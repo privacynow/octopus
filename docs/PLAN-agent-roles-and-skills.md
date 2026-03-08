@@ -63,11 +63,17 @@ Active skills are stored in the session JSON per chat. Different conversations o
 Neither provider maintains a long-running process between messages — each `run()` spawns a fresh subprocess. However, the providers differ in how mid-conversation changes behave:
 
 - **Claude**: `--append-system-prompt` is rebuilt from active skills every `run()` call. It operates outside the conversation history, so changes (additive or subtractive) take effect cleanly on the very next message.
-- **Codex**: The prompt prefix is prepended to the user's message text, which means it becomes part of the conversation history on that turn. On a resumed thread, prior turns still contain the old prefix. Additive changes (adding a skill) work fine — the new prefix is a superset. But subtractive or contradictory changes (`/skills remove`, `/role clear`, role replacement) leave stale instructions in thread history that cannot be retracted. To guarantee deterministic behavior, `/skills add`, `/skills remove`, `/skills clear`, `/role set`, and `/role clear` all reset the Codex thread (clear `thread_id` from provider state). The next message starts a fresh thread with only the current role and skills. Conversation context is lost, but the alternative — stale instructions silently competing with current ones — would produce unpredictable behavior that's hard to debug.
+- **Codex**: The prompt prefix is prepended to the user's message text, which means it becomes part of the conversation history on that turn. On a resumed thread, prior turns still contain the old prefix. Subtractive or contradictory changes leave stale instructions in thread history that cannot be retracted. Additionally, `codex exec resume` does not accept `--add-dir`, so a resumed thread cannot receive new directory access.
 
-**Codex resume and `--add-dir`**: `codex exec resume` does not accept `--add-dir`. This means a resumed Codex thread cannot receive new directory access — the upload dir and any approval-granted dirs passed on the initial `exec` are the only ones available for the life of that thread. In practice this is rarely a problem: the chat-specific upload dir is set on the first message and doesn't change. If new directory access is needed mid-conversation (e.g., from the permission-denial retry flow), the Codex thread must be reset so the next `exec` can include the new `--add-dir` paths. In the current app, permission-denial retries go through the `retry_allow` callback handler (not `approve_pending()`). When `retry_allow` has new `extra_dirs` and the provider is Codex, it must clear `thread_id` before calling `execute_request()`.
+**Codex thread invalidation**: Rather than resetting on specific commands (`/skills`, `/role`), the Codex provider uses an **effective context hash** (see §8.3). Before each `run()`, compute the hash of the current execution context. If it differs from `provider_state["context_hash"]`, clear `thread_id` and start a fresh thread. This catches all sources of context drift:
+  - `/skills add/remove/clear` and `/role set/clear` (user commands)
+  - Skill file edits on disk (custom skill updated, built-in skill changed after deploy)
+  - `codex.yaml` or `requires.yaml` changes
+  - New skill-declared `extra_dirs` (e.g. skill added that declares a directory)
 
-This asymmetry is inherent to the Codex CLI and cannot be abstracted away.
+The hash is stored in `provider_state["context_hash"]` after each successful `run()`. If the hash is unchanged, the thread is preserved and conversation context is maintained.
+
+This asymmetry is inherent to the Codex CLI and cannot be abstracted away. Claude doesn't need this — `--append-system-prompt` and `--add-dir` are rebuilt fresh every call.
 
 ### D3: Credentials belong to the user, scoped per user
 
@@ -93,7 +99,8 @@ The bot deletes the user's message containing the secret after reading it.
 
 Lifted from the gateway architecture: `.env` files are good for flat operational config (token, provider, timeout, allowed users) but break down for structured data like role descriptions longer than a sentence.
 
-- **`.env`**: `BOT_ROLE` (short role description or empty), `BOT_SKILLS` (comma-separated defaults for new chats). Keeps simple cases simple. **Important**: `BOT_ROLE` must be properly serialized in the `.env` file — double-quoted with internal `"` escaped as `\"` and `\` escaped as `\\`. Without quoting, `load_dotenv_file()` strips everything after `#` (a role like `Senior C# engineer` becomes `Senior C`). Without escaping, a role containing `"` or `\` produces a broken `.env` entry. `set_env_value()` in `setup.sh` must handle this serialization — not just wrap in quotes, but escape the content. For roles that are too complex for a one-liner, use `role.md` instead (see below).
+- **`.env`**: `BOT_ROLE` (short role description or empty), `BOT_SKILLS` (comma-separated defaults for new chats). Keeps simple cases simple. **Important**: `BOT_ROLE` requires correct round-tripping through write and read. Without quoting, `load_dotenv_file()` strips everything after `#` (a role like `Senior C# engineer` becomes `Senior C`). The current `load_dotenv_file()` strips surrounding quotes but does NOT unescape `\"` or `\\`.
+  **Contract**: `set_env_value()` double-quotes the value and **rejects** roles containing `"` or `\`, directing the operator to use `role.md` instead. No escaping logic needed — `load_dotenv_file()` only needs to strip surrounding quotes, which it already does. The test invariant (§8.5 #7) validates that values containing `#` and whitespace round-trip correctly, and that `"` and `\` are rejected at write time. For roles that are too complex for a one-liner, use `role.md` (see below).
 
 **Separation of concerns**: `BOT_ROLE` in `.env` is the *instance default* — set by the platform operator via `setup.sh`. The `/role` Telegram command sets a *chat-local override* stored in the session JSON. It does NOT write to `.env`. This means a skill user can customize the role for their conversation without mutating operator-owned instance defaults. New chats still start with the operator's `BOT_ROLE`.
 - **`role.md` file** (optional): For roles that need more than a one-liner, the operator can place a markdown file at `~/.config/telegram-agent-bot/<instance>.role.md`. If present, it overrides `BOT_ROLE`. This is the recommended path for rich role descriptions — no quoting issues, supports multi-line markdown, mirrors the gateway's `prompt_file` pattern.
@@ -476,9 +483,9 @@ A publisher creates a skill by:
 3. Optionally adding `requires.yaml` for credentials
 4. Optionally adding `claude.yaml` / `codex.yaml` for provider-specific features
 
-The skill appears in `/skills list` immediately (built-in after deploy, custom after file creation).
+Built-in skills appear in `/skills list` after deploy. Custom skill discovery is Phase 4 — until then, publishers contribute to the built-in catalog.
 
-Future: `/skills create <name>` scaffolds the directory structure.
+Future (Phase 4): `/skills create <name>` scaffolds the directory structure.
 
 ---
 
@@ -489,11 +496,11 @@ Future: `/skills create <name>` scaffolds the directory structure.
 ```json
 {
   "provider": "claude",
-  "provider_state": {"session_id": "...", "started": true},
+  "provider_state": {"session_id": "...", "started": true, "context_hash": "abc123..."},
   "approval_mode": "on",
   "active_skills": ["code-review", "testing", "debugging"],
   "role": "Senior Python engineer",
-  "awaiting_skill_setup": null,      // see below — includes initiating user_id
+  "awaiting_skill_setup": null,
   "pending_request": null,
   "created_at": "...",
   "updated_at": "..."
@@ -503,7 +510,11 @@ Future: `/skills create <name>` scaffolds the directory structure.
 New fields:
 - `active_skills` (list of skill names) — initialized from `BOT_SKILLS` when a new chat starts
 - `role` (string) — initialized from `BOT_ROLE` / `<instance>.role.md`
-- `awaiting_skill_setup` (object or null) — tracks in-progress credential setup: `{"user_id": 12345, "skill": "github-integration", "remaining": [{"key": "GITHUB_TOKEN", ...}]}`. The `user_id` field identifies who initiated the setup — the handler MUST verify that the next plain-text message comes from this user before consuming it as a credential. Messages from other users during setup are handled normally. Must be included in the session restore whitelist in `load_session()` so it survives bot restarts.
+- `awaiting_skill_setup` (object or null) — tracks in-progress credential setup: `{"user_id": 12345, "skill": "github-integration", "remaining": [{"key": "GITHUB_TOKEN", ...}]}`. See §8.1 for the hard routing invariant.
+- `pending_request` (object or null) — typed `PendingRequest` with `request_user_id`, `context_hash`, and either `attachment_dicts` (approval) or `denials` (retry). See §8.2.
+- `provider_state.context_hash` — effective context hash for Codex thread invalidation. See §8.3.
+
+Must be included in the session restore whitelist in `load_session()` so `awaiting_skill_setup` and `pending_request` survive bot restarts.
 
 Note: credentials are stored per-user, not per-chat (see §7.3). Sessions contain no credential values.
 
@@ -519,7 +530,7 @@ class BotConfig:
 
 ### 7.3 Credential storage and security
 
-Credentials are stored per user, not per chat or per instance.
+Credentials are stored per user per instance — each user has a separate credential file on each bot instance.
 
 ```
 ~/.telegram-agent-bot/<instance>/credentials/<user_id>.json
@@ -559,7 +570,101 @@ Only credentials for active skills are injected. Deactivating a skill removes it
 
 ---
 
-## 8. `app/skills.py` — The Skill Engine
+## 8. Cross-Cutting Invariants
+
+These are hard rules that cut across the handler flow, approval, retry, credential capture, and Codex session management. They exist because the plan underspecifies state that must survive beyond the original message — approval, retry, and credential capture are all delayed flows where the execution context can drift from the request context. Fixing these locally keeps causing regressions; defining them once here stops the churn.
+
+### 8.1 Message routing order in `handle_message()`
+
+The handler MUST branch in this exact order:
+
+1. **Credential capture**: If `awaiting_skill_setup` is set and `message.from_user.id` matches the setup's `user_id`, consume the message as a credential value. Delete it. No provider call, no preflight, no approval check. This is a hard invariant: **a secret message never reaches a provider**.
+2. **Approval mode**: If `approval_mode == "on"`, go to `request_approval()`.
+3. **Normal execution**: Go to `execute_request()`.
+
+If `awaiting_skill_setup` is set but the sender doesn't match, fall through to steps 2-3 normally.
+
+### 8.2 Execution context and requester identity
+
+Every provider call must use the context that was active when the user sent the original message, not the context at execution time. This matters for delayed flows: approval (user sends → preflight → waits for approve → executes) and retry (user sends → denial → waits for allow → re-executes).
+
+**`pending_request` schema** — replaces the current untyped dict:
+
+```python
+@dataclass
+class PendingRequest:
+    request_user_id: int             # who sent the original message
+    prompt: str
+    image_paths: list[str]
+    attachment_dicts: list[dict]     # serialized Attachment objects (approval only)
+    context_hash: str                # hash of effective execution context at request time
+    denials: list[dict] | None       # permission denials (retry only, None for approval)
+```
+
+`request_user_id` ensures credentials are loaded for the original requester, not whoever clicks Approve. `context_hash` ensures the pending request is invalidated if the execution context changes before approval/retry (see §8.3).
+
+Both `approve_pending()` and `retry_allow` MUST:
+- Use `pending.request_user_id` to load credentials, not `update.effective_user.id`
+- Check `pending.context_hash` against the current **base** context hash (see §8.3); if changed, reject with "Context changed since this request was made. Please resend."
+
+**Retry derives a new execution context.** When `retry_allow` validates the pending request, the base context hash will match (role, skills, etc. haven't changed). But the execution context is different — it includes the approved dirs from the denial. The flow:
+1. Validate: recompute base context hash → must match `pending.context_hash`
+2. Derive: build `RunContext` with base `extra_dirs` + approved dirs from `pending.denials`
+3. Execute: pass the derived `RunContext` to `run()` (Codex will reset its thread since the full execution state changed)
+
+### 8.3 Effective context hash
+
+A deterministic hash of the **base** execution context — everything that the user or operator configures, excluding ephemeral additions like denial-approved dirs:
+
+```python
+def compute_context_hash(
+    role: str,
+    active_skills: list[str],
+    skill_digests: dict[str, str],   # {skill_name: sha256 of skill.md content}
+    provider_config_digest: str,      # sha256 of resolved provider_config
+    extra_dirs: list[str],            # base extra_dirs from skills/config only
+) -> str:
+    """SHA-256 of the base execution context (excludes denial-approved dirs)."""
+```
+
+The hash covers what the user has configured (role, skills, provider settings, skill-declared dirs). It does **not** include dirs approved via the denial/retry flow — those are ephemeral additions derived at execution time.
+
+**Uses**:
+- **Codex thread invalidation**: Before each Codex `run()`, compute the base context hash. If it differs from `provider_state["context_hash"]`, clear `thread_id`. This catches all sources of context drift: `/skills` commands, `/role` changes, skill file edits on disk, built-in skill updates after deploy, `codex.yaml` changes. Claude doesn't need this — `--append-system-prompt` is rebuilt fresh every call. Note: a retry with approved dirs will also change the full execution state, triggering a thread reset — but this is handled by the Codex provider comparing the full `RunContext`, not the base hash.
+- **Pending request validation**: `approve_pending()` and `retry_allow` check that the current base context hash matches `pending.context_hash`. If it doesn't, the underlying context changed and the request is stale. For retries, the approved dirs are layered on top of the validated base context (see §8.2).
+- **Credential check gate**: The per-request credential check (§D3) runs against the context that will actually be used — the frozen one for pending flows, the live one for direct execution.
+
+### 8.4 Credential satisfaction check placement
+
+The credential check MUST run before any provider call — both `execute_request()` and `request_approval()`. It is a shared helper:
+
+```python
+async def check_credential_satisfaction(
+    chat_id: int, user_id: int, active_skills: list[str]
+) -> list[str] | None:
+    """Returns list of unsatisfied skill names, or None if all satisfied."""
+```
+
+If unsatisfied, the handler replies with a setup prompt and returns without calling the provider. This prevents:
+- Preflight plans for requests that can't execute
+- Execution with missing env vars
+- Approval prompts for impossible requests
+
+### 8.5 Test invariants
+
+These must be written as tests before implementation begins:
+
+1. **Approve-as-different-user**: Alice requests in a group, Bob clicks Approve → execution uses Alice's credentials and Alice's context, not Bob's
+2. **Retry-after-context-change**: Alice gets a permission denial, base context changes (skill added/removed), retry is rejected as stale. But if base context is unchanged, retry succeeds and execution includes the approved dirs.
+3. **Pending invalidation on context change**: Pending approval is rejected if role, skills, or skill content changed since the request
+4. **Codex resets on effective context hash change**: Skill file edited on disk → next Codex `run()` starts fresh thread
+5. **Codex does NOT reset on unchanged context**: Two consecutive messages with same context → thread is preserved
+6. **Secret capture never reaches provider**: Credential message during `awaiting_skill_setup` is consumed and deleted, never passed to `run()` or `run_preflight()`
+7. **BOT_ROLE contract**: Values containing `#` and whitespace survive write → read → use. Values containing `"` or `\` are rejected by `set_env_value()` with a message directing to `role.md`.
+
+---
+
+## 9. `app/skills.py` — The Skill Engine
 
 ```python
 """Skill catalog loading, validation, and prompt composition."""
@@ -777,20 +882,21 @@ The foundation. Covers the most common use cases without touching tool integrati
 
 | Step | What | Files |
 |------|------|-------|
-| 1 | Add `PreflightContext` and `RunContext` dataclasses to provider base; update `Provider.run()` (RunContext) and `Provider.run_preflight()` (PreflightContext) signatures | `app/providers/base.py` |
-| 2 | Create `app/skills.py` — catalog discovery (built-in only), instruction loading, `build_system_prompt()` (shared by both providers), context builders (`RunContext`, `PreflightContext`) | `app/skills.py` (new) |
+| 1 | Add `PreflightContext`, `RunContext`, `PendingRequest` dataclasses and `compute_context_hash()` to provider base | `app/providers/base.py` |
+| 2 | Create `app/skills.py` — catalog discovery (built-in only), instruction loading, `build_system_prompt()` (shared by both providers), context builders | `app/skills.py` (new) |
 | 3 | Create built-in catalog — 8 `skill.md` files with real, tested instruction content | `skills/catalog/*/skill.md` (new) |
-| 4 | Add `role` and `skills` to `BotConfig`, update `load_config()` to read `BOT_ROLE` (double-quoted) / `<instance>.role.md`, `validate_config()` | `app/config.py` |
-| 5 | Add `active_skills` and `role` to session state, initialize from config defaults; include in `load_session()` restore whitelist | `app/storage.py` |
+| 4 | Add `role` and `skills` to `BotConfig`, update `load_config()` to read `BOT_ROLE` / `<instance>.role.md`, `validate_config()`. `BOT_ROLE` rejects `"` and `\` with redirect to `role.md` (see D5) | `app/config.py` |
+| 5 | Add `active_skills`, `role`, typed `pending_request` to session state, initialize from config defaults; include in `load_session()` restore whitelist | `app/storage.py` |
 | 6 | Claude provider: read `context.system_prompt` → `--append-system-prompt`, `context.extra_dirs` | `app/providers/claude.py` |
-| 7 | Codex provider: prepend `context.system_prompt` to user prompt text, pass `context.extra_dirs` | `app/providers/codex.py` |
-| 8 | `execute_request()`: build `RunContext`, pass to `run()`. `request_approval()`: build `PreflightContext`, pass to `run_preflight()`. Both built from session state. | `app/telegram_handlers.py` |
-| 9 | Implement `/skills` command (list/add/remove/clear); reset Codex `thread_id` on any skill change (see D2) | `app/telegram_handlers.py` |
-| 10 | Implement `/role` command (view/set/clear) — chat-local override, does not write to `.env`; reset Codex `thread_id` on role change (see D2) | `app/telegram_handlers.py` |
-| 11 | Update `/help` text, add skill/role display to `/session` | `app/telegram_handlers.py` |
-| 12 | Add role/skill prompts to `setup.sh` new-instance and edit flows; `set_env_value()` must quote and escape `BOT_ROLE` (escape `"` and `\` inside double quotes) | `setup.sh` |
-| 13 | Update `.env.example` with `BOT_ROLE` and `BOT_SKILLS` | `.env.example` |
-| 14 | Tests: skill engine, config loading, `RunContext` building, provider command building (both providers), session state, Codex prompt prefix injection, Codex thread reset on skill/role change, preflight receives `PreflightContext` | `tests/test_skills.py` (new), `tests/test_high_risk.py` |
+| 7 | Codex provider: prepend `context.system_prompt` to prompt, `context.extra_dirs`; context-hash-based thread invalidation (§8.3) | `app/providers/codex.py` |
+| 8 | `execute_request()`: build `RunContext`, pass to `run()`. `request_approval()`: build `PreflightContext`, pass to `run_preflight()`. Both store `context_hash` in `PendingRequest`. | `app/telegram_handlers.py` |
+| 9 | `approve_pending()`: validate base context hash, use `pending.request_user_id` for credentials, reject if stale. `retry_allow`: validate base context hash, derive execution context with approved dirs, reject if stale. | `app/telegram_handlers.py` |
+| 10 | Implement `/skills` command (list/add/remove/clear) | `app/telegram_handlers.py` |
+| 11 | Implement `/role` command (view/set/clear) — chat-local override, does not write to `.env` | `app/telegram_handlers.py` |
+| 12 | Update `/help` text, add skill/role display to `/session` | `app/telegram_handlers.py` |
+| 13 | Add role/skill prompts to `setup.sh` new-instance and edit flows; `set_env_value()` rejects `"` and `\` in BOT_ROLE | `setup.sh` |
+| 14 | Update `.env.example` with `BOT_ROLE` and `BOT_SKILLS` | `.env.example` |
+| 15 | Tests: §8.5 invariants first, then skill engine, config loading, context hash, provider command building, Codex thread invalidation, preflight `PreflightContext`, pending request identity and staleness | `tests/test_skills.py` (new), `tests/test_high_risk.py` |
 
 **Deliverable**: Users can `/skills add code-review` and the next message uses those instructions. Built-in skills are browsable via `/skills list`. Custom skill discovery is Phase 4.
 
@@ -824,9 +930,10 @@ Adds `claude.yaml` and `codex.yaml` support for skills that need MCP servers, to
 | 27 | `${VAR}` placeholder resolution in `build_provider_config()` — interpolate credential values into MCP server env, script env, etc. before passing to provider | `app/skills.py` |
 | 28 | Claude provider: read `context.provider_config` → translate to `--mcp-config`, `--allowedTools`, `--disallowedTools` flags | `app/providers/claude.py` |
 | 29 | Codex provider: read `context.provider_config` → stage scripts in `scripts/<chat_id>/`, add via `--add-dir`, apply sandbox settings and config overrides | `app/providers/codex.py` |
-| 30 | Build `capability_summary` from active provider_config for `PreflightContext` | `app/skills.py` |
-| 31 | Create 2-3 tool-integrated built-in skills (e.g. `github-integration`) | `skills/catalog/` |
-| 32 | Tests: MCP config generation, placeholder resolution, provider_config handling, capability_summary, script staging | `tests/test_skills.py` |
+| 30 | Codex script lifecycle: on each `run()`, sync staged scripts to match active skills (remove stale dirs, add new ones); on `/new`, delete `scripts/<chat_id>/` entirely | `app/providers/codex.py`, `app/telegram_handlers.py` |
+| 31 | Build `capability_summary` from active provider_config for `PreflightContext` | `app/skills.py` |
+| 32 | Create 2-3 tool-integrated built-in skills (e.g. `github-integration`) | `skills/catalog/` |
+| 33 | Tests: MCP config generation, placeholder resolution, provider_config handling, capability_summary, script staging and cleanup | `tests/test_skills.py` |
 
 **Deliverable**: Skill publishers can create skills that configure MCP servers, restrict tools, and include helper scripts.
 
@@ -834,12 +941,12 @@ Adds `claude.yaml` and `codex.yaml` support for skills that need MCP servers, to
 
 | Step | What | Files |
 |------|------|-------|
-| 33 | Custom skill discovery from `~/.config/telegram-agent-bot/skills/` | `app/skills.py` |
-| 34 | Override logic (custom > built-in for same name) | `app/skills.py` |
-| 35 | `/skills create <name>` scaffolds a new custom skill directory | `app/telegram_handlers.py` |
-| 36 | Show `(custom)` tag in `/skills list` for user-created skills | `app/telegram_handlers.py` |
-| 37 | `/doctor` validates active skills — checks catalog presence, credential satisfaction | `app/telegram_handlers.py` |
-| 38 | Tests: custom skill override, scaffold command | `tests/test_skills.py` |
+| 34 | Custom skill discovery from `~/.config/telegram-agent-bot/skills/` | `app/skills.py` |
+| 35 | Override logic (custom > built-in for same name) | `app/skills.py` |
+| 36 | `/skills create <name>` scaffolds a new custom skill directory | `app/telegram_handlers.py` |
+| 37 | Show `(custom)` tag in `/skills list` for user-created skills | `app/telegram_handlers.py` |
+| 38 | `/doctor` validates active skills — checks catalog presence, credential satisfaction | `app/telegram_handlers.py` |
+| 39 | Tests: custom skill override, scaffold command | `tests/test_skills.py` |
 
 **Deliverable**: Power users can create and manage custom skills alongside built-ins.
 
@@ -891,8 +998,8 @@ Questions raised during design, now closed with decisions.
 | `app/storage.py` | Add `active_skills`, `role` to session defaults, load/save, and restore whitelist |
 | `app/providers/claude.py` | Read `context.system_prompt` → `--append-system-prompt`; `context.extra_dirs`; `context.credential_env` into subprocess env (populated in Phase 2) |
 | `app/providers/codex.py` | Prepend `context.system_prompt` to prompt; `context.extra_dirs`; `context.credential_env` into subprocess env (populated in Phase 2); reset `thread_id` on skill/role change (D2) |
-| `app/telegram_handlers.py` | Add `/skills`, `/role` handlers; build `RunContext` in `execute_request()`, `PreflightContext` in `request_approval()`; Codex `thread_id` reset on new `extra_dirs` in `retry_allow`; update `/help`, `/session` |
-| `setup.sh` | Add role/skill prompts to new + existing instance flows; `set_env_value()` must quote and escape `BOT_ROLE` |
+| `app/telegram_handlers.py` | Add `/skills`, `/role` handlers; build `RunContext` in `execute_request()`, `PreflightContext` in `request_approval()`; `retry_allow` validates base context then derives execution context with approved dirs; update `/help`, `/session` |
+| `setup.sh` | Add role/skill prompts to new + existing instance flows; `set_env_value()` double-quotes `BOT_ROLE` and rejects `"` / `\` |
 | `.env.example` | Add `BOT_ROLE` and `BOT_SKILLS` |
 | `tests/test_skills.py` | NEW — skill engine tests |
 | `tests/test_high_risk.py` | Add skill injection tests for both providers, Codex thread reset on skill/role change, preflight `PreflightContext` |

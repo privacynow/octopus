@@ -1,0 +1,112 @@
+"""Tests for storage.py — session CRUD, path resolution, uploads."""
+
+import json
+import sys
+import tempfile
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
+
+from pathlib import Path
+from app.storage import (
+    build_upload_path,
+    default_session,
+    ensure_data_dirs,
+    is_image_path,
+    load_session,
+    resolve_allowed_path,
+    sanitize_filename,
+    save_session,
+    session_file,
+)
+
+passed = 0
+failed = 0
+
+
+def check(name, got, expected):
+    global passed, failed
+    if got == expected:
+        print(f"  PASS  {name}")
+        passed += 1
+    else:
+        print(f"  FAIL  {name}")
+        print(f"    expected: {expected!r}")
+        print(f"    got:      {got!r}")
+        failed += 1
+
+
+# -- sanitize_filename --
+print("\n=== sanitize_filename ===")
+check("clean", sanitize_filename("hello.txt"), "hello.txt")
+check("spaces", sanitize_filename("my file (1).doc"), "my_file_1_.doc")
+check("empty", sanitize_filename("..."), "attachment")
+
+# -- is_image_path --
+print("\n=== is_image_path ===")
+check("png", is_image_path(Path("test.png")), True)
+check("jpg", is_image_path(Path("test.JPG")), True)
+check("txt", is_image_path(Path("test.txt")), False)
+
+# -- session management --
+print("\n=== session management ===")
+with tempfile.TemporaryDirectory() as tmp:
+    data_dir = Path(tmp)
+    ensure_data_dirs(data_dir)
+    check("sessions dir exists", (data_dir / "sessions").is_dir(), True)
+    check("uploads dir exists", (data_dir / "uploads").is_dir(), True)
+
+    # default_session
+    s = default_session("claude", {"session_id": "abc", "started": False}, "on")
+    check("provider set", s["provider"], "claude")
+    check("provider_state set", s["provider_state"]["session_id"], "abc")
+    check("approval mode", s["approval_mode"], "on")
+    check("has created_at", "created_at" in s, True)
+    check("has updated_at", "updated_at" in s, True)
+
+    # save + load
+    save_session(data_dir, 12345, s)
+    loaded = load_session(data_dir, 12345, "claude", lambda: {"session_id": "abc", "started": False}, "on")
+    check("loaded provider", loaded["provider"], "claude")
+    check("loaded state", loaded["provider_state"]["session_id"], "abc")
+
+    # load with new provider_state keys (migration-safe)
+    loaded2 = load_session(data_dir, 12345, "claude", lambda: {"session_id": "abc", "started": False, "new_key": "default"}, "on")
+    check("new key filled", loaded2["provider_state"]["new_key"], "default")
+
+    # fresh session for new chat
+    fresh = load_session(data_dir, 99999, "codex", lambda: {"thread_id": None}, "off")
+    check("fresh session provider", fresh["provider"], "codex")
+    check("fresh session state", fresh["provider_state"]["thread_id"], None)
+
+# -- resolve_allowed_path --
+print("\n=== resolve_allowed_path ===")
+with tempfile.TemporaryDirectory() as tmp:
+    test_file = Path(tmp) / "test.txt"
+    test_file.write_text("x")
+    roots = [Path(tmp)]
+
+    resolved = resolve_allowed_path(str(test_file), roots)
+    check("absolute allowed", resolved, test_file.resolve())
+
+    resolved2 = resolve_allowed_path("test.txt", roots)
+    check("relative allowed", resolved2, test_file.resolve())
+
+    resolved3 = resolve_allowed_path("/etc/passwd", roots)
+    check("outside roots", resolved3, None)
+
+    resolved4 = resolve_allowed_path("/nonexistent/file", roots)
+    check("nonexistent", resolved4, None)
+
+# -- build_upload_path --
+print("\n=== build_upload_path ===")
+with tempfile.TemporaryDirectory() as tmp:
+    data_dir = Path(tmp)
+    ensure_data_dirs(data_dir)
+    path = build_upload_path(data_dir, 42, "photo.jpg")
+    check("upload in chat dir", str(path).startswith(str(data_dir / "uploads" / "42")), True)
+    check("upload has safe name", path.name.endswith("_photo.jpg"), True)
+
+# -- Summary --
+print(f"\n{'='*40}")
+print(f"  {passed} passed, {failed} failed")
+print(f"{'='*40}")
+sys.exit(1 if failed else 0)

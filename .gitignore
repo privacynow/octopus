@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Instance config (contains tokens/secrets)
+*.env
+!.env.example
+
+# Runtime data
+*.log
+
+# Test artifacts
+.setup-test-patched.sh

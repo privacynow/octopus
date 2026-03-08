@@ -610,7 +610,8 @@ Both `approve_pending()` and `retry_allow` MUST:
 **Retry derives a new execution context.** When `retry_allow` validates the pending request, the base context hash will match (role, skills, etc. haven't changed). But the execution context is different — it includes the approved dirs from the denial. The flow:
 1. Validate: recompute base context hash → must match `pending.context_hash`
 2. Derive: build `RunContext` with base `extra_dirs` + approved dirs from `pending.denials`
-3. Execute: pass the derived `RunContext` to `run()` (Codex will reset its thread since the full execution state changed)
+3. **Codex thread reset**: If the provider is Codex and there are approved dirs, `retry_allow` must clear `provider_state["thread_id"]` before calling `execute_request()`. This is necessary because `codex exec resume` cannot take new `--add-dir` values — the only way to grant new directory access is a fresh thread. The base context hash in `provider_state` is unchanged, so normal hash-based invalidation would not trigger a reset. `retry_allow` handles this explicitly.
+4. Execute: pass the derived `RunContext` to `run()`
 
 ### 8.3 Effective context hash
 
@@ -630,7 +631,7 @@ def compute_context_hash(
 The hash covers what the user has configured (role, skills, provider settings, skill-declared dirs). It does **not** include dirs approved via the denial/retry flow — those are ephemeral additions derived at execution time.
 
 **Uses**:
-- **Codex thread invalidation**: Before each Codex `run()`, compute the base context hash. If it differs from `provider_state["context_hash"]`, clear `thread_id`. This catches all sources of context drift: `/skills` commands, `/role` changes, skill file edits on disk, built-in skill updates after deploy, `codex.yaml` changes. Claude doesn't need this — `--append-system-prompt` is rebuilt fresh every call. Note: a retry with approved dirs will also change the full execution state, triggering a thread reset — but this is handled by the Codex provider comparing the full `RunContext`, not the base hash.
+- **Codex thread invalidation**: Before each Codex `run()`, compute the base context hash. If it differs from `provider_state["context_hash"]`, clear `thread_id`. This catches all sources of context drift: `/skills` commands, `/role` changes, skill file edits on disk, built-in skill updates after deploy, `codex.yaml` changes. Claude doesn't need this — `--append-system-prompt` is rebuilt fresh every call. Note: denial-approved dirs are not covered by this hash — `retry_allow` explicitly clears `thread_id` for Codex when approved dirs are present (see §8.2 step 3).
 - **Pending request validation**: `approve_pending()` and `retry_allow` check that the current base context hash matches `pending.context_hash`. If it doesn't, the underlying context changed and the request is stale. For retries, the approved dirs are layered on top of the validated base context (see §8.2).
 - **Credential check gate**: The per-request credential check (§D3) runs against the context that will actually be used — the frozen one for pending flows, the live one for direct execution.
 
@@ -890,7 +891,7 @@ The foundation. Covers the most common use cases without touching tool integrati
 | 6 | Claude provider: read `context.system_prompt` → `--append-system-prompt`, `context.extra_dirs` | `app/providers/claude.py` |
 | 7 | Codex provider: prepend `context.system_prompt` to prompt, `context.extra_dirs`; context-hash-based thread invalidation (§8.3) | `app/providers/codex.py` |
 | 8 | `execute_request()`: build `RunContext`, pass to `run()`. `request_approval()`: build `PreflightContext`, pass to `run_preflight()`. Both store `context_hash` in `PendingRequest`. | `app/telegram_handlers.py` |
-| 9 | `approve_pending()`: validate base context hash, use `pending.request_user_id` for credentials, reject if stale. `retry_allow`: validate base context hash, derive execution context with approved dirs, reject if stale. | `app/telegram_handlers.py` |
+| 9 | `approve_pending()`: validate base context hash, use `pending.request_user_id` for credentials, reject if stale. `retry_allow`: validate base context hash, derive execution context with approved dirs, clear Codex `thread_id` when approved dirs present (§8.2 step 3), reject if stale. | `app/telegram_handlers.py` |
 | 10 | Implement `/skills` command (list/add/remove/clear) | `app/telegram_handlers.py` |
 | 11 | Implement `/role` command (view/set/clear) — chat-local override, does not write to `.env` | `app/telegram_handlers.py` |
 | 12 | Update `/help` text, add skill/role display to `/session` | `app/telegram_handlers.py` |
@@ -998,7 +999,7 @@ Questions raised during design, now closed with decisions.
 | `app/storage.py` | Add `active_skills`, `role` to session defaults, load/save, and restore whitelist |
 | `app/providers/claude.py` | Read `context.system_prompt` → `--append-system-prompt`; `context.extra_dirs`; `context.credential_env` into subprocess env (populated in Phase 2) |
 | `app/providers/codex.py` | Prepend `context.system_prompt` to prompt; `context.extra_dirs`; `context.credential_env` into subprocess env (populated in Phase 2); reset `thread_id` on skill/role change (D2) |
-| `app/telegram_handlers.py` | Add `/skills`, `/role` handlers; build `RunContext` in `execute_request()`, `PreflightContext` in `request_approval()`; `retry_allow` validates base context then derives execution context with approved dirs; update `/help`, `/session` |
+| `app/telegram_handlers.py` | Add `/skills`, `/role` handlers; build `RunContext` in `execute_request()`, `PreflightContext` in `request_approval()`; `retry_allow` validates base context, derives execution context with approved dirs, clears Codex `thread_id` when dirs added; update `/help`, `/session` |
 | `setup.sh` | Add role/skill prompts to new + existing instance flows; `set_env_value()` double-quotes `BOT_ROLE` and rejects `"` / `\` |
 | `.env.example` | Add `BOT_ROLE` and `BOT_SKILLS` |
 | `tests/test_skills.py` | NEW — skill engine tests |

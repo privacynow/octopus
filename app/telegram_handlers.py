@@ -970,10 +970,8 @@ async def cmd_doctor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if event is None or not is_allowed(event.user):
         return
     from app.config import validate_config
-    loop = asyncio.get_running_loop()
     cfg_errors = validate_config(_cfg())
-    # Run blocking health checks in a thread to avoid stalling the event loop
-    prov_errors = await loop.run_in_executor(None, _prov().check_health)
+    prov_errors = _prov().check_health()
     # Validate active skills for this chat
     session = _load(event.chat_id)
     user_id = event.user.id

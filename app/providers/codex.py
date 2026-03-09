@@ -46,6 +46,8 @@ class CodexProvider:
             else:
                 log.info("codex version: %s", stdout.decode().strip())
         except (asyncio.TimeoutError, TimeoutError):
+            proc.kill()
+            await proc.wait()
             errors.append("'codex --version' timed out")
         except OSError as e:
             errors.append(f"'codex' binary not executable: {e}")
@@ -72,6 +74,8 @@ class CodexProvider:
                 else:
                     log.info("codex API ping ok")
             except (asyncio.TimeoutError, TimeoutError):
+                proc.kill()
+                await proc.wait()
                 errors.append("API ping timed out (30s)")
             except OSError as e:
                 errors.append(f"API ping error: {e}")

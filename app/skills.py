@@ -397,7 +397,7 @@ def load_catalog() -> dict[str, SkillMeta]:
 
     Precedence (last wins): catalog < managed < custom.
     """
-    from app.store import list_refs, _object_dir
+    from app.store import list_refs, object_dir
 
     catalog: dict[str, SkillMeta] = {}
 
@@ -425,7 +425,7 @@ def load_catalog() -> dict[str, SkillMeta]:
 
     # 2. Managed refs (override catalog)
     for name, ref in list_refs().items():
-        obj_dir = _object_dir(ref.digest)
+        obj_dir = object_dir(ref.digest)
         skill_file = obj_dir / "skill.md"
         if not obj_dir.is_dir() or not skill_file.is_file():
             continue

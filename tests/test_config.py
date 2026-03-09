@@ -133,8 +133,4 @@ errors_no_skills = validate_config(make_config(default_skills=(), provider_name=
 check("no skills no error", len([e for e in errors_no_skills if "BOT_SKILLS" in e]), 0)
 
 
-# -- Summary --
-print(f"\n{'='*40}")
-print(f"  {checks.passed} passed, {checks.failed} failed")
-print(f"{'='*40}")
-sys.exit(1 if checks.failed else 0)
+checks.run_and_exit()

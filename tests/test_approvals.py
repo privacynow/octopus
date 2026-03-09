@@ -32,8 +32,4 @@ check_contains("denial html", html, "<b>Bash</b>", "rm -rf")
 empty = format_denials_html([])
 check("empty denials", empty, "")
 
-# -- Summary --
-print(f"\n{'='*40}")
-print(f"  {checks.passed} passed, {checks.failed} failed")
-print(f"{'='*40}")
-sys.exit(1 if checks.failed else 0)
+checks.run_and_exit()

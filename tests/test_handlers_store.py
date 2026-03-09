@@ -1,6 +1,5 @@
 """Handler integration tests for skill-store flows (immutable store model)."""
 
-import asyncio
 import sys
 import tempfile
 from pathlib import Path
@@ -13,6 +12,7 @@ from tests.support.assertions import Checks
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
+    FakeContext,
     FakeMessage,
     FakeProvider,
     FakeUpdate,
@@ -22,20 +22,17 @@ from tests.support.handler_support import (
     load_session_disk,
     make_config,
     make_store_skill,
+    send_callback,
     send_command,
     send_text,
     setup_globals,
 )
 
 checks = Checks()
-_tests: list[tuple[str, object]] = []
+run_test = checks.add_test
 
 STORE_V1 = "STORE_HELPER_V1_d4e8"
 STORE_V2 = "STORE_HELPER_V2_b7f1"
-
-
-def run_test(name, coro):
-    _tests.append((name, coro))
 
 
 def _store_env(tmp):
@@ -158,7 +155,7 @@ async def test_handler_admin_install_creates_ref():
             checks.check("ref source", ref.source, "store")
 
             # Object should exist
-            obj_dir = store_mod._object_dir(ref.digest)
+            obj_dir = store_mod.object_dir(ref.digest)
             checks.check_true("object exists", obj_dir.is_dir())
         finally:
             cleanup()
@@ -349,26 +346,201 @@ async def test_skills_info_store_requirements():
 run_test("/skills info store requirements", test_skills_info_store_requirements())
 
 
-async def _run_all():
-    for name, coro in _tests:
-        print(f"\n=== {name} ===")
+async def test_skill_update_callback_nonadmin_alert():
+    """Non-admin clicking update callback gets an alert, not silent rejection."""
+    import app.telegram_handlers as th
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
         try:
-            await coro
-        except Exception as exc:
-            print(f"  FAIL  {name} (exception: {exc})")
-            import traceback
+            make_store_skill(tmp_store, "helper", body=STORE_V1)
+            prov = FakeProvider("claude")
+            setup_globals(_admin_cfg(data_dir), prov)
 
-            traceback.print_exc()
-            checks.failed += 1
+            chat = FakeChat(2001)
+            regular = FakeUser(uid=200, username="regular")
+            query, cb_msg = await send_callback(
+                th.handle_skill_update_callback, chat, regular, "skill_update_confirm:helper")
+
+            checks.check_true("answer sent", query.answered)
+            checks.check_true("answer is alert", query.answer_show_alert)
+            checks.check_in("alert mentions admin", "admin", query.answer_text.lower())
+            checks.check("no edit made", len(cb_msg.replies), 0)
+        finally:
+            cleanup()
 
 
-async def _main():
-    await _run_all()
-    print(f"\n{'=' * 40}")
-    print(f"  {checks.passed} passed, {checks.failed} failed")
-    print(f"{'=' * 40}")
-    raise SystemExit(1 if checks.failed else 0)
+run_test("skill_update callback non-admin alert", test_skill_update_callback_nonadmin_alert())
+
+
+async def test_skill_update_callback_admin_confirm():
+    """Admin confirming update via callback actually updates the skill and shows result."""
+    import app.store as store_mod
+    import app.telegram_handlers as th
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
+        try:
+            make_store_skill(tmp_store, "helper", body=STORE_V1)
+            prov = FakeProvider("claude")
+            setup_globals(_admin_cfg(data_dir), prov)
+
+            admin = FakeUser(uid=100, username="admin")
+            chat = FakeChat(1001)
+
+            # Install first
+            await send_command(th.cmd_skills, chat, admin, "/skills install helper", ["install", "helper"])
+            old_ref = store_mod.read_ref("helper")
+            checks.check_true("ref exists", old_ref is not None)
+
+            # Update store source
+            (tmp_store / "helper" / "skill.md").write_text(
+                "---\nname: helper\ndisplay_name: helper\n"
+                "description: test fixture\n---\n\n" + STORE_V2 + "\n"
+            )
+
+            # Admin confirms update via callback
+            query, cb_msg = await send_callback(
+                th.handle_skill_update_callback, chat, admin, "skill_update_confirm:helper")
+
+            checks.check_true("answered", query.answered)
+            checks.check_false("not alert", query.answer_show_alert)
+            reply_text = cb_msg.replies[-1].get("edit_text", "") if cb_msg.replies else ""
+            checks.check_in("shows update result", "helper", reply_text)
+
+            new_ref = store_mod.read_ref("helper")
+            checks.check_true("ref updated", new_ref is not None and new_ref.digest != old_ref.digest)
+        finally:
+            cleanup()
+
+
+run_test("skill_update callback admin confirm", test_skill_update_callback_admin_confirm())
+
+
+async def test_skill_update_callback_cancel():
+    """Cancel button on update callback edits message without updating."""
+    import app.telegram_handlers as th
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
+        try:
+            make_store_skill(tmp_store, "helper", body=STORE_V1)
+            prov = FakeProvider("claude")
+            setup_globals(_admin_cfg(data_dir), prov)
+
+            admin = FakeUser(uid=100, username="admin")
+            chat = FakeChat(1001)
+
+            query, cb_msg = await send_callback(
+                th.handle_skill_update_callback, chat, admin, "skill_update_cancel")
+
+            checks.check_true("answered", query.answered)
+            reply_text = cb_msg.replies[-1].get("edit_text", "") if cb_msg.replies else ""
+            checks.check_in("shows cancelled", "cancelled", reply_text.lower())
+        finally:
+            cleanup()
+
+
+run_test("skill_update callback cancel", test_skill_update_callback_cancel())
+
+
+async def test_skill_add_callback_confirm():
+    """Confirming skill add via callback activates the skill in session."""
+    import app.store as store_mod
+    import app.telegram_handlers as th
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
+        try:
+            make_store_skill(tmp_store, "helper", body=STORE_V1)
+            prov = FakeProvider("claude")
+            setup_globals(_admin_cfg(data_dir), prov)
+
+            admin = FakeUser(uid=100, username="admin")
+            chat = FakeChat(1001)
+
+            # Install the skill so it's in the catalog
+            await send_command(th.cmd_skills, chat, admin, "/skills install helper", ["install", "helper"])
+
+            # Confirm add via callback (simulates user clicking "Yes" on size warning)
+            query, cb_msg = await send_callback(
+                th.handle_skill_add_callback, chat, admin, "skill_add_confirm:helper")
+
+            checks.check_true("answered", query.answered)
+            checks.check_false("not alert", query.answer_show_alert)
+            reply_text = cb_msg.replies[-1].get("edit_text", "") if cb_msg.replies else ""
+            checks.check_in("shows activated", "activated", reply_text.lower())
+
+            # Skill should be in session
+            session = load_session_disk(data_dir, 1001, prov)
+            checks.check_in("helper in active skills", "helper", session.get("active_skills", []))
+        finally:
+            cleanup()
+
+
+run_test("skill_add callback confirm", test_skill_add_callback_confirm())
+
+
+async def test_skill_add_callback_cancel():
+    """Cancel button on skill add callback edits message without activating."""
+    import app.telegram_handlers as th
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
+        try:
+            make_store_skill(tmp_store, "helper", body=STORE_V1)
+            prov = FakeProvider("claude")
+            setup_globals(_admin_cfg(data_dir), prov)
+
+            admin = FakeUser(uid=100, username="admin")
+            chat = FakeChat(1001)
+
+            await send_command(th.cmd_skills, chat, admin, "/skills install helper", ["install", "helper"])
+
+            query, cb_msg = await send_callback(
+                th.handle_skill_add_callback, chat, admin, "skill_add_cancel")
+
+            checks.check_true("answered", query.answered)
+            reply_text = cb_msg.replies[-1].get("edit_text", "") if cb_msg.replies else ""
+            checks.check_in("shows cancelled", "cancelled", reply_text.lower())
+
+            # Skill should NOT be in session
+            session = load_session_disk(data_dir, 1001, prov)
+            checks.check_not_in("helper not active", "helper", session.get("active_skills", []))
+        finally:
+            cleanup()
+
+
+run_test("skill_add callback cancel", test_skill_add_callback_cancel())
+
+
+async def test_callback_unauthorized_alert():
+    """Unauthorized user clicking any callback gets 'Not authorized' alert."""
+    import app.telegram_handlers as th
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
+        try:
+            prov = FakeProvider("claude")
+            setup_globals(_admin_cfg(data_dir), prov)
+
+            # User 999 is not in allowed_user_ids
+            stranger = FakeUser(uid=999, username="nobody")
+            chat = FakeChat(9999)
+
+            query, cb_msg = await send_callback(
+                th.handle_callback, chat, stranger, "approval_approve")
+
+            checks.check_true("answered", query.answered)
+            checks.check_true("is alert", query.answer_show_alert)
+            checks.check_in("says not authorized", "not authorized", query.answer_text.lower())
+            checks.check("no edits", len(cb_msg.replies), 0)
+        finally:
+            cleanup()
+
+
+run_test("callback unauthorized alert", test_callback_unauthorized_alert())
 
 
 if __name__ == "__main__":
-    asyncio.run(_main())
+    checks.run_async_and_exit()

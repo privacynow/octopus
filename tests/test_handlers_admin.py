@@ -1,6 +1,5 @@
 """Tests for /admin sessions handler."""
 
-import asyncio
 import sys
 from pathlib import Path
 
@@ -25,11 +24,7 @@ from tests.support.handler_support import (
 )
 
 checks = Checks()
-_tests: list[tuple[str, object]] = []
-
-
-def run_test(name, coro):
-    _tests.append((name, coro))
+run_test = checks.add_test
 
 
 async def test_admin_requires_admin():
@@ -225,18 +220,5 @@ async def test_admin_not_allowed():
 run_test("disallowed user", test_admin_not_allowed())
 
 
-# Run all tests
-for name, coro in _tests:
-    print(f"\n--- {name} ---")
-    try:
-        asyncio.get_event_loop().run_until_complete(coro)
-    except Exception as exc:
-        print(f"  FAIL  {name} (exception: {exc})")
-        import traceback
-        traceback.print_exc()
-        checks.failed += 1
-
-print(f"\n{'='*40}")
-print(f"  {checks.passed} passed, {checks.failed} failed")
-print(f"{'='*40}")
-sys.exit(1 if checks.failed else 0)
+if __name__ == "__main__":
+    checks.run_async_and_exit()

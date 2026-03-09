@@ -100,7 +100,4 @@ ok4, retry = rl.check(1)
 checks.check("3 allowed under hour cap", all([ok1, ok2, ok3]), True)
 checks.check("4th blocked by hour limit", ok4, False)
 
-print(f"\n{'='*40}")
-print(f"  {checks.passed} passed, {checks.failed} failed")
-print(f"{'='*40}")
-sys.exit(1 if checks.failed else 0)
+checks.run_and_exit()

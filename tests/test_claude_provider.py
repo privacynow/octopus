@@ -62,8 +62,4 @@ env = ClaudeProvider._clean_env()
 check("CLAUDECODE removed", "CLAUDECODE" not in env, True)
 check("PATH preserved", "PATH" in env, True)
 
-# -- Summary --
-print(f"\n{'='*40}")
-print(f"  {checks.passed} passed, {checks.failed} failed")
-print(f"{'='*40}")
-sys.exit(1 if checks.failed else 0)
+checks.run_and_exit()

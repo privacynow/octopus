@@ -1,6 +1,5 @@
 """Tests for the inbound transport normalization layer (app/transport.py)."""
 
-import asyncio
 import sys
 import tempfile
 from pathlib import Path
@@ -33,11 +32,7 @@ from tests.support.handler_support import (
 )
 
 checks = Checks()
-_tests: list[tuple[str, object]] = []
-
-
-def run_test(name, coro_or_func):
-    _tests.append((name, coro_or_func))
+run_test = checks.add_test
 
 
 # ---------------------------------------------------------------------------
@@ -627,30 +622,5 @@ run_test("handle_message caption reaches provider", test_handle_message_caption_
 
 
 # ---------------------------------------------------------------------------
-# Runner
-# ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    failed = 0
-    for name, test in _tests:
-        print(f"\n=== {name} ===")
-        try:
-            if asyncio.iscoroutine(test):
-                loop.run_until_complete(test)
-            else:
-                test()
-        except Exception as e:
-            print(f"  ERROR: {e}")
-            import traceback
-            traceback.print_exc()
-            failed += 1
-    loop.close()
-
-    failed += checks.failed
-
-    print(f"\n{'=' * 40}")
-    print(f"  {checks.passed} passed, {failed} failed")
-    print(f"{'=' * 40}")
-    if failed > 0:
-        sys.exit(1)
+    checks.run_async_and_exit()

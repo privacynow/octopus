@@ -444,8 +444,4 @@ cmd_with_chat_dir = p_iso._build_run_cmd(
 )
 check("claude cmd has chat-specific dir", "/tmp/data/uploads/111" in cmd_with_chat_dir, True)
 
-# -- Summary --
-print(f"\n{'='*40}")
-print(f"  {checks.passed} passed, {checks.failed} failed")
-print(f"{'='*40}")
-sys.exit(1 if checks.failed else 0)
+checks.run_and_exit()

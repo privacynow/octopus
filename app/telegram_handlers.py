@@ -32,13 +32,12 @@ from app.formatting import extract_send_directives, md_to_telegram_html, split_h
 from app.providers.base import PendingRequest, Provider, RunContext, PreflightContext, compute_context_hash
 from app.skills import (
     build_run_context, build_preflight_context,
-    get_provider_config_digest, get_skill_digests, load_catalog,
+    get_provider_config_digest, get_skill_digests,
     get_skill_requirements, check_credentials, load_user_credentials,
     save_user_credential, delete_user_credentials, list_user_credential_skills,
     derive_encryption_key,
     build_credential_env,
-    scaffold_skill, validate_active_skills, validate_credential,
-    check_prompt_size, estimate_prompt_size,
+    validate_credential,
     stage_codex_scripts, cleanup_codex_scripts,
     SkillRequirement,
 )
@@ -157,26 +156,46 @@ def is_admin(user) -> bool:
     return u.id in cfg.admin_user_ids or u.username in cfg.admin_usernames
 
 
-def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
-    """Check prompt size in all chats where skill_name is active.
+def _command_handler(fn):
+    """Decorator: normalize_command → is_allowed gate → call fn(event, update, context)."""
+    import functools
+    @functools.wraps(fn)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        event = normalize_command(update, context)
+        if event is None or not is_allowed(event.user):
+            return
+        await fn(event, update, context)
+    return wrapper
 
-    Returns list of warning strings for chats over threshold.
+
+def _callback_handler(fn):
+    """Decorator: normalize_callback → is_allowed gate → call fn(event, query).
+
+    Does NOT call query.answer() — handlers control their own answer semantics
+    (some need alerts, some need silent acks, some answer conditionally).
     """
-    from app.skills import filter_resolvable_skills
-    warnings: list[str] = []
-    for info in list_sessions(data_dir):
-        active = filter_resolvable_skills(info.get("active_skills", []))
-        if skill_name not in active:
-            continue
-        session_data = load_session(
-            data_dir, info["chat_id"], _cfg().provider_name,
-            lambda: _prov().new_provider_state(), _cfg().approval_mode,
-        )
-        role = session_data.get("role", "")
-        warning = check_prompt_size(role, active)
-        if warning:
-            warnings.append(f"  Chat {info['chat_id']}: {warning}")
-    return warnings
+    import functools
+    @functools.wraps(fn)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        event = normalize_callback(update)
+        if event is None:
+            return
+        query = update.callback_query
+        if not is_allowed(event.user):
+            await query.answer("Not authorized.", show_alert=True)
+            return
+        await fn(event, query)
+    return wrapper
+
+
+def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
+    """Check prompt size in all chats where skill_name is active."""
+    from app.doctor import check_prompt_size_cross_chat
+    cfg = _cfg()
+    return check_prompt_size_cross_chat(
+        data_dir, skill_name, cfg.provider_name,
+        _prov().new_provider_state, cfg.approval_mode,
+    )
 
 
 # -- Helpers ---------------------------------------------------------------
@@ -830,10 +849,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
-async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
+@_command_handler
+async def cmd_new(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = event.chat_id
     cfg = _cfg()
     prov = _prov()
@@ -860,10 +877,8 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(f"Fresh {prov.name} conversation started.")
 
 
-async def cmd_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
+@_command_handler
+async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     session = _load(event.chat_id)
     cfg = _cfg()
     pstate = session.get("provider_state", {})
@@ -896,10 +911,8 @@ async def cmd_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
-async def cmd_approval(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
+@_command_handler
+async def cmd_approval(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = event.chat_id
     arg = (event.args[0].lower() if event.args else "status")
     if arg not in {"on", "off", "status"}:
@@ -922,26 +935,20 @@ async def cmd_approval(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
-async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
+@_command_handler
+async def cmd_approve(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     async with CHAT_LOCKS[event.chat_id]:
         await approve_pending(event.chat_id, update.effective_message)
 
 
-async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
+@_command_handler
+async def cmd_reject(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     async with CHAT_LOCKS[event.chat_id]:
         await reject_pending(event.chat_id, update.effective_message)
 
 
-async def cmd_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
+@_command_handler
+async def cmd_send(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not event.args:
         await update.effective_message.reply_text("Usage: /send <path>")
         return
@@ -953,10 +960,8 @@ async def cmd_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_path_to_chat(update.effective_message, resolved)
 
 
-async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
+@_command_handler
+async def cmd_id(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     username = event.user.username or "[none]"
     await update.effective_message.reply_text(
         f"Your user ID: <code>{event.user.id}</code>\n"
@@ -965,62 +970,21 @@ async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def cmd_doctor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
-    from app.config import validate_config
-    cfg_errors = validate_config(_cfg())
-    prov_errors = _prov().check_health()
-    prov_errors.extend(await _prov().check_runtime_health())
-    # Validate active skills for this chat
+@_command_handler
+async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from app.doctor import collect_doctor_report
     session = _load(event.chat_id)
-    user_id = event.user.id
-    skill_errors = validate_active_skills(
-        session.get("active_skills", []),
-        user_id=user_id,
-        data_dir=_cfg().data_dir,
+    report = await collect_doctor_report(
+        _cfg(), _prov(),
+        session=session,
+        user_id=event.user.id,
         encryption_key=_encryption_key(),
     )
-    # Advisory warnings (non-fatal)
-    warnings: list[str] = []
-    cfg = _cfg()
-    total_users = len(cfg.allowed_user_ids) + len(cfg.allowed_usernames)
-    if total_users > 1 and not cfg.admin_users_explicit:
-        warnings.append(
-            "BOT_ADMIN_USERS not set \u2014 all allowed users have admin "
-            "privileges (install/uninstall skills). Set BOT_ADMIN_USERS to restrict.")
-
-    # Stale session scan — only flag entries older than a threshold
-    stale_pending = 0
-    stale_setup = 0
-    now = time.time()
-    _STALE_PENDING_SECONDS = 3600     # 1 hour
-    _STALE_SETUP_SECONDS = 600        # 10 minutes
-    for info in list_sessions(cfg.data_dir):
-        if not info["has_pending"] and not info["has_setup"]:
-            continue
-        session_data = load_session(
-            cfg.data_dir, info["chat_id"], cfg.provider_name,
-            lambda: _prov().new_provider_state(), cfg.approval_mode,
-        )
-        pending = session_data.get("pending_request")
-        if pending and (now - pending.get("created_at", 0)) > _STALE_PENDING_SECONDS:
-            stale_pending += 1
-        setup = session_data.get("awaiting_skill_setup")
-        if setup and (now - setup.get("started_at", 0)) > _STALE_SETUP_SECONDS:
-            stale_setup += 1
-    if stale_pending:
-        warnings.append(f"{stale_pending} session(s) with stale pending approval requests (>1h old).")
-    if stale_setup:
-        warnings.append(f"{stale_setup} session(s) with stale credential setup (>10m old).")
-
-    all_errors = cfg_errors + prov_errors + skill_errors
     parts: list[str] = []
-    if all_errors:
-        parts.extend(f"\u274c {html.escape(e)}" for e in all_errors)
-    if warnings:
-        parts.extend(f"\u26a0\ufe0f {html.escape(w)}" for w in warnings)
+    if report.errors:
+        parts.extend(f"\u274c {html.escape(e)}" for e in report.errors)
+    if report.warnings:
+        parts.extend(f"\u26a0\ufe0f {html.escape(w)}" for w in report.warnings)
     if parts:
         await update.effective_message.reply_text(
             "\n".join(parts), parse_mode=ParseMode.HTML)
@@ -1029,10 +993,8 @@ async def cmd_doctor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 
-async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
+@_command_handler
+async def cmd_export(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = event.chat_id
     cfg = _cfg()
 
@@ -1067,10 +1029,8 @@ async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.effective_message.reply_document(document=doc)
 
 
-async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
+@_command_handler
+async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(event.user):
         await update.effective_message.reply_text("Admin access required.")
         return
@@ -1152,373 +1112,42 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "\n".join(lines), parse_mode=ParseMode.HTML)
 
 
-async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
-    chat_id = event.chat_id
+@_command_handler
+async def cmd_skills(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from app.skill_commands import (
+        skills_show, skills_list, skills_add, skills_remove,
+        skills_setup, skills_clear, skills_create, skills_search,
+        skills_info, skills_install, skills_uninstall, skills_updates,
+        skills_diff, skills_update,
+    )
     args = event.args
-    catalog = load_catalog()
-
     if not args:
-        # /skills — show active skills and available count
-        session = _load(chat_id)
-        active = session.get("active_skills", [])
-        if active:
-            lines = [f"<b>Active skills ({len(active)}):</b>"]
-            for name in active:
-                meta = catalog.get(name)
-                display = meta.display_name if meta else name
-                lines.append(f"  {html.escape(display)}")
-        else:
-            lines = ["<b>No active skills.</b>"]
-        lines.append(f"\n{len(catalog)} skill(s) available. Use /skills list to see all.")
-        await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        await skills_show(event, update)
         return
 
     sub = args[0].lower()
-
+    _SUBS_WITH_ARG = {
+        "add": skills_add, "remove": skills_remove, "setup": skills_setup,
+        "create": skills_create, "info": skills_info, "install": skills_install,
+        "uninstall": skills_uninstall, "diff": skills_diff,
+    }
+    if sub in _SUBS_WITH_ARG and len(args) >= 2:
+        await _SUBS_WITH_ARG[sub](event, update, args[1])
+        return
     if sub == "list":
-        if not catalog:
-            await update.effective_message.reply_text("No skills available.")
-            return
-        session = _load(chat_id)
-        active = set(session.get("active_skills", []))
-        # Load user credentials for status annotations
-        req_user_id = event.user.id
-        user_creds = load_user_credentials(_cfg().data_dir, req_user_id, _encryption_key())
-        lines = ["<b>Available skills:</b>"]
-        for name, meta in sorted(catalog.items()):
-            from app.store import is_store_installed, has_custom_override
-            if name in active:
-                status = " [active]"
-            else:
-                reqs = get_skill_requirements(name)
-                if reqs:
-                    missing = check_credentials(name, user_creds)
-                    status = " [needs setup]" if missing else " [ready]"
-                else:
-                    status = ""
-            if has_custom_override(name):
-                custom_tag = " [custom override]"
-            elif meta.is_custom:
-                custom_tag = " (custom)"
-            elif is_store_installed(name):
-                custom_tag = " (managed)"
-            else:
-                custom_tag = ""
-            desc = f" \u2014 {html.escape(meta.description)}" if meta.description else ""
-            lines.append(f"  <code>{html.escape(name)}</code>{desc}{status}{custom_tag}")
-        await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        await skills_list(event, update)
         return
-
-    if sub == "add" and len(args) >= 2:
-        name = args[1]
-        if name not in catalog:
-            await update.effective_message.reply_text(
-                f"Unknown skill: {html.escape(name)}. Use /skills list to see available.",
-                parse_mode=ParseMode.HTML,
-            )
-            return
-        user_id = event.user.id
-        async with CHAT_LOCKS[chat_id]:
-            session = _load(chat_id)
-            active = session.get("active_skills", [])
-
-            # Check credential requirements before activating
-            requirements = get_skill_requirements(name)
-            if requirements:
-                key = _encryption_key()
-                user_creds = load_user_credentials(_cfg().data_dir, user_id, key)
-                missing = check_credentials(name, user_creds)
-                if missing:
-                    # Don't overwrite another user's in-progress setup
-                    if _foreign_skill_setup(session, user_id):
-                        await update.effective_message.reply_text(
-                            _foreign_setup_message(session.get("awaiting_skill_setup", {})),
-                        )
-                        return
-
-                    # Don't add to active_skills yet — start credential setup first
-                    setup = _build_setup_state(user_id, name, missing)
-                    session["awaiting_skill_setup"] = setup
-                    _save(chat_id, session)
-                    first_req = setup["remaining"][0]
-                    await update.effective_message.reply_text(
-                        f"Skill <code>{html.escape(name)}</code> needs setup before activation.\n\n"
-                        f"{_format_credential_prompt(first_req)}",
-                        parse_mode=ParseMode.HTML,
-                    )
-                    return
-
-            # Credentials satisfied (or none required) — check size before activating
-            if name not in active:
-                projected_size, over = estimate_prompt_size(
-                    session.get("role", ""), active, name)
-                if over:
-                    from app.skills import PROMPT_SIZE_WARNING_THRESHOLD
-                    kb = InlineKeyboardMarkup([[
-                        InlineKeyboardButton("Yes", callback_data=f"skill_add_confirm:{name}"),
-                        InlineKeyboardButton("No", callback_data="skill_add_cancel"),
-                    ]])
-                    await update.effective_message.reply_text(
-                        f"Adding <code>{html.escape(name)}</code> would bring total "
-                        f"prompt context to ~{projected_size:,} chars "
-                        f"(threshold: {PROMPT_SIZE_WARNING_THRESHOLD:,}). "
-                        f"This may reduce response quality. Continue?",
-                        parse_mode=ParseMode.HTML, reply_markup=kb)
-                    return
-                active.append(name)
-                session["active_skills"] = active
-                _save(chat_id, session)
-            await update.effective_message.reply_text(
-                f"Skill <code>{html.escape(name)}</code> activated.",
-                parse_mode=ParseMode.HTML)
-        return
-
-    if sub == "remove" and len(args) >= 2:
-        name = args[1]
-        async with CHAT_LOCKS[chat_id]:
-            session = _load(chat_id)
-            req_user_id = event.user.id
-            had_setup = session.get("awaiting_skill_setup") is not None
-            if _foreign_skill_setup(session, req_user_id, skill_name=name):
-                await update.effective_message.reply_text(
-                    _foreign_setup_message(session.get("awaiting_skill_setup", {})),
-                )
-                return
-            # _foreign_skill_setup may have expired a stale setup (had_setup but now None).
-            setup_expired = had_setup and session.get("awaiting_skill_setup") is None
-            active = session.get("active_skills", [])
-            removed = False
-            if name in active:
-                active.remove(name)
-                session["active_skills"] = active
-                removed = True
-            setup = session.get("awaiting_skill_setup")
-            setup_cleared = False
-            if setup and setup.get("skill") == name:
-                if setup.get("user_id") == req_user_id:
-                    session["awaiting_skill_setup"] = None
-                    setup_cleared = True
-            if removed or setup_cleared or setup_expired:
-                _save(chat_id, session)
-            if removed:
-                await update.effective_message.reply_text(f"Skill <code>{html.escape(name)}</code> deactivated.", parse_mode=ParseMode.HTML)
-            else:
-                await update.effective_message.reply_text(f"Skill <code>{html.escape(name)}</code> is not active.", parse_mode=ParseMode.HTML)
-        return
-
-    if sub == "setup" and len(args) >= 2:
-        name = args[1]
-        if name not in catalog:
-            await update.effective_message.reply_text(
-                f"Unknown skill: {html.escape(name)}. Use /skills list to see available.",
-                parse_mode=ParseMode.HTML,
-            )
-            return
-        requirements = get_skill_requirements(name)
-        if not requirements:
-            await update.effective_message.reply_text(
-                f"Skill <code>{html.escape(name)}</code> has no credential requirements.",
-                parse_mode=ParseMode.HTML,
-            )
-            return
-        user_id = event.user.id
-        async with CHAT_LOCKS[chat_id]:
-            session = _load(chat_id)
-            # Don't overwrite another user's in-progress setup
-            if _foreign_skill_setup(session, user_id):
-                await update.effective_message.reply_text(
-                    _foreign_setup_message(session.get("awaiting_skill_setup", {})),
-                )
-                return
-            setup = _build_setup_state(user_id, name, requirements)
-            session["awaiting_skill_setup"] = setup
-            _save(chat_id, session)
-        first_req = setup["remaining"][0]
-        await update.effective_message.reply_text(
-            f"Setting up <code>{html.escape(name)}</code>.\n\n"
-            f"{_format_credential_prompt(first_req)}",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
     if sub == "clear":
-        async with CHAT_LOCKS[chat_id]:
-            session = _load(chat_id)
-            req_user_id = event.user.id
-            if _foreign_skill_setup(session, req_user_id):
-                await update.effective_message.reply_text(
-                    _foreign_setup_message(session.get("awaiting_skill_setup", {})),
-                )
-                return
-            session["active_skills"] = []
-            session["awaiting_skill_setup"] = None
-            _save(chat_id, session)
-        await update.effective_message.reply_text("All skills removed.")
+        await skills_clear(event, update)
         return
-
-    if sub == "create" and len(args) >= 2:
-        name = args[1]
-        try:
-            skill_dir = scaffold_skill(name)
-            await update.effective_message.reply_text(
-                f"Created custom skill <code>{html.escape(name)}</code>\n"
-                f"Edit: <code>{html.escape(str(skill_dir / 'skill.md'))}</code>",
-                parse_mode=ParseMode.HTML,
-            )
-        except ValueError as e:
-            await update.effective_message.reply_text(str(e))
-        return
-
     if sub == "search" and len(args) >= 2:
-        from app.store import search as store_search
-        query = " ".join(args[1:])
-        results = store_search(query)
-        if not results:
-            await update.effective_message.reply_text(
-                f"No store skills matching '{html.escape(query)}'.",
-                parse_mode=ParseMode.HTML,
-            )
-            return
-        lines = [f"<b>Store skills matching '{html.escape(query)}':</b>"]
-        for info in results:
-            desc = f" \u2014 {html.escape(info.description)}" if info.description else ""
-            lines.append(f"  <code>{html.escape(info.name)}</code>{desc}")
-        lines.append("\nUse /skills info <name> for details, /skills install <name> to install.")
-        await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        await skills_search(event, update, " ".join(args[1:]))
         return
-
-    if sub == "info" and len(args) >= 2:
-        from app.skills import skill_info_resolved
-        name = args[1]
-        result = skill_info_resolved(name)
-        if not result:
-            await update.effective_message.reply_text(
-                f"Skill '{html.escape(name)}' not found.",
-                parse_mode=ParseMode.HTML,
-            )
-            return
-        meta, body, source, skill_path = result
-        display_name = meta.get("display_name", name)
-        description = meta.get("description", "")
-        parts = [f"<b>{html.escape(display_name)}</b>"]
-        if description:
-            parts.append(html.escape(description))
-        # Show credential requirements
-        reqs = get_skill_requirements(name)
-        if reqs:
-            req_keys = ", ".join(r.key for r in reqs)
-            parts.append(f"Requires: {html.escape(req_keys)}")
-        elif source == "store (not installed)":
-            from app.store import get_store_skill_requirements
-            store_keys = get_store_skill_requirements(name)
-            if store_keys:
-                parts.append(f"Requires: {html.escape(', '.join(store_keys))}")
-        # Show provider compatibility from the resolved directory
-        providers = []
-        if (skill_path / "claude.yaml").is_file():
-            providers.append("Claude")
-        if (skill_path / "codex.yaml").is_file():
-            providers.append("Codex")
-        if providers:
-            parts.append(f"Providers: {', '.join(providers)}")
-        parts.append(f"Resolves to: {source}")
-        # Preview: up to 1000 chars, break at paragraph boundary
-        if len(body) > 1000:
-            cut = body.rfind("\n\n", 0, 1000)
-            if cut < 500:
-                cut = 1000
-            preview = body[:cut] + "..."
-        else:
-            preview = body
-        parts.append(f"\n<pre>{html.escape(preview)}</pre>")
-        await update.effective_message.reply_text("\n".join(parts), parse_mode=ParseMode.HTML)
-        return
-
-    if sub == "install" and len(args) >= 2:
-        from app.store import install as store_install
-        if not is_admin(event.user):
-            await update.effective_message.reply_text("Only admins can install store skills.")
-            return
-        name = args[1]
-        ok, msg = store_install(name)
-        await update.effective_message.reply_text(html.escape(msg), parse_mode=ParseMode.HTML)
-        return
-
-    if sub == "uninstall" and len(args) >= 2:
-        from app.store import uninstall as store_uninstall
-        if not is_admin(event.user):
-            await update.effective_message.reply_text("Only admins can uninstall store skills.")
-            return
-        name = args[1]
-        cfg = _cfg()
-        ok, msg = store_uninstall(name, cfg.default_skills)
-        await update.effective_message.reply_text(html.escape(msg), parse_mode=ParseMode.HTML)
-        return
-
     if sub == "updates":
-        from app.store import check_updates as store_check_updates
-        updates = store_check_updates()
-        if not updates:
-            await update.effective_message.reply_text("No store-installed skills found.")
-            return
-        lines = ["<b>Store skill status:</b>"]
-        from app.store import has_custom_override
-        for name, status in updates:
-            label = "update available" if status == "update_available" else "up to date"
-            override = " [custom override]" if has_custom_override(name) else ""
-            lines.append(f"  <code>{html.escape(name)}</code> \u2014 {label}{override}")
-        await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        await skills_updates(event, update)
         return
-
-    if sub == "diff" and len(args) >= 2:
-        from app.store import diff_skill
-        name = args[1]
-        ok, diff_text = diff_skill(name)
-        if not diff_text.strip():
-            diff_text = "No differences."
-        # Send as preformatted text
-        if len(diff_text) > 4000:
-            diff_text = diff_text[:4000] + "\n... (truncated)"
-        await update.effective_message.reply_text(
-            f"<pre>{html.escape(diff_text)}</pre>", parse_mode=ParseMode.HTML)
-        return
-
     if sub == "update" and len(args) >= 2:
-        from app.store import update_skill as store_update_skill, update_all as store_update_all
-        if not is_admin(event.user):
-            await update.effective_message.reply_text("Only admins can update store skills.")
-            return
-        target = args[1]
-        if target == "all":
-            results = store_update_all()
-            if not results:
-                await update.effective_message.reply_text("No store skills need updating.")
-                return
-            lines = ["<b>Update results:</b>"]
-            cfg = _cfg()
-            all_size_warnings: list[str] = []
-            for name, ok, msg in results:
-                status = "\u2714" if ok else "\u2718"
-                lines.append(f"  {status} {html.escape(msg)}")
-                if ok:
-                    all_size_warnings.extend(_check_prompt_size_cross_chat(cfg.data_dir, name))
-            if all_size_warnings:
-                lines.append("")
-                lines.append("<b>Prompt size warnings:</b>")
-                for w in all_size_warnings:
-                    lines.append(f"  {html.escape(w)}")
-            await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
-        else:
-            ok, msg = store_update_skill(target)
-            if ok:
-                cfg = _cfg()
-                size_warnings = _check_prompt_size_cross_chat(cfg.data_dir, target)
-                if size_warnings:
-                    msg += "\n\nPrompt size warnings:\n" + "\n".join(size_warnings)
-            await update.effective_message.reply_text(html.escape(msg), parse_mode=ParseMode.HTML)
+        await skills_update(event, update, args[1])
         return
 
     await update.effective_message.reply_text(
@@ -1526,10 +1155,8 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
-async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
+@_command_handler
+async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = event.chat_id
     user_id = event.user.id
 
@@ -1561,10 +1188,8 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.effective_message.reply_text("Nothing to cancel.")
 
 
-async def cmd_clear_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
+@_command_handler
+async def cmd_clear_credentials(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = event.user.id
     args = event.args
     skill_name = args[0] if args else None
@@ -1643,15 +1268,8 @@ async def _execute_clear_credentials(
     await query.edit_message_text("\n".join(parts), parse_mode=ParseMode.HTML)
 
 
-async def handle_clear_cred_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_callback(update)
-    if event is None:
-        return
-    query = update.callback_query
-    if not is_allowed(event.user):
-        await query.answer("Not authorized.", show_alert=True)
-        return
-
+@_callback_handler
+async def handle_clear_cred_callback(event, query) -> None:
     chat_id = event.chat_id
     clicker_id = event.user.id
 
@@ -1687,10 +1305,8 @@ async def handle_clear_cred_callback(update: Update, context: ContextTypes.DEFAU
         return
 
 
-async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
+@_command_handler
+async def cmd_compact(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = event.chat_id
     args = event.args
 
@@ -1720,10 +1336,8 @@ async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
-async def cmd_raw(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
+@_command_handler
+async def cmd_raw(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = event.chat_id
     cfg = _cfg()
     args = event.args
@@ -1744,10 +1358,8 @@ async def cmd_raw(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await send_formatted_reply(update.effective_message, raw_text)
 
 
-async def cmd_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_command(update, context)
-    if event is None or not is_allowed(event.user):
-        return
+@_command_handler
+async def cmd_role(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = event.chat_id
     args = event.args
 
@@ -1892,15 +1504,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await execute_request(chat_id, prompt, image_paths, message, request_user_id=user_id)
 
 
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_callback(update)
-    if event is None:
-        return
-    query = update.callback_query
-    if not is_allowed(event.user):
-        await query.answer("Not authorized.", show_alert=True)
-        return
-
+@_callback_handler
+async def handle_callback(event, query) -> None:
     await query.answer()
     chat_id = event.chat_id
 
@@ -1975,15 +1580,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 
-async def handle_skill_add_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_callback(update)
-    if event is None:
-        return
-    query = update.callback_query
-    if not is_allowed(event.user):
-        await query.answer("Not authorized.", show_alert=True)
-        return
-
+@_callback_handler
+async def handle_skill_add_callback(event, query) -> None:
     await query.answer()
     chat_id = event.chat_id
 
@@ -2007,14 +1605,8 @@ async def handle_skill_add_callback(update: Update, context: ContextTypes.DEFAUL
                 parse_mode=ParseMode.HTML)
 
 
-async def handle_skill_update_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    event = normalize_callback(update)
-    if event is None:
-        return
-    query = update.callback_query
-    if not is_allowed(event.user):
-        await query.answer("Not authorized.", show_alert=True)
-        return
+@_callback_handler
+async def handle_skill_update_callback(event, query) -> None:
     if not is_admin(event.user):
         await query.answer("Only admins can update skills.", show_alert=True)
         return

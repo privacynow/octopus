@@ -229,8 +229,4 @@ has_tags = any("<b>" in c or "</b>" in c for c in chunks_broken)
 all_balanced = all(c.count("<b>") == c.count("</b>") for c in chunks_broken)
 check("broken html either balanced or stripped", has_tags is False or all_balanced, True)
 
-# -- Summary --
-print(f"\n{'='*40}")
-print(f"  {checks.passed} passed, {checks.failed} failed")
-print(f"{'='*40}")
-sys.exit(1 if checks.failed else 0)
+checks.run_and_exit()

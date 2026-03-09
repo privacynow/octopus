@@ -1,6 +1,5 @@
 """Tests for codex provider — command building, event parsing."""
 
-import asyncio
 import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 
@@ -362,15 +361,9 @@ async def _run_modern_schema_tests():
     check("modern resume configured progress", any("Resumed Codex thread" in u and "resume-modern" in u for u in progress2.updates), True)
     check("modern resume draft progress", any("resume final reply" in u for u in progress2.updates), True)
 
-async def _main():
-    await _run_skip_permissions_tests()
-    await _run_timeout_tests()
-    await _run_modern_schema_tests()
-
+checks.add_test("skip permissions tests", _run_skip_permissions_tests())
+checks.add_test("timeout tests", _run_timeout_tests())
+checks.add_test("modern schema tests", _run_modern_schema_tests())
 
 if __name__ == "__main__":
-    asyncio.run(_main())
-    print(f"\n{'='*40}")
-    print(f"  {checks.passed} passed, {checks.failed} failed")
-    print(f"{'='*40}")
-    sys.exit(1 if checks.failed else 0)
+    checks.run_async_and_exit()

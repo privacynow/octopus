@@ -124,7 +124,7 @@ See `.env.example` for all available options. Key settings:
 
 ```bash
 ./scripts/bootstrap.sh                                    # create venv
-./scripts/test_all.sh                                     # canonical full test suite (1,509 checks)
+./scripts/test_all.sh                                     # canonical full test suite (1,510 checks)
 ./scripts/doctor.sh <instance>                            # health check
 ```
 

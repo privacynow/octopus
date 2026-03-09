@@ -211,21 +211,6 @@ def session_exists(data_dir: Path, chat_id: int) -> bool:
     return row is not None
 
 
-# Keep session_file for backward compat during transition — tests may use it.
-# Returns a Path whose .exists() maps to session_exists().
-class _SessionPath:
-    """Thin wrapper so session_file(data_dir, chat_id).exists() still works."""
-    def __init__(self, data_dir: Path, chat_id: int):
-        self._data_dir = data_dir
-        self._chat_id = chat_id
-
-    def exists(self) -> bool:
-        return session_exists(self._data_dir, self._chat_id)
-
-
-def session_file(data_dir: Path, chat_id: int) -> _SessionPath:
-    return _SessionPath(data_dir, chat_id)
-
 
 def default_session(
     provider_name: str,

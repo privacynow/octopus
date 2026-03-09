@@ -17,7 +17,6 @@ Covers:
 - --doctor catches incompatible store schema
 """
 
-import asyncio
 import json
 import sys
 import tempfile
@@ -46,16 +45,12 @@ from tests.support.handler_support import (
 )
 
 checks = Checks()
-_tests: list[tuple[str, object]] = []
+run_test = checks.add_test
 
 MARKER_V1 = "UNIQUE_V1_MARKER_e2e_a9c4"
 MARKER_V2 = "UNIQUE_V2_MARKER_e2e_f7b2"
 MARKER_CUSTOM = "UNIQUE_CUSTOM_MARKER_e2e_3d1f"
 MARKER_CATALOG = "UNIQUE_CATALOG_MARKER_e2e_8e5a"
-
-
-def run_test(name, coro):
-    _tests.append((name, coro))
 
 
 def _store_env(tmp):
@@ -805,9 +800,9 @@ async def test_doctor_catches_bad_schema():
             # Write future schema
             store_mod.VERSION_FILE.write_text(json.dumps({"schema": 99}) + "\n")
 
-            from app.main import run_doctor
+            from app.main import _run_doctor
             try:
-                run_doctor(cfg, prov)
+                await _run_doctor(cfg, prov)
                 checks.check_true("should have raised SystemExit", False)
             except SystemExit as e:
                 checks.check("doctor exits 1", e.code, 1)
@@ -1086,29 +1081,5 @@ async def test_normalization_persists_to_disk():
 run_test("e2e: normalization persists pruned state to disk", test_normalization_persists_to_disk())
 
 
-# ============================================================================
-# Runner
-# ============================================================================
-
-async def _run_all():
-    for name, coro in _tests:
-        print(f"\n=== {name} ===")
-        try:
-            await coro
-        except Exception as exc:
-            print(f"  FAIL  {name} (exception: {exc})")
-            import traceback
-            traceback.print_exc()
-            checks.failed += 1
-
-
-async def _main():
-    await _run_all()
-    print(f"\n{'=' * 60}")
-    print(f"  test_store_e2e.py: {checks.passed} passed, {checks.failed} failed")
-    print(f"{'=' * 60}")
-    raise SystemExit(1 if checks.failed else 0)
-
-
 if __name__ == "__main__":
-    asyncio.run(_main())
+    checks.run_async_and_exit()

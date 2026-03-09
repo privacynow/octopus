@@ -4,7 +4,7 @@ import argparse
 import logging
 import sys
 
-from app.config import BotConfig, fail_fast, load_config, validate_config
+from app.config import BotConfig, fail_fast, load_config
 from app.providers.base import Provider
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
@@ -32,38 +32,23 @@ def make_provider(config: BotConfig) -> Provider:
     return cls(config)
 
 
-def _run_async(coro):
-    """Run a coroutine, handling both sync and async calling contexts."""
-    import asyncio
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    # Already in an event loop (e.g. called from tests) — create a task
-    import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(1) as pool:
-        return pool.submit(asyncio.run, coro).result(timeout=60)
+async def _run_doctor(config: BotConfig, provider: Provider) -> None:
+    from app.doctor import collect_doctor_report
+    report = await collect_doctor_report(config, provider)
+    if report.errors:
+        for e in report.errors:
+            print(f"  FAIL: {e}", file=sys.stderr)
+        raise SystemExit(1)
+    if report.warnings:
+        for w in report.warnings:
+            print(f"  WARN: {w}", file=sys.stderr)
+    print("All checks passed.")
+    raise SystemExit(0)
 
 
 def run_doctor(config: BotConfig, provider: Provider) -> None:
-    errors = validate_config(config)
-    errors.extend(provider.check_health())
-    errors.extend(_run_async(provider.check_runtime_health()))
-    # Check managed store health (schema compat, dir layout)
-    try:
-        from app.store import ensure_managed_dirs, check_schema
-        ensure_managed_dirs()
-        check_schema()
-    except RuntimeError as e:
-        errors.append(str(e))
-    except Exception as e:
-        errors.append(f"Managed store check failed: {e}")
-    if errors:
-        for e in errors:
-            print(f"  FAIL: {e}", file=sys.stderr)
-        raise SystemExit(1)
-    print("All checks passed.")
-    raise SystemExit(0)
+    import asyncio
+    asyncio.run(_run_doctor(config, provider))
 
 
 def main() -> None:

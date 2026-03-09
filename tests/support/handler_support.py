@@ -105,9 +105,13 @@ class FakeCallbackQuery:
         self.message = message or FakeMessage()
         self._user = user
         self.answered = False
+        self.answer_text = None
+        self.answer_show_alert = False
 
     async def answer(self, text=None, show_alert=False):
         self.answered = True
+        self.answer_text = text
+        self.answer_show_alert = show_alert
 
     async def edit_message_reply_markup(self, reply_markup=None):
         pass
@@ -195,6 +199,15 @@ async def send_command(handler, chat, user, text, args=None):
     upd = FakeUpdate(message=msg, user=user, chat=chat)
     await handler(upd, FakeContext(args=args or []))
     return msg
+
+
+async def send_callback(handler, chat, user, data):
+    """Fire a callback handler, return (query, message) for assertion."""
+    msg = FakeMessage(chat=chat)
+    query = FakeCallbackQuery(data, message=msg, user=user)
+    upd = FakeUpdate(user=user, chat=chat, callback_query=query)
+    await handler(upd, FakeContext())
+    return query, msg
 
 
 async def send_text(chat, user, text):

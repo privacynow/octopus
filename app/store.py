@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-import frontmatter
 import yaml
 
 _log = logging.getLogger(__name__)
@@ -228,12 +227,12 @@ def list_refs() -> dict[str, SkillRef]:
 # Object management (immutable, content-addressed)
 # ---------------------------------------------------------------------------
 
-def _object_dir(digest: str) -> Path:
+def object_dir(digest: str) -> Path:
     return OBJECTS_DIR / digest
 
 
 def _object_exists(digest: str) -> bool:
-    return _object_dir(digest).is_dir()
+    return object_dir(digest).is_dir()
 
 
 def _create_object(source_dir: Path) -> str:
@@ -258,7 +257,7 @@ def _create_object(source_dir: Path) -> str:
             meta_path.unlink()
 
     digest = hash_directory(staging)
-    dest = _object_dir(digest)
+    dest = object_dir(digest)
 
     if dest.is_dir():
         # Already exists — idempotent
@@ -278,7 +277,7 @@ def resolve_object(name: str) -> Path | None:
     ref = read_ref(name)
     if ref is None:
         return None
-    obj = _object_dir(ref.digest)
+    obj = object_dir(ref.digest)
     if not obj.is_dir():
         _log.warning("Ref '%s' points to missing object %s", name, ref.digest[:12])
         return None
@@ -291,10 +290,10 @@ def resolve_object(name: str) -> Path | None:
 
 def _parse_skill_md(path: Path) -> tuple[dict, str] | None:
     """Parse a skill.md file. Returns (metadata, body) or None on failure."""
+    from app.skills import _load_skill_md
     try:
-        post = frontmatter.load(str(path))
-        return dict(post.metadata), post.content.strip()
-    except Exception:
+        return _load_skill_md(path)
+    except (ValueError, Exception):
         return None
 
 
@@ -555,7 +554,7 @@ def diff_skill(name: str, max_chars: int = 4000) -> tuple[bool, str]:
 
     if custom_path.is_dir() and ref is not None:
         # Diff custom override vs managed object
-        obj_path = _object_dir(ref.digest)
+        obj_path = object_dir(ref.digest)
         if not obj_path.is_dir():
             return False, f"Managed object for '{name}' is missing."
         return _diff_dirs(
@@ -566,7 +565,7 @@ def diff_skill(name: str, max_chars: int = 4000) -> tuple[bool, str]:
 
     if ref is not None:
         # Diff managed object vs store source
-        obj_path = _object_dir(ref.digest)
+        obj_path = object_dir(ref.digest)
         store_path = STORE_DIR / name
         if not store_path.is_dir():
             return False, f"Skill '{name}' is no longer in the store."

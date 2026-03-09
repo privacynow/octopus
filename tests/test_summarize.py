@@ -191,8 +191,4 @@ with tempfile.TemporaryDirectory() as tmp:
 print("\n=== ring size ===")
 check("ring size is 50", _RING_SIZE, 50)
 
-# -- Summary --
-print(f"\n{'='*40}")
-print(f"  {checks.passed} passed, {checks.failed} failed")
-print(f"{'='*40}")
-sys.exit(1 if checks.failed else 0)
+checks.run_and_exit()

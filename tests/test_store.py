@@ -261,7 +261,7 @@ check("ref source", ref.source, "store")
 check("ref source_uri", ref.source_uri, "skills/store/api-testing")
 
 # Verify object was created
-obj_dir = store_mod._object_dir(ref.digest)
+obj_dir = store_mod.object_dir(ref.digest)
 check_true("object dir exists", obj_dir.is_dir())
 check_true("object has skill.md", (obj_dir / "skill.md").is_file())
 
@@ -440,7 +440,7 @@ store_hash = store_mod.hash_directory(tmp_store / "update-me")
 check("ref digest updated", ref.digest, store_hash)
 
 # Verify object has new content
-obj_dir = store_mod._object_dir(ref.digest)
+obj_dir = store_mod.object_dir(ref.digest)
 installed_body = (obj_dir / "skill.md").read_text()
 check_in("v2 content", "V2", installed_body)
 
@@ -773,12 +773,4 @@ check("digest unchanged", ref_after.digest, ref.digest)
 _restore_originals()
 
 # ===========================================================================
-# Summary
-# ===========================================================================
-
-print(f"\n{'='*60}")
-print(f"  test_store.py: {checks.passed} passed, {checks.failed} failed")
-print(f"{'='*60}")
-
-if checks.failed:
-    sys.exit(1)
+checks.run_and_exit()

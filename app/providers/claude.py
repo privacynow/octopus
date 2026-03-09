@@ -47,6 +47,8 @@ class ClaudeProvider:
             else:
                 log.info("claude version: %s", stdout.decode().strip())
         except (asyncio.TimeoutError, TimeoutError):
+            proc.kill()
+            await proc.wait()
             errors.append("'claude --version' timed out")
         except OSError as e:
             errors.append(f"'claude' binary not executable: {e}")
@@ -66,6 +68,8 @@ class ClaudeProvider:
                 else:
                     log.info("claude API ping ok")
             except (asyncio.TimeoutError, TimeoutError):
+                proc.kill()
+                await proc.wait()
                 errors.append("API ping timed out (15s)")
             except OSError as e:
                 errors.append(f"API ping error: {e}")

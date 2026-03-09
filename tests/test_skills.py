@@ -1184,8 +1184,4 @@ finally:
     skills_mod.CUSTOM_DIR = orig_custom_dir
 
 
-# -- Summary --
-print(f"\n{'='*40}")
-print(f"  {checks.passed} passed, {checks.failed} failed")
-print(f"{'='*40}")
-sys.exit(1 if checks.failed else 0)
+checks.run_and_exit()

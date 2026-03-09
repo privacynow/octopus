@@ -1,6 +1,5 @@
 """Core handler integration tests: happy-path routing, session lifecycle, /help, /start, /doctor."""
 
-import asyncio
 import sys
 from pathlib import Path
 
@@ -25,11 +24,7 @@ from tests.support.handler_support import (
 )
 
 checks = Checks()
-_tests: list[tuple[str, object]] = []
-
-
-def run_test(name, coro):
-    _tests.append((name, coro))
+run_test = checks.add_test
 
 
 async def test_happy_path():
@@ -526,26 +521,5 @@ async def test_doctor_no_stale_warning_for_fresh_sessions():
 run_test("/doctor no stale warning for fresh sessions", test_doctor_no_stale_warning_for_fresh_sessions())
 
 
-async def _run_all():
-    for name, coro in _tests:
-        print(f"\n=== {name} ===")
-        try:
-            await coro
-        except Exception as exc:
-            print(f"  FAIL  {name} (exception: {exc})")
-            import traceback
-
-            traceback.print_exc()
-            checks.failed += 1
-
-
-async def _main():
-    await _run_all()
-    print(f"\n{'=' * 40}")
-    print(f"  {checks.passed} passed, {checks.failed} failed")
-    print(f"{'=' * 40}")
-    raise SystemExit(1 if checks.failed else 0)
-
-
 if __name__ == "__main__":
-    asyncio.run(_main())
+    checks.run_async_and_exit()

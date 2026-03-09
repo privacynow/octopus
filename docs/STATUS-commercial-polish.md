@@ -22,7 +22,7 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 
 Canonical full-suite runner: `./scripts/test_all.sh`
 
-Current suite: 1,509 passing checks across 23 entrypoints.
+Current suite: 1,540 passing checks across 24 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -32,14 +32,15 @@ Current suite: 1,509 passing checks across 23 entrypoints.
 | `test_config.py` | 19 | Config loading, validation, `.env` parsing, rate limit and admin config, BOT_SKILLS validation. |
 | `test_formatting.py` | 297 | Markdown-to-Telegram HTML conversion, balanced HTML splitting, table rendering, directive extraction. |
 | `test_handlers.py` | 51 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings (admin fallback, stale sessions, prompt size). |
+
 | `test_handlers_admin.py` | 12 | `/admin sessions` summary and detail views, access gating, stale skill filtering. |
-| `test_handlers_approval.py` | 53 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL. |
+| `test_handlers_approval.py` | 55 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL, callback answer verification. |
 | `test_handlers_codex.py` | 33 | Codex-specific handler behavior: thread invalidation, boot ID, retry semantics, script staging. |
-| `test_handlers_credentials.py` | 171 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection, clear-credentials confirmation ownership, malformed validate spec resilience. |
+| `test_handlers_credentials.py` | 178 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection, clear-credentials confirmation ownership, callback answer verification, malformed validate spec resilience. |
 | `test_handlers_export.py` | 14 | `/export` command: no history, document generation, access gating. |
 | `test_handlers_output.py` | 20 | Output presentation: `/compact`, `/raw`, table rendering, summarization flows. |
 | `test_handlers_ratelimit.py` | 11 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
-| `test_handlers_store.py` | 21 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle. |
+| `test_handlers_store.py` | 43 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle, callback flows (skill_add confirm/cancel, skill_update confirm/cancel/non-admin alert, unauthorized alert). |
 | `test_high_risk.py` | 78 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
 | `test_ratelimit.py` | 21 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_skills.py` | 235 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
@@ -73,8 +74,11 @@ Current suite: 1,509 passing checks across 23 entrypoints.
 - `handle_skill_add_callback` processes confirm/cancel.
 
 **3.5 Runtime health checks**
+- Provider health split into cheap sync `check_health()` (binary in PATH) and async `check_runtime_health()` (version check, API ping via `asyncio.create_subprocess_exec`).
 - Claude: API ping via `claude -p --model <model> --max-turns 1`.
 - Codex: API ping via `codex exec --ephemeral` mirroring real execution flags (sandbox, skip-git-repo-check, model, profile, working dir).
+- `/doctor` calls both: sync check inline, async probes awaited directly in the event loop.
+- `--doctor` (CLI) delegates to `collect_doctor_report()` in `app/doctor.py`.
 - Age-gated stale session scan: pending requests >1h, credential setup >10m.
 
 **3.2 Usage tracking** — Deferred. Requires token-cost mapping and billing integration.
@@ -240,7 +244,31 @@ The deferred item `3.2` (usage tracking / billing hooks) remains intentionally o
 | `cmd_doctor` stale scan still read JSON files after SQLite migration | Medium | Stale session scan at `cmd_doctor` globbed `sessions/*.json` instead of querying SQLite | Converted to `list_sessions()` + `load_session()` |
 | `_check_prompt_size_cross_chat` still read JSON files after SQLite migration | Medium | Cross-chat prompt size scan globbed `sessions/*.json` | Converted to `list_sessions()` + `load_session()` |
 | `test_store_e2e.py` read session from JSON file path | Low | `normalization persists pruned state` test read `sessions/1001.json` directly | Changed to `load_session()` from SQLite |
-| Leaked SQLite connections in test runners | Low | Tests created temp dirs with `ensure_data_dirs` but never called `close_db`, accumulating stale connections | Added `_close_all_db_connections()` cleanup to all 12 test runner files |
+| Leaked SQLite connections in test runners | Low | Tests created temp dirs with `ensure_data_dirs` but never called `close_db`, accumulating stale connections | Added `test_data_dir()` context manager; closes DB before temp dir deletion |
+| `cmd_doctor` `run_in_executor` hangs in some environments | Medium | Sequential `run_in_executor()` calls within a single event loop deadlock on some platforms | Removed `run_in_executor`; split health checks into cheap sync + async subprocess probes |
+| Provider health checks block the event loop | Medium | `check_health()` ran `subprocess.run()` with 10–30s timeouts, blocking the bot for all users | Split into sync `check_health()` (PATH lookup only) and async `check_runtime_health()` (async subprocess) |
+| `check_runtime_health` leaks subprocesses on timeout | Medium-high | `asyncio.wait_for` timeout on `proc.communicate()` never killed or reaped the subprocess, causing orphaned CLI processes and loop-teardown warnings | Added `proc.kill()` + `await proc.wait()` on all timeout paths in both providers |
+| Doctor runs expensive runtime probe after cheap check fails | Low-medium | Both `/doctor` and `--doctor` always called `check_runtime_health()` even when `check_health()` already found errors (e.g. binary missing) | Short-circuit: skip runtime probes when cheap precheck has failures |
+| `_callback_handler` decorator erased handler-specific callback feedback | Medium | Decorator eagerly called `query.answer()` before handler ran, swallowing per-handler alerts (foreign-user rejection in clear-cred, non-admin rejection in skill-update) | Removed blanket `query.answer()` from decorator; each handler controls its own answer semantics. Restored lost alerts. |
+| `FakeCallbackQuery` discarded answer payload | Medium | Test harness `answer()` only set `answered=True`, discarding `text` and `show_alert` — made callback feedback regression structurally undetectable | `FakeCallbackQuery.answer()` now captures `answer_text` and `answer_show_alert`. Added `send_callback()` test helper. 23 new callback feedback assertions. |
+
+---
+
+## Architecture Cleanup
+
+Seven code smells identified and fixed in a single pass. All 1,540 tests pass after each change.
+
+| Smell | Fix | Files changed |
+|-------|-----|---------------|
+| Duplicated doctor logic between CLI `--doctor` and chat `/doctor` | Extracted `app/doctor.py` with `collect_doctor_report()` returning `DoctorReport(errors, warnings)`. Both paths delegate to it. | `app/doctor.py` (new), `app/main.py`, `app/telegram_handlers.py` |
+| Session-scan queries (`scan_stale_sessions`, `check_prompt_size_cross_chat`) lived in `telegram_handlers.py` | Moved to `app/doctor.py` as pure functions taking explicit parameters | `app/doctor.py`, `app/telegram_handlers.py` |
+| Every command handler repeated `normalize_command → is_allowed` boilerplate | `@_command_handler` and `@_callback_handler` decorators. 16 command handlers and 4 callback handlers converted. | `app/telegram_handlers.py` |
+| `cmd_skills` was a 370-line monolith with 13 subcommands | Extracted `app/skill_commands.py` (374 lines) with one function per subcommand. `cmd_skills` is now a 30-line dispatcher. | `app/skill_commands.py` (new), `app/telegram_handlers.py` (−330 lines) |
+| Every test file duplicated a 15-line async runner boilerplate | `Checks` class gained `add_test()`, `run_and_exit()`, `run_async_and_exit()`. 23 test files converted. | `tests/support/assertions.py`, 23 test files |
+| Dead `session_file()` / `_SessionPath` compatibility shim in storage | Deleted (~15 lines). No callers after SQLite migration. | `app/storage.py` |
+| `store._object_dir()` was private but accessed from `skills.py`; `store._parse_skill_md()` duplicated frontmatter parsing | Renamed to `store.object_dir()` (public API). `_parse_skill_md()` delegates to `skills._load_skill_md()`. Removed duplicate `import frontmatter`. | `app/store.py`, `app/skills.py`, 2 test files |
+
+Net result: `telegram_handlers.py` reduced from 2,015 to 1,685 lines. Two new focused modules (`doctor.py`, `skill_commands.py`). Test runner boilerplate eliminated across 23 files.
 
 ---
 

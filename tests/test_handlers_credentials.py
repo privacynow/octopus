@@ -33,14 +33,10 @@ from tests.support.handler_support import (
 )
 
 checks = Checks()
-_tests: list[tuple[str, object]] = []
+run_test = checks.add_test
 
 MARKER_ALPHA = "SKILL_ALPHA_e7f3"
 MARKER_BETA = "SKILL_BETA_a2c9"
-
-
-def run_test(name, coro):
-    _tests.append((name, coro))
 
 
 async def test_credential_capture():
@@ -1244,6 +1240,8 @@ async def test_clear_credentials_confirm_flow():
             update = FakeUpdate(user=user, chat=chat, callback_query=query)
             await _th.handle_clear_cred_callback(update, FakeContext())
 
+            checks.check_true("confirm: query answered", query.answered)
+            checks.check_false("confirm: not an alert", query.answer_show_alert)
             session = load_session_disk(data_dir, 12345, prov)
             checks.check("setup cleared", session.get("awaiting_skill_setup"), None)
             creds = load_user_credentials(data_dir, 42, key)
@@ -1292,6 +1290,8 @@ async def test_clear_credentials_cancel():
             update = FakeUpdate(user=user, chat=chat, callback_query=query)
             await _th.handle_clear_cred_callback(update, FakeContext())
 
+            checks.check_true("cancel: query answered", query.answered)
+            checks.check_false("cancel: not an alert", query.answer_show_alert)
             checks.check_in("reply says cancelled", "cancelled", cb_msg.replies[-1]["edit_text"].lower())
             # Credentials should still exist
             creds = load_user_credentials(data_dir, 42, key)
@@ -1422,6 +1422,10 @@ async def test_clear_credentials_cross_user_rejected():
             checks.check("bob creds preserved", "cred-test" in bob_creds, True)
             # No edit_text reply (only query.answer with alert)
             checks.check("no edit made", len(cb_msg.replies), 0)
+            # Callback should have shown an alert to the wrong user
+            checks.check_true("answer sent", query.answered)
+            checks.check_true("answer is alert", query.answer_show_alert)
+            checks.check_in("alert mentions other user", "another user", query.answer_text.lower())
     finally:
         skills_mod.CUSTOM_DIR = orig_custom_dir
 
@@ -1461,29 +1465,5 @@ async def test_bad_validate_spec_no_crash():
 run_test("bad validate spec no crash", test_bad_validate_spec_no_crash())
 
 
-async def _run_all():
-    for name, coro in _tests:
-        print(f"\n=== {name} ===")
-        try:
-            await coro
-        except Exception as exc:
-            print(f"  FAIL  {name} (exception: {exc})")
-            import traceback
-
-            traceback.print_exc()
-            checks.failed += 1
-
-
-async def _main():
-    await _run_all()
-    print(f"\n{'=' * 40}")
-    print(f"  {checks.passed} passed, {checks.failed} failed")
-    print(f"{'=' * 40}")
-    loop = asyncio.get_running_loop()
-    if hasattr(loop, "_default_executor") and loop._default_executor is not None:
-        loop._default_executor.shutdown(wait=False)
-    raise SystemExit(1 if checks.failed else 0)
-
-
 if __name__ == "__main__":
-    asyncio.run(_main())
+    checks.run_async_and_exit()

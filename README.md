@@ -63,15 +63,15 @@ After installing, any user can activate a store skill in their chat with `/skill
 |---|---|
 | `/compact on\|off` | Toggle response summarization (shorter for mobile) |
 | `/raw [N]` | Retrieve full raw response (default: latest) |
-| `/export` | Export conversation history as a file |
+| `/export` | Download recent conversation history (last 50 turns) |
 
 ### Admin & Diagnostics
 
 | Command | What it does |
 |---|---|
 | `/doctor` | Health check — provider status, stale sessions, config |
-| `/admin` | Admin panel — manage users, view stats |
-| `/clear-credentials` | Remove stored skill credentials |
+| `/admin sessions` | List all active sessions (admin) |
+| `/clear_credentials` | Remove stored skill credentials |
 | `/role [text]` | Set or clear bot persona |
 | `/session` | Show current session info |
 

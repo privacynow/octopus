@@ -186,21 +186,6 @@ with tempfile.TemporaryDirectory() as tmp:
     check_contains("approval label", result, "[approval]")
     check_contains("request has no label", result, "--- 20")
 
-# -- export backward compat with old prompt_preview field --
-print("\n=== export backward compat ===")
-with tempfile.TemporaryDirectory() as tmp:
-    data_dir = Path(tmp)
-    # Simulate old-format entry
-    ring_dir = data_dir / "raw" / "1"
-    ring_dir.mkdir(parents=True)
-    old_entry = {
-        "timestamp": "2025-01-01T00:00:00",
-        "prompt_preview": "old format prompt",
-        "raw_text": "old response",
-    }
-    (ring_dir / "000001.json").write_text(json.dumps(old_entry))
-    result = export_chat_history(data_dir, 1)
-    check_contains("old format prompt readable", result, "User: old format prompt")
 
 # -- ring size is 50 --
 print("\n=== ring size ===")

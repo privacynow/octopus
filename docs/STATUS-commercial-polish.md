@@ -20,7 +20,7 @@ Current as of 2026-03-09. Tracks progress against [PLAN-commercial-polish.md](PL
 
 Canonical full-suite runner: `./scripts/test_all.sh`
 
-Current suite: 1,293 passing checks across 20 entrypoints.
+Current suite: 1,302 passing checks across 20 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -34,7 +34,7 @@ Current suite: 1,293 passing checks across 20 entrypoints.
 | `test_handlers_approval.py` | 53 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL. |
 | `test_handlers_codex.py` | 33 | Codex-specific handler behavior: thread invalidation, boot ID, retry semantics, script staging. |
 | `test_handlers_credentials.py` | 155 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection. |
-| `test_handlers_export.py` | 4 | `/export` command: no history, document generation, access gating. |
+| `test_handlers_export.py` | 14 | `/export` command: no history, document generation, access gating. |
 | `test_handlers_output.py` | 20 | Output presentation: `/compact`, `/raw`, table rendering, summarization flows. |
 | `test_handlers_ratelimit.py` | 11 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
 | `test_handlers_store.py` | 28 | Store handler flows: install/update/uninstall, locally modified confirmation, prompt-size warnings. |
@@ -43,7 +43,7 @@ Current suite: 1,293 passing checks across 20 entrypoints.
 | `test_skills.py` | 201 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing. |
 | `test_storage.py` | 41 | Session CRUD, upload paths, directory creation, session sweep, `list_sessions()`. |
 | `test_store.py` | 115 | Store module: discovery, search, install/uninstall, SHA-256 provenance, locally_modified persistence. |
-| `test_summarize.py` | 34 | Ring buffer (full prompt, kind field, rotation at 50), export formatting, backward compat, summarization. |
+| `test_summarize.py` | 33 | Ring buffer (full prompt, kind field, rotation at 50), export formatting, summarization. |
 | `test_setup.sh` | 34/35 | Installer/setup wizard flows, provider-pruned config generation. (1 systemd test skipped in CI.) |
 
 ---
@@ -108,16 +108,16 @@ Current suite: 1,293 passing checks across 20 entrypoints.
 **4.5 Conversation export**
 - Ring buffer upgraded: full prompt storage (no truncation), `kind` field (`request`/`approval`/`system`), capacity 10 → 50.
 - Approval plan turns now captured in ring buffer.
-- `export_chat_history()` in `app/summarize.py` formats entries with kind labels and backward compat for old `prompt_preview` field.
+- `export_chat_history()` in `app/summarize.py` formats entries with kind labels.
 - `/export` sends session metadata header + history as downloadable `.txt` document.
-- Header includes scope note: "last 50 exchanges, command replies and older turns not included."
+- Header documents scope honestly: only successful model responses and approval plans are captured; denied, timed-out, or failed requests are not.
 - `/help` updated to list `/export` and `/admin sessions`.
 
 **4.1 Repairable skill store operations** — Deferred. Requires intent logging and recovery on startup; most complex item in phase.
 
 ### Design decisions
 
-**Ring buffer vs append-only log**: The `/export` feature deliberately reuses the existing ring buffer rather than building a separate conversation log. The ring buffer stores the last 50 turns with full prompts, which covers most practical export needs. A proper append-only log is a future option if unbounded history becomes a requirement. The export header documents the scope limitation.
+**Ring buffer vs append-only log**: The `/export` feature reuses the existing ring buffer rather than building a separate conversation log. The ring buffer stores the last 50 turns with full prompts, which covers most practical export needs. A proper append-only log is a future option if unbounded history becomes a requirement. The export header documents the scope limitation honestly: only successful model responses and approval plans are captured; denied, timed-out, or failed requests are not.
 
 **Admin session listing**: Returns all sessions sorted by `updated_at`. No pagination — bounded by number of session files on disk. Detail view shows per-session metadata without loading provider state internals.
 

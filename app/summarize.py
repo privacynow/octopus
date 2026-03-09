@@ -107,8 +107,7 @@ def export_chat_history(data_dir: Path, chat_id: int) -> str | None:
             continue
         ts = data.get("timestamp", "unknown")[:19]
         kind = data.get("kind", "request")
-        # Support both old "prompt_preview" and new "prompt" field
-        prompt = data.get("prompt") or data.get("prompt_preview", "")
+        prompt = data.get("prompt", "")
         response = data.get("raw_text", "")
         label = {"approval": "[approval] ", "system": "[system] "}.get(kind, "")
         parts.append(f"--- {label}{ts} ---")

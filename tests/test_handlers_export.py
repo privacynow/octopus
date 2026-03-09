@@ -117,35 +117,6 @@ async def test_export_approval_label():
 run_test("approval label", test_export_approval_label())
 
 
-async def test_export_backward_compat():
-    """Old-format ring buffer entries (prompt_preview field) export correctly."""
-    import json
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
-        cfg = make_config(data_dir)
-        setup_globals(cfg, FakeProvider("claude"))
-
-        # Write an old-format entry directly
-        ring_dir = data_dir / "raw" / "12345"
-        ring_dir.mkdir(parents=True)
-        old_entry = {
-            "timestamp": "2025-06-01T12:00:00",
-            "prompt_preview": "old style prompt",
-            "raw_text": "old response",
-        }
-        (ring_dir / "000001.json").write_text(json.dumps(old_entry))
-
-        chat = FakeChat(12345)
-        user = FakeUser(42)
-        msg = await send_command(th.cmd_export, chat, user, "/export")
-
-        text = _export_text(msg)
-        checks.check("old prompt readable", "User: old style prompt" in text, True)
-        checks.check("old response readable", "Assistant: old response" in text, True)
-
-
-run_test("backward compat", test_export_backward_compat())
 
 
 async def test_export_not_allowed():

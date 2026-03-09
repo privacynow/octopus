@@ -327,7 +327,7 @@ and status updates are especially bad.
 
 **Ring buffer storage**:
 - Store as JSON files in `{data_dir}/raw/{chat_id}/` with sequential numbering.
-- Each entry: `{"timestamp": ..., "prompt_preview": ..., "raw_text": ...}`.
+- Each entry: `{"timestamp": ..., "prompt": ..., "raw_text": ..., "kind": ...}`.
 - Rotate on write: when count exceeds 10, delete oldest.
 
 **Implementation note**: The summarization call should use `claude -p` with a

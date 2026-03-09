@@ -2,13 +2,12 @@
 
 import asyncio
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import app.telegram_handlers as th
-from app.storage import _db_connections, default_session, ensure_data_dirs, save_session
+from app.storage import default_session, save_session
 from tests.support.assertions import Checks
 from tests.support.handler_support import (
     FakeChat,
@@ -22,6 +21,7 @@ from tests.support.handler_support import (
     make_skill,
     send_command,
     setup_globals,
+    test_data_dir,
 )
 
 checks = Checks()
@@ -34,9 +34,7 @@ def run_test(name, coro):
 
 async def test_admin_requires_admin():
     """Non-admin users get rejected."""
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
             admin_user_ids=frozenset({99}),
@@ -57,9 +55,7 @@ run_test("non-admin rejected", test_admin_requires_admin())
 async def test_admin_sessions_summary():
     """Admin gets session summary."""
     import app.skills as skills_mod
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
             admin_user_ids=frozenset({42}),
@@ -70,7 +66,7 @@ async def test_admin_sessions_summary():
         setup_globals(cfg, prov)
 
         # Create a resolvable custom skill
-        tmp_custom = Path(tmp) / "custom"
+        tmp_custom = data_dir / "custom"
         tmp_custom.mkdir()
         orig_custom = skills_mod.CUSTOM_DIR
         skills_mod.CUSTOM_DIR = tmp_custom
@@ -103,9 +99,7 @@ run_test("sessions summary", test_admin_sessions_summary())
 async def test_admin_sessions_detail():
     """Admin gets detail view for a specific chat."""
     import app.skills as skills_mod
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
             admin_user_ids=frozenset({42}),
@@ -116,7 +110,7 @@ async def test_admin_sessions_detail():
         setup_globals(cfg, prov)
 
         # Create resolvable custom skills
-        tmp_custom = Path(tmp) / "custom"
+        tmp_custom = data_dir / "custom"
         tmp_custom.mkdir()
         orig_custom = skills_mod.CUSTOM_DIR
         skills_mod.CUSTOM_DIR = tmp_custom
@@ -146,9 +140,7 @@ run_test("sessions detail", test_admin_sessions_detail())
 
 async def test_admin_sessions_detail_not_found():
     """Detail view for non-existent chat."""
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
             admin_user_ids=frozenset({42}),
@@ -174,9 +166,7 @@ run_test("detail not found", test_admin_sessions_detail_not_found())
 
 async def test_admin_no_sessions():
     """Empty sessions directory."""
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
             admin_user_ids=frozenset({42}),
@@ -196,9 +186,7 @@ run_test("no sessions", test_admin_no_sessions())
 
 async def test_admin_usage():
     """No subcommand shows usage."""
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
             admin_user_ids=frozenset({42}),
@@ -218,9 +206,7 @@ run_test("usage", test_admin_usage())
 
 async def test_admin_not_allowed():
     """Disallowed user gets nothing."""
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
             allow_open=False,
@@ -239,23 +225,16 @@ async def test_admin_not_allowed():
 run_test("disallowed user", test_admin_not_allowed())
 
 
-def _close_all_db_connections():
-    """Close all leaked SQLite connections between tests."""
-    for conn in _db_connections.values():
-        try:
-            conn.close()
-        except Exception:
-            pass
-    _db_connections.clear()
-
-
 # Run all tests
 for name, coro in _tests:
     print(f"\n--- {name} ---")
     try:
         asyncio.get_event_loop().run_until_complete(coro)
-    finally:
-        _close_all_db_connections()
+    except Exception as exc:
+        print(f"  FAIL  {name} (exception: {exc})")
+        import traceback
+        traceback.print_exc()
+        checks.failed += 1
 
 print(f"\n{'='*40}")
 print(f"  {checks.passed} passed, {checks.failed} failed")

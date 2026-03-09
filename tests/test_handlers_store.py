@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.providers.base import RunResult
-from app.storage import _db_connections, ensure_data_dirs, load_session, save_session, default_session
+from app.storage import close_db, ensure_data_dirs, load_session, save_session, default_session
 from tests.support.assertions import Checks
 from tests.support.handler_support import (
     FakeCallbackQuery,
@@ -85,6 +85,7 @@ def _store_env(tmp):
     skills_mod.CUSTOM_DIR = tmp_custom
 
     def cleanup():
+        close_db(data_dir)
         store_mod.STORE_DIR = original["STORE_DIR"]
         store_mod.CUSTOM_DIR = original["CUSTOM_DIR"]
         store_mod.MANAGED_DIR = original["MANAGED_DIR"]
@@ -348,16 +349,6 @@ async def test_skills_info_store_requirements():
 run_test("/skills info store requirements", test_skills_info_store_requirements())
 
 
-def _close_all_db_connections():
-    """Close all leaked SQLite connections between tests."""
-    for conn in _db_connections.values():
-        try:
-            conn.close()
-        except Exception:
-            pass
-    _db_connections.clear()
-
-
 async def _run_all():
     for name, coro in _tests:
         print(f"\n=== {name} ===")
@@ -369,8 +360,6 @@ async def _run_all():
 
             traceback.print_exc()
             checks.failed += 1
-        finally:
-            _close_all_db_connections()
 
 
 async def _main():

@@ -2,14 +2,13 @@
 
 import asyncio
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.providers.base import PreflightContext, RunResult
-from app.storage import _db_connections, default_session, ensure_data_dirs, save_session
+from app.storage import default_session, save_session
 from tests.support.assertions import Checks
 from tests.support.handler_support import (
     FakeCallbackQuery,
@@ -22,6 +21,7 @@ from tests.support.handler_support import (
     load_session_disk,
     make_config,
     setup_globals,
+    test_data_dir,
 )
 
 checks = Checks()
@@ -33,9 +33,7 @@ def run_test(name, coro):
 
 
 async def test_approval_flow():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, approval_mode="on")
         prov = FakeProvider("claude")
         prov.preflight_results = [RunResult(text="Plan: read files")]
@@ -88,9 +86,7 @@ run_test("approval flow", test_approval_flow())
 
 
 async def test_approval_wording():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, approval_mode="on")
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -132,9 +128,7 @@ run_test("approval wording", test_approval_wording())
 
 
 async def test_denial_retry_flow():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         prov.run_results = [
@@ -189,9 +183,7 @@ run_test("denial/retry flow", test_denial_retry_flow())
 
 
 async def test_retry_skip():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -227,9 +219,7 @@ run_test("retry skip", test_retry_skip())
 
 
 async def test_stale_context_hash():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -269,9 +259,7 @@ run_test("stale context hash", test_stale_context_hash())
 
 
 async def test_cross_user_approval():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, approval_mode="on")
         prov = FakeProvider("claude")
         prov.preflight_results = [RunResult(text="Plan: do something")]
@@ -311,9 +299,7 @@ run_test("cross-user approval", test_cross_user_approval())
 
 
 async def test_approval_preflight_timeout():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, approval_mode="on")
         prov = FakeProvider("claude")
         prov.preflight_results = [RunResult(text="", timed_out=True)]
@@ -342,9 +328,7 @@ run_test("approval preflight timeout", test_approval_preflight_timeout())
 
 
 async def test_approval_preflight_error():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, approval_mode="on")
         prov = FakeProvider("claude")
         prov.preflight_results = [RunResult(text="Preflight error", returncode=1)]
@@ -370,9 +354,7 @@ run_test("approval preflight error", test_approval_preflight_error())
 
 
 async def test_duplicate_pending_blocked():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, approval_mode="on")
         prov = FakeProvider("claude")
         prov.preflight_results = [RunResult(text="Plan 1"), RunResult(text="Plan 2")]
@@ -401,9 +383,7 @@ run_test("duplicate pending blocked", test_duplicate_pending_blocked())
 
 
 async def test_denial_preserves_request_user_id():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         prov.run_results = [
@@ -434,9 +414,7 @@ run_test("denial preserves request_user_id", test_denial_preserves_request_user_
 
 
 async def test_cancel_pending():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -472,9 +450,7 @@ run_test("/cancel clears pending", test_cancel_pending())
 
 
 async def test_stale_pending_ttl():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, timeout_seconds=300)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -506,16 +482,6 @@ async def test_stale_pending_ttl():
 run_test("stale pending TTL", test_stale_pending_ttl())
 
 
-def _close_all_db_connections():
-    """Close all leaked SQLite connections between tests."""
-    for conn in _db_connections.values():
-        try:
-            conn.close()
-        except Exception:
-            pass
-    _db_connections.clear()
-
-
 async def _run_all():
     for name, coro in _tests:
         print(f"\n=== {name} ===")
@@ -527,8 +493,6 @@ async def _run_all():
 
             traceback.print_exc()
             checks.failed += 1
-        finally:
-            _close_all_db_connections()
 
 
 async def _main():

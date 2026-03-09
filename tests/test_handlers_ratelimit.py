@@ -2,13 +2,12 @@
 
 import asyncio
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.providers.base import RunResult
-from app.storage import _db_connections, default_session, ensure_data_dirs, save_session
+from app.storage import default_session, save_session
 from tests.support.assertions import Checks
 from tests.support.handler_support import (
     FakeChat,
@@ -18,6 +17,7 @@ from tests.support.handler_support import (
     make_config,
     send_text,
     setup_globals,
+    test_data_dir,
 )
 
 checks = Checks()
@@ -29,9 +29,7 @@ def run_test(name, coro):
 
 
 async def test_rate_limit_blocks_after_threshold():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, rate_limit_per_minute=2, rate_limit_per_hour=0)
         prov = FakeProvider("claude")
         prov.run_results = [RunResult(text="ok")] * 5
@@ -57,9 +55,7 @@ run_test("rate limit blocks after threshold", test_rate_limit_blocks_after_thres
 
 
 async def test_rate_limit_admin_exempt():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
             rate_limit_per_minute=1,
@@ -87,9 +83,7 @@ run_test("rate limit admin exempt", test_rate_limit_admin_exempt())
 
 
 async def test_rate_limit_disabled_by_default():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)  # defaults: per_minute=0, per_hour=0
         prov = FakeProvider("claude")
         prov.run_results = [RunResult(text="ok")] * 10
@@ -111,9 +105,7 @@ run_test("rate limit disabled by default", test_rate_limit_disabled_by_default()
 
 
 async def test_rate_limit_per_user_isolation():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, rate_limit_per_minute=1)
         prov = FakeProvider("claude")
         prov.run_results = [RunResult(text="ok")] * 10
@@ -146,9 +138,7 @@ run_test("rate limit per-user isolation", test_rate_limit_per_user_isolation())
 async def test_rate_limit_implicit_admin_not_exempt():
     """When BOT_ADMIN_USERS is not set, the fallback makes everyone admin,
     but rate limiting should still apply since admin was not explicit."""
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
             rate_limit_per_minute=1,
@@ -180,9 +170,7 @@ run_test("implicit admin not rate limit exempt", test_rate_limit_implicit_admin_
 async def test_rate_limit_explicit_admin_equal_to_allowed_still_exempt():
     """If operator explicitly sets BOT_ADMIN_USERS equal to BOT_ALLOWED_USERS,
     admins should be exempt from rate limiting."""
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
             rate_limit_per_minute=1,
@@ -208,16 +196,6 @@ async def test_rate_limit_explicit_admin_equal_to_allowed_still_exempt():
 
 run_test("explicit admin equal sets still exempt", test_rate_limit_explicit_admin_equal_to_allowed_still_exempt())
 
-def _close_all_db_connections():
-    """Close all leaked SQLite connections between tests."""
-    for conn in _db_connections.values():
-        try:
-            conn.close()
-        except Exception:
-            pass
-    _db_connections.clear()
-
-
 async def _run_all():
     for name, coro in _tests:
         print(f"\n=== {name} ===")
@@ -228,8 +206,6 @@ async def _run_all():
             import traceback
             traceback.print_exc()
             checks.failed += 1
-        finally:
-            _close_all_db_connections()
 
 
 if __name__ == "__main__":

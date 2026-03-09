@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.providers.base import RunResult
-from app.storage import _db_connections, ensure_data_dirs
+from app.storage import close_db, ensure_data_dirs
 from tests.support.assertions import Checks
 from tests.support.handler_support import (
     FakeChat,
@@ -103,6 +103,7 @@ def _store_env(tmp):
     skills_mod.CATALOG_DIR = tmp_catalog
 
     def cleanup():
+        close_db(data_dir)
         for attr, val in original.items():
             if attr.startswith("skills_"):
                 setattr(skills_mod, attr[len("skills_"):], val)
@@ -1089,16 +1090,6 @@ run_test("e2e: normalization persists pruned state to disk", test_normalization_
 # Runner
 # ============================================================================
 
-def _close_all_db_connections():
-    """Close all leaked SQLite connections between tests."""
-    for conn in _db_connections.values():
-        try:
-            conn.close()
-        except Exception:
-            pass
-    _db_connections.clear()
-
-
 async def _run_all():
     for name, coro in _tests:
         print(f"\n=== {name} ===")
@@ -1109,8 +1100,6 @@ async def _run_all():
             import traceback
             traceback.print_exc()
             checks.failed += 1
-        finally:
-            _close_all_db_connections()
 
 
 async def _main():

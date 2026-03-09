@@ -19,7 +19,6 @@ from app.transport import (
     normalize_user,
 )
 from tests.support.assertions import Checks
-from app.storage import _db_connections
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
@@ -30,6 +29,7 @@ from tests.support.handler_support import (
     FakeUser,
     make_config,
     setup_globals,
+    test_data_dir,
 )
 
 checks = Checks()
@@ -403,12 +403,9 @@ run_test("default attachments are tuple", test_message_default_attachments_are_t
 
 async def test_handlers_receive_normalized_user():
     """Verify that handlers receive InboundUser through normalization, not raw Telegram objects."""
-    from app.storage import ensure_data_dirs
     import app.telegram_handlers as th
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -440,13 +437,11 @@ run_test("handlers receive normalized user", test_handlers_receive_normalized_us
 
 async def test_callback_handler_uses_normalized_data():
     """Verify callback handlers use event.data not query.data for routing."""
-    from app.storage import ensure_data_dirs, save_session, default_session
+    from app.storage import save_session, default_session
     import app.telegram_handlers as th
     import time
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, approval_mode="on")
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -481,12 +476,9 @@ run_test("callback handler uses normalized data", test_callback_handler_uses_nor
 
 async def test_command_normalization_strips_bot_mention():
     """Verify /command@botname still works through normalization."""
-    from app.storage import ensure_data_dirs
     import app.telegram_handlers as th
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -511,12 +503,9 @@ run_test("command normalization strips bot mention", test_command_normalization_
 
 async def test_command_handler_no_user_no_crash():
     """A command handler receiving an update with no user returns silently."""
-    from app.storage import ensure_data_dirs
     import app.telegram_handlers as th
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -535,12 +524,9 @@ run_test("command handler no user no crash", test_command_handler_no_user_no_cra
 
 async def test_message_handler_no_user_no_crash():
     """The message handler receiving an update with no user returns silently."""
-    from app.storage import ensure_data_dirs
     import app.telegram_handlers as th
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -559,12 +545,9 @@ run_test("message handler no user no crash", test_message_handler_no_user_no_cra
 
 async def test_callback_handler_no_user_no_crash():
     """A callback handler receiving an update with no user returns silently."""
-    from app.storage import ensure_data_dirs
     import app.telegram_handlers as th
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -592,12 +575,9 @@ async def test_handle_message_empty_content_skipped():
     This proves the empty-content decision from normalize_message() is the one
     that governs the runtime path (normalize_message returns None, handler exits).
     """
-    from app.storage import ensure_data_dirs
     import app.telegram_handlers as th
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -621,13 +601,10 @@ async def test_handle_message_caption_reaches_provider():
 
     This proves the caption fallback in normalize_message() governs the runtime path.
     """
-    from app.storage import ensure_data_dirs
     from app.providers.base import RunResult
     import app.telegram_handlers as th
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         prov.run_results = [RunResult(text="ok")]
@@ -653,16 +630,6 @@ run_test("handle_message caption reaches provider", test_handle_message_caption_
 # Runner
 # ---------------------------------------------------------------------------
 
-def _close_all_db_connections():
-    """Close all leaked SQLite connections between tests."""
-    for conn in _db_connections.values():
-        try:
-            conn.close()
-        except Exception:
-            pass
-    _db_connections.clear()
-
-
 if __name__ == "__main__":
     loop = asyncio.new_event_loop()
     failed = 0
@@ -678,8 +645,6 @@ if __name__ == "__main__":
             import traceback
             traceback.print_exc()
             failed += 1
-        finally:
-            _close_all_db_connections()
     loop.close()
 
     failed += checks.failed

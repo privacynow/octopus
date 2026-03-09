@@ -2,13 +2,12 @@
 
 import asyncio
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.providers.base import RunResult
-from app.storage import _db_connections, default_session, ensure_data_dirs, save_session
+from app.storage import default_session, save_session
 from tests.support.assertions import Checks
 from tests.support.handler_support import (
     FakeChat,
@@ -20,6 +19,7 @@ from tests.support.handler_support import (
     send_command,
     send_text,
     setup_globals,
+    test_data_dir,
 )
 
 checks = Checks()
@@ -31,9 +31,7 @@ def run_test(name, coro):
 
 
 async def test_compact_toggle():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
@@ -64,9 +62,7 @@ run_test("/compact toggle", test_compact_toggle())
 
 
 async def test_raw_retrieves_response():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
@@ -93,9 +89,7 @@ run_test("/raw retrieves response", test_raw_retrieves_response())
 
 
 async def test_e2e_table_in_provider_response():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
@@ -126,9 +120,7 @@ run_test("e2e table in provider response", test_e2e_table_in_provider_response()
 
 
 async def test_e2e_compact_mode_summarizes():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
@@ -173,9 +165,7 @@ run_test("e2e compact mode summarizes", test_e2e_compact_mode_summarizes())
 
 
 async def test_e2e_compact_off_no_summarize():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
@@ -203,9 +193,7 @@ run_test("e2e compact off no summarize", test_e2e_compact_off_no_summarize())
 
 
 async def test_e2e_compact_mode_summarize_exception_falls_back():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
@@ -247,16 +235,6 @@ run_test(
 )
 
 
-def _close_all_db_connections():
-    """Close all leaked SQLite connections between tests."""
-    for conn in _db_connections.values():
-        try:
-            conn.close()
-        except Exception:
-            pass
-    _db_connections.clear()
-
-
 async def _run_all():
     for name, coro in _tests:
         print(f"\n=== {name} ===")
@@ -267,8 +245,6 @@ async def _run_all():
             import traceback
             traceback.print_exc()
             checks.failed += 1
-        finally:
-            _close_all_db_connections()
 
 
 async def _main():

@@ -12,22 +12,33 @@ from tests.support.config_support import make_config as _make_config
 
 
 @contextlib.contextmanager
-def test_env(*, config_overrides=None, provider_name="claude", boot_id="test-boot"):
-    """Context manager that sets up a temp data_dir, config, provider, globals,
-    and tears down the DB connection on exit.  Yields (data_dir, cfg, prov)."""
+def test_data_dir():
+    """TemporaryDirectory + ensure_data_dirs + close_db on exit.
+
+    Closes the SQLite connection BEFORE the temp dir is deleted,
+    preventing WAL checkpoint hangs on deleted files.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
+        try:
+            yield data_dir
+        finally:
+            close_db(data_dir)
+
+
+@contextlib.contextmanager
+def test_env(*, config_overrides=None, provider_name="claude", boot_id="test-boot"):
+    """Context manager that sets up a temp data_dir, config, provider, globals,
+    and tears down the DB connection on exit.  Yields (data_dir, cfg, prov)."""
+    with test_data_dir() as data_dir:
         prov = FakeProvider(provider_name)
         overrides = dict(working_dir=data_dir)
         if config_overrides:
             overrides.update(config_overrides)
         cfg = make_config(data_dir, **overrides)
         setup_globals(cfg, prov, boot_id=boot_id)
-        try:
-            yield data_dir, cfg, prov
-        finally:
-            close_db(data_dir)
+        yield data_dir, cfg, prov
 
 
 class FakeChat:

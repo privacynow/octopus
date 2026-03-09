@@ -8,7 +8,7 @@ from app.config import BotConfig, fail_fast, load_config, validate_config
 from app.providers.base import Provider
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
-from app.storage import ensure_data_dirs
+from app.storage import close_db, ensure_data_dirs
 from app.store import startup_recovery
 from app.telegram_handlers import build_application
 
@@ -81,7 +81,10 @@ def main() -> None:
 
     app = build_application(config, provider)
     log.info("Bot starting (long-poll)...")
-    app.run_polling()
+    try:
+        app.run_polling()
+    finally:
+        close_db(config.data_dir)
 
 
 if __name__ == "__main__":

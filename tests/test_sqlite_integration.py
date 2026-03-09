@@ -21,7 +21,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.providers.base import RunResult
 from app.storage import (
     _db,
-    _db_connections,
     _reset_db,
     close_db,
     default_session,
@@ -43,6 +42,7 @@ from tests.support.handler_support import (
     send_command,
     send_text,
     setup_globals,
+    test_data_dir,
     test_env,
 )
 
@@ -246,36 +246,30 @@ run_test("delete_session removes from SQLite", test_delete_session())
 async def test_close_db_and_reopen():
     """close_db closes the connection; subsequent operations transparently
     reopen it and data is still there."""
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
+        s = default_session("claude", {"session_id": "abc", "started": False}, "on")
+        s["role"] = "persistent role"
+        save_session(data_dir, 6001, s)
 
-        try:
-            s = default_session("claude", {"session_id": "abc", "started": False}, "on")
-            s["role"] = "persistent role"
-            save_session(data_dir, 6001, s)
+        # Close the connection
+        close_db(data_dir)
 
-            # Close the connection
-            close_db(data_dir)
+        # Operations should transparently reopen
+        checks.check("exists after reopen", session_exists(data_dir, 6001), True)
 
-            # Operations should transparently reopen
-            checks.check("exists after reopen", session_exists(data_dir, 6001), True)
+        loaded = load_session(data_dir, 6001, "claude",
+                              lambda: {"session_id": "abc", "started": False}, "on")
+        checks.check("role survives close/reopen", loaded["role"], "persistent role")
 
-            loaded = load_session(data_dir, 6001, "claude",
-                                  lambda: {"session_id": "abc", "started": False}, "on")
-            checks.check("role survives close/reopen", loaded["role"], "persistent role")
+        # Save new data after reopen
+        loaded["role"] = "updated role"
+        save_session(data_dir, 6001, loaded)
+        close_db(data_dir)
 
-            # Save new data after reopen
-            loaded["role"] = "updated role"
-            save_session(data_dir, 6001, loaded)
-            close_db(data_dir)
-
-            # Verify again
-            loaded2 = load_session(data_dir, 6001, "claude",
-                                   lambda: {"session_id": "abc", "started": False}, "on")
-            checks.check("updated role survives", loaded2["role"], "updated role")
-        finally:
-            close_db(data_dir)
+        # Verify again
+        loaded2 = load_session(data_dir, 6001, "claude",
+                               lambda: {"session_id": "abc", "started": False}, "on")
+        checks.check("updated role survives", loaded2["role"], "updated role")
 
 
 run_test("close_db and reopen", test_close_db_and_reopen())
@@ -390,16 +384,6 @@ run_test("fresh DB no JSON artifacts", test_fresh_db_no_json_artifacts())
 # Runner
 # ---------------------------------------------------------------------------
 
-def _close_all_db_connections():
-    """Close all leaked SQLite connections between tests."""
-    for conn in _db_connections.values():
-        try:
-            conn.close()
-        except Exception:
-            pass
-    _db_connections.clear()
-
-
 async def _run_all():
     for name, coro in _tests:
         print(f"\n=== {name} ===")
@@ -410,8 +394,6 @@ async def _run_all():
             import traceback
             traceback.print_exc()
             checks.failed += 1
-        finally:
-            _close_all_db_connections()
 
 
 async def _main():

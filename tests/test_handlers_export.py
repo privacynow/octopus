@@ -2,13 +2,11 @@
 
 import asyncio
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import app.telegram_handlers as th
-from app.storage import _db_connections, ensure_data_dirs
 from app.summarize import save_raw
 from tests.support.assertions import Checks
 from tests.support.handler_support import (
@@ -22,6 +20,7 @@ from tests.support.handler_support import (
     make_config,
     send_command,
     setup_globals,
+    test_data_dir,
 )
 
 checks = Checks()
@@ -34,9 +33,7 @@ def run_test(name, coro):
 
 async def test_export_no_history():
     """No history returns message."""
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         setup_globals(cfg, FakeProvider())
 
@@ -59,9 +56,7 @@ def _export_text(msg) -> str:
 
 async def test_export_with_history():
     """Export sends document with correct body content."""
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -96,9 +91,7 @@ run_test("with history", test_export_with_history())
 
 async def test_export_approval_label():
     """Approval-kind entries show [approval] label in export."""
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         setup_globals(cfg, FakeProvider("claude"))
 
@@ -121,9 +114,7 @@ run_test("approval label", test_export_approval_label())
 
 async def test_export_not_allowed():
     """Disallowed user gets no response."""
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
             allow_open=False,
@@ -140,23 +131,16 @@ async def test_export_not_allowed():
 run_test("not allowed", test_export_not_allowed())
 
 
-def _close_all_db_connections():
-    """Close all leaked SQLite connections between tests."""
-    for conn in _db_connections.values():
-        try:
-            conn.close()
-        except Exception:
-            pass
-    _db_connections.clear()
-
-
 # Run all tests
 for name, coro in _tests:
     print(f"\n--- {name} ---")
     try:
         asyncio.get_event_loop().run_until_complete(coro)
-    finally:
-        _close_all_db_connections()
+    except Exception as exc:
+        print(f"  FAIL  {name} (exception: {exc})")
+        import traceback
+        traceback.print_exc()
+        checks.failed += 1
 
 print(f"\n{'='*40}")
 print(f"  {checks.passed} passed, {checks.failed} failed")

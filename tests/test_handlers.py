@@ -2,13 +2,12 @@
 
 import asyncio
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.providers.base import RunContext, RunResult
-from app.storage import _db_connections, default_session, ensure_data_dirs, save_session
+from app.storage import default_session, save_session
 from tests.support.assertions import Checks
 from tests.support.handler_support import (
     FakeChat,
@@ -22,6 +21,7 @@ from tests.support.handler_support import (
     make_config,
     send_command,
     setup_globals,
+    test_data_dir,
 )
 
 checks = Checks()
@@ -33,9 +33,7 @@ def run_test(name, coro):
 
 
 async def test_happy_path():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         prov.run_results = [RunResult(text="Hello world", provider_state_updates={"started": True})]
@@ -67,9 +65,7 @@ run_test("happy path", test_happy_path())
 
 
 async def test_cmd_new():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -101,9 +97,7 @@ run_test("/new resets session", test_cmd_new())
 
 
 async def test_provider_timeout():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         prov.run_results = [RunResult(text="partial output", timed_out=True)]
@@ -129,9 +123,7 @@ run_test("provider timeout", test_provider_timeout())
 
 
 async def test_provider_error_returncode():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         prov.run_results = [RunResult(text="Error: segfault in subprocess", returncode=1)]
@@ -157,9 +149,7 @@ run_test("provider error returncode", test_provider_error_returncode())
 
 
 async def test_cmd_role():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, role="default engineer")
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -189,9 +179,7 @@ run_test("/role command", test_cmd_role())
 
 
 async def test_role_in_provider_context():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, role="Kubernetes expert")
         prov = FakeProvider("claude")
         prov.run_results = [RunResult(text="ok")]
@@ -216,9 +204,7 @@ run_test("role in provider context", test_role_in_provider_context())
 async def test_new_preserves_default_skills():
     from app.skills import save_user_credential, derive_encryption_key
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, default_skills=("github-integration",))
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -244,9 +230,7 @@ run_test("/new preserves default_skills", test_new_preserves_default_skills())
 
 
 async def test_help_topics():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -278,9 +262,7 @@ run_test("/help tiered", test_help_topics())
 
 
 async def test_first_run_welcome():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, approval_mode="on")
         prov = FakeProvider("claude")
         prov.preflight_results = [RunResult(text="plan: read files")]
@@ -301,9 +283,7 @@ run_test("first-run welcome", test_first_run_welcome())
 
 
 async def test_start_deep_link():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -321,9 +301,7 @@ async def test_start_deep_link():
 run_test("/start deep-link payload", test_start_deep_link())
 
 async def test_doctor_admin_warning():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
             allowed_user_ids=frozenset({1, 2, 3}),
@@ -348,9 +326,7 @@ run_test("/doctor admin fallback warning", test_doctor_admin_warning())
 
 
 async def test_doctor_no_warning_explicit_admin():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
             allowed_user_ids=frozenset({1, 2, 3}),
@@ -378,10 +354,7 @@ run_test("/doctor no warning with explicit admin", test_doctor_no_warning_explic
 async def test_prompt_size_warning_before_activation():
     import app.skills as skills_mod
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
-
+    with test_data_dir() as data_dir:
         orig_custom_dir = skills_mod.CUSTOM_DIR
         try:
             custom_dir = data_dir / "custom-skills"
@@ -427,10 +400,7 @@ run_test("prompt size warning before activation", test_prompt_size_warning_befor
 async def test_prompt_size_no_warning_small_skill():
     import app.skills as skills_mod
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
-
+    with test_data_dir() as data_dir:
         orig_custom_dir = skills_mod.CUSTOM_DIR
         try:
             custom_dir = data_dir / "custom-skills"
@@ -473,10 +443,8 @@ run_test("no warning for small skill", test_prompt_size_no_warning_small_skill()
 
 
 async def test_doctor_stale_session_warnings():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
-        cfg = make_config(data_dir, working_dir=Path(tmp))
+    with test_data_dir() as data_dir:
+        cfg = make_config(data_dir, working_dir=data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
@@ -506,9 +474,7 @@ run_test("/doctor stale session warnings", test_doctor_stale_session_warnings())
 async def test_doctor_no_warning_explicit_admin_equal_to_allowed():
     """If BOT_ADMIN_USERS is explicitly set to same as BOT_ALLOWED_USERS,
     /doctor should NOT warn (operator made a deliberate choice)."""
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
             allowed_user_ids=frozenset({1, 2, 3}),
@@ -535,9 +501,7 @@ run_test("/doctor no false positive for explicit admin", test_doctor_no_warning_
 
 async def test_doctor_no_stale_warning_for_fresh_sessions():
     import time as _time
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -561,15 +525,6 @@ async def test_doctor_no_stale_warning_for_fresh_sessions():
 
 run_test("/doctor no stale warning for fresh sessions", test_doctor_no_stale_warning_for_fresh_sessions())
 
-def _close_all_db_connections():
-    """Close all leaked SQLite connections between tests."""
-    for conn in _db_connections.values():
-        try:
-            conn.close()
-        except Exception:
-            pass
-    _db_connections.clear()
-
 
 async def _run_all():
     for name, coro in _tests:
@@ -582,8 +537,6 @@ async def _run_all():
 
             traceback.print_exc()
             checks.failed += 1
-        finally:
-            _close_all_db_connections()
 
 
 async def _main():

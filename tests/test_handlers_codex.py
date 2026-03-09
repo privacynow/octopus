@@ -2,14 +2,13 @@
 
 import asyncio
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.providers.base import RunContext, RunResult, compute_context_hash
 from app.skills import derive_encryption_key, get_provider_config_digest, save_user_credential
-from app.storage import _db_connections, default_session, ensure_data_dirs, save_session
+from app.storage import default_session, save_session
 from tests.support.assertions import Checks
 from tests.support.handler_support import (
     FakeCallbackQuery,
@@ -23,6 +22,7 @@ from tests.support.handler_support import (
     load_session_disk,
     make_config,
     setup_globals,
+    test_data_dir,
 )
 
 checks = Checks()
@@ -34,9 +34,7 @@ def run_test(name, coro):
 
 
 async def test_codex_context_hash_invalidation():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, provider_name="codex")
         prov = FakeProvider("codex")
         prov.run_results = [RunResult(text="ok", provider_state_updates={"thread_id": "new-thread"})]
@@ -66,9 +64,7 @@ run_test("codex context-hash invalidation", test_codex_context_hash_invalidation
 
 
 async def test_codex_script_staging():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, provider_name="codex", default_skills=("github-integration",))
         prov = FakeProvider("codex")
         prov.run_results = [RunResult(text="ok")]
@@ -101,9 +97,7 @@ run_test("codex script staging", test_codex_script_staging())
 
 
 async def test_codex_retry_clears_thread():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, provider_name="codex")
         prov = FakeProvider("codex")
         prov.run_results = [RunResult(text="ok")]
@@ -140,9 +134,7 @@ run_test("codex retry clears thread_id", test_codex_retry_clears_thread())
 
 
 async def test_codex_failed_resume_clears_thread():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, provider_name="codex")
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
@@ -170,9 +162,7 @@ run_test("codex failed resume clears thread_id", test_codex_failed_resume_clears
 
 
 async def test_codex_timed_out_resume_preserves_thread():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, provider_name="codex")
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
@@ -200,9 +190,7 @@ run_test("codex timed-out resume preserves thread_id", test_codex_timed_out_resu
 
 
 async def test_codex_new_exec_failure_preserves_no_thread():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, provider_name="codex")
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
@@ -229,9 +217,7 @@ run_test("codex new exec failure preserves no thread", test_codex_new_exec_failu
 
 
 async def test_codex_boot_id_clears_stale_thread():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, provider_name="codex")
         prov = FakeProvider("codex")
         setup_globals(cfg, prov, boot_id="old-boot")
@@ -265,9 +251,7 @@ run_test("codex boot_id clears stale thread on restart", test_codex_boot_id_clea
 
 
 async def test_codex_same_boot_preserves_thread():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, provider_name="codex")
         prov = FakeProvider("codex")
         setup_globals(cfg, prov, boot_id="same-boot")
@@ -294,9 +278,7 @@ run_test("codex same boot preserves thread", test_codex_same_boot_preserves_thre
 
 
 async def test_scripts_dir_in_run_context():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, provider_name="codex", default_skills=("github-integration",))
         prov = FakeProvider("codex")
         prov.run_results = [RunResult(text="ok")]
@@ -329,9 +311,7 @@ run_test("scripts dir in RunContext", test_scripts_dir_in_run_context())
 async def test_script_staging_removes_stale():
     from app.skills import stage_codex_scripts
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
 
         result = stage_codex_scripts(data_dir, 99999, ["github-integration"])
         checks.check_true("staging returns path", result is not None)
@@ -351,9 +331,7 @@ run_test("script staging removes stale", test_script_staging_removes_stale())
 
 
 async def test_context_hash_role_sensitivity():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, provider_name="codex")
         prov = FakeProvider("codex")
         prov.run_results = [
@@ -395,16 +373,6 @@ async def test_context_hash_role_sensitivity():
 run_test("context hash role sensitivity", test_context_hash_role_sensitivity())
 
 
-def _close_all_db_connections():
-    """Close all leaked SQLite connections between tests."""
-    for conn in _db_connections.values():
-        try:
-            conn.close()
-        except Exception:
-            pass
-    _db_connections.clear()
-
-
 async def _run_all():
     for name, coro in _tests:
         print(f"\n=== {name} ===")
@@ -416,8 +384,6 @@ async def _run_all():
 
             traceback.print_exc()
             checks.failed += 1
-        finally:
-            _close_all_db_connections()
 
 
 async def _main():

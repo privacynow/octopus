@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.providers.base import RunResult
 from app.skills import derive_encryption_key, load_user_credentials, save_user_credential
-from app.storage import _db_connections, default_session, ensure_data_dirs, save_session
+from app.storage import default_session, ensure_data_dirs, save_session
 import app.telegram_handlers as _th
 from tests.support.assertions import Checks
 from tests.support.handler_support import (
@@ -29,6 +29,7 @@ from tests.support.handler_support import (
     send_command,
     send_text,
     setup_globals,
+    test_data_dir,
 )
 
 checks = Checks()
@@ -43,9 +44,7 @@ def run_test(name, coro):
 
 
 async def test_credential_capture():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         prov.run_results = [RunResult(text="Used github token")]
@@ -100,9 +99,7 @@ run_test("credential capture", test_credential_capture())
 
 
 async def test_credential_validation_failure():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -159,9 +156,7 @@ run_test("credential validation failure", test_credential_validation_failure())
 
 
 async def test_doctor_credential_check():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         prov._health_errors = []
@@ -182,9 +177,7 @@ run_test("/doctor credential checks", test_doctor_credential_check())
 
 
 async def test_multi_credential():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -232,9 +225,7 @@ run_test("multi-credential capture", test_multi_credential())
 
 
 async def test_credential_env_in_context():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, default_skills=("github-integration",))
         prov = FakeProvider("claude")
         prov.run_results = [RunResult(text="used token")]
@@ -257,9 +248,7 @@ run_test("credential env in context", test_credential_env_in_context())
 
 
 async def test_missing_creds_block_execution():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, default_skills=("github-integration",))
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -279,9 +268,7 @@ run_test("missing creds block execution", test_missing_creds_block_execution())
 
 
 async def test_skills_add_defers_activation():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -302,9 +289,7 @@ run_test("/skills add defers activation", test_skills_add_defers_activation())
 
 
 async def test_credential_completion_activates():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -333,9 +318,7 @@ run_test("credential completion activates", test_credential_completion_activates
 async def test_skills_add_no_creds():
     from app.skills import load_catalog, get_skill_requirements
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -359,9 +342,7 @@ run_test("/skills add no creds", test_skills_add_no_creds())
 
 
 async def test_skills_remove_cancels_setup():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -391,9 +372,7 @@ run_test("/skills remove cancels setup", test_skills_remove_cancels_setup())
 
 
 async def test_skills_clear_cancels_setup():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -420,9 +399,7 @@ run_test("/skills clear cancels setup", test_skills_clear_cancels_setup())
 
 
 async def test_cross_user_credential_isolation():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, approval_mode="on", default_skills=("github-integration",))
         prov = FakeProvider("claude")
         prov.preflight_results = [RunResult(text="Plan: use github")]
@@ -468,9 +445,7 @@ run_test("cross-user credential isolation", test_cross_user_credential_isolation
 
 
 async def test_group_chat_setup_isolation():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, default_skills=("github-integration",))
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -536,9 +511,7 @@ run_test("group chat setup isolation", test_group_chat_setup_isolation())
 
 
 async def test_group_check_cred_satisfaction_no_overwrite():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -571,9 +544,7 @@ run_test("group check_cred_satisfaction no overwrite", test_group_check_cred_sat
 
 
 async def test_cross_user_skills_remove_blocked():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -611,9 +582,7 @@ run_test("cross-user /skills remove blocked", test_cross_user_skills_remove_bloc
 
 
 async def test_cross_user_skills_clear_blocked():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -651,9 +620,7 @@ run_test("cross-user /skills clear blocked", test_cross_user_skills_clear_blocke
 
 
 async def test_cross_user_new_blocked():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -693,9 +660,7 @@ run_test("cross-user /new blocked", test_cross_user_new_blocked())
 
 
 async def test_expired_foreign_setup_allows_recovery():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -753,9 +718,7 @@ run_test("expired foreign setup allows recovery", test_expired_foreign_setup_all
 
 
 async def test_expired_setup_persisted_on_noop_remove():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -1110,9 +1073,7 @@ run_test("smoke: credentialed skill flow", test_smoke_credentialed_skill_flow())
 
 
 async def test_cancel_setup():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -1139,9 +1100,7 @@ run_test("/cancel clears own setup", test_cancel_setup())
 
 
 async def test_cancel_nothing():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -1157,9 +1116,7 @@ run_test("/cancel nothing", test_cancel_nothing())
 
 
 async def test_cancel_admin_foreign_setup():
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         cfg = make_config(data_dir, admin_user_ids=frozenset({99}))
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -1211,9 +1168,7 @@ run_test("credential prompt clickable URL", test_credential_prompt_html_link())
 async def test_delete_user_credentials():
     from app.skills import delete_user_credentials
 
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        ensure_data_dirs(data_dir)
+    with test_data_dir() as data_dir:
         key = derive_encryption_key("1234567890:AABBCCDDEEFFaabbccddeeff_01234567")
         save_user_credential(data_dir, 42, "skill-a", "TOKEN_A", "value-a", key)
         save_user_credential(data_dir, 42, "skill-b", "TOKEN_B", "value-b", key)
@@ -1506,16 +1461,6 @@ async def test_bad_validate_spec_no_crash():
 run_test("bad validate spec no crash", test_bad_validate_spec_no_crash())
 
 
-def _close_all_db_connections():
-    """Close all leaked SQLite connections between tests."""
-    for conn in _db_connections.values():
-        try:
-            conn.close()
-        except Exception:
-            pass
-    _db_connections.clear()
-
-
 async def _run_all():
     for name, coro in _tests:
         print(f"\n=== {name} ===")
@@ -1527,8 +1472,6 @@ async def _run_all():
 
             traceback.print_exc()
             checks.failed += 1
-        finally:
-            _close_all_db_connections()
 
 
 async def _main():

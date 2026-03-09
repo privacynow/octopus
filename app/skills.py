@@ -613,6 +613,16 @@ def check_prompt_size(role: str, active_skills: list[str]) -> str | None:
         )
     return None
 
+
+def estimate_prompt_size(role: str, current_skills: list[str], new_skill: str) -> tuple[int, bool]:
+    """Estimate prompt size if new_skill were added.
+
+    Returns (projected_size, over_threshold).
+    """
+    projected = current_skills + ([new_skill] if new_skill not in current_skills else [])
+    prompt = build_system_prompt(role, projected)
+    return len(prompt), len(prompt) > PROMPT_SIZE_WARNING_THRESHOLD
+
 # ---------------------------------------------------------------------------
 # Context builders
 # ---------------------------------------------------------------------------

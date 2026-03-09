@@ -415,3 +415,64 @@ def update_all() -> list[tuple[str, bool, str]]:
             ok, msg = update_skill(name)
             results.append((name, ok, msg))
     return results
+
+def diff_skill(name: str, max_chars: int = 2000) -> tuple[bool, str]:
+    """Show diff between installed skill and store version.
+
+    Returns (ok, diff_text). If not a store skill or no differences, returns
+    a descriptive message instead of a diff.
+    """
+    import difflib
+
+    dest = CUSTOM_DIR / name
+    if not dest.is_dir():
+        return False, f"Skill '{name}' is not installed."
+
+    manifest = read_manifest(dest)
+    if manifest is None:
+        return False, f"Skill '{name}' is a custom skill, not a store install."
+
+    store_path = STORE_DIR / name
+    if not store_path.is_dir():
+        return False, f"Skill '{name}' is no longer in the store."
+
+    # Collect text files from both sides
+    lines: list[str] = []
+    all_files = set()
+    for d in (store_path, dest):
+        for f in sorted(d.rglob("*")):
+            if f.is_file() and f.name != "_store.json":
+                all_files.add(f.relative_to(d))
+
+    for rel in sorted(all_files):
+        store_file = store_path / rel
+        installed_file = dest / rel
+        store_lines = store_file.read_text().splitlines(keepends=True) if store_file.exists() else []
+        installed_lines = installed_file.read_text().splitlines(keepends=True) if installed_file.exists() else []
+        if store_lines == installed_lines:
+            continue
+        diff = difflib.unified_diff(
+            store_lines, installed_lines,
+            fromfile=f"store/{name}/{rel}", tofile=f"installed/{name}/{rel}",
+        )
+        lines.extend(diff)
+
+    if not lines:
+        return True, f"Skill '{name}' has no differences from store version."
+
+    text = "".join(lines)
+    if len(text) > max_chars:
+        text = text[:max_chars] + f"\n... (truncated at {max_chars} chars)"
+    return True, text
+
+
+def is_locally_modified(name: str) -> bool:
+    """Check if an installed store skill has local modifications."""
+    dest = CUSTOM_DIR / name
+    if not dest.is_dir():
+        return False
+    manifest = read_manifest(dest)
+    if manifest is None:
+        return False
+    return _hash_directory(dest) != manifest.content_sha256
+

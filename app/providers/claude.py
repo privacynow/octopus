@@ -46,6 +46,24 @@ class ClaudeProvider:
             errors.append("'claude --version' timed out")
         except OSError as e:
             errors.append(f"'claude' binary not executable: {e}")
+        # Lightweight API ping
+        if not errors:
+            try:
+                model = self.config.model or "claude-sonnet-4-20250514"
+                result = subprocess.run(
+                    ["claude", "-p", "--model", model, "--max-turns", "1",
+                     "--output-format", "text", "reply with ok"],
+                    capture_output=True, text=True, timeout=15,
+                )
+                if result.returncode != 0:
+                    stderr = result.stderr.strip()[:200]
+                    errors.append(f"API ping failed (rc={result.returncode}): {stderr}")
+                else:
+                    log.info("claude API ping ok")
+            except subprocess.TimeoutExpired:
+                errors.append("API ping timed out (15s)")
+            except OSError as e:
+                errors.append(f"API ping error: {e}")
         return errors
 
     # -- subprocess env ----------------------------------------------------

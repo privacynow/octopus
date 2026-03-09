@@ -127,6 +127,36 @@ def resolve_allowed_path(raw_path: str, allowed_roots: list[Path]) -> Path | Non
     return None
 
 
+def list_sessions(data_dir: Path) -> list[dict[str, Any]]:
+    """Return summary info for all stored sessions.
+
+    Each dict has: chat_id, provider, active_skills, has_pending,
+    has_setup, updated_at, created_at.
+    """
+    sessions_dir = data_dir / "sessions"
+    if not sessions_dir.is_dir():
+        return []
+    results: list[dict[str, Any]] = []
+    for sf in sessions_dir.glob("*.json"):
+        try:
+            data = json.loads(sf.read_text())
+            chat_id = int(sf.stem)
+        except (json.JSONDecodeError, OSError, ValueError):
+            continue
+        results.append({
+            "chat_id": chat_id,
+            "provider": data.get("provider", "unknown"),
+            "active_skills": data.get("active_skills", []),
+            "has_pending": data.get("pending_request") is not None,
+            "has_setup": data.get("awaiting_skill_setup") is not None,
+            "approval_mode": data.get("approval_mode", "off"),
+            "updated_at": data.get("updated_at", ""),
+            "created_at": data.get("created_at", ""),
+        })
+    results.sort(key=lambda s: s["updated_at"], reverse=True)
+    return results
+
+
 def sweep_skill_from_sessions(data_dir: Path, skill_name: str) -> int:
     """Remove a skill from active_skills in all session files.
 

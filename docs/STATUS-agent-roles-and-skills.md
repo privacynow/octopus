@@ -21,81 +21,41 @@ All planned implementation work through Phase 5 is done. The system is productio
 
 ## Test Suite
 
-1,074 tests across 10 files, all passing.
+Canonical full-suite runner: `./scripts/test_all.sh`
+
+Current suite: 1,226 passing checks across 17 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
-| `test_handlers.py` | 315 | Handler-level integration: real session storage, real encryption, real skill catalog, real context building. Mocks only at Telegram API and Provider.run() boundary. Includes Phase 5 E2E lifecycle test. |
-| `test_skills.py` | 201 | Skill engine unit tests: catalog discovery, instruction loading, prompt composition, credential encryption, provider YAML parsing, context hashing, config digest, custom skill override. |
-| `test_high_risk.py` | 78 | Cross-cutting invariants from plan section 8.5: requester identity through approval, context hash staleness, Codex thread invalidation, credential injection, system prompt injection for both providers. |
-| `test_formatting.py` | 276 | Markdown-to-Telegram HTML conversion, text splitting, SEND_FILE/SEND_IMAGE directive extraction. |
-| `test_config.py` | 16 | Config loading, validation, .env parsing, BOT_SKILLS validation against catalog. |
 | `test_approvals.py` | 11 | Preflight prompt building, denial formatting. |
-| `test_claude_provider.py` | 16 | Claude CLI command construction from RunContext. |
-| `test_codex_provider.py` | 20 | Codex CLI command construction, thread invalidation, script staging flags. |
+| `test_claude_provider.py` | 16 | Claude CLI command construction from `RunContext`. |
+| `test_codex_provider.py` | 55 | Codex CLI command construction, thread invalidation, progress parsing, and modern JSON event handling. |
+| `test_config.py` | 16 | Config loading, validation, `.env` parsing, and `BOT_SKILLS` validation. |
+| `test_formatting.py` | 296 | Markdown-to-Telegram HTML conversion, balanced HTML splitting, table rendering, and directive extraction. |
+| `test_handlers.py` | 78 | Core handler integration: happy-path routing, role/session behavior, resilience, `/help`, `/start`, and generic command flows. |
+| `test_handlers_approval.py` | 53 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL, `/approval`, and `/cancel` for pending requests. |
+| `test_handlers_codex.py` | 33 | Codex-specific handler behavior: thread invalidation, boot ID handling, retry semantics, and script staging. |
+| `test_handlers_credentials.py` | 155 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection, and credentialed-skill smokes. |
+| `test_handlers_output.py` | 17 | Output presentation helpers: `/compact`, `/raw`, table rendering, and compact-mode summarization flows. |
+| `test_handlers_store.py` | 26 | Store handler flows: install/update/uninstall, local-modification detection, prompt-size warnings, and store lifecycle smoke tests. |
+| `test_high_risk.py` | 78 | Cross-cutting invariants from plan section 8.5: requester identity through approval, context hash staleness, Codex thread invalidation, credential injection, system prompt injection for both providers. |
+| `test_skills.py` | 201 | Skill engine unit tests: catalog discovery, instruction loading, prompt composition, credential encryption, provider YAML parsing, context hashing, config digest, custom skill override. |
 | `test_storage.py` | 26 | Session CRUD, upload path management, directory creation, session sweep. |
 | `test_store.py` | 115 | Store module: discovery, search, install/uninstall, update checking, SHA-256 provenance, locally_modified persistence, session sweep, admin gate, prompt-size warning. |
+| `test_summarize.py` | 15 | Raw-response ring buffer and `/raw` support primitives. |
+| `tests/test_setup.sh` | 35 | Installer/setup wizard flows and config generation. |
 
-### Handler Integration Tests (test_handlers.py) — 54 scenarios
+### Handler Integration Layout
 
-These are the highest-signal tests. They exercise the full handler wiring between components — a message arrives, flows through session loading, credential checking, context building, and provider dispatch, then assertions verify both the provider call arguments and the persisted session state.
+The highest-signal coverage remains in the handler integration suites. These exercise the full wiring between components: a Telegram update arrives, flows through session loading, credential checking, context building, and provider dispatch, then assertions verify both the provider call arguments and persisted session state.
 
-| # | Scenario | Bugs caught / regression covered |
-|---|----------|----------------------------------|
-| 1 | Happy path | Basic message → run → reply wiring |
-| 2 | Approval flow | Preflight → pending → approve → execute; PreflightContext populated |
-| 3 | Credential capture | /skills add → setup → credential message → activation; deferred activation |
-| 4 | Credential validation failure | Failed HTTP check → setup preserved, credential not saved |
-| 5 | /new resets session | Session reset, script cleanup, approval_mode preserved |
-| 6 | Codex context-hash invalidation | Stale hash → thread_id cleared before run |
-| 7 | Codex script staging | Scripts staged on disk and present in RunContext.extra_dirs |
-| 8 | /doctor credential checks | Reports missing GITHUB_TOKEN for active skill |
-| 9 | Denial/retry flow | Denial → pending → retry → extra_dirs include denied paths |
-| 10 | Retry skip | retry_skip clears pending, no provider call |
-| 11 | Stale context hash | Context drift between request and retry → rejection |
-| 12 | Codex retry clears thread | Retry with denial dirs → fresh Codex thread |
-| 13 | Multi-credential capture | Two credentials collected sequentially, both saved |
-| 14 | Credential env in context | Decrypted credentials flow through to RunContext.credential_env |
-| 15 | Missing creds block execution | Active credentialed skill without credentials → setup prompt, no run |
-| 16 | Scripts dir in RunContext | Regression: staging happened after context build; scripts_dir now in extra_dirs |
-| 17 | /skills add defers activation | Regression: skill was activated before credential check |
-| 18 | Credential completion activates | After all creds collected, skill added to active_skills |
-| 19 | Provider-scoped digest | Regression: editing claude.yaml no longer invalidates Codex threads |
-| 20 | /skills add no creds | Skill without requirements activates immediately |
-| 21 | Rich role verbatim | Regression: "You are a ..." roles were double-wrapped; case-insensitive detection |
-| 22 | /skills remove cancels setup | Regression: setup state was left intact after skill removal |
-| 23 | /skills clear cancels setup | Same regression for /skills clear |
-| 24 | MCP args is list | Regression: claude.yaml had scalar string instead of YAML list |
-| 25 | Script staging removes stale | Regression: re-staging didn't remove old files |
-| 26 | Cross-user approval | Alice requests, Bob approves → request_user_id preserved |
-| 27 | Cross-user credential isolation | Alice requests, Bob approves → Alice's credentials used, not Bob's |
-| 28 | Provider timeout | Timeout → no formatted reply sent, no pending saved |
-| 29 | Provider error returncode | Non-zero returncode → no formatted reply, status updated |
-| 30 | Malformed skill resilience | Malformed skill.md → skipped in catalog, invisible to runtime |
-| 31 | Malformed provider YAML | Bad claude.yaml → returns {}, build_provider_config safe |
-| 32 | Malformed requires.yaml | Bad YAML → empty list, no crash |
-| 33 | BOT_SKILLS validation | Unknown skill name in config → reported by validate_config |
-| 34 | /role command | Show, set, and clear role lifecycle |
-| 35 | Role in provider context | Role text flows into RunContext.system_prompt |
-| 36 | Approval preflight timeout | Preflight timeout → no pending saved, no approval buttons |
-| 37 | Approval preflight error | Preflight error → no pending saved |
-| 38 | Duplicate pending blocked | Second request while pending exists → no corruption |
-| 39 | /new preserves default_skills | Reset restores config defaults, drops extras |
-| 40 | Denial preserves request_user_id | Pending request stores original requester for retry credential lookup |
-| 41 | Context hash role sensitivity | Role change → hash change → Codex thread reset |
-| 42 | Group chat setup isolation | Bob can't overwrite Alice's in-progress credential setup; secret not leaked |
-| 43 | Group check_cred_satisfaction no overwrite | Bob's message doesn't replace Alice's setup via _check_credential_satisfaction |
-| 44 | Catalog uses directory name | Frontmatter name divergence from dir name doesn't create ghost skills |
-| 45 | Bad validate spec no crash | Non-numeric expect_status returns error instead of crashing |
-| 46 | Cross-user /skills remove blocked | Bob's `/skills remove` is rejected while Alice is mid-setup; state stays intact |
-| 47 | Cross-user /skills clear blocked | Bob's `/skills clear` is rejected while Alice is mid-setup; skills are not partially cleared |
-| 48 | Cross-user /new blocked | Bob's `/new` is rejected while Alice is mid-setup; session is not partially reset |
-| 49 | Expired foreign setup allows recovery | Stale setup (>10 min) auto-expires so another user can recover the chat |
-| 50 | Expired setup persisted on no-op remove | Expired setup is saved to disk even when /skills remove is otherwise a no-op |
-| 51 | E2E skills lifecycle | Full lifecycle: add credentialed skill → setup → capture → activation → dispatch with creds → add instruction skill → role change → remove → clear → /new → re-add (immediate activation) |
-| 52 | /skills update all prompt-size warning | Update multiple skills → cross-chat prompt-size warnings collected and reported |
-| 53 | locally_modified persisted via handler | /skills updates → _store.json locally_modified=true on disk; update resets to false |
-| 54 | Phase 5 E2E full lifecycle | Admin install → user activate → provider sees instructions → store update → /skills update all → V2 in prompt → local modification detection → prompt-size warning → config guard → uninstall sweep → provider no longer sees instructions |
+- `test_handlers.py` now holds only the core non-domain-specific handler flows.
+- `test_handlers_approval.py` isolates approval-specific state transitions and callback flows.
+- `test_handlers_codex.py` isolates Codex-specific session and script behavior.
+- `test_handlers_credentials.py` isolates the credential/setup state machine and group-setup protections.
+- `test_handlers_output.py` isolates output rendering and compact/raw response behavior.
+- `test_handlers_store.py` isolates store mutations and store-backed lifecycle flows.
+- The split reduces the maintenance burden of a single monolithic handler file while preserving the same integration depth.
 
 ---
 

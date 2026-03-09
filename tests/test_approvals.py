@@ -9,33 +9,11 @@ from app.approvals import (
     format_denials_html,
     serialize_pending_request,
 )
+from tests.support.assertions import Checks
 
-passed = 0
-failed = 0
-
-
-def check(name, got, expected):
-    global passed, failed
-    if got == expected:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    expected: {expected!r}")
-        print(f"    got:      {got!r}")
-        failed += 1
-
-
-def check_contains(name, got, *substrings):
-    global passed, failed
-    ok = all(s in got for s in substrings)
-    if ok:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    missing: {[s for s in substrings if s not in got]}")
-        failed += 1
+checks = Checks()
+check = checks.check
+check_contains = checks.check_contains
 
 
 # -- build_preflight_prompt --
@@ -72,6 +50,6 @@ check("empty denials", empty, "")
 
 # -- Summary --
 print(f"\n{'='*40}")
-print(f"  {passed} passed, {failed} failed")
+print(f"  {checks.passed} passed, {checks.failed} failed")
 print(f"{'='*40}")
-sys.exit(1 if failed else 0)
+sys.exit(1 if checks.failed else 0)

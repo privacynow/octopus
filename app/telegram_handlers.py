@@ -38,7 +38,7 @@ from app.skills import (
     save_user_credential, delete_user_credentials, derive_encryption_key,
     build_credential_env,
     scaffold_skill, validate_active_skills, validate_credential,
-    check_prompt_size,
+    check_prompt_size, estimate_prompt_size,
     stage_codex_scripts, cleanup_codex_scripts,
     SkillRequirement,
 )
@@ -51,9 +51,11 @@ from app.storage import (
     resolve_allowed_path,
     save_session,
     session_file,
+    list_sessions,
     sweep_skill_from_sessions,
 )
-from app.summarize import load_raw, save_raw, summarize
+from app.ratelimit import RateLimiter
+from app.summarize import export_chat_history, load_raw, save_raw, summarize
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +65,7 @@ CHAT_LOCKS: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 _config: BotConfig | None = None
 _provider: Provider | None = None
 _boot_id: str = ""  # unique per process; detects restart to clear stale threads
+_rate_limiter: RateLimiter | None = None
 
 
 def _cfg() -> BotConfig:
@@ -545,9 +548,13 @@ async def execute_request(
     # Compact mode: summarize long responses for mobile readability
     compact = session.get("compact_mode", cfg.compact_mode)
     if compact and len(cleaned_reply) > 800:
-        summary = await summarize(cleaned_reply, cfg.summary_model)
-        if summary != cleaned_reply:
-            cleaned_reply = summary + "\n\n<i>Summarized — /raw for full response</i>"
+        try:
+            summary = await summarize(cleaned_reply, cfg.summary_model)
+        except Exception as exc:
+            log.warning("compact summarization failed: %s", exc)
+        else:
+            if summary != cleaned_reply:
+                cleaned_reply = summary + "\n\n<i>Summarized — /raw for full response</i>"
 
     await send_formatted_reply(message, cleaned_reply)
     await send_directed_artifacts(chat_id, message, directives)
@@ -977,12 +984,164 @@ async def cmd_doctor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         data_dir=_cfg().data_dir,
         encryption_key=_encryption_key(),
     )
+    # Advisory warnings (non-fatal)
+    warnings: list[str] = []
+    cfg = _cfg()
+    total_users = len(cfg.allowed_user_ids) + len(cfg.allowed_usernames)
+    if total_users > 1 and not cfg.admin_users_explicit:
+        warnings.append(
+            "BOT_ADMIN_USERS not set \u2014 all allowed users have admin "
+            "privileges (install/uninstall skills). Set BOT_ADMIN_USERS to restrict.")
+
+    # Stale session scan — only flag entries older than a threshold
+    stale_pending = 0
+    stale_setup = 0
+    now = time.time()
+    _STALE_PENDING_SECONDS = 3600     # 1 hour
+    _STALE_SETUP_SECONDS = 600        # 10 minutes
+    sessions_dir = cfg.data_dir / "sessions"
+    if sessions_dir.is_dir():
+        for sf in sessions_dir.glob("*.json"):
+            try:
+                import json as _json
+                data = _json.loads(sf.read_text())
+                pending = data.get("pending_request")
+                if pending and (now - pending.get("created_at", 0)) > _STALE_PENDING_SECONDS:
+                    stale_pending += 1
+                setup = data.get("awaiting_skill_setup")
+                if setup and (now - setup.get("started_at", 0)) > _STALE_SETUP_SECONDS:
+                    stale_setup += 1
+            except Exception:
+                pass
+    if stale_pending:
+        warnings.append(f"{stale_pending} session(s) with stale pending approval requests (>1h old).")
+    if stale_setup:
+        warnings.append(f"{stale_setup} session(s) with stale credential setup (>10m old).")
+
     all_errors = cfg_errors + prov_errors + skill_errors
+    parts: list[str] = []
     if all_errors:
-        lines = "\n".join(f"\u274c {html.escape(e)}" for e in all_errors)
-        await update.effective_message.reply_text(lines, parse_mode=ParseMode.HTML)
+        parts.extend(f"\u274c {html.escape(e)}" for e in all_errors)
+    if warnings:
+        parts.extend(f"\u26a0\ufe0f {html.escape(w)}" for w in warnings)
+    if parts:
+        await update.effective_message.reply_text(
+            "\n".join(parts), parse_mode=ParseMode.HTML)
     else:
         await update.effective_message.reply_text("\u2705 All checks passed.")
+
+
+
+async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update.effective_user):
+        return
+    chat_id = update.effective_chat.id
+    cfg = _cfg()
+
+    history = export_chat_history(cfg.data_dir, chat_id)
+    if not history:
+        await update.effective_message.reply_text("No conversation history to export.")
+        return
+
+    # Add session metadata header
+    session = _load(chat_id)
+    skills = session.get("active_skills", [])
+    header_lines = [
+        f"Chat ID: {chat_id}",
+        f"Provider: {session.get('provider', 'unknown')}",
+        f"Approval mode: {session.get('approval_mode', 'off')}",
+        f"Active skills: {', '.join(skills) if skills else 'none'}",
+        f"Created: {session.get('created_at', 'unknown')[:19]}",
+        "",
+        "=" * 40,
+        "",
+    ]
+    full_text = "\n".join(header_lines) + history
+
+    # Send as document
+    import io
+    doc = io.BytesIO(full_text.encode("utf-8"))
+    doc.name = f"chat_{chat_id}_export.txt"
+    await update.effective_message.reply_document(document=doc)
+
+
+async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update.effective_user):
+        return
+    if not is_admin(update.effective_user):
+        await update.effective_message.reply_text("Admin access required.")
+        return
+
+    args = context.args or []
+    sub = args[0].lower() if args else ""
+
+    if sub != "sessions":
+        await update.effective_message.reply_text(
+            "Usage: /admin sessions [chat_id]")
+        return
+
+    cfg = _cfg()
+    sessions = list_sessions(cfg.data_dir)
+
+    if not sessions:
+        await update.effective_message.reply_text("No sessions found.")
+        return
+
+    # Detail view for a specific chat
+    if len(args) >= 2:
+        try:
+            target_id = int(args[1])
+        except ValueError:
+            await update.effective_message.reply_text("Invalid chat ID.")
+            return
+        match = next((s for s in sessions if s["chat_id"] == target_id), None)
+        if not match:
+            await update.effective_message.reply_text(
+                f"No session found for chat {target_id}.")
+            return
+        skills = match["active_skills"]
+        skill_list = ", ".join(skills) if skills else "none"
+        lines = [
+            f"<b>Session {target_id}</b>",
+            f"Provider: {html.escape(match['provider'])}",
+            f"Approval: {html.escape(match['approval_mode'])}",
+            f"Skills ({len(skills)}): {html.escape(skill_list)}",
+            f"Pending request: {'yes' if match['has_pending'] else 'no'}",
+            f"Credential setup: {'in progress' if match['has_setup'] else 'no'}",
+            f"Created: {html.escape(match['created_at'][:19])}",
+            f"Updated: {html.escape(match['updated_at'][:19])}",
+        ]
+        await update.effective_message.reply_text(
+            "\n".join(lines), parse_mode=ParseMode.HTML)
+        return
+
+    # Summary view
+    total = len(sessions)
+    pending = sum(1 for s in sessions if s["has_pending"])
+    setup = sum(1 for s in sessions if s["has_setup"])
+    skill_counts: dict[str, int] = {}
+    for s in sessions:
+        for sk in s["active_skills"]:
+            skill_counts[sk] = skill_counts.get(sk, 0) + 1
+
+    lines = [f"<b>Sessions: {total}</b>"]
+    if pending:
+        lines.append(f"Pending approval: {pending}")
+    if setup:
+        lines.append(f"Credential setup: {setup}")
+    if skill_counts:
+        top = sorted(skill_counts.items(), key=lambda x: -x[1])[:5]
+        lines.append("")
+        lines.append("<b>Top skills:</b>")
+        for sk, count in top:
+            lines.append(f"  {html.escape(sk)}: {count}")
+    lines.append("")
+    lines.append(f"Most recent: chat {sessions[0]['chat_id']}")
+    if sessions[0]["updated_at"]:
+        lines.append(f"  updated {sessions[0]['updated_at'][:19]}")
+
+    await update.effective_message.reply_text(
+        "\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1081,16 +1240,29 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     )
                     return
 
-            # Credentials satisfied (or none required) — activate
+            # Credentials satisfied (or none required) — check size before activating
             if name not in active:
+                projected_size, over = estimate_prompt_size(
+                    session.get("role", ""), active, name)
+                if over:
+                    from app.skills import PROMPT_SIZE_WARNING_THRESHOLD
+                    kb = InlineKeyboardMarkup([[
+                        InlineKeyboardButton("Yes", callback_data=f"skill_add_confirm:{name}"),
+                        InlineKeyboardButton("No", callback_data="skill_add_cancel"),
+                    ]])
+                    await update.effective_message.reply_text(
+                        f"Adding <code>{html.escape(name)}</code> would bring total "
+                        f"prompt context to ~{projected_size:,} chars "
+                        f"(threshold: {PROMPT_SIZE_WARNING_THRESHOLD:,}). "
+                        f"This may reduce response quality. Continue?",
+                        parse_mode=ParseMode.HTML, reply_markup=kb)
+                    return
                 active.append(name)
                 session["active_skills"] = active
                 _save(chat_id, session)
-            msg = f"Skill <code>{html.escape(name)}</code> activated."
-            warning = check_prompt_size(session.get("role", ""), active)
-            if warning:
-                msg += f"\n\n\u26a0\ufe0f {html.escape(warning)}"
-            await update.effective_message.reply_text(msg, parse_mode=ParseMode.HTML)
+            await update.effective_message.reply_text(
+                f"Skill <code>{html.escape(name)}</code> activated.",
+                parse_mode=ParseMode.HTML)
         return
 
     if sub == "remove" and len(args) >= 2:
@@ -1291,6 +1463,19 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
         return
 
+    if sub == "diff" and len(args) >= 2:
+        from app.store import diff_skill
+        name = args[1]
+        ok, diff_text = diff_skill(name)
+        if not diff_text.strip():
+            diff_text = "No differences."
+        # Send as preformatted text
+        if len(diff_text) > 4000:
+            diff_text = diff_text[:4000] + "\n... (truncated)"
+        await update.effective_message.reply_text(
+            f"<pre>{html.escape(diff_text)}</pre>", parse_mode=ParseMode.HTML)
+        return
+
     if sub == "update" and len(args) >= 2:
         from app.store import update_skill as store_update_skill, update_all as store_update_all
         if not is_admin(update.effective_user):
@@ -1298,6 +1483,19 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
         target = args[1]
         if target == "all":
+            from app.store import check_updates as store_check_updates, is_locally_modified
+            modified = [n for n, s in store_check_updates() if s == "locally_modified"]
+            if modified:
+                names = ", ".join(f"<code>{html.escape(n)}</code>" for n in modified)
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("Yes, overwrite all", callback_data="skill_update_all_confirm"),
+                    InlineKeyboardButton("Cancel", callback_data="skill_update_cancel"),
+                ]])
+                await update.effective_message.reply_text(
+                    f"These skills have local modifications that will be overwritten: {names}\n\n"
+                    f"Continue?",
+                    parse_mode=ParseMode.HTML, reply_markup=kb)
+                return
             results = store_update_all()
             if not results:
                 await update.effective_message.reply_text("No store skills need updating.")
@@ -1317,9 +1515,20 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     lines.append(f"  {html.escape(w)}")
             await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
         else:
+            from app.store import is_locally_modified
+            if is_locally_modified(target):
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("Yes, overwrite", callback_data=f"skill_update_confirm:{target}"),
+                    InlineKeyboardButton("Cancel", callback_data="skill_update_cancel"),
+                ]])
+                await update.effective_message.reply_text(
+                    f"Skill <code>{html.escape(target)}</code> has local modifications. "
+                    f"Update will overwrite them. Continue?\n\n"
+                    f"Use /skills diff {html.escape(target)} to see changes.",
+                    parse_mode=ParseMode.HTML, reply_markup=kb)
+                return
             ok, msg = store_update_skill(target)
             if ok:
-                # Check prompt size in all chats where this skill is active
                 cfg = _cfg()
                 size_warnings = _check_prompt_size_cross_chat(cfg.data_dir, target)
                 if size_warnings:
@@ -1328,7 +1537,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     await update.effective_message.reply_text(
-        "Usage: /skills [list|add|remove|setup|create|clear|search|info|install|uninstall|updates|update]"
+        "Usage: /skills [list|add|remove|setup|create|clear|search|info|install|uninstall|updates|update|diff]"
     )
 
 
@@ -1513,6 +1722,16 @@ async def cmd_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update.effective_user):
         return
+
+    # Rate limit check (admins exempt)
+    user = update.effective_user
+    if _rate_limiter and _rate_limiter.enabled and not (_cfg().admin_users_explicit and is_admin(user)):
+        allowed, retry_after = _rate_limiter.check(user.id)
+        if not allowed:
+            await update.effective_message.reply_text(
+                f"Rate limit reached. Please wait {retry_after} seconds.")
+            return
+
     message = update.effective_message
     chat_id = update.effective_chat.id
     attachments = await download_attachments(chat_id, update)
@@ -1688,11 +1907,98 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 # -- Application builder ---------------------------------------------------
 
+
+
+async def handle_skill_add_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not is_allowed(update.effective_user):
+        await query.answer("Not authorized.", show_alert=True)
+        return
+
+    await query.answer()
+    chat_id = update.effective_chat.id
+
+    if query.data == "skill_add_cancel":
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.edit_message_text("Skill activation cancelled.")
+        return
+
+    if query.data.startswith("skill_add_confirm:"):
+        name = query.data.split(":", 1)[1]
+        async with CHAT_LOCKS[chat_id]:
+            session = _load(chat_id)
+            active = session.get("active_skills", [])
+            if name not in active:
+                active.append(name)
+                session["active_skills"] = active
+                _save(chat_id, session)
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.edit_message_text(
+                f"Skill <code>{html.escape(name)}</code> activated.",
+                parse_mode=ParseMode.HTML)
+
+
+async def handle_skill_update_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not is_allowed(update.effective_user):
+        await query.answer("Not authorized.", show_alert=True)
+        return
+    if not is_admin(update.effective_user):
+        await query.answer("Only admins can update skills.", show_alert=True)
+        return
+
+    await query.answer()
+
+    if query.data == "skill_update_cancel":
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.edit_message_text("Update cancelled.")
+        return
+
+    if query.data.startswith("skill_update_confirm:"):
+        from app.store import update_skill as store_update_skill
+        name = query.data.split(":", 1)[1]
+        ok, msg = store_update_skill(name)
+        if ok:
+            cfg = _cfg()
+            size_warnings = _check_prompt_size_cross_chat(cfg.data_dir, name)
+            if size_warnings:
+                msg += "\n\nPrompt size warnings:\n" + "\n".join(size_warnings)
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.edit_message_text(html.escape(msg), parse_mode=ParseMode.HTML)
+        return
+
+    if query.data == "skill_update_all_confirm":
+        from app.store import update_all as store_update_all
+        results = store_update_all()
+        if not results:
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.edit_message_text("No store skills need updating.")
+            return
+        lines = ["<b>Update results:</b>"]
+        cfg = _cfg()
+        all_size_warnings: list[str] = []
+        for name, ok, msg in results:
+            status = "\u2714" if ok else "\u2718"
+            lines.append(f"  {status} {html.escape(msg)}")
+            if ok:
+                all_size_warnings.extend(_check_prompt_size_cross_chat(cfg.data_dir, name))
+        if all_size_warnings:
+            lines.append("")
+            lines.append("<b>Prompt size warnings:</b>")
+            for w in all_size_warnings:
+                lines.append(f"  {html.escape(w)}")
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.edit_message_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
 def build_application(config: BotConfig, provider: Provider) -> Application:
-    global _config, _provider, _boot_id
+    global _config, _provider, _boot_id, _rate_limiter
     _config = config
     _provider = provider
     _boot_id = uuid.uuid4().hex
+    _rate_limiter = RateLimiter(
+        per_minute=config.rate_limit_per_minute,
+        per_hour=config.rate_limit_per_hour,
+    )
 
     app = Application.builder().token(config.telegram_token).build()
     app.add_handler(CommandHandler("start", cmd_start))
@@ -1711,7 +2017,11 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     app.add_handler(CommandHandler("send", cmd_send))
     app.add_handler(CommandHandler("id", cmd_id))
     app.add_handler(CommandHandler("doctor", cmd_doctor))
+    app.add_handler(CommandHandler("export", cmd_export))
+    app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CallbackQueryHandler(handle_callback, pattern=r"^(retry_|approval_)"))
+    app.add_handler(CallbackQueryHandler(handle_skill_add_callback, pattern=r"^skill_add_"))
+    app.add_handler(CallbackQueryHandler(handle_skill_update_callback, pattern=r"^skill_update_"))
     app.add_handler(
         MessageHandler(
             (filters.TEXT | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,

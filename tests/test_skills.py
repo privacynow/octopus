@@ -21,7 +21,7 @@ import tempfile
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 
 from pathlib import Path
-from app.config import BotConfig, load_dotenv_file, validate_config
+from app.config import load_dotenv_file, validate_config
 from app.providers.base import (
     PendingRequest, PreflightContext, RunContext,
     compute_context_hash,
@@ -35,60 +35,13 @@ from app.skills import (
     load_catalog, load_user_credentials, save_user_credential,
 )
 from app.storage import default_session, load_session, save_session
+from tests.support.assertions import Checks
+from tests.support.config_support import make_config
 
-passed = 0
-failed = 0
-
-
-def check(name, got, expected):
-    global passed, failed
-    if got == expected:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    expected: {expected!r}")
-        print(f"    got:      {got!r}")
-        failed += 1
-
-
-def check_in(name, needle, haystack):
-    global passed, failed
-    if needle in haystack:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    expected {needle!r} in {haystack!r}")
-        failed += 1
-
-
-def check_not_in(name, needle, haystack):
-    global passed, failed
-    if needle not in haystack:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    expected {needle!r} NOT in {haystack!r}")
-        failed += 1
-
-
-def make_config(**overrides):
-    defaults = dict(
-        instance="test", telegram_token="x", allow_open=True,
-        allowed_user_ids=frozenset(), allowed_usernames=frozenset(),
-        provider_name="claude", model="", working_dir=Path("/home/test"),
-        extra_dirs=(), data_dir=Path("/tmp/test-data"),
-        timeout_seconds=300, approval_mode="on", role="", role_from_file=False, default_skills=(),
-        stream_update_interval_seconds=1.0, typing_interval_seconds=4.0,
-        codex_sandbox="workspace-write", codex_skip_git_repo_check=True,
-        codex_full_auto=False, codex_dangerous=False, codex_profile="",
-        admin_user_ids=frozenset(), admin_usernames=frozenset(),
-        compact_mode=False, summary_model="claude-haiku-4-5-20251001",
-    )
-    defaults.update(overrides)
-    return BotConfig(**defaults)
+checks = Checks()
+check = checks.check
+check_in = checks.check_in
+check_not_in = checks.check_not_in
 
 
 # =====================================================================
@@ -1083,6 +1036,6 @@ check("explicit is_custom is True", meta_custom.is_custom, True)
 
 # -- Summary --
 print(f"\n{'='*40}")
-print(f"  {passed} passed, {failed} failed")
+print(f"  {checks.passed} passed, {checks.failed} failed")
 print(f"{'='*40}")
-sys.exit(1 if failed else 0)
+sys.exit(1 if checks.failed else 0)

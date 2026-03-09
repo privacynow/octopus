@@ -45,6 +45,31 @@ class CodexProvider:
             errors.append("'codex --version' timed out")
         except OSError as e:
             errors.append(f"'codex' binary not executable: {e}")
+        # Lightweight API ping (mirrors real execution flags)
+        if not errors:
+            try:
+                ping_cmd = ["codex", "exec", "--json", "--ephemeral",
+                            "--sandbox", self.config.codex_sandbox]
+                if self.config.codex_skip_git_repo_check:
+                    ping_cmd.append("--skip-git-repo-check")
+                if self.config.model:
+                    ping_cmd.extend(["--model", self.config.model])
+                if self.config.codex_profile:
+                    ping_cmd.extend(["--profile", self.config.codex_profile])
+                ping_cmd.extend(["-C", str(self.config.working_dir), "reply with ok"])
+                result = subprocess.run(
+                    ping_cmd,
+                    capture_output=True, text=True, timeout=30,
+                )
+                if result.returncode != 0:
+                    stderr = result.stderr.strip()[:200]
+                    errors.append(f"API ping failed (rc={result.returncode}): {stderr}")
+                else:
+                    log.info("codex API ping ok")
+            except subprocess.TimeoutExpired:
+                errors.append("API ping timed out (30s)")
+            except OSError as e:
+                errors.append(f"API ping error: {e}")
         return errors
 
     # -- command building --------------------------------------------------

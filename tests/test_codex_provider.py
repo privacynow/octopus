@@ -5,54 +5,14 @@ import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 
 from pathlib import Path
-from app.config import BotConfig
 from app.providers.base import RunContext, RunResult
 from app.providers.codex import CodexProvider
+from tests.support.assertions import Checks
+from tests.support.config_support import make_config
 
-passed = 0
-failed = 0
-
-
-def check(name, got, expected):
-    global passed, failed
-    if got == expected:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    expected: {expected!r}")
-        print(f"    got:      {got!r}")
-        failed += 1
-
-
-def check_contains(name, haystack, *needles):
-    global passed, failed
-    ok = all(n in haystack for n in needles)
-    if ok:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    missing: {[n for n in needles if n not in haystack]}")
-        print(f"    in: {haystack}")
-        failed += 1
-
-
-def make_config(**overrides):
-    defaults = dict(
-        instance="test", telegram_token="x", allow_open=True,
-        allowed_user_ids=frozenset(), allowed_usernames=frozenset(),
-        provider_name="codex", model="", working_dir=Path("/home/test"),
-        extra_dirs=(), data_dir=Path("/tmp/test-data"),
-        timeout_seconds=300, approval_mode="on", role="", role_from_file=False, default_skills=(),
-        stream_update_interval_seconds=1.0, typing_interval_seconds=4.0,
-        codex_sandbox="workspace-write", codex_skip_git_repo_check=True,
-        codex_full_auto=False, codex_dangerous=False, codex_profile="",
-        admin_user_ids=frozenset(), admin_usernames=frozenset(),
-        compact_mode=False, summary_model="claude-haiku-4-5-20251001",
-    )
-    defaults.update(overrides)
-    return BotConfig(**defaults)
+checks = Checks()
+check = checks.check
+check_contains = checks.check_contains
 
 
 # -- new_provider_state --
@@ -114,8 +74,6 @@ class FakeProgress:
 
 
 async def _run_skip_permissions_tests():
-    global passed, failed
-
     print("\n=== skip_permissions behaviour ===")
 
     provider = CodexProvider(make_config(codex_full_auto=True))
@@ -142,9 +100,6 @@ async def _run_skip_permissions_tests():
     check("approved resume has no --dangerous",
           "--dangerously-bypass-approvals-and-sandbox" in cmd_resume, False)
     check_contains("approved resume uses thread id", cmd_resume, "resume", "thread-123")
-
-
-asyncio.run(_run_skip_permissions_tests())
 
 # -- progress_html --
 print("\n=== progress_html ===")
@@ -341,8 +296,6 @@ def _modern_resume_script() -> str:
 
 
 async def _run_timeout_tests():
-    global passed, failed
-
     print("\n=== _run_cmd timeout behaviour ===")
 
     cfg = make_config(timeout_seconds=1, working_dir=Path(tempfile.gettempdir()))
@@ -382,13 +335,7 @@ async def _run_timeout_tests():
     check("fast non-resume succeeds", result4.timed_out, False)
     check("fast non-resume text", "done" in result4.text, True)
 
-
-asyncio.run(_run_timeout_tests())
-
-
 async def _run_modern_schema_tests():
-    global passed, failed
-
     print("\n=== _run_cmd modern schema ===")
 
     cfg = make_config(timeout_seconds=1, working_dir=Path(tempfile.gettempdir()))
@@ -415,11 +362,15 @@ async def _run_modern_schema_tests():
     check("modern resume configured progress", any("Resumed Codex thread" in u and "resume-modern" in u for u in progress2.updates), True)
     check("modern resume draft progress", any("resume final reply" in u for u in progress2.updates), True)
 
+async def _main():
+    await _run_skip_permissions_tests()
+    await _run_timeout_tests()
+    await _run_modern_schema_tests()
 
-asyncio.run(_run_modern_schema_tests())
 
-# -- Summary --
-print(f"\n{'='*40}")
-print(f"  {passed} passed, {failed} failed")
-print(f"{'='*40}")
-sys.exit(1 if failed else 0)
+if __name__ == "__main__":
+    asyncio.run(_main())
+    print(f"\n{'='*40}")
+    print(f"  {checks.passed} passed, {checks.failed} failed")
+    print(f"{'='*40}")
+    sys.exit(1 if checks.failed else 0)

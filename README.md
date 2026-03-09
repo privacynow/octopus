@@ -89,7 +89,6 @@ See `.env.example` for all available options. Key settings:
 
 ```bash
 ./scripts/bootstrap.sh                                    # create venv
-for t in tests/test_*.py; do .venv/bin/python "$t"; done  # python tests
-bash tests/test_setup.sh                                  # setup wizard tests
+./scripts/test_all.sh                                     # canonical full test suite
 ./scripts/doctor.sh <instance>                            # health check
 ```

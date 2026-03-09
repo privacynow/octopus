@@ -78,9 +78,13 @@ class BotConfig:
     # Admin users — gates store install/uninstall/update
     admin_user_ids: frozenset[int]
     admin_usernames: frozenset[str]
+    admin_users_explicit: bool  # True if BOT_ADMIN_USERS was set
     # Compact mode — mobile-friendly response summarization
     compact_mode: bool
     summary_model: str
+    # Rate limiting (0 = disabled)
+    rate_limit_per_minute: int
+    rate_limit_per_hour: int
 
 
 def load_config(instance: str | None = None) -> BotConfig:
@@ -148,6 +152,7 @@ def load_config(instance: str | None = None) -> BotConfig:
     user_ids, usernames = parse_allowed_users(raw_users)
 
     raw_admins = get("BOT_ADMIN_USERS")
+    admin_explicit = bool(raw_admins)
     if raw_admins:
         admin_ids, admin_names = parse_allowed_users(raw_admins)
     else:
@@ -183,8 +188,11 @@ def load_config(instance: str | None = None) -> BotConfig:
         codex_profile=get("CODEX_PROFILE"),
         admin_user_ids=frozenset(admin_ids),
         admin_usernames=frozenset(admin_names),
+        admin_users_explicit=admin_explicit,
         compact_mode=get_bool("BOT_COMPACT_MODE"),
         summary_model=get("BOT_SUMMARY_MODEL", "claude-haiku-4-5-20251001"),
+        rate_limit_per_minute=get_int("BOT_RATE_LIMIT_PER_MINUTE", "0"),
+        rate_limit_per_hour=get_int("BOT_RATE_LIMIT_PER_HOUR", "0"),
     )
 
 

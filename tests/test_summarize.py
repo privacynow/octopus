@@ -1,40 +1,20 @@
 """Tests for summarize.py — ring buffer and summarization."""
 
+import asyncio
 import json
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.summarize import _RING_SIZE, _SHORT_THRESHOLD, load_raw, save_raw
+from app.summarize import _RING_SIZE, _SHORT_THRESHOLD, export_chat_history, load_raw, save_raw, summarize
+from tests.support.assertions import Checks
 
-passed = 0
-failed = 0
-
-
-def check(name, got, expected):
-    global passed, failed
-    if got == expected:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    expected: {expected!r}")
-        print(f"    got:      {got!r}")
-        failed += 1
-
-
-def check_contains(name, got, *needles):
-    global passed, failed
-    ok = all(n in got for n in needles)
-    if ok:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    missing: {[n for n in needles if n not in got]}")
-        failed += 1
+checks = Checks()
+check = checks.check
+check_contains = checks.check_contains
 
 
 # -- ring buffer --
@@ -102,8 +82,72 @@ with tempfile.TemporaryDirectory() as tmp:
 print("\n=== short threshold ===")
 check("short threshold is 800", _SHORT_THRESHOLD, 800)
 
+
+class _FakeProc:
+    def __init__(self, stdout: bytes, returncode: int = 0):
+        self._stdout = stdout
+        self.returncode = returncode
+
+    async def communicate(self):
+        return self._stdout, b""
+
+
+print("\n=== summarize ===")
+check(
+    "short text returned unchanged",
+    asyncio.run(summarize("short text", "fake-model")),
+    "short text",
+)
+
+long_text = "Long output block. " * 60
+with patch("app.summarize.shutil.which", return_value=None):
+    check(
+        "missing claude binary returns original",
+        asyncio.run(summarize(long_text, "fake-model")),
+        long_text,
+    )
+
+with patch("app.summarize.shutil.which", return_value="/usr/bin/claude"), patch(
+    "app.summarize.asyncio.create_subprocess_exec",
+    side_effect=OSError("no cli"),
+):
+    check(
+        "subprocess error returns original",
+        asyncio.run(summarize(long_text, "fake-model")),
+        long_text,
+    )
+
+with patch("app.summarize.shutil.which", return_value="/usr/bin/claude"), patch(
+    "app.summarize.asyncio.create_subprocess_exec",
+    return_value=_FakeProc(b"Short mobile summary"),
+):
+    check(
+        "successful summarize returns summary",
+        asyncio.run(summarize(long_text, "fake-model")),
+        "Short mobile summary",
+    )
+
+
+# -- export_chat_history --
+print("\n=== export_chat_history ===")
+with tempfile.TemporaryDirectory() as tmp:
+    data_dir = Path(tmp)
+    check("no history returns None", export_chat_history(data_dir, 999), None)
+
+    save_raw(data_dir, 42, "hello", "Hi there!")
+    save_raw(data_dir, 42, "2+2", "4")
+
+    result = export_chat_history(data_dir, 42)
+    check("returns string", isinstance(result, str), True)
+    check_contains("contains prompt", result, "User: hello")
+    check_contains("contains response", result, "Assistant: Hi there!")
+    check_contains("contains second", result, "Assistant: 4")
+
+    # Different chat has no history
+    check("other chat empty", export_chat_history(data_dir, 999), None)
+
 # -- Summary --
 print(f"\n{'='*40}")
-print(f"  {passed} passed, {failed} failed")
+print(f"  {checks.passed} passed, {checks.failed} failed")
 print(f"{'='*40}")
-sys.exit(1 if failed else 0)
+sys.exit(1 if checks.failed else 0)

@@ -77,6 +77,32 @@ def load_raw(data_dir: Path, chat_id: int, n: int = 1) -> str | None:
         return None
 
 
+
+def export_chat_history(data_dir: Path, chat_id: int) -> str | None:
+    """Export all ring buffer entries for a chat as plain text.
+
+    Returns formatted text, or None if no history exists.
+    """
+    d = _ring_dir(data_dir, chat_id)
+    entries = sorted(d.glob("*.json"))
+    if not entries:
+        return None
+    parts: list[str] = []
+    for entry_path in entries:
+        try:
+            data = json.loads(entry_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        ts = data.get("timestamp", "unknown")[:19]
+        prompt = data.get("prompt_preview", "")
+        response = data.get("raw_text", "")
+        parts.append(f"--- {ts} ---")
+        if prompt:
+            parts.append(f"User: {prompt}")
+        parts.append(f"Assistant: {response}")
+        parts.append("")
+    return "\n".join(parts) if parts else None
+
 # -- Summarization -------------------------------------------------------------
 
 async def summarize(text: str, model: str, timeout: int = 30) -> str:

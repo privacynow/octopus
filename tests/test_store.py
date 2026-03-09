@@ -15,6 +15,7 @@ Covers:
 - Prompt size warning (check_prompt_size)
 """
 
+import atexit
 import json
 import os
 import shutil
@@ -23,58 +24,15 @@ import tempfile
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 
 from pathlib import Path
+from tests.support.assertions import Checks
+from tests.support.config_support import make_config
 
-passed = 0
-failed = 0
-
-
-def check(name, got, expected):
-    global passed, failed
-    if got == expected:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    expected: {expected!r}")
-        print(f"    got:      {got!r}")
-        failed += 1
-
-
-def check_in(name, needle, haystack):
-    global passed, failed
-    if needle in haystack:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    expected {needle!r} in {haystack!r}")
-        failed += 1
-
-
-def check_not_in(name, needle, haystack):
-    global passed, failed
-    if needle not in haystack:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    expected {needle!r} NOT in {haystack!r}")
-        failed += 1
-
-
-def check_true(name, value):
-    global passed, failed
-    if value:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    expected truthy, got: {value!r}")
-        failed += 1
-
-
-def check_false(name, value):
-    check_true(name, not value)
+checks = Checks()
+check = checks.check
+check_in = checks.check_in
+check_not_in = checks.check_not_in
+check_true = checks.check_true
+check_false = checks.check_false
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +53,15 @@ _orig_store_dir = store_mod.STORE_DIR
 _orig_custom_dir = store_mod.CUSTOM_DIR
 store_mod.STORE_DIR = tmp_store
 store_mod.CUSTOM_DIR = tmp_custom
+
+
+def _cleanup_store_test_dirs():
+    store_mod.STORE_DIR = _orig_store_dir
+    store_mod.CUSTOM_DIR = _orig_custom_dir
+    shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+atexit.register(_cleanup_store_test_dirs)
 
 
 def _create_store_skill(name, display_name=None, description="", body="Instructions here.", extra_files=None):
@@ -561,23 +528,7 @@ with patch("app.skills.build_system_prompt", fake_under_threshold):
 
 print("\n=== Admin Gate ===")
 
-from app.config import BotConfig, parse_allowed_users
-
-def make_config(**overrides):
-    defaults = dict(
-        instance="test", telegram_token="x", allow_open=True,
-        allowed_user_ids=frozenset(), allowed_usernames=frozenset(),
-        provider_name="claude", model="test", working_dir=Path("/tmp"),
-        extra_dirs=(), data_dir=Path("/tmp/data"), timeout_seconds=300,
-        approval_mode="off", role="", role_from_file=False,
-        default_skills=(), stream_update_interval_seconds=1.0,
-        typing_interval_seconds=4.0, codex_sandbox="", codex_skip_git_repo_check=True,
-        codex_full_auto=False, codex_dangerous=False, codex_profile="",
-        admin_user_ids=frozenset(), admin_usernames=frozenset(),
-        compact_mode=False, summary_model="claude-haiku-4-5-20251001",
-    )
-    defaults.update(overrides)
-    return BotConfig(**defaults)
+from app.config import parse_allowed_users
 
 
 # Test parse_allowed_users for admin parsing
@@ -682,18 +633,15 @@ check("modified reset after update", manifest_updated.locally_modified, False)
 # ===========================================================================
 
 # Restore original dirs
-store_mod.STORE_DIR = _orig_store_dir
-store_mod.CUSTOM_DIR = _orig_custom_dir
-
-shutil.rmtree(tmp_root, ignore_errors=True)
+_cleanup_store_test_dirs()
 
 # ===========================================================================
 # Summary
 # ===========================================================================
 
 print(f"\n{'='*60}")
-print(f"  test_store.py: {passed} passed, {failed} failed")
+print(f"  test_store.py: {checks.passed} passed, {checks.failed} failed")
 print(f"{'='*60}")
 
-if failed:
+if checks.failed:
     sys.exit(1)

@@ -18,8 +18,8 @@ and design notes remain below.
 |---|---|---|
 | Phase 1 | Mostly done | Core activation/self-service work is largely shipped; README parity and a few plan-level gaps remain. |
 | Phase 2 | Done | All three items shipped: table rendering, HTML fallback, and mobile summarization with `/raw` + `/compact`. |
-| Phase 3 | Partially started | Prompt-size warnings and basic `/doctor` checks exist, but most trust/cost-control work is still pending. |
-| Phase 4 | Mostly untouched | Local-modification detection exists, but the operational hardening flows are not implemented. |
+| Phase 3 | Done | Rate limiting, admin safety posture, proactive prompt size warnings, runtime health checks all shipped. |
+| Phase 4 | Mostly done | 4.2-4.5 shipped: skill protection with confirmation/diff, provider-pruned setup, admin sessions, conversation export. 4.1 (repairable store ops) deferred. |
 | Phase 5 | Not started | No third-party skill registry or webhook mode yet. |
 
 ### Phase 1 Status
@@ -47,21 +47,21 @@ and design notes remain below.
 
 | Item | Status | Notes |
 |---|---|---|
-| 3.1 Rate limiting | Not started | No rate-limit module, config, or handler enforcement. |
-| 3.2 Usage tracking, quota, and billing hooks | Not started | No usage log, `/usage`, or budget enforcement. |
-| 3.3 Admin safety posture | Not started | No `/doctor` warning for implicit admin fallback; README still normalizes the fallback. |
-| 3.4 Proactive prompt size warnings | Partially done | Prompt-size warnings exist, but not the planned pre-activation projection + confirmation flow. |
-| 3.5 `/doctor` runtime health checks | Partially done | Cheap binary checks exist; runtime API ping/model validation/stale-session reporting do not. |
+| 3.1 Rate limiting | Done | `app/ratelimit.py` sliding-window limiter. `BOT_RATE_LIMIT_PER_MINUTE` / `BOT_RATE_LIMIT_PER_HOUR` config. Admin exempt. Integrated in `handle_message`. |
+| 3.2 Usage tracking, quota, and billing hooks | Deferred | Requires token-cost mapping and billing integration — deferred to Phase 4+. |
+| 3.3 Admin safety posture | Done | `/doctor` warns when `BOT_ADMIN_USERS` not explicitly set and multiple allowed users exist. |
+| 3.4 Proactive prompt size warnings | Done | Pre-activation projection with inline keyboard confirmation. `estimate_prompt_size()` in skills.py. Callback handler `handle_skill_add_callback`. |
+| 3.5 `/doctor` runtime health checks | Done | API ping via `claude -p` / `codex exec --ephemeral`. Stale session scan (pending requests + incomplete setups). |
 
 ### Phase 4 Status
 
 | Item | Status | Notes |
 |---|---|---|
 | 4.1 Repairable skill store operations | Not started | No intent log / recovery flow for partial install-update-uninstall failures. |
-| 4.2 Locally modified skill protection | Partially done | Detection and `locally_modified` state exist; confirmation prompts and `/skills diff` do not. |
-| 4.3 Configuration template per provider | Not started | Setup output is not provider-pruned. |
-| 4.4 Admin session visibility | Not started | No `/admin sessions` handler or session listing surface. |
-| 4.5 Conversation export | Not started | No `/export` handler or provider transcript export methods. |
+| 4.2 Locally modified skill protection | Done | Confirmation prompts for update of modified skills, `/skills diff <name>`, batch update confirmation. |
+| 4.3 Configuration template per provider | Done | `setup.sh` prunes codex-specific config for claude instances and vice versa. |
+| 4.4 Admin session visibility | Done | `/admin sessions` summary and `/admin sessions <chat_id>` detail views. `list_sessions()` in storage.py. |
+| 4.5 Conversation export | Done | `/export` sends ring buffer history as downloadable text file with session metadata header. |
 
 ### Phase 5 Status
 

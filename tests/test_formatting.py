@@ -4,34 +4,11 @@ import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 
 from app.formatting import extract_send_directives, md_to_telegram_html, split_html, trim_text
+from tests.support.assertions import Checks
 
-passed = 0
-failed = 0
-
-
-def check(name, got, expected):
-    global passed, failed
-    if got == expected:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    expected: {expected!r}")
-        print(f"    got:      {got!r}")
-        failed += 1
-
-
-def check_contains(name, got, *substrings):
-    global passed, failed
-    ok = all(s in got for s in substrings)
-    if ok:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    got: {got!r}")
-        print(f"    missing: {[s for s in substrings if s not in got]}")
-        failed += 1
+checks = Checks()
+check = checks.check
+check_contains = checks.check_contains
 
 
 # -- trim_text --
@@ -58,7 +35,7 @@ check_contains("fenced code block", cb, "<pre>", "language-python", "print", "</
 
 cb_nolang = md_to_telegram_html("```\nplain code\n```")
 check_contains("fenced no lang", cb_nolang, "<pre>", "plain code", "</pre>")
-assert "language-" not in cb_nolang, "should not have language class"
+check("fenced no lang omits language class", "language-" in cb_nolang, False)
 
 mixed = md_to_telegram_html("**bold with `code` inside**")
 check_contains("bold+code", mixed, "<b>", "<code>code</code>")
@@ -254,6 +231,6 @@ check("broken html either balanced or stripped", has_tags is False or all_balanc
 
 # -- Summary --
 print(f"\n{'='*40}")
-print(f"  {passed} passed, {failed} failed")
+print(f"  {checks.passed} passed, {checks.failed} failed")
 print(f"{'='*40}")
-sys.exit(1 if failed else 0)
+sys.exit(1 if checks.failed else 0)

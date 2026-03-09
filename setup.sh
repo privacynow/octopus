@@ -249,6 +249,14 @@ else
     done
     set_env_value "$ENV_FILE" "BOT_PROVIDER" "$PROVIDER"
 
+    # Prune provider-irrelevant config sections
+    if [ "$PROVIDER" = "claude" ]; then
+        # Remove Codex-specific lines
+        tmpfile="${ENV_FILE}.tmp.$$"
+        grep -v '^# === Codex-specific' "$ENV_FILE" | grep -v '^# CODEX_' > "$tmpfile"
+        mv "$tmpfile" "$ENV_FILE"
+    fi
+
     # --- Model ---
     echo
     if [ "$PROVIDER" = "claude" ]; then

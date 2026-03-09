@@ -4,53 +4,13 @@ import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 
 from pathlib import Path
-from app.config import BotConfig
 from app.providers.claude import ClaudeProvider
+from tests.support.assertions import Checks
+from tests.support.config_support import make_config
 
-passed = 0
-failed = 0
-
-
-def check(name, got, expected):
-    global passed, failed
-    if got == expected:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    expected: {expected!r}")
-        print(f"    got:      {got!r}")
-        failed += 1
-
-
-def check_contains(name, haystack, *needles):
-    global passed, failed
-    ok = all(n in haystack for n in needles)
-    if ok:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    missing: {[n for n in needles if n not in haystack]}")
-        print(f"    in: {haystack}")
-        failed += 1
-
-
-def make_config(**overrides):
-    defaults = dict(
-        instance="test", telegram_token="x", allow_open=True,
-        allowed_user_ids=frozenset(), allowed_usernames=frozenset(),
-        provider_name="claude", model="", working_dir=Path("/home/test"),
-        extra_dirs=(), data_dir=Path("/tmp/test-data"),
-        timeout_seconds=300, approval_mode="on", role="", role_from_file=False, default_skills=(),
-        stream_update_interval_seconds=1.0, typing_interval_seconds=4.0,
-        codex_sandbox="workspace-write", codex_skip_git_repo_check=True,
-        codex_full_auto=False, codex_dangerous=False, codex_profile="",
-        admin_user_ids=frozenset(), admin_usernames=frozenset(),
-        compact_mode=False, summary_model="claude-haiku-4-5-20251001",
-    )
-    defaults.update(overrides)
-    return BotConfig(**defaults)
+checks = Checks()
+check = checks.check
+check_contains = checks.check_contains
 
 
 # -- new_provider_state --
@@ -104,6 +64,6 @@ check("PATH preserved", "PATH" in env, True)
 
 # -- Summary --
 print(f"\n{'='*40}")
-print(f"  {passed} passed, {failed} failed")
+print(f"  {checks.passed} passed, {checks.failed} failed")
 print(f"{'='*40}")
-sys.exit(1 if failed else 0)
+sys.exit(1 if checks.failed else 0)

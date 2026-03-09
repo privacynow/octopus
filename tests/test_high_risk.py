@@ -3,45 +3,30 @@
 2. Claude retry must forward extra_dirs through provider.run()
 """
 
+import os
 import sys
+import tempfile
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 
 from pathlib import Path
-from app.config import BotConfig
+from app.config import load_config
 from app.providers.codex import CodexProvider
 from app.providers.claude import ClaudeProvider
+from tests.support.assertions import Checks
+from tests.support.config_support import make_config as make_test_config
 
-passed = 0
-failed = 0
-
-
-def check(name, got, expected):
-    global passed, failed
-    if got == expected:
-        print(f"  PASS  {name}")
-        passed += 1
-    else:
-        print(f"  FAIL  {name}")
-        print(f"    expected: {expected!r}")
-        print(f"    got:      {got!r}")
-        failed += 1
+checks = Checks()
+check = checks.check
 
 
 def make_config(**overrides):
     defaults = dict(
-        instance="test", telegram_token="x", allow_open=True,
-        allowed_user_ids=frozenset(), allowed_usernames=frozenset(),
-        provider_name="codex", model="test-model", working_dir=Path("/home/test"),
-        extra_dirs=(), data_dir=Path("/tmp/test-data"),
-        timeout_seconds=300, approval_mode="on", role="", role_from_file=False, default_skills=(),
-        stream_update_interval_seconds=1.0, typing_interval_seconds=4.0,
-        codex_sandbox="workspace-write", codex_skip_git_repo_check=True,
-        codex_full_auto=False, codex_dangerous=False, codex_profile="myprofile",
-        admin_user_ids=frozenset(), admin_usernames=frozenset(),
-        compact_mode=False, summary_model="claude-haiku-4-5-20251001",
+        provider_name="codex",
+        model="test-model",
+        codex_profile="myprofile",
     )
     defaults.update(overrides)
-    return BotConfig(**defaults)
+    return make_test_config(**defaults)
 
 
 # =====================================================================
@@ -112,21 +97,39 @@ except SystemExit:
     check("valid config loads", False, True)
 
 # Bad timeout
-import os
 old_env = os.environ.get("BOT_TIMEOUT_SECONDS")
+old_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+old_provider = os.environ.get("BOT_PROVIDER")
+old_working_dir = os.environ.get("BOT_WORKING_DIR")
+old_data_dir = os.environ.get("BOT_DATA_DIR")
+old_allow_open = os.environ.get("BOT_ALLOW_OPEN")
+os.environ["TELEGRAM_BOT_TOKEN"] = "x"
+os.environ["BOT_PROVIDER"] = "claude"
+os.environ["BOT_WORKING_DIR"] = tempfile.gettempdir()
+os.environ["BOT_DATA_DIR"] = tempfile.gettempdir()
+os.environ["BOT_ALLOW_OPEN"] = "1"
 os.environ["BOT_TIMEOUT_SECONDS"] = "not_a_number"
 try:
-    from app.config import load_config as _lc
-    # Can't easily test load_config with overrides, but we can test the exit message
-    # Just verify make_config works with valid int
-    check("bad timeout caught", True, True)  # placeholder — tested via SystemExit below
-except SystemExit:
-    check("bad timeout caught", True, True)
+    load_config("test")
+    check("bad timeout caught", False, True)
+except SystemExit as exc:
+    check("bad timeout caught", "BOT_TIMEOUT_SECONDS must be an integer" in str(exc), True)
 finally:
     if old_env is not None:
         os.environ["BOT_TIMEOUT_SECONDS"] = old_env
     else:
         os.environ.pop("BOT_TIMEOUT_SECONDS", None)
+    for key, value in (
+        ("TELEGRAM_BOT_TOKEN", old_token),
+        ("BOT_PROVIDER", old_provider),
+        ("BOT_WORKING_DIR", old_working_dir),
+        ("BOT_DATA_DIR", old_data_dir),
+        ("BOT_ALLOW_OPEN", old_allow_open),
+    ):
+        if value is not None:
+            os.environ[key] = value
+        else:
+            os.environ.pop(key, None)
 
 # =====================================================================
 # Finding 2: Claude retry must forward extra_dirs
@@ -443,6 +446,6 @@ check("claude cmd has chat-specific dir", "/tmp/data/uploads/111" in cmd_with_ch
 
 # -- Summary --
 print(f"\n{'='*40}")
-print(f"  {passed} passed, {failed} failed")
+print(f"  {checks.passed} passed, {checks.failed} failed")
 print(f"{'='*40}")
-sys.exit(1 if failed else 0)
+sys.exit(1 if checks.failed else 0)

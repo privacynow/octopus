@@ -115,7 +115,7 @@ validate_token() {\
 }' "$REPO_DIR/setup.sh" > "$PATCHED_SETUP"
 chmod +x "$PATCHED_SETUP"
 
-output=$(echo -e "$FAKE_TOKEN\nclaude\nclaude-opus-4-6\n@alice,@bob\nn" | "$PATCHED_SETUP" test-setup-claude 2>&1)
+output=$(echo -e "$FAKE_TOKEN\nclaude\nclaude-opus-4-6\n@alice,@bob\n\n\nn" | "$PATCHED_SETUP" test-setup-claude 2>&1)
 
 check_contains "wizard shows BotFather link" "$output" "https://t.me/BotFather"
 check_contains "wizard shows step-by-step" "$output" "/newbot"
@@ -153,7 +153,7 @@ echo
 echo "=== Wizard: codex instance ==="
 
 # Input: token, provider, model, allowed users, decline launch
-output=$(echo -e "$FAKE_TOKEN\ncodex\ngpt-5.4\n123456789\nn" | "$PATCHED_SETUP" test-setup-codex 2>&1)
+output=$(echo -e "$FAKE_TOKEN\ncodex\ngpt-5.4\n123456789\n\n\nn" | "$PATCHED_SETUP" test-setup-codex 2>&1)
 
 ENV_FILE="$CONFIG_DIR/test-setup-codex.env"
 check "codex config created" "$(test -f "$ENV_FILE" && echo yes)" "yes"
@@ -183,7 +183,7 @@ echo "=== Wizard: claude defaults model when blank ==="
 
 rm -f "$CONFIG_DIR/test-setup-default.env"
 # Input: token, provider, blank model (defaults), allowed users, decline launch
-output=$(echo -e "$FAKE_TOKEN\nclaude\n\n@user\nn" | "$PATCHED_SETUP" test-setup-default 2>&1)
+output=$(echo -e "$FAKE_TOKEN\nclaude\n\n@user\n\n\nn" | "$PATCHED_SETUP" test-setup-default 2>&1)
 
 ENV_FILE="$CONFIG_DIR/test-setup-default.env"
 model_val=$(grep "^BOT_MODEL=" "$ENV_FILE" | cut -d= -f2)
@@ -194,7 +194,7 @@ echo "=== Wizard: blank allowed users is ok ==="
 
 rm -f "$CONFIG_DIR/test-setup-nouser.env"
 # Input: token, provider, blank model, blank users, decline launch
-output=$(echo -e "$FAKE_TOKEN\nclaude\n\n\nn" | "$PATCHED_SETUP" test-setup-nouser 2>&1)
+output=$(echo -e "$FAKE_TOKEN\nclaude\n\n\n\n\nn" | "$PATCHED_SETUP" test-setup-nouser 2>&1)
 
 ENV_FILE="$CONFIG_DIR/test-setup-nouser.env"
 # When blank, the line keeps the inline comment from .env.example — just check no real value was set
@@ -209,7 +209,7 @@ echo "=== Wizard: accept launch ==="
 
 rm -f "$CONFIG_DIR/test-setup-launch.env"
 # Input: token, provider, model, allowed users, accept launch
-output=$(echo -e "$FAKE_TOKEN\nclaude\nclaude-opus-4-6\n@testuser\ny" | "$PATCHED_SETUP" test-setup-launch 2>&1) || true
+output=$(echo -e "$FAKE_TOKEN\nclaude\nclaude-opus-4-6\n@testuser\n\n\ny" | "$PATCHED_SETUP" test-setup-launch 2>&1) || true
 
 check_contains "runs health check" "$output" "health check"
 # Systemd may not be available in test env — script should degrade gracefully.

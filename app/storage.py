@@ -13,6 +13,7 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 def ensure_data_dirs(data_dir: Path) -> None:
     (data_dir / "sessions").mkdir(parents=True, exist_ok=True)
     (data_dir / "uploads").mkdir(parents=True, exist_ok=True)
+    (data_dir / "credentials").mkdir(parents=True, exist_ok=True)
 
 
 def session_file(data_dir: Path, chat_id: int) -> Path:
@@ -23,13 +24,18 @@ def default_session(
     provider_name: str,
     provider_state: dict[str, Any],
     approval_mode: str,
+    role: str = "",
+    default_skills: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     return {
         "provider": provider_name,
         "provider_state": provider_state,
         "approval_mode": approval_mode,
+        "active_skills": list(default_skills),
+        "role": role,
         "pending_request": None,
+        "awaiting_skill_setup": None,
         "created_at": now,
         "updated_at": now,
     }
@@ -41,16 +47,25 @@ def load_session(
     provider_name: str,
     provider_state_factory: Callable[[], dict[str, Any]],
     approval_mode: str,
+    role: str = "",
+    default_skills: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     path = session_file(data_dir, chat_id)
-    session = default_session(provider_name, provider_state_factory(), approval_mode)
+    session = default_session(provider_name, provider_state_factory(), approval_mode, role, default_skills)
     if path.exists():
         try:
             saved = json.loads(path.read_text())
-            # Restore chat-level settings (approval_mode, pending_request, timestamps)
-            for key in ("approval_mode", "pending_request", "created_at", "updated_at"):
+            # Restore chat-level settings (skills, role, pending_request, timestamps)
+            for key in ("active_skills", "role", "pending_request", "awaiting_skill_setup", "created_at", "updated_at"):
                 if key in saved:
                     session[key] = saved[key]
+            # Only restore approval_mode if the user explicitly set it
+            # via /approval (indicated by approval_mode_explicit flag).
+            # Otherwise, always use the instance config default so that
+            # BOT_APPROVAL_MODE changes propagate to existing chats.
+            if saved.get("approval_mode_explicit"):
+                session["approval_mode"] = saved["approval_mode"]
+                session["approval_mode_explicit"] = True
             # Only restore provider_state if the saved provider matches;
             # a provider switch means the old state is meaningless.
             if saved.get("provider") == provider_name:
@@ -110,3 +125,29 @@ def resolve_allowed_path(raw_path: str, allowed_roots: list[Path]) -> Path | Non
         except ValueError:
             continue
     return None
+
+
+def sweep_skill_from_sessions(data_dir: Path, skill_name: str) -> int:
+    """Remove a skill from active_skills in all session files.
+
+    Returns the number of sessions modified.
+    """
+    sessions_dir = data_dir / "sessions"
+    if not sessions_dir.is_dir():
+        return 0
+    modified = 0
+    for session_path in sessions_dir.glob("*.json"):
+        try:
+            session = json.loads(session_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        active = session.get("active_skills", [])
+        if skill_name in active:
+            active.remove(skill_name)
+            session["active_skills"] = active
+            session["updated_at"] = datetime.now(timezone.utc).isoformat()
+            tmp = session_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(session, indent=2, sort_keys=True))
+            tmp.rename(session_path)
+            modified += 1
+    return modified

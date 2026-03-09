@@ -72,6 +72,20 @@ with tempfile.TemporaryDirectory() as tmp:
     loaded2 = load_session(data_dir, 12345, "claude", lambda: {"session_id": "abc", "started": False, "new_key": "default"}, "on")
     check("new key filled", loaded2["provider_state"]["new_key"], "default")
 
+    # explicit approval mode survives reload, including its source flag
+    s["approval_mode"] = "off"
+    s["approval_mode_explicit"] = True
+    save_session(data_dir, 12345, s)
+    loaded3 = load_session(
+        data_dir,
+        12345,
+        "claude",
+        lambda: {"session_id": "abc", "started": False},
+        "on",
+    )
+    check("explicit approval mode restored", loaded3["approval_mode"], "off")
+    check("explicit approval source restored", loaded3["approval_mode_explicit"], True)
+
     # fresh session for new chat
     fresh = load_session(data_dir, 99999, "codex", lambda: {"thread_id": None}, "off")
     check("fresh session provider", fresh["provider"], "codex")

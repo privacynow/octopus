@@ -1,0 +1,9 @@
+credentials:
+  - key: GITHUB_TOKEN
+    prompt: "Paste a GitHub personal access token (classic, with 'repo' scope)"
+    help_url: https://github.com/settings/tokens/new
+    validate:
+      method: GET
+      url: https://api.github.com/user
+      header: "Authorization: Bearer ${GITHUB_TOKEN}"
+      expect_status: 200

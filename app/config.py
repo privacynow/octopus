@@ -64,6 +64,9 @@ class BotConfig:
     data_dir: Path
     timeout_seconds: int
     approval_mode: str
+    role: str
+    role_from_file: bool  # True if role came from <instance>.role.md
+    default_skills: tuple[str, ...]
     stream_update_interval_seconds: float
     typing_interval_seconds: float
     # Codex-specific
@@ -72,6 +75,9 @@ class BotConfig:
     codex_full_auto: bool
     codex_dangerous: bool
     codex_profile: str
+    # Admin users — gates store install/uninstall/update
+    admin_user_ids: frozenset[int]
+    admin_usernames: frozenset[str]
 
 
 def load_config(instance: str | None = None) -> BotConfig:
@@ -122,8 +128,28 @@ def load_config(instance: str | None = None) -> BotConfig:
     if approval not in {"on", "off"}:
         approval = "on"
 
+    role_str = get("BOT_ROLE")
+    role_from_file = False
+    # Check for role.md override
+    role_md = env_file.with_suffix(".role.md")
+    if role_md.exists():
+        role_str = role_md.read_text().strip()
+        role_from_file = True
+
+    default_skills_raw = get("BOT_SKILLS")
+    default_skills = tuple(
+        s.strip() for s in default_skills_raw.split(",") if s.strip()
+    )
+
     raw_users = get("BOT_ALLOWED_USERS")
     user_ids, usernames = parse_allowed_users(raw_users)
+
+    raw_admins = get("BOT_ADMIN_USERS")
+    if raw_admins:
+        admin_ids, admin_names = parse_allowed_users(raw_admins)
+    else:
+        # Fallback: all allowed users are admins
+        admin_ids, admin_names = user_ids, usernames
 
     return BotConfig(
         instance=instance,
@@ -138,6 +164,9 @@ def load_config(instance: str | None = None) -> BotConfig:
         data_dir=Path(get("BOT_DATA_DIR", str(default_data))),
         timeout_seconds=get_int("BOT_TIMEOUT_SECONDS", "300"),
         approval_mode=approval,
+        role=role_str,
+        role_from_file=role_from_file,
+        default_skills=default_skills,
         stream_update_interval_seconds=get_float(
             "BOT_STREAM_UPDATE_INTERVAL", "1.0"
         ),
@@ -149,6 +178,8 @@ def load_config(instance: str | None = None) -> BotConfig:
         codex_full_auto=get_bool("CODEX_FULL_AUTO"),
         codex_dangerous=get_bool("CODEX_DANGEROUS"),
         codex_profile=get("CODEX_PROFILE"),
+        admin_user_ids=frozenset(admin_ids),
+        admin_usernames=frozenset(admin_names),
     )
 
 
@@ -181,8 +212,24 @@ def validate_config(config: BotConfig) -> list[str]:
         if not d.is_dir():
             errors.append(f"BOT_EXTRA_DIRS path does not exist or is not a directory: {d}")
 
+    if not config.role_from_file and ('"' in config.role or '\\' in config.role):
+        errors.append(
+            'BOT_ROLE contains " or \\. Use <instance>.role.md for complex roles.'
+        )
+
     if config.codex_full_auto and config.codex_dangerous:
         errors.append("CODEX_FULL_AUTO and CODEX_DANGEROUS cannot both be set")
+
+    # Validate default_skills against catalog
+    if config.default_skills:
+        from app.skills import load_catalog
+        try:
+            catalog = load_catalog()
+            for skill_name in config.default_skills:
+                if skill_name not in catalog:
+                    errors.append(f"BOT_SKILLS references unknown skill: '{skill_name}'")
+        except Exception:
+            pass  # Don't block startup if catalog can't load
 
     # Validate data dir writability
     data_dir = config.data_dir

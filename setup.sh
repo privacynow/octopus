@@ -73,6 +73,12 @@ show_config() {
         echo "  Allowed users:  (not set — configure before use)"
     fi
 
+    val=$(grep "^BOT_ROLE=" "$env_file" 2>/dev/null | cut -d= -f2- | sed 's/^"//;s/"$//') || true
+    echo "  Role:           ${val:-(none)}"
+
+    val=$(grep "^BOT_SKILLS=" "$env_file" 2>/dev/null | cut -d= -f2 | awk '{print $1}') || true
+    echo "  Skills:         ${val:-(none)}"
+
     val=$(grep "^BOT_TIMEOUT_SECONDS=" "$env_file" 2>/dev/null | cut -d= -f2 | awk '{print $1}') || true
     echo "  Timeout:        ${val:-300}s"
 
@@ -271,6 +277,33 @@ else
         # Enable open access so the bot can launch without users configured.
         # The user can /id themselves, add their ID, and disable open access later.
         set_env_value "$ENV_FILE" "BOT_ALLOW_OPEN" "1"
+    fi
+
+    # --- Role ---
+    echo
+    echo "Give the bot a role/persona (optional). Examples:"
+    echo "  Senior Python engineer"
+    echo "  DevOps specialist managing Kubernetes clusters"
+    echo "  For long descriptions, create ${CONFIG_DIR}/${INSTANCE}.role.md"
+    read -rp "Role [none]: " BOT_ROLE_INPUT
+    if [ -n "$BOT_ROLE_INPUT" ]; then
+        # Reject " and \ — direct to role.md for complex roles
+        if [[ "$BOT_ROLE_INPUT" == *'"'* ]] || [[ "$BOT_ROLE_INPUT" == *'\\'* ]]; then
+            echo "  Role contains \" or \\. Use ${CONFIG_DIR}/${INSTANCE}.role.md instead."
+        else
+            set_env_value "$ENV_FILE" "BOT_ROLE" "\"${BOT_ROLE_INPUT}\""
+        fi
+    fi
+
+    # --- Default skills ---
+    echo
+    echo "Default skills for new conversations (comma-separated, optional)."
+    echo "  Available: code-review, testing, debugging, devops,"
+    echo "             documentation, security, refactoring, architecture"
+    echo "  Users can change active skills per chat via /skills."
+    read -rp "Default skills [none]: " BOT_SKILLS_INPUT
+    if [ -n "$BOT_SKILLS_INPUT" ]; then
+        set_env_value "$ENV_FILE" "BOT_SKILLS" "$BOT_SKILLS_INPUT"
     fi
 
     # --- Show config summary ---

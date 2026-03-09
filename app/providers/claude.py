@@ -6,12 +6,13 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 import uuid
 from typing import Any
 
 from app.config import BotConfig
 from app.formatting import md_to_telegram_html, trim_text
-from app.providers.base import ProgressSink, RunResult
+from app.providers.base import PreflightContext, ProgressSink, RunContext, RunResult
 
 log = logging.getLogger(__name__)
 
@@ -91,10 +92,10 @@ class ClaudeProvider:
         cmd.extend(["--", prompt])
         return cmd
 
-    def _build_preflight_cmd(self, prompt: str) -> list[str]:
+    def _build_preflight_cmd(self, prompt: str, extra_dirs: list[str] | None = None) -> list[str]:
         cmd = self._base_cmd()
         cmd.extend(["--permission-mode", "plan"])
-        cmd.extend(self._extra_dir_args())
+        cmd.extend(self._extra_dir_args(extra_dirs))
         cmd.extend(["--", prompt])
         return cmd
 
@@ -183,16 +184,21 @@ class ClaudeProvider:
         cmd: list[str],
         progress: ProgressSink,
         timeout: int | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> tuple[str, dict, int]:
         """Spawn claude, consume output, return (accumulated_text, result_data, returncode)."""
         log.info("claude: %s", " ".join(cmd[:-1] + ["<prompt>"]))
+
+        env = self._clean_env()
+        if extra_env:
+            env.update(extra_env)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self.config.working_dir),
-            env=self._clean_env(),
+            env=env,
             limit=1024 * 1024,
         )
 
@@ -216,18 +222,66 @@ class ClaudeProvider:
 
         return accumulated, result_data, proc.returncode or 0
 
+    def _apply_provider_config(self, cmd: list[str], provider_config: dict) -> str | None:
+        """Apply provider_config to command. Returns temp MCP config path or None."""
+        mcp_tmp = None
+        if "mcp_servers" in provider_config:
+            # Write MCP server config to a temp file
+            mcp_data = {"mcpServers": provider_config["mcp_servers"]}
+            f = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", prefix="mcp_", delete=False,
+            )
+            json.dump(mcp_data, f)
+            f.close()
+            mcp_tmp = f.name
+            idx = cmd.index("--")
+            cmd[idx:idx] = ["--mcp-config", mcp_tmp]
+
+        if "allowed_tools" in provider_config:
+            for tool in provider_config["allowed_tools"]:
+                idx = cmd.index("--")
+                cmd[idx:idx] = ["--allowedTools", tool]
+
+        if "disallowed_tools" in provider_config:
+            for tool in provider_config["disallowed_tools"]:
+                idx = cmd.index("--")
+                cmd[idx:idx] = ["--disallowedTools", tool]
+
+        return mcp_tmp
+
     async def run(
         self,
         provider_state: dict[str, Any],
         prompt: str,
         image_paths: list[str],
         progress: ProgressSink,
-        extra_dirs: list[str] | None = None,
+        context: RunContext | None = None,
     ) -> RunResult:
-        # Claude doesn't have -i flags; images are referenced by path in the prompt
+        extra_dirs = context.extra_dirs if context else None
         cmd = self._build_run_cmd(provider_state, prompt, extra_dirs=extra_dirs)
+        if context and context.skip_permissions:
+            idx = cmd.index("--")
+            cmd[idx:idx] = ["--dangerously-skip-permissions"]
+        if context and context.system_prompt:
+            # Insert before the "--" separator
+            idx = cmd.index("--")
+            cmd[idx:idx] = ["--append-system-prompt", context.system_prompt]
 
-        accumulated, result_data, rc = await self._run_process(cmd, progress)
+        mcp_tmp = None
+        if context and context.provider_config:
+            mcp_tmp = self._apply_provider_config(cmd, context.provider_config)
+
+        # Inject credential env
+        extra_env = context.credential_env if context else {}
+
+        accumulated, result_data, rc = await self._run_process(cmd, progress, extra_env=extra_env)
+
+        # Cleanup temp MCP config
+        if mcp_tmp:
+            try:
+                os.unlink(mcp_tmp)
+            except OSError:
+                pass
 
         if rc == -1:
             return RunResult(text="", timed_out=True, returncode=124)
@@ -252,8 +306,20 @@ class ClaudeProvider:
         prompt: str,
         image_paths: list[str],
         progress: ProgressSink,
+        context: PreflightContext | None = None,
     ) -> RunResult:
-        cmd = self._build_preflight_cmd(prompt)
+        extra_dirs = context.extra_dirs if context else None
+        cmd = self._build_preflight_cmd(prompt, extra_dirs=extra_dirs)
+        system_prompt = ""
+        if context and context.system_prompt:
+            system_prompt = context.system_prompt
+        # Include capability summary in system prompt for preflight awareness
+        if context and context.capability_summary:
+            cap = f"\n\n## Available capabilities\n\n{context.capability_summary}"
+            system_prompt = (system_prompt + cap) if system_prompt else cap
+        if system_prompt:
+            idx = cmd.index("--")
+            cmd[idx:idx] = ["--append-system-prompt", system_prompt]
 
         accumulated, result_data, rc = await self._run_process(
             cmd, progress, timeout=120

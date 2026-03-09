@@ -1,0 +1,11 @@
+mcp_servers:
+  linear:
+    command: npx
+    args:
+      - "-y"
+      - "@linear/mcp-server"
+    env:
+      LINEAR_API_KEY: "${LINEAR_API_KEY}"
+
+allowed_tools:
+  - "mcp__linear__*"

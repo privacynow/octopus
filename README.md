@@ -32,6 +32,9 @@ To add another bot, run `./setup.sh` again. Each bot needs its own @BotFather to
 | `/new` | Start a fresh conversation |
 | `/approval on\|off` | Toggle plan approval before execution |
 | `/approve` / `/reject` | Approve or reject a pending plan |
+| `/skills list` | Show active skills in this chat |
+| `/skills add <name>` | Activate a skill |
+| `/skills remove <name>` | Deactivate a skill |
 | `/send <path>` | Have the bot send you a file |
 | `/id` | Show your Telegram user ID |
 | `/help` | Show all commands |
@@ -39,6 +42,20 @@ To add another bot, run `./setup.sh` again. Each bot needs its own @BotFather to
 **Approval flow**: When enabled (default), the bot generates a read-only plan before making any changes. You approve or reject via buttons in the chat.
 
 **File exchange**: You can upload files to the bot. The model can send files back in its response.
+
+### Skill Store
+
+Admins can install additional skills from the built-in store:
+
+```
+/skills search <query>     # find available skills
+/skills install <name>     # install from store (admin)
+/skills uninstall <name>   # remove (admin)
+/skills updates            # check for new versions
+/skills update all         # update everything (admin)
+```
+
+After installing, any user can activate a store skill in their chat with `/skills add <name>`. See [docs/OPS-skill-store.md](docs/OPS-skill-store.md) for the full operations guide.
 
 ## Managing Bots
 
@@ -65,6 +82,8 @@ See `.env.example` for all available options. Key settings:
 | `BOT_APPROVAL_MODE` | `on` | Preflight plan approval |
 | `BOT_MODEL` | provider default | e.g. `claude-opus-4-6`, `gpt-5.4` |
 | `BOT_WORKING_DIR` | `$HOME` | Where the CLI runs |
+| `BOT_ADMIN_USERS` | same as allowed | Who can install/update store skills |
+| `BOT_SKILLS` | *(none)* | Default skills for new chats (comma-separated) |
 
 ## Development
 

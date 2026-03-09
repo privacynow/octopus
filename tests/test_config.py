@@ -73,7 +73,7 @@ def make_config(**overrides):
         extra_dirs=(),
         data_dir=Path("/tmp/test-agent-bot"),
         timeout_seconds=300,
-        approval_mode="on",
+        approval_mode="on", role="", role_from_file=False, default_skills=(),
         stream_update_interval_seconds=1.0,
         typing_interval_seconds=4.0,
         codex_sandbox="workspace-write",
@@ -81,6 +81,7 @@ def make_config(**overrides):
         codex_full_auto=False,
         codex_dangerous=False,
         codex_profile="",
+        admin_user_ids=frozenset(), admin_usernames=frozenset(),
     )
     defaults.update(overrides)
     return BotConfig(**defaults)

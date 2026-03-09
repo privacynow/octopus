@@ -1,0 +1,8 @@
+sandbox: workspace-write
+
+config_overrides:
+  - 'sandbox_permissions=["disk-full-read-access"]'
+
+scripts:
+  - source: gh-helper.sh
+    name: gh-helper.sh

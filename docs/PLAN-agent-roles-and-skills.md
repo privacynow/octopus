@@ -93,7 +93,7 @@ The bot deletes the user's message containing the secret after reading it.
 
 1. **Built-in** — ships with the repo in `skills/catalog/`. Curated, tested, always available.
 2. **Custom** — user-created skills in `~/.config/telegram-agent-bot/skills/`. Same format. Appear alongside built-ins. Override built-ins if same name.
-3. **Store** (future) — remote skill registry. Browse, install, rate. Not in scope for initial implementation.
+3. **Store** — curated skills in `skills/store/` within the repo. Browse, install, uninstall. Operators get new store skills on `git pull`, same as built-in catalog updates. Future: upgrade to a proper service with contributor onboarding, access control, and payment — a git repo is not sophisticated enough for that eventuality.
 
 ### D5: Structured config for rich definitions, env for operational settings
 
@@ -951,14 +951,129 @@ Adds `claude.yaml` and `codex.yaml` support for skills that need MCP servers, to
 
 **Deliverable**: Power users can create and manage custom skills alongside built-ins.
 
-### Phase 5: Skill store (future)
+### Phase 5: Skill store
 
-Not designed in detail yet. Rough shape:
+#### Design decisions
 
-- Remote skill registry (Git repo, HTTP API, or similar)
-- `/skills search <query>` — browse remote skills
-- `/skills install <publisher/name>` — download and activate
-- Versioning, ratings, trust levels
+**D9: Store = local `skills/store/` directory in the repo.** Store skills live alongside built-in skills in the repo itself. No remote registry, no git clone, no network dependency. Operators get new store skills on `git pull`, same as built-in catalog updates. The store directory uses the same skill format as the catalog — standard directories with `skill.md` and optional provider config.
+
+**Why not a git repo registry**: A git repo is a middle ground that serves neither extreme well. For the current scale (single operator, handful of instances), a local directory is simpler and equally functional. For the eventual scale (contributor onboarding, access control, payments), a git repo is not sophisticated enough — that needs a proper service. The local directory upgrades cleanly to a service later: replace "read from local path" with "fetch from API." No intermediate git transport code gets written and then thrown away.
+
+**D10: Trust = explicit admin gate via `BOT_ADMIN_USERS`.** A new `BOT_ADMIN_USERS` setting (comma-separated Telegram user IDs, same format as `BOT_ALLOWED_USERS`) gates all instance-global store mutations: `/skills install`, `/skills uninstall`, and `/skills update`. If `BOT_ADMIN_USERS` is unset, it falls back to the full `BOT_ALLOWED_USERS` set — single-operator deployments need no extra config. Non-admin allowed users can `/skills search` and `/skills info` but cannot mutate the instance-wide skill set.
+
+No runtime sandboxing — skills can do anything the LLM and provider can do. The operator controls what's in `skills/store/` via the repo, and what's installed via the admin gate.
+
+The `_store.json` provenance record (see D11) links every installed skill back to its store source and content hash — `/skills list` shows `(store)` so operators always know what came from where.
+
+**D11: Install = copy into custom dir with provenance manifest.** Installed skills go to `~/.config/telegram-agent-bot/skills/` (same as Phase 4 custom skills). Each installed skill gets a `_store.json` manifest that distinguishes it from user-created skills and enables safe update/uninstall:
+
+```json
+{
+  "source": "store",
+  "store_path": "skills/store/skill-name",
+  "installed_at": "2026-03-08T12:00:00Z",
+  "content_sha256": "e3b0c44298fc...",
+  "locally_modified": false
+}
+```
+
+`load_catalog()` already finds these directories — no new discovery path needed. The `_store.json` presence is the sole discriminator: directories without it are user-created and untouched by store operations. On update, if the on-disk content hash doesn't match `content_sha256`, `locally_modified` is set to `true` and the user is warned before overwriting. `/skills uninstall` refuses to remove directories without `_store.json`.
+
+**D12: Uninstall sweeps active sessions and guards config defaults.** `/skills uninstall` is an instance-global operation (removes the skill directory), but active skills live in two places: per-chat session JSON and the `BOT_SKILLS` config default for new chats.
+
+- **Config guard**: If the skill is listed in `BOT_SKILLS`, refuse the uninstall and tell the operator to remove it from config first. `BOT_SKILLS` is the operator's declared intent for new chats — silently breaking it is wrong.
+- **Session sweep**: After the config check passes, sweep all sessions and remove the skill from `active_skills` wherever it appears. This prevents dangling entries that silently stop contributing instructions. The sweep is logged so the admin sees which chats were affected.
+
+#### Store structure
+
+```
+skills/store/                      # In the repo, alongside skills/catalog/
+  skill-name/                      # Standard skill format
+    skill.md
+    requires.yaml                  # Optional
+    claude.yaml                    # Optional
+    codex.yaml                     # Optional
+```
+
+Discovery uses the same mechanism as catalog — read directories, parse `skill.md` frontmatter. No index file needed.
+
+#### New commands
+
+| Command | What it does |
+|---------|-------------|
+| `/skills search <query>` | Substring match on name/description in store skills |
+| `/skills info <name>` | Preview full skill content before install |
+| `/skills install <name>` | Copy from `skills/store/` to custom dir, write `_store.json` |
+| `/skills uninstall <name>` | Remove if `_store.json` present (won't touch user-created skills) |
+| `/skills updates` | Compare installed `_store.json` hashes against current store |
+| `/skills update <name>\|all` | Re-install from store |
+
+Install and activate are separate — install puts files on disk, `/skills add` activates and triggers credential flow.
+
+#### Sub-phase 5a: Minimum viable store
+
+| Step | What | Files |
+|------|------|-------|
+| 40 | `BOT_ADMIN_USERS` in config | `app/config.py` |
+| 41 | New `app/store.py` — store directory discovery, skill listing, `_store.json` parsing | `app/store.py` |
+| 42 | `search()` and `skill_info()` in store module | `app/store.py` |
+| 43 | `install()` and `uninstall()` — copy to `CUSTOM_DIR`, write `_store.json`, conflict checking. `uninstall()` refuses if skill is in `BOT_SKILLS`, otherwise sweeps all sessions to deactivate (D12) | `app/store.py`, `app/storage.py` |
+| 44 | Wire `/skills search\|info\|install\|uninstall` into `cmd_skills` | `app/telegram_handlers.py` |
+| 45 | Tests: store discovery, search matching, install/uninstall lifecycle, `_store.json` provenance round-trip, conflict detection (store vs user-created), dirty local install detection, admin gate (non-admin blocked from install/uninstall/update), uninstall refused while in BOT_SKILLS, uninstall session sweep (skill removed from all active chats after config check) | `tests/test_store.py`, `tests/test_handlers.py` |
+
+**Deliverable**: Users can search, browse, install, and uninstall skills from the local store.
+
+#### Sub-phase 5b: Updates and integrity
+
+| Step | What | Files |
+|------|------|-------|
+| 46 | `check_updates()` — compare `_store.json` SHA-256 against current store content | `app/store.py` |
+| 47 | `/skills updates` and `/skills update` commands | `app/telegram_handlers.py` |
+| 48 | SHA-256 verification on install | `app/store.py` |
+| 49 | Tests: update detection, hash verification, `locally_modified` detection and warning | `tests/test_store.py` |
+
+**Deliverable**: Installed skills can be checked for updates and verified for integrity.
+
+#### Sub-phase 5c: Prompt size warning
+
+Because prompt size is chat-local but `/skills update` is instance-global, the warning scope is explicit:
+
+- `/skills add` checks only the current chat.
+- `/skills update <name>|all` checks every chat where the updated skill is active and returns a summary to the admin who ran the command. It does **not** send warning messages into those chats.
+
+This keeps the warning tied to the real effective prompt (role override + active skills per chat) instead of pretending there is one global prompt size for an installed skill.
+
+| Step | What | Files |
+|------|------|-------|
+| 50 | Shared `check_prompt_size()` helper — warns at 8000 chars when active skill text changes. `/skills add` checks the current chat only. `/skills update <name>\|all` re-checks each chat where the updated skill is active and returns an admin summary of chats above threshold. | `app/skills.py`, `app/storage.py`, `app/telegram_handlers.py` |
+| 51 | Tests | `tests/test_skills.py`, `tests/test_handlers.py` |
+
+**Deliverable**: Operational polish — prompt size guardrail.
+
+#### What NOT to build (now)
+
+- Remote registry / git clone transport (future: proper service with onboarding and payments)
+- Ratings/reviews (needs a database and a service)
+- In-Telegram publishing (future: service with contributor portal)
+- Dependency resolution between skills
+- Version pinning or lockfiles
+- Automatic updates
+
+#### Future: Skill store service
+
+When demand warrants, the store upgrades to a proper service — not a git repo. The service would handle:
+
+- **Contributor onboarding**: registration, review process, terms of service
+- **Access control**: per-publisher permissions, approval workflows
+- **Payments**: revenue share, subscriptions (like App Store)
+- **Discovery**: search API, categories, ratings, featured skills
+- **Publishing**: CLI upload, CI validation, code signing
+
+The local store's install mechanic (copy to custom dir + `_store.json` provenance) survives this upgrade unchanged. Only the transport changes: "read from `skills/store/`" becomes "fetch from service API."
+
+#### New production module
+
+`app/store.py` — pure module, no Telegram dependency. Uses only `yaml` (already a dep), `hashlib`, `shutil`.
 
 ---
 
@@ -1016,6 +1131,19 @@ Questions raised during design, now closed with decisions.
 | `app/providers/codex.py` | Read `context.provider_config` → stage scripts in `scripts/<chat_id>/`, add via `--add-dir`, apply sandbox/config overrides |
 | `skills/catalog/` | Tool-integrated skills (github, etc.) |
 | `~/.telegram-agent-bot/<instance>/credentials/` | NEW — per-user encrypted credential files (`<user_id>.json`) |
+
+### Phase 5 (additive)
+
+| File | Change |
+|------|--------|
+| `app/config.py` | Add `BOT_ADMIN_USERS` |
+| `app/store.py` | NEW — store directory discovery, search, install/uninstall (with session sweep), update checking, SHA-256 verification |
+| `app/storage.py` | Add session sweep helper for uninstall (remove skill from `active_skills` across all sessions) |
+| `app/telegram_handlers.py` | Wire `/skills search\|info\|install\|uninstall\|updates\|update` |
+| `app/skills.py` | Prompt size warning (Step 50) |
+| `skills/store/` | NEW — store skill directories (in repo) |
+| `tests/test_store.py` | NEW — store module tests |
+| `~/.config/telegram-agent-bot/skills/*/_store.json` | NEW — per-skill install metadata (source, SHA-256) |
 
 ---
 

@@ -1,0 +1,4 @@
+credentials:
+  - key: LINEAR_API_KEY
+    prompt: "Paste your Linear API key"
+    help_url: https://linear.app/settings/api

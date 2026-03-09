@@ -33,10 +33,11 @@ def make_config(**overrides):
         allowed_user_ids=frozenset(), allowed_usernames=frozenset(),
         provider_name="codex", model="test-model", working_dir=Path("/home/test"),
         extra_dirs=(), data_dir=Path("/tmp/test-data"),
-        timeout_seconds=300, approval_mode="on",
+        timeout_seconds=300, approval_mode="on", role="", role_from_file=False, default_skills=(),
         stream_update_interval_seconds=1.0, typing_interval_seconds=4.0,
         codex_sandbox="workspace-write", codex_skip_git_repo_check=True,
         codex_full_auto=False, codex_dangerous=False, codex_profile="myprofile",
+        admin_user_ids=frozenset(), admin_usernames=frozenset(),
     )
     defaults.update(overrides)
     return BotConfig(**defaults)
@@ -369,6 +370,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
     claude_session = default_session("claude", claude_state_factory(), "on")
     claude_session["provider_state"]["started"] = True
     claude_session["approval_mode"] = "off"
+    claude_session["approval_mode_explicit"] = True
     save_session(data_dir, chat_id, claude_session)
 
     # Now load as Codex — provider changed

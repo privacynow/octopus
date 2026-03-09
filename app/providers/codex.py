@@ -11,7 +11,7 @@ from typing import Any
 
 from app.config import BotConfig
 from app.formatting import md_to_telegram_html, trim_text
-from app.providers.base import ProgressSink, RunResult
+from app.providers.base import PreflightContext, ProgressSink, RunContext, RunResult
 
 log = logging.getLogger(__name__)
 
@@ -163,15 +163,20 @@ class CodexProvider:
         cmd: list[str],
         progress: ProgressSink,
         is_resume: bool = False,
+        extra_env: dict[str, str] | None = None,
     ) -> RunResult:
         log.info("codex: %s", " ".join(cmd[:-1] + ["<prompt>"]))
+
+        env = os.environ.copy()
+        if extra_env:
+            env.update(extra_env)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self.config.working_dir),
-            env=os.environ.copy(),
+            env=env,
         )
 
         thread_id: str | None = None
@@ -244,25 +249,66 @@ class CodexProvider:
         prompt: str,
         image_paths: list[str],
         progress: ProgressSink,
-        extra_dirs: list[str] | None = None,
+        context: RunContext | None = None,
     ) -> RunResult:
+        extra_dirs = context.extra_dirs if context else None
+
         thread_id = provider_state.get("thread_id")
         is_resume = bool(thread_id)
 
-        if thread_id:
-            cmd = self._build_resume_cmd(thread_id, prompt, image_paths)
-        else:
-            cmd = self._build_new_cmd(prompt, image_paths, extra_dirs=extra_dirs)
+        # Prepend system prompt to user prompt for Codex
+        effective_prompt = prompt
+        if context and context.system_prompt:
+            effective_prompt = context.system_prompt + "\n\n---\n\n" + prompt
 
-        return await self._run_cmd(cmd, progress, is_resume=is_resume)
+        # Apply provider_config: sandbox override, config overrides
+        sandbox_override = None
+        if context and context.provider_config:
+            pc = context.provider_config
+            if "sandbox" in pc:
+                sandbox_override = pc["sandbox"]
+
+        if thread_id:
+            cmd = self._build_resume_cmd(thread_id, effective_prompt, image_paths)
+        else:
+            cmd = self._build_new_cmd(
+                effective_prompt, image_paths, extra_dirs=extra_dirs,
+                sandbox=sandbox_override,
+            )
+
+        # User already approved (preflight or retry) — bypass all permission checks
+        if context and context.skip_permissions:
+            if "--dangerously-bypass-approvals-and-sandbox" not in cmd:
+                cmd.insert(3, "--dangerously-bypass-approvals-and-sandbox")
+
+        # Inject config_overrides as -c flags
+        if context and context.provider_config:
+            for override in context.provider_config.get("config_overrides", []):
+                cmd.insert(-1, "-c")  # Insert before the prompt (last arg)
+                cmd.insert(-1, override)
+
+        extra_env = context.credential_env if context else {}
+        return await self._run_cmd(cmd, progress, is_resume=is_resume, extra_env=extra_env)
 
     async def run_preflight(
         self,
         prompt: str,
         image_paths: list[str],
         progress: ProgressSink,
+        context: PreflightContext | None = None,
     ) -> RunResult:
+        system_prompt = ""
+        if context and context.system_prompt:
+            system_prompt = context.system_prompt
+        if context and context.capability_summary:
+            cap = f"\n\n## Available capabilities\n\n{context.capability_summary}"
+            system_prompt = (system_prompt + cap) if system_prompt else cap
+        effective_prompt = prompt
+        if system_prompt:
+            effective_prompt = system_prompt + "\n\n---\n\n" + prompt
+        extra_dirs = context.extra_dirs if context else None
         cmd = self._build_new_cmd(
-            prompt, image_paths, sandbox="read-only", ephemeral=True, safe_mode=True
+            effective_prompt, image_paths, sandbox="read-only", ephemeral=True, safe_mode=True,
+            extra_dirs=extra_dirs,
         )
         return await self._run_cmd(cmd, progress)

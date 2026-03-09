@@ -1,0 +1,619 @@
+# Commercial Polish Plan
+
+Phased plan to bring telegram-agent-bot to commercial readiness. Focuses on
+user-facing usability, safety, and polish — not new provider integrations or
+infrastructure changes.
+
+Ordering principle: activation before abuse control. Fix the flows that make
+users leave before guarding against the traffic you don't yet have.
+
+---
+
+## Phase 1 — Activation & Self-Service
+
+The features that determine whether a new user succeeds or gives up. Every item
+here directly affects first-session completion and day-one workflows.
+
+### 1.1 `/cancel` command
+
+**Problem**: Users stuck in credential setup or waiting on a pending approval
+have no escape hatch. The only option is `/new`, which destroys the entire
+conversation and resets all state.
+
+**Scope**:
+- Add `/cancel` command handler.
+- If `awaiting_skill_setup` is in progress for this user, clear it and reply
+  "Credential setup cancelled."
+- If `pending_request` exists, clear it and reply "Pending request cancelled."
+- If neither is active, reply "Nothing to cancel."
+- In group chats, only the owning user or an admin can cancel.
+- Admins can cancel another user's stalled credential setup (ties into Phase 2
+  group chat visibility).
+
+**Files**: `app/telegram_handlers.py` (new handler + register in
+`build_application`).
+
+**Tests**: Handler test for each cancel path (setup, pending, nothing), plus
+group chat ownership check.
+
+---
+
+### 1.2 `/clear-credentials` command
+
+**Problem**: Users have no way to reset their own stored credentials. If a token
+is rotated, compromised, or entered wrong, they must ask an admin or manually
+delete files on the server. For paying users, this is a day-one workflow.
+
+**Scope**:
+- `/clear-credentials` — clears ALL credentials for the calling user.
+- `/clear-credentials <skill>` — clears credentials for a specific skill.
+- After clearing, affected active skills are deactivated in the current chat
+  (since they no longer have credentials).
+- Confirm before clearing: "This will remove your stored credentials for
+  <skill> and deactivate it. Continue? [Yes/No]"
+
+**Files**: `app/telegram_handlers.py` (new handler + register in
+`build_application`), `app/skills.py` (credential deletion function).
+
+**Tests**: Handler tests for clear all, clear single, confirmation flow, and
+skill deactivation after clear.
+
+---
+
+### 1.3 Onboarding overhaul
+
+**Problem**: Onboarding is the biggest user-facing weakness. The in-product copy
+presents the bot as a "{provider} CLI Bridge" with a raw command list. The
+README is incomplete relative to the actual product surface. New users don't
+understand approval mode, skills, or credentials. This creates higher support
+burden and lower activation.
+
+This is a unified workstream — not just a `/help` rewrite.
+
+**In-product help**:
+- Rewrite `HELP_TEMPLATE` to use product language instead of developer jargon.
+  Drop "CLI Bridge" framing. Lead with what the bot does, not what it wraps.
+- One-line examples for each command (e.g., `/role You are a Python expert`).
+- Brief explanation of approval mode: "When on, the bot shows a plan before
+  executing. When off, it executes immediately."
+- Brief explanation of skills: "Skills add domain knowledge and tools. Use
+  /skills to browse and activate them."
+- Two-tier help: `/help` shows summary, `/help <topic>` shows detailed help
+  for approval, skills, or credentials.
+
+**README parity**:
+- Audit README.md against actual feature surface. Document all commands,
+  approval flow, skill system, credential setup, group chat behavior.
+- Add a "Quick Start" section: install → setup → first message → first skill.
+- Add a "For Mobile Users" section explaining `/compact` mode.
+
+**First-run experience**:
+- On first message in a new chat, send a brief welcome: "I'm ready. Send me a
+  message or type /help to see what I can do." (One sentence, not a wall.)
+- If approval mode is on, mention it: "Approval mode is on — I'll show a plan
+  before acting."
+
+**Files**: `app/telegram_handlers.py` (`HELP_TEMPLATE`, `cmd_start`, first-run
+logic), `README.md`.
+
+**Tests**: Handler test that `/help` contains examples and key terms. Handler
+test for `/help skills` detailed output. First-run message test.
+
+---
+
+### 1.4 Credential status in `/skills list`
+
+**Problem**: Users can't tell which skills require credential setup until they
+try to add one and get prompted. This makes skill discovery frustrating and
+reduces activation.
+
+**Scope**:
+- In `/skills list` output, annotate each skill with credential status:
+  - `[active]` — already activated (current behavior).
+  - `[needs setup]` — has `requires.yaml` credentials that this user hasn't
+    provided.
+  - `[ready]` — credentials satisfied, can be activated immediately.
+  - No annotation — no credentials required.
+- This requires loading the requesting user's credentials during list display.
+
+**Files**: `app/telegram_handlers.py` (`cmd_skills` list handler),
+`app/skills.py` (expose a function to check credential status without starting
+setup flow).
+
+**Tests**: Handler test with a skill that has requirements, verify annotation
+appears. Test with satisfied credentials shows `[ready]`.
+
+---
+
+### 1.5 Skill info improvements
+
+**Problem**: `/skills info <name>` truncates instructions at 500 chars, often
+mid-sentence. Users can't get a full picture of what a skill does before
+deciding to activate it.
+
+**Scope**:
+- Increase preview to 1000 chars, breaking at the nearest paragraph boundary
+  (double newline) rather than mid-sentence.
+- Show credential requirements (from `requires.yaml`) in the info output:
+  "Requires: GITHUB_TOKEN, LINEAR_API_KEY".
+- Show provider compatibility (if `claude.yaml` or `codex.yaml` exists, note
+  which providers are supported).
+
+**Files**: `app/telegram_handlers.py` (skills info handler), `app/skills.py`
+(expose requirements summary).
+
+**Tests**: Handler test for info output format, paragraph-aware truncation.
+
+---
+
+### 1.6 Human-readable credential errors and clickable setup links
+
+**Problem**: Validation failures show raw HTTP details like "Expected status
+200, got 401". Users unfamiliar with APIs don't know what to do. The `help_url`
+renders as plain text — users must manually copy-paste into a browser.
+
+**Credential validation errors**:
+- Map common HTTP status codes to human-readable guidance:
+  - 401/403 → "Token was rejected. Double-check you copied the full token and
+    that it has the required permissions."
+  - 404 → "The validation endpoint was not found. The service may have changed
+    its API."
+  - 5xx → "The service is temporarily unavailable. Try again in a few minutes."
+- Keep the raw status code in the message for debugging, but lead with the
+  human-readable guidance.
+
+**Clickable help URLs**:
+- Format `help_url` as Telegram HTML link: `(<a href="url">setup guide</a>)`.
+- If help_url is missing, omit the link entirely (no empty parens).
+
+**Files**: `app/skills.py` (`validate_credential` function),
+`app/telegram_handlers.py` (`_format_credential_prompt`).
+
+**Tests**: Unit tests for each status code mapping. Handler test verifying
+HTML `<a>` tag in prompt output.
+
+---
+
+### 1.7 Group chat credential visibility and admin override
+
+**Problem**: In group chats, if one user starts credential setup, all other
+users are blocked with "Another user is completing credential setup" and no
+visibility into who's blocking or how long they've been waiting.
+
+**Current state**: Foreign setup already auto-expires after 10 minutes
+(`_SETUP_TIMEOUT_SECONDS`). `/skills remove`, `/skills clear`, and `/new` are
+all correctly blocked while another user is mid-setup. The protection is solid;
+the gap is messaging and admin control.
+
+**Scope**:
+- Include the blocking user's ID or display name in the foreign-setup message:
+  "User @alice is completing credential setup (started 3 min ago). Please wait
+  or ask them to finish."
+- Admin override via `/cancel` (from 1.1) can clear another user's stalled
+  setup.
+- Consider reducing the expiry timeout from 10 minutes to 5 minutes.
+
+**Files**: `app/telegram_handlers.py` (foreign setup message, cancel handler).
+
+**Tests**: Group chat test with named blocking user. Admin cancel test.
+
+---
+
+### 1.8 Stale button UX cleanup
+
+**Problem**: Pending approvals are intentionally persisted across restarts —
+`approve_pending()` will still execute them if the context hash is unchanged.
+But very old pending requests become confusing. Users click a week-old button
+and get unexpected behavior.
+
+**Current state**: Missing or stale cases already return explicit messages
+("Context changed since this request was made", "No pending request to
+approve"). The gap is time-based staleness, not missing error handling.
+
+**Scope**:
+- Add a `created_at` timestamp to `PendingRequest`.
+- On button click, reject if older than a configurable TTL (default: 1 hour,
+  or `BOT_TIMEOUT_SECONDS` if longer). Show: "This request has expired
+  (created X minutes ago). Please resend your message."
+- Do NOT sweep pending requests on startup — they may still be valid if the
+  context hasn't changed.
+
+**Files**: `app/providers/base.py` (add `created_at` to `PendingRequest`),
+`app/telegram_handlers.py` (TTL check in callback handlers).
+
+**Tests**: Handler test for clicking expired button. Test that fresh button
+still works.
+
+---
+
+## Phase 2 — Mobile Presentation & Output Quality
+
+The primary user interface is Telegram on a phone. These items make the output
+readable and the formatting reliable on mobile.
+
+### 2.1 Mobile-first response summarization and `/raw` command
+
+**Problem**: LLM responses are optimized for terminal/IDE consumption — long
+code blocks, detailed step-by-step plans, full file diffs. On a phone screen in
+Telegram, these are walls of text requiring aggressive scrolling. Plans, reviews,
+and status updates are especially bad.
+
+**Design**:
+- After the provider returns a response, save the raw text to a per-chat ring
+  buffer (last 10 responses).
+- If compact mode is enabled, run the raw response through a cheap/fast
+  summarization model (e.g., Haiku) before formatting and sending to Telegram.
+- Short responses (under ~800 chars) skip summarization — they're already
+  mobile-friendly.
+- Every summarized message includes a footer:
+  `"Summarized — /raw for full response"`
+- `/raw` (or `/raw 1`) retrieves the most recent raw response, formats it
+  normally (current formatting pipeline), and sends it.
+- `/raw N` retrieves the Nth most recent (2 = previous, 3 = before that, etc.).
+- `/compact on|off` toggles summarization per chat (stored in session).
+- New config: `BOT_COMPACT_MODE=off` (instance-level default).
+  `BOT_SUMMARY_MODEL=claude-haiku-4-5-20251001` (model used for summarization).
+
+**Summarization prompt** (tight, domain-aware):
+- Preserve: code snippets, file paths, commands, action items, errors, key
+  decisions.
+- Drop: step-by-step reasoning, caveats about obvious things, verbose
+  explanations.
+- Target: under 600 chars for plan/review/status responses; code-only responses
+  returned unchanged.
+
+**Ring buffer storage**:
+- Store as JSON files in `{data_dir}/raw/{chat_id}/` with sequential numbering.
+- Each entry: `{"timestamp": ..., "prompt_preview": ..., "raw_text": ...}`.
+- Rotate on write: when count exceeds 10, delete oldest.
+
+**Implementation note**: The summarization call should use `claude -p` with a
+cheap model (`--model claude-haiku-4-5-20251001`), keeping the CLI-only
+architecture. No SDK dependency. The call is lightweight — short system prompt,
+raw text in, summary out, plain text output format. Timeout of 30 seconds.
+
+**Files**: New `app/summarize.py` (summarization logic + ring buffer),
+`app/telegram_handlers.py` (integration in `execute_request`, new `/raw` and
+`/compact` handlers), `app/config.py` (new config keys).
+
+**Tests**: Summarizer unit tests (short passthrough, long summarization, code
+preservation). Ring buffer rotation tests. Handler tests for `/raw`,
+`/compact`, and summarized footer presence.
+
+---
+
+### 2.2 Markdown table rendering
+
+**Problem**: Models frequently generate markdown tables. Telegram doesn't
+support HTML tables, so they render as unreadable plain text.
+
+**Scope**:
+- Detect markdown tables (lines with `|` column separators and `---` separator
+  rows) in `md_to_telegram_html`.
+- Convert to monospaced `<pre>` block with aligned columns (pad cells to
+  uniform width). This preserves readability in Telegram's monospace font.
+- Handle edge cases: tables with inconsistent column counts, tables inside code
+  blocks (don't convert those).
+
+**Files**: `app/formatting.py` (table detection and conversion).
+
+**Tests**: Formatting tests for simple tables, ragged tables, tables inside
+code fences (should be left alone).
+
+---
+
+### 2.3 Robust HTML chunk splitting
+
+**Problem**: Long responses are split into 4096-char Telegram messages. Tag
+balancing is attempted but edge cases (deeply nested tags, model-generated
+broken HTML) can produce malformed chunks.
+
+**Scope**:
+- Add a post-split validation pass: parse each chunk with a simple tag-balance
+  checker. If unbalanced, close open tags at chunk boundary and re-open at next
+  chunk start.
+- Add a fallback: if HTML parsing fails entirely, strip all tags and send as
+  plain text rather than erroring.
+
+**Files**: `app/formatting.py` (`split_html`).
+
+**Tests**: Formatting tests with deeply nested tags, unclosed tags, and
+malformed model output.
+
+---
+
+## Phase 3 — Trust & Cost Control
+
+Guard against abuse and give operators visibility into spend. These become
+critical as the user base grows beyond trusted early adopters.
+
+### 3.1 Rate limiting
+
+**Problem**: No rate limiting. A user (or compromised account) can spam the bot
+and rack up unlimited API costs.
+
+**Scope**:
+- Per-user rate limit: configurable max requests per minute (default: 5) and
+  per hour (default: 30).
+- Per-chat rate limit for group chats (aggregate across all users).
+- New config: `BOT_RATE_LIMIT_PER_MINUTE=5`, `BOT_RATE_LIMIT_PER_HOUR=30`.
+- When limit exceeded, reply: "Rate limit reached. Please wait X seconds."
+- Admins are exempt from rate limits.
+
+**Files**: New `app/ratelimit.py` (token bucket or sliding window),
+`app/telegram_handlers.py` (check before execution), `app/config.py` (new
+config keys).
+
+**Tests**: Rate limit unit tests. Handler test that rate-limited user gets
+rejection message. Admin exemption test.
+
+---
+
+### 3.2 Usage tracking, quota, and billing hooks
+
+**Problem**: No visibility into per-user or per-chat API consumption. Can't bill
+customers, explain costs, or set spending caps.
+
+**Scope**:
+- Track per-request metadata: user_id, chat_id, provider, model, duration,
+  token count (if available from provider output).
+- Store in append-only log: `~/.telegram-agent-bot/<instance>/usage.jsonl`.
+- New config: `BOT_BUDGET_LIMIT_USD=` per user per day (requires token→cost
+  mapping).
+- `/usage` — show requesting user's usage summary (today, this week, total).
+- `/admin usage` — show aggregate usage across all users.
+
+**Files**: New `app/usage.py`, `app/telegram_handlers.py` (instrumentation
+around `execute_request`), `app/config.py` (budget config).
+
+**Tests**: Usage tracking unit tests. Budget limit enforcement test.
+
+---
+
+### 3.3 Admin safety posture
+
+**Problem**: `BOT_ADMIN_USERS` defaults to `BOT_ALLOWED_USERS` if not set. In a
+multi-user deployment, every user silently becomes an admin with power to
+install/uninstall skills and sweep all sessions. The README normalizes this
+fallback. For a paid product, "everyone is admin unless you opt out" is a trust
+problem.
+
+**Scope**:
+- In `/doctor` output, if `BOT_ADMIN_USERS` is not explicitly set AND there are
+  more than one allowed user, emit a warning:
+  "BOT_ADMIN_USERS not set — all allowed users have admin privileges
+  (install/uninstall skills). Set BOT_ADMIN_USERS to restrict."
+- This is a `/doctor`-only warning. `validate_config()` currently returns hard
+  errors and `fail_fast()` exits on any returned string. Adding a non-fatal
+  warning there would require a separate warning channel (e.g., returning a
+  tuple of errors and warnings, or a log-only path). Keep it simple: `/doctor`
+  is the right place for advisory checks that don't block startup.
+- Update README to note the security implication of the fallback behavior
+  rather than normalizing it.
+
+**Files**: `app/telegram_handlers.py` (`cmd_doctor`), `README.md`.
+
+**Tests**: Doctor test checking warning presence with multiple allowed users.
+
+---
+
+### 3.4 Proactive prompt size warnings
+
+**Problem**: Prompt size warnings only appear after a skill is activated. Users
+add multiple skills and only then discover the combined context is too large.
+
+**Scope**:
+- When running `/skills add <name>`, compute the PROJECTED total prompt size
+  (current active skills + the new one) and warn BEFORE activating if it
+  exceeds the threshold.
+- Show: "Adding <name> would bring total prompt context to ~12,400 chars
+  (threshold: 8,000). This may reduce response quality. Continue? [Yes/No]"
+- Use inline keyboard buttons for confirmation.
+
+**Files**: `app/telegram_handlers.py` (skills add handler), `app/skills.py`
+(`check_prompt_size` or new `estimate_prompt_size`).
+
+**Tests**: Handler test adding a skill that pushes over threshold, verify
+warning shown and confirmation required.
+
+---
+
+### 3.5 `/doctor` runtime health checks
+
+**Problem**: `/doctor` only checks "can the bot start" — binary availability,
+config validity, data dir writability. It doesn't detect runtime issues like API
+rate limits, invalid model names, or expired API keys.
+
+**Scope**:
+- Add a lightweight "ping" to the provider:
+  - Claude: run `claude --version` (already done) + a minimal `-p` call with
+    timeout to verify API connectivity.
+  - Codex: run `codex exec --json --ephemeral` with a trivial prompt and short
+    timeout.
+- Report API key validity, model availability, and estimated latency.
+- Add stale session detection: count sessions with `pending_request` or
+  `awaiting_skill_setup` and report as informational.
+
+**Files**: `app/providers/claude.py` and `app/providers/codex.py`
+(`check_health` methods), `app/telegram_handlers.py` (`cmd_doctor`).
+
+**Tests**: Provider health check tests with mock subprocess responses.
+
+---
+
+## Phase 4 — Operational Hardening
+
+### 4.1 Repairable skill store operations
+
+**Problem**: `/skills uninstall` sweeps all sessions before removing the skill
+from disk (`store.py`). If the filesystem removal fails, sessions are already
+modified. Simply reversing the order (remove first, sweep second) flips the
+failure mode: chats would reference a skill that no longer exists on disk.
+
+**Scope**:
+- Adopt a two-phase approach:
+  1. **Prepare**: validate the operation will succeed (check permissions, verify
+     skill exists, etc.). Write an intent record to a staging file.
+  2. **Execute**: perform disk operation, then sweep sessions, then remove the
+     intent record.
+  3. **Recover**: on startup, check for incomplete intent records. If found,
+     complete or roll back the operation based on what phase it reached.
+- For updates: write new content to a temp directory, validate it parses
+  correctly, then atomic-rename into place. Only then notify affected chats.
+- Intent record format: JSON with operation type, skill name, timestamp, and
+  phase marker (prepared/disk-done/sweep-done).
+
+**Files**: `app/store.py` (install/uninstall/update functions, recovery logic),
+`app/telegram_handlers.py` (store command handlers).
+
+**Tests**: Store operation tests with simulated filesystem failures at each
+phase. Verify recovery on startup completes partial operations. Verify session
+state is consistent after partial failure.
+
+---
+
+### 4.2 Locally modified skill protection
+
+**Problem**: `/skills update <name>` silently overwrites locally modified
+skills. `/skills update all` can nuke multiple customizations without
+confirmation.
+
+**Scope**:
+- Before updating a locally modified skill, show a warning: "Skill <name> has
+  local modifications. Update will overwrite them. Continue? [Yes/No]"
+- Use inline keyboard buttons for confirmation.
+- For `/skills update all`, list all locally modified skills that would be
+  affected and require a single confirmation.
+- Add `/skills diff <name>` to show what changed between installed version and
+  store version (basic text diff, first 2000 chars).
+
+**Files**: `app/telegram_handlers.py` (update handler), `app/store.py` (diff
+generation).
+
+**Tests**: Handler test for locally modified update warning. Test that
+unmodified skills update without confirmation.
+
+---
+
+### 4.3 Configuration template per provider
+
+**Problem**: `.env.example` shows all settings for all providers. Claude users
+see `CODEX_SANDBOX`, `CODEX_FULL_AUTO`, `CODEX_DANGEROUS` which are irrelevant.
+Codex users see Claude-specific comments.
+
+**Scope**:
+- `setup.sh` should generate a provider-specific `.env` file, omitting
+  irrelevant sections entirely.
+- Keep `.env.example` as the full reference, but generated configs are clean.
+
+**Files**: `setup.sh`, `.env.example` (add section markers for conditional
+generation).
+
+**Tests**: Manual / script test that generated config for each provider only
+contains relevant settings.
+
+---
+
+### 4.4 Admin session visibility
+
+**Problem**: Admins have no visibility into active sessions across chats. They
+can't tell which chats are active, stuck, or consuming resources.
+
+**Scope**:
+- `/admin sessions` — list all chats with sessions, showing:
+  - Chat ID
+  - Active skills count
+  - Pending request status
+  - Last activity timestamp
+  - Provider state summary (thread_id or session_id present)
+- `/admin sessions <chat_id>` — detailed view of a specific chat session.
+- Admin-only (gated by `BOT_ADMIN_USERS`).
+
+**Files**: `app/telegram_handlers.py` (new admin handler), `app/storage.py`
+(list all sessions function).
+
+**Tests**: Handler tests for admin access gate and output format.
+
+---
+
+### 4.5 Conversation export
+
+**Problem**: Users can't export or download their conversation history through
+the bot.
+
+**Scope**:
+- `/export` — exports the current chat's provider session as a downloadable
+  file.
+- For Claude: session transcript (if available from Claude Code's session
+  storage).
+- For Codex: thread transcript (if available from Codex's session storage).
+- Format: plain text or markdown, sent as a Telegram document.
+- If provider doesn't support transcript export, reply with session metadata
+  only.
+
+**Files**: `app/telegram_handlers.py` (new handler), provider-specific export
+methods.
+
+**Tests**: Handler test for export command. Test for provider without export
+support.
+
+---
+
+## Phase 5 — Ecosystem & Extensibility
+
+### 5.1 Third-party skill registry
+
+**Problem**: Skills can only come from the local `skills/store/` directory.
+There's no way to discover or install community-created skills.
+
+**Scope**:
+- Support remote skill sources: git repositories or HTTP endpoints containing
+  skill directories.
+- `/skills install <url>` — install from a remote source.
+- Skill manifests include a `source` field for provenance tracking.
+- Signature verification: skills can include a signature file; the bot validates
+  against a configurable set of trusted publishers.
+- New config: `BOT_SKILL_SOURCES=` (comma-separated list of trusted git repos
+  or URLs).
+
+**Files**: `app/store.py` (remote fetch), `app/skills.py` (source tracking),
+`app/config.py` (new config).
+
+**Tests**: Store tests with mock remote sources. Signature validation tests.
+
+---
+
+### 5.2 Webhook mode
+
+**Problem**: The bot uses long-polling, which works but adds latency and
+requires a persistent connection. For production deployments behind a reverse
+proxy, webhook mode is more efficient and reliable.
+
+**Scope**:
+- New config: `BOT_MODE=poll|webhook`, `BOT_WEBHOOK_URL=`,
+  `BOT_WEBHOOK_PORT=`.
+- When `webhook`, start an aiohttp server and register the webhook URL with
+  Telegram.
+- Health endpoint at `/health` for load balancer checks.
+- Graceful fallback: if webhook registration fails, fall back to polling with a
+  warning.
+
+**Files**: `app/main.py` (mode selection), new `app/webhook.py`,
+`app/config.py` (new config keys).
+
+**Tests**: Webhook registration test with mock Telegram API. Health endpoint
+test.
+
+---
+
+## Implementation Notes
+
+- Ordering principle: activation before abuse control. Phase 1 fixes the flows
+  that make users leave. Phase 2 makes output readable on the primary device.
+  Phase 3 adds guardrails as the user base grows. Phase 4 hardens operations.
+  Phase 5 builds the ecosystem.
+- Every feature gets a regression test before merge.
+- Production bugs found during implementation get fixed immediately with a
+  regression test, same as the agent-roles-and-skills work.
+- No new external dependencies. The mobile summarization feature (2.1) uses
+  `claude -p` with a cheap model, keeping the CLI-only architecture.

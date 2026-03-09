@@ -20,8 +20,8 @@ and design notes remain below.
 | Phase 2 | Done | All three items shipped: table rendering, HTML fallback, and mobile summarization with `/raw` + `/compact`. |
 | Phase 3 | Done | Rate limiting, admin safety posture, proactive prompt size warnings, runtime health checks all shipped. |
 | Phase 4 | Done | All items shipped. 4.1 managed immutable store with content-addressed objects, atomic refs, cross-instance locking, GC, session self-healing, three-tier resolution, and 7 bugs found and fixed during review. 4.2-4.5 shipped earlier. |
-| Phase 5 | In progress | Transport/webhook foundation. 5.1 transport normalization done. 5.2 single-process webhook mode next. |
-| Phase 6 | Not started | Session and execution-context work: SQLite sessions, per-chat projects, then file policy. |
+| Phase 5 | In progress | Transport/webhook foundation. 5.1 transport normalization done. 5.2 webhook mode deferred until after 6.1 (SQLite). |
+| Phase 6 | In progress | Session and execution-context work: 6.1 SQLite sessions next, then per-chat projects, then file policy. |
 | Phase 7 | Not started | Ecosystem work. 7.1 registry lands after phases 5 and 6. |
 
 ### Phase 1 Status
@@ -70,13 +70,13 @@ and design notes remain below.
 | Item | Status | Notes |
 |---|---|---|
 | 5.1 Thin inbound transport normalization | Done | `app/transport.py` with frozen inbound dataclasses. All handlers normalized. |
-| 5.2 Webhook mode | Not started | Lands after 5.1 and remains explicitly single-process in the first cut. |
+| 5.2 Webhook mode | Not started | Deferred until after 6.1 SQLite — lands on transactional storage instead of JSON files. |
 
 ### Phase 6 Status
 
 | Item | Status | Notes |
 |---|---|---|
-| 6.1 SQLite session backend | Not started | Replaces per-chat JSON session blobs; schema includes future `project_id` and `file_policy` fields from day one. |
+| 6.1 SQLite session backend | Not started | Next execution item. Replaces per-chat JSON session blobs; schema includes future `project_id` and `file_policy` fields from day one. |
 | 6.2 Per-chat project model | Not started | Named chat bindings on top of the current working-dir model. |
 | 6.3 File policy | Not started | `inspect|edit` threaded through session/project/provider context. |
 
@@ -93,19 +93,20 @@ and design notes remain below.
 Execution from the current state:
 
 1. ~~**5.1** — add thin inbound transport normalization~~ Done.
-2. **5.2** — add webhook mode on top of the normalized inbound path
-3. **6.1** — move chat sessions from JSON blobs to SQLite
+2. **6.1** — move chat sessions from JSON blobs to SQLite
+3. **5.2** — add webhook mode on top of SQLite + normalized inbound path
 4. **6.2** — add optional per-chat project bindings
 5. **6.3** — add file policy (`inspect|edit`)
 6. **7.1** — add the third-party registry using the 4.1 store architecture
 
-`5.1` is complete. `5.2` is next — polling and webhook modes will feed the same
-normalized inbound shape. `6.1` carries the future session schema from day one
-so projects and file policy do not require an immediate second migration.
+`5.1` is complete. `6.1` is next — SQLite gives webhook, projects, and file
+policy a transactional foundation instead of building on per-chat JSON files.
+The schema carries `project_id` and `file_policy` columns from day one so
+later phases fill in existing columns rather than requiring migrations.
 
-Important assumption: the first webhook cut is **single-process**. The current
-bot still uses in-memory per-chat locks, so multi-worker webhook deployment is
-out of scope until after the session/persistence work in Phase 6.
+`5.2` lands after `6.1` so the webhook ingress path writes to SQLite from day
+one. The first webhook cut remains **single-process** — SQLite WAL mode
+replaces the in-memory `CHAT_LOCKS` dict for write serialization.
 
 The deferred item `3.2` (usage tracking / billing hooks) remains intentionally out of sequence and is not part of the next execution block.
 

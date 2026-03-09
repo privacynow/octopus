@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.providers.base import RunResult
-from app.storage import ensure_data_dirs
+from app.storage import _db_connections, ensure_data_dirs
 from tests.support.assertions import Checks
 from tests.support.handler_support import (
     FakeChat,
@@ -1074,10 +1074,9 @@ async def test_normalization_persists_to_disk():
             msg1 = await send_command(th.cmd_skills, chat, admin, "/skills", [])
             checks.check_in("first load: no active", "No active skills", last_reply(msg1))
 
-            # Read raw JSON from disk — should have empty active_skills
-            import json
-            session_path = data_dir / "sessions" / "1001.json"
-            raw = json.loads(session_path.read_text())
+            # Read from SQLite — should have empty active_skills
+            from app.storage import load_session
+            raw = load_session(data_dir, 1001, "claude", prov.new_provider_state, "off")
             checks.check("disk state pruned", raw.get("active_skills", []), [])
         finally:
             cleanup()
@@ -1090,6 +1089,16 @@ run_test("e2e: normalization persists pruned state to disk", test_normalization_
 # Runner
 # ============================================================================
 
+def _close_all_db_connections():
+    """Close all leaked SQLite connections between tests."""
+    for conn in _db_connections.values():
+        try:
+            conn.close()
+        except Exception:
+            pass
+    _db_connections.clear()
+
+
 async def _run_all():
     for name, coro in _tests:
         print(f"\n=== {name} ===")
@@ -1100,6 +1109,8 @@ async def _run_all():
             import traceback
             traceback.print_exc()
             checks.failed += 1
+        finally:
+            _close_all_db_connections()
 
 
 async def _main():

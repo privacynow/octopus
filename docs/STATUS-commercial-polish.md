@@ -12,8 +12,8 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 | Phase 2 | Output quality | Done |
 | Phase 3 | Trust & cost control | Done |
 | Phase 4 | Operational hardening | Done |
-| Phase 5 | Transport & webhook foundation | In progress (5.1 done, 5.2 next) |
-| Phase 6 | Session & execution context | Not started |
+| Phase 5 | Transport & webhook foundation | In progress (5.1 done, 5.2 deferred until after 6.1) |
+| Phase 6 | Session & execution context | In progress (6.1 done, 6.2 next) |
 | Phase 7 | Ecosystem & extensibility | Not started |
 
 ---
@@ -22,7 +22,7 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 
 Canonical full-suite runner: `./scripts/test_all.sh`
 
-Current suite: 1,459 passing checks across 22 entrypoints.
+Current suite: 1,509 passing checks across 23 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -43,7 +43,8 @@ Current suite: 1,459 passing checks across 22 entrypoints.
 | `test_high_risk.py` | 78 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
 | `test_ratelimit.py` | 21 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_skills.py` | 235 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
-| `test_storage.py` | 41 | Session CRUD, upload paths, directory creation, path resolution, `list_sessions()`. |
+| `test_sqlite_integration.py` | 46 | SQLite session backend integration: handler→SQLite round-trip, JSON-to-SQLite migration under handler load, `cmd_doctor` stale scan from SQLite, `delete_session`, `close_db`/reopen lifecycle, multi-chat independence, cross-chat prompt size scan, no-JSON-artifact verification. |
+| `test_storage.py` | 46 | Session CRUD (SQLite-backed), upload paths, directory creation, path resolution, `list_sessions()`, JSON-to-SQLite migration with corrupt file handling. |
 | `test_store.py` | 123 | Store module: discovery, search, content hashing, install/uninstall via refs and objects, ref round-trip, update detection, custom override detection, diff, GC, startup recovery, schema guard, pinned refs. |
 | `test_store_e2e.py` | 57 | End-to-end user flows through handlers: install→add→message→prompt, update propagation, uninstall pruning, /skills info across all tiers, three-tier resolution, custom override shadowing, /admin sessions stale filtering, provider compatibility output, source label edge cases, normalization persistence, --doctor schema check. |
 | `test_summarize.py` | 33 | Ring buffer (full prompt, kind field, rotation at 50), export formatting, summarization. |
@@ -113,7 +114,7 @@ Current suite: 1,459 passing checks across 22 entrypoints.
 - `.env.example` remains the full reference; generated configs are clean.
 
 **4.4 Admin session visibility** (`app/storage.py`, `app/telegram_handlers.py`)
-- `list_sessions()` in storage.py reads all session files, returns sorted summary dicts.
+- `list_sessions()` in storage.py queries SQLite, returns sorted summary dicts.
 - `/admin sessions` — summary view: total sessions, pending approvals, top skills by usage.
 - `/admin sessions <chat_id>` — detail view: provider, approval mode, skills, timestamps.
 - Admin-gated via `is_admin()`.
@@ -137,7 +138,7 @@ Current suite: 1,459 passing checks across 22 entrypoints.
 
 **Ring buffer vs append-only log**: The `/export` feature reuses the existing ring buffer rather than building a separate conversation log. The ring buffer stores the last 50 turns with full prompts, which covers most practical export needs.
 
-**Admin session listing**: Returns all sessions sorted by `updated_at`. No pagination — bounded by number of session files on disk. Detail view shows per-session metadata without loading provider state internals.
+**Admin session listing**: Returns all sessions sorted by `updated_at`. No pagination — bounded by number of rows in SQLite. Detail view shows per-session metadata without loading provider state internals.
 
 ---
 
@@ -152,7 +153,7 @@ Current suite: 1,459 passing checks across 22 entrypoints.
 - `is_allowed()` and `is_admin()` accept both raw Telegram user objects and `InboundUser` via `_to_inbound_user()` coercion.
 - Attachment download logic moved to `transport.download_attachments()`.
 - The old `Attachment` dataclass is replaced by `InboundAttachment` (aliased for internal compatibility).
-- All 1,372 existing tests pass without modification, proving the normalization is transparent.
+- All existing tests pass without modification, proving the normalization is transparent.
 - 57 tests in `test_transport.py` covering: user/command/callback/message normalization, frozen dataclasses (tuples not lists), bot-mention stripping, None-user safety for all handler types, behavioral integration (empty-content skip, caption-to-provider), handler integration proving `InboundUser` flows through `is_allowed`.
 - `handle_message` calls `normalize_message()` directly for text/attachment/empty-content extraction — single inbound seam, no duplicated logic.
 - 3 bugs found and fixed during review:
@@ -164,15 +165,30 @@ Current suite: 1,459 passing checks across 22 entrypoints.
 | Item | Status | Notes |
 |------|--------|-------|
 | 5.1 Thin inbound transport normalization | Done | All handlers normalized. New `app/transport.py` module. |
-| 5.2 Webhook mode | Not started | Lands on top of the 5.1 normalized inbound path. First cut remains explicitly single-process. |
+| 5.2 Webhook mode | Not started | Deferred until after 6.1 SQLite — lands on transactional storage. First cut remains single-process. |
 
 ---
 
 ## Phase 6 — Session & Execution Context
 
+### What shipped
+
+**6.1 SQLite session backend** (`app/storage.py`, `app/telegram_handlers.py`)
+- SQLite with WAL mode replaces per-chat JSON session files.
+- Schema carries `project_id` and `file_policy` columns from day one (for 6.2/6.3).
+- `_db()` manages connection pool (one per data_dir), creates schema on first use.
+- `_upsert()` extracts indexed columns (`provider`, `has_pending`, `has_setup`, `project_id`, `file_policy`) from session dict for query efficiency.
+- One-time JSON-to-SQLite migration: on first DB open, imports `sessions/*.json` and removes files/directory. Corrupt files are cleaned up.
+- Schema version guard: refuses to open if DB schema is newer than code supports.
+- Same API surface: `load_session()`, `save_session()`, `list_sessions()`, `default_session()`.
+- New: `session_exists()`, `delete_session()`, `close_db()`.
+- All handler-side session scans (`cmd_doctor` stale scan, `_check_prompt_size_cross_chat`) converted from JSON glob to `list_sessions()` / `load_session()`.
+- DB connection cleanup added to all 12 test runner files to prevent leaked connections.
+- 46 integration tests in `test_sqlite_integration.py` exercise real handler→SQLite round-trips.
+
 | Item | Status | Notes |
 |------|--------|-------|
-| 6.1 SQLite session backend | Not started | Replaces per-chat JSON session blobs. Target schema will carry `project_id` and `file_policy` from day one. |
+| 6.1 SQLite session backend | Done | WAL mode, schema versioning, JSON migration, indexed query columns. |
 | 6.2 Per-chat project model | Not started | Optional named project bindings layered on top of the current working-dir model. |
 | 6.3 File policy | Not started | `inspect|edit` persisted in session/project/provider context. |
 
@@ -191,18 +207,15 @@ Current suite: 1,459 passing checks across 22 entrypoints.
 Execution from the current state is:
 
 1. ~~**5.1** — add thin inbound transport normalization~~ Done.
-2. **5.2** — add webhook mode on top of the normalized inbound path
-3. **6.1** — move chat sessions from JSON blobs to SQLite
+2. ~~**6.1** — move chat sessions from JSON blobs to SQLite~~ Done.
+3. **5.2** — add webhook mode on top of SQLite + normalized inbound path
 4. **6.2** — add optional per-chat project bindings
 5. **6.3** — add file policy (`inspect|edit`)
 6. **7.1** — add the third-party registry on top of the 4.1 store model
 
-`5.1` is complete. Polling and webhook modes will feed the same normalized
-inbound shape. `5.2` is next.
-
-Important assumption: the first webhook cut is **single-process**. The current
-per-chat locking is in-memory, so multi-worker webhook deployment remains out
-of scope until after the Phase 6 session work lands.
+`5.1` and `6.1` are complete. `5.2` is next — webhook ingress writes to
+SQLite from the start. `6.2` and `6.3` use the `project_id` and `file_policy`
+columns already present in the schema.
 
 The deferred item `3.2` (usage tracking / billing hooks) remains intentionally out of sequence.
 
@@ -224,6 +237,10 @@ The deferred item `3.2` (usage tracking / billing hooks) remains intentionally o
 | `InboundCommand.args` and `InboundMessage.attachments` were mutable lists | Low | `field(default_factory=list)` on frozen dataclass allows content mutation | Changed to `tuple` fields; tests verify `append()` raises `AttributeError` |
 | `/doctor` stale scan counts fresh sessions | Medium | No age threshold — any pending request was flagged | Added `_STALE_PENDING_SECONDS = 3600`, `_STALE_SETUP_SECONDS = 600` |
 | `/doctor` false positive for explicit admin with equal user sets | Low | Warning triggered when admin set == allowed set regardless of explicit config | Check `admin_users_explicit` flag, not set equality |
+| `cmd_doctor` stale scan still read JSON files after SQLite migration | Medium | Stale session scan at `cmd_doctor` globbed `sessions/*.json` instead of querying SQLite | Converted to `list_sessions()` + `load_session()` |
+| `_check_prompt_size_cross_chat` still read JSON files after SQLite migration | Medium | Cross-chat prompt size scan globbed `sessions/*.json` | Converted to `list_sessions()` + `load_session()` |
+| `test_store_e2e.py` read session from JSON file path | Low | `normalization persists pruned state` test read `sessions/1001.json` directly | Changed to `load_session()` from SQLite |
+| Leaked SQLite connections in test runners | Low | Tests created temp dirs with `ensure_data_dirs` but never called `close_db`, accumulating stale connections | Added `_close_all_db_connections()` cleanup to all 12 test runner files |
 
 ---
 
@@ -233,7 +250,6 @@ The deferred item `3.2` (usage tracking / billing hooks) remains intentionally o
 |------|--------|-------|
 | 3.2 Usage tracking & quotas | Deferred | Needs token-cost mapping, billing integration |
 | 5.2 Webhook mode | Not started | Next execution item. `BOT_MODE=poll\|webhook`, webhook server, `/health` endpoint, single-process only in first cut. |
-| 6.1 SQLite session backend | Not started | Replaces per-chat JSON session files while leaving uploads/credentials/raw/store on disk. |
 | 6.2 Per-chat project model | Not started | Named project bindings per chat, with provider/pending invalidation on switch. |
 | 6.3 File policy | Not started | `inspect|edit` surfaced in session/provider context. |
 | 7.1 Third-party skill registry | Not started | Planned after phases 5 and 6. Uses the managed store foundation from 4.1 |

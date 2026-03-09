@@ -49,7 +49,7 @@ from app.storage import (
     load_session,
     resolve_allowed_path,
     save_session,
-    session_file,
+    session_exists,
     list_sessions,
 )
 from app.ratelimit import RateLimiter
@@ -163,24 +163,19 @@ def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
     Returns list of warning strings for chats over threshold.
     """
     from app.skills import filter_resolvable_skills
-    sessions_dir = data_dir / "sessions"
-    if not sessions_dir.is_dir():
-        return []
     warnings: list[str] = []
-    for session_path in sessions_dir.glob("*.json"):
-        try:
-            import json as _json
-            session = _json.loads(session_path.read_text())
-        except Exception:
-            continue
-        active = filter_resolvable_skills(session.get("active_skills", []))
+    for info in list_sessions(data_dir):
+        active = filter_resolvable_skills(info.get("active_skills", []))
         if skill_name not in active:
             continue
-        role = session.get("role", "")
+        session_data = load_session(
+            data_dir, info["chat_id"], _cfg().provider_name,
+            lambda: _prov().new_provider_state(), _cfg().approval_mode,
+        )
+        role = session_data.get("role", "")
         warning = check_prompt_size(role, active)
         if warning:
-            chat_id = session_path.stem
-            warnings.append(f"  Chat {chat_id}: {warning}")
+            warnings.append(f"  Chat {info['chat_id']}: {warning}")
     return warnings
 
 
@@ -1003,20 +998,19 @@ async def cmd_doctor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     now = time.time()
     _STALE_PENDING_SECONDS = 3600     # 1 hour
     _STALE_SETUP_SECONDS = 600        # 10 minutes
-    sessions_dir = cfg.data_dir / "sessions"
-    if sessions_dir.is_dir():
-        for sf in sessions_dir.glob("*.json"):
-            try:
-                import json as _json
-                data = _json.loads(sf.read_text())
-                pending = data.get("pending_request")
-                if pending and (now - pending.get("created_at", 0)) > _STALE_PENDING_SECONDS:
-                    stale_pending += 1
-                setup = data.get("awaiting_skill_setup")
-                if setup and (now - setup.get("started_at", 0)) > _STALE_SETUP_SECONDS:
-                    stale_setup += 1
-            except Exception:
-                pass
+    for info in list_sessions(cfg.data_dir):
+        if not info["has_pending"] and not info["has_setup"]:
+            continue
+        session_data = load_session(
+            cfg.data_dir, info["chat_id"], cfg.provider_name,
+            lambda: _prov().new_provider_state(), cfg.approval_mode,
+        )
+        pending = session_data.get("pending_request")
+        if pending and (now - pending.get("created_at", 0)) > _STALE_PENDING_SECONDS:
+            stale_pending += 1
+        setup = session_data.get("awaiting_skill_setup")
+        if setup and (now - setup.get("started_at", 0)) > _STALE_SETUP_SECONDS:
+            stale_setup += 1
     if stale_pending:
         warnings.append(f"{stale_pending} session(s) with stale pending approval requests (>1h old).")
     if stale_setup:
@@ -1817,7 +1811,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # already provide orientation, so the welcome is only needed when a user
     # sends a plain message without knowing what the bot does).
     cfg = _cfg()
-    if not session_file(cfg.data_dir, chat_id).exists():
+    if not session_exists(cfg.data_dir, chat_id):
         welcome = "I'm ready. Send me a message or type /help to see what I can do."
         if cfg.approval_mode == "on":
             welcome += "\nApproval mode is on \u2014 I'll show a plan before acting."

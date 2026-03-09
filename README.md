@@ -124,7 +124,7 @@ See `.env.example` for all available options. Key settings:
 
 ```bash
 ./scripts/bootstrap.sh                                    # create venv
-./scripts/test_all.sh                                     # canonical full test suite (1,459 checks)
+./scripts/test_all.sh                                     # canonical full test suite (1,509 checks)
 ./scripts/doctor.sh <instance>                            # health check
 ```
 
@@ -136,7 +136,7 @@ See `.env.example` for all available options. Key settings:
 | `app/telegram_handlers.py` | Command/message/callback handlers, approval flow, provider execution |
 | `app/skills.py` | Skill catalog, prompt composition, credential management, three-tier resolution |
 | `app/store.py` | Immutable content-addressed skill store with atomic refs and GC |
-| `app/storage.py` | Per-chat JSON session persistence |
+| `app/storage.py` | SQLite session backend (WAL mode), upload paths, directory management |
 | `app/providers/` | CLI provider abstraction (Claude, Codex) |
 | `app/formatting.py` | Markdown-to-Telegram HTML conversion and message splitting |
 

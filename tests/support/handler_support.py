@@ -1,12 +1,33 @@
 """Shared fakes and helpers for handler integration tests."""
 
+import contextlib
+import tempfile
 from pathlib import Path
 
 import app.telegram_handlers as _th
 from app.providers.base import RunResult
 from app.ratelimit import RateLimiter
-from app.storage import load_session
+from app.storage import close_db, ensure_data_dirs, load_session
 from tests.support.config_support import make_config as _make_config
+
+
+@contextlib.contextmanager
+def test_env(*, config_overrides=None, provider_name="claude", boot_id="test-boot"):
+    """Context manager that sets up a temp data_dir, config, provider, globals,
+    and tears down the DB connection on exit.  Yields (data_dir, cfg, prov)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        prov = FakeProvider(provider_name)
+        overrides = dict(working_dir=data_dir)
+        if config_overrides:
+            overrides.update(config_overrides)
+        cfg = make_config(data_dir, **overrides)
+        setup_globals(cfg, prov, boot_id=boot_id)
+        try:
+            yield data_dir, cfg, prov
+        finally:
+            close_db(data_dir)
 
 
 class FakeChat:

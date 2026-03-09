@@ -1,4 +1,4 @@
-"""Tests for storage.py — session CRUD, path resolution, uploads."""
+"""Tests for storage.py — session CRUD (SQLite-backed), path resolution, uploads."""
 
 import json
 import sys
@@ -7,6 +7,7 @@ sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 
 from pathlib import Path
 from app.storage import (
+    _reset_db,
     build_upload_path,
     default_session,
     ensure_data_dirs,
@@ -16,7 +17,7 @@ from app.storage import (
     sanitize_filename,
     list_sessions,
     save_session,
-    session_file,
+    session_exists,
 )
 from tests.support.assertions import Checks
 
@@ -41,7 +42,7 @@ print("\n=== session management ===")
 with tempfile.TemporaryDirectory() as tmp:
     data_dir = Path(tmp)
     ensure_data_dirs(data_dir)
-    check("sessions dir exists", (data_dir / "sessions").is_dir(), True)
+    check("db file exists", (data_dir / "sessions.db").exists(), True)
     check("uploads dir exists", (data_dir / "uploads").is_dir(), True)
 
     # default_session
@@ -54,6 +55,9 @@ with tempfile.TemporaryDirectory() as tmp:
 
     # save + load
     save_session(data_dir, 12345, s)
+    check("session_exists after save", session_exists(data_dir, 12345), True)
+    check("session_exists for unknown", session_exists(data_dir, 99998), False)
+
     loaded = load_session(data_dir, 12345, "claude", lambda: {"session_id": "abc", "started": False}, "on")
     check("loaded provider", loaded["provider"], "claude")
     check("loaded state", loaded["provider_state"]["session_id"], "abc")
@@ -61,17 +65,6 @@ with tempfile.TemporaryDirectory() as tmp:
     # load with new provider_state keys (migration-safe)
     loaded2 = load_session(data_dir, 12345, "claude", lambda: {"session_id": "abc", "started": False, "new_key": "default"}, "on")
     check("new key filled", loaded2["provider_state"]["new_key"], "default")
-
-    session_file(data_dir, 54321).write_text("{not json")
-    corrupt_loaded = load_session(
-        data_dir,
-        54321,
-        "codex",
-        lambda: {"thread_id": None},
-        "off",
-    )
-    check("corrupt session falls back to provider", corrupt_loaded["provider"], "codex")
-    check("corrupt session falls back to fresh state", corrupt_loaded["provider_state"]["thread_id"], None)
 
     # explicit approval mode survives reload, including its source flag
     s["approval_mode"] = "off"
@@ -91,6 +84,8 @@ with tempfile.TemporaryDirectory() as tmp:
     fresh = load_session(data_dir, 99999, "codex", lambda: {"thread_id": None}, "off")
     check("fresh session provider", fresh["provider"], "codex")
     check("fresh session state", fresh["provider_state"]["thread_id"], None)
+
+    _reset_db(data_dir)
 
 # -- resolve_allowed_path --
 print("\n=== resolve_allowed_path ===")
@@ -119,6 +114,7 @@ with tempfile.TemporaryDirectory() as tmp:
     path = build_upload_path(data_dir, 42, "photo.jpg")
     check("upload in chat dir", str(path).startswith(str(data_dir / "uploads" / "42")), True)
     check("upload has safe name", path.name.endswith("_photo.jpg"), True)
+    _reset_db(data_dir)
 
 # -- list_sessions --
 print("\n=== list_sessions ===")
@@ -126,7 +122,7 @@ with tempfile.TemporaryDirectory() as tmp:
     data_dir = Path(tmp)
     ensure_data_dirs(data_dir)
 
-    # Empty directory
+    # Empty database
     check("empty sessions", list_sessions(data_dir), [])
 
     # Create two sessions
@@ -157,13 +153,49 @@ with tempfile.TemporaryDirectory() as tmp:
     check("provider field 2", s111["provider"], "claude")
     check("has_pending 2", s111["has_pending"], False)
 
-    # Non-existent data_dir
-    check("missing dir", list_sessions(Path("/tmp/nonexistent-xyz")), [])
+    _reset_db(data_dir)
 
-    # Corrupt file is skipped
-    (data_dir / "sessions" / "bad.json").write_text("{corrupt")
-    result2 = list_sessions(data_dir)
-    check("corrupt skipped", len(result2), 2)
+# -- JSON file migration --
+print("\n=== JSON file migration ===")
+with tempfile.TemporaryDirectory() as tmp:
+    data_dir = Path(tmp)
+    (data_dir / "uploads").mkdir(parents=True)
+    (data_dir / "credentials").mkdir(parents=True)
+
+    # Create legacy JSON session files
+    sessions_dir = data_dir / "sessions"
+    sessions_dir.mkdir()
+    s = default_session("claude", {"session_id": "migrated"}, "on")
+    s["active_skills"] = ["github-integration"]
+    (sessions_dir / "12345.json").write_text(json.dumps(s))
+
+    s2 = default_session("codex", {"thread_id": "t1"}, "off")
+    (sessions_dir / "67890.json").write_text(json.dumps(s2))
+
+    # Also a corrupt file — should be skipped
+    (sessions_dir / "bad.json").write_text("{corrupt")
+
+    # Initialize DB — should migrate JSON files
+    ensure_data_dirs(data_dir)
+
+    check("json dir removed after migration", sessions_dir.exists(), False)
+    check("db file created", (data_dir / "sessions.db").exists(), True)
+
+    # Verify migrated data
+    loaded = load_session(data_dir, 12345, "claude", lambda: {"session_id": "new"}, "on")
+    check("migrated provider_state", loaded["provider_state"]["session_id"], "migrated")
+    check("migrated skills", loaded["active_skills"], ["github-integration"])
+
+    loaded2 = load_session(data_dir, 67890, "codex", lambda: {"thread_id": None}, "off")
+    check("migrated codex state", loaded2["provider_state"]["thread_id"], "t1")
+
+    # Corrupt file was skipped — no session for "bad"
+    check("corrupt skipped", session_exists(data_dir, 0), False)
+
+    result = list_sessions(data_dir)
+    check("migrated session count", len(result), 2)
+
+    _reset_db(data_dir)
 
 # -- Summary --
 print(f"\n{'='*40}")

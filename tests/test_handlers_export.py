@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import app.telegram_handlers as th
-from app.storage import ensure_data_dirs
+from app.storage import _db_connections, ensure_data_dirs
 from app.summarize import save_raw
 from tests.support.assertions import Checks
 from tests.support.handler_support import (
@@ -140,10 +140,23 @@ async def test_export_not_allowed():
 run_test("not allowed", test_export_not_allowed())
 
 
+def _close_all_db_connections():
+    """Close all leaked SQLite connections between tests."""
+    for conn in _db_connections.values():
+        try:
+            conn.close()
+        except Exception:
+            pass
+    _db_connections.clear()
+
+
 # Run all tests
 for name, coro in _tests:
     print(f"\n--- {name} ---")
-    asyncio.get_event_loop().run_until_complete(coro)
+    try:
+        asyncio.get_event_loop().run_until_complete(coro)
+    finally:
+        _close_all_db_connections()
 
 print(f"\n{'='*40}")
 print(f"  {checks.passed} passed, {checks.failed} failed")

@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.providers.base import RunContext, RunResult
-from app.storage import default_session, ensure_data_dirs, save_session
+from app.storage import _db_connections, default_session, ensure_data_dirs, save_session
 from tests.support.assertions import Checks
 from tests.support.handler_support import (
     FakeChat,
@@ -476,7 +476,7 @@ async def test_doctor_stale_session_warnings():
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
-        cfg = make_config(data_dir)
+        cfg = make_config(data_dir, working_dir=Path(tmp))
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
@@ -561,6 +561,16 @@ async def test_doctor_no_stale_warning_for_fresh_sessions():
 
 run_test("/doctor no stale warning for fresh sessions", test_doctor_no_stale_warning_for_fresh_sessions())
 
+def _close_all_db_connections():
+    """Close all leaked SQLite connections between tests."""
+    for conn in _db_connections.values():
+        try:
+            conn.close()
+        except Exception:
+            pass
+    _db_connections.clear()
+
+
 async def _run_all():
     for name, coro in _tests:
         print(f"\n=== {name} ===")
@@ -572,6 +582,8 @@ async def _run_all():
 
             traceback.print_exc()
             checks.failed += 1
+        finally:
+            _close_all_db_connections()
 
 
 async def _main():

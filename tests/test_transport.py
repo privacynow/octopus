@@ -19,6 +19,7 @@ from app.transport import (
     normalize_user,
 )
 from tests.support.assertions import Checks
+from app.storage import _db_connections
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
@@ -652,6 +653,16 @@ run_test("handle_message caption reaches provider", test_handle_message_caption_
 # Runner
 # ---------------------------------------------------------------------------
 
+def _close_all_db_connections():
+    """Close all leaked SQLite connections between tests."""
+    for conn in _db_connections.values():
+        try:
+            conn.close()
+        except Exception:
+            pass
+    _db_connections.clear()
+
+
 if __name__ == "__main__":
     loop = asyncio.new_event_loop()
     failed = 0
@@ -667,6 +678,8 @@ if __name__ == "__main__":
             import traceback
             traceback.print_exc()
             failed += 1
+        finally:
+            _close_all_db_connections()
     loop.close()
 
     failed += checks.failed

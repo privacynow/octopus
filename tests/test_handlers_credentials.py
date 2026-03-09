@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.providers.base import RunResult
 from app.skills import derive_encryption_key, load_user_credentials, save_user_credential
-from app.storage import default_session, ensure_data_dirs, save_session
+from app.storage import _db_connections, default_session, ensure_data_dirs, save_session
 import app.telegram_handlers as _th
 from tests.support.assertions import Checks
 from tests.support.handler_support import (
@@ -1506,6 +1506,16 @@ async def test_bad_validate_spec_no_crash():
 run_test("bad validate spec no crash", test_bad_validate_spec_no_crash())
 
 
+def _close_all_db_connections():
+    """Close all leaked SQLite connections between tests."""
+    for conn in _db_connections.values():
+        try:
+            conn.close()
+        except Exception:
+            pass
+    _db_connections.clear()
+
+
 async def _run_all():
     for name, coro in _tests:
         print(f"\n=== {name} ===")
@@ -1517,6 +1527,8 @@ async def _run_all():
 
             traceback.print_exc()
             checks.failed += 1
+        finally:
+            _close_all_db_connections()
 
 
 async def _main():

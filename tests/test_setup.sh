@@ -213,9 +213,14 @@ output=$(echo -e "$FAKE_TOKEN\nclaude\nclaude-opus-4-6\n@testuser\n\n\ny" | "$PA
 
 check_contains "runs health check" "$output" "health check"
 # Systemd may not be available in test env — script should degrade gracefully.
-# It should either attempt systemd install or show fallback run instructions.
+# Three valid outcomes:
+#   1. No systemd → shows fallback run command
+#   2. Systemd present, health check passes → attempts systemd install
+#   3. Systemd present, health check fails → shows manual launch with run.sh
 if echo "$output" | grep -qF "systemd user services are not available"; then
     check_contains "shows fallback run command" "$output" "run.sh"
+elif echo "$output" | grep -qF "Health check failed"; then
+    check_contains "health failure shows manual launch" "$output" "run.sh"
 else
     check_contains "attempts systemd install" "$output" "systemd"
 fi

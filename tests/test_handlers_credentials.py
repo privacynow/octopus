@@ -1474,6 +1474,38 @@ async def test_clear_credentials_cross_user_rejected():
 run_test("clear_credentials cross-user rejected", test_clear_credentials_cross_user_rejected())
 
 
+async def test_bad_validate_spec_no_crash():
+    from app.skills import SkillRequirement, validate_credential
+
+    req = SkillRequirement(
+        key="API_KEY",
+        prompt="Enter key",
+        help_url=None,
+        validate={
+            "method": "GET",
+            "url": "https://example.com/health",
+            "header": "Authorization: Bearer ${API_KEY}",
+            "expect_status": "twohundred",
+        },
+    )
+    ok, detail = await validate_credential(req, "some-key-value")
+    checks.check("returns not-ok", ok, False)
+    checks.check_in("mentions invalid expect_status", "expect_status", detail.lower())
+
+    req2 = SkillRequirement(
+        key="API_KEY",
+        prompt="Enter key",
+        help_url=None,
+        validate={"method": "GET", "url": "https://example.com/health", "expect_status": None},
+    )
+    ok2, detail2 = await validate_credential(req2, "some-key")
+    checks.check("none expect_status returns not-ok", ok2, False)
+    checks.check_in("mentions invalid", "invalid", detail2.lower())
+
+
+run_test("bad validate spec no crash", test_bad_validate_spec_no_crash())
+
+
 async def _run_all():
     for name, coro in _tests:
         print(f"\n=== {name} ===")

@@ -124,6 +124,20 @@ See `.env.example` for all available options. Key settings:
 
 ```bash
 ./scripts/bootstrap.sh                                    # create venv
-./scripts/test_all.sh                                     # canonical full test suite
+./scripts/test_all.sh                                     # canonical full test suite (1,459 checks)
 ./scripts/doctor.sh <instance>                            # health check
 ```
+
+### Architecture
+
+| Module | Purpose |
+|--------|---------|
+| `app/transport.py` | Inbound normalization — converts Telegram updates into frozen dataclasses before business logic |
+| `app/telegram_handlers.py` | Command/message/callback handlers, approval flow, provider execution |
+| `app/skills.py` | Skill catalog, prompt composition, credential management, three-tier resolution |
+| `app/store.py` | Immutable content-addressed skill store with atomic refs and GC |
+| `app/storage.py` | Per-chat JSON session persistence |
+| `app/providers/` | CLI provider abstraction (Claude, Codex) |
+| `app/formatting.py` | Markdown-to-Telegram HTML conversion and message splitting |
+
+See [docs/PLAN-commercial-polish.md](docs/PLAN-commercial-polish.md) for the roadmap and [docs/STATUS-commercial-polish.md](docs/STATUS-commercial-polish.md) for current progress.

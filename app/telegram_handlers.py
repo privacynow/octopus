@@ -8,7 +8,6 @@ import re
 import time
 import uuid
 from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +31,7 @@ from app.config import BotConfig
 from app.formatting import extract_send_directives, md_to_telegram_html, split_html, trim_text
 from app.providers.base import PendingRequest, Provider, RunContext, PreflightContext, compute_context_hash
 from app.skills import (
-    build_run_context, build_preflight_context, build_provider_config,
+    build_run_context, build_preflight_context,
     get_provider_config_digest, get_skill_digests, load_catalog,
     get_skill_requirements, check_credentials, load_user_credentials,
     save_user_credential, delete_user_credentials, list_user_credential_skills,
@@ -44,7 +43,6 @@ from app.skills import (
     SkillRequirement,
 )
 from app.storage import (
-    build_upload_path,
     chat_upload_dir,
     default_session,
     is_image_path,
@@ -56,6 +54,14 @@ from app.storage import (
 )
 from app.ratelimit import RateLimiter
 from app.summarize import export_chat_history, load_raw, save_raw, summarize
+from app.transport import (
+    InboundAttachment,
+    InboundUser,
+    normalize_callback,
+    normalize_command,
+    normalize_message,
+    normalize_user,
+)
 
 log = logging.getLogger(__name__)
 
@@ -88,12 +94,9 @@ def _approval_mode_source(session: dict[str, Any]) -> str:
 
 # -- Data classes ----------------------------------------------------------
 
-@dataclass
-class Attachment:
-    path: Path
-    original_name: str
-    is_image: bool
-    mime_type: str | None = None
+# Attachment is now InboundAttachment from app.transport.
+# Alias kept for internal signature compatibility.
+Attachment = InboundAttachment
 
 
 # -- TelegramProgress (rate-limited HTML editor) ---------------------------
@@ -124,23 +127,34 @@ class TelegramProgress:
 
 # -- Auth ------------------------------------------------------------------
 
+def _to_inbound_user(user) -> InboundUser | None:
+    """Coerce a raw Telegram user or InboundUser to InboundUser."""
+    if user is None:
+        return None
+    if isinstance(user, InboundUser):
+        return user
+    return normalize_user(user)
+
+
 def is_allowed(user) -> bool:
+    u = _to_inbound_user(user)
+    if u is None:
+        return False
     cfg = _cfg()
     if cfg.allow_open and not cfg.allowed_user_ids and not cfg.allowed_usernames:
         return True
     if not cfg.allowed_user_ids and not cfg.allowed_usernames:
         return False
-    uid = getattr(user, "id", None)
-    uname = (getattr(user, "username", None) or "").lower()
-    return uid in cfg.allowed_user_ids or uname in cfg.allowed_usernames
+    return u.id in cfg.allowed_user_ids or u.username in cfg.allowed_usernames
 
 
 def is_admin(user) -> bool:
     """Check if user is an admin (can install/uninstall/update store skills)."""
+    u = _to_inbound_user(user)
+    if u is None:
+        return False
     cfg = _cfg()
-    uid = getattr(user, "id", None)
-    uname = (getattr(user, "username", None) or "").lower()
-    return uid in cfg.admin_user_ids or uname in cfg.admin_usernames
+    return u.id in cfg.admin_user_ids or u.username in cfg.admin_usernames
 
 
 def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
@@ -184,7 +198,7 @@ def _allowed_roots(chat_id: int) -> list[Path]:
     return [r.resolve() for r in roots]
 
 
-def build_user_prompt(text: str, attachments: list[Attachment]) -> tuple[str, list[str]]:
+def build_user_prompt(text: str, attachments: list[InboundAttachment]) -> tuple[str, list[str]]:
     prompt = text.strip() or "Inspect the attached files or images and help with them."
     image_paths: list[str] = []
     if attachments:
@@ -197,33 +211,6 @@ def build_user_prompt(text: str, attachments: list[Attachment]) -> tuple[str, li
         prompt = f"{prompt}\n\nAttached local files:\n" + "\n".join(lines)
     return prompt, image_paths
 
-
-async def download_attachments(chat_id: int, update: Update) -> list[Attachment]:
-    cfg = _cfg()
-    message = update.effective_message
-    attachments: list[Attachment] = []
-
-    if message.photo:
-        photo = message.photo[-1]
-        path = build_upload_path(cfg.data_dir, chat_id, "photo.jpg")
-        tf = await photo.get_file()
-        await tf.download_to_drive(custom_path=str(path))
-        attachments.append(
-            Attachment(path=path, original_name="photo.jpg", is_image=True, mime_type="image/jpeg")
-        )
-
-    if message.document:
-        doc = message.document
-        name = doc.file_name or "document"
-        path = build_upload_path(cfg.data_dir, chat_id, name)
-        tf = await doc.get_file()
-        await tf.download_to_drive(custom_path=str(path))
-        is_img = (doc.mime_type or "").startswith("image/") or is_image_path(path)
-        attachments.append(
-            Attachment(path=path, original_name=name, is_image=is_img, mime_type=doc.mime_type)
-        )
-
-    return attachments
 
 
 async def send_formatted_reply(message, text: str) -> None:
@@ -815,7 +802,8 @@ _HELP_TOPICS = {
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start — always show main help (ignores deep-link payloads)."""
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         await update.effective_message.reply_text("Not authorized.")
         return
     cfg = _cfg()
@@ -825,11 +813,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help [topic] — main help or topic-specific detail."""
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         await update.effective_message.reply_text("Not authorized.")
         return
     cfg = _cfg()
-    args = context.args or []
+    args = event.args
 
     if args:
         topic = args[0].lower()
@@ -847,15 +836,16 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
-    chat_id = update.effective_chat.id
+    chat_id = event.chat_id
     cfg = _cfg()
     prov = _prov()
     async with CHAT_LOCKS[chat_id]:
         # Preserve approval_mode only if explicitly set via /approval command
         old_session = _load(chat_id)
-        user_id = update.effective_user.id if update.effective_user else 0
+        user_id = event.user.id
         if _foreign_skill_setup(old_session, user_id):
             await update.effective_message.reply_text(
                 _foreign_setup_message(old_session.get("awaiting_skill_setup", {})),
@@ -876,9 +866,10 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
-    session = _load(update.effective_chat.id)
+    session = _load(event.chat_id)
     cfg = _cfg()
     pstate = session.get("provider_state", {})
 
@@ -911,10 +902,11 @@ async def cmd_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def cmd_approval(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
-    chat_id = update.effective_chat.id
-    arg = (context.args[0].lower() if context.args else "status")
+    chat_id = event.chat_id
+    arg = (event.args[0].lower() if event.args else "status")
     if arg not in {"on", "off", "status"}:
         await update.effective_message.reply_text("Use /approval on, /approval off, or /approval status.")
         return
@@ -936,27 +928,30 @@ async def cmd_approval(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
-    async with CHAT_LOCKS[update.effective_chat.id]:
-        await approve_pending(update.effective_chat.id, update.effective_message)
+    async with CHAT_LOCKS[event.chat_id]:
+        await approve_pending(event.chat_id, update.effective_message)
 
 
 async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
-    async with CHAT_LOCKS[update.effective_chat.id]:
-        await reject_pending(update.effective_chat.id, update.effective_message)
+    async with CHAT_LOCKS[event.chat_id]:
+        await reject_pending(event.chat_id, update.effective_message)
 
 
 async def cmd_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
-    if not context.args:
+    if not event.args:
         await update.effective_message.reply_text("Usage: /send <path>")
         return
-    raw_path = " ".join(context.args)
-    resolved = resolve_allowed_path(raw_path, _allowed_roots(update.effective_chat.id))
+    raw_path = " ".join(event.args)
+    resolved = resolve_allowed_path(raw_path, _allowed_roots(event.chat_id))
     if not resolved:
         await update.effective_message.reply_text("Path is missing or outside allowed roots.")
         return
@@ -964,18 +959,20 @@ async def cmd_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
-    username = update.effective_user.username or "[none]"
+    username = event.user.username or "[none]"
     await update.effective_message.reply_text(
-        f"Your user ID: <code>{update.effective_user.id}</code>\n"
+        f"Your user ID: <code>{event.user.id}</code>\n"
         f"Your username: <code>{html.escape(username)}</code>",
         parse_mode=ParseMode.HTML,
     )
 
 
 async def cmd_doctor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
     from app.config import validate_config
     loop = asyncio.get_running_loop()
@@ -983,8 +980,8 @@ async def cmd_doctor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     # Run blocking health checks in a thread to avoid stalling the event loop
     prov_errors = await loop.run_in_executor(None, _prov().check_health)
     # Validate active skills for this chat
-    session = _load(update.effective_chat.id)
-    user_id = update.effective_user.id if update.effective_user else 0
+    session = _load(event.chat_id)
+    user_id = event.user.id
     skill_errors = validate_active_skills(
         session.get("active_skills", []),
         user_id=user_id,
@@ -1040,9 +1037,10 @@ async def cmd_doctor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
-    chat_id = update.effective_chat.id
+    chat_id = event.chat_id
     cfg = _cfg()
 
     history = export_chat_history(cfg.data_dir, chat_id)
@@ -1077,13 +1075,14 @@ async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
-    if not is_admin(update.effective_user):
+    if not is_admin(event.user):
         await update.effective_message.reply_text("Admin access required.")
         return
 
-    args = context.args or []
+    args = event.args
     sub = args[0].lower() if args else ""
 
     if sub != "sessions":
@@ -1161,10 +1160,11 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
-    chat_id = update.effective_chat.id
-    args = context.args or []
+    chat_id = event.chat_id
+    args = event.args
     catalog = load_catalog()
 
     if not args:
@@ -1192,7 +1192,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         session = _load(chat_id)
         active = set(session.get("active_skills", []))
         # Load user credentials for status annotations
-        req_user_id = update.effective_user.id if update.effective_user else 0
+        req_user_id = event.user.id
         user_creds = load_user_credentials(_cfg().data_dir, req_user_id, _encryption_key())
         lines = ["<b>Available skills:</b>"]
         for name, meta in sorted(catalog.items()):
@@ -1227,7 +1227,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 parse_mode=ParseMode.HTML,
             )
             return
-        user_id = update.effective_user.id if update.effective_user else 0
+        user_id = event.user.id
         async with CHAT_LOCKS[chat_id]:
             session = _load(chat_id)
             active = session.get("active_skills", [])
@@ -1287,7 +1287,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         name = args[1]
         async with CHAT_LOCKS[chat_id]:
             session = _load(chat_id)
-            req_user_id = update.effective_user.id if update.effective_user else 0
+            req_user_id = event.user.id
             had_setup = session.get("awaiting_skill_setup") is not None
             if _foreign_skill_setup(session, req_user_id, skill_name=name):
                 await update.effective_message.reply_text(
@@ -1331,7 +1331,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 parse_mode=ParseMode.HTML,
             )
             return
-        user_id = update.effective_user.id if update.effective_user else 0
+        user_id = event.user.id
         async with CHAT_LOCKS[chat_id]:
             session = _load(chat_id)
             # Don't overwrite another user's in-progress setup
@@ -1354,7 +1354,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if sub == "clear":
         async with CHAT_LOCKS[chat_id]:
             session = _load(chat_id)
-            req_user_id = update.effective_user.id if update.effective_user else 0
+            req_user_id = event.user.id
             if _foreign_skill_setup(session, req_user_id):
                 await update.effective_message.reply_text(
                     _foreign_setup_message(session.get("awaiting_skill_setup", {})),
@@ -1446,7 +1446,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     if sub == "install" and len(args) >= 2:
         from app.store import install as store_install
-        if not is_admin(update.effective_user):
+        if not is_admin(event.user):
             await update.effective_message.reply_text("Only admins can install store skills.")
             return
         name = args[1]
@@ -1456,7 +1456,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     if sub == "uninstall" and len(args) >= 2:
         from app.store import uninstall as store_uninstall
-        if not is_admin(update.effective_user):
+        if not is_admin(event.user):
             await update.effective_message.reply_text("Only admins can uninstall store skills.")
             return
         name = args[1]
@@ -1495,7 +1495,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     if sub == "update" and len(args) >= 2:
         from app.store import update_skill as store_update_skill, update_all as store_update_all
-        if not is_admin(update.effective_user):
+        if not is_admin(event.user):
             await update.effective_message.reply_text("Only admins can update store skills.")
             return
         target = args[1]
@@ -1534,10 +1534,11 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
-    chat_id = update.effective_chat.id
-    user_id = update.effective_user.id if update.effective_user else 0
+    chat_id = event.chat_id
+    user_id = event.user.id
 
     async with CHAT_LOCKS[chat_id]:
         session = _load(chat_id)
@@ -1545,7 +1546,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         # Cancel credential setup — own setup, or admin can cancel foreign setup
         setup = session.get("awaiting_skill_setup")
         if setup:
-            if setup.get("user_id") == user_id or is_admin(update.effective_user):
+            if setup.get("user_id") == user_id or is_admin(event.user):
                 session["awaiting_skill_setup"] = None
                 _save(chat_id, session)
                 await update.effective_message.reply_text("Credential setup cancelled.")
@@ -1568,10 +1569,11 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_clear_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
-    user_id = update.effective_user.id if update.effective_user else 0
-    args = context.args or []
+    user_id = event.user.id
+    args = event.args
     skill_name = args[0] if args else None
 
     cfg = _cfg()
@@ -1649,17 +1651,20 @@ async def _execute_clear_credentials(
 
 
 async def handle_clear_cred_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    event = normalize_callback(update)
+    if event is None:
+        return
     query = update.callback_query
-    if not is_allowed(update.effective_user):
+    if not is_allowed(event.user):
         await query.answer("Not authorized.", show_alert=True)
         return
 
-    chat_id = update.effective_chat.id
-    clicker_id = update.effective_user.id if update.effective_user else 0
+    chat_id = event.chat_id
+    clicker_id = event.user.id
 
     # All callback data encodes the initiating user: clear_cred_<action>:<uid>[:<skill>]
     # Reject if a different user clicks the button.
-    parts = query.data.split(":")
+    parts = event.data.split(":")
     # parts[0] = "clear_cred_cancel" | "clear_cred_confirm" | "clear_cred_confirm_all"
     if len(parts) >= 2:
         try:
@@ -1690,10 +1695,11 @@ async def handle_clear_cred_callback(update: Update, context: ContextTypes.DEFAU
 
 
 async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
-    chat_id = update.effective_chat.id
-    args = context.args or []
+    chat_id = event.chat_id
+    args = event.args
 
     if not args:
         session = _load(chat_id)
@@ -1722,11 +1728,12 @@ async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def cmd_raw(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
-    chat_id = update.effective_chat.id
+    chat_id = event.chat_id
     cfg = _cfg()
-    args = context.args or []
+    args = event.args
 
     n = 1
     if args:
@@ -1745,10 +1752,11 @@ async def cmd_raw(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    event = normalize_command(update, context)
+    if event is None or not is_allowed(event.user):
         return
-    chat_id = update.effective_chat.id
-    args = context.args or []
+    chat_id = event.chat_id
+    args = event.args
 
     if not args:
         # /role — show current role
@@ -1783,11 +1791,11 @@ async def cmd_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_allowed(update.effective_user):
+    user = normalize_user(update.effective_user)
+    if user is None or not is_allowed(user):
         return
 
     # Rate limit check (admins exempt)
-    user = update.effective_user
     if _rate_limiter and _rate_limiter.enabled and not (_cfg().admin_users_explicit and is_admin(user)):
         allowed, retry_after = _rate_limiter.check(user.id)
         if not allowed:
@@ -1795,16 +1803,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"Rate limit reached. Please wait {retry_after} seconds.")
             return
 
-    message = update.effective_message
-    chat_id = update.effective_chat.id
-    attachments = await download_attachments(chat_id, update)
-    text = message.text or message.caption or ""
-    if not text and not attachments:
+    msg = await normalize_message(update, context, _cfg().data_dir)
+    if msg is None:
         return
 
-    prompt, image_paths = build_user_prompt(text, attachments)
+    message = update.effective_message
+    chat_id = msg.chat_id
+    prompt, image_paths = build_user_prompt(msg.text, list(msg.attachments))
 
-    user_id = update.effective_user.id if update.effective_user else 0
+    user_id = user.id
 
     # First-run welcome for plain messages only (commands like /start and /help
     # already provide orientation, so the welcome is only needed when a user
@@ -1887,32 +1894,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
 
         if session.get("approval_mode") == "on":
-            await request_approval(chat_id, prompt, image_paths, attachments, message, request_user_id=user_id)
+            await request_approval(chat_id, prompt, image_paths, list(msg.attachments), message, request_user_id=user_id)
             return
         await execute_request(chat_id, prompt, image_paths, message, request_user_id=user_id)
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    event = normalize_callback(update)
+    if event is None:
+        return
     query = update.callback_query
-    if not is_allowed(update.effective_user):
+    if not is_allowed(event.user):
         await query.answer("Not authorized.", show_alert=True)
         return
 
     await query.answer()
-    chat_id = update.effective_chat.id
+    chat_id = event.chat_id
 
     async with CHAT_LOCKS[chat_id]:
-        if query.data == "approval_approve":
+        if event.data == "approval_approve":
             await query.edit_message_reply_markup(reply_markup=None)
             await approve_pending(chat_id, query.message)
             return
 
-        if query.data == "approval_reject":
+        if event.data == "approval_reject":
             await query.edit_message_reply_markup(reply_markup=None)
             await reject_pending(chat_id, query.message)
             return
 
-        if query.data == "retry_skip":
+        if event.data == "retry_skip":
             session = _load(chat_id)
             session["pending_request"] = None
             _save(chat_id, session)
@@ -1920,7 +1930,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.message.edit_text("Skipped.")
             return
 
-        if query.data == "retry_allow":
+        if event.data == "retry_allow":
             session = _load(chat_id)
             pending = session.get("pending_request")
             if not pending:
@@ -1973,21 +1983,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def handle_skill_add_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    event = normalize_callback(update)
+    if event is None:
+        return
     query = update.callback_query
-    if not is_allowed(update.effective_user):
+    if not is_allowed(event.user):
         await query.answer("Not authorized.", show_alert=True)
         return
 
     await query.answer()
-    chat_id = update.effective_chat.id
+    chat_id = event.chat_id
 
-    if query.data == "skill_add_cancel":
+    if event.data == "skill_add_cancel":
         await query.edit_message_reply_markup(reply_markup=None)
         await query.edit_message_text("Skill activation cancelled.")
         return
 
-    if query.data.startswith("skill_add_confirm:"):
-        name = query.data.split(":", 1)[1]
+    if event.data.startswith("skill_add_confirm:"):
+        name = event.data.split(":", 1)[1]
         async with CHAT_LOCKS[chat_id]:
             session = _load(chat_id)
             active = session.get("active_skills", [])
@@ -2002,24 +2015,27 @@ async def handle_skill_add_callback(update: Update, context: ContextTypes.DEFAUL
 
 
 async def handle_skill_update_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    event = normalize_callback(update)
+    if event is None:
+        return
     query = update.callback_query
-    if not is_allowed(update.effective_user):
+    if not is_allowed(event.user):
         await query.answer("Not authorized.", show_alert=True)
         return
-    if not is_admin(update.effective_user):
+    if not is_admin(event.user):
         await query.answer("Only admins can update skills.", show_alert=True)
         return
 
     await query.answer()
 
-    if query.data == "skill_update_cancel":
+    if event.data == "skill_update_cancel":
         await query.edit_message_reply_markup(reply_markup=None)
         await query.edit_message_text("Update cancelled.")
         return
 
-    if query.data.startswith("skill_update_confirm:"):
+    if event.data.startswith("skill_update_confirm:"):
         from app.store import update_skill as store_update_skill
-        name = query.data.split(":", 1)[1]
+        name = event.data.split(":", 1)[1]
         ok, msg = store_update_skill(name)
         if ok:
             cfg = _cfg()
@@ -2030,7 +2046,7 @@ async def handle_skill_update_callback(update: Update, context: ContextTypes.DEF
         await query.edit_message_text(html.escape(msg), parse_mode=ParseMode.HTML)
         return
 
-    if query.data == "skill_update_all_confirm":
+    if event.data == "skill_update_all_confirm":
         from app.store import update_all as store_update_all
         results = store_update_all()
         if not results:

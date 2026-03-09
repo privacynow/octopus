@@ -119,6 +119,20 @@ errors6 = validate_config(
 )
 check("codex mutual exclusion", any("CODEX_FULL_AUTO" in e for e in errors6), True)
 
+
+# -- BOT_SKILLS validation --
+print("\n=== BOT_SKILLS validation ===")
+
+errors_bad_skill = validate_config(make_config(default_skills=("nonexistent-skill-xyz",), provider_name="claude"))
+check("reports unknown skill", len([e for e in errors_bad_skill if "nonexistent-skill-xyz" in e]) > 0, True)
+
+errors_good_skill = validate_config(make_config(default_skills=("github-integration",), provider_name="claude"))
+check("valid skill no error", len([e for e in errors_good_skill if "BOT_SKILLS" in e and "github-integration" in e]), 0)
+
+errors_no_skills = validate_config(make_config(default_skills=(), provider_name="claude"))
+check("no skills no error", len([e for e in errors_no_skills if "BOT_SKILLS" in e]), 0)
+
+
 # -- Summary --
 print(f"\n{'='*40}")
 print(f"  {checks.passed} passed, {checks.failed} failed")

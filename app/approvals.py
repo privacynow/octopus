@@ -22,23 +22,6 @@ def build_preflight_prompt(user_prompt: str, provider_name: str) -> str:
     )
 
 
-def serialize_pending_request(
-    prompt: str,
-    image_paths: list[str],
-    attachments: list[dict[str, Any]],
-) -> dict[str, Any]:
-    return {
-        "prompt": prompt,
-        "image_paths": image_paths,
-        "attachments": attachments,
-    }
-
-
-def clear_pending_request(session: dict[str, Any]) -> dict[str, Any]:
-    session["pending_request"] = None
-    return session
-
-
 def format_denials_html(denials: list[dict[str, Any]]) -> str:
     lines = []
     for d in denials:

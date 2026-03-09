@@ -28,11 +28,13 @@ from app.providers.base import (
 )
 from app.skills import (
     SkillRequirement,
-    _encrypt, _decrypt, _parse_requires_yaml,
-    build_credential_env, build_preflight_context, build_run_context,
+    _encrypt, _decrypt, _parse_requires_yaml, _skill_dir,
+    build_credential_env, build_preflight_context, build_provider_config,
+    build_run_context,
     build_system_prompt, check_credentials, derive_encryption_key,
-    get_skill_digests, get_skill_instructions, get_skill_requirements,
-    load_catalog, load_user_credentials, save_user_credential,
+    get_provider_config_digest, get_skill_digests, get_skill_instructions,
+    get_skill_requirements,
+    load_catalog, load_provider_yaml, load_user_credentials, save_user_credential,
 )
 from app.storage import default_session, load_session, save_session
 from tests.support.assertions import Checks
@@ -1032,6 +1034,154 @@ check("default is_custom is False", meta_builtin.is_custom, False)
 
 meta_custom = SkillMeta(name="test", display_name="Test", description="desc", is_custom=True)
 check("explicit is_custom is True", meta_custom.is_custom, True)
+
+
+# =====================================================================
+# Rich role prompt shaping
+# =====================================================================
+print("\n=== rich role verbatim ===")
+
+prompt1 = build_system_prompt("senior Python engineer", [])
+check_in("short role wrapped", "You are a senior Python engineer", prompt1)
+
+rich = "You are a senior architect.\nYou specialize in distributed systems."
+prompt2 = build_system_prompt(rich, [])
+check_in("rich role verbatim", "You are a senior architect.", prompt2)
+check_not_in("no double wrap", "You are a You are", prompt2)
+
+prompt3 = build_system_prompt("You are an expert in Kubernetes.", [])
+check_not_in("no double wrap for 'You are'", "You are a You are", prompt3)
+check_in("starts with You are", "You are an expert", prompt3)
+
+prompt4 = build_system_prompt("Act as a security auditor.", [])
+check_not_in("no wrap for 'Act as'", "You are a Act as", prompt4)
+check_in("starts with Act as", "Act as a security auditor", prompt4)
+
+prompt5 = build_system_prompt("you are an expert in kubernetes.", [])
+check_not_in("no double wrap lowercase", "You are a you are", prompt5)
+check_in("lowercase verbatim", "you are an expert in kubernetes", prompt5)
+
+prompt6 = build_system_prompt("you're a helpful coding assistant.", [])
+check_not_in("no wrap for you're", "You are a you're", prompt6)
+check_in("you're verbatim", "you're a helpful coding assistant", prompt6)
+
+
+# =====================================================================
+# Provider-scoped config digest
+# =====================================================================
+print("\n=== provider-scoped digest ===")
+
+digest_claude = get_provider_config_digest(["github-integration"], provider_name="claude")
+digest_codex = get_provider_config_digest(["github-integration"], provider_name="codex")
+digest_all = get_provider_config_digest(["github-integration"])
+
+check("claude != codex digest", digest_claude != digest_codex, True)
+check("unscoped != claude", digest_all != digest_claude, True)
+check("unscoped != codex", digest_all != digest_codex, True)
+
+
+# =====================================================================
+# MCP args YAML parsing
+# =====================================================================
+print("\n=== MCP args is list ===")
+
+raw = load_provider_yaml("github-integration", "claude")
+mcp = raw.get("mcp_servers", {}).get("github", {})
+check("args is a list", isinstance(mcp.get("args"), list), True)
+check("args has 2 elements", len(mcp.get("args", [])), 2)
+check_in("args contains -y", "-y", mcp["args"])
+
+raw2 = load_provider_yaml("linear-integration", "claude")
+mcp2 = raw2.get("mcp_servers", {}).get("linear", {})
+check("linear args is a list", isinstance(mcp2.get("args"), list), True)
+
+
+# =====================================================================
+# Malformed skill resilience
+# =====================================================================
+print("\n=== malformed skill resilience ===")
+
+import app.skills as skills_mod
+
+orig_custom_dir = skills_mod.CUSTOM_DIR
+try:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        custom_dir = Path(tmpdir) / "custom-skills"
+        skills_mod.CUSTOM_DIR = custom_dir
+        malformed_dir = custom_dir / "malformed-test-skill"
+        malformed_dir.mkdir(parents=True, exist_ok=True)
+        (malformed_dir / "skill.md").write_text(
+            "---\nname: malformed-test-skill\ndescription: [invalid yaml\n---\n\nBody text here.\n"
+        )
+
+        catalog = load_catalog()
+        check("load_catalog did not crash", isinstance(catalog, dict), True)
+        check_not_in("malformed skill not in catalog", "malformed-test-skill", catalog)
+        check("_skill_dir returns None for malformed", _skill_dir("malformed-test-skill"), None)
+        check("instructions empty for malformed", get_skill_instructions("malformed-test-skill"), "")
+        check("requirements empty for malformed", get_skill_requirements("malformed-test-skill"), [])
+finally:
+    skills_mod.CUSTOM_DIR = orig_custom_dir
+
+
+# =====================================================================
+# Malformed provider YAML resilience
+# =====================================================================
+print("\n=== malformed provider yaml resilience ===")
+
+orig_custom_dir = skills_mod.CUSTOM_DIR
+try:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        custom_dir = Path(tmpdir) / "custom-skills"
+        skills_mod.CUSTOM_DIR = custom_dir
+        skill_dir = custom_dir / "yaml-test-skill"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "skill.md").write_text(
+            "---\nname: yaml-test-skill\ndisplay_name: YAML Test\ndescription: Test skill\n---\n\nTest.\n"
+        )
+        (skill_dir / "claude.yaml").write_text("mcp_servers:\n  test:\n    command: echo\n    args: [unclosed\n")
+
+        check("malformed yaml returns empty dict", load_provider_yaml("yaml-test-skill", "claude"), {})
+        check("build_provider_config returns dict", isinstance(build_provider_config("claude", ["yaml-test-skill"], {}), dict), True)
+finally:
+    skills_mod.CUSTOM_DIR = orig_custom_dir
+
+
+# =====================================================================
+# Malformed requires.yaml resilience
+# =====================================================================
+print("\n=== malformed requires.yaml resilience ===")
+
+check("malformed requires.yaml returns empty", _parse_requires_yaml("credentials:\n  - key: [unclosed\n"), [])
+check("non-dict requires.yaml returns empty", _parse_requires_yaml("just_a_string"), [])
+check("empty requires.yaml returns empty", _parse_requires_yaml(""), [])
+
+
+# =====================================================================
+# Catalog uses directory name, not frontmatter name
+# =====================================================================
+print("\n=== catalog uses directory name ===")
+
+orig_custom_dir = skills_mod.CUSTOM_DIR
+try:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        custom_dir = Path(tmpdir) / "custom-skills"
+        skills_mod.CUSTOM_DIR = custom_dir
+        skill_dir = custom_dir / "my-actual-dir"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "skill.md").write_text(
+            "---\nname: fancy-meta-name\ndisplay_name: Fancy Skill\ndescription: A test skill\n---\n\nDo fancy things.\n"
+        )
+
+        catalog = load_catalog()
+        check_in("dir name in catalog", "my-actual-dir", catalog)
+        check_not_in("frontmatter name NOT in catalog", "fancy-meta-name", catalog)
+        check("_skill_dir finds dir name", _skill_dir("my-actual-dir") is not None, True)
+        check("_skill_dir misses frontmatter name", _skill_dir("fancy-meta-name"), None)
+        check_in("instructions loaded", "fancy things", get_skill_instructions("my-actual-dir"))
+        check("no instructions by frontmatter name", get_skill_instructions("fancy-meta-name"), "")
+finally:
+    skills_mod.CUSTOM_DIR = orig_custom_dir
 
 
 # -- Summary --

@@ -1,13 +1,11 @@
-"""Tests for approvals.py — preflight prompt, pending request, denials."""
+"""Tests for approvals.py — preflight prompt and denial formatting."""
 
 import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 
 from app.approvals import (
     build_preflight_prompt,
-    clear_pending_request,
     format_denials_html,
-    serialize_pending_request,
 )
 from tests.support.assertions import Checks
 
@@ -25,20 +23,6 @@ check_contains("has provider name", prompt, "claude")
 
 prompt2 = build_preflight_prompt("hello", "codex")
 check_contains("codex provider", prompt2, "codex")
-
-# -- serialize_pending_request --
-print("\n=== serialize_pending_request ===")
-pending = serialize_pending_request("do thing", ["/tmp/img.png"], [{"path": "/tmp/img.png", "is_image": True}])
-check("prompt", pending["prompt"], "do thing")
-check("image_paths", pending["image_paths"], ["/tmp/img.png"])
-check("attachments", len(pending["attachments"]), 1)
-
-# -- clear_pending_request --
-print("\n=== clear_pending_request ===")
-session = {"pending_request": {"prompt": "x"}, "other": "data"}
-cleared = clear_pending_request(session)
-check("cleared", cleared["pending_request"], None)
-check("other preserved", cleared["other"], "data")
 
 # -- format_denials_html --
 print("\n=== format_denials_html ===")

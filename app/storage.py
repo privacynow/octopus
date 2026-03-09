@@ -157,27 +157,3 @@ def list_sessions(data_dir: Path) -> list[dict[str, Any]]:
     return results
 
 
-def sweep_skill_from_sessions(data_dir: Path, skill_name: str) -> int:
-    """Remove a skill from active_skills in all session files.
-
-    Returns the number of sessions modified.
-    """
-    sessions_dir = data_dir / "sessions"
-    if not sessions_dir.is_dir():
-        return 0
-    modified = 0
-    for session_path in sessions_dir.glob("*.json"):
-        try:
-            session = json.loads(session_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            continue
-        active = session.get("active_skills", [])
-        if skill_name in active:
-            active.remove(skill_name)
-            session["active_skills"] = active
-            session["updated_at"] = datetime.now(timezone.utc).isoformat()
-            tmp = session_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(session, indent=2, sort_keys=True))
-            tmp.rename(session_path)
-            modified += 1
-    return modified

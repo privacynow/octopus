@@ -1,8 +1,8 @@
 # Commercial Polish Plan
 
 Phased plan to bring telegram-agent-bot to commercial readiness. Focuses on
-user-facing usability, safety, and polish — not new provider integrations or
-infrastructure changes.
+user-facing usability, safety, and the supporting runtime architecture needed
+to make the product durable as the surface grows.
 
 Ordering principle: activation before abuse control. Fix the flows that make
 users leave before guarding against the traffic you don't yet have.
@@ -20,7 +20,9 @@ and design notes remain below.
 | Phase 2 | Done | All three items shipped: table rendering, HTML fallback, and mobile summarization with `/raw` + `/compact`. |
 | Phase 3 | Done | Rate limiting, admin safety posture, proactive prompt size warnings, runtime health checks all shipped. |
 | Phase 4 | Done | All items shipped. 4.1 managed immutable store with content-addressed objects, atomic refs, cross-instance locking, GC, session self-healing, three-tier resolution, and 7 bugs found and fixed during review. 4.2-4.5 shipped earlier. |
-| Phase 5 | Not started | Execution order: 5.2 (webhook) first, then 5.1 (registry). Registry builds on the 4.1 store foundation. |
+| Phase 5 | In progress | Transport/webhook foundation. 5.1 transport normalization done. 5.2 single-process webhook mode next. |
+| Phase 6 | Not started | Session and execution-context work: SQLite sessions, per-chat projects, then file policy. |
+| Phase 7 | Not started | Ecosystem work. 7.1 registry lands after phases 5 and 6. |
 
 ### Phase 1 Status
 
@@ -67,8 +69,22 @@ and design notes remain below.
 
 | Item | Status | Notes |
 |---|---|---|
-| 5.1 Third-party skill registry | Not started | Deferred until after 5.2. Will use the managed immutable store foundation from 4.1. |
-| 5.2 Webhook mode | Not started | Next execution item. |
+| 5.1 Thin inbound transport normalization | Done | `app/transport.py` with frozen inbound dataclasses. All handlers normalized. |
+| 5.2 Webhook mode | Not started | Lands after 5.1 and remains explicitly single-process in the first cut. |
+
+### Phase 6 Status
+
+| Item | Status | Notes |
+|---|---|---|
+| 6.1 SQLite session backend | Not started | Replaces per-chat JSON session blobs; schema includes future `project_id` and `file_policy` fields from day one. |
+| 6.2 Per-chat project model | Not started | Named chat bindings on top of the current working-dir model. |
+| 6.3 File policy | Not started | `inspect|edit` threaded through session/project/provider context. |
+
+### Phase 7 Status
+
+| Item | Status | Notes |
+|---|---|---|
+| 7.1 Third-party skill registry | Not started | Lands after phases 5 and 6 on top of the 4.1 store foundation. |
 
 ---
 
@@ -76,11 +92,20 @@ and design notes remain below.
 
 Execution from the current state:
 
-1. **5.2** — add webhook mode on top of the current bot runtime
-2. **5.1** — add the third-party registry using the 4.1 store architecture
+1. ~~**5.1** — add thin inbound transport normalization~~ Done.
+2. **5.2** — add webhook mode on top of the normalized inbound path
+3. **6.1** — move chat sessions from JSON blobs to SQLite
+4. **6.2** — add optional per-chat project bindings
+5. **6.3** — add file policy (`inspect|edit`)
+6. **7.1** — add the third-party registry using the 4.1 store architecture
 
-`4.1` is complete. `5.2` is operationally independent and can ship quickly.
-`5.1` is last so it lands on the final store model.
+`5.1` is complete. `5.2` is next — polling and webhook modes will feed the same
+normalized inbound shape. `6.1` carries the future session schema from day one
+so projects and file policy do not require an immediate second migration.
+
+Important assumption: the first webhook cut is **single-process**. The current
+bot still uses in-memory per-chat locks, so multi-worker webhook deployment is
+out of scope until after the session/persistence work in Phase 6.
 
 The deferred item `3.2` (usage tracking / billing hooks) remains intentionally out of sequence and is not part of the next execution block.
 
@@ -784,9 +809,201 @@ support.
 
 ---
 
-## Phase 5 — Ecosystem & Extensibility
+## Phase 5 — Transport & Webhook Foundation
 
-### 5.1 Third-party skill registry
+### 5.1 Thin inbound transport normalization
+
+**Problem**: The current handler chain consumes raw `python-telegram-bot`
+objects directly. That works for polling, but it makes the transport boundary
+opaque and turns webhook mode into a larger refactor than necessary.
+
+**Scope**:
+- Introduce a small internal inbound-event shape for:
+  - plain messages
+  - attachments
+  - callback payloads
+  - effective chat/user/message identity
+- Polling and webhook entrypoints both normalize into this same shape before
+  handing off to business logic.
+- Keep this intentionally thin:
+  - no outbound abstraction yet
+  - no attempt to rewrite all handlers around a generic transport interface
+  - no multi-bot concepts
+- The goal is a cleaner inbound seam, not a total handler rewrite.
+
+**Files**:
+- `app/telegram_handlers.py` — normalization helpers and handler entrypoint
+  refactor
+- `app/main.py` or a new small transport module — shared ingress for polling
+  and webhook modes
+
+**Tests**:
+- Unit tests for message normalization
+- Unit tests for callback normalization
+- Regression test proving polling and webhook paths feed the same normalized
+  payload into the business-logic layer
+
+---
+
+### 5.2 Webhook mode
+
+**Problem**: The bot uses long-polling, which works but adds latency and
+requires a persistent connection. For production deployments behind a reverse
+proxy, webhook mode is more efficient and operationally cleaner.
+
+**Scope**:
+- New config: `BOT_MODE=poll|webhook`, `BOT_WEBHOOK_URL=`,
+  `BOT_WEBHOOK_PORT=`.
+- When `webhook`, start an aiohttp server and register the webhook URL with
+  Telegram.
+- Health endpoint at `/health` for load balancer checks.
+- Webhook and polling must feed the same normalized inbound path from `5.1`.
+- First webhook cut is explicitly **single-process**.
+  - Current in-memory per-chat locks remain the concurrency guard.
+  - Multi-worker webhook deployment is deferred until after Phase 6 session
+    work.
+- Graceful fallback: if webhook registration fails, fall back to polling with a
+  warning.
+
+**Files**:
+- `app/main.py` (mode selection)
+- new `app/webhook.py`
+- `app/config.py` (new config keys)
+
+**Tests**:
+- Webhook registration test with mock Telegram API
+- Health endpoint test
+- Regression test that webhook and polling paths hit the same inbound
+  normalization logic
+
+---
+
+## Phase 6 — Session & Execution Context
+
+### 6.1 SQLite session backend
+
+**Problem**: Per-chat JSON session blobs are simple, but they make
+cross-session queries and runtime scans expensive and increasingly awkward as
+the product surface grows (`/admin sessions`, `/doctor`, cross-chat prompt-size
+checks, future webhook/runtime views).
+
+**Scope**:
+- Replace per-chat JSON session blobs with a SQLite-backed session store while
+  keeping uploads, credentials, raw history, and the immutable skill store on
+  the filesystem.
+- Preserve the current storage API shape where practical:
+  - `load_session`
+  - `save_session`
+  - `list_sessions`
+- Design the schema for the near-term target model from day one. Include:
+  - `chat_id`
+  - provider/session state
+  - approval mode fields
+  - role
+  - active skills
+  - pending request / setup state
+  - `project_id` (nullable or defaulted initially)
+  - `file_policy` (nullable or defaulted initially)
+- Add indexes needed for:
+  - `/admin sessions`
+  - stale-session scans
+  - future project-bound session queries
+- Do not try to move every file-backed subsystem into SQLite in this phase.
+
+**Files**:
+- `app/storage.py` or split storage modules
+- `app/main.py` (startup initialization / migration hook)
+- any admin/runtime call sites that currently walk session files directly
+
+**Tests**:
+- CRUD parity tests against the current session API
+- one-time JSON-to-SQLite migration test
+- list/query tests for admin and stale-session surfaces
+- concurrency/regression tests around per-chat updates
+
+---
+
+### 6.2 Per-chat project model
+
+**Problem**: The bot currently exposes one instance-level `BOT_WORKING_DIR`
+plus `BOT_EXTRA_DIRS`. That is simple, but it forces one bot instance to have
+one filesystem context. A single bot cannot cleanly serve multiple repos or
+working areas without extra instances or config edits.
+
+**Scope**:
+- Introduce optional named projects on top of the current model.
+- If no project config is defined, preserve today’s behavior via an implicit
+  default project derived from `BOT_WORKING_DIR` and `BOT_EXTRA_DIRS`.
+- Add per-chat project binding:
+  - `/project` — show current project
+  - `/project list` — list available projects
+  - `/project use <name>` — bind this chat to a named project
+- Project definition includes:
+  - project id
+  - root dir
+  - readable dirs / allowed dirs
+  - default file policy (used by 6.3)
+- Switching projects must clear or invalidate provider session state and any
+  stale pending approvals.
+- `/session`, `/export`, and approval UX should surface the active project
+  explicitly.
+- Context hash must include the bound project’s filesystem view.
+
+**Files**:
+- `app/config.py` — project config loading/validation
+- `app/storage.py` — persist chat→project binding
+- `app/telegram_handlers.py` — `/project` commands, session reset on switch
+- provider/context builders — use project dirs instead of only instance-level
+  working dir
+
+**Tests**:
+- project config validation
+- `/project list` and `/project use`
+- provider-session invalidation on project switch
+- approval invalidation on project switch
+- `/session` and `/export` show current project
+
+---
+
+### 6.3 File policy
+
+**Problem**: Approval mode answers "show a plan first?" but it does not answer
+"may this session modify files?" The bot needs an explicit inspect-vs-edit
+concept for safer review flows and clearer user expectations.
+
+**Scope**:
+- Add `file_policy = inspect|edit`.
+- Persist file policy in session state.
+- Default file policy can come from the bound project, with room for later
+  per-chat override if needed.
+- Surface the active policy in:
+  - `/session`
+  - approval UI / execution summaries where relevant
+- Provider integration:
+  - Codex should use actual read-only / write-capable execution flags where
+    available.
+  - Claude should use best-effort prompt/context restrictions and explicit UI
+    messaging where hard enforcement is not possible.
+- Context hash must include file policy so stale approvals and Codex thread
+  reuse remain correct.
+
+**Files**:
+- `app/config.py` — default policy config if needed
+- `app/storage.py` — persist `file_policy`
+- `app/telegram_handlers.py` — show policy in `/session` and related surfaces
+- provider/context builders — thread policy into execution context
+
+**Tests**:
+- session persistence for `inspect|edit`
+- Codex command construction in both modes
+- context-hash invalidation when file policy changes
+- `/session` output coverage
+
+---
+
+## Phase 7 — Ecosystem & Extensibility
+
+### 7.1 Third-party skill registry
 
 **Decision**: Registry work builds directly on the 4.1 managed immutable store.
 Do not add remote installs to the legacy mutable store model.
@@ -827,40 +1044,25 @@ provenance and trust verification.
 
 ---
 
-### 5.2 Webhook mode
-
-**Problem**: The bot uses long-polling, which works but adds latency and
-requires a persistent connection. For production deployments behind a reverse
-proxy, webhook mode is more efficient and reliable.
-
-**Scope**:
-- New config: `BOT_MODE=poll|webhook`, `BOT_WEBHOOK_URL=`,
-  `BOT_WEBHOOK_PORT=`.
-- When `webhook`, start an aiohttp server and register the webhook URL with
-  Telegram.
-- Health endpoint at `/health` for load balancer checks.
-- Graceful fallback: if webhook registration fails, fall back to polling with a
-  warning.
-
-**Files**: `app/main.py` (mode selection), new `app/webhook.py`,
-`app/config.py` (new config keys).
-
-**Tests**: Webhook registration test with mock Telegram API. Health endpoint
-test.
-
----
-
 ## Implementation Notes
 
 - Ordering principle: activation before abuse control. Phase 1 fixes the flows
   that make users leave. Phase 2 makes output readable on the primary device.
   Phase 3 adds guardrails as the user base grows. Phase 4 hardens operations.
-  Phase 5 builds the ecosystem.
-- Execution sequence from the current state is: `4.1` managed store
-  foundation, then `5.2` webhook mode, then `5.1` registry.
+  Phases 5-7 add the transport, session, and ecosystem work needed for the
+  next product step-up.
+- Execution sequence from the current state is: `5.2` single-process webhook
+  mode (`5.1` done), `6.1` SQLite sessions, `6.2` per-chat projects, `6.3`
+  file policy, then `7.1` registry.
 - `4.1` is intentionally broader than "repairable ops" because the registry
   should land on the final storage/provenance architecture, not on a temporary
   mutable-store patch.
+- `6.1` is not a narrow backend swap. The SQLite schema should carry
+  near-term fields like `project_id` and `file_policy` from day one so that
+  phases 6.2 and 6.3 do not force an immediate second migration.
+- `5.2` is explicitly single-process in the first cut because the current
+  per-chat lock model is in-memory. Multi-worker webhook deployment is out of
+  scope until after the Phase 6 session work lands.
 - `4.1` does not introduce `fork` / `unfork`; same-name custom shadowing is
   the intentional low-complexity override model.
 - Every feature gets a regression test before merge.

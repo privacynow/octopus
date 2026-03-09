@@ -1,6 +1,6 @@
 # Commercial Polish — Implementation Status
 
-Current as of 2026-03-09. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
+Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
 ---
 
@@ -12,7 +12,9 @@ Current as of 2026-03-09. Tracks progress against [PLAN-commercial-polish.md](PL
 | Phase 2 | Output quality | Done |
 | Phase 3 | Trust & cost control | Done |
 | Phase 4 | Operational hardening | Done |
-| Phase 5 | Ecosystem & extensibility | Not started (5.2 next) |
+| Phase 5 | Transport & webhook foundation | In progress (5.1 done, 5.2 next) |
+| Phase 6 | Session & execution context | Not started |
+| Phase 7 | Ecosystem & extensibility | Not started |
 
 ---
 
@@ -20,31 +22,32 @@ Current as of 2026-03-09. Tracks progress against [PLAN-commercial-polish.md](PL
 
 Canonical full-suite runner: `./scripts/test_all.sh`
 
-Current suite: 1,372 passing checks across 21 entrypoints.
+Current suite: 1,459 passing checks across 22 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
-| `test_approvals.py` | 11 | Preflight prompt building, denial formatting. |
+| `test_approvals.py` | 6 | Preflight prompt building, denial formatting. |
 | `test_claude_provider.py` | 16 | Claude CLI command construction, API ping health check. |
 | `test_codex_provider.py` | 55 | Codex CLI command construction, thread invalidation, progress parsing, health check with real flags. |
-| `test_config.py` | 16 | Config loading, validation, `.env` parsing, rate limit and admin config. |
+| `test_config.py` | 19 | Config loading, validation, `.env` parsing, rate limit and admin config, BOT_SKILLS validation. |
 | `test_formatting.py` | 297 | Markdown-to-Telegram HTML conversion, balanced HTML splitting, table rendering, directive extraction. |
-| `test_handlers.py` | 92 | Core handler integration: happy-path routing, role/session behavior, `/doctor` warnings (admin fallback, stale sessions, prompt size), `/help`, `/start`. |
+| `test_handlers.py` | 51 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings (admin fallback, stale sessions, prompt size). |
 | `test_handlers_admin.py` | 12 | `/admin sessions` summary and detail views, access gating, stale skill filtering. |
 | `test_handlers_approval.py` | 53 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL. |
 | `test_handlers_codex.py` | 33 | Codex-specific handler behavior: thread invalidation, boot ID, retry semantics, script staging. |
-| `test_handlers_credentials.py` | 167 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection, and clear-credentials confirmation ownership. |
+| `test_handlers_credentials.py` | 171 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection, clear-credentials confirmation ownership, malformed validate spec resilience. |
 | `test_handlers_export.py` | 14 | `/export` command: no history, document generation, access gating. |
 | `test_handlers_output.py` | 20 | Output presentation: `/compact`, `/raw`, table rendering, summarization flows. |
 | `test_handlers_ratelimit.py` | 11 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
 | `test_handlers_store.py` | 21 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle. |
 | `test_high_risk.py` | 78 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
 | `test_ratelimit.py` | 21 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
-| `test_skills.py` | 201 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing. |
-| `test_storage.py` | 41 | Session CRUD, upload paths, directory creation, session sweep, `list_sessions()`. |
+| `test_skills.py` | 235 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
+| `test_storage.py` | 41 | Session CRUD, upload paths, directory creation, path resolution, `list_sessions()`. |
 | `test_store.py` | 123 | Store module: discovery, search, content hashing, install/uninstall via refs and objects, ref round-trip, update detection, custom override detection, diff, GC, startup recovery, schema guard, pinned refs. |
 | `test_store_e2e.py` | 57 | End-to-end user flows through handlers: install→add→message→prompt, update propagation, uninstall pruning, /skills info across all tiers, three-tier resolution, custom override shadowing, /admin sessions stale filtering, provider compatibility output, source label edge cases, normalization persistence, --doctor schema check. |
 | `test_summarize.py` | 33 | Ring buffer (full prompt, kind field, rotation at 50), export formatting, summarization. |
+| `test_transport.py` | 57 | Inbound transport normalization: user/command/callback/message normalization, frozen dataclasses (tuples not lists), bot-mention stripping, None-user safety for all handler types, behavioral integration (empty-content skip, caption-to-provider), handler integration proving normalized types flow through. |
 | `test_setup.sh` | 34/35 | Installer/setup wizard flows, provider-pruned config generation. (1 systemd test skipped in CI.) |
 
 ---
@@ -138,14 +141,68 @@ Current suite: 1,372 passing checks across 21 entrypoints.
 
 ---
 
+## Phase 5 — Transport & Webhook Foundation
+
+### What shipped
+
+**5.1 Thin inbound transport normalization** (`app/transport.py`, `app/telegram_handlers.py`)
+- New `app/transport.py` module with frozen inbound event dataclasses: `InboundUser`, `InboundMessage`, `InboundCommand`, `InboundCallback`, `InboundAttachment`.
+- Normalization functions: `normalize_user()`, `normalize_message()`, `normalize_command()`, `normalize_callback()`.
+- All command handlers, the message handler, and all callback handlers now normalize inbound data before processing.
+- `is_allowed()` and `is_admin()` accept both raw Telegram user objects and `InboundUser` via `_to_inbound_user()` coercion.
+- Attachment download logic moved to `transport.download_attachments()`.
+- The old `Attachment` dataclass is replaced by `InboundAttachment` (aliased for internal compatibility).
+- All 1,372 existing tests pass without modification, proving the normalization is transparent.
+- 57 tests in `test_transport.py` covering: user/command/callback/message normalization, frozen dataclasses (tuples not lists), bot-mention stripping, None-user safety for all handler types, behavioral integration (empty-content skip, caption-to-provider), handler integration proving `InboundUser` flows through `is_allowed`.
+- `handle_message` calls `normalize_message()` directly for text/attachment/empty-content extraction — single inbound seam, no duplicated logic.
+- 3 bugs found and fixed during review:
+  - Updates with no `effective_user` crashed normalization instead of returning cleanly
+  - `handle_message` bypassed `normalize_message()`, duplicating text/attachment extraction (fixed: now calls normalize_message directly)
+  - `InboundCommand.args` and `InboundMessage.attachments` used mutable lists despite frozen dataclass claim
+- Post-review cleanup: removed dead code (`serialize_pending_request`, `clear_pending_request`, `sweep_skill_from_sessions`), removed unused imports, moved 9 misplaced tests from catch-all `test_handlers.py` to proper specialized suites, fixed test runner bug in `test_transport.py` that masked exceptions.
+
+| Item | Status | Notes |
+|------|--------|-------|
+| 5.1 Thin inbound transport normalization | Done | All handlers normalized. New `app/transport.py` module. |
+| 5.2 Webhook mode | Not started | Lands on top of the 5.1 normalized inbound path. First cut remains explicitly single-process. |
+
+---
+
+## Phase 6 — Session & Execution Context
+
+| Item | Status | Notes |
+|------|--------|-------|
+| 6.1 SQLite session backend | Not started | Replaces per-chat JSON session blobs. Target schema will carry `project_id` and `file_policy` from day one. |
+| 6.2 Per-chat project model | Not started | Optional named project bindings layered on top of the current working-dir model. |
+| 6.3 File policy | Not started | `inspect|edit` persisted in session/project/provider context. |
+
+---
+
+## Phase 7 — Ecosystem & Extensibility
+
+| Item | Status | Notes |
+|------|--------|-------|
+| 7.1 Third-party skill registry | Not started | Lands after phases 5 and 6 on top of the 4.1 managed store foundation. |
+
+---
+
 ## Planned Next Sequence
 
 Execution from the current state is:
 
-1. **5.2** — add webhook mode
-2. **5.1** — add the third-party registry on top of the 4.1 store model
+1. ~~**5.1** — add thin inbound transport normalization~~ Done.
+2. **5.2** — add webhook mode on top of the normalized inbound path
+3. **6.1** — move chat sessions from JSON blobs to SQLite
+4. **6.2** — add optional per-chat project bindings
+5. **6.3** — add file policy (`inspect|edit`)
+6. **7.1** — add the third-party registry on top of the 4.1 store model
 
-`5.2` is operationally independent of the store and can ship quickly. `5.1` is intentionally last so it lands on the final store model.
+`5.1` is complete. Polling and webhook modes will feed the same normalized
+inbound shape. `5.2` is next.
+
+Important assumption: the first webhook cut is **single-process**. The current
+per-chat locking is in-memory, so multi-worker webhook deployment remains out
+of scope until after the Phase 6 session work lands.
 
 The deferred item `3.2` (usage tracking / billing hooks) remains intentionally out of sequence.
 
@@ -162,6 +219,9 @@ The deferred item `3.2` (usage tracking / billing hooks) remains intentionally o
 | `--doctor` didn't check managed store schema | Low-medium | `run_doctor()` only ran config + provider health | Added `ensure_managed_dirs()` + `check_schema()` to doctor path |
 | Rate limiter ineffective for implicit admins | High | Admin fallback made all users admin-exempt from rate limiting | Added `admin_users_explicit` flag; rate limiter only exempts when explicitly configured |
 | Codex health check fails in valid environments | Medium | Ping command didn't use real execution flags | Mirror `--sandbox`, `--skip-git-repo-check`, `--model`, `--profile`, `-C working_dir` |
+| Normalization crashes on updates with no `effective_user` | Medium | `normalize_user()` dereferences `tg_user.id` unconditionally; handlers normalize before auth | `normalize_user` returns None for None input; all handlers guard `event is None` before accessing fields |
+| `handle_message` bypasses shared normalization path | Low-medium | Handler manually extracted text/attachments instead of calling `normalize_message()` | `handle_message` now calls `normalize_message()` directly; `_download_attachments` wrapper removed; behavioral tests verify empty-content and caption paths |
+| `InboundCommand.args` and `InboundMessage.attachments` were mutable lists | Low | `field(default_factory=list)` on frozen dataclass allows content mutation | Changed to `tuple` fields; tests verify `append()` raises `AttributeError` |
 | `/doctor` stale scan counts fresh sessions | Medium | No age threshold — any pending request was flagged | Added `_STALE_PENDING_SECONDS = 3600`, `_STALE_SETUP_SECONDS = 600` |
 | `/doctor` false positive for explicit admin with equal user sets | Low | Warning triggered when admin set == allowed set regardless of explicit config | Check `admin_users_explicit` flag, not set equality |
 
@@ -172,5 +232,8 @@ The deferred item `3.2` (usage tracking / billing hooks) remains intentionally o
 | Item | Status | Notes |
 |------|--------|-------|
 | 3.2 Usage tracking & quotas | Deferred | Needs token-cost mapping, billing integration |
-| 5.2 Webhook mode | Not started | Next execution item. `BOT_MODE=poll\|webhook`, webhook server, `/health` endpoint |
-| 5.1 Third-party skill registry | Not started | Planned after 5.2. Uses the managed store foundation from 4.1 |
+| 5.2 Webhook mode | Not started | Next execution item. `BOT_MODE=poll\|webhook`, webhook server, `/health` endpoint, single-process only in first cut. |
+| 6.1 SQLite session backend | Not started | Replaces per-chat JSON session files while leaving uploads/credentials/raw/store on disk. |
+| 6.2 Per-chat project model | Not started | Named project bindings per chat, with provider/pending invalidation on switch. |
+| 6.3 File policy | Not started | `inspect|edit` surfaced in session/provider context. |
+| 7.1 Third-party skill registry | Not started | Planned after phases 5 and 6. Uses the managed store foundation from 4.1 |

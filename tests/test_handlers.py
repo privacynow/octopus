@@ -1,4 +1,4 @@
-"""Core handler integration tests that don't belong to approval/output/store/credential suites."""
+"""Core handler integration tests: happy-path routing, session lifecycle, /help, /start, /doctor."""
 
 import asyncio
 import sys
@@ -8,7 +8,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.providers.base import RunContext, RunResult
-from app.skills import get_provider_config_digest
 from app.storage import default_session, ensure_data_dirs, save_session
 from tests.support.assertions import Checks
 from tests.support.handler_support import (
@@ -157,149 +156,6 @@ async def test_provider_error_returncode():
 run_test("provider error returncode", test_provider_error_returncode())
 
 
-async def test_rich_role_verbatim():
-    from app.skills import build_system_prompt
-
-    prompt1 = build_system_prompt("senior Python engineer", [])
-    checks.check_in("short role wrapped", "You are a senior Python engineer", prompt1)
-
-    rich = "You are a senior architect.\nYou specialize in distributed systems."
-    prompt2 = build_system_prompt(rich, [])
-    checks.check_in("rich role verbatim", "You are a senior architect.", prompt2)
-    checks.check_not_in("no double wrap", "You are a You are", prompt2)
-
-    prompt3 = build_system_prompt("You are an expert in Kubernetes.", [])
-    checks.check_not_in("no double wrap for 'You are'", "You are a You are", prompt3)
-    checks.check_in("starts with You are", "You are an expert", prompt3)
-
-    prompt4 = build_system_prompt("Act as a security auditor.", [])
-    checks.check_not_in("no wrap for 'Act as'", "You are a Act as", prompt4)
-    checks.check_in("starts with Act as", "Act as a security auditor", prompt4)
-
-    prompt5 = build_system_prompt("you are an expert in kubernetes.", [])
-    checks.check_not_in("no double wrap lowercase", "You are a you are", prompt5)
-    checks.check_in("lowercase verbatim", "you are an expert in kubernetes", prompt5)
-
-    prompt6 = build_system_prompt("you're a helpful coding assistant.", [])
-    checks.check_not_in("no wrap for you're", "You are a you're", prompt6)
-    checks.check_in("you're verbatim", "you're a helpful coding assistant", prompt6)
-
-
-run_test("rich role verbatim", test_rich_role_verbatim())
-
-
-async def test_provider_scoped_digest():
-    digest_claude = get_provider_config_digest(["github-integration"], provider_name="claude")
-    digest_codex = get_provider_config_digest(["github-integration"], provider_name="codex")
-    digest_all = get_provider_config_digest(["github-integration"])
-
-    checks.check("claude != codex digest", digest_claude != digest_codex, True)
-    checks.check("unscoped != claude", digest_all != digest_claude, True)
-    checks.check("unscoped != codex", digest_all != digest_codex, True)
-
-
-run_test("provider-scoped digest", test_provider_scoped_digest())
-
-
-async def test_mcp_args_is_list():
-    from app.skills import load_provider_yaml
-
-    raw = load_provider_yaml("github-integration", "claude")
-    mcp = raw.get("mcp_servers", {}).get("github", {})
-    checks.check_true("args is a list", isinstance(mcp.get("args"), list))
-    checks.check("args has 2 elements", len(mcp.get("args", [])), 2)
-    checks.check_in("args contains -y", "-y", mcp["args"])
-
-    raw2 = load_provider_yaml("linear-integration", "claude")
-    mcp2 = raw2.get("mcp_servers", {}).get("linear", {})
-    checks.check_true("linear args is a list", isinstance(mcp2.get("args"), list))
-
-
-run_test("MCP args is list", test_mcp_args_is_list())
-
-
-async def test_malformed_skill_resilience():
-    import app.skills as skills_mod
-    from app.skills import _skill_dir, get_skill_instructions, get_skill_requirements, load_catalog
-
-    orig_custom_dir = skills_mod.CUSTOM_DIR
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            custom_dir = Path(tmpdir) / "custom-skills"
-            skills_mod.CUSTOM_DIR = custom_dir
-            malformed_dir = custom_dir / "malformed-test-skill"
-            malformed_dir.mkdir(parents=True, exist_ok=True)
-            (malformed_dir / "skill.md").write_text(
-                "---\nname: malformed-test-skill\ndescription: [invalid yaml\n---\n\nBody text here.\n"
-            )
-
-            catalog = load_catalog()
-            checks.check_true("load_catalog did not crash", isinstance(catalog, dict))
-            checks.check_not_in("malformed skill not in catalog", "malformed-test-skill", catalog)
-            checks.check("_skill_dir returns None for malformed", _skill_dir("malformed-test-skill"), None)
-            checks.check("instructions empty for malformed", get_skill_instructions("malformed-test-skill"), "")
-            checks.check("requirements empty for malformed", get_skill_requirements("malformed-test-skill"), [])
-    finally:
-        skills_mod.CUSTOM_DIR = orig_custom_dir
-
-
-run_test("malformed skill resilience", test_malformed_skill_resilience())
-
-
-async def test_malformed_provider_yaml_resilience():
-    import app.skills as skills_mod
-    from app.skills import build_provider_config, load_provider_yaml
-
-    orig_custom_dir = skills_mod.CUSTOM_DIR
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            custom_dir = Path(tmpdir) / "custom-skills"
-            skills_mod.CUSTOM_DIR = custom_dir
-            skill_dir = custom_dir / "yaml-test-skill"
-            skill_dir.mkdir(parents=True, exist_ok=True)
-            (skill_dir / "skill.md").write_text(
-                "---\nname: yaml-test-skill\ndisplay_name: YAML Test\ndescription: Test skill\n---\n\nTest.\n"
-            )
-            (skill_dir / "claude.yaml").write_text("mcp_servers:\n  test:\n    command: echo\n    args: [unclosed\n")
-
-            checks.check("malformed yaml returns empty dict", load_provider_yaml("yaml-test-skill", "claude"), {})
-            checks.check("build_provider_config returns dict", isinstance(build_provider_config("claude", ["yaml-test-skill"], {}), dict), True)
-    finally:
-        skills_mod.CUSTOM_DIR = orig_custom_dir
-
-
-run_test("malformed provider yaml resilience", test_malformed_provider_yaml_resilience())
-
-
-async def test_malformed_requires_yaml_resilience():
-    from app.skills import _parse_requires_yaml
-
-    checks.check("malformed requires.yaml returns empty", _parse_requires_yaml("credentials:\n  - key: [unclosed\n"), [])
-    checks.check("non-dict requires.yaml returns empty", _parse_requires_yaml("just_a_string"), [])
-    checks.check("empty requires.yaml returns empty", _parse_requires_yaml(""), [])
-
-
-run_test("malformed requires.yaml resilience", test_malformed_requires_yaml_resilience())
-
-
-async def test_bot_skills_validation():
-    from app.config import validate_config
-
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp)
-        errors = validate_config(make_config(data_dir, default_skills=("nonexistent-skill-xyz",), provider_name="claude"))
-        checks.check_true("reports unknown skill", len([e for e in errors if "nonexistent-skill-xyz" in e]) > 0)
-
-        errors2 = validate_config(make_config(data_dir, default_skills=("github-integration",), provider_name="claude"))
-        checks.check("valid skill no error", len([e for e in errors2 if "BOT_SKILLS" in e and "github-integration" in e]), 0)
-
-        errors3 = validate_config(make_config(data_dir, default_skills=(), provider_name="claude"))
-        checks.check("no skills no error", len([e for e in errors3 if "BOT_SKILLS" in e]), 0)
-
-
-run_test("BOT_SKILLS validation", test_bot_skills_validation())
-
-
 async def test_cmd_role():
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
@@ -387,67 +243,6 @@ async def test_new_preserves_default_skills():
 run_test("/new preserves default_skills", test_new_preserves_default_skills())
 
 
-async def test_catalog_uses_directory_name():
-    import app.skills as skills_mod
-    from app.skills import _skill_dir, get_skill_instructions, load_catalog
-
-    orig_custom_dir = skills_mod.CUSTOM_DIR
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            custom_dir = Path(tmpdir) / "custom-skills"
-            skills_mod.CUSTOM_DIR = custom_dir
-            skill_dir = custom_dir / "my-actual-dir"
-            skill_dir.mkdir(parents=True)
-            (skill_dir / "skill.md").write_text(
-                "---\nname: fancy-meta-name\ndisplay_name: Fancy Skill\ndescription: A test skill\n---\n\nDo fancy things.\n"
-            )
-
-            catalog = load_catalog()
-            checks.check_in("dir name in catalog", "my-actual-dir", catalog)
-            checks.check_not_in("frontmatter name NOT in catalog", "fancy-meta-name", catalog)
-            checks.check_true("_skill_dir finds dir name", _skill_dir("my-actual-dir") is not None)
-            checks.check("_skill_dir misses frontmatter name", _skill_dir("fancy-meta-name"), None)
-            checks.check_in("instructions loaded", "fancy things", get_skill_instructions("my-actual-dir"))
-            checks.check("no instructions by frontmatter name", get_skill_instructions("fancy-meta-name"), "")
-    finally:
-        skills_mod.CUSTOM_DIR = orig_custom_dir
-
-
-run_test("catalog uses directory name", test_catalog_uses_directory_name())
-
-
-async def test_bad_validate_spec_no_crash():
-    from app.skills import SkillRequirement, validate_credential
-
-    req = SkillRequirement(
-        key="API_KEY",
-        prompt="Enter key",
-        help_url=None,
-        validate={
-            "method": "GET",
-            "url": "https://example.com/health",
-            "header": "Authorization: Bearer ${API_KEY}",
-            "expect_status": "twohundred",
-        },
-    )
-    ok, detail = await validate_credential(req, "some-key-value")
-    checks.check("returns not-ok", ok, False)
-    checks.check_in("mentions invalid expect_status", "expect_status", detail.lower())
-
-    req2 = SkillRequirement(
-        key="API_KEY",
-        prompt="Enter key",
-        help_url=None,
-        validate={"method": "GET", "url": "https://example.com/health", "expect_status": None},
-    )
-    ok2, detail2 = await validate_credential(req2, "some-key")
-    checks.check("none expect_status returns not-ok", ok2, False)
-    checks.check_in("mentions invalid", "invalid", detail2.lower())
-
-
-run_test("bad validate spec no crash", test_bad_validate_spec_no_crash())
-
-
 async def test_help_topics():
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
@@ -529,7 +324,6 @@ async def test_doctor_admin_warning():
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
-        # Multiple allowed users, no explicit admin set (admin == allowed)
         cfg = make_config(
             data_dir,
             allowed_user_ids=frozenset({1, 2, 3}),
@@ -542,7 +336,6 @@ async def test_doctor_admin_warning():
         save_session(data_dir, 1, session)
 
         import app.telegram_handlers as th
-        from tests.support.handler_support import send_command, last_reply
 
         chat = FakeChat(1)
         user = FakeUser(1)
@@ -558,7 +351,6 @@ async def test_doctor_no_warning_explicit_admin():
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
-        # Explicit admin subset
         cfg = make_config(
             data_dir,
             allowed_user_ids=frozenset({1, 2, 3}),
@@ -572,7 +364,6 @@ async def test_doctor_no_warning_explicit_admin():
         save_session(data_dir, 1, session)
 
         import app.telegram_handlers as th
-        from tests.support.handler_support import send_command, last_reply
 
         chat = FakeChat(1)
         user = FakeUser(1)
@@ -586,7 +377,6 @@ run_test("/doctor no warning with explicit admin", test_doctor_no_warning_explic
 
 async def test_prompt_size_warning_before_activation():
     import app.skills as skills_mod
-    from tests.support.handler_support import FakeContext
 
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
@@ -597,7 +387,6 @@ async def test_prompt_size_warning_before_activation():
             custom_dir = data_dir / "custom-skills"
             skills_mod.CUSTOM_DIR = custom_dir
 
-            # Create a skill with huge instructions
             d = custom_dir / "big-skill"
             d.mkdir(parents=True)
             (d / "skill.md").write_text(
@@ -625,7 +414,6 @@ async def test_prompt_size_warning_before_activation():
             checks.check_in("shows threshold", "8,000", reply)
             checks.check_in("asks to continue", "Continue", reply)
 
-            # Skill should NOT be activated yet
             session = load_session_disk(data_dir, 1, prov)
             checks.check_not_in("skill not activated", "big-skill",
                                 session.get("active_skills", []))
@@ -692,17 +480,14 @@ async def test_doctor_stale_session_warnings():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        # Create a session with a pending request
         session1 = default_session("claude", prov.new_provider_state(), "off")
-        session1["pending_request"] = {"prompt": "do something", "created_at": 0}  # epoch = very old
+        session1["pending_request"] = {"prompt": "do something", "created_at": 0}
         save_session(data_dir, 100, session1)
 
-        # Create a session with stale credential setup
         session2 = default_session("claude", prov.new_provider_state(), "off")
-        session2["awaiting_skill_setup"] = {"user_id": 42, "skill": "test", "started_at": 0}  # epoch = very old
+        session2["awaiting_skill_setup"] = {"user_id": 42, "skill": "test", "started_at": 0}
         save_session(data_dir, 200, session2)
 
-        # Create a clean session
         session3 = default_session("claude", prov.new_provider_state(), "off")
         save_session(data_dir, 300, session3)
 
@@ -757,7 +542,6 @@ async def test_doctor_no_stale_warning_for_fresh_sessions():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        # Create sessions with fresh timestamps (just now)
         session1 = default_session("claude", prov.new_provider_state(), "off")
         session1["pending_request"] = {"prompt": "do something", "created_at": _time.time()}
         save_session(data_dir, 100, session1)
@@ -800,4 +584,3 @@ async def _main():
 
 if __name__ == "__main__":
     asyncio.run(_main())
-# inserted before _run_all

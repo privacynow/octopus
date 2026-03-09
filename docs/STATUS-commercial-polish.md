@@ -8,10 +8,10 @@ Current as of 2026-03-09. Tracks progress against [PLAN-commercial-polish.md](PL
 
 | Phase | Scope | Status |
 |-------|-------|--------|
-| Phase 1 | Activation & self-service | Mostly done |
+| Phase 1 | Activation & self-service | Done |
 | Phase 2 | Output quality | Done |
 | Phase 3 | Trust & cost control | Done |
-| Phase 4 | Operational hardening | Mostly done (4.1 deferred) |
+| Phase 4 | Operational hardening | Mostly done (4.1 next) |
 | Phase 5 | Ecosystem & extensibility | Not started |
 
 ---
@@ -20,7 +20,7 @@ Current as of 2026-03-09. Tracks progress against [PLAN-commercial-polish.md](PL
 
 Canonical full-suite runner: `./scripts/test_all.sh`
 
-Current suite: 1,302 passing checks across 20 entrypoints.
+Current suite: 1,314 passing checks across 20 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -33,7 +33,7 @@ Current suite: 1,302 passing checks across 20 entrypoints.
 | `test_handlers_admin.py` | 12 | `/admin sessions` summary and detail views, access gating. |
 | `test_handlers_approval.py` | 53 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL. |
 | `test_handlers_codex.py` | 33 | Codex-specific handler behavior: thread invalidation, boot ID, retry semantics, script staging. |
-| `test_handlers_credentials.py` | 155 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection. |
+| `test_handlers_credentials.py` | 167 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection, and clear-credentials confirmation ownership. |
 | `test_handlers_export.py` | 14 | `/export` command: no history, document generation, access gating. |
 | `test_handlers_output.py` | 20 | Output presentation: `/compact`, `/raw`, table rendering, summarization flows. |
 | `test_handlers_ratelimit.py` | 11 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
@@ -74,6 +74,22 @@ Current suite: 1,302 passing checks across 20 entrypoints.
 
 **3.2 Usage tracking** — Deferred. Requires token-cost mapping and billing integration.
 
+---
+
+## Planned Next Sequence
+
+Execution from the current state is:
+
+1. **4.1** — build the managed immutable skill-store foundation
+2. **5.2** — add webhook mode
+3. **5.1** — add the third-party registry on top of the 4.1 store model
+
+This order is intentional. `4.1` is no longer a narrow crash-recovery patch; it
+is the final local storage and provenance foundation that registry work will
+reuse. `5.2` is operationally independent, so it can ship before remote
+registry features. Because the project is still in development, `4.1` is being
+treated as a clean-break storage redesign rather than a migration exercise.
+
 ### Bugs found and fixed
 
 | Bug | Severity | Root cause | Fix |
@@ -113,7 +129,15 @@ Current suite: 1,302 passing checks across 20 entrypoints.
 - Header documents scope honestly: only successful model responses and approval plans are captured; denied, timed-out, or failed requests are not.
 - `/help` updated to list `/export` and `/admin sessions`.
 
-**4.1 Repairable skill store operations** — Deferred. Requires intent logging and recovery on startup; most complex item in phase.
+**4.1 Managed immutable skill-store foundation** — Not started. Replaces the
+earlier intent-log approach. Will introduce immutable managed artifacts,
+logical refs, startup reconciliation, garbage collection, cross-instance
+locking, and session self-healing. This is the next planned execution item and
+the foundation for Phase 5 registry work. No migration/backward-compat support
+is planned while the project is still in development. The design is now locked
+to use atomic ref writes, idempotent object creation, a separate session
+normalization step (not validation-side mutation), and explicit custom-override
+visibility in `/skills list`, `/skills info`, and managed-update messaging.
 
 ### Design decisions
 
@@ -128,6 +152,6 @@ Current suite: 1,302 passing checks across 20 entrypoints.
 | Item | Status | Notes |
 |------|--------|-------|
 | 3.2 Usage tracking & quotas | Deferred | Needs token-cost mapping, billing integration |
-| 4.1 Repairable store operations | Deferred | Intent log + recovery; most complex Phase 4 item |
-| 5.1 Third-party skill registry | Not started | Remote install, signature verification, trusted publishers |
-| 5.2 Webhook mode | Not started | `BOT_MODE=poll\|webhook`, aiohttp server, `/health` endpoint |
+| 4.1 Managed immutable skill-store foundation | Not started | Next planned execution item. Replaces the earlier intent-log proposal with immutable objects, refs, recovery, GC, locking, atomic ref writes, idempotent object creation, session normalization, and a clean-break storage model. No migration/backward-compat support planned. |
+| 5.2 Webhook mode | Not started | Planned immediately after 4.1. `BOT_MODE=poll\|webhook`, aiohttp server, `/health` endpoint |
+| 5.1 Third-party skill registry | Not started | Planned after 4.1 and 5.2. Will use the managed store foundation, artifact digests, and provenance model from 4.1 |

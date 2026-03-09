@@ -19,8 +19,8 @@ and design notes remain below.
 | Phase 1 | Done | All 8 items shipped: cancel, clear-credentials with confirmation, onboarding, credential status, skill info, error mapping, group chat visibility, stale button TTL. |
 | Phase 2 | Done | All three items shipped: table rendering, HTML fallback, and mobile summarization with `/raw` + `/compact`. |
 | Phase 3 | Done | Rate limiting, admin safety posture, proactive prompt size warnings, runtime health checks all shipped. |
-| Phase 4 | Mostly done | 4.2-4.5 shipped: skill protection with confirmation/diff, provider-pruned setup, admin sessions, conversation export. 4.1 (repairable store ops) deferred. |
-| Phase 5 | Not started | No third-party skill registry or webhook mode yet. |
+| Phase 4 | Mostly done | 4.2-4.5 shipped. 4.1 is the next execution item and is now defined as the managed immutable store foundation, not a narrow intent-log patch. This is a clean-break redesign; no backward-compat migration is planned. |
+| Phase 5 | Not started | Execution order after 4.1 is 5.2 first, then 5.1. Registry will build on the 4.1 store foundation. |
 
 ### Phase 1 Status
 
@@ -57,7 +57,7 @@ and design notes remain below.
 
 | Item | Status | Notes |
 |---|---|---|
-| 4.1 Repairable skill store operations | Not started | No intent log / recovery flow for partial install-update-uninstall failures. |
+| 4.1 Managed immutable skill store foundation | Not started | Replaces the earlier intent-log design. Will introduce immutable objects, refs, recovery, GC, locking, and session self-healing as the base for registry work. No migration/backward-compat support is planned. |
 | 4.2 Locally modified skill protection | Done | Confirmation prompts for update of modified skills, `/skills diff <name>`, batch update confirmation. |
 | 4.3 Configuration template per provider | Done | `setup.sh` prunes codex-specific config for claude instances and vice versa. |
 | 4.4 Admin session visibility | Done | `/admin sessions` summary and `/admin sessions <chat_id>` detail views. `list_sessions()` in storage.py. |
@@ -67,8 +67,25 @@ and design notes remain below.
 
 | Item | Status | Notes |
 |---|---|---|
-| 5.1 Third-party skill registry | Not started | No remote install source support or publisher verification. |
-| 5.2 Webhook mode | Not started | No webhook-mode config or server path. |
+| 5.1 Third-party skill registry | Not started | Deferred until after 4.1 and 5.2. Will use the managed immutable store foundation from 4.1. |
+| 5.2 Webhook mode | Not started | Planned immediately after 4.1, before registry. |
+
+---
+
+## Planned Next Sequence
+
+Execution from this point intentionally diverges from phase numbering:
+
+1. **4.1** — build the final managed immutable store foundation
+2. **5.2** — add webhook mode on top of the current bot runtime
+3. **5.1** — add the third-party registry using the 4.1 store architecture
+
+Why this order:
+- `4.1` is no longer just crash recovery. It is the storage/provenance model the registry will depend on.
+- `5.2` is operationally independent of the store redesign and can ship before remote registry work.
+- `5.1` is intentionally last so it can land on the final store model rather than forcing a second redesign.
+
+The deferred item `3.2` (usage tracking / billing hooks) remains intentionally out of sequence and is not part of the next execution block.
 
 ---
 
@@ -303,7 +320,7 @@ and status updates are especially bad.
 
 **Design**:
 - After the provider returns a response, save the raw text to a per-chat ring
-  buffer (last 10 responses).
+  buffer (last 50 responses).
 - If compact mode is enabled, run the raw response through a cheap/fast
   summarization model (e.g., Haiku) before formatting and sending to Telegram.
 - Short responses (under ~800 chars) skip summarization — they're already
@@ -328,7 +345,7 @@ and status updates are especially bad.
 **Ring buffer storage**:
 - Store as JSON files in `{data_dir}/raw/{chat_id}/` with sequential numbering.
 - Each entry: `{"timestamp": ..., "prompt": ..., "raw_text": ..., "kind": ...}`.
-- Rotate on write: when count exceeds 10, delete oldest.
+- Rotate on write: when count exceeds 50, delete oldest.
 
 **Implementation note**: The summarization call should use `claude -p` with a
 cheap model (`--model claude-haiku-4-5-20251001`), keeping the CLI-only
@@ -506,55 +523,203 @@ rate limits, invalid model names, or expired API keys.
 
 ## Phase 4 — Operational Hardening
 
-### 4.1 Repairable skill store operations
+### 4.1 Managed immutable skill store foundation
 
-**Problem**: `/skills uninstall` sweeps all sessions before removing the skill
-from disk (`store.py`). If the filesystem removal fails, sessions are already
-modified. Simply reversing the order (remove first, sweep second) flips the
-failure mode: chats would reference a skill that no longer exists on disk.
+**Decision**: Do not build a narrow intent-log patch and throw it away later.
+Instead, build the final local store architecture now so that crash recovery
+and the future third-party registry share the same foundation.
+
+**Problem with the current model**:
+- Store installs and updates mutate live skill directories in place.
+- Custom editable skills and store-managed installs share the same directory
+  model, which makes provenance and overwrite semantics awkward.
+- Recovery is hard because the runtime treats on-disk skill dirs as mutable
+  truth.
+- The current model does not scale cleanly to remote registry artifacts,
+  signatures, rollbacks, or durable provenance.
+
+**Architecture goals**:
+- Managed store artifacts are **immutable** once written.
+- Installed skill names point to artifacts via lightweight **refs**, not by
+  mutating a live directory in place.
+- Install/update become atomic promotion/swap operations.
+- Uninstall removes the ref first-class, with garbage collection handling
+  unreferenced artifacts later.
+- Startup recovery reconciles temp/backup/trash state from disk layout rather
+  than replaying a generic transaction log.
+- Sessions treat managed skills as **soft references** and self-heal if a ref
+  disappears.
+- Editable custom skills remain separate from managed store installs.
+
+**Proposed on-disk model**:
+- `skills/custom/<name>/...`
+  - Operator-authored, editable custom skills.
+- `skills/managed/objects/<full_sha256>/...`
+  - Immutable skill artifacts, fully materialized on disk and keyed by full digest.
+  - Object digest is SHA-256 over sorted files: `<relative_path>\0<mode_octal>\0<content>` per file. File mode bits are included so executable scripts preserve their permissions.
+- `skills/managed/refs/<name>.json`
+  - Logical mapping from skill name to active object digest and provenance.
+- `skills/managed/tmp/`
+  - Staging area for installs and updates before promotion.
+- `skills/managed/trash/`
+  - Short-lived holding area for uninstall / rollback / GC.
+- `skills/managed/version.json`
+  - Schema version marker (`{"schema": 1}`). Startup checks this before touching
+    the managed store. If missing, treat as fresh init. If schema > known, refuse
+    to operate (prevents old code from corrupting a newer layout).
+- `skills/managed/.lock`
+  - Cross-instance store mutation / GC / recovery lock. Read-only operations
+    (`_skill_dir`, `load_catalog`) do NOT acquire this lock.
+
+**Ref metadata**:
+- Store ref metadata includes at least:
+  - schema version
+  - logical skill name
+  - full object digest
+  - source (`bundled-store`, later `registry`)
+  - installed_at
+  - version / publisher metadata when available
+  - trust / verification state
+  - optional pinning state for future update policy
+
+**Resolution order**:
+1. `skills/custom/<name>` — explicit local override
+2. `skills/managed/refs/<name>` → object digest → immutable object dir
+3. built-in catalog
+
+This keeps local operator overrides simple while making store-installed skills
+traceable and safe.
+
+**Mutation model**:
+- **Install**
+  - Build artifact in `tmp/`
+  - Validate parseability and provider config
+  - Materialize `objects/<digest>/` only if it does not already exist
+  - Write ref metadata
+  - Atomically promote artifact + ref into place
+- **Update**
+  - Create a new immutable object
+  - Atomically swap the logical ref from old digest to new digest
+  - Old object remains available for rollback/GC
+- **Uninstall**
+  - Remove logical ref
+  - Runtime stops resolving the skill by name
+  - Old object becomes garbage-collectable
+- **GC**
+  - Runs at startup only (not periodic). Removes unreferenced objects older than
+    1 hour (grace window for crash recovery) and abandoned temp/trash content.
+
+**Recovery model**:
+- Recovery is driven by filesystem state, not by a separate intent ledger.
+- Recovery and mutation run under a cross-instance lock because the managed
+  store is shared across bot instances.
+- Ref writes are atomic: write `refs/<name>.json.tmp`, then rename into place.
+- Object creation is idempotent: if `objects/<digest>/` already exists and is
+  valid, reuse it rather than rewriting it.
+- On startup:
+  - clean abandoned temp dirs
+  - resolve incomplete promotions
+  - restore from backup/trash if needed
+  - prune orphaned refs
+  - garbage-collect unreferenced objects
+- Recovery must be idempotent and safe to run on every startup.
+
+**Session model changes**:
+- Session `active_skills` remain logical skill names.
+- If a managed ref is missing, the runtime removes that skill from the chat
+  session during an explicit `normalize_active_skills(...)` step on load or
+  before execution instead of
+  assuming a perfect global sweep.
+- This avoids coupling store mutation correctness to immediate cross-session
+  rewrites.
+
+**Validation vs normalization**:
+- `validate_active_skills(...)` remains pure and read-only.
+- A separate `normalize_active_skills(session, save_fn)` handles pruning stale
+  logical skill names and persisting the cleaned session state.
+
+**Locally modified skills**:
+- The current "store-installed but edited in place" model does not survive this
+  redesign cleanly.
+- Store-managed skills become immutable.
+- If an operator wants to customize a store skill, the workflow becomes:
+  - fork/copy it into `skills/custom/<name>` (or a new custom name)
+  - edit the custom copy
+- `4.2` local-modification protection remains relevant until the new managed
+  store model lands, but the long-term model is "managed immutable" vs
+  "custom editable", not "managed but maybe edited".
+
+**Override visibility**:
+- `/skills list` should show when a custom skill shadows a managed ref
+  (for example: `[custom override]`).
+- `/skills info <name>` should state whether the skill currently resolves to
+  `custom` or `managed`.
+- `/skills update <name>` should report when the managed ref changed but a
+  custom override remains active.
+- No `fork` / `unfork` commands are part of the 4.1 foundation. Same-name
+  custom shadowing is sufficient; extra UX can be added later only if needed.
+
+**Development-mode clean break**:
+- No migration or backward-compat support is planned for pre-4.1 installed
+  skills.
+- Existing development installs can be discarded/reset when the new layout
+  lands.
+- 4.1 defines the new baseline storage model for all later work.
 
 **Scope**:
-- Adopt a two-phase approach:
-  1. **Prepare**: validate the operation will succeed (check permissions, verify
-     skill exists, etc.). Write an intent record to a staging file.
-  2. **Execute**: perform disk operation, then sweep sessions, then remove the
-     intent record.
-  3. **Recover**: on startup, check for incomplete intent records. If found,
-     complete or roll back the operation based on what phase it reached.
-- For updates: write new content to a temp directory, validate it parses
-  correctly, then atomic-rename into place. Only then notify affected chats.
-- Intent record format: JSON with operation type, skill name, timestamp, and
-  phase marker (prepared/disk-done/sweep-done).
+- New managed store layer in `app/store.py`
+- Runtime resolution updates in `app/skills.py`
+- Startup reconciliation in `app/main.py`
+- Session self-healing for missing managed refs
+- Cross-instance lock for mutation / recovery / GC
+- User-facing override visibility in `/skills list`, `/skills info`, and
+  managed-update messaging
 
-**Files**: `app/store.py` (install/uninstall/update functions, recovery logic),
-`app/telegram_handlers.py` (store command handlers).
+**Non-goals for 4.1**:
+- No remote registry fetch yet
+- No publisher trust UI yet
+- No billing/usage work
+- No migration of legacy `_store.json` installs
+- No backward-compat preservation for the old mixed custom/store layout
+- No `fork` / `unfork` workflow in the foundation
 
-**Tests**: Store operation tests with simulated filesystem failures at each
-phase. Verify recovery on startup completes partial operations. Verify session
-state is consistent after partial failure.
+**Files**:
+- `app/store.py` — object/ref store, atomic ref writes, recovery, GC, locking
+- `app/skills.py` — managed skill resolution, custom-vs-managed precedence,
+  pure validation helpers
+- `app/main.py` — startup recovery / reconciliation
+- `app/storage.py` or handler/runtime call sites — session normalization for
+  stale logical skill refs
+- `app/telegram_handlers.py` — override visibility and managed-update messaging
+
+**Tests**:
+- Install/update/uninstall with crash simulation at each promotion phase
+- Startup recovery idempotence
+- Missing-ref session self-healing
+- Custom-overrides-managed precedence
+- Atomic ref write behavior
+- Idempotent object creation / reuse
+- GC only removes truly unreferenced objects
+- Cross-instance lock behavior / serialization
+- Override-visibility UX in list/info/update flows
 
 ---
 
 ### 4.2 Locally modified skill protection
 
-**Problem**: `/skills update <name>` silently overwrites locally modified
-skills. `/skills update all` can nuke multiple customizations without
-confirmation.
+**Note**: This item is partially subsumed by the 4.1 immutable store redesign.
+Under the new model, managed skills cannot be edited in place — they are
+immutable objects. "Local modifications" only occur when a custom skill in
+`skills/custom/<name>` shadows a managed ref. The protection semantics change:
 
-**Scope**:
-- Before updating a locally modified skill, show a warning: "Skill <name> has
-  local modifications. Update will overwrite them. Continue? [Yes/No]"
-- Use inline keyboard buttons for confirmation.
-- For `/skills update all`, list all locally modified skills that would be
-  affected and require a single confirmation.
-- Add `/skills diff <name>` to show what changed between installed version and
-  store version (basic text diff, first 2000 chars).
+- `/skills diff <name>` compares `custom/<name>` against the managed object
+  (if a managed ref exists for that name).
+- `/skills update <name>` updates the managed ref. If a custom override exists,
+  the message says "managed version updated; custom override still active."
+- Batch update confirmation remains relevant for managed refs.
 
-**Files**: `app/telegram_handlers.py` (update handler), `app/store.py` (diff
-generation).
-
-**Tests**: Handler test for locally modified update warning. Test that
-unmodified skills update without confirmation.
+The existing confirmation and diff implementations (done before 4.1) will be
+adapted during 4.1 implementation to use the new resolution model.
 
 ---
 
@@ -626,23 +791,42 @@ support.
 
 ### 5.1 Third-party skill registry
 
-**Problem**: Skills can only come from the local `skills/store/` directory.
-There's no way to discover or install community-created skills.
+**Decision**: Registry work builds directly on the 4.1 managed immutable store.
+Do not add remote installs to the legacy mutable store model.
+
+**Problem**: Skills can only come from the local bundled store. There is no way
+to discover or install community or organization-published skills with durable
+provenance and trust verification.
 
 **Scope**:
-- Support remote skill sources: git repositories or HTTP endpoints containing
-  skill directories.
-- `/skills install <url>` — install from a remote source.
-- Skill manifests include a `source` field for provenance tracking.
-- Signature verification: skills can include a signature file; the bot validates
-  against a configurable set of trusted publishers.
-- New config: `BOT_SKILL_SOURCES=` (comma-separated list of trusted git repos
-  or URLs).
+- Add a remote registry/index that resolves logical skill names to immutable
+  artifacts and metadata.
+- Fetch registry artifacts into `skills/managed/objects/<sha256>/...`
+  rather than unpacking directly into live skill dirs.
+- Create/update logical refs only after artifact verification succeeds.
+- Registry metadata should carry:
+  - publisher identity
+  - version
+  - digest
+  - signature / trust material
+  - description/search fields
+- Signature or publisher verification gates ref creation.
+- `/skills search` and `/skills info` should be able to surface registry-backed
+  results without changing the local managed-store architecture.
+- `/skills install` remains name-driven where possible; remote URLs are an
+  escape hatch, not the primary UX.
 
-**Files**: `app/store.py` (remote fetch), `app/skills.py` (source tracking),
-`app/config.py` (new config).
+**Files**:
+- `app/store.py` — registry fetch, artifact import, trust checks, ref creation
+- `app/config.py` — trusted publishers / registry source config
+- `app/telegram_handlers.py` — registry-backed search/install UX
 
-**Tests**: Store tests with mock remote sources. Signature validation tests.
+**Tests**:
+- Registry index parsing
+- Artifact fetch/import into managed objects
+- Signature / trust verification
+- Ref creation only after verification
+- Search/info/install flows against a mock registry
 
 ---
 
@@ -675,6 +859,13 @@ test.
   that make users leave. Phase 2 makes output readable on the primary device.
   Phase 3 adds guardrails as the user base grows. Phase 4 hardens operations.
   Phase 5 builds the ecosystem.
+- Execution sequence from the current state is: `4.1` managed store
+  foundation, then `5.2` webhook mode, then `5.1` registry.
+- `4.1` is intentionally broader than "repairable ops" because the registry
+  should land on the final storage/provenance architecture, not on a temporary
+  mutable-store patch.
+- `4.1` does not introduce `fork` / `unfork`; same-name custom shadowing is
+  the intentional low-complexity override model.
 - Every feature gets a regression test before merge.
 - Production bugs found during implementation get fixed immediately with a
   regression test, same as the agent-roles-and-skills work.

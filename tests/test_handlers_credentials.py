@@ -1283,9 +1283,9 @@ async def test_clear_credentials_confirm_flow():
             checks.check_in("confirmation mentions skill", "cred-test", reply["text"])
             checks.check("has buttons", "reply_markup" in reply, True)
 
-            # Step 2: Confirm via callback
+            # Step 2: Confirm via callback (data includes user_id)
             cb_msg = FakeMessage(chat=chat)
-            query = FakeCallbackQuery("clear_cred_confirm:cred-test", message=cb_msg)
+            query = FakeCallbackQuery("clear_cred_confirm:42:cred-test", message=cb_msg)
             update = FakeUpdate(user=user, chat=chat, callback_query=query)
             await _th.handle_clear_cred_callback(update, FakeContext())
 
@@ -1331,9 +1331,9 @@ async def test_clear_credentials_cancel():
             msg = await send_command(_th.cmd_clear_credentials, chat, user, "/clear_credentials cred-test", args=["cred-test"])
             checks.check("has buttons", "reply_markup" in msg.replies[-1], True)
 
-            # Step 2: Cancel via callback
+            # Step 2: Cancel via callback (data includes user_id)
             cb_msg = FakeMessage(chat=chat)
-            query = FakeCallbackQuery("clear_cred_cancel", message=cb_msg)
+            query = FakeCallbackQuery("clear_cred_cancel:42", message=cb_msg)
             update = FakeUpdate(user=user, chat=chat, callback_query=query)
             await _th.handle_clear_cred_callback(update, FakeContext())
 
@@ -1383,9 +1383,9 @@ async def test_clear_credentials_all_confirm():
             checks.check_in("lists skill-b", "skill-b", reply["text"])
             checks.check("has buttons", "reply_markup" in reply, True)
 
-            # Confirm
+            # Confirm (data includes user_id)
             cb_msg = FakeMessage(chat=chat)
-            query = FakeCallbackQuery("clear_cred_confirm_all", message=cb_msg)
+            query = FakeCallbackQuery("clear_cred_confirm_all:42", message=cb_msg)
             update = FakeUpdate(user=user, chat=chat, callback_query=query)
             await _th.handle_clear_cred_callback(update, FakeContext())
 
@@ -1420,6 +1420,58 @@ async def test_clear_credentials_no_stored():
 
 
 run_test("clear_credentials no stored", test_clear_credentials_no_stored())
+
+
+async def test_clear_credentials_cross_user_rejected():
+    """In a group chat, Bob cannot tap Alice's clear-credentials button."""
+    import app.skills as skills_mod
+
+    orig_custom_dir = skills_mod.CUSTOM_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            ensure_data_dirs(data_dir)
+            custom_dir = Path(tmp) / "custom-skills"
+            skills_mod.CUSTOM_DIR = custom_dir
+
+            skill_dir = custom_dir / "cred-test"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "skill.md").write_text("---\nname: cred-test\ndisplay_name: Cred Test\ndescription: Test\n---\n\nTest instructions.\n")
+            (skill_dir / "requires.yaml").write_text("credentials:\n  - key: API_TOKEN\n    prompt: Enter token\n")
+
+            cfg = make_config(data_dir)
+            prov = FakeProvider("claude")
+            setup_globals(cfg, prov)
+
+            chat = FakeChat(12345)
+            alice = FakeUser(42)
+            bob = FakeUser(99)
+            key = derive_encryption_key(cfg.telegram_token)
+            save_user_credential(data_dir, 42, "cred-test", "API_TOKEN", "alice-token", key)
+            save_user_credential(data_dir, 99, "cred-test", "API_TOKEN", "bob-token", key)
+
+            # Alice initiates clear — button encodes alice's user_id (42)
+            msg = await send_command(_th.cmd_clear_credentials, chat, alice, "/clear_credentials cred-test", args=["cred-test"])
+            checks.check("has buttons", "reply_markup" in msg.replies[-1], True)
+
+            # Bob clicks Alice's confirm button — should be rejected
+            cb_msg = FakeMessage(chat=chat)
+            query = FakeCallbackQuery("clear_cred_confirm:42:cred-test", message=cb_msg)
+            update = FakeUpdate(user=bob, chat=chat, callback_query=query)
+            await _th.handle_clear_cred_callback(update, FakeContext())
+
+            # Both credentials should still exist
+            alice_creds = load_user_credentials(data_dir, 42, key)
+            bob_creds = load_user_credentials(data_dir, 99, key)
+            checks.check("alice creds preserved", "cred-test" in alice_creds, True)
+            checks.check("bob creds preserved", "cred-test" in bob_creds, True)
+            # No edit_text reply (only query.answer with alert)
+            checks.check("no edit made", len(cb_msg.replies), 0)
+    finally:
+        skills_mod.CUSTOM_DIR = orig_custom_dir
+
+
+run_test("clear_credentials cross-user rejected", test_clear_credentials_cross_user_rejected())
 
 
 async def _run_all():

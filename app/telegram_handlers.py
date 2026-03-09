@@ -1603,7 +1603,7 @@ async def cmd_clear_credentials(update: Update, context: ContextTypes.DEFAULT_TY
         msg = (f"This will remove your credentials for "
                f"<code>{html.escape(skill_name)}</code> and deactivate it "
                f"in this chat. Continue?")
-        cb_data = f"clear_cred_confirm:{skill_name}"
+        cb_data = f"clear_cred_confirm:{user_id}:{skill_name}"
     else:
         if not stored:
             await update.effective_message.reply_text("No stored credentials found.")
@@ -1612,11 +1612,11 @@ async def cmd_clear_credentials(update: Update, context: ContextTypes.DEFAULT_TY
         names = html.escape(", ".join(affected))
         msg = (f"This will remove all your stored credentials "
                f"({names}) and deactivate affected skills. Continue?")
-        cb_data = "clear_cred_confirm_all"
+        cb_data = f"clear_cred_confirm_all:{user_id}"
 
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("Yes, clear", callback_data=cb_data),
-        InlineKeyboardButton("Cancel", callback_data="clear_cred_cancel"),
+        InlineKeyboardButton("Cancel", callback_data=f"clear_cred_cancel:{user_id}"),
     ]])
     await update.effective_message.reply_text(msg, parse_mode=ParseMode.HTML,
                                               reply_markup=keyboard)
@@ -1669,24 +1669,38 @@ async def handle_clear_cred_callback(update: Update, context: ContextTypes.DEFAU
         await query.answer("Not authorized.", show_alert=True)
         return
 
-    await query.answer()
     chat_id = update.effective_chat.id
-    user_id = update.effective_user.id if update.effective_user else 0
+    clicker_id = update.effective_user.id if update.effective_user else 0
 
-    if query.data == "clear_cred_cancel":
+    # All callback data encodes the initiating user: clear_cred_<action>:<uid>[:<skill>]
+    # Reject if a different user clicks the button.
+    parts = query.data.split(":")
+    # parts[0] = "clear_cred_cancel" | "clear_cred_confirm" | "clear_cred_confirm_all"
+    if len(parts) >= 2:
+        try:
+            owner_id = int(parts[1])
+        except (ValueError, IndexError):
+            owner_id = 0
+        if owner_id and clicker_id != owner_id:
+            await query.answer("This button is for another user.", show_alert=True)
+            return
+
+    await query.answer()
+
+    if parts[0] == "clear_cred_cancel":
         await query.edit_message_reply_markup(reply_markup=None)
         await query.edit_message_text("Credential clear cancelled.")
         return
 
-    if query.data == "clear_cred_confirm_all":
+    if parts[0] == "clear_cred_confirm_all":
         await query.edit_message_reply_markup(reply_markup=None)
-        await _execute_clear_credentials(query, chat_id, user_id, None)
+        await _execute_clear_credentials(query, chat_id, clicker_id, None)
         return
 
-    if query.data.startswith("clear_cred_confirm:"):
-        skill_name = query.data.split(":", 1)[1]
+    if parts[0] == "clear_cred_confirm" and len(parts) >= 3:
+        skill_name = parts[2]
         await query.edit_message_reply_markup(reply_markup=None)
-        await _execute_clear_credentials(query, chat_id, user_id, skill_name)
+        await _execute_clear_credentials(query, chat_id, clicker_id, skill_name)
         return
 
 

@@ -144,6 +144,28 @@ def skill_info(name: str) -> tuple[StoreSkillInfo, str] | None:
     return info, body
 
 
+def get_store_skill_requirements(name: str) -> list[str]:
+    """Return credential key names from a store skill's requires.yaml.
+
+    Falls back to the store directory for skills that aren't installed yet.
+    Returns empty list if no requirements or skill not found.
+    """
+    store_path = STORE_DIR / name / "requires.yaml"
+    if not store_path.is_file():
+        return []
+    try:
+        data = yaml.safe_load(store_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError:
+        return []
+    if not isinstance(data, dict):
+        return []
+    credentials = data.get("credentials", [])
+    if not isinstance(credentials, list):
+        return []
+    return [str(item.get("key", "")) for item in credentials
+            if isinstance(item, dict) and item.get("key")]
+
+
 # ---------------------------------------------------------------------------
 # _store.json helpers
 # ---------------------------------------------------------------------------

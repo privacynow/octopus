@@ -34,6 +34,38 @@ def md_to_telegram_html(text: str) -> str:
         return f"\x00BLOCK{len(blocks) - 1}\x00"
 
     text = re.sub(r"```(\w*)\n(.*?)```", stash_fenced, text, flags=re.DOTALL)
+
+    # Convert markdown tables to aligned <pre> blocks (after code fences are
+    # stashed so tables inside fences are left alone).
+    def stash_table(m: re.Match) -> str:
+        raw = m.group(0)
+        rows = [line.strip().strip("|").split("|") for line in raw.splitlines()]
+        rows = [[cell.strip() for cell in row] for row in rows]
+        # Drop the separator row (second row, all dashes/colons)
+        if len(rows) >= 2 and all(
+            re.fullmatch(r":?-+:?", cell) for cell in rows[1] if cell
+        ):
+            rows = rows[:1] + rows[2:]
+        if not rows:
+            return raw
+        ncols = max(len(r) for r in rows)
+        rows = [r + [""] * (ncols - len(r)) for r in rows]
+        widths = [max(len(r[c]) for r in rows) for c in range(ncols)]
+        lines = []
+        for r in rows:
+            cells = [r[c].ljust(widths[c]) for c in range(ncols)]
+            lines.append("  ".join(cells).rstrip())
+        blocks.append(f"<pre>{html.escape(chr(10).join(lines))}</pre>")
+        return f"\x00BLOCK{len(blocks) - 1}\x00"
+
+    table_re = re.compile(
+        r"(?m)"
+        r"^[^\n]*\|[^\n]*\n"         # header row (must contain |)
+        r"[|\s:-]*---[|\s:.-]*\n"     # separator row (must contain ---)
+        r"(?:[^\n]*\|[^\n]*\n?)*"     # data rows (must contain |)
+    )
+    text = table_re.sub(stash_table, text)
+
     text = re.sub(r"`([^`\n]+)`", stash_inline, text)
     text = html.escape(text)
     text = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", text, flags=re.MULTILINE)
@@ -82,12 +114,25 @@ def _track_open_tags(html_text: str) -> list[tuple[str, str]]:
     return stack
 
 
+def _strip_tags(text: str) -> str:
+    """Remove all HTML tags, returning plain text."""
+    return re.sub(r"<[^>]*>", "", text)
+
+
+def _validate_chunk(chunk: str) -> bool:
+    """Return True if the chunk has balanced HTML tags."""
+    return len(_track_open_tags(chunk)) == 0
+
+
 def split_html(text: str, limit: int = 4096) -> list[str]:
     """Split HTML text into chunks that each have balanced tags.
 
     Closes any open tags at the end of each chunk and reopens them
     (with original attributes) at the start of the next chunk.
     Every emitted chunk is guaranteed to be <= limit characters.
+
+    If the tag-balancing pass produces invalid chunks, falls back to
+    stripping all HTML and splitting as plain text.
     """
     if len(text) <= limit:
         return [text]
@@ -147,6 +192,19 @@ def split_html(text: str, limit: int = 4096) -> list[str]:
         chunks.append(full_chunk + suffix)
         carry_open = open_tags
         remainder = remainder[cut:].lstrip("\n")
+
+    # Post-split validation: if any chunk has unbalanced tags, fall back to
+    # plain text splitting to avoid sending malformed HTML to Telegram.
+    if any(not _validate_chunk(c) for c in chunks):
+        plain = _strip_tags(text)
+        chunks = []
+        while plain:
+            cut = plain.rfind("\n", 0, limit)
+            if cut < limit // 2:
+                cut = limit
+            chunks.append(plain[:cut])
+            plain = plain[cut:].lstrip("\n")
+
     return chunks
 
 

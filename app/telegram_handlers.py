@@ -6,6 +6,7 @@ import html
 import logging
 import re
 import time
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,7 +35,8 @@ from app.skills import (
     build_run_context, build_preflight_context, build_provider_config,
     get_provider_config_digest, get_skill_digests, load_catalog,
     get_skill_requirements, check_credentials, load_user_credentials,
-    save_user_credential, derive_encryption_key, build_credential_env,
+    save_user_credential, delete_user_credentials, derive_encryption_key,
+    build_credential_env,
     scaffold_skill, validate_active_skills, validate_credential,
     check_prompt_size,
     stage_codex_scripts, cleanup_codex_scripts,
@@ -48,8 +50,10 @@ from app.storage import (
     load_session,
     resolve_allowed_path,
     save_session,
+    session_file,
     sweep_skill_from_sessions,
 )
+from app.summarize import load_raw, save_raw, summarize
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +62,7 @@ CHAT_LOCKS: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 # These get set by build_application()
 _config: BotConfig | None = None
 _provider: Provider | None = None
+_boot_id: str = ""  # unique per process; detects restart to clear stale threads
 
 
 def _cfg() -> BotConfig:
@@ -287,15 +292,35 @@ def _build_setup_state(user_id: int, skill_name: str, missing: list[SkillRequire
 
 
 def _format_credential_prompt(req: dict) -> str:
-    """Format a credential prompt for a single requirement."""
-    text = req["prompt"]
+    """Format a credential prompt for a single requirement.
+
+    Returns HTML-safe text. help_url is rendered as a clickable Telegram link.
+    """
+    text = html.escape(req["prompt"])
     if req.get("help_url"):
-        text += f"\n(See: {req['help_url']})"
+        url = html.escape(req["help_url"])
+        text += f'\n(<a href="{url}">setup guide</a>)'
     return text
 
 
 # Foreign setup is considered expired after this many seconds.
-_SETUP_TIMEOUT_SECONDS = 600  # 10 minutes
+_SETUP_TIMEOUT_SECONDS = 300  # 5 minutes
+
+
+def _foreign_setup_message(setup: dict) -> str:
+    """Format a message about another user's in-progress credential setup."""
+    uid = setup.get("user_id", "unknown")
+    started = setup.get("started_at")
+    if started:
+        elapsed = int(time.time() - started)
+        minutes = elapsed // 60
+        time_str = f"{minutes} min ago" if minutes >= 1 else "just now"
+    else:
+        time_str = "unknown time"
+    return (
+        f"User {uid} is completing credential setup (started {time_str}). "
+        f"Please wait or ask them to finish. An admin can use /cancel to clear it."
+    )
 
 
 def _foreign_skill_setup(
@@ -345,7 +370,7 @@ async def _check_credential_satisfaction(
         # Their next message would fall through to normal execution, leaking a secret.
         if _foreign_skill_setup(session, user_id):
             await message.reply_text(
-                "Another user is completing credential setup. Please wait and try again.",
+                _foreign_setup_message(session.get("awaiting_skill_setup", {})),
             )
             return None
 
@@ -357,7 +382,7 @@ async def _check_credential_satisfaction(
         first_req = setup["remaining"][0]
         await message.reply_text(
             f"Skill <code>{html.escape(skill_name)}</code> needs setup.\n\n"
-            f"{html.escape(_format_credential_prompt(first_req))}",
+            f"{_format_credential_prompt(first_req)}",
             parse_mode=ParseMode.HTML,
         )
         return None
@@ -411,12 +436,22 @@ async def execute_request(
         sorted(str(d) for d in cfg.extra_dirs),
     )
 
-    # Codex thread invalidation (§8.3): if base context drifted, start fresh thread
+    # Codex thread invalidation: start fresh thread when context drifted or bot restarted.
+    # After a restart, the old thread's context may have been compacted and the model
+    # loses awareness of available tools.  A fresh thread gets full system prompt.
     if prov.name == "codex":
         stored_hash = session["provider_state"].get("context_hash")
-        if stored_hash and stored_hash != context_hash:
+        stored_boot = session["provider_state"].get("boot_id")
+        stale_thread = (
+            (stored_hash and stored_hash != context_hash)
+            or (stored_boot and stored_boot != _boot_id)
+        )
+        if stale_thread and session["provider_state"].get("thread_id"):
+            log.info("Clearing stale codex thread for chat %d (hash_match=%s, boot_match=%s)",
+                     chat_id, stored_hash == context_hash, stored_boot == _boot_id)
             session["provider_state"]["thread_id"] = None
         session["provider_state"]["context_hash"] = context_hash
+        session["provider_state"]["boot_id"] = _boot_id
         _save(chat_id, session)
 
     is_resume = bool(session["provider_state"].get("thread_id") or session["provider_state"].get("started"))
@@ -434,6 +469,21 @@ async def execute_request(
     # (e.g. /approval or /new issued concurrently), then merge provider state.
     session = _load(chat_id)
     session["provider_state"].update(result.provider_state_updates)
+
+    # If a Codex resume returned an error (not timeout — timeouts are handled
+    # in the provider with an extended deadline for compaction), the thread is
+    # likely corrupt.  Clear thread_id so the next message starts fresh.
+    resume_errored = (
+        prov.name == "codex"
+        and is_resume
+        and not result.timed_out
+        and result.returncode and result.returncode != 0
+    )
+    if resume_errored:
+        log.warning("Codex resume error (rc=%s) for chat %d — clearing thread",
+                     result.returncode, chat_id)
+        session["provider_state"]["thread_id"] = None
+
     _save(chat_id, session)
 
     if result.timed_out:
@@ -443,7 +493,10 @@ async def execute_request(
         return
 
     if result.returncode != 0:
-        await progress.update(trim_text(result.text, 3000), force=True)
+        error_text = trim_text(result.text, 3000)
+        if resume_errored:
+            error_text += "\n\n<i>Thread could not be resumed — next message starts a fresh session.</i>"
+        await progress.update(error_text, force=True)
         return
 
     # Claude denial/retry flow — show denials BEFORE output so the user
@@ -459,6 +512,7 @@ async def execute_request(
             attachment_dicts=[],
             context_hash=context_hash,
             denials=result.denials,
+            created_at=time.time(),
         )
         session["pending_request"] = dataclasses.asdict(pending)
         _save(chat_id, session)
@@ -484,6 +538,17 @@ async def execute_request(
     await progress.update("Done.", force=True)
 
     cleaned_reply, directives = extract_send_directives(result.text)
+
+    # Save raw response to ring buffer for /raw retrieval
+    save_raw(cfg.data_dir, chat_id, prompt[:200], cleaned_reply)
+
+    # Compact mode: summarize long responses for mobile readability
+    compact = session.get("compact_mode", cfg.compact_mode)
+    if compact and len(cleaned_reply) > 800:
+        summary = await summarize(cleaned_reply, cfg.summary_model)
+        if summary != cleaned_reply:
+            cleaned_reply = summary + "\n\n<i>Summarized — /raw for full response</i>"
+
     await send_formatted_reply(message, cleaned_reply)
     await send_directed_artifacts(chat_id, message, directives)
 
@@ -561,6 +626,7 @@ async def request_approval(
         image_paths=image_paths,
         attachment_dicts=attachment_dicts,
         context_hash=context_hash,
+        created_at=time.time(),
     )
     session["pending_request"] = dataclasses.asdict(pending)
     _save(chat_id, session)
@@ -614,11 +680,32 @@ def _current_context_hash(session: dict[str, Any]) -> str:
     )
 
 
+def _pending_expired(pending: dict) -> str | None:
+    """Return an expiry message if the pending request is too old, else None."""
+    created_at = pending.get("created_at", 0)
+    if not created_at:
+        return None  # legacy requests without timestamp — allow
+    ttl = max(3600, _cfg().timeout_seconds)  # at least 1 hour
+    age = time.time() - created_at
+    if age > ttl:
+        minutes = int(age // 60)
+        return f"This request has expired (created {minutes} minutes ago). Please resend your message."
+    return None
+
+
 async def approve_pending(chat_id: int, message) -> None:
     session = _load(chat_id)
     pending = session.get("pending_request")
     if not pending:
         await message.reply_text("No pending request to approve.")
+        return
+
+    # Reject expired requests
+    expiry_msg = _pending_expired(pending)
+    if expiry_msg:
+        session["pending_request"] = None
+        _save(chat_id, session)
+        await message.reply_text(expiry_msg)
         return
 
     # Validate context hash — reject if stale
@@ -654,30 +741,93 @@ async def reject_pending(chat_id: int, message) -> None:
 # -- Command handlers ------------------------------------------------------
 
 HELP_TEMPLATE = (
-    "<b>{provider} CLI Bridge</b> (instance: <code>{instance}</code>)\n\n"
-    "Send text, photos, or documents to chat with {provider}.\n\n"
+    "<b>Agent Bot</b> (instance: <code>{instance}</code>, provider: {provider})\n\n"
+    "Send a message, photo, or document and the AI will respond.\n\n"
     "<b>Commands:</b>\n"
-    "/new \u2014 fresh conversation\n"
-    "/session \u2014 show current session info\n"
-    "/skills \u2014 manage active skills\n"
-    "/role \u2014 view or set the chat role\n"
-    "/approval on|off|status \u2014 toggle preflight approval mode\n"
-    "/approve \u2014 approve pending request\n"
-    "/reject \u2014 reject pending request\n"
-    "/send &lt;path&gt; \u2014 retrieve a file from the filesystem\n"
-    "/id \u2014 show your Telegram user ID\n"
-    "/doctor \u2014 run health checks\n\n"
-    "{provider} can send files back by including lines like:\n"
-    "<code>SEND_FILE: /path/to/file</code>\n"
-    "<code>SEND_IMAGE: /path/to/image</code>"
+    "/new — start a fresh conversation\n"
+    "/skills — browse and activate skills (e.g. <code>/skills list</code>)\n"
+    "/role &lt;text&gt; — set the AI's persona (e.g. <code>/role Python expert</code>)\n"
+    "/approval on|off — show a plan before executing, or run immediately\n"
+    "/approve / /reject — act on a pending plan\n"
+    "/cancel — cancel credential setup or a pending request\n"
+    "/clear_credentials — remove your stored credentials\n"
+    "/send &lt;path&gt; — retrieve a file from the server\n"
+    "/session — show current session info\n"
+    "/id — show your Telegram user ID\n"
+    "/doctor — run health checks\n\n"
+    "Type /help skills, /help approval, or /help credentials for details."
 )
+
+HELP_SKILLS = (
+    "<b>Skills</b>\n\n"
+    "Skills add domain knowledge and tools to the AI.\n\n"
+    "/skills list — see all available skills with status\n"
+    "/skills add &lt;name&gt; — activate a skill (prompts for credentials if needed)\n"
+    "/skills remove &lt;name&gt; — deactivate a skill\n"
+    "/skills setup &lt;name&gt; — re-enter credentials for a skill\n"
+    "/skills info &lt;name&gt; — view skill details\n"
+    "/skills search &lt;query&gt; — search the skill store\n"
+    "/skills clear — deactivate all skills"
+)
+
+HELP_APPROVAL = (
+    "<b>Approval Mode</b>\n\n"
+    "When approval mode is on, the AI shows a plan before executing. "
+    "You review and approve or reject it.\n\n"
+    "/approval on — require approval before execution\n"
+    "/approval off — execute immediately\n"
+    "/approval status — check current setting\n"
+    "/approve — approve the pending plan\n"
+    "/reject — reject the pending plan\n"
+    "/cancel — cancel a pending request"
+)
+
+HELP_CREDENTIALS = (
+    "<b>Credentials</b>\n\n"
+    "Some skills need API tokens or keys. When you activate such a skill, "
+    "the bot asks for each credential in a private message and encrypts it.\n\n"
+    "/skills setup &lt;name&gt; — re-enter credentials for a skill\n"
+    "/clear_credentials — remove all your stored credentials\n"
+    "/clear_credentials &lt;skill&gt; — remove credentials for one skill\n\n"
+    "Your credential messages are deleted after capture for safety."
+)
+
+_HELP_TOPICS = {
+    "skills": HELP_SKILLS,
+    "approval": HELP_APPROVAL,
+    "credentials": HELP_CREDENTIALS,
+}
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /start — always show main help (ignores deep-link payloads)."""
     if not is_allowed(update.effective_user):
         await update.effective_message.reply_text("Not authorized.")
         return
     cfg = _cfg()
+    text = HELP_TEMPLATE.format(provider=_prov().name.capitalize(), instance=cfg.instance)
+    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /help [topic] — main help or topic-specific detail."""
+    if not is_allowed(update.effective_user):
+        await update.effective_message.reply_text("Not authorized.")
+        return
+    cfg = _cfg()
+    args = context.args or []
+
+    if args:
+        topic = args[0].lower()
+        topic_text = _HELP_TOPICS.get(topic)
+        if topic_text:
+            await update.effective_message.reply_text(topic_text, parse_mode=ParseMode.HTML)
+            return
+        await update.effective_message.reply_text(
+            "Unknown help topic. Try: /help skills, /help approval, or /help credentials."
+        )
+        return
+
     text = HELP_TEMPLATE.format(provider=_prov().name.capitalize(), instance=cfg.instance)
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
 
@@ -694,7 +844,7 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user_id = update.effective_user.id if update.effective_user else 0
         if _foreign_skill_setup(old_session, user_id):
             await update.effective_message.reply_text(
-                "Another user is completing credential setup. Please wait and try again.",
+                _foreign_setup_message(old_session.get("awaiting_skill_setup", {})),
             )
             return
         # Only preserve approval_mode if the user explicitly set it via /approval
@@ -866,10 +1016,21 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
         session = _load(chat_id)
         active = set(session.get("active_skills", []))
+        # Load user credentials for status annotations
+        req_user_id = update.effective_user.id if update.effective_user else 0
+        user_creds = load_user_credentials(_cfg().data_dir, req_user_id, _encryption_key())
         lines = ["<b>Available skills:</b>"]
         for name, meta in sorted(catalog.items()):
-            marker = " [active]" if name in active else ""
             from app.store import is_store_installed
+            if name in active:
+                status = " [active]"
+            else:
+                reqs = get_skill_requirements(name)
+                if reqs:
+                    missing = check_credentials(name, user_creds)
+                    status = " [needs setup]" if missing else " [ready]"
+                else:
+                    status = ""
             if meta.is_custom and is_store_installed(name):
                 custom_tag = " (store)"
             elif meta.is_custom:
@@ -877,7 +1038,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             else:
                 custom_tag = ""
             desc = f" \u2014 {html.escape(meta.description)}" if meta.description else ""
-            lines.append(f"  <code>{html.escape(name)}</code>{desc}{marker}{custom_tag}")
+            lines.append(f"  <code>{html.escape(name)}</code>{desc}{status}{custom_tag}")
         await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
         return
 
@@ -904,7 +1065,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     # Don't overwrite another user's in-progress setup
                     if _foreign_skill_setup(session, user_id):
                         await update.effective_message.reply_text(
-                            "Another user is completing credential setup. Please wait and try again.",
+                            _foreign_setup_message(session.get("awaiting_skill_setup", {})),
                         )
                         return
 
@@ -915,7 +1076,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     first_req = setup["remaining"][0]
                     await update.effective_message.reply_text(
                         f"Skill <code>{html.escape(name)}</code> needs setup before activation.\n\n"
-                        f"{html.escape(_format_credential_prompt(first_req))}",
+                        f"{_format_credential_prompt(first_req)}",
                         parse_mode=ParseMode.HTML,
                     )
                     return
@@ -940,7 +1101,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             had_setup = session.get("awaiting_skill_setup") is not None
             if _foreign_skill_setup(session, req_user_id, skill_name=name):
                 await update.effective_message.reply_text(
-                    "Another user is completing credential setup. Please wait and try again.",
+                    _foreign_setup_message(session.get("awaiting_skill_setup", {})),
                 )
                 return
             # _foreign_skill_setup may have expired a stale setup (had_setup but now None).
@@ -986,7 +1147,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             # Don't overwrite another user's in-progress setup
             if _foreign_skill_setup(session, user_id):
                 await update.effective_message.reply_text(
-                    "Another user is completing credential setup. Please wait and try again.",
+                    _foreign_setup_message(session.get("awaiting_skill_setup", {})),
                 )
                 return
             setup = _build_setup_state(user_id, name, requirements)
@@ -995,7 +1156,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         first_req = setup["remaining"][0]
         await update.effective_message.reply_text(
             f"Setting up <code>{html.escape(name)}</code>.\n\n"
-            f"{html.escape(_format_credential_prompt(first_req))}",
+            f"{_format_credential_prompt(first_req)}",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -1006,7 +1167,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             req_user_id = update.effective_user.id if update.effective_user else 0
             if _foreign_skill_setup(session, req_user_id):
                 await update.effective_message.reply_text(
-                    "Another user is completing credential setup. Please wait and try again.",
+                    _foreign_setup_message(session.get("awaiting_skill_setup", {})),
                 )
                 return
             session["active_skills"] = []
@@ -1060,19 +1221,32 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         parts = [f"<b>{html.escape(info.display_name)}</b>"]
         if info.description:
             parts.append(html.escape(info.description))
-        features = []
-        if info.has_requirements:
-            features.append("credentials required")
+        # Show credential requirements (installed skill first, store fallback)
+        reqs = get_skill_requirements(name)
+        if reqs:
+            req_keys = ", ".join(r.key for r in reqs)
+            parts.append(f"Requires: {html.escape(req_keys)}")
+        elif info.has_requirements:
+            from app.store import get_store_skill_requirements
+            store_keys = get_store_skill_requirements(name)
+            if store_keys:
+                parts.append(f"Requires: {html.escape(', '.join(store_keys))}")
+        # Show provider compatibility
+        providers = []
         if info.has_claude_config:
-            features.append("Claude config")
+            providers.append("Claude")
         if info.has_codex_config:
-            features.append("Codex config")
-        if features:
-            parts.append(f"Features: {', '.join(features)}")
-        # Show a preview of the instructions (first 500 chars)
-        preview = body[:500]
-        if len(body) > 500:
-            preview += "..."
+            providers.append("Codex")
+        if providers:
+            parts.append(f"Providers: {', '.join(providers)}")
+        # Preview: up to 1000 chars, break at paragraph boundary
+        if len(body) > 1000:
+            cut = body.rfind("\n\n", 0, 1000)
+            if cut < 500:
+                cut = 1000
+            preview = body[:cut] + "..."
+        else:
+            preview = body
         parts.append(f"\n<pre>{html.escape(preview)}</pre>")
         await update.effective_message.reply_text("\n".join(parts), parse_mode=ParseMode.HTML)
         return
@@ -1158,6 +1332,146 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
+async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update.effective_user):
+        return
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id if update.effective_user else 0
+
+    async with CHAT_LOCKS[chat_id]:
+        session = _load(chat_id)
+
+        # Cancel credential setup — own setup, or admin can cancel foreign setup
+        setup = session.get("awaiting_skill_setup")
+        if setup:
+            if setup.get("user_id") == user_id or is_admin(update.effective_user):
+                session["awaiting_skill_setup"] = None
+                _save(chat_id, session)
+                await update.effective_message.reply_text("Credential setup cancelled.")
+                return
+            else:
+                await update.effective_message.reply_text(
+                    "Another user's credential setup is in progress. Only they or an admin can cancel it.",
+                )
+                return
+
+        # Cancel pending approval request
+        pending = session.get("pending_request")
+        if pending:
+            session["pending_request"] = None
+            _save(chat_id, session)
+            await update.effective_message.reply_text("Pending request cancelled.")
+            return
+
+    await update.effective_message.reply_text("Nothing to cancel.")
+
+
+async def cmd_clear_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update.effective_user):
+        return
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id if update.effective_user else 0
+    args = context.args or []
+    skill_name = args[0] if args else None
+
+    cfg = _cfg()
+    key = _encryption_key()
+    removed = delete_user_credentials(cfg.data_dir, user_id, key, skill_name)
+
+    # Clear in-progress setup even if no credentials were saved yet
+    setup_cleared = False
+    async with CHAT_LOCKS[chat_id]:
+        session = _load(chat_id)
+        setup = session.get("awaiting_skill_setup")
+        if setup and setup.get("user_id") == user_id:
+            if skill_name is None or setup.get("skill") == skill_name:
+                session["awaiting_skill_setup"] = None
+                setup_cleared = True
+
+        # Deactivate affected skills
+        active = session.get("active_skills", [])
+        deactivated = []
+        for name in removed:
+            if name in active and get_skill_requirements(name):
+                active.remove(name)
+                deactivated.append(name)
+        if deactivated or setup_cleared:
+            session["active_skills"] = active
+            _save(chat_id, session)
+
+    if not removed and not setup_cleared:
+        target = f"for skill <code>{html.escape(skill_name)}</code>" if skill_name else ""
+        await update.effective_message.reply_text(
+            f"No stored credentials found {target}.".strip(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    parts = []
+    if removed:
+        parts.append(f"Credentials cleared for: {html.escape(', '.join(removed))}.")
+    if setup_cleared:
+        parts.append("Credential setup cancelled.")
+    if deactivated:
+        parts.append(f"Deactivated in this chat: {html.escape(', '.join(deactivated))}.")
+    await update.effective_message.reply_text("\n".join(parts), parse_mode=ParseMode.HTML)
+
+
+async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update.effective_user):
+        return
+    chat_id = update.effective_chat.id
+    args = context.args or []
+
+    if not args:
+        session = _load(chat_id)
+        current = session.get("compact_mode", _cfg().compact_mode)
+        state = "on" if current else "off"
+        await update.effective_message.reply_text(
+            f"Compact mode is <b>{state}</b>.\nUse <code>/compact on</code> or <code>/compact off</code> to change.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    mode = args[0].lower()
+    if mode not in {"on", "off"}:
+        await update.effective_message.reply_text("Usage: /compact on|off")
+        return
+
+    async with CHAT_LOCKS[chat_id]:
+        session = _load(chat_id)
+        session["compact_mode"] = mode == "on"
+        _save(chat_id, session)
+
+    label = "on — long responses will be summarized" if mode == "on" else "off"
+    await update.effective_message.reply_text(
+        f"Compact mode set to <b>{label}</b>.", parse_mode=ParseMode.HTML,
+    )
+
+
+async def cmd_raw(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_allowed(update.effective_user):
+        return
+    chat_id = update.effective_chat.id
+    cfg = _cfg()
+    args = context.args or []
+
+    n = 1
+    if args:
+        try:
+            n = int(args[0])
+        except ValueError:
+            await update.effective_message.reply_text("Usage: /raw [N] — N is the Nth most recent response (default: 1)")
+            return
+
+    raw_text = load_raw(cfg.data_dir, chat_id, n)
+    if raw_text is None:
+        await update.effective_message.reply_text("No stored responses found.")
+        return
+
+    await send_formatted_reply(update.effective_message, raw_text)
+
+
 async def cmd_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update.effective_user):
         return
@@ -1209,6 +1523,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     prompt, image_paths = build_user_prompt(text, attachments)
 
     user_id = update.effective_user.id if update.effective_user else 0
+
+    # First-run welcome for plain messages only (commands like /start and /help
+    # already provide orientation, so the welcome is only needed when a user
+    # sends a plain message without knowing what the bot does).
+    cfg = _cfg()
+    if not session_file(cfg.data_dir, chat_id).exists():
+        welcome = "I'm ready. Send me a message or type /help to see what I can do."
+        if cfg.approval_mode == "on":
+            welcome += "\nApproval mode is on \u2014 I'll show a plan before acting."
+        await message.chat.send_message(welcome)
 
     async with CHAT_LOCKS[chat_id]:
         await message.chat.send_action(ChatAction.TYPING)
@@ -1262,7 +1586,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 session["awaiting_skill_setup"] = setup
                 _save(chat_id, session)
                 await message.reply_text(
-                    html.escape(_format_credential_prompt(next_req)),
+                    _format_credential_prompt(next_req),
                     parse_mode=ParseMode.HTML,
                 )
             else:
@@ -1321,6 +1645,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 await query.message.edit_text("Nothing to retry.")
                 return
 
+            # Reject expired requests
+            expiry_msg = _pending_expired(pending)
+            if expiry_msg:
+                session["pending_request"] = None
+                _save(chat_id, session)
+                await query.edit_message_reply_markup(reply_markup=None)
+                await query.message.edit_text(expiry_msg)
+                return
+
             # Validate context hash — reject if stale
             if pending.get("context_hash") and pending["context_hash"] != _current_context_hash(session):
                 session["pending_request"] = None
@@ -1356,20 +1689,25 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # -- Application builder ---------------------------------------------------
 
 def build_application(config: BotConfig, provider: Provider) -> Application:
-    global _config, _provider
+    global _config, _provider, _boot_id
     _config = config
     _provider = provider
+    _boot_id = uuid.uuid4().hex
 
     app = Application.builder().token(config.telegram_token).build()
     app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("new", cmd_new))
     app.add_handler(CommandHandler("session", cmd_session))
     app.add_handler(CommandHandler("approval", cmd_approval))
     app.add_handler(CommandHandler("approve", cmd_approve))
     app.add_handler(CommandHandler("reject", cmd_reject))
     app.add_handler(CommandHandler("skills", cmd_skills))
+    app.add_handler(CommandHandler("cancel", cmd_cancel))
+    app.add_handler(CommandHandler("clear_credentials", cmd_clear_credentials))
     app.add_handler(CommandHandler("role", cmd_role))
+    app.add_handler(CommandHandler("compact", cmd_compact))
+    app.add_handler(CommandHandler("raw", cmd_raw))
     app.add_handler(CommandHandler("send", cmd_send))
     app.add_handler(CommandHandler("id", cmd_id))
     app.add_handler(CommandHandler("doctor", cmd_doctor))

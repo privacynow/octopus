@@ -223,6 +223,47 @@ def save_user_credential(
     tmp.rename(path)
 
 
+def delete_user_credentials(
+    data_dir: Path,
+    user_id: int,
+    key: bytes,
+    skill_name: str | None = None,
+) -> list[str]:
+    """Delete stored credentials for a user.
+
+    If skill_name is given, delete only that skill's credentials.
+    Otherwise delete all credentials.
+    Returns list of skill names whose credentials were removed.
+    """
+    path = _credential_file(data_dir, user_id)
+    if not path.is_file():
+        return []
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(stored, dict):
+        return []
+
+    if skill_name:
+        if skill_name not in stored:
+            return []
+        del stored[skill_name]
+        removed = [skill_name]
+    else:
+        removed = list(stored.keys())
+        stored = {}
+
+    if stored:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(stored, indent=2, sort_keys=True), encoding="utf-8")
+        tmp.rename(path)
+    else:
+        path.unlink(missing_ok=True)
+
+    return removed
+
+
 def build_credential_env(
     active_skills: list[str],
     user_credentials: dict[str, dict[str, str]],
@@ -280,9 +321,24 @@ async def validate_credential(req: SkillRequirement, value: str) -> tuple[bool, 
             resp = await client.request(method, url, headers=headers)
             if resp.status_code == expect_status:
                 return True, ""
-            return False, f"Expected status {expect_status}, got {resp.status_code}"
+            return False, _friendly_validation_error(resp.status_code, expect_status)
     except Exception as e:
         return False, f"Validation request failed: {e}"
+
+
+def _friendly_validation_error(got: int, expected: int) -> str:
+    """Map HTTP status codes to human-readable credential error guidance."""
+    if got in (401, 403):
+        hint = ("Token was rejected. Double-check you copied the full token "
+                "and that it has the required permissions.")
+    elif got == 404:
+        hint = ("The validation endpoint was not found. "
+                "The service may have changed its API.")
+    elif 500 <= got < 600:
+        hint = "The service is temporarily unavailable. Try again in a few minutes."
+    else:
+        hint = "Unexpected response from the service."
+    return f"{hint} (HTTP {got}, expected {expected})"
 
 
 # ---------------------------------------------------------------------------

@@ -38,6 +38,7 @@ def make_config(**overrides):
         codex_sandbox="workspace-write", codex_skip_git_repo_check=True,
         codex_full_auto=False, codex_dangerous=False, codex_profile="myprofile",
         admin_user_ids=frozenset(), admin_usernames=frozenset(),
+        compact_mode=False, summary_model="claude-haiku-4-5-20251001",
     )
     defaults.update(overrides)
     return BotConfig(**defaults)

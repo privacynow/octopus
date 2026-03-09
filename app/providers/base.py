@@ -40,6 +40,7 @@ class PendingRequest:
     attachment_dicts: list[dict]  # serialized Attachment objects (approval flow)
     context_hash: str
     denials: list[dict] | None = None  # permission denials (retry flow only)
+    created_at: float = 0.0  # time.time() when request was created
 
 
 def compute_context_hash(

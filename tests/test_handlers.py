@@ -212,22 +212,99 @@ def make_config(data_dir, **overrides):
         codex_sandbox="workspace-write", codex_skip_git_repo_check=True,
         codex_full_auto=False, codex_dangerous=False, codex_profile="",
         admin_user_ids=frozenset(), admin_usernames=frozenset(),
+        compact_mode=False, summary_model="claude-haiku-4-5-20251001",
     )
     defaults.update(overrides)
     return BotConfig(**defaults)
 
 
-def setup_globals(config, provider):
+def setup_globals(config, provider, *, boot_id="test-boot"):
     """Inject config and provider into telegram_handlers module globals."""
     import app.telegram_handlers as th
     th._config = config
     th._provider = provider
+    th._boot_id = boot_id
     th.CHAT_LOCKS.clear()
 
 
 def load_session_disk(data_dir, chat_id, provider):
     """Load session from disk using the provider's factory."""
     return load_session(data_dir, chat_id, provider.name, provider.new_provider_state, "off")
+
+
+# ---------------------------------------------------------------------------
+# Scenario-test helpers — keep focused tests small and readable
+# ---------------------------------------------------------------------------
+
+import app.telegram_handlers as _th
+
+
+async def send_command(handler, chat, user, text, args=None):
+    """Call a command handler, return the FakeMessage so callers can inspect replies."""
+    msg = FakeMessage(chat=chat, text=text)
+    upd = FakeUpdate(message=msg, user=user, chat=chat)
+    await handler(upd, FakeContext(args=args or []))
+    return msg
+
+
+async def send_text(chat, user, text, *, provider):
+    """Send a plain message through handle_message, return the FakeMessage.
+
+    Caller must seed provider.run_results before calling — no silent fallback.
+    """
+    msg = FakeMessage(chat=chat, text=text)
+    upd = FakeUpdate(message=msg, user=user, chat=chat)
+    await _th.handle_message(upd, FakeContext())
+    return msg
+
+
+def last_reply(msg):
+    """Return the text of the most recent reply_text on a FakeMessage."""
+    if not msg.replies:
+        return ""
+    r = msg.replies[-1]
+    return r.get("text", r.get("edit_text", ""))
+
+
+def last_run_call(provider):
+    """Return the most recent run() call dict, or None."""
+    return provider.run_calls[-1] if provider.run_calls else None
+
+
+def last_run_context(provider):
+    """Return the RunContext from the most recent provider.run() call."""
+    call = last_run_call(provider)
+    return call["context"] if call else None
+
+
+def make_skill(custom_dir, name, *, body, requires=None):
+    """Create a custom skill fixture on disk. Returns the skill directory path."""
+    d = custom_dir / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "skill.md").write_text(
+        f"---\nname: {name}\ndisplay_name: {name}\n"
+        f"description: test fixture\n---\n\n{body}\n"
+    )
+    if requires:
+        lines = ["credentials:"]
+        for r in requires:
+            lines.append(f'  - key: {r["key"]}')
+            lines.append(f'    prompt: "{r.get("prompt", "enter " + r["key"])}"')
+            if "help_url" in r:
+                lines.append(f'    help_url: {r["help_url"]}')
+        (d / "requires.yaml").write_text("\n".join(lines) + "\n")
+    return d
+
+
+def make_store_skill(store_dir, name, *, body):
+    """Create a store skill fixture on disk. Returns the skill directory path."""
+    d = store_dir / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "skill.md").write_text(
+        f"---\nname: {name}\ndisplay_name: {name}\n"
+        f"description: test fixture\n---\n\n{body}\n"
+    )
+    return d
 
 
 _tests: list[tuple[str, Any]] = []  # (name, coroutine_function)
@@ -892,6 +969,173 @@ async def test_codex_retry_clears_thread():
         check("thread_id cleared for retry", call_state.get("thread_id"), None)
 
 run_test("codex retry clears thread_id", test_codex_retry_clears_thread())
+
+
+# ===================================================================
+# Regression: failed codex resume clears thread_id (compaction / crash)
+# ===================================================================
+
+async def test_codex_failed_resume_clears_thread():
+    """When codex exec resume fails (e.g. thread killed mid-compaction),
+    thread_id must be cleared so the next message starts fresh."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir, provider_name="codex")
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        current_hash = compute_context_hash("", [], {}, get_provider_config_digest([]), [])
+
+        # Session has an active thread
+        session = default_session("codex", {"thread_id": "thread-abc", "context_hash": current_hash}, "off")
+        save_session(data_dir, 12345, session)
+
+        # Provider returns a non-zero exit (simulating resume failure)
+        prov.run_results = [RunResult(text="[Codex error: thread not found]", returncode=1)]
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = FakeMessage(chat=chat, text="continue working")
+        update = FakeUpdate(message=msg, user=user, chat=chat)
+
+        import app.telegram_handlers as th
+        await th.handle_message(update, FakeContext())
+
+        # thread_id must be cleared so next message starts fresh
+        session = load_session_disk(data_dir, 12345, prov)
+        check("thread_id cleared after failed resume",
+              session["provider_state"].get("thread_id"), None)
+
+run_test("codex failed resume clears thread_id", test_codex_failed_resume_clears_thread())
+
+
+async def test_codex_timed_out_resume_preserves_thread():
+    """When codex exec resume times out, thread_id must be preserved —
+    the timeout extension in the provider handles compaction; the handler
+    should not discard a potentially-valid thread."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir, provider_name="codex")
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        current_hash = compute_context_hash("", [], {}, get_provider_config_digest([]), [])
+
+        session = default_session("codex", {"thread_id": "thread-abc", "context_hash": current_hash}, "off")
+        save_session(data_dir, 12345, session)
+
+        prov.run_results = [RunResult(text="", timed_out=True, returncode=124)]
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = FakeMessage(chat=chat, text="continue working")
+        update = FakeUpdate(message=msg, user=user, chat=chat)
+
+        import app.telegram_handlers as th
+        await th.handle_message(update, FakeContext())
+
+        session = load_session_disk(data_dir, 12345, prov)
+        check("thread_id preserved after timeout",
+              session["provider_state"].get("thread_id"), "thread-abc")
+
+run_test("codex timed-out resume preserves thread_id", test_codex_timed_out_resume_preserves_thread())
+
+
+async def test_codex_new_exec_failure_preserves_no_thread():
+    """When codex exec (NOT resume) fails, thread_id stays None — not a resume, no clear needed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir, provider_name="codex")
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        session = default_session("codex", {"thread_id": None}, "off")
+        save_session(data_dir, 12345, session)
+
+        prov.run_results = [RunResult(text="[Codex error: model overloaded]", returncode=1)]
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = FakeMessage(chat=chat, text="do something")
+        update = FakeUpdate(message=msg, user=user, chat=chat)
+
+        import app.telegram_handlers as th
+        await th.handle_message(update, FakeContext())
+
+        session = load_session_disk(data_dir, 12345, prov)
+        check("thread_id still None",
+              session["provider_state"].get("thread_id"), None)
+
+run_test("codex new exec failure preserves no thread", test_codex_new_exec_failure_preserves_no_thread())
+
+
+async def test_codex_boot_id_clears_stale_thread():
+    """After bot restart (new boot_id), first message clears old thread and starts fresh."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir, provider_name="codex")
+        prov = FakeProvider("codex")
+        # Simulate old boot: set up session with old boot_id and a thread_id
+        setup_globals(cfg, prov, boot_id="old-boot")
+        session = default_session("codex", {"thread_id": "old-thread", "boot_id": "old-boot", "context_hash": "abc"}, "off")
+        save_session(data_dir, 12345, session)
+
+        # Now simulate restart: new boot_id
+        setup_globals(cfg, prov, boot_id="new-boot")
+        prov.run_results = [RunResult(text="done")]
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = FakeMessage(chat=chat, text="hello")
+        update = FakeUpdate(message=msg, user=user, chat=chat)
+
+        import app.telegram_handlers as th
+        await th.handle_message(update, FakeContext())
+
+        # Thread should have been cleared before execution
+        # Provider should have been called with no thread_id (fresh exec, not resume)
+        call = last_run_call(prov)
+        check("boot restart is not resume",
+              call["provider_state"].get("thread_id"), None)
+
+        # Session on disk should have new boot_id
+        session = load_session_disk(data_dir, 12345, prov)
+        check("boot_id updated", session["provider_state"].get("boot_id"), "new-boot")
+
+run_test("codex boot_id clears stale thread on restart", test_codex_boot_id_clears_stale_thread())
+
+
+async def test_codex_same_boot_preserves_thread():
+    """Within the same boot, thread_id is preserved for resume."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir, provider_name="codex")
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov, boot_id="same-boot")
+
+        session = default_session("codex", {"thread_id": "my-thread", "boot_id": "same-boot"}, "off")
+        save_session(data_dir, 12345, session)
+
+        prov.run_results = [RunResult(text="done", provider_state_updates={"thread_id": "my-thread"})]
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = FakeMessage(chat=chat, text="hello")
+        update = FakeUpdate(message=msg, user=user, chat=chat)
+
+        import app.telegram_handlers as th
+        await th.handle_message(update, FakeContext())
+
+        call = last_run_call(prov)
+        check("same boot preserves thread",
+              call["provider_state"].get("thread_id"), "my-thread")
+
+run_test("codex same boot preserves thread", test_codex_same_boot_preserves_thread())
 
 
 # ===================================================================
@@ -2577,16 +2821,773 @@ run_test("expired setup persisted on noop remove", test_expired_setup_persisted_
 
 
 # ===================================================================
-# Test 51: End-to-end skills lifecycle
+# Focused scenario tests — skills lifecycle
+# Each test covers one behavioral invariant with stable markers.
 # ===================================================================
 
-async def test_e2e_skills_lifecycle():
-    """Full skills lifecycle in one session, exercising real persistence between
-    every step: add credentialed skill → credential setup → capture → activation
-    → provider dispatch with creds → add instruction-only skill → provider dispatch
-    with both skills → role change → context hash drift → remove credentialed skill
-    → provider dispatch without creds → /skills clear → provider dispatch with no
-    skills → /new reset."""
+MARKER_ALPHA = "SKILL_ALPHA_e7f3"
+MARKER_BETA = "SKILL_BETA_a2c9"
+
+
+async def test_handler_credential_activation_and_capture():
+    """Add credentialed skill -> send secret -> skill activates, secret deleted."""
+    import app.skills as skills_mod
+    orig = skills_mod.CUSTOM_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            ensure_data_dirs(data_dir)
+            custom_dir = Path(tmp) / "custom"
+            custom_dir.mkdir()
+            skills_mod.CUSTOM_DIR = custom_dir
+
+            make_skill(custom_dir, "alpha", body=MARKER_ALPHA,
+                       requires=[{"key": "ALPHA_TOKEN"}])
+
+            cfg = make_config(data_dir)
+            prov = FakeProvider("claude")
+            setup_globals(cfg, prov)
+
+            original_validate = _th.validate_credential
+            _th.validate_credential = lambda req, val: asyncio.coroutine(lambda: (True, ""))()
+            try:
+                chat = FakeChat(1001)
+                alice = FakeUser(uid=100, username="alice")
+
+                # Add credentialed skill — enters setup, not yet active
+                msg = await send_command(_th.cmd_skills, chat, alice,
+                                        "/skills add alpha", ["add", "alpha"])
+                session = load_session_disk(data_dir, 1001, prov)
+                check_not_in("not active before creds", "alpha",
+                             session.get("active_skills", []))
+                check_true("setup started", session.get("awaiting_skill_setup") is not None)
+
+                # Send credential — captured, deleted, skill activates
+                secret_msg = FakeMessage(chat=chat, text="my-secret-token")
+                await _th.handle_message(
+                    FakeUpdate(message=secret_msg, user=alice, chat=chat), FakeContext())
+
+                check_true("secret message deleted", secret_msg.deleted)
+                session = load_session_disk(data_dir, 1001, prov)
+                check("setup cleared", session.get("awaiting_skill_setup"), None)
+                check_in("skill activated", "alpha", session.get("active_skills", []))
+
+                # Credential persisted in encrypted storage
+                key = derive_encryption_key(cfg.telegram_token)
+                creds = load_user_credentials(data_dir, 100, key)
+                check("credential saved", creds.get("alpha", {}).get("ALPHA_TOKEN"),
+                      "my-secret-token")
+            finally:
+                _th.validate_credential = original_validate
+    finally:
+        skills_mod.CUSTOM_DIR = orig
+
+run_test("handler: credential activation and capture",
+         test_handler_credential_activation_and_capture())
+
+
+async def test_handler_provider_context_has_skill_and_creds():
+    """After activation, provider.run receives skill instructions and credential_env."""
+    import app.skills as skills_mod
+    orig = skills_mod.CUSTOM_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            ensure_data_dirs(data_dir)
+            custom_dir = Path(tmp) / "custom"
+            custom_dir.mkdir()
+            skills_mod.CUSTOM_DIR = custom_dir
+
+            make_skill(custom_dir, "alpha", body=MARKER_ALPHA,
+                       requires=[{"key": "ALPHA_TOKEN"}])
+
+            cfg = make_config(data_dir)
+            prov = FakeProvider("claude")
+            setup_globals(cfg, prov)
+
+            chat = FakeChat(1001)
+            alice = FakeUser(uid=100, username="alice")
+
+            # Pre-save credential and activate skill directly
+            key = derive_encryption_key(cfg.telegram_token)
+            save_user_credential(data_dir, 100, "alpha", "ALPHA_TOKEN", "tok-123", key)
+            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session["active_skills"] = ["alpha"]
+            save_session(data_dir, 1001, session)
+
+            prov.run_results = [RunResult(text="done")]
+            await send_text(chat, alice, "do something", provider=prov)
+
+            ctx = last_run_context(prov)
+            check_in("marker in system_prompt", MARKER_ALPHA, ctx.system_prompt)
+            check("cred in env", ctx.credential_env.get("ALPHA_TOKEN"), "tok-123")
+    finally:
+        skills_mod.CUSTOM_DIR = orig
+
+run_test("handler: provider context has skill instructions and creds",
+         test_handler_provider_context_has_skill_and_creds())
+
+
+async def test_handler_second_skill_changes_prompt():
+    """Adding a second instruction-only skill includes both markers in prompt."""
+    import app.skills as skills_mod
+    orig = skills_mod.CUSTOM_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            ensure_data_dirs(data_dir)
+            custom_dir = Path(tmp) / "custom"
+            custom_dir.mkdir()
+            skills_mod.CUSTOM_DIR = custom_dir
+
+            make_skill(custom_dir, "alpha", body=MARKER_ALPHA,
+                       requires=[{"key": "ALPHA_TOKEN"}])
+            make_skill(custom_dir, "beta", body=MARKER_BETA)
+
+            cfg = make_config(data_dir)
+            prov = FakeProvider("claude")
+            setup_globals(cfg, prov)
+
+            chat = FakeChat(1001)
+            alice = FakeUser(uid=100, username="alice")
+
+            # Pre-activate alpha with creds, then add beta
+            key = derive_encryption_key(cfg.telegram_token)
+            save_user_credential(data_dir, 100, "alpha", "ALPHA_TOKEN", "tok-123", key)
+            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session["active_skills"] = ["alpha"]
+            save_session(data_dir, 1001, session)
+
+            await send_command(_th.cmd_skills, chat, alice,
+                               "/skills add beta", ["add", "beta"])
+
+            session = load_session_disk(data_dir, 1001, prov)
+            check_in("alpha still active", "alpha", session.get("active_skills", []))
+            check_in("beta now active", "beta", session.get("active_skills", []))
+
+            prov.run_results = [RunResult(text="done")]
+            await send_text(chat, alice, "go", provider=prov)
+
+            ctx = last_run_context(prov)
+            check_in("alpha marker in prompt", MARKER_ALPHA, ctx.system_prompt)
+            check_in("beta marker in prompt", MARKER_BETA, ctx.system_prompt)
+            check("alpha cred still in env", ctx.credential_env.get("ALPHA_TOKEN"), "tok-123")
+    finally:
+        skills_mod.CUSTOM_DIR = orig
+
+run_test("handler: second skill changes prompt composition",
+         test_handler_second_skill_changes_prompt())
+
+
+async def test_handler_role_affects_provider_context():
+    """Setting a role includes it in the provider system_prompt."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        chat = FakeChat(1001)
+        alice = FakeUser(uid=100, username="alice")
+
+        await send_command(_th.cmd_role, chat, alice,
+                           "/role senior engineer", ["senior", "engineer"])
+
+        session = load_session_disk(data_dir, 1001, prov)
+        check("role persisted", session.get("role"), "senior engineer")
+
+        prov.run_results = [RunResult(text="done")]
+        await send_text(chat, alice, "review this", provider=prov)
+
+        ctx = last_run_context(prov)
+        check_in("role in system_prompt", "senior engineer", ctx.system_prompt.lower())
+
+run_test("handler: role affects provider context",
+         test_handler_role_affects_provider_context())
+
+
+async def test_handler_skills_remove_drops_cred_env():
+    """/skills remove drops credential_env for that skill but preserves others."""
+    import app.skills as skills_mod
+    orig = skills_mod.CUSTOM_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            ensure_data_dirs(data_dir)
+            custom_dir = Path(tmp) / "custom"
+            custom_dir.mkdir()
+            skills_mod.CUSTOM_DIR = custom_dir
+
+            make_skill(custom_dir, "alpha", body=MARKER_ALPHA,
+                       requires=[{"key": "ALPHA_TOKEN"}])
+            make_skill(custom_dir, "beta", body=MARKER_BETA)
+
+            cfg = make_config(data_dir)
+            prov = FakeProvider("claude")
+            setup_globals(cfg, prov)
+
+            chat = FakeChat(1001)
+            alice = FakeUser(uid=100, username="alice")
+
+            key = derive_encryption_key(cfg.telegram_token)
+            save_user_credential(data_dir, 100, "alpha", "ALPHA_TOKEN", "tok-123", key)
+            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session["active_skills"] = ["alpha", "beta"]
+            save_session(data_dir, 1001, session)
+
+            await send_command(_th.cmd_skills, chat, alice,
+                               "/skills remove alpha", ["remove", "alpha"])
+
+            session = load_session_disk(data_dir, 1001, prov)
+            check_not_in("alpha removed", "alpha", session.get("active_skills", []))
+            check_in("beta preserved", "beta", session.get("active_skills", []))
+
+            prov.run_results = [RunResult(text="done")]
+            await send_text(chat, alice, "go", provider=prov)
+
+            ctx = last_run_context(prov)
+            check_not_in("alpha marker gone", MARKER_ALPHA, ctx.system_prompt)
+            check_in("beta marker present", MARKER_BETA, ctx.system_prompt)
+            check("alpha cred gone", ctx.credential_env.get("ALPHA_TOKEN"), None)
+    finally:
+        skills_mod.CUSTOM_DIR = orig
+
+run_test("handler: /skills remove drops cred env",
+         test_handler_skills_remove_drops_cred_env())
+
+
+async def test_handler_skills_clear_preserves_credentials():
+    """/skills clear empties active_skills but credentials stay on disk."""
+    import app.skills as skills_mod
+    orig = skills_mod.CUSTOM_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            ensure_data_dirs(data_dir)
+            custom_dir = Path(tmp) / "custom"
+            custom_dir.mkdir()
+            skills_mod.CUSTOM_DIR = custom_dir
+
+            make_skill(custom_dir, "alpha", body=MARKER_ALPHA,
+                       requires=[{"key": "ALPHA_TOKEN"}])
+
+            cfg = make_config(data_dir)
+            prov = FakeProvider("claude")
+            setup_globals(cfg, prov)
+
+            chat = FakeChat(1001)
+            alice = FakeUser(uid=100, username="alice")
+
+            key = derive_encryption_key(cfg.telegram_token)
+            save_user_credential(data_dir, 100, "alpha", "ALPHA_TOKEN", "tok-123", key)
+            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session["active_skills"] = ["alpha"]
+            save_session(data_dir, 1001, session)
+
+            msg = await send_command(_th.cmd_skills, chat, alice,
+                                    "/skills clear", ["clear"])
+            check_in("reply confirms clear", "removed", last_reply(msg).lower())
+
+            session = load_session_disk(data_dir, 1001, prov)
+            check("active_skills empty", session.get("active_skills"), [])
+
+            creds = load_user_credentials(data_dir, 100, key)
+            check("credential survives clear",
+                  creds.get("alpha", {}).get("ALPHA_TOKEN"), "tok-123")
+    finally:
+        skills_mod.CUSTOM_DIR = orig
+
+run_test("handler: /skills clear preserves credentials",
+         test_handler_skills_clear_preserves_credentials())
+
+
+async def test_handler_new_resets_state_not_credentials():
+    """/new resets session (skills, role, setup) but user credentials survive."""
+    import app.skills as skills_mod
+    orig = skills_mod.CUSTOM_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            ensure_data_dirs(data_dir)
+            custom_dir = Path(tmp) / "custom"
+            custom_dir.mkdir()
+            skills_mod.CUSTOM_DIR = custom_dir
+
+            make_skill(custom_dir, "alpha", body=MARKER_ALPHA,
+                       requires=[{"key": "ALPHA_TOKEN"}])
+
+            cfg = make_config(data_dir)
+            prov = FakeProvider("claude")
+            setup_globals(cfg, prov)
+
+            chat = FakeChat(1001)
+            alice = FakeUser(uid=100, username="alice")
+
+            key = derive_encryption_key(cfg.telegram_token)
+            save_user_credential(data_dir, 100, "alpha", "ALPHA_TOKEN", "tok-123", key)
+            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session["active_skills"] = ["alpha"]
+            session["role"] = "senior engineer"
+            save_session(data_dir, 1001, session)
+
+            await send_command(_th.cmd_new, chat, alice, "/new")
+
+            session = load_session_disk(data_dir, 1001, prov)
+            check("skills reset", session.get("active_skills"), [])
+            check("role reset", session.get("role"), "")
+            check("setup cleared", session.get("awaiting_skill_setup"), None)
+
+            creds = load_user_credentials(data_dir, 100, key)
+            check("credential survives /new",
+                  creds.get("alpha", {}).get("ALPHA_TOKEN"), "tok-123")
+    finally:
+        skills_mod.CUSTOM_DIR = orig
+
+run_test("handler: /new resets state not credentials",
+         test_handler_new_resets_state_not_credentials())
+
+
+async def test_regression_readd_after_new_skips_setup():
+    """Re-adding a skill after /new activates immediately when credentials exist."""
+    import app.skills as skills_mod
+    orig = skills_mod.CUSTOM_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            ensure_data_dirs(data_dir)
+            custom_dir = Path(tmp) / "custom"
+            custom_dir.mkdir()
+            skills_mod.CUSTOM_DIR = custom_dir
+
+            make_skill(custom_dir, "alpha", body=MARKER_ALPHA,
+                       requires=[{"key": "ALPHA_TOKEN"}])
+
+            cfg = make_config(data_dir)
+            prov = FakeProvider("claude")
+            setup_globals(cfg, prov)
+
+            chat = FakeChat(1001)
+            alice = FakeUser(uid=100, username="alice")
+
+            key = derive_encryption_key(cfg.telegram_token)
+            save_user_credential(data_dir, 100, "alpha", "ALPHA_TOKEN", "tok-123", key)
+
+            # Fresh session (as after /new)
+            session = default_session(prov.name, prov.new_provider_state(), "off")
+            save_session(data_dir, 1001, session)
+
+            await send_command(_th.cmd_skills, chat, alice,
+                               "/skills add alpha", ["add", "alpha"])
+
+            session = load_session_disk(data_dir, 1001, prov)
+            check_in("activates immediately", "alpha", session.get("active_skills", []))
+            check("no setup needed", session.get("awaiting_skill_setup"), None)
+    finally:
+        skills_mod.CUSTOM_DIR = orig
+
+run_test("regression: re-add after /new skips setup",
+         test_regression_readd_after_new_skips_setup())
+
+
+# ===================================================================
+# Smoke test — credentialed skill happy path (max 4 phases)
+# Proves wiring works end to end; focused tests cover edge cases.
+# ===================================================================
+
+async def test_smoke_credentialed_skill_flow():
+    """Smoke: add credentialed skill -> capture secret -> provider dispatch -> done."""
+    import app.skills as skills_mod
+    orig = skills_mod.CUSTOM_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            ensure_data_dirs(data_dir)
+            custom_dir = Path(tmp) / "custom"
+            custom_dir.mkdir()
+            skills_mod.CUSTOM_DIR = custom_dir
+
+            make_skill(custom_dir, "alpha", body=MARKER_ALPHA,
+                       requires=[{"key": "ALPHA_TOKEN"}])
+
+            cfg = make_config(data_dir)
+            prov = FakeProvider("claude")
+            setup_globals(cfg, prov)
+
+            original_validate = _th.validate_credential
+            _th.validate_credential = lambda req, val: asyncio.coroutine(lambda: (True, ""))()
+            try:
+                chat = FakeChat(1001)
+                alice = FakeUser(uid=100, username="alice")
+
+                # Phase 1: /skills add -> enters setup
+                await send_command(_th.cmd_skills, chat, alice,
+                                   "/skills add alpha", ["add", "alpha"])
+
+                # Phase 2: send credential -> captured
+                secret_msg = FakeMessage(chat=chat, text="my-secret")
+                await _th.handle_message(
+                    FakeUpdate(message=secret_msg, user=alice, chat=chat), FakeContext())
+                check_true("smoke: secret deleted", secret_msg.deleted)
+
+                # Phase 3: plain message -> provider sees skill + cred
+                prov.run_results = [RunResult(text="done")]
+                msg = await send_text(chat, alice, "go", provider=prov)
+
+                ctx = last_run_context(prov)
+                check_in("smoke: marker in prompt", MARKER_ALPHA, ctx.system_prompt)
+                check("smoke: cred in env",
+                      ctx.credential_env.get("ALPHA_TOKEN"), "my-secret")
+            finally:
+                _th.validate_credential = original_validate
+    finally:
+        skills_mod.CUSTOM_DIR = orig
+
+run_test("smoke: credentialed skill flow", test_smoke_credentialed_skill_flow())
+
+
+
+# ===================================================================
+# Focused scenario tests — skill store lifecycle
+# Each test covers one behavioral invariant with stable markers.
+# ===================================================================
+
+STORE_V1 = "STORE_HELPER_V1_d4e8"
+STORE_V2 = "STORE_HELPER_V2_b7f1"
+STORE_V3 = "STORE_HELPER_V3_c9a2"
+
+
+def _store_env(tmp):
+    """Set up store + custom dirs and patch module globals. Returns cleanup callable."""
+    import app.store as store_mod
+    import app.skills as skills_mod
+
+    data_dir = Path(tmp) / "data"
+    ensure_data_dirs(data_dir)
+    tmp_store = Path(tmp) / "store"
+    tmp_custom = Path(tmp) / "custom"
+    tmp_store.mkdir()
+    tmp_custom.mkdir()
+
+    orig = (store_mod.STORE_DIR, store_mod.CUSTOM_DIR, skills_mod.CUSTOM_DIR)
+    store_mod.STORE_DIR = tmp_store
+    store_mod.CUSTOM_DIR = tmp_custom
+    skills_mod.CUSTOM_DIR = tmp_custom
+
+    def cleanup():
+        store_mod.STORE_DIR, store_mod.CUSTOM_DIR, skills_mod.CUSTOM_DIR = orig
+
+    return data_dir, tmp_store, tmp_custom, cleanup
+
+
+def _admin_cfg(data_dir):
+    return make_config(
+        data_dir=data_dir,
+        admin_user_ids=frozenset({100}),
+        admin_usernames=frozenset({"admin"}),
+        allowed_user_ids=frozenset({100, 200}),
+        allowed_usernames=frozenset({"admin", "regular"}),
+    )
+
+
+async def test_handler_nonadmin_install_rejected():
+    """Non-admin user cannot install store skills."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
+        try:
+            make_store_skill(tmp_store, "helper", body=STORE_V1)
+            prov = FakeProvider("claude")
+            setup_globals(_admin_cfg(data_dir), prov)
+
+            regular = FakeUser(uid=200, username="regular")
+            chat = FakeChat(2001)
+
+            msg = await send_command(_th.cmd_skills, chat, regular,
+                                    "/skills install helper", ["install", "helper"])
+
+            check_in("blocked msg mentions admin", "admin", last_reply(msg).lower())
+            check_false("skill not installed", (tmp_custom / "helper").is_dir())
+        finally:
+            cleanup()
+
+run_test("handler: non-admin install rejected",
+         test_handler_nonadmin_install_rejected())
+
+
+async def test_handler_admin_install_writes_manifest():
+    """Admin install creates skill dir with _store.json manifest."""
+    import json as _json
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
+        try:
+            make_store_skill(tmp_store, "helper", body=STORE_V1)
+            prov = FakeProvider("claude")
+            setup_globals(_admin_cfg(data_dir), prov)
+
+            admin = FakeUser(uid=100, username="admin")
+            chat = FakeChat(1001)
+
+            msg = await send_command(_th.cmd_skills, chat, admin,
+                                    "/skills install helper", ["install", "helper"])
+
+            check_in("reply confirms install", "installed", last_reply(msg).lower())
+            check_true("skill dir created", (tmp_custom / "helper").is_dir())
+            check_true("_store.json exists", (tmp_custom / "helper" / "_store.json").is_file())
+
+            manifest = _json.loads((tmp_custom / "helper" / "_store.json").read_text())
+            check("manifest source", manifest["source"], "store")
+            check("manifest not modified", manifest["locally_modified"], False)
+        finally:
+            cleanup()
+
+run_test("handler: admin install writes manifest",
+         test_handler_admin_install_writes_manifest())
+
+
+async def test_handler_store_update_propagates():
+    """Updated store content reaches provider on next message after /skills update."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
+        try:
+            make_store_skill(tmp_store, "helper", body=STORE_V1)
+            prov = FakeProvider("claude")
+            cfg = _admin_cfg(data_dir)
+            setup_globals(cfg, prov)
+
+            admin = FakeUser(uid=100, username="admin")
+            regular = FakeUser(uid=200, username="regular")
+            chat_admin = FakeChat(1001)
+            chat_user = FakeChat(2001)
+
+            # Install and activate
+            await send_command(_th.cmd_skills, chat_admin, admin,
+                               "/skills install helper", ["install", "helper"])
+            await send_command(_th.cmd_skills, chat_user, regular,
+                               "/skills add helper", ["add", "helper"])
+
+            # Verify V1 reaches provider
+            prov.run_results = [RunResult(text="ok")]
+            await send_text(chat_user, regular, "go", provider=prov)
+            check_in("V1 in prompt", STORE_V1, last_run_context(prov).system_prompt)
+            prov.run_calls.clear()
+
+            # Operator updates store to V2, admin runs update
+            (tmp_store / "helper" / "skill.md").write_text(
+                "---\nname: helper\ndisplay_name: helper\n"
+                "description: test fixture\n---\n\n" + STORE_V2 + "\n"
+            )
+            msg = await send_command(_th.cmd_skills, chat_admin, admin,
+                                    "/skills update all", ["update", "all"])
+            check_in("update reply", "Update results", last_reply(msg))
+
+            # Verify V2 reaches provider, V1 gone
+            prov.run_results = [RunResult(text="ok")]
+            await send_text(chat_user, regular, "go again", provider=prov)
+            ctx = last_run_context(prov)
+            check_in("V2 in prompt", STORE_V2, ctx.system_prompt)
+            check_not_in("V1 gone", STORE_V1, ctx.system_prompt)
+        finally:
+            cleanup()
+
+run_test("handler: store update propagates to provider",
+         test_handler_store_update_propagates())
+
+
+async def test_handler_local_modification_detected_and_cleared():
+    """Local edits to installed skill are detected; update clears the flag."""
+    import json as _json
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
+        try:
+            make_store_skill(tmp_store, "helper", body=STORE_V1)
+            prov = FakeProvider("claude")
+            setup_globals(_admin_cfg(data_dir), prov)
+
+            admin = FakeUser(uid=100, username="admin")
+            chat = FakeChat(1001)
+
+            await send_command(_th.cmd_skills, chat, admin,
+                               "/skills install helper", ["install", "helper"])
+
+            # Locally edit the installed skill
+            installed = tmp_custom / "helper" / "skill.md"
+            installed.write_text(installed.read_text() + "\nLOCAL_EDIT.\n")
+
+            msg = await send_command(_th.cmd_skills, chat, admin,
+                                    "/skills updates", ["updates"])
+            check_in("locally modified reported", "locally modified", last_reply(msg))
+
+            manifest = _json.loads((tmp_custom / "helper" / "_store.json").read_text())
+            check("locally_modified flag set", manifest["locally_modified"], True)
+
+            # Update from store clears the flag
+            (tmp_store / "helper" / "skill.md").write_text(
+                "---\nname: helper\ndisplay_name: helper\n"
+                "description: test fixture\n---\n\n" + STORE_V2 + "\n"
+            )
+            await send_command(_th.cmd_skills, chat, admin,
+                               "/skills update helper", ["update", "helper"])
+
+            manifest = _json.loads((tmp_custom / "helper" / "_store.json").read_text())
+            check("locally_modified cleared", manifest["locally_modified"], False)
+        finally:
+            cleanup()
+
+run_test("handler: local modification detected and cleared",
+         test_handler_local_modification_detected_and_cleared())
+
+
+async def test_handler_uninstall_sweeps_sessions():
+    """Uninstall removes skill dir and sweeps it from all active sessions."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
+        try:
+            make_store_skill(tmp_store, "helper", body=STORE_V1)
+            prov = FakeProvider("claude")
+            cfg = _admin_cfg(data_dir)
+            setup_globals(cfg, prov)
+
+            admin = FakeUser(uid=100, username="admin")
+            regular = FakeUser(uid=200, username="regular")
+            chat_admin = FakeChat(1001)
+            chat_user = FakeChat(2001)
+
+            # Install, then activate in both chats
+            await send_command(_th.cmd_skills, chat_admin, admin,
+                               "/skills install helper", ["install", "helper"])
+            await send_command(_th.cmd_skills, chat_admin, admin,
+                               "/skills add helper", ["add", "helper"])
+            await send_command(_th.cmd_skills, chat_user, regular,
+                               "/skills add helper", ["add", "helper"])
+
+            # Uninstall
+            msg = await send_command(_th.cmd_skills, chat_admin, admin,
+                                    "/skills uninstall helper", ["uninstall", "helper"])
+            check_in("reply confirms uninstall", "uninstalled", last_reply(msg).lower())
+            check_false("skill dir removed", (tmp_custom / "helper").is_dir())
+
+            # Both sessions swept
+            s1 = load_session_disk(data_dir, 1001, prov)
+            s2 = load_session_disk(data_dir, 2001, prov)
+            check_not_in("admin chat swept", "helper", s1.get("active_skills", []))
+            check_not_in("user chat swept", "helper", s2.get("active_skills", []))
+        finally:
+            cleanup()
+
+run_test("handler: uninstall sweeps active sessions",
+         test_handler_uninstall_sweeps_sessions())
+
+
+async def test_handler_prompt_size_warning_lists_chats():
+    """Update that causes oversized prompt warns with affected chat IDs."""
+    from unittest.mock import patch
+    from app.skills import PROMPT_SIZE_WARNING_THRESHOLD
+    import app.skills as skills_mod
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
+        try:
+            make_store_skill(tmp_store, "helper", body=STORE_V1)
+            prov = FakeProvider("claude")
+            cfg = _admin_cfg(data_dir)
+            setup_globals(cfg, prov)
+
+            admin = FakeUser(uid=100, username="admin")
+            regular = FakeUser(uid=200, username="regular")
+            chat_admin = FakeChat(1001)
+            chat_user = FakeChat(2001)
+
+            # Install and activate in both chats
+            await send_command(_th.cmd_skills, chat_admin, admin,
+                               "/skills install helper", ["install", "helper"])
+            await send_command(_th.cmd_skills, chat_admin, admin,
+                               "/skills add helper", ["add", "helper"])
+            await send_command(_th.cmd_skills, chat_user, regular,
+                               "/skills add helper", ["add", "helper"])
+
+            # Bump store version
+            (tmp_store / "helper" / "skill.md").write_text(
+                "---\nname: helper\ndisplay_name: helper\n"
+                "description: test fixture\n---\n\n" + STORE_V2 + "\n"
+            )
+
+            original_build = skills_mod.build_system_prompt
+            def fake_oversize(role, active_skills):
+                if "helper" in active_skills:
+                    return "x" * (PROMPT_SIZE_WARNING_THRESHOLD + 500)
+                return original_build(role, active_skills)
+
+            with patch("app.skills.build_system_prompt", fake_oversize):
+                msg = await send_command(_th.cmd_skills, chat_admin, admin,
+                                        "/skills update all", ["update", "all"])
+
+            reply = last_reply(msg)
+            check_in("warning header", "Prompt size warnings", reply)
+            check_in("admin chat warned", "1001", reply)
+            check_in("user chat warned", "2001", reply)
+        finally:
+            cleanup()
+
+run_test("handler: prompt size warning lists chats",
+         test_handler_prompt_size_warning_lists_chats())
+
+
+# ===================================================================
+# Smoke test — store lifecycle happy path (max 4 phases)
+# Proves install -> activate -> use -> uninstall wiring; focused tests cover edge cases.
+# ===================================================================
+
+async def test_smoke_store_lifecycle():
+    """Smoke: install -> activate -> provider sees instructions -> uninstall -> gone."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
+        try:
+            make_store_skill(tmp_store, "helper", body=STORE_V1)
+            prov = FakeProvider("claude")
+            cfg = _admin_cfg(data_dir)
+            setup_globals(cfg, prov)
+
+            admin = FakeUser(uid=100, username="admin")
+            chat = FakeChat(1001)
+
+            # Phase 1: install
+            msg = await send_command(_th.cmd_skills, chat, admin,
+                                    "/skills install helper", ["install", "helper"])
+            check_in("smoke: installed", "installed", last_reply(msg).lower())
+
+            # Phase 2: activate + dispatch
+            await send_command(_th.cmd_skills, chat, admin,
+                               "/skills add helper", ["add", "helper"])
+            prov.run_results = [RunResult(text="ok")]
+            await send_text(chat, admin, "go", provider=prov)
+            check_in("smoke: marker in prompt", STORE_V1,
+                      last_run_context(prov).system_prompt)
+            prov.run_calls.clear()
+
+            # Phase 3: uninstall
+            msg = await send_command(_th.cmd_skills, chat, admin,
+                                    "/skills uninstall helper", ["uninstall", "helper"])
+            check_in("smoke: uninstalled", "uninstalled", last_reply(msg).lower())
+
+            # Phase 4: provider no longer sees instructions
+            prov.run_results = [RunResult(text="ok")]
+            await send_text(chat, admin, "go again", provider=prov)
+            check_not_in("smoke: marker gone", STORE_V1,
+                          last_run_context(prov).system_prompt)
+        finally:
+            cleanup()
+
+run_test("smoke: store lifecycle", test_smoke_store_lifecycle())
+
+
+# ===================================================================
+# Test: /cancel command — setup, pending, nothing
+# ===================================================================
+
+async def test_cancel_setup():
+    """Cancel clears own credential setup."""
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
@@ -2595,469 +3596,617 @@ async def test_e2e_skills_lifecycle():
         setup_globals(cfg, prov)
 
         import app.telegram_handlers as th
-        original_validate = th.validate_credential
-        async def fake_validate(req, value):
-            return (True, "")
-        th.validate_credential = fake_validate
 
-        try:
-            chat = FakeChat(12345)
-            alice = FakeUser(uid=100, username="alice")
+        chat = FakeChat(12345)
+        user = FakeUser(42)
 
-            # --- Phase 1: Add credentialed skill ---
-            msg = FakeMessage(chat=chat, text="/skills add github-integration")
-            await th.cmd_skills(FakeUpdate(message=msg, user=alice, chat=chat),
-                                FakeContext(args=["add", "github-integration"]))
+        # Pre-populate a session with awaiting_skill_setup
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session["awaiting_skill_setup"] = {
+            "user_id": 42,
+            "skill": "test-skill",
+            "started_at": time.time(),
+            "remaining": [{"key": "TOKEN", "prompt": "Enter token"}],
+        }
+        save_session(data_dir, 12345, session)
 
-            session = load_session_disk(data_dir, 12345, prov)
-            check_not_in("e2e: skill not active before creds",
-                         "github-integration", session.get("active_skills", []))
-            check_true("e2e: setup started", session.get("awaiting_skill_setup") is not None)
+        msg = FakeMessage(chat=chat, text="/cancel")
+        update = FakeUpdate(message=msg, user=user, chat=chat)
+        await th.cmd_cancel(update, FakeContext())
 
-            # --- Phase 2: Send credential ---
-            msg2 = FakeMessage(chat=chat, text="ghp_alice_e2e_token")
-            await th.handle_message(FakeUpdate(message=msg2, user=alice, chat=chat),
-                                    FakeContext())
+        reply = msg.replies[0]["text"]
+        check_in("cancel setup reply", "Credential setup cancelled", reply)
 
-            check_true("e2e: secret deleted", msg2.deleted)
-            session = load_session_disk(data_dir, 12345, prov)
-            check("e2e: setup cleared", session.get("awaiting_skill_setup"), None)
-            check_in("e2e: skill activated", "github-integration",
-                      session.get("active_skills", []))
+        session = load_session_disk(data_dir, 12345, prov)
+        check("setup cleared", session.get("awaiting_skill_setup"), None)
 
-            # Verify credential persisted
-            key = derive_encryption_key(cfg.telegram_token)
-            creds = load_user_credentials(data_dir, 100, key)
-            check("e2e: credential saved",
-                  creds.get("github-integration", {}).get("GITHUB_TOKEN"),
-                  "ghp_alice_e2e_token")
+run_test("/cancel clears own setup", test_cancel_setup())
 
-            # --- Phase 3: Provider dispatch with credential ---
-            prov.run_results = [RunResult(text="repos listed")]
-            msg3 = FakeMessage(chat=chat, text="list my repos")
-            await th.handle_message(FakeUpdate(message=msg3, user=alice, chat=chat),
-                                    FakeContext())
 
-            check("e2e: provider called", len(prov.run_calls), 1)
-            ctx = prov.run_calls[0]["context"]
-            check("e2e: cred in env", ctx.credential_env.get("GITHUB_TOKEN"),
-                  "ghp_alice_e2e_token")
-            check_in("e2e: system prompt has skill instructions",
-                      "github", ctx.system_prompt.lower())
+async def test_cancel_pending():
+    """Cancel clears pending approval request."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
 
-            # --- Phase 4: Add instruction-only skill ---
-            msg4 = FakeMessage(chat=chat, text="/skills add testing")
-            await th.cmd_skills(FakeUpdate(message=msg4, user=alice, chat=chat),
-                                FakeContext(args=["add", "testing"]))
+        import app.telegram_handlers as th
 
-            session = load_session_disk(data_dir, 12345, prov)
-            check_in("e2e: testing active", "testing", session.get("active_skills", []))
-            check_in("e2e: github still active", "github-integration",
-                      session.get("active_skills", []))
+        chat = FakeChat(12345)
+        user = FakeUser(42)
 
-            # --- Phase 5: Provider dispatch with both skills ---
-            prov.run_results = [RunResult(text="tests written")]
-            msg5 = FakeMessage(chat=chat, text="write tests for auth module")
-            await th.handle_message(FakeUpdate(message=msg5, user=alice, chat=chat),
-                                    FakeContext())
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session["pending_request"] = {
+            "request_user_id": 42, "prompt": "test", "image_paths": [],
+            "attachment_dicts": [], "context_hash": "abc", "created_at": time.time(),
+        }
+        save_session(data_dir, 12345, session)
 
-            check("e2e: provider called again", len(prov.run_calls), 2)
-            ctx2 = prov.run_calls[1]["context"]
-            check_in("e2e: system prompt has testing", "test", ctx2.system_prompt.lower())
-            check_in("e2e: system prompt has github", "github", ctx2.system_prompt.lower())
-            check("e2e: cred still in env", ctx2.credential_env.get("GITHUB_TOKEN"),
-                  "ghp_alice_e2e_token")
+        msg = FakeMessage(chat=chat, text="/cancel")
+        update = FakeUpdate(message=msg, user=user, chat=chat)
+        await th.cmd_cancel(update, FakeContext())
 
-            # --- Phase 6: Set role ---
-            msg6 = FakeMessage(chat=chat, text="/role senior engineer")
-            await th.cmd_role(FakeUpdate(message=msg6, user=alice, chat=chat),
-                              FakeContext(args=["senior", "engineer"]))
+        reply = msg.replies[0]["text"]
+        check_in("cancel pending reply", "Pending request cancelled", reply)
 
-            session = load_session_disk(data_dir, 12345, prov)
-            check("e2e: role set", session.get("role"), "senior engineer")
+        session = load_session_disk(data_dir, 12345, prov)
+        check("pending cleared", session.get("pending_request"), None)
 
-            # --- Phase 7: Provider dispatch with role ---
-            prov.run_results = [RunResult(text="done with role")]
-            msg7 = FakeMessage(chat=chat, text="review this PR")
-            await th.handle_message(FakeUpdate(message=msg7, user=alice, chat=chat),
-                                    FakeContext())
+run_test("/cancel clears pending", test_cancel_pending())
 
-            check("e2e: provider called with role", len(prov.run_calls), 3)
-            ctx3 = prov.run_calls[2]["context"]
-            check_in("e2e: role in system prompt", "senior engineer",
-                      ctx3.system_prompt.lower())
 
-            # --- Phase 8: Remove credentialed skill ---
-            msg8 = FakeMessage(chat=chat, text="/skills remove github-integration")
-            await th.cmd_skills(FakeUpdate(message=msg8, user=alice, chat=chat),
-                                FakeContext(args=["remove", "github-integration"]))
+async def test_cancel_nothing():
+    """Cancel with nothing active says so."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
 
-            session = load_session_disk(data_dir, 12345, prov)
-            check_not_in("e2e: github removed", "github-integration",
-                         session.get("active_skills", []))
-            check_in("e2e: testing still active", "testing",
-                      session.get("active_skills", []))
+        import app.telegram_handlers as th
 
-            # --- Phase 9: Provider dispatch without credentialed skill ---
-            prov.run_results = [RunResult(text="just testing")]
-            msg9 = FakeMessage(chat=chat, text="run tests")
-            await th.handle_message(FakeUpdate(message=msg9, user=alice, chat=chat),
-                                    FakeContext())
+        chat = FakeChat(12345)
+        user = FakeUser(42)
 
-            check("e2e: provider called without github", len(prov.run_calls), 4)
-            ctx4 = prov.run_calls[3]["context"]
-            check_not_in("e2e: no github in prompt", "github",
-                         ctx4.system_prompt.lower())
-            check("e2e: no cred in env", ctx4.credential_env.get("GITHUB_TOKEN"), None)
+        msg = FakeMessage(chat=chat, text="/cancel")
+        update = FakeUpdate(message=msg, user=user, chat=chat)
+        await th.cmd_cancel(update, FakeContext())
 
-            # --- Phase 10: /skills clear ---
-            msg10 = FakeMessage(chat=chat, text="/skills clear")
-            await th.cmd_skills(FakeUpdate(message=msg10, user=alice, chat=chat),
-                                FakeContext(args=["clear"]))
+        reply = msg.replies[0]["text"]
+        check_in("cancel nothing reply", "Nothing to cancel", reply)
 
-            session = load_session_disk(data_dir, 12345, prov)
-            check("e2e: skills empty", session.get("active_skills"), [])
+run_test("/cancel nothing", test_cancel_nothing())
 
-            # --- Phase 11: Provider dispatch with no skills ---
-            prov.run_results = [RunResult(text="bare response")]
-            msg11 = FakeMessage(chat=chat, text="hello")
-            await th.handle_message(FakeUpdate(message=msg11, user=alice, chat=chat),
-                                    FakeContext())
 
-            check("e2e: provider called bare", len(prov.run_calls), 5)
-            ctx5 = prov.run_calls[4]["context"]
-            # Role still set, but no skill instructions
-            check_in("e2e: role still in prompt", "senior engineer",
-                      ctx5.system_prompt.lower())
-            check("e2e: empty cred env", ctx5.credential_env, {})
+async def test_cancel_admin_foreign_setup():
+    """Admin can cancel another user's credential setup."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir, admin_user_ids=frozenset({99}))
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
 
-            # --- Phase 12: /new resets session ---
-            msg12 = FakeMessage(chat=chat, text="/new")
-            await th.cmd_new(FakeUpdate(message=msg12, user=alice, chat=chat),
-                             FakeContext())
+        import app.telegram_handlers as th
 
-            session = load_session_disk(data_dir, 12345, prov)
-            check("e2e: skills reset", session.get("active_skills"), [])
-            check("e2e: role reset", session.get("role"), "")
-            check("e2e: setup cleared", session.get("awaiting_skill_setup"), None)
+        chat = FakeChat(12345)
+        admin = FakeUser(99, "admin")
 
-            # Credential still on disk (per-user, not per-session)
-            creds = load_user_credentials(data_dir, 100, key)
-            check("e2e: credential survives /new",
-                  creds.get("github-integration", {}).get("GITHUB_TOKEN"),
-                  "ghp_alice_e2e_token")
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session["awaiting_skill_setup"] = {
+            "user_id": 42,
+            "skill": "test-skill",
+            "started_at": time.time(),
+            "remaining": [{"key": "TOKEN", "prompt": "Enter token"}],
+        }
+        save_session(data_dir, 12345, session)
 
-            # --- Phase 13: Re-add skill — should activate immediately (creds exist) ---
-            msg13 = FakeMessage(chat=chat, text="/skills add github-integration")
-            await th.cmd_skills(FakeUpdate(message=msg13, user=alice, chat=chat),
-                                FakeContext(args=["add", "github-integration"]))
+        msg = FakeMessage(chat=chat, text="/cancel")
+        update = FakeUpdate(message=msg, user=admin, chat=chat)
+        await th.cmd_cancel(update, FakeContext())
 
-            session = load_session_disk(data_dir, 12345, prov)
-            check_in("e2e: re-add activates immediately", "github-integration",
-                      session.get("active_skills", []))
-            check("e2e: no setup needed", session.get("awaiting_skill_setup"), None)
+        reply = msg.replies[0]["text"]
+        check_in("admin cancel reply", "Credential setup cancelled", reply)
 
-        finally:
-            th.validate_credential = original_validate
-
-run_test("e2e skills lifecycle", test_e2e_skills_lifecycle())
-
+run_test("/cancel admin override", test_cancel_admin_foreign_setup())
 
 
 # ===================================================================
-# Test: /skills update all — prompt-size cross-chat warning
-# ===================================================================
-# Test: locally_modified persisted to _store.json via handler
-
-# ===================================================================
-# Phase 5 E2E: Full skill store lifecycle through handler layer
+# Test: /help tiered help
 # ===================================================================
 
-async def test_phase5_e2e_full_journey():
-    """Full product workflow: install -> activate -> use -> update -> uninstall.
+async def test_help_topics():
+    """Tiered /help shows topic-specific content."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
 
-    Real: filesystem (store/custom/sessions), handler command flow, skill discovery,
-          _store.json provenance, session sweep, prompt construction.
-    Mocked: Telegram transport, provider subprocess, build_system_prompt for oversize test.
-    """
-    import json as _json
-    import app.store as store_mod
+        import app.telegram_handlers as th
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+
+        # /help skills
+        msg1 = FakeMessage(chat=chat, text="/help skills")
+        await th.cmd_help(FakeUpdate(message=msg1, user=user, chat=chat),
+                          FakeContext(args=["skills"]))
+        reply1 = msg1.replies[0]["text"]
+        check_in("help skills has add", "/skills add", reply1)
+
+        # /help approval
+        msg2 = FakeMessage(chat=chat, text="/help approval")
+        await th.cmd_help(FakeUpdate(message=msg2, user=user, chat=chat),
+                          FakeContext(args=["approval"]))
+        reply2 = msg2.replies[0]["text"]
+        check_in("help approval has mode", "Approval Mode", reply2)
+
+        # /help credentials
+        msg3 = FakeMessage(chat=chat, text="/help credentials")
+        await th.cmd_help(FakeUpdate(message=msg3, user=user, chat=chat),
+                          FakeContext(args=["credentials"]))
+        reply3 = msg3.replies[0]["text"]
+        check_in("help credentials has clear", "/clear_credentials", reply3)
+
+        # /help (no topic) — main help
+        msg4 = FakeMessage(chat=chat, text="/help")
+        await th.cmd_help(FakeUpdate(message=msg4, user=user, chat=chat),
+                          FakeContext(args=[]))
+        reply4 = msg4.replies[0]["text"]
+        check_in("main help has commands", "/skills", reply4)
+        check_not_in("main help no CLI Bridge", "CLI Bridge", reply4)
+
+run_test("/help tiered", test_help_topics())
+
+
+# ===================================================================
+# Test: First-run welcome message
+# ===================================================================
+
+async def test_first_run_welcome():
+    """First message in a chat triggers a welcome message."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir, approval_mode="on")
+        prov = FakeProvider("claude")
+        prov.preflight_results = [RunResult(text="plan: read files")]
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = FakeMessage(chat=chat, text="hello")
+        update = FakeUpdate(message=msg, user=user, chat=chat)
+
+        await th.handle_message(update, FakeContext())
+
+        # Welcome should be in chat.sent_messages (via send_message)
+        sent = " ".join(m.get("text", "") for m in chat.sent_messages)
+        check_in("welcome has ready", "ready", sent.lower())
+        check_in("welcome mentions approval", "Approval mode is on", sent)
+
+run_test("first-run welcome", test_first_run_welcome())
+
+
+# ===================================================================
+# Test: Stale pending request TTL
+# ===================================================================
+
+async def test_stale_pending_ttl():
+    """Expired pending requests are rejected on button click."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir, timeout_seconds=300)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+
+        # Create a pending request that's 2 hours old
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_request"] = {
+            "request_user_id": 42, "prompt": "old request",
+            "image_paths": [], "attachment_dicts": [],
+            "context_hash": "", "created_at": time.time() - 7200,
+        }
+        save_session(data_dir, 12345, session)
+
+        msg = FakeMessage(chat=chat, text="")
+        update = FakeUpdate(message=msg, user=user, chat=chat)
+        await th.approve_pending(12345, msg)
+
+        reply = " ".join(r.get("text", "") for r in msg.replies)
+        check_in("expired msg", "expired", reply.lower())
+        check("provider not called", len(prov.run_calls), 0)
+
+run_test("stale pending TTL", test_stale_pending_ttl())
+
+
+# ===================================================================
+# Test: Human-readable credential validation errors
+# ===================================================================
+
+async def test_friendly_validation_errors():
+    """validate_credential returns human-friendly messages for common HTTP errors."""
+    from app.skills import _friendly_validation_error
+
+    msg401 = _friendly_validation_error(401, 200)
+    check_in("401 says rejected", "rejected", msg401.lower())
+    check_in("401 has code", "401", msg401)
+
+    msg500 = _friendly_validation_error(500, 200)
+    check_in("500 says unavailable", "unavailable", msg500.lower())
+
+    msg404 = _friendly_validation_error(404, 200)
+    check_in("404 says not found", "not found", msg404.lower())
+
+run_test("friendly validation errors", test_friendly_validation_errors())
+
+
+# ===================================================================
+# Test: Credential prompt has clickable URL
+# ===================================================================
+
+async def test_credential_prompt_html_link():
+    """_format_credential_prompt produces clickable HTML link."""
     import app.telegram_handlers as th
-    from unittest.mock import patch
-    from app.skills import PROMPT_SIZE_WARNING_THRESHOLD
+
+    req = {"key": "TOKEN", "prompt": "Enter your token", "help_url": "https://example.com/guide"}
+    result = th._format_credential_prompt(req)
+    check_in("has href", 'href="https://example.com/guide"', result)
+    check_in("has link text", "setup guide", result)
+
+    # Without help_url
+    req2 = {"key": "TOKEN", "prompt": "Enter your token", "help_url": None}
+    result2 = th._format_credential_prompt(req2)
+    check_not_in("no href", "href", result2)
+
+run_test("credential prompt clickable URL", test_credential_prompt_html_link())
+
+
+# ===================================================================
+# Test: delete_user_credentials
+# ===================================================================
+
+async def test_delete_user_credentials():
+    """delete_user_credentials removes credentials and returns skill names."""
+    from app.skills import delete_user_credentials
 
     with tempfile.TemporaryDirectory() as tmp:
-        data_dir = Path(tmp) / "data"
+        data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
+        key = derive_encryption_key("1234567890:AABBCCDDEEFFaabbccddeeff_01234567")
 
-        tmp_store = Path(tmp) / "store"
-        tmp_custom = Path(tmp) / "custom"
-        tmp_store.mkdir()
-        tmp_custom.mkdir()
-        orig_store = store_mod.STORE_DIR
-        orig_custom = store_mod.CUSTOM_DIR
-        store_mod.STORE_DIR = tmp_store
-        store_mod.CUSTOM_DIR = tmp_custom
+        # Save creds for two skills
+        save_user_credential(data_dir, 42, "skill-a", "TOKEN_A", "value-a", key)
+        save_user_credential(data_dir, 42, "skill-b", "TOKEN_B", "value-b", key)
 
-        # Patch CUSTOM_DIR in skills module so load_catalog/get_skill_instructions finds installed skills
-        import app.skills as skills_mod
-        orig_skills_custom = skills_mod.CUSTOM_DIR
-        skills_mod.CUSTOM_DIR = tmp_custom
+        # Delete single skill
+        removed = delete_user_credentials(data_dir, 42, key, "skill-a")
+        check("removed one", removed, ["skill-a"])
 
-        try:
-            # --- Setup ---
-            admin = FakeUser(uid=100, username="admin")
-            regular = FakeUser(uid=200, username="regular")
-            cfg = make_config(
-                data_dir=data_dir,
-                admin_user_ids=frozenset({100}),
-                admin_usernames=frozenset({"admin"}),
-                allowed_user_ids=frozenset({100, 200}),
-                allowed_usernames=frozenset({"admin", "regular"}),
+        # Verify skill-b still exists
+        creds = load_user_credentials(data_dir, 42, key)
+        check_true("skill-b remains", "skill-b" in creds)
+        check_false("skill-a gone", "skill-a" in creds)
+
+        # Delete all
+        removed2 = delete_user_credentials(data_dir, 42, key)
+        check("removed all", removed2, ["skill-b"])
+
+        # Nothing left
+        removed3 = delete_user_credentials(data_dir, 42, key)
+        check("nothing to remove", removed3, [])
+
+run_test("delete_user_credentials", test_delete_user_credentials())
+
+
+# ===================================================================
+# Test: Foreign setup message includes user ID and time
+# ===================================================================
+
+async def test_foreign_setup_message_info():
+    """_foreign_setup_message includes blocking user ID and elapsed time."""
+    import app.telegram_handlers as th
+
+    setup = {"user_id": 42, "started_at": time.time() - 120}  # 2 min ago
+    msg = th._foreign_setup_message(setup)
+    check_in("has user id", "42", msg)
+    check_in("has time", "min ago", msg)
+    check_in("has admin hint", "/cancel", msg)
+
+run_test("foreign setup message info", test_foreign_setup_message_info())
+
+
+# ===================================================================
+# Regression: /clear_credentials mid-setup clears awaiting_skill_setup
+# ===================================================================
+
+async def test_clear_credentials_clears_setup():
+    """Clearing credentials for a skill mid-setup must also clear awaiting_skill_setup."""
+    import app.skills as skills_mod
+
+    orig_custom_dir = skills_mod.CUSTOM_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            ensure_data_dirs(data_dir)
+            custom_dir = Path(tmp) / "custom-skills"
+            skills_mod.CUSTOM_DIR = custom_dir
+
+            # Create a skill with requires.yaml
+            skill_dir = custom_dir / "cred-test"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "skill.md").write_text(
+                "---\nname: cred-test\ndisplay_name: Cred Test\n"
+                "description: Test\n---\n\nTest instructions.\n"
             )
+            (skill_dir / "requires.yaml").write_text(
+                "credentials:\n  - key: API_TOKEN\n    prompt: Enter token\n"
+            )
+
+            cfg = make_config(data_dir)
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            # Create store skill v1
-            skill_dir = tmp_store / "code-helper"
-            skill_dir.mkdir()
+            import app.telegram_handlers as th
+
+            chat = FakeChat(12345)
+            user = FakeUser(42)
+            key = derive_encryption_key(cfg.telegram_token)
+
+            # Save a credential so clear has something to remove
+            save_user_credential(data_dir, 42, "cred-test", "API_TOKEN", "old-value", key)
+
+            # Put session in setup state for this skill
+            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session["awaiting_skill_setup"] = {
+                "user_id": 42, "skill": "cred-test", "started_at": time.time(),
+                "remaining": [{"key": "API_TOKEN", "prompt": "Enter token"}],
+            }
+            save_session(data_dir, 12345, session)
+
+            # Clear credentials for that skill
+            msg = FakeMessage(chat=chat, text="/clear_credentials cred-test")
+            update = FakeUpdate(message=msg, user=user, chat=chat)
+            await th.cmd_clear_credentials(update, FakeContext(args=["cred-test"]))
+
+            # Setup state must be cleared
+            session = load_session_disk(data_dir, 12345, prov)
+            check("setup cleared after clear_credentials",
+                  session.get("awaiting_skill_setup"), None)
+    finally:
+        skills_mod.CUSTOM_DIR = orig_custom_dir
+
+run_test("clear_credentials clears setup", test_clear_credentials_clears_setup())
+
+
+async def test_clear_credentials_no_saved_creds_e2e():
+    """E2E: mid-setup, no credential on disk -> /clear_credentials -> next plain
+    message must reach the provider, NOT be captured as a secret."""
+    import app.skills as skills_mod
+
+    orig_custom_dir = skills_mod.CUSTOM_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            ensure_data_dirs(data_dir)
+            custom_dir = Path(tmp) / "custom-skills"
+            skills_mod.CUSTOM_DIR = custom_dir
+
+            skill_dir = custom_dir / "cred-test"
+            skill_dir.mkdir(parents=True, exist_ok=True)
             (skill_dir / "skill.md").write_text(
-                "---\nname: code-helper\ndisplay_name: Code Helper\n"
-                "description: Assists with code tasks\n---\n\n"
-                "Always explain your reasoning step by step. V1_MARKER.\n"
+                "---\nname: cred-test\ndisplay_name: Cred Test\n"
+                "description: Test\n---\n\nTest instructions.\n"
+            )
+            (skill_dir / "requires.yaml").write_text(
+                "credentials:\n  - key: API_TOKEN\n    prompt: Enter token\n"
             )
 
-            # =============================================================
-            # Phase 1: Non-admin blocked from install
-            # =============================================================
-            chat_reg = FakeChat(2001)
-            msg1 = FakeMessage(chat=chat_reg, text="/skills install code-helper")
-            upd1 = FakeUpdate(message=msg1, user=regular, chat=chat_reg)
-            await th.cmd_skills(upd1, FakeContext(args=["install", "code-helper"]))
-
-            check_true("p1: non-admin got reply", len(msg1.replies) > 0)
-            check_in("p1: blocked msg", "admin", msg1.replies[-1]["text"].lower())
-            # Verify no files created
-            check_false("p1: skill not installed", (tmp_custom / "code-helper").is_dir())
-
-            # =============================================================
-            # Phase 2: Admin installs store skill
-            # =============================================================
-            chat_admin = FakeChat(1001)
-            msg2 = FakeMessage(chat=chat_admin, text="/skills install code-helper")
-            upd2 = FakeUpdate(message=msg2, user=admin, chat=chat_admin)
-            await th.cmd_skills(upd2, FakeContext(args=["install", "code-helper"]))
-
-            check_true("p2: install reply", len(msg2.replies) > 0)
-            check_in("p2: installed msg", "installed", msg2.replies[-1]["text"].lower())
-            check_true("p2: skill dir exists", (tmp_custom / "code-helper").is_dir())
-            check_true("p2: _store.json exists", (tmp_custom / "code-helper" / "_store.json").is_file())
-
-            manifest = _json.loads((tmp_custom / "code-helper" / "_store.json").read_text())
-            check("p2: source", manifest["source"], "store")
-            check("p2: locally_modified", manifest["locally_modified"], False)
-
-            # =============================================================
-            # Phase 3: User activates skill in their chat
-            # =============================================================
-            chat_user = FakeChat(2001)
-            msg3 = FakeMessage(chat=chat_user, text="/skills add code-helper")
-            upd3 = FakeUpdate(message=msg3, user=regular, chat=chat_user)
-            await th.cmd_skills(upd3, FakeContext(args=["add", "code-helper"]))
-
-            session_user = load_session_disk(data_dir, 2001, prov)
-            check_in("p3: skill activated", "code-helper", session_user.get("active_skills", []))
-
-            # Admin also activates in their chat
-            msg3b = FakeMessage(chat=chat_admin, text="/skills add code-helper")
-            upd3b = FakeUpdate(message=msg3b, user=admin, chat=chat_admin)
-            await th.cmd_skills(upd3b, FakeContext(args=["add", "code-helper"]))
-
-            session_admin = load_session_disk(data_dir, 1001, prov)
-            check_in("p3: admin skill activated", "code-helper", session_admin.get("active_skills", []))
-
-            # =============================================================
-            # Phase 4: User sends message — provider sees skill instructions
-            # =============================================================
-            prov.run_results = [RunResult(text="Here's your code explanation")]
-            msg4 = FakeMessage(chat=chat_user, text="explain this function")
-            upd4 = FakeUpdate(message=msg4, user=regular, chat=chat_user)
-            await th.handle_message(upd4, FakeContext())
-
-            check("p4: provider called", len(prov.run_calls), 1)
-            ctx = prov.run_calls[0]["context"]
-            check_in("p4: V1 instructions in prompt", "V1_MARKER", ctx.system_prompt)
-            check_in("p4: step by step in prompt", "step by step", ctx.system_prompt)
-            prov.run_calls.clear()
-
-            # =============================================================
-            # Phase 5: /skills list shows (store) tag
-            # =============================================================
-            msg5 = FakeMessage(chat=chat_user, text="/skills list")
-            upd5 = FakeUpdate(message=msg5, user=regular, chat=chat_user)
-            await th.cmd_skills(upd5, FakeContext(args=["list"]))
-
-            check_true("p5: list reply", len(msg5.replies) > 0)
-            check_in("p5: store tag", "(store)", msg5.replies[-1]["text"])
-
-            # =============================================================
-            # Phase 6: Non-admin blocked from update
-            # =============================================================
-            msg6 = FakeMessage(chat=chat_user, text="/skills update code-helper")
-            upd6 = FakeUpdate(message=msg6, user=regular, chat=chat_user)
-            await th.cmd_skills(upd6, FakeContext(args=["update", "code-helper"]))
-
-            check_in("p6: update blocked", "admin", msg6.replies[-1]["text"].lower())
-
-            # =============================================================
-            # Phase 7: Operator updates store — admin runs /skills update all
-            # =============================================================
-            (tmp_store / "code-helper" / "skill.md").write_text(
-                "---\nname: code-helper\ndisplay_name: Code Helper\n"
-                "description: Assists with code tasks\n---\n\n"
-                "Always explain your reasoning step by step. V2_MARKER.\n"
-            )
-
-            # Check updates shows update available
-            msg7a = FakeMessage(chat=chat_admin, text="/skills updates")
-            upd7a = FakeUpdate(message=msg7a, user=admin, chat=chat_admin)
-            await th.cmd_skills(upd7a, FakeContext(args=["updates"]))
-            check_in("p7: update available", "update available", msg7a.replies[-1]["text"])
-
-            # Run update all
-            msg7 = FakeMessage(chat=chat_admin, text="/skills update all")
-            upd7 = FakeUpdate(message=msg7, user=admin, chat=chat_admin)
-            await th.cmd_skills(upd7, FakeContext(args=["update", "all"]))
-
-            check_true("p7: update reply", len(msg7.replies) > 0)
-            reply7 = msg7.replies[-1]["text"]
-            check_in("p7: update results", "Update results", reply7)
-
-            # Verify installed content is V2
-            installed_md = (tmp_custom / "code-helper" / "skill.md").read_text()
-            check_in("p7: V2 on disk", "V2_MARKER", installed_md)
-            check_not_in("p7: V1 gone", "V1_MARKER", installed_md)
-
-            # =============================================================
-            # Phase 8: User message now sees V2 instructions
-            # =============================================================
-            prov.run_results = [RunResult(text="Updated explanation")]
-            msg8 = FakeMessage(chat=chat_user, text="explain again")
-            upd8 = FakeUpdate(message=msg8, user=regular, chat=chat_user)
-            await th.handle_message(upd8, FakeContext())
-
-            check("p8: provider called", len(prov.run_calls), 1)
-            ctx8 = prov.run_calls[0]["context"]
-            check_in("p8: V2 instructions in prompt", "V2_MARKER", ctx8.system_prompt)
-            check_not_in("p8: V1 not in prompt", "V1_MARKER", ctx8.system_prompt)
-            prov.run_calls.clear()
-
-            # =============================================================
-            # Phase 9: Local modification detection and persistence
-            # =============================================================
-            installed_path = tmp_custom / "code-helper" / "skill.md"
-            installed_path.write_text(installed_path.read_text() + "\nLOCAL_EDIT.\n")
-
-            msg9 = FakeMessage(chat=chat_admin, text="/skills updates")
-            upd9 = FakeUpdate(message=msg9, user=admin, chat=chat_admin)
-            await th.cmd_skills(upd9, FakeContext(args=["updates"]))
-
-            check_in("p9: locally modified", "locally modified", msg9.replies[-1]["text"])
-            manifest9 = _json.loads((tmp_custom / "code-helper" / "_store.json").read_text())
-            check("p9: locally_modified persisted", manifest9["locally_modified"], True)
-
-            # Update resets locally_modified
-            (tmp_store / "code-helper" / "skill.md").write_text(
-                "---\nname: code-helper\ndisplay_name: Code Helper\n"
-                "description: Assists with code tasks\n---\n\n"
-                "V3_MARKER instructions.\n"
-            )
-            msg9b = FakeMessage(chat=chat_admin, text="/skills update code-helper")
-            upd9b = FakeUpdate(message=msg9b, user=admin, chat=chat_admin)
-            await th.cmd_skills(upd9b, FakeContext(args=["update", "code-helper"]))
-
-            manifest9b = _json.loads((tmp_custom / "code-helper" / "_store.json").read_text())
-            check("p9: locally_modified reset", manifest9b["locally_modified"], False)
-
-            # =============================================================
-            # Phase 10: Update all with prompt-size warning
-            # =============================================================
-            (tmp_store / "code-helper" / "skill.md").write_text(
-                "---\nname: code-helper\ndisplay_name: Code Helper\n"
-                "description: Assists with code tasks\n---\n\n"
-                "V4_MARKER instructions.\n"
-            )
-
-            original_build = skills_mod.build_system_prompt
-            def fake_oversize(role, active_skills):
-                if "code-helper" in active_skills:
-                    return "x" * (PROMPT_SIZE_WARNING_THRESHOLD + 500)
-                return original_build(role, active_skills)
-
-            with patch("app.skills.build_system_prompt", fake_oversize):
-                msg10 = FakeMessage(chat=chat_admin, text="/skills update all")
-                upd10 = FakeUpdate(message=msg10, user=admin, chat=chat_admin)
-                await th.cmd_skills(upd10, FakeContext(args=["update", "all"]))
-
-            reply10 = msg10.replies[-1]["text"]
-            check_in("p10: prompt warning header", "Prompt size warnings", reply10)
-            # Both chats (1001 and 2001) have the skill active
-            check_in("p10: chat 1001 warned", "1001", reply10)
-            check_in("p10: chat 2001 warned", "2001", reply10)
-
-            # =============================================================
-            # Phase 11: Uninstall — config guard then sweep
-            # =============================================================
-            # First, try with skill in BOT_SKILLS — should refuse
-            cfg_guarded = make_config(
-                data_dir=data_dir,
-                admin_user_ids=frozenset({100}),
-                admin_usernames=frozenset({"admin"}),
-                default_skills=("code-helper",),
-            )
-            setup_globals(cfg_guarded, prov)
-
-            msg11a = FakeMessage(chat=chat_admin, text="/skills uninstall code-helper")
-            upd11a = FakeUpdate(message=msg11a, user=admin, chat=chat_admin)
-            await th.cmd_skills(upd11a, FakeContext(args=["uninstall", "code-helper"]))
-
-            check_in("p11: config guard", "BOT_SKILLS", msg11a.replies[-1]["text"])
-            check_true("p11: skill still on disk", (tmp_custom / "code-helper").is_dir())
-
-            # Remove from BOT_SKILLS and uninstall
+            cfg = make_config(data_dir)
+            prov = FakeProvider("claude")
+            prov.run_results = [RunResult(text="Normal response")]
             setup_globals(cfg, prov)
-            msg11b = FakeMessage(chat=chat_admin, text="/skills uninstall code-helper")
-            upd11b = FakeUpdate(message=msg11b, user=admin, chat=chat_admin)
-            await th.cmd_skills(upd11b, FakeContext(args=["uninstall", "code-helper"]))
 
-            check_in("p11: uninstalled", "uninstalled", msg11b.replies[-1]["text"].lower())
-            check_false("p11: skill dir removed", (tmp_custom / "code-helper").is_dir())
+            import app.telegram_handlers as th
 
-            # Verify session sweep — both chats lost the skill
-            session_after_1 = load_session_disk(data_dir, 1001, prov)
-            session_after_2 = load_session_disk(data_dir, 2001, prov)
-            check_not_in("p11: admin chat swept", "code-helper", session_after_1.get("active_skills", []))
-            check_not_in("p11: user chat swept", "code-helper", session_after_2.get("active_skills", []))
+            chat = FakeChat(12345)
+            user = FakeUser(42)
 
-            # =============================================================
-            # Phase 12: Message after uninstall — provider does NOT see instructions
-            # =============================================================
-            prov.run_results = [RunResult(text="No skill now")]
-            msg12 = FakeMessage(chat=chat_user, text="one more question")
-            upd12 = FakeUpdate(message=msg12, user=regular, chat=chat_user)
-            await th.handle_message(upd12, FakeContext())
+            # Step 1: session is mid-setup, NO credential saved on disk
+            session = default_session(prov.name, prov.new_provider_state(), "off")
+            session["awaiting_skill_setup"] = {
+                "user_id": 42, "skill": "cred-test", "started_at": time.time(),
+                "remaining": [{"key": "API_TOKEN", "prompt": "Enter token"}],
+            }
+            save_session(data_dir, 12345, session)
 
-            check("p12: provider called", len(prov.run_calls), 1)
-            ctx12 = prov.run_calls[0]["context"]
-            check_not_in("p12: no V4 in prompt", "V4_MARKER", ctx12.system_prompt)
-            check_not_in("p12: no step by step", "step by step", ctx12.system_prompt)
+            # Step 2: /clear_credentials — nothing on disk to delete
+            clear_msg = FakeMessage(chat=chat, text="/clear_credentials cred-test")
+            clear_upd = FakeUpdate(message=clear_msg, user=user, chat=chat)
+            await th.cmd_clear_credentials(clear_upd, FakeContext(args=["cred-test"]))
 
-        finally:
-            store_mod.STORE_DIR = orig_store
-            store_mod.CUSTOM_DIR = orig_custom
-            skills_mod.CUSTOM_DIR = orig_skills_custom
+            # Setup state must be gone
+            session = load_session_disk(data_dir, 12345, prov)
+            check("setup cleared with no saved creds",
+                  session.get("awaiting_skill_setup"), None)
+            check("reply mentions setup cancelled",
+                  "setup cancelled" in clear_msg.replies[-1]["text"].lower(), True)
 
-run_test("Phase 5 E2E: full skill store lifecycle", test_phase5_e2e_full_journey())
+            # Step 3: send a plain message through handle_message
+            plain_msg = FakeMessage(chat=chat, text="hello bot")
+            plain_upd = FakeUpdate(message=plain_msg, user=user, chat=chat)
+            await th.handle_message(plain_upd, FakeContext())
+
+            # Must reach provider — not captured as credential
+            check("provider called", len(prov.run_calls), 1)
+            check_in("prompt has user text", "hello bot", prov.run_calls[0]["prompt"])
+            # Credential capture deletes the message; normal path does not
+            check("message not deleted", plain_msg.deleted, False)
+    finally:
+        skills_mod.CUSTOM_DIR = orig_custom_dir
+
+run_test("clear_credentials no saved creds e2e", test_clear_credentials_no_saved_creds_e2e())
+
+
+# ===================================================================
+# Regression: /start <payload> shows help, not "Unknown topic"
+# ===================================================================
+
+async def test_start_deep_link():
+    """/start with a payload should show main help, not 'Unknown help topic'."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+
+        # /start foo (deep-link payload)
+        msg = FakeMessage(chat=chat, text="/start foo")
+        update = FakeUpdate(message=msg, user=user, chat=chat)
+        await th.cmd_start(update, FakeContext(args=["foo"]))
+
+        reply = msg.replies[0]["text"]
+        check_not_in("/start payload not unknown topic", "Unknown help topic", reply)
+        check_in("/start payload shows main help", "Agent Bot", reply)
+
+run_test("/start deep-link payload", test_start_deep_link())
+
+
+# ===================================================================
+# Regression: /skills info shows Requires for store-only skills
+# ===================================================================
+
+async def test_skills_info_store_requirements():
+    """/skills info for a store-only skill should show Requires from store path."""
+    import app.store as store_mod
+
+    orig_store = store_mod.STORE_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            ensure_data_dirs(data_dir)
+            tmp_store = Path(tmp) / "store"
+            store_mod.STORE_DIR = tmp_store
+
+            # Create a store-only skill with requires.yaml
+            skill_dir = tmp_store / "store-cred-skill"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "skill.md").write_text(
+                "---\nname: store-cred-skill\ndisplay_name: Store Cred\n"
+                "description: A store skill\n---\n\nInstructions here.\n"
+            )
+            (skill_dir / "requires.yaml").write_text(
+                "credentials:\n  - key: API_TOKEN\n    prompt: Enter token\n"
+            )
+
+            cfg = make_config(data_dir)
+            prov = FakeProvider("claude")
+            setup_globals(cfg, prov)
+
+            import app.telegram_handlers as th
+
+            chat = FakeChat(12345)
+            user = FakeUser(42)
+
+            msg = FakeMessage(chat=chat, text="/skills info store-cred-skill")
+            update = FakeUpdate(message=msg, user=user, chat=chat)
+            await th.cmd_skills(update, FakeContext(args=["info", "store-cred-skill"]))
+
+            reply = " ".join(r.get("text", "") for r in msg.replies)
+            check_in("store skill shows Requires", "Requires: API_TOKEN", reply)
+    finally:
+        store_mod.STORE_DIR = orig_store
+
+run_test("/skills info store requirements", test_skills_info_store_requirements())
+
+
+# -- /compact and /raw --
+
+async def test_compact_toggle():
+    """Toggle compact mode on/off via /compact."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        session = default_session("codex", prov.new_provider_state(), "off")
+        save_session(data_dir, 1, session)
+
+        chat = FakeChat(1)
+        user = FakeUser(42)
+
+        import app.telegram_handlers as th
+
+        # Check default (off)
+        msg1 = await send_command(th.cmd_compact, chat, user, "/compact")
+        check("compact default is off", "off" in last_reply(msg1).lower(), True)
+
+        # Turn on
+        msg2 = await send_command(th.cmd_compact, chat, user, "/compact on", args=["on"])
+        check("compact turned on", "on" in last_reply(msg2).lower(), True)
+        session = load_session_disk(data_dir, 1, prov)
+        check("compact_mode stored true", session.get("compact_mode"), True)
+
+        # Turn off
+        msg3 = await send_command(th.cmd_compact, chat, user, "/compact off", args=["off"])
+        check("compact turned off", "off" in last_reply(msg3).lower(), True)
+        session = load_session_disk(data_dir, 1, prov)
+        check("compact_mode stored false", session.get("compact_mode"), False)
+
+run_test("/compact toggle", test_compact_toggle())
+
+
+async def test_raw_retrieves_response():
+    """/raw retrieves the most recent raw response from the ring buffer."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        session = default_session("codex", prov.new_provider_state(), "off")
+        save_session(data_dir, 1, session)
+
+        chat = FakeChat(1)
+        user = FakeUser(42)
+
+        # Send a message so a raw response gets saved
+        prov.run_results = [RunResult(text="This is the full response text.")]
+        await send_text(chat, user, "hello", provider=prov)
+
+        import app.telegram_handlers as th
+
+        # /raw should retrieve it
+        msg = await send_command(th.cmd_raw, chat, user, "/raw")
+        check("raw has response text", "full response" in last_reply(msg), True)
+
+        # /raw when empty (different chat)
+        msg2 = await send_command(th.cmd_raw, FakeChat(999), user, "/raw")
+        check("raw empty chat", "no stored" in last_reply(msg2).lower(), True)
+
+run_test("/raw retrieves response", test_raw_retrieves_response())
 
 
 # ===================================================================

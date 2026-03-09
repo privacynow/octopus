@@ -174,6 +174,84 @@ check("text unchanged", text2, "no directives here")
 text3, dirs3 = extract_send_directives("SEND_IMAGE: /tmp/img.png")
 check("image directive", dirs3, [("IMAGE", "/tmp/img.png")])
 
+# -- markdown tables --
+print("\n=== markdown tables ===")
+
+simple_table = """\
+| Name | Age |
+|------|-----|
+| Alice | 30 |
+| Bob | 25 |"""
+result = md_to_telegram_html(simple_table)
+check_contains("simple table is pre", result, "<pre>")
+check_contains("simple table has alice", result, "Alice")
+check_contains("simple table has bob", result, "Bob")
+check("simple table no pipes", "|" not in result.replace("</pre>", "").replace("<pre>", ""), True)
+# Columns should be aligned (padded)
+check_contains("simple table aligned", result, "Name ", "Age")
+
+# Ragged table (inconsistent column counts)
+ragged = """\
+| A | B | C |
+|---|---|---|
+| 1 | 2 |
+| x | y | z |"""
+result2 = md_to_telegram_html(ragged)
+check_contains("ragged table is pre", result2, "<pre>")
+check_contains("ragged table has data", result2, "x", "y", "z")
+
+# Table inside code fence should NOT be converted
+fenced_table = """\
+```
+| Name | Age |
+|------|-----|
+| Alice | 30 |
+```"""
+result3 = md_to_telegram_html(fenced_table)
+check_contains("fenced table has pipes", result3, "|")
+# Should be in a code fence pre, not a table pre
+check("fenced table not double-converted", result3.count("<pre>"), 1)
+
+# No separator row = not a table
+not_a_table = "| just | some | pipes |"
+result4 = md_to_telegram_html(not_a_table)
+check_contains("no separator not converted", result4, "|")
+
+# Table with surrounding text
+mixed = """\
+Here is a table:
+
+| Col1 | Col2 |
+|------|------|
+| a    | b    |
+
+And some more text."""
+result5 = md_to_telegram_html(mixed)
+check_contains("mixed has surrounding text", result5, "Here is a table:", "And some more text.")
+check_contains("mixed has table content", result5, "<pre>")
+
+# Special chars in table cells are escaped
+special = """\
+| Key | Value |
+|-----|-------|
+| <script> | x&y |"""
+result6 = md_to_telegram_html(special)
+check_contains("special chars escaped", result6, "&lt;script&gt;", "x&amp;y")
+
+# -- split_html plaintext fallback --
+print("\n=== split_html plaintext fallback ===")
+# Deliberately broken HTML that would produce unbalanced chunks
+broken = "<b>unclosed " + "x" * 200
+chunks_broken = split_html(broken, 50)
+check("broken html splits", len(chunks_broken) > 1, True)
+for i, c in enumerate(chunks_broken):
+    check(f"broken chunk {i} within limit", len(c) <= 50, True)
+# All chunks should be plain text (tags stripped) since balancing would fail
+has_tags = any("<b>" in c or "</b>" in c for c in chunks_broken)
+# Either properly balanced OR stripped — both are acceptable outcomes
+all_balanced = all(c.count("<b>") == c.count("</b>") for c in chunks_broken)
+check("broken html either balanced or stripped", has_tags is False or all_balanced, True)
+
 # -- Summary --
 print(f"\n{'='*40}")
 print(f"  {passed} passed, {failed} failed")

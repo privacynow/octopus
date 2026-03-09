@@ -78,6 +78,9 @@ class BotConfig:
     # Admin users — gates store install/uninstall/update
     admin_user_ids: frozenset[int]
     admin_usernames: frozenset[str]
+    # Compact mode — mobile-friendly response summarization
+    compact_mode: bool
+    summary_model: str
 
 
 def load_config(instance: str | None = None) -> BotConfig:
@@ -180,6 +183,8 @@ def load_config(instance: str | None = None) -> BotConfig:
         codex_profile=get("CODEX_PROFILE"),
         admin_user_ids=frozenset(admin_ids),
         admin_usernames=frozenset(admin_names),
+        compact_mode=get_bool("BOT_COMPACT_MODE"),
+        summary_model=get("BOT_SUMMARY_MODEL", "claude-haiku-4-5-20251001"),
     )
 
 

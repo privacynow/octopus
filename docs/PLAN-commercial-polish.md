@@ -9,6 +9,69 @@ users leave before guarding against the traffic you don't yet have.
 
 ---
 
+## Current Status Snapshot (2026-03-09)
+
+This section tracks observed implementation status in the repo. Detailed scope
+and design notes remain below.
+
+| Phase | Status | Notes |
+|---|---|---|
+| Phase 1 | Mostly done | Core activation/self-service work is largely shipped; README parity and a few plan-level gaps remain. |
+| Phase 2 | Done | All three items shipped: table rendering, HTML fallback, and mobile summarization with `/raw` + `/compact`. |
+| Phase 3 | Partially started | Prompt-size warnings and basic `/doctor` checks exist, but most trust/cost-control work is still pending. |
+| Phase 4 | Mostly untouched | Local-modification detection exists, but the operational hardening flows are not implemented. |
+| Phase 5 | Not started | No third-party skill registry or webhook mode yet. |
+
+### Phase 1 Status
+
+| Item | Status | Notes |
+|---|---|---|
+| 1.1 `/cancel` command | Done | Handler registered and covered by handler tests. |
+| 1.2 `/clear-credentials` command | Partially done | Command exists, including mid-setup cleanup, but the planned confirmation flow is not implemented. |
+| 1.3 Onboarding overhaul | Partially done | Tiered help and first-run welcome exist; README parity/audit is still outstanding. |
+| 1.4 Credential status in `/skills list` | Done | `[needs setup]` and `[ready]` annotations are implemented. |
+| 1.5 Skill info improvements | Done | `Requires:` and `Providers:` are shown; preview truncates at 1000 chars with paragraph-aware cutoff. |
+| 1.6 Human-readable credential errors and clickable setup links | Done | 401/403/404/5xx guidance and HTML `<a href>` setup links are implemented and tested. |
+| 1.7 Group chat credential visibility and admin override | Done | Blocking user/time is shown, admin cancel works, and foreign setup timeout is 5 minutes. |
+| 1.8 Stale button UX cleanup | Done | `created_at` on `PendingRequest` plus TTL rejection on stale approval/retry buttons. |
+
+### Phase 2 Status
+
+| Item | Status | Notes |
+|---|---|---|
+| 2.1 Mobile summarization and `/raw` + `/compact` | Done | `app/summarize.py` with ring buffer + Claude Haiku summarizer. `/compact on\|off` per-chat toggle, `/raw [N]` retrieval. `BOT_COMPACT_MODE` and `BOT_SUMMARY_MODEL` config. Integrated in `execute_request`. |
+| 2.2 Markdown table rendering | Done | Markdown tables detected and converted to aligned `<pre>` blocks in `md_to_telegram_html`. Tables inside code fences left alone. |
+| 2.3 Robust HTML chunk splitting | Done | Post-split validation added to `split_html()`. If any chunk has unbalanced tags, falls back to stripping HTML and splitting as plain text. |
+
+### Phase 3 Status
+
+| Item | Status | Notes |
+|---|---|---|
+| 3.1 Rate limiting | Not started | No rate-limit module, config, or handler enforcement. |
+| 3.2 Usage tracking, quota, and billing hooks | Not started | No usage log, `/usage`, or budget enforcement. |
+| 3.3 Admin safety posture | Not started | No `/doctor` warning for implicit admin fallback; README still normalizes the fallback. |
+| 3.4 Proactive prompt size warnings | Partially done | Prompt-size warnings exist, but not the planned pre-activation projection + confirmation flow. |
+| 3.5 `/doctor` runtime health checks | Partially done | Cheap binary checks exist; runtime API ping/model validation/stale-session reporting do not. |
+
+### Phase 4 Status
+
+| Item | Status | Notes |
+|---|---|---|
+| 4.1 Repairable skill store operations | Not started | No intent log / recovery flow for partial install-update-uninstall failures. |
+| 4.2 Locally modified skill protection | Partially done | Detection and `locally_modified` state exist; confirmation prompts and `/skills diff` do not. |
+| 4.3 Configuration template per provider | Not started | Setup output is not provider-pruned. |
+| 4.4 Admin session visibility | Not started | No `/admin sessions` handler or session listing surface. |
+| 4.5 Conversation export | Not started | No `/export` handler or provider transcript export methods. |
+
+### Phase 5 Status
+
+| Item | Status | Notes |
+|---|---|---|
+| 5.1 Third-party skill registry | Not started | No remote install source support or publisher verification. |
+| 5.2 Webhook mode | Not started | No webhook-mode config or server path. |
+
+---
+
 ## Phase 1 — Activation & Self-Service
 
 The features that determine whether a new user succeeds or gives up. Every item

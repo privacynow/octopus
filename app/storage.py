@@ -56,7 +56,7 @@ def load_session(
         try:
             saved = json.loads(path.read_text())
             # Restore chat-level settings (skills, role, pending_request, timestamps)
-            for key in ("active_skills", "role", "pending_request", "awaiting_skill_setup", "created_at", "updated_at"):
+            for key in ("active_skills", "role", "pending_request", "awaiting_skill_setup", "compact_mode", "created_at", "updated_at"):
                 if key in saved:
                     session[key] = saved[key]
             # Only restore approval_mode if the user explicitly set it

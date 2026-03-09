@@ -27,7 +27,7 @@ and design notes remain below.
 | Item | Status | Notes |
 |---|---|---|
 | 1.1 `/cancel` command | Done | Handler registered and covered by handler tests. |
-| 1.2 `/clear-credentials` command | Partially done | Command exists, including mid-setup cleanup, but the planned confirmation flow is not implemented. |
+| 1.2 `/clear_credentials` command | Partially done | Command exists, including mid-setup cleanup, but the planned confirmation flow is not implemented. |
 | 1.3 Onboarding overhaul | Partially done | Tiered help and first-run welcome exist; README parity/audit is still outstanding. |
 | 1.4 Credential status in `/skills list` | Done | `[needs setup]` and `[ready]` annotations are implemented. |
 | 1.5 Skill info improvements | Done | `Requires:` and `Providers:` are shown; preview truncates at 1000 chars with paragraph-aware cutoff. |
@@ -101,15 +101,15 @@ group chat ownership check.
 
 ---
 
-### 1.2 `/clear-credentials` command
+### 1.2 `/clear_credentials` command
 
 **Problem**: Users have no way to reset their own stored credentials. If a token
 is rotated, compromised, or entered wrong, they must ask an admin or manually
 delete files on the server. For paying users, this is a day-one workflow.
 
 **Scope**:
-- `/clear-credentials` — clears ALL credentials for the calling user.
-- `/clear-credentials <skill>` — clears credentials for a specific skill.
+- `/clear_credentials` — clears ALL credentials for the calling user.
+- `/clear_credentials <skill>` — clears credentials for a specific skill.
 - After clearing, affected active skills are deactivated in the current chat
   (since they no longer have credentials).
 - Confirm before clearing: "This will remove your stored credentials for

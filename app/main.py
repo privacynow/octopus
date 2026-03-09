@@ -32,9 +32,23 @@ def make_provider(config: BotConfig) -> Provider:
     return cls(config)
 
 
+def _run_async(coro):
+    """Run a coroutine, handling both sync and async calling contexts."""
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    # Already in an event loop (e.g. called from tests) — create a task
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(1) as pool:
+        return pool.submit(asyncio.run, coro).result(timeout=60)
+
+
 def run_doctor(config: BotConfig, provider: Provider) -> None:
     errors = validate_config(config)
     errors.extend(provider.check_health())
+    errors.extend(_run_async(provider.check_runtime_health()))
     # Check managed store health (schema compat, dir layout)
     try:
         from app.store import ensure_managed_dirs, check_schema

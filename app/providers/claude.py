@@ -30,37 +30,42 @@ class ClaudeProvider:
         errors: list[str] = []
         if not shutil.which("claude"):
             errors.append("'claude' binary not found in PATH")
-            return errors
-        # Verify the binary actually works
-        import subprocess
+        return errors
+
+    async def check_runtime_health(self) -> list[str]:
+        errors: list[str] = []
+        # Version check
         try:
-            result = subprocess.run(
-                ["claude", "--version"],
-                capture_output=True, text=True, timeout=10,
+            proc = await asyncio.create_subprocess_exec(
+                "claude", "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            if result.returncode != 0:
-                errors.append(f"'claude --version' failed (rc={result.returncode}): {result.stderr.strip()[:200]}")
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+            if proc.returncode != 0:
+                errors.append(f"'claude --version' failed (rc={proc.returncode}): {stderr.decode()[:200]}")
             else:
-                log.info("claude version: %s", result.stdout.strip())
-        except subprocess.TimeoutExpired:
+                log.info("claude version: %s", stdout.decode().strip())
+        except (asyncio.TimeoutError, TimeoutError):
             errors.append("'claude --version' timed out")
         except OSError as e:
             errors.append(f"'claude' binary not executable: {e}")
-        # Lightweight API ping
+        # API ping
         if not errors:
             try:
                 model = self.config.model or "claude-sonnet-4-20250514"
-                result = subprocess.run(
-                    ["claude", "-p", "--model", model, "--max-turns", "1",
-                     "--output-format", "text", "reply with ok"],
-                    capture_output=True, text=True, timeout=15,
+                proc = await asyncio.create_subprocess_exec(
+                    "claude", "-p", "--model", model, "--max-turns", "1",
+                    "--output-format", "text", "reply with ok",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-                if result.returncode != 0:
-                    stderr = result.stderr.strip()[:200]
-                    errors.append(f"API ping failed (rc={result.returncode}): {stderr}")
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+                if proc.returncode != 0:
+                    errors.append(f"API ping failed (rc={proc.returncode}): {stderr.decode()[:200]}")
                 else:
                     log.info("claude API ping ok")
-            except subprocess.TimeoutExpired:
+            except (asyncio.TimeoutError, TimeoutError):
                 errors.append("API ping timed out (15s)")
             except OSError as e:
                 errors.append(f"API ping error: {e}")

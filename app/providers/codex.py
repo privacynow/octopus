@@ -29,23 +29,27 @@ class CodexProvider:
         errors: list[str] = []
         if not shutil.which("codex"):
             errors.append("'codex' binary not found in PATH")
-            return errors
-        # Verify the binary actually works
-        import subprocess
+        return errors
+
+    async def check_runtime_health(self) -> list[str]:
+        errors: list[str] = []
+        # Version check
         try:
-            result = subprocess.run(
-                ["codex", "--version"],
-                capture_output=True, text=True, timeout=10,
+            proc = await asyncio.create_subprocess_exec(
+                "codex", "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            if result.returncode != 0:
-                errors.append(f"'codex --version' failed (rc={result.returncode}): {result.stderr.strip()[:200]}")
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+            if proc.returncode != 0:
+                errors.append(f"'codex --version' failed (rc={proc.returncode}): {stderr.decode()[:200]}")
             else:
-                log.info("codex version: %s", result.stdout.strip())
-        except subprocess.TimeoutExpired:
+                log.info("codex version: %s", stdout.decode().strip())
+        except (asyncio.TimeoutError, TimeoutError):
             errors.append("'codex --version' timed out")
         except OSError as e:
             errors.append(f"'codex' binary not executable: {e}")
-        # Lightweight API ping (mirrors real execution flags)
+        # API ping (mirrors real execution flags)
         if not errors:
             try:
                 ping_cmd = ["codex", "exec", "--json", "--ephemeral",
@@ -57,16 +61,17 @@ class CodexProvider:
                 if self.config.codex_profile:
                     ping_cmd.extend(["--profile", self.config.codex_profile])
                 ping_cmd.extend(["-C", str(self.config.working_dir), "reply with ok"])
-                result = subprocess.run(
-                    ping_cmd,
-                    capture_output=True, text=True, timeout=30,
+                proc = await asyncio.create_subprocess_exec(
+                    *ping_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-                if result.returncode != 0:
-                    stderr = result.stderr.strip()[:200]
-                    errors.append(f"API ping failed (rc={result.returncode}): {stderr}")
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+                if proc.returncode != 0:
+                    errors.append(f"API ping failed (rc={proc.returncode}): {stderr.decode()[:200]}")
                 else:
                     log.info("codex API ping ok")
-            except subprocess.TimeoutExpired:
+            except (asyncio.TimeoutError, TimeoutError):
                 errors.append("API ping timed out (30s)")
             except OSError as e:
                 errors.append(f"API ping error: {e}")

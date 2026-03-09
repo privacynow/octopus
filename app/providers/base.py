@@ -97,5 +97,11 @@ class Provider(Protocol):
         ...
 
     def check_health(self) -> list[str]:
-        """Return list of problems, empty if healthy. Cheap checks only."""
+        """Return list of problems, empty if healthy. Cheap local checks only
+        (e.g. binary exists in PATH). Must not do blocking I/O."""
+        ...
+
+    async def check_runtime_health(self) -> list[str]:
+        """Return list of problems from runtime probes (version check, API ping).
+        Uses async subprocess — safe to await in the event loop."""
         ...

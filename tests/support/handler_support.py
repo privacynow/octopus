@@ -159,6 +159,9 @@ class FakeProvider:
     def check_health(self):
         return list(self._health_errors)
 
+    async def check_runtime_health(self):
+        return []
+
 
 def make_config(data_dir, **overrides):
     defaults = dict(

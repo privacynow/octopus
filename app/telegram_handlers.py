@@ -972,6 +972,7 @@ async def cmd_doctor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     from app.config import validate_config
     cfg_errors = validate_config(_cfg())
     prov_errors = _prov().check_health()
+    prov_errors.extend(await _prov().check_runtime_health())
     # Validate active skills for this chat
     session = _load(event.chat_id)
     user_id = event.user.id

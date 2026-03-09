@@ -16,7 +16,7 @@ and design notes remain below.
 
 | Phase | Status | Notes |
 |---|---|---|
-| Phase 1 | Mostly done | Core activation/self-service work is largely shipped; README parity and a few plan-level gaps remain. |
+| Phase 1 | Done | All 8 items shipped: cancel, clear-credentials with confirmation, onboarding, credential status, skill info, error mapping, group chat visibility, stale button TTL. |
 | Phase 2 | Done | All three items shipped: table rendering, HTML fallback, and mobile summarization with `/raw` + `/compact`. |
 | Phase 3 | Done | Rate limiting, admin safety posture, proactive prompt size warnings, runtime health checks all shipped. |
 | Phase 4 | Mostly done | 4.2-4.5 shipped: skill protection with confirmation/diff, provider-pruned setup, admin sessions, conversation export. 4.1 (repairable store ops) deferred. |
@@ -27,8 +27,8 @@ and design notes remain below.
 | Item | Status | Notes |
 |---|---|---|
 | 1.1 `/cancel` command | Done | Handler registered and covered by handler tests. |
-| 1.2 `/clear_credentials` command | Partially done | Command exists, including mid-setup cleanup, but the planned confirmation flow is not implemented. |
-| 1.3 Onboarding overhaul | Partially done | Tiered help and first-run welcome exist; README parity/audit is still outstanding. |
+| 1.2 `/clear_credentials` command | Done | Confirmation flow with inline buttons before clearing. Clears setup, deactivates affected skills. |
+| 1.3 Onboarding overhaul | Done | Tiered help, first-run welcome, and README updated with full command reference and feature docs. |
 | 1.4 Credential status in `/skills list` | Done | `[needs setup]` and `[ready]` annotations are implemented. |
 | 1.5 Skill info improvements | Done | `Requires:` and `Providers:` are shown; preview truncates at 1000 chars with paragraph-aware cutoff. |
 | 1.6 Human-readable credential errors and clickable setup links | Done | 401/403/404/5xx guidance and HTML `<a href>` setup links are implemented and tested. |

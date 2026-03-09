@@ -35,7 +35,8 @@ from app.skills import (
     build_run_context, build_preflight_context, build_provider_config,
     get_provider_config_digest, get_skill_digests, load_catalog,
     get_skill_requirements, check_credentials, load_user_credentials,
-    save_user_credential, delete_user_credentials, derive_encryption_key,
+    save_user_credential, delete_user_credentials, list_user_credential_skills,
+    derive_encryption_key,
     build_credential_env,
     scaffold_skill, validate_active_skills, validate_credential,
     check_prompt_size, estimate_prompt_size,
@@ -1584,11 +1585,47 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def cmd_clear_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update.effective_user):
         return
-    chat_id = update.effective_chat.id
     user_id = update.effective_user.id if update.effective_user else 0
     args = context.args or []
     skill_name = args[0] if args else None
 
+    cfg = _cfg()
+    stored = list_user_credential_skills(cfg.data_dir, user_id)
+
+    if skill_name:
+        if skill_name not in stored:
+            await update.effective_message.reply_text(
+                f"No stored credentials for <code>{html.escape(skill_name)}</code>.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        affected = [skill_name]
+        msg = (f"This will remove your credentials for "
+               f"<code>{html.escape(skill_name)}</code> and deactivate it "
+               f"in this chat. Continue?")
+        cb_data = f"clear_cred_confirm:{skill_name}"
+    else:
+        if not stored:
+            await update.effective_message.reply_text("No stored credentials found.")
+            return
+        affected = stored
+        names = html.escape(", ".join(affected))
+        msg = (f"This will remove all your stored credentials "
+               f"({names}) and deactivate affected skills. Continue?")
+        cb_data = "clear_cred_confirm_all"
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Yes, clear", callback_data=cb_data),
+        InlineKeyboardButton("Cancel", callback_data="clear_cred_cancel"),
+    ]])
+    await update.effective_message.reply_text(msg, parse_mode=ParseMode.HTML,
+                                              reply_markup=keyboard)
+
+
+async def _execute_clear_credentials(
+    query, chat_id: int, user_id: int, skill_name: str | None,
+) -> None:
+    """Shared logic for clearing credentials after confirmation."""
     cfg = _cfg()
     key = _encryption_key()
     removed = delete_user_credentials(cfg.data_dir, user_id, key, skill_name)
@@ -1614,14 +1651,6 @@ async def cmd_clear_credentials(update: Update, context: ContextTypes.DEFAULT_TY
             session["active_skills"] = active
             _save(chat_id, session)
 
-    if not removed and not setup_cleared:
-        target = f"for skill <code>{html.escape(skill_name)}</code>" if skill_name else ""
-        await update.effective_message.reply_text(
-            f"No stored credentials found {target}.".strip(),
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
     parts = []
     if removed:
         parts.append(f"Credentials cleared for: {html.escape(', '.join(removed))}.")
@@ -1629,7 +1658,36 @@ async def cmd_clear_credentials(update: Update, context: ContextTypes.DEFAULT_TY
         parts.append("Credential setup cancelled.")
     if deactivated:
         parts.append(f"Deactivated in this chat: {html.escape(', '.join(deactivated))}.")
-    await update.effective_message.reply_text("\n".join(parts), parse_mode=ParseMode.HTML)
+    if not parts:
+        parts.append("No credentials to clear (may have already been removed).")
+    await query.edit_message_text("\n".join(parts), parse_mode=ParseMode.HTML)
+
+
+async def handle_clear_cred_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not is_allowed(update.effective_user):
+        await query.answer("Not authorized.", show_alert=True)
+        return
+
+    await query.answer()
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id if update.effective_user else 0
+
+    if query.data == "clear_cred_cancel":
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.edit_message_text("Credential clear cancelled.")
+        return
+
+    if query.data == "clear_cred_confirm_all":
+        await query.edit_message_reply_markup(reply_markup=None)
+        await _execute_clear_credentials(query, chat_id, user_id, None)
+        return
+
+    if query.data.startswith("clear_cred_confirm:"):
+        skill_name = query.data.split(":", 1)[1]
+        await query.edit_message_reply_markup(reply_markup=None)
+        await _execute_clear_credentials(query, chat_id, user_id, skill_name)
+        return
 
 
 async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2028,6 +2086,7 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     app.add_handler(CallbackQueryHandler(handle_callback, pattern=r"^(retry_|approval_)"))
     app.add_handler(CallbackQueryHandler(handle_skill_add_callback, pattern=r"^skill_add_"))
     app.add_handler(CallbackQueryHandler(handle_skill_update_callback, pattern=r"^skill_update_"))
+    app.add_handler(CallbackQueryHandler(handle_clear_cred_callback, pattern=r"^clear_cred_"))
     app.add_handler(
         MessageHandler(
             (filters.TEXT | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,

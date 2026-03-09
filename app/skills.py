@@ -169,6 +169,20 @@ def _credential_file(data_dir: Path, user_id: int) -> Path:
     return data_dir / "credentials" / f"{user_id}.json"
 
 
+def list_user_credential_skills(data_dir: Path, user_id: int) -> list[str]:
+    """Return skill names that have stored credentials (no decryption)."""
+    path = _credential_file(data_dir, user_id)
+    if not path.is_file():
+        return []
+    try:
+        stored = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(stored, dict):
+        return []
+    return [k for k, v in stored.items() if isinstance(v, dict) and v]
+
+
 def load_user_credentials(data_dir: Path, user_id: int, key: bytes) -> dict[str, dict[str, str]]:
     """Load and decrypt per-user credentials.
 

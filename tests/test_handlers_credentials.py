@@ -1242,7 +1242,8 @@ async def test_foreign_setup_message_info():
 run_test("foreign setup message info", test_foreign_setup_message_info())
 
 
-async def test_clear_credentials_clears_setup():
+async def test_clear_credentials_confirm_flow():
+    """Clear credentials shows confirmation, then clears on confirm."""
     import app.skills as skills_mod
 
     orig_custom_dir = skills_mod.CUSTOM_DIR
@@ -1276,20 +1277,32 @@ async def test_clear_credentials_clears_setup():
             }
             save_session(data_dir, 12345, session)
 
-            await _th.cmd_clear_credentials(
-                FakeUpdate(message=FakeMessage(chat=chat, text="/clear_credentials cred-test"), user=user, chat=chat),
-                FakeContext(args=["cred-test"]),
-            )
+            # Step 1: Command shows confirmation
+            msg = await send_command(_th.cmd_clear_credentials, chat, user, "/clear_credentials cred-test", args=["cred-test"])
+            reply = msg.replies[-1]
+            checks.check_in("confirmation mentions skill", "cred-test", reply["text"])
+            checks.check("has buttons", "reply_markup" in reply, True)
+
+            # Step 2: Confirm via callback
+            cb_msg = FakeMessage(chat=chat)
+            query = FakeCallbackQuery("clear_cred_confirm:cred-test", message=cb_msg)
+            update = FakeUpdate(user=user, chat=chat, callback_query=query)
+            await _th.handle_clear_cred_callback(update, FakeContext())
+
             session = load_session_disk(data_dir, 12345, prov)
-            checks.check("setup cleared after clear_credentials", session.get("awaiting_skill_setup"), None)
+            checks.check("setup cleared", session.get("awaiting_skill_setup"), None)
+            creds = load_user_credentials(data_dir, 42, key)
+            checks.check("credentials removed", "cred-test" in creds, False)
+            checks.check_in("reply confirms cleared", "cleared", cb_msg.replies[-1]["edit_text"].lower())
     finally:
         skills_mod.CUSTOM_DIR = orig_custom_dir
 
 
-run_test("clear_credentials clears setup", test_clear_credentials_clears_setup())
+run_test("clear_credentials confirm flow", test_clear_credentials_confirm_flow())
 
 
-async def test_clear_credentials_no_saved_creds_e2e():
+async def test_clear_credentials_cancel():
+    """Cancel button aborts credential clearing."""
     import app.skills as skills_mod
 
     orig_custom_dir = skills_mod.CUSTOM_DIR
@@ -1307,38 +1320,106 @@ async def test_clear_credentials_no_saved_creds_e2e():
 
             cfg = make_config(data_dir)
             prov = FakeProvider("claude")
-            prov.run_results = [RunResult(text="Normal response")]
             setup_globals(cfg, prov)
 
             chat = FakeChat(12345)
             user = FakeUser(42)
+            key = derive_encryption_key(cfg.telegram_token)
+            save_user_credential(data_dir, 42, "cred-test", "API_TOKEN", "old-value", key)
 
-            session = default_session(prov.name, prov.new_provider_state(), "off")
-            session["awaiting_skill_setup"] = {
-                "user_id": 42,
-                "skill": "cred-test",
-                "started_at": time.time(),
-                "remaining": [{"key": "API_TOKEN", "prompt": "Enter token"}],
-            }
-            save_session(data_dir, 12345, session)
+            # Step 1: Command shows confirmation
+            msg = await send_command(_th.cmd_clear_credentials, chat, user, "/clear_credentials cred-test", args=["cred-test"])
+            checks.check("has buttons", "reply_markup" in msg.replies[-1], True)
 
-            clear_msg = FakeMessage(chat=chat, text="/clear_credentials cred-test")
-            await _th.cmd_clear_credentials(FakeUpdate(message=clear_msg, user=user, chat=chat), FakeContext(args=["cred-test"]))
+            # Step 2: Cancel via callback
+            cb_msg = FakeMessage(chat=chat)
+            query = FakeCallbackQuery("clear_cred_cancel", message=cb_msg)
+            update = FakeUpdate(user=user, chat=chat, callback_query=query)
+            await _th.handle_clear_cred_callback(update, FakeContext())
 
-            session = load_session_disk(data_dir, 12345, prov)
-            checks.check("setup cleared with no saved creds", session.get("awaiting_skill_setup"), None)
-            checks.check("reply mentions setup cancelled", "setup cancelled" in clear_msg.replies[-1]["text"].lower(), True)
-
-            plain_msg = FakeMessage(chat=chat, text="hello bot")
-            await _th.handle_message(FakeUpdate(message=plain_msg, user=user, chat=chat), FakeContext())
-            checks.check("provider called", len(prov.run_calls), 1)
-            checks.check_in("prompt has user text", "hello bot", prov.run_calls[0]["prompt"])
-            checks.check("message not deleted", plain_msg.deleted, False)
+            checks.check_in("reply says cancelled", "cancelled", cb_msg.replies[-1]["edit_text"].lower())
+            # Credentials should still exist
+            creds = load_user_credentials(data_dir, 42, key)
+            checks.check("credentials preserved", "cred-test" in creds, True)
     finally:
         skills_mod.CUSTOM_DIR = orig_custom_dir
 
 
-run_test("clear_credentials no saved creds e2e", test_clear_credentials_no_saved_creds_e2e())
+run_test("clear_credentials cancel", test_clear_credentials_cancel())
+
+
+async def test_clear_credentials_all_confirm():
+    """Clear all credentials with confirmation."""
+    import app.skills as skills_mod
+
+    orig_custom_dir = skills_mod.CUSTOM_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            ensure_data_dirs(data_dir)
+            custom_dir = Path(tmp) / "custom-skills"
+            skills_mod.CUSTOM_DIR = custom_dir
+
+            for sname in ("skill-a", "skill-b"):
+                sd = custom_dir / sname
+                sd.mkdir(parents=True, exist_ok=True)
+                (sd / "skill.md").write_text(f"---\nname: {sname}\ndisplay_name: {sname}\ndescription: Test\n---\n\nInstructions.\n")
+                (sd / "requires.yaml").write_text(f"credentials:\n  - key: TOKEN_{sname.upper().replace('-','_')}\n    prompt: Enter token\n")
+
+            cfg = make_config(data_dir)
+            prov = FakeProvider("claude")
+            setup_globals(cfg, prov)
+
+            chat = FakeChat(12345)
+            user = FakeUser(42)
+            key = derive_encryption_key(cfg.telegram_token)
+            save_user_credential(data_dir, 42, "skill-a", "TOKEN_SKILL_A", "val-a", key)
+            save_user_credential(data_dir, 42, "skill-b", "TOKEN_SKILL_B", "val-b", key)
+
+            # No args → clear all
+            msg = await send_command(_th.cmd_clear_credentials, chat, user, "/clear_credentials")
+            reply = msg.replies[-1]
+            checks.check_in("lists skill-a", "skill-a", reply["text"])
+            checks.check_in("lists skill-b", "skill-b", reply["text"])
+            checks.check("has buttons", "reply_markup" in reply, True)
+
+            # Confirm
+            cb_msg = FakeMessage(chat=chat)
+            query = FakeCallbackQuery("clear_cred_confirm_all", message=cb_msg)
+            update = FakeUpdate(user=user, chat=chat, callback_query=query)
+            await _th.handle_clear_cred_callback(update, FakeContext())
+
+            creds = load_user_credentials(data_dir, 42, key)
+            checks.check("all credentials removed", len(creds), 0)
+    finally:
+        skills_mod.CUSTOM_DIR = orig_custom_dir
+
+
+run_test("clear_credentials all confirm", test_clear_credentials_all_confirm())
+
+
+async def test_clear_credentials_no_stored():
+    """Clear credentials with nothing stored shows informative message."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp) / "data"
+        ensure_data_dirs(data_dir)
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+
+        # Specific skill
+        msg = await send_command(_th.cmd_clear_credentials, chat, user, "/clear_credentials foo", args=["foo"])
+        checks.check_in("no creds message", "no stored credentials", msg.replies[-1]["text"].lower())
+
+        # All
+        msg2 = await send_command(_th.cmd_clear_credentials, chat, user, "/clear_credentials")
+        checks.check_in("no creds all message", "no stored credentials", msg2.replies[-1]["text"].lower())
+
+
+run_test("clear_credentials no stored", test_clear_credentials_no_stored())
 
 
 async def _run_all():

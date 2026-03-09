@@ -543,7 +543,7 @@ async def execute_request(
     cleaned_reply, directives = extract_send_directives(result.text)
 
     # Save raw response to ring buffer for /raw retrieval
-    save_raw(cfg.data_dir, chat_id, prompt[:200], cleaned_reply)
+    save_raw(cfg.data_dir, chat_id, prompt, cleaned_reply)
 
     # Compact mode: summarize long responses for mobile readability
     compact = session.get("compact_mode", cfg.compact_mode)
@@ -643,9 +643,11 @@ async def request_approval(
         InlineKeyboardButton("\u274c Reject plan", callback_data="approval_reject"),
     ]])
     await progress.update("Preflight approval required.", force=True)
+    plan_text = plan_result.text or "[empty plan]"
+    save_raw(cfg.data_dir, chat_id, prompt, plan_text, kind="approval")
     await send_formatted_reply(
         message,
-        "**Preflight approval plan:**\n\n" + (plan_result.text or "[empty plan]"),
+        "**Preflight approval plan:**\n\n" + plan_text,
     )
     await message.chat.send_message("Approve this preflight plan?", reply_markup=keyboard)
 
@@ -761,7 +763,7 @@ HELP_TEMPLATE = (
     "/send &lt;path&gt; — retrieve a file from the server\n"
     "/session — show current session info\n"
     "/id — show your Telegram user ID\n"
-    "/doctor — run health checks\n\n"
+    "/doctor — run health checks\n""/export — download recent conversation history\n""/admin sessions — session overview (admin only)\n\n"
     "Type /help skills, /help approval, or /help credentials for details."
 )
 
@@ -1052,6 +1054,9 @@ async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"Approval mode: {session.get('approval_mode', 'off')}",
         f"Active skills: {', '.join(skills) if skills else 'none'}",
         f"Created: {session.get('created_at', 'unknown')[:19]}",
+        "",
+        "Note: This export contains the last 50 exchanges (requests and",
+        "approval plans). Command replies and older turns are not included.",
         "",
         "=" * 40,
         "",

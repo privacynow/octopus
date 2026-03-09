@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 _SHORT_THRESHOLD = 800
 
 # Ring buffer capacity per chat.
-_RING_SIZE = 10
+_RING_SIZE = 50
 
 _SUMMARY_PROMPT = """\
 Summarize the following AI assistant response for a mobile chat screen.
@@ -37,8 +37,19 @@ def _ring_dir(data_dir: Path, chat_id: int) -> Path:
     return d
 
 
-def save_raw(data_dir: Path, chat_id: int, prompt_preview: str, raw_text: str) -> None:
-    """Append a raw response to the ring buffer, rotating old entries."""
+def save_raw(
+    data_dir: Path,
+    chat_id: int,
+    prompt: str,
+    raw_text: str,
+    kind: str = "request",
+) -> None:
+    """Append a conversation turn to the ring buffer, rotating old entries.
+
+    *kind* distinguishes turn types: "request" (normal user->model),
+    "approval" (approval plan or approved execution), "system" (bot-
+    generated messages worth preserving such as setup or credential flow).
+    """
     d = _ring_dir(data_dir, chat_id)
     entries = sorted(d.glob("*.json"))
 
@@ -55,8 +66,9 @@ def save_raw(data_dir: Path, chat_id: int, prompt_preview: str, raw_text: str) -
 
     payload = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "prompt_preview": prompt_preview[:200],
+        "prompt": prompt,
         "raw_text": raw_text,
+        "kind": kind,
     }
     target = d / f"{new_num:06d}.json"
     tmp = target.with_suffix(".tmp")
@@ -94,9 +106,12 @@ def export_chat_history(data_dir: Path, chat_id: int) -> str | None:
         except (json.JSONDecodeError, OSError):
             continue
         ts = data.get("timestamp", "unknown")[:19]
-        prompt = data.get("prompt_preview", "")
+        kind = data.get("kind", "request")
+        # Support both old "prompt_preview" and new "prompt" field
+        prompt = data.get("prompt") or data.get("prompt_preview", "")
         response = data.get("raw_text", "")
-        parts.append(f"--- {ts} ---")
+        label = {"approval": "[approval] ", "system": "[system] "}.get(kind, "")
+        parts.append(f"--- {label}{ts} ---")
         if prompt:
             parts.append(f"User: {prompt}")
         parts.append(f"Assistant: {response}")

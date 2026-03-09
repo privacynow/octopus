@@ -75,8 +75,9 @@ with tempfile.TemporaryDirectory() as tmp:
     entry = next(ring_dir.glob("*.json"))
     payload = json.loads(entry.read_text())
     check("has timestamp", "timestamp" in payload, True)
-    check("has prompt_preview", payload["prompt_preview"], "test prompt preview")
+    check("has prompt", payload["prompt"], "test prompt preview")
     check("has raw_text", payload["raw_text"], "test raw text")
+    check("has kind", payload["kind"], "request")
 
 # -- short threshold constant --
 print("\n=== short threshold ===")
@@ -145,6 +146,65 @@ with tempfile.TemporaryDirectory() as tmp:
 
     # Different chat has no history
     check("other chat empty", export_chat_history(data_dir, 999), None)
+
+
+# -- full prompt storage (no truncation) --
+print("\n=== full prompt storage ===")
+with tempfile.TemporaryDirectory() as tmp:
+    data_dir = Path(tmp)
+    long_prompt = "x" * 500
+    save_raw(data_dir, 1, long_prompt, "response")
+    ring_dir = data_dir / "raw" / "1"
+    entry = next(ring_dir.glob("*.json"))
+    payload = json.loads(entry.read_text())
+    check("full prompt stored", len(payload["prompt"]), 500)
+    check("prompt not truncated", payload["prompt"], long_prompt)
+
+# -- kind field --
+print("\n=== kind field ===")
+with tempfile.TemporaryDirectory() as tmp:
+    data_dir = Path(tmp)
+    save_raw(data_dir, 1, "test", "response", kind="approval")
+    ring_dir = data_dir / "raw" / "1"
+    entry = next(ring_dir.glob("*.json"))
+    payload = json.loads(entry.read_text())
+    check("kind stored", payload["kind"], "approval")
+
+    save_raw(data_dir, 2, "test", "response")
+    ring_dir2 = data_dir / "raw" / "2"
+    entry2 = next(ring_dir2.glob("*.json"))
+    payload2 = json.loads(entry2.read_text())
+    check("default kind is request", payload2["kind"], "request")
+
+# -- export with kind labels --
+print("\n=== export kind labels ===")
+with tempfile.TemporaryDirectory() as tmp:
+    data_dir = Path(tmp)
+    save_raw(data_dir, 1, "do something", "here is the plan", kind="approval")
+    save_raw(data_dir, 1, "do something", "done, executed")
+    result = export_chat_history(data_dir, 1)
+    check_contains("approval label", result, "[approval]")
+    check_contains("request has no label", result, "--- 20")
+
+# -- export backward compat with old prompt_preview field --
+print("\n=== export backward compat ===")
+with tempfile.TemporaryDirectory() as tmp:
+    data_dir = Path(tmp)
+    # Simulate old-format entry
+    ring_dir = data_dir / "raw" / "1"
+    ring_dir.mkdir(parents=True)
+    old_entry = {
+        "timestamp": "2025-01-01T00:00:00",
+        "prompt_preview": "old format prompt",
+        "raw_text": "old response",
+    }
+    (ring_dir / "000001.json").write_text(json.dumps(old_entry))
+    result = export_chat_history(data_dir, 1)
+    check_contains("old format prompt readable", result, "User: old format prompt")
+
+# -- ring size is 50 --
+print("\n=== ring size ===")
+check("ring size is 50", _RING_SIZE, 50)
 
 # -- Summary --
 print(f"\n{'='*40}")

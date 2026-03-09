@@ -1,15 +1,25 @@
-"""Skill store: discovery, search, install/uninstall, update checking.
+"""Managed immutable skill store.
 
-Store skills live in skills/store/ within the repo. Install copies them
-to the custom skills directory (~/.config/telegram-agent-bot/skills/).
-A _store.json manifest distinguishes store-installed skills from
-user-created custom skills.
+Layout under ~/.config/telegram-agent-bot/skills/:
+
+    custom/<name>/              Operator-authored, editable
+    managed/version.json        Schema version marker
+    managed/.lock               Cross-instance flock
+    managed/objects/<sha256>/   Immutable skill snapshots
+    managed/refs/<name>.json    Logical name → digest + provenance
+    managed/tmp/                Staging for in-progress installs
 """
 
+import difflib
+import fcntl
 import hashlib
 import json
 import logging
+import os
 import shutil
+import stat
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,14 +29,30 @@ import yaml
 
 _log = logging.getLogger(__name__)
 
+# Bundled store source (in repo, read-only)
 STORE_DIR = Path(__file__).resolve().parent.parent / "skills" / "store"
-CUSTOM_DIR = Path.home() / ".config" / "telegram-agent-bot" / "skills"
-_STORE_JSON = "_store.json"
 
+# Managed store root — shared across instances
+_SKILLS_ROOT = Path.home() / ".config" / "telegram-agent-bot" / "skills"
+CUSTOM_DIR = _SKILLS_ROOT / "custom"
+MANAGED_DIR = _SKILLS_ROOT / "managed"
+OBJECTS_DIR = MANAGED_DIR / "objects"
+REFS_DIR = MANAGED_DIR / "refs"
+TMP_DIR = MANAGED_DIR / "tmp"
+VERSION_FILE = MANAGED_DIR / "version.json"
+LOCK_FILE = MANAGED_DIR / ".lock"
+
+_SCHEMA_VERSION = 1
+_GC_GRACE_SECONDS = 3600  # 1 hour
+
+
+# ---------------------------------------------------------------------------
+# Data types
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class StoreSkillInfo:
-    """Metadata for a skill available in the store."""
+    """Metadata for a skill available in the bundled store."""
     name: str
     display_name: str
     description: str
@@ -36,34 +62,231 @@ class StoreSkillInfo:
 
 
 @dataclass(frozen=True)
-class StoreManifest:
-    """Provenance record written as _store.json in installed skill dir."""
-    source: str  # always "store"
-    store_path: str
+class SkillRef:
+    """Logical ref: name → immutable object digest + provenance."""
+    schema_version: int
+    digest: str
+    source: str
+    source_uri: str
     installed_at: str
-    content_sha256: str
-    locally_modified: bool = False
+    version: str | None = None
+    publisher: str | None = None
+    signature: str | None = None
+    pinned: bool = False
 
 
 # ---------------------------------------------------------------------------
 # Content hashing
 # ---------------------------------------------------------------------------
 
-def _hash_directory(path: Path) -> str:
-    """SHA-256 of all files in a directory (sorted, deterministic).
+def hash_directory(path: Path) -> str:
+    """SHA-256 of all files in a directory.
 
-    Excludes _store.json itself so we can compare store source vs installed.
+    Hash includes relative path, file mode (octal), and content for each file.
+    Sorted for determinism. Excludes metadata files (_store.json, _ref.json).
     """
     h = hashlib.sha256()
+    exclude = {"_store.json", "_ref.json"}
     for fpath in sorted(path.rglob("*")):
-        if fpath.is_file() and fpath.name != _STORE_JSON:
-            h.update(fpath.relative_to(path).as_posix().encode())
+        if fpath.is_file() and fpath.name not in exclude:
+            rel = fpath.relative_to(path).as_posix()
+            mode = oct(fpath.stat().st_mode & 0o777)
+            h.update(rel.encode())
+            h.update(b"\0")
+            h.update(mode.encode())
+            h.update(b"\0")
             h.update(fpath.read_bytes())
     return h.hexdigest()
 
 
 # ---------------------------------------------------------------------------
-# Store discovery
+# Directory init and schema guard
+# ---------------------------------------------------------------------------
+
+def ensure_managed_dirs() -> None:
+    """Create the managed store layout if it doesn't exist."""
+    for d in (CUSTOM_DIR, OBJECTS_DIR, REFS_DIR, TMP_DIR):
+        d.mkdir(parents=True, exist_ok=True)
+    if not VERSION_FILE.exists():
+        VERSION_FILE.write_text(
+            json.dumps({"schema": _SCHEMA_VERSION}) + "\n"
+        )
+
+
+def check_schema() -> None:
+    """Verify schema version. Raises if incompatible."""
+    if not VERSION_FILE.exists():
+        return  # Fresh init, ensure_managed_dirs will create it
+    try:
+        data = json.loads(VERSION_FILE.read_text())
+        version = data.get("schema", 0)
+    except (json.JSONDecodeError, OSError):
+        version = 0
+    if version > _SCHEMA_VERSION:
+        raise RuntimeError(
+            f"Managed store schema version {version} is newer than "
+            f"supported version {_SCHEMA_VERSION}. Upgrade the bot."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Cross-instance locking
+# ---------------------------------------------------------------------------
+
+@contextmanager
+def _store_lock():
+    """Acquire exclusive flock on the managed store.
+
+    Used for all mutations: object creation, ref writes, GC, recovery.
+    Read-only operations (skill resolution, catalog loading) do NOT lock.
+    """
+    MANAGED_DIR.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(LOCK_FILE), os.O_RDWR | os.O_CREAT)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+# ---------------------------------------------------------------------------
+# Ref read/write (atomic)
+# ---------------------------------------------------------------------------
+
+def read_ref(name: str) -> SkillRef | None:
+    """Read a logical ref by skill name. Returns None if missing or corrupt."""
+    ref_path = REFS_DIR / f"{name}.json"
+    if not ref_path.is_file():
+        return None
+    try:
+        data = json.loads(ref_path.read_text(encoding="utf-8"))
+        return SkillRef(
+            schema_version=data.get("schema_version", 1),
+            digest=data["digest"],
+            source=data.get("source", "store"),
+            source_uri=data.get("source_uri", ""),
+            installed_at=data.get("installed_at", ""),
+            version=data.get("version"),
+            publisher=data.get("publisher"),
+            signature=data.get("signature"),
+            pinned=data.get("pinned", False),
+        )
+    except (json.JSONDecodeError, KeyError, TypeError):
+        _log.warning("Corrupt ref for '%s', treating as missing", name)
+        return None
+
+
+def _write_ref(name: str, ref: SkillRef) -> None:
+    """Atomically write a ref: write .tmp then rename."""
+    REFS_DIR.mkdir(parents=True, exist_ok=True)
+    data = {
+        "schema_version": ref.schema_version,
+        "digest": ref.digest,
+        "source": ref.source,
+        "source_uri": ref.source_uri,
+        "installed_at": ref.installed_at,
+        "version": ref.version,
+        "publisher": ref.publisher,
+        "signature": ref.signature,
+        "pinned": ref.pinned,
+    }
+    tmp = REFS_DIR / f"{name}.json.tmp"
+    tmp.write_text(
+        json.dumps(data, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    tmp.rename(REFS_DIR / f"{name}.json")
+
+
+def _delete_ref(name: str) -> bool:
+    """Delete a ref file. Returns True if it existed."""
+    ref_path = REFS_DIR / f"{name}.json"
+    try:
+        ref_path.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def list_refs() -> dict[str, SkillRef]:
+    """Return all logical refs."""
+    result: dict[str, SkillRef] = {}
+    if not REFS_DIR.is_dir():
+        return result
+    for p in sorted(REFS_DIR.glob("*.json")):
+        if p.name.endswith(".tmp"):
+            continue
+        name = p.stem
+        ref = read_ref(name)
+        if ref:
+            result[name] = ref
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Object management (immutable, content-addressed)
+# ---------------------------------------------------------------------------
+
+def _object_dir(digest: str) -> Path:
+    return OBJECTS_DIR / digest
+
+
+def _object_exists(digest: str) -> bool:
+    return _object_dir(digest).is_dir()
+
+
+def _create_object(source_dir: Path) -> str:
+    """Create an immutable object from source directory.
+
+    Copies to tmp, hashes, moves to objects/<digest>/.
+    Idempotent: if object already exists, skips.
+    Returns the digest.
+    """
+    # Stage in tmp
+    ts = f"{time.time():.6f}".replace(".", "_")
+    staging = TMP_DIR / f"obj_{ts}"
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    if staging.exists():
+        shutil.rmtree(staging)
+    shutil.copytree(source_dir, staging)
+
+    # Remove any metadata files that shouldn't be in the object
+    for meta in ("_store.json", "_ref.json"):
+        meta_path = staging / meta
+        if meta_path.exists():
+            meta_path.unlink()
+
+    digest = hash_directory(staging)
+    dest = _object_dir(digest)
+
+    if dest.is_dir():
+        # Already exists — idempotent
+        shutil.rmtree(staging)
+    else:
+        OBJECTS_DIR.mkdir(parents=True, exist_ok=True)
+        staging.rename(dest)
+
+    return digest
+
+
+def resolve_object(name: str) -> Path | None:
+    """Resolve a managed skill name to its immutable object directory.
+
+    Returns None if no ref or object is missing.
+    """
+    ref = read_ref(name)
+    if ref is None:
+        return None
+    obj = _object_dir(ref.digest)
+    if not obj.is_dir():
+        _log.warning("Ref '%s' points to missing object %s", name, ref.digest[:12])
+        return None
+    return obj
+
+
+# ---------------------------------------------------------------------------
+# Bundled store discovery (read-only, from repo)
 # ---------------------------------------------------------------------------
 
 def _parse_skill_md(path: Path) -> tuple[dict, str] | None:
@@ -76,7 +299,7 @@ def _parse_skill_md(path: Path) -> tuple[dict, str] | None:
 
 
 def list_store_skills() -> dict[str, StoreSkillInfo]:
-    """Discover all skills in the store directory."""
+    """Discover all skills in the bundled store directory."""
     if not STORE_DIR.is_dir():
         return {}
     result: dict[str, StoreSkillInfo] = {}
@@ -103,26 +326,17 @@ def list_store_skills() -> dict[str, StoreSkillInfo]:
     return result
 
 
-# ---------------------------------------------------------------------------
-# Search
-# ---------------------------------------------------------------------------
-
 def search(query: str) -> list[StoreSkillInfo]:
     """Substring match on name and description (case-insensitive)."""
     q = query.lower()
-    results: list[StoreSkillInfo] = []
-    for info in list_store_skills().values():
-        if q in info.name.lower() or q in (info.description or "").lower():
-            results.append(info)
-    return results
+    return [
+        info for info in list_store_skills().values()
+        if q in info.name.lower() or q in (info.description or "").lower()
+    ]
 
-
-# ---------------------------------------------------------------------------
-# Skill info
-# ---------------------------------------------------------------------------
 
 def skill_info(name: str) -> tuple[StoreSkillInfo, str] | None:
-    """Return (info, instructions_body) for a store skill, or None if not found."""
+    """Return (info, instructions_body) for a bundled store skill."""
     store_path = STORE_DIR / name
     if not store_path.is_dir():
         return None
@@ -145,11 +359,7 @@ def skill_info(name: str) -> tuple[StoreSkillInfo, str] | None:
 
 
 def get_store_skill_requirements(name: str) -> list[str]:
-    """Return credential key names from a store skill's requires.yaml.
-
-    Falls back to the store directory for skills that aren't installed yet.
-    Returns empty list if no requirements or skill not found.
-    """
+    """Return credential key names from a bundled store skill's requires.yaml."""
     store_path = STORE_DIR / name / "requires.yaml"
     if not store_path.is_file():
         return []
@@ -167,154 +377,128 @@ def get_store_skill_requirements(name: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# _store.json helpers
-# ---------------------------------------------------------------------------
-
-def read_manifest(skill_dir: Path) -> StoreManifest | None:
-    """Read _store.json from an installed skill directory."""
-    manifest_path = skill_dir / _STORE_JSON
-    if not manifest_path.is_file():
-        return None
-    try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        return StoreManifest(
-            source=data.get("source", ""),
-            store_path=data.get("store_path", ""),
-            installed_at=data.get("installed_at", ""),
-            content_sha256=data.get("content_sha256", ""),
-            locally_modified=data.get("locally_modified", False),
-        )
-    except (json.JSONDecodeError, KeyError, TypeError):
-        return None
-
-
-def _write_manifest(skill_dir: Path, manifest: StoreManifest) -> None:
-    """Write _store.json to an installed skill directory."""
-    data = {
-        "source": manifest.source,
-        "store_path": manifest.store_path,
-        "installed_at": manifest.installed_at,
-        "content_sha256": manifest.content_sha256,
-        "locally_modified": manifest.locally_modified,
-    }
-    (skill_dir / _STORE_JSON).write_text(
-        json.dumps(data, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-
-def is_store_installed(name: str) -> bool:
-    """Check if a skill in the custom dir was installed from the store."""
-    return read_manifest(CUSTOM_DIR / name) is not None
-
-
-# ---------------------------------------------------------------------------
-# Install
+# Install / Uninstall / Update
 # ---------------------------------------------------------------------------
 
 def install(name: str) -> tuple[bool, str]:
-    """Install a skill from the store to the custom skills directory.
+    """Install a skill from the bundled store.
 
+    Creates an immutable object and writes a ref.
     Returns (success, message).
     """
     store_path = STORE_DIR / name
     if not store_path.is_dir() or not (store_path / "skill.md").is_file():
         return False, f"Skill '{name}' not found in store."
 
-    dest = CUSTOM_DIR / name
-    if dest.is_dir():
-        manifest = read_manifest(dest)
-        if manifest is None:
-            # User-created skill — don't overwrite
+    with _store_lock():
+        existing_ref = read_ref(name)
+
+        # Check for custom skill with same name (not a managed override)
+        custom_path = CUSTOM_DIR / name
+        if custom_path.is_dir() and existing_ref is None:
             return False, (
                 f"Skill '{name}' already exists as a custom skill. "
-                f"Use /skills uninstall first if you want to replace it with the store version."
+                f"Remove it first if you want to install the store version."
             )
-        # Already installed from store — treat as update
-        return _do_install(name, store_path, dest, is_update=True)
 
-    return _do_install(name, store_path, dest, is_update=False)
+        digest = _create_object(store_path)
+        ref = SkillRef(
+            schema_version=_SCHEMA_VERSION,
+            digest=digest,
+            source="store",
+            source_uri=f"skills/store/{name}",
+            installed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        _write_ref(name, ref)
 
-
-def _do_install(name: str, store_path: Path, dest: Path, *, is_update: bool) -> tuple[bool, str]:
-    """Copy store skill to custom dir and write _store.json."""
-    content_hash = _hash_directory(store_path)
-
-    if is_update:
-        # Check for local modifications
-        manifest = read_manifest(dest)
-        if manifest and manifest.content_sha256 != _hash_directory(dest):
-            _log.warning("Skill '%s' was locally modified, overwriting", name)
-
-    # Clean and copy
-    if dest.is_dir():
-        shutil.rmtree(dest)
-    CUSTOM_DIR.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(store_path, dest)
-
-    # Write provenance manifest
-    _write_manifest(dest, StoreManifest(
-        source="store",
-        store_path=f"skills/store/{name}",
-        installed_at=datetime.now(timezone.utc).isoformat(),
-        content_sha256=content_hash,
-        locally_modified=False,
-    ))
-
-    # Verify SHA-256
-    installed_hash = _hash_directory(dest)
-    if installed_hash != content_hash:
-        # Should not happen, but guard against filesystem issues
-        shutil.rmtree(dest, ignore_errors=True)
-        return False, f"SHA-256 verification failed after install for '{name}'."
-
-    action = "updated" if is_update else "installed"
+    if existing_ref:
+        action = "updated" if existing_ref.digest != digest else "reinstalled"
+    else:
+        action = "installed"
     return True, f"Skill '{name}' {action} from store. Use /skills add {name} to activate."
 
 
-# ---------------------------------------------------------------------------
-# Uninstall
-# ---------------------------------------------------------------------------
+def uninstall(name: str, default_skills: tuple[str, ...] = ()) -> tuple[bool, str]:
+    """Remove a managed skill ref.
 
-def uninstall(
-    name: str,
-    default_skills: tuple[str, ...],
-    session_sweep_fn=None,
-) -> tuple[bool, str]:
-    """Remove a store-installed skill from the custom directory.
-
+    The object becomes unreferenced and will be cleaned up by GC.
+    Sessions self-heal: missing refs are pruned on next load.
     Returns (success, message).
-    - Refuses if skill is in BOT_SKILLS (operator intent).
-    - Calls session_sweep_fn(name) to deactivate from all chats.
-    - Only removes directories with _store.json (won't touch user-created).
     """
-    dest = CUSTOM_DIR / name
-    if not dest.is_dir():
-        return False, f"Skill '{name}' is not installed."
+    with _store_lock():
+        ref = read_ref(name)
+        if ref is None:
+            return False, f"Skill '{name}' is not installed as a managed skill."
 
-    manifest = read_manifest(dest)
-    if manifest is None:
-        return False, f"Skill '{name}' is a custom skill, not a store install. Use the filesystem to manage it."
+        if name in default_skills:
+            return False, (
+                f"Skill '{name}' is listed in BOT_SKILLS. "
+                f"Remove it from your .env config before uninstalling."
+            )
 
-    # Config guard
-    if name in default_skills:
-        return False, (
-            f"Skill '{name}' is listed in BOT_SKILLS. "
-            f"Remove it from your .env config before uninstalling."
-        )
+        _delete_ref(name)
 
-    # Session sweep
-    swept = 0
-    if session_sweep_fn:
-        swept = session_sweep_fn(name)
-
-    # Remove
-    shutil.rmtree(dest)
-
+    custom_path = CUSTOM_DIR / name
     parts = [f"Skill '{name}' uninstalled."]
-    if swept:
-        parts.append(f"Deactivated from {swept} chat(s).")
+    if custom_path.is_dir():
+        parts.append(
+            f"Note: custom override '{name}' still exists and will remain active."
+        )
     return True, " ".join(parts)
+
+
+def update_skill(name: str) -> tuple[bool, str]:
+    """Update a managed skill from the bundled store.
+
+    Creates a new object and atomically swaps the ref.
+    Returns (success, message).
+    """
+    store_path = STORE_DIR / name
+    if not store_path.is_dir():
+        return False, f"Skill '{name}' is no longer available in the store."
+
+    with _store_lock():
+        ref = read_ref(name)
+        if ref is None:
+            return False, f"Skill '{name}' is not installed as a managed skill."
+
+        new_digest = _create_object(store_path)
+
+        if new_digest == ref.digest:
+            return True, f"Skill '{name}' is already up to date."
+
+        new_ref = SkillRef(
+            schema_version=_SCHEMA_VERSION,
+            digest=new_digest,
+            source="store",
+            source_uri=f"skills/store/{name}",
+            installed_at=datetime.now(timezone.utc).isoformat(),
+            pinned=ref.pinned,
+        )
+        _write_ref(name, new_ref)
+
+    msg = f"Skill '{name}' updated from store."
+    custom_path = CUSTOM_DIR / name
+    if custom_path.is_dir():
+        msg += " Note: custom override is still active."
+    return True, msg
+
+
+def update_all() -> list[tuple[str, bool, str]]:
+    """Update all managed skills that have updates available.
+
+    Returns list of (name, success, message). Skips pinned refs.
+    """
+    results: list[tuple[str, bool, str]] = []
+    for name, status in check_updates():
+        if status == "update_available":
+            ref = read_ref(name)
+            if ref and ref.pinned:
+                results.append((name, True, f"Skill '{name}' is pinned, skipping."))
+                continue
+            ok, msg = update_skill(name)
+            results.append((name, ok, msg))
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -322,157 +506,179 @@ def uninstall(
 # ---------------------------------------------------------------------------
 
 def check_updates() -> list[tuple[str, str]]:
-    """Compare installed store skills against current store content.
+    """Compare managed refs against bundled store content.
 
     Returns list of (name, status) where status is one of:
     - "update_available" — store content changed since install
-    - "locally_modified" — installed content differs from both store and manifest
     - "up_to_date" — no changes
     """
     results: list[tuple[str, str]] = []
-    if not CUSTOM_DIR.is_dir():
-        return results
-
-    for skill_dir in sorted(CUSTOM_DIR.iterdir()):
-        if not skill_dir.is_dir():
-            continue
-        manifest = read_manifest(skill_dir)
-        if manifest is None:
-            continue  # Not a store-installed skill
-
-        name = skill_dir.name
-        installed_hash = _hash_directory(skill_dir)
-
-        # Check if locally modified
-        if installed_hash != manifest.content_sha256:
-            if not manifest.locally_modified:
-                _write_manifest(skill_dir, StoreManifest(
-                    source=manifest.source,
-                    store_path=manifest.store_path,
-                    installed_at=manifest.installed_at,
-                    content_sha256=manifest.content_sha256,
-                    locally_modified=True,
-                ))
-            results.append((name, "locally_modified"))
-            continue
-
-        # Check if store has a newer version
+    refs = list_refs()
+    for name, ref in refs.items():
         store_path = STORE_DIR / name
         if not store_path.is_dir():
             continue  # Store skill removed — nothing to update
-        store_hash = _hash_directory(store_path)
-        if store_hash != manifest.content_sha256:
+        store_hash = hash_directory(store_path)
+        if store_hash != ref.digest:
             results.append((name, "update_available"))
         else:
             results.append((name, "up_to_date"))
-
     return results
 
 
-def update_skill(name: str) -> tuple[bool, str]:
-    """Re-install a single store skill.
+# ---------------------------------------------------------------------------
+# Custom override detection
+# ---------------------------------------------------------------------------
 
-    Returns (success, message). Warns if locally modified.
+def has_custom_override(name: str) -> bool:
+    """Check if a custom skill shadows a managed ref."""
+    return (CUSTOM_DIR / name).is_dir() and read_ref(name) is not None
+
+
+def is_store_installed(name: str) -> bool:
+    """Check if a managed ref exists for this skill name."""
+    return read_ref(name) is not None
+
+
+# ---------------------------------------------------------------------------
+# Diff
+# ---------------------------------------------------------------------------
+
+def diff_skill(name: str, max_chars: int = 4000) -> tuple[bool, str]:
+    """Show diff for a skill.
+
+    If custom override exists with a managed ref: diffs custom vs managed object.
+    If only managed ref: diffs managed object vs store source (preview of update).
     """
-    dest = CUSTOM_DIR / name
-    if not dest.is_dir():
-        return False, f"Skill '{name}' is not installed."
+    ref = read_ref(name)
+    custom_path = CUSTOM_DIR / name
 
-    manifest = read_manifest(dest)
-    if manifest is None:
-        return False, f"Skill '{name}' is a custom skill, not a store install."
+    if custom_path.is_dir() and ref is not None:
+        # Diff custom override vs managed object
+        obj_path = _object_dir(ref.digest)
+        if not obj_path.is_dir():
+            return False, f"Managed object for '{name}' is missing."
+        return _diff_dirs(
+            obj_path, custom_path, name,
+            from_label="managed", to_label="custom",
+            max_chars=max_chars,
+        )
 
-    store_path = STORE_DIR / name
-    if not store_path.is_dir():
-        return False, f"Skill '{name}' is no longer available in the store."
+    if ref is not None:
+        # Diff managed object vs store source
+        obj_path = _object_dir(ref.digest)
+        store_path = STORE_DIR / name
+        if not store_path.is_dir():
+            return False, f"Skill '{name}' is no longer in the store."
+        if not obj_path.is_dir():
+            return False, f"Managed object for '{name}' is missing."
+        return _diff_dirs(
+            obj_path, store_path, name,
+            from_label="installed", to_label="store",
+            max_chars=max_chars,
+        )
 
-    # Check if actually needs update
-    store_hash = _hash_directory(store_path)
-    installed_hash = _hash_directory(dest)
-    locally_modified = installed_hash != manifest.content_sha256
+    if custom_path.is_dir():
+        return False, f"Skill '{name}' is a custom skill with no managed version to compare."
 
-    warning = ""
-    if locally_modified:
-        warning = " (local modifications overwritten)"
-
-    if store_hash == installed_hash and not locally_modified:
-        return True, f"Skill '{name}' is already up to date."
-
-    ok, msg = _do_install(name, store_path, dest, is_update=True)
-    if ok and warning:
-        msg += warning
-    return ok, msg
+    return False, f"Skill '{name}' is not installed."
 
 
-def update_all() -> list[tuple[str, bool, str]]:
-    """Update all store-installed skills that have updates available.
-
-    Returns list of (name, success, message).
-    """
-    results: list[tuple[str, bool, str]] = []
-    for name, status in check_updates():
-        if status in ("update_available", "locally_modified"):
-            ok, msg = update_skill(name)
-            results.append((name, ok, msg))
-    return results
-
-def diff_skill(name: str, max_chars: int = 2000) -> tuple[bool, str]:
-    """Show diff between installed skill and store version.
-
-    Returns (ok, diff_text). If not a store skill or no differences, returns
-    a descriptive message instead of a diff.
-    """
-    import difflib
-
-    dest = CUSTOM_DIR / name
-    if not dest.is_dir():
-        return False, f"Skill '{name}' is not installed."
-
-    manifest = read_manifest(dest)
-    if manifest is None:
-        return False, f"Skill '{name}' is a custom skill, not a store install."
-
-    store_path = STORE_DIR / name
-    if not store_path.is_dir():
-        return False, f"Skill '{name}' is no longer in the store."
-
-    # Collect text files from both sides
-    lines: list[str] = []
-    all_files = set()
-    for d in (store_path, dest):
+def _diff_dirs(
+    dir_a: Path, dir_b: Path, name: str, *,
+    from_label: str, to_label: str,
+    max_chars: int,
+) -> tuple[bool, str]:
+    """Unified diff between two skill directories."""
+    all_files: set[Path] = set()
+    for d in (dir_a, dir_b):
         for f in sorted(d.rglob("*")):
-            if f.is_file() and f.name != "_store.json":
+            if f.is_file() and f.name not in ("_store.json", "_ref.json"):
                 all_files.add(f.relative_to(d))
 
+    lines: list[str] = []
     for rel in sorted(all_files):
-        store_file = store_path / rel
-        installed_file = dest / rel
-        store_lines = store_file.read_text().splitlines(keepends=True) if store_file.exists() else []
-        installed_lines = installed_file.read_text().splitlines(keepends=True) if installed_file.exists() else []
-        if store_lines == installed_lines:
+        fa, fb = dir_a / rel, dir_b / rel
+        la = fa.read_text(errors="replace").splitlines(keepends=True) if fa.exists() else []
+        lb = fb.read_text(errors="replace").splitlines(keepends=True) if fb.exists() else []
+        if la == lb:
             continue
         diff = difflib.unified_diff(
-            store_lines, installed_lines,
-            fromfile=f"store/{name}/{rel}", tofile=f"installed/{name}/{rel}",
+            la, lb,
+            fromfile=f"{from_label}/{name}/{rel}",
+            tofile=f"{to_label}/{name}/{rel}",
         )
         lines.extend(diff)
 
     if not lines:
-        return True, f"Skill '{name}' has no differences from store version."
-
+        return True, f"Skill '{name}' has no differences ({from_label} vs {to_label})."
     text = "".join(lines)
     if len(text) > max_chars:
         text = text[:max_chars] + f"\n... (truncated at {max_chars} chars)"
     return True, text
 
 
-def is_locally_modified(name: str) -> bool:
-    """Check if an installed store skill has local modifications."""
-    dest = CUSTOM_DIR / name
-    if not dest.is_dir():
-        return False
-    manifest = read_manifest(dest)
-    if manifest is None:
-        return False
-    return _hash_directory(dest) != manifest.content_sha256
+# ---------------------------------------------------------------------------
+# Garbage collection
+# ---------------------------------------------------------------------------
 
+def gc(grace_seconds: int = _GC_GRACE_SECONDS) -> list[str]:
+    """Remove unreferenced objects older than grace_seconds.
+
+    Also cleans up abandoned tmp dirs. Must be called under _store_lock.
+    Returns list of removed object digests.
+    """
+    removed: list[str] = []
+    now = time.time()
+
+    # Collect referenced digests
+    referenced = {ref.digest for ref in list_refs().values()}
+
+    # Remove unreferenced objects past grace window
+    if OBJECTS_DIR.is_dir():
+        for obj_dir in OBJECTS_DIR.iterdir():
+            if not obj_dir.is_dir():
+                continue
+            digest = obj_dir.name
+            if digest in referenced:
+                continue
+            age = now - obj_dir.stat().st_mtime
+            if age < grace_seconds:
+                _log.info("GC: skipping young unreferenced object %s (%.0fs old)", digest[:12], age)
+                continue
+            _log.info("GC: removing unreferenced object %s (%.0fs old)", digest[:12], age)
+            shutil.rmtree(obj_dir, ignore_errors=True)
+            removed.append(digest)
+
+    # Clean abandoned tmp dirs
+    if TMP_DIR.is_dir():
+        for tmp in TMP_DIR.iterdir():
+            age = now - tmp.stat().st_mtime
+            if age > grace_seconds:
+                _log.info("GC: removing stale tmp %s", tmp.name)
+                if tmp.is_dir():
+                    shutil.rmtree(tmp, ignore_errors=True)
+                else:
+                    tmp.unlink(missing_ok=True)
+
+    # Clean stale .tmp ref files
+    if REFS_DIR.is_dir():
+        for p in REFS_DIR.glob("*.json.tmp"):
+            age = now - p.stat().st_mtime
+            if age > grace_seconds:
+                _log.info("GC: removing stale ref tmp %s", p.name)
+                p.unlink(missing_ok=True)
+
+    return removed
+
+
+# ---------------------------------------------------------------------------
+# Startup recovery
+# ---------------------------------------------------------------------------
+
+def startup_recovery() -> None:
+    """Run on startup: ensure dirs, check schema, GC under lock."""
+    ensure_managed_dirs()
+    check_schema()
+    with _store_lock():
+        gc()

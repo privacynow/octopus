@@ -15,7 +15,8 @@ from app.providers.base import PreflightContext, RunContext
 
 
 CATALOG_DIR = Path(__file__).resolve().parent.parent / "skills" / "catalog"
-CUSTOM_DIR = Path.home() / ".config" / "telegram-agent-bot" / "skills"
+# Custom and managed dirs are set by the store module
+from app.store import CUSTOM_DIR, resolve_object
 
 
 @dataclass(frozen=True)
@@ -35,26 +36,58 @@ class SkillRequirement:
 
 
 # ---------------------------------------------------------------------------
-# Skill directory resolution: custom > built-in
+# Skill directory resolution: custom > managed ref > built-in catalog
 # ---------------------------------------------------------------------------
 
-def _skill_dir(name: str) -> Path | None:
-    """Resolve skill directory: custom > built-in. Returns None if not found.
+def _resolve_skill(name: str) -> tuple[Path, str] | None:
+    """Resolve skill directory with three-tier precedence.
 
-    Also returns None if skill.md exists but is malformed, so that
-    broken skills are excluded from credential checks, provider config,
-    and execution — not just from the catalog UI.
+    1. custom/<name>  — operator-authored override
+    2. managed ref → immutable object
+    3. catalog/<name>  — built-in fallback
+
+    Returns (path, tier) or None.  tier is one of:
+    "custom_override", "custom", "managed", "catalog".
     """
-    for base in (CUSTOM_DIR, CATALOG_DIR):
-        candidate = base / name
-        skill_file = candidate / "skill.md"
-        if candidate.is_dir() and skill_file.is_file():
-            try:
-                _load_skill_md(skill_file)
-            except ValueError:
-                continue
-            return candidate
+    from app.store import read_ref
+
+    has_ref = read_ref(name) is not None
+
+    # 1. Custom override
+    custom = CUSTOM_DIR / name
+    if custom.is_dir() and (custom / "skill.md").is_file():
+        try:
+            _load_skill_md(custom / "skill.md")
+            tier = "custom_override" if has_ref else "custom"
+            return custom, tier
+        except ValueError:
+            pass  # Malformed custom skill, fall through
+
+    # 2. Managed ref → immutable object
+    obj_dir = resolve_object(name)
+    if obj_dir is not None and (obj_dir / "skill.md").is_file():
+        try:
+            _load_skill_md(obj_dir / "skill.md")
+            return obj_dir, "managed"
+        except ValueError:
+            pass  # Malformed managed object, fall through
+
+    # 3. Built-in catalog
+    catalog = CATALOG_DIR / name
+    if catalog.is_dir() and (catalog / "skill.md").is_file():
+        try:
+            _load_skill_md(catalog / "skill.md")
+            return catalog, "catalog"
+        except ValueError:
+            pass
+
     return None
+
+
+def _skill_dir(name: str) -> Path | None:
+    """Resolve skill directory (path only). See _resolve_skill for tier info."""
+    result = _resolve_skill(name)
+    return result[0] if result else None
 
 
 # ---------------------------------------------------------------------------
@@ -360,18 +393,18 @@ def _friendly_validation_error(got: int, expected: int) -> str:
 # ---------------------------------------------------------------------------
 
 def load_catalog() -> dict[str, SkillMeta]:
-    """Discover skills from built-in catalog and custom skills dir.
+    """Discover skills from built-in catalog, managed refs, and custom dir.
 
-    Custom skills override built-in skills with the same name.
+    Precedence (last wins): catalog < managed < custom.
     """
+    from app.store import list_refs, _object_dir
+
     catalog: dict[str, SkillMeta] = {}
 
     import logging
     _log = logging.getLogger(__name__)
 
-    # Built-in skills first.
-    # The canonical key is the directory name — _skill_dir() resolves by directory
-    # name, so catalog must use the same key. Frontmatter "name" is display metadata.
+    # 1. Built-in catalog (lowest priority)
     if CATALOG_DIR.is_dir():
         for skill_dir in sorted(CATALOG_DIR.iterdir()):
             skill_file = skill_dir / "skill.md"
@@ -390,7 +423,25 @@ def load_catalog() -> dict[str, SkillMeta]:
                 is_custom=False,
             )
 
-    # Custom skills override built-in
+    # 2. Managed refs (override catalog)
+    for name, ref in list_refs().items():
+        obj_dir = _object_dir(ref.digest)
+        skill_file = obj_dir / "skill.md"
+        if not obj_dir.is_dir() or not skill_file.is_file():
+            continue
+        try:
+            meta, _ = _load_skill_md(skill_file)
+        except ValueError as e:
+            _log.warning("Skipping malformed managed skill %s: %s", name, e)
+            continue
+        catalog[name] = SkillMeta(
+            name=name,
+            display_name=meta.get("display_name", name),
+            description=meta.get("description", ""),
+            is_custom=False,
+        )
+
+    # 3. Custom skills (highest priority)
     if CUSTOM_DIR.is_dir():
         for skill_dir in sorted(CUSTOM_DIR.iterdir()):
             skill_file = skill_dir / "skill.md"
@@ -422,6 +473,47 @@ def get_skill_instructions(name: str) -> str:
     except ValueError:
         return ""
     return body
+
+
+def skill_info_resolved(name: str) -> tuple[dict, str, str, Path] | None:
+    """Return (metadata, body, source, skill_dir) for a skill.
+
+    Uses _resolve_skill() so the source label always matches the tier that
+    actually resolved. Falls back to the bundled store for uninstalled skills.
+    Returns None only if the skill doesn't exist anywhere.
+
+    source is one of: "custom (overriding managed)", "custom", "managed",
+    "catalog", "store (not installed)".
+    """
+    _TIER_LABELS = {
+        "custom_override": "custom (overriding managed)",
+        "custom": "custom",
+        "managed": "managed",
+        "catalog": "catalog",
+    }
+
+    result = _resolve_skill(name)
+    if result is not None:
+        skill_path, tier = result
+        try:
+            meta, body = _load_skill_md(skill_path / "skill.md")
+        except ValueError:
+            return None
+        return meta, body, _TIER_LABELS[tier], skill_path
+
+    # Not resolvable via three-tier — check bundled store (not yet installed)
+    from app.store import skill_info as store_skill_info
+    result_store = store_skill_info(name)
+    if result_store is not None:
+        info, body = result_store
+        store_path = Path(__file__).resolve().parent.parent / "skills" / "store" / name
+        meta = {
+            "display_name": info.display_name,
+            "description": info.description,
+        }
+        return meta, body, "store (not installed)", store_path
+
+    return None
 
 
 def get_provider_config_digest(skill_names: list[str], provider_name: str = "") -> str:
@@ -781,6 +873,33 @@ def scaffold_skill(name: str) -> Path:
     return skill_dir
 
 
+def filter_resolvable_skills(names: list[str]) -> list[str]:
+    """Return only skills that currently resolve to a valid directory."""
+    return [n for n in names if _skill_dir(n) is not None]
+
+
+def normalize_active_skills(session: dict, save_fn=None) -> list[str]:
+    """Prune active skills whose directories no longer resolve.
+
+    Mutates session['active_skills'] in place.  Calls save_fn(session) if
+    any skills were removed and save_fn is provided.
+    Returns list of pruned skill names.
+    """
+    active = session.get("active_skills", [])
+    pruned: list[str] = []
+    kept: list[str] = []
+    for name in active:
+        if _skill_dir(name) is not None:
+            kept.append(name)
+        else:
+            pruned.append(name)
+    if pruned:
+        session["active_skills"] = kept
+        if save_fn:
+            save_fn(session)
+    return pruned
+
+
 def validate_active_skills(
     skill_names: list[str],
     user_id: int = 0,
@@ -789,7 +908,7 @@ def validate_active_skills(
 ) -> list[str]:
     """Validate active skills: catalog presence + credential satisfaction.
 
-    Returns list of error strings.
+    Returns list of error strings.  Pure/read-only — does not mutate state.
     """
     catalog = load_catalog()
     errors: list[str] = []

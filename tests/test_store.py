@@ -1,17 +1,18 @@
-"""Tests for the skill store — Phase 5.
+"""Tests for the managed immutable skill store.
 
 Covers:
 - Store discovery (list_store_skills, skill_info)
 - Search matching
-- Install/uninstall lifecycle
-- _store.json provenance round-trip
-- Conflict detection (store vs user-created)
-- SHA-256 content hashing and verification
+- Content hashing (hash_directory)
+- Install/uninstall lifecycle via refs and objects
+- Ref read/write round-trip and provenance
 - Update detection (check_updates, update_skill, update_all)
-- locally_modified detection and warning
-- Session sweep on uninstall
-- Admin gate (tested via is_admin helper)
-- Uninstall refused while in BOT_SKILLS
+- Custom override detection (has_custom_override)
+- Diff between managed/custom/store
+- GC of unreferenced objects
+- Startup recovery idempotence
+- Schema version guard
+- Admin gate (is_admin helper)
 - Prompt size warning (check_prompt_size)
 """
 
@@ -21,6 +22,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 
 from pathlib import Path
@@ -36,32 +38,57 @@ check_false = checks.check_false
 
 
 # ---------------------------------------------------------------------------
-# Setup: temp dirs for store and custom skills
+# Setup: temp dirs for store and managed skills
 # ---------------------------------------------------------------------------
 
 tmp_root = tempfile.mkdtemp()
 tmp_store = Path(tmp_root) / "store"
 tmp_custom = Path(tmp_root) / "custom"
+tmp_managed = Path(tmp_root) / "managed"
+tmp_objects = tmp_managed / "objects"
+tmp_refs = tmp_managed / "refs"
+tmp_tmp = tmp_managed / "tmp"
+tmp_version = tmp_managed / "version.json"
+tmp_lock = tmp_managed / ".lock"
 tmp_data = Path(tmp_root) / "data"
+
 tmp_store.mkdir()
 tmp_custom.mkdir()
+tmp_managed.mkdir()
+tmp_objects.mkdir()
+tmp_refs.mkdir()
+tmp_tmp.mkdir()
 (tmp_data / "sessions").mkdir(parents=True)
 
 # Monkey-patch store module dirs
 import app.store as store_mod
-_orig_store_dir = store_mod.STORE_DIR
-_orig_custom_dir = store_mod.CUSTOM_DIR
+_originals = {
+    "STORE_DIR": store_mod.STORE_DIR,
+    "CUSTOM_DIR": store_mod.CUSTOM_DIR,
+    "MANAGED_DIR": store_mod.MANAGED_DIR,
+    "OBJECTS_DIR": store_mod.OBJECTS_DIR,
+    "REFS_DIR": store_mod.REFS_DIR,
+    "TMP_DIR": store_mod.TMP_DIR,
+    "VERSION_FILE": store_mod.VERSION_FILE,
+    "LOCK_FILE": store_mod.LOCK_FILE,
+}
 store_mod.STORE_DIR = tmp_store
 store_mod.CUSTOM_DIR = tmp_custom
+store_mod.MANAGED_DIR = tmp_managed
+store_mod.OBJECTS_DIR = tmp_objects
+store_mod.REFS_DIR = tmp_refs
+store_mod.TMP_DIR = tmp_tmp
+store_mod.VERSION_FILE = tmp_version
+store_mod.LOCK_FILE = tmp_lock
 
 
-def _cleanup_store_test_dirs():
-    store_mod.STORE_DIR = _orig_store_dir
-    store_mod.CUSTOM_DIR = _orig_custom_dir
+def _restore_originals():
+    for attr, val in _originals.items():
+        setattr(store_mod, attr, val)
     shutil.rmtree(tmp_root, ignore_errors=True)
 
 
-atexit.register(_cleanup_store_test_dirs)
+atexit.register(_restore_originals)
 
 
 def _create_store_skill(name, display_name=None, description="", body="Instructions here.", extra_files=None):
@@ -89,17 +116,28 @@ def _create_custom_skill(name, body="Custom instructions."):
 
 
 def _cleanup_custom():
-    """Remove all custom skills."""
     if tmp_custom.is_dir():
         shutil.rmtree(tmp_custom)
     tmp_custom.mkdir()
 
 
 def _cleanup_store():
-    """Remove all store skills."""
     if tmp_store.is_dir():
         shutil.rmtree(tmp_store)
     tmp_store.mkdir()
+
+
+def _cleanup_managed():
+    """Remove all refs and objects."""
+    if tmp_refs.is_dir():
+        shutil.rmtree(tmp_refs)
+    tmp_refs.mkdir()
+    if tmp_objects.is_dir():
+        shutil.rmtree(tmp_objects)
+    tmp_objects.mkdir()
+    if tmp_tmp.is_dir():
+        shutil.rmtree(tmp_tmp)
+    tmp_tmp.mkdir()
 
 
 # ===========================================================================
@@ -194,11 +232,11 @@ check("info nonexistent", store_mod.skill_info("nonexistent"), None)
 
 print("\n=== Content Hashing ===")
 
-hash1 = store_mod._hash_directory(tmp_store / "api-testing")
-hash2 = store_mod._hash_directory(tmp_store / "api-testing")
+hash1 = store_mod.hash_directory(tmp_store / "api-testing")
+hash2 = store_mod.hash_directory(tmp_store / "api-testing")
 check("hash deterministic", hash1, hash2)
 
-hash3 = store_mod._hash_directory(tmp_store / "data-analysis")
+hash3 = store_mod.hash_directory(tmp_store / "data-analysis")
 check_true("different content different hash", hash1 != hash3)
 
 
@@ -209,34 +247,34 @@ check_true("different content different hash", hash1 != hash3)
 print("\n=== Install ===")
 
 _cleanup_custom()
+_cleanup_managed()
 
 # Install a skill
 ok, msg = store_mod.install("api-testing")
 check("install success", ok, True)
 check_in("install msg", "installed", msg)
-check_true("skill dir exists", (tmp_custom / "api-testing").is_dir())
-check_true("skill.md exists", (tmp_custom / "api-testing" / "skill.md").is_file())
-check_true("_store.json exists", (tmp_custom / "api-testing" / "_store.json").is_file())
 
-# Read manifest
-manifest = store_mod.read_manifest(tmp_custom / "api-testing")
-check_true("manifest read", manifest is not None)
-check("manifest source", manifest.source, "store")
-check("manifest store_path", manifest.store_path, "skills/store/api-testing")
-check_false("manifest not modified", manifest.locally_modified)
+# Verify ref was created
+ref = store_mod.read_ref("api-testing")
+check_true("ref exists", ref is not None)
+check("ref source", ref.source, "store")
+check("ref source_uri", ref.source_uri, "skills/store/api-testing")
 
-# SHA-256 verification
-store_hash = store_mod._hash_directory(tmp_store / "api-testing")
-installed_hash = store_mod._hash_directory(tmp_custom / "api-testing")
-check("hash matches after install", installed_hash, store_hash)
-check("manifest hash matches", manifest.content_sha256, store_hash)
+# Verify object was created
+obj_dir = store_mod._object_dir(ref.digest)
+check_true("object dir exists", obj_dir.is_dir())
+check_true("object has skill.md", (obj_dir / "skill.md").is_file())
+
+# SHA-256 verification: object hash matches store source
+store_hash = store_mod.hash_directory(tmp_store / "api-testing")
+check("object digest matches store", ref.digest, store_hash)
 
 # Install nonexistent
 ok2, msg2 = store_mod.install("nonexistent")
 check("install nonexistent fails", ok2, False)
 check_in("install nonexistent msg", "not found", msg2)
 
-# Conflict: user-created skill with same name
+# Conflict: user-created custom skill with same name (no existing ref)
 _create_custom_skill("conflict-skill")
 _create_store_skill("conflict-skill", description="Store version")
 ok3, msg3 = store_mod.install("conflict-skill")
@@ -246,7 +284,7 @@ check_in("conflict msg", "custom skill", msg3)
 # Re-install (update) an already installed skill
 ok4, msg4 = store_mod.install("api-testing")
 check("reinstall success", ok4, True)
-check_in("reinstall msg", "updated", msg4)
+check_in("reinstall msg", "reinstalled", msg4)
 
 
 # ===========================================================================
@@ -266,8 +304,10 @@ check("nonexistent not installed", store_mod.is_store_installed("nonexistent"), 
 
 print("\n=== Uninstall ===")
 
-# Install first
 _cleanup_custom()
+_cleanup_managed()
+
+# Install first
 store_mod.install("api-testing")
 store_mod.install("data-analysis")
 
@@ -275,75 +315,73 @@ store_mod.install("data-analysis")
 ok, msg = store_mod.uninstall("api-testing", default_skills=())
 check("uninstall success", ok, True)
 check_in("uninstall msg", "uninstalled", msg)
-check_false("dir removed", (tmp_custom / "api-testing").is_dir())
+
+# Ref should be gone
+ref = store_mod.read_ref("api-testing")
+check("ref removed", ref, None)
 
 # Uninstall nonexistent
 ok2, msg2 = store_mod.uninstall("nonexistent", default_skills=())
 check("uninstall nonexistent fails", ok2, False)
 
-# Uninstall user-created skill
+# Uninstall non-managed custom skill
 _create_custom_skill("my-custom")
 ok3, msg3 = store_mod.uninstall("my-custom", default_skills=())
 check("uninstall custom fails", ok3, False)
-check_in("custom msg", "custom skill", msg3)
+check_in("custom msg", "not installed", msg3)
 
 # Uninstall refused while in BOT_SKILLS
 ok4, msg4 = store_mod.uninstall("data-analysis", default_skills=("data-analysis",))
 check("uninstall refused BOT_SKILLS", ok4, False)
 check_in("BOT_SKILLS msg", "BOT_SKILLS", msg4)
-check_true("skill still exists", (tmp_custom / "data-analysis").is_dir())
+# Ref should still exist
+check_true("ref still exists", store_mod.read_ref("data-analysis") is not None)
 
-# Uninstall with session sweep
-swept_count = [0]
-def fake_sweep(name):
-    swept_count[0] += 1
-    return 3
-
-ok5, msg5 = store_mod.uninstall("data-analysis", default_skills=(), session_sweep_fn=fake_sweep)
-check("uninstall with sweep success", ok5, True)
-check("sweep called", swept_count[0], 1)
-check_in("sweep count msg", "3 chat(s)", msg5)
+# Uninstall with custom override note
+_create_custom_skill("data-analysis")
+ok5, msg5 = store_mod.uninstall("data-analysis", default_skills=())
+check("uninstall with override success", ok5, True)
+check_in("override note", "custom override", msg5)
 
 
 # ===========================================================================
-# Session Sweep (storage.py)
+# Ref Round-Trip
 # ===========================================================================
 
-print("\n=== Session Sweep ===")
+print("\n=== Ref Round-Trip ===")
 
-from app.storage import sweep_skill_from_sessions
+_cleanup_managed()
 
-# Create some session files
-sessions_dir = tmp_data / "sessions"
-for old in sessions_dir.glob("*.json"):
-    old.unlink()
+from app.store import SkillRef
 
-s1 = {"active_skills": ["code-review", "api-testing"], "updated_at": "old"}
-s2 = {"active_skills": ["api-testing", "testing"], "updated_at": "old"}
-s3 = {"active_skills": ["debugging"], "updated_at": "old"}
+test_ref = SkillRef(
+    schema_version=1,
+    digest="abc123deadbeef",
+    source="store",
+    source_uri="skills/store/test-skill",
+    installed_at="2026-01-01T00:00:00+00:00",
+    version="1.0",
+    publisher="test-pub",
+    signature=None,
+    pinned=True,
+)
+store_mod._write_ref("test-skill", test_ref)
+read_back = store_mod.read_ref("test-skill")
+check("round-trip source", read_back.source, "store")
+check("round-trip digest", read_back.digest, "abc123deadbeef")
+check("round-trip source_uri", read_back.source_uri, "skills/store/test-skill")
+check("round-trip installed_at", read_back.installed_at, "2026-01-01T00:00:00+00:00")
+check("round-trip version", read_back.version, "1.0")
+check("round-trip publisher", read_back.publisher, "test-pub")
+check("round-trip signature", read_back.signature, None)
+check("round-trip pinned", read_back.pinned, True)
 
-(sessions_dir / "100.json").write_text(json.dumps(s1))
-(sessions_dir / "200.json").write_text(json.dumps(s2))
-(sessions_dir / "300.json").write_text(json.dumps(s3))
+# Corrupt ref returns None
+(tmp_refs / "corrupt.json").write_text("not json")
+check("corrupt ref", store_mod.read_ref("corrupt"), None)
 
-swept = sweep_skill_from_sessions(tmp_data, "api-testing")
-check("swept 2 sessions", swept, 2)
-
-# Verify sessions were updated
-s1_after = json.loads((sessions_dir / "100.json").read_text())
-check("s1 skill removed", s1_after["active_skills"], ["code-review"])
-check_true("s1 updated_at changed", s1_after["updated_at"] != "old")
-
-s2_after = json.loads((sessions_dir / "200.json").read_text())
-check("s2 skill removed", s2_after["active_skills"], ["testing"])
-
-s3_after = json.loads((sessions_dir / "300.json").read_text())
-check("s3 unchanged", s3_after["active_skills"], ["debugging"])
-check("s3 updated_at unchanged", s3_after["updated_at"], "old")
-
-# Sweep nonexistent skill
-swept2 = sweep_skill_from_sessions(tmp_data, "nonexistent")
-check("sweep no matches", swept2, 0)
+# Missing ref returns None
+check("missing ref", store_mod.read_ref("does-not-exist"), None)
 
 
 # ===========================================================================
@@ -354,6 +392,7 @@ print("\n=== Update Checking ===")
 
 _cleanup_custom()
 _cleanup_store()
+_cleanup_managed()
 
 # Create and install a skill
 _create_store_skill("updatable", description="v1", body="Version 1 instructions.")
@@ -370,13 +409,6 @@ updates2 = store_mod.check_updates()
 check("update available", len(updates2), 1)
 check("status update_available", updates2[0], ("updatable", "update_available"))
 
-# Locally modified installed skill
-installed_skill_md = tmp_custom / "updatable" / "skill.md"
-installed_skill_md.write_text(installed_skill_md.read_text() + "\nLocal edit.\n")
-updates3 = store_mod.check_updates()
-check("locally modified", len(updates3), 1)
-check("status locally_modified", updates3[0], ("updatable", "locally_modified"))
-
 
 # ===========================================================================
 # Update Skill
@@ -386,6 +418,7 @@ print("\n=== Update Skill ===")
 
 _cleanup_custom()
 _cleanup_store()
+_cleanup_managed()
 
 _create_store_skill("update-me", description="v1", body="V1.")
 store_mod.install("update-me")
@@ -401,32 +434,25 @@ ok2, msg2 = store_mod.update_skill("update-me")
 check("update success", ok2, True)
 check_in("updated msg", "updated", msg2)
 
-# Verify content was updated
-installed_body = (tmp_custom / "update-me" / "skill.md").read_text()
-check_in("v2 content", "V2", installed_body)
+# Verify ref now points to new content
+ref = store_mod.read_ref("update-me")
+store_hash = store_mod.hash_directory(tmp_store / "update-me")
+check("ref digest updated", ref.digest, store_hash)
 
-# Manifest updated
-manifest = store_mod.read_manifest(tmp_custom / "update-me")
-check("manifest hash updated", manifest.content_sha256, store_mod._hash_directory(tmp_store / "update-me"))
+# Verify object has new content
+obj_dir = store_mod._object_dir(ref.digest)
+installed_body = (obj_dir / "skill.md").read_text()
+check_in("v2 content", "V2", installed_body)
 
 # Update nonexistent
 ok3, msg3 = store_mod.update_skill("nonexistent")
 check("update nonexistent", ok3, False)
 
-# Update custom (non-store) skill
+# Update non-managed skill
 _create_custom_skill("my-skill")
 ok4, msg4 = store_mod.update_skill("my-skill")
 check("update custom fails", ok4, False)
-check_in("custom msg", "custom skill", msg4)
-
-# Locally modified warning on update
-_create_store_skill("modified-test", body="V1.")
-store_mod.install("modified-test")
-(tmp_custom / "modified-test" / "skill.md").write_text("local edit")
-_create_store_skill("modified-test", body="V2.")
-ok5, msg5 = store_mod.update_skill("modified-test")
-check("modified update success", ok5, True)
-check_in("modified warning", "local modifications", msg5)
+check_in("custom msg", "no longer available", msg4)
 
 
 # ===========================================================================
@@ -437,6 +463,7 @@ print("\n=== Update All ===")
 
 _cleanup_custom()
 _cleanup_store()
+_cleanup_managed()
 
 _create_store_skill("skill-a", body="V1.")
 _create_store_skill("skill-b", body="V1.")
@@ -462,30 +489,146 @@ check("no more updates", len(results2), 0)
 
 
 # ===========================================================================
-# _store.json Provenance Round-Trip
+# Custom Override Detection
 # ===========================================================================
 
-print("\n=== Provenance Round-Trip ===")
+print("\n=== Custom Override Detection ===")
 
 _cleanup_custom()
 _cleanup_store()
+_cleanup_managed()
 
-_create_store_skill("prov-test", description="Provenance test")
-store_mod.install("prov-test")
+# Install a managed skill
+_create_store_skill("shadowed", body="Managed version.")
+store_mod.install("shadowed")
 
-manifest = store_mod.read_manifest(tmp_custom / "prov-test")
-check("source", manifest.source, "store")
-check("store_path", manifest.store_path, "skills/store/prov-test")
-check_true("installed_at non-empty", len(manifest.installed_at) > 0)
-check_true("content_sha256 non-empty", len(manifest.content_sha256) > 0)
-check("locally_modified", manifest.locally_modified, False)
+# No override yet
+check("no override", store_mod.has_custom_override("shadowed"), False)
 
-# Verify round-trip: write then read
-store_mod._write_manifest(tmp_custom / "prov-test", manifest)
-manifest2 = store_mod.read_manifest(tmp_custom / "prov-test")
-check("round-trip source", manifest2.source, manifest.source)
-check("round-trip path", manifest2.store_path, manifest.store_path)
-check("round-trip hash", manifest2.content_sha256, manifest.content_sha256)
+# Create custom skill with same name
+_create_custom_skill("shadowed", body="Custom version.")
+check("has override", store_mod.has_custom_override("shadowed"), True)
+
+# Custom only (no ref) — not an override
+_create_custom_skill("custom-only", body="Just custom.")
+check("custom-only not override", store_mod.has_custom_override("custom-only"), False)
+
+
+# ===========================================================================
+# Diff
+# ===========================================================================
+
+print("\n=== Diff ===")
+
+_cleanup_custom()
+_cleanup_store()
+_cleanup_managed()
+
+# Custom override vs managed
+_create_store_skill("diff-test", body="Managed content.")
+store_mod.install("diff-test")
+_create_custom_skill("diff-test", body="Custom content.")
+
+ok, diff_text = store_mod.diff_skill("diff-test")
+check("diff success", ok, True)
+check_in("diff has managed label", "managed", diff_text)
+check_in("diff has custom label", "custom", diff_text)
+
+# Managed vs store (update preview)
+_cleanup_custom()
+_create_store_skill("diff-test", body="Updated store content.")
+ok2, diff_text2 = store_mod.diff_skill("diff-test")
+check("update diff success", ok2, True)
+check_in("diff has installed label", "installed", diff_text2)
+check_in("diff has store label", "store", diff_text2)
+
+# No differences
+_create_store_skill("diff-test", body="Managed content.")  # match what was installed
+# Need to reinstall to match
+store_mod.install("diff-test")
+ok3, diff_text3 = store_mod.diff_skill("diff-test")
+check("no diff", ok3, True)
+check_in("no differences", "no differences", diff_text3.lower())
+
+# Nonexistent
+ok4, msg4 = store_mod.diff_skill("nonexistent")
+check("diff nonexistent", ok4, False)
+
+
+# ===========================================================================
+# Garbage Collection
+# ===========================================================================
+
+print("\n=== Garbage Collection ===")
+
+_cleanup_custom()
+_cleanup_store()
+_cleanup_managed()
+
+# Create and install a skill, then uninstall it
+_create_store_skill("gc-test", body="GC me.")
+store_mod.install("gc-test")
+ref = store_mod.read_ref("gc-test")
+digest = ref.digest
+
+# Uninstall — object becomes unreferenced
+store_mod.uninstall("gc-test", default_skills=())
+
+# GC with default grace — should NOT remove (too young)
+removed = store_mod.gc(grace_seconds=3600)
+check("gc skips young", len(removed), 0)
+check_true("object still exists", store_mod._object_exists(digest))
+
+# GC with zero grace — should remove
+removed2 = store_mod.gc(grace_seconds=0)
+check("gc removes old", len(removed2), 1)
+check("gc removed correct", removed2[0], digest)
+check_false("object gone", store_mod._object_exists(digest))
+
+# GC doesn't touch referenced objects
+_create_store_skill("gc-keep", body="Keep me.")
+store_mod.install("gc-keep")
+ref_keep = store_mod.read_ref("gc-keep")
+removed3 = store_mod.gc(grace_seconds=0)
+check("gc keeps referenced", len(removed3), 0)
+check_true("referenced object safe", store_mod._object_exists(ref_keep.digest))
+
+
+# ===========================================================================
+# Startup Recovery
+# ===========================================================================
+
+print("\n=== Startup Recovery ===")
+
+# Should be idempotent — just ensure dirs and run GC
+store_mod.startup_recovery()
+check_true("version file exists", tmp_version.is_file())
+version_data = json.loads(tmp_version.read_text())
+check("schema version", version_data["schema"], 1)
+
+# Call again — idempotent
+store_mod.startup_recovery()
+check_true("still works", tmp_version.is_file())
+
+
+# ===========================================================================
+# Schema Guard
+# ===========================================================================
+
+print("\n=== Schema Guard ===")
+
+# Write a future schema version
+tmp_version.write_text(json.dumps({"schema": 99}) + "\n")
+try:
+    store_mod.check_schema()
+    check_true("should have raised", False)
+except RuntimeError as e:
+    check_in("error mentions version", "99", str(e))
+    check_in("error mentions upgrade", "Upgrade", str(e))
+
+# Restore valid version
+tmp_version.write_text(json.dumps({"schema": 1}) + "\n")
+store_mod.check_schema()  # should not raise
 
 
 # ===========================================================================
@@ -500,8 +643,6 @@ from app.skills import check_prompt_size, PROMPT_SIZE_WARNING_THRESHOLD
 warning = check_prompt_size("short role", [])
 check("no warning for short", warning, None)
 
-# We can't easily create a prompt > 8000 chars with real catalog skills,
-# so test the function directly with a mock
 from unittest.mock import patch
 
 def fake_build_system_prompt(role, skills):
@@ -513,7 +654,6 @@ with patch("app.skills.build_system_prompt", fake_build_system_prompt):
     check_in("threshold mentioned", "8,000", warning2)
     check_in("size mentioned", "9,000", warning2)
 
-# Just under threshold — no warning
 def fake_under_threshold(role, skills):
     return "x" * 7999
 
@@ -530,13 +670,10 @@ print("\n=== Admin Gate ===")
 
 from app.config import parse_allowed_users
 
-
-# Test parse_allowed_users for admin parsing
 admin_ids, admin_names = parse_allowed_users("111,@adminuser")
 check("admin ids parsed", admin_ids, {111})
 check("admin names parsed", admin_names, {"adminuser"})
 
-# Config with explicit admins
 cfg_explicit = make_config(
     allowed_user_ids=frozenset({111, 222}),
     admin_user_ids=frozenset({111}),
@@ -544,8 +681,6 @@ cfg_explicit = make_config(
 )
 check("admin field populated", cfg_explicit.admin_user_ids, frozenset({111}))
 
-# Config without BOT_ADMIN_USERS falls back to allowed users
-# (This is handled in load_config, but we verify the field exists)
 cfg_fallback = make_config(
     allowed_user_ids=frozenset({111, 222}),
     admin_user_ids=frozenset({111, 222}),
@@ -573,67 +708,69 @@ store_mod.STORE_DIR = tmp_store
 ok, msg = store_mod.install("anything")
 check("install from empty store", ok, False)
 
-# Read manifest from dir without _store.json
-d = tmp_custom / "no-manifest"
-d.mkdir(parents=True, exist_ok=True)
-(d / "skill.md").write_text("---\nname: no-manifest\n---\n\nHello\n")
-check("no manifest", store_mod.read_manifest(d), None)
-
-# Malformed _store.json
-d2 = tmp_custom / "bad-manifest"
-d2.mkdir(parents=True, exist_ok=True)
-(d2 / "_store.json").write_text("not json")
-check("malformed manifest", store_mod.read_manifest(d2), None)
-
-
 
 # ===========================================================================
-# locally_modified persisted to _store.json
+# Object Idempotence
 # ===========================================================================
 
-print("\n=== locally_modified persistence ===")
+print("\n=== Object Idempotence ===")
 
-_cleanup_custom()
 _cleanup_store()
+_cleanup_managed()
 
-_create_store_skill("persist-mod", body="V1.")
-store_mod.install("persist-mod")
+_create_store_skill("idem-test", body="Same content.")
 
-# Before modification, locally_modified is False on disk
-manifest_before = store_mod.read_manifest(tmp_custom / "persist-mod")
-check("not modified before edit", manifest_before.locally_modified, False)
+# Create object twice — should be idempotent
+digest1 = store_mod._create_object(tmp_store / "idem-test")
+digest2 = store_mod._create_object(tmp_store / "idem-test")
+check("idempotent digest", digest1, digest2)
 
-# Modify the installed skill
-(tmp_custom / "persist-mod" / "skill.md").write_text(
-    (tmp_custom / "persist-mod" / "skill.md").read_text() + "\nLocal edit."
+# Only one object dir should exist
+obj_count = len(list(tmp_objects.iterdir()))
+check("single object", obj_count, 1)
+
+
+# ===========================================================================
+# Pinned Ref Skipped by update_all
+# ===========================================================================
+
+print("\n=== Pinned Ref ===")
+
+_cleanup_store()
+_cleanup_managed()
+
+_create_store_skill("pinned-skill", body="V1.")
+store_mod.install("pinned-skill")
+
+# Pin the ref
+ref = store_mod.read_ref("pinned-skill")
+pinned_ref = SkillRef(
+    schema_version=ref.schema_version,
+    digest=ref.digest,
+    source=ref.source,
+    source_uri=ref.source_uri,
+    installed_at=ref.installed_at,
+    pinned=True,
 )
+store_mod._write_ref("pinned-skill", pinned_ref)
 
-# check_updates should persist locally_modified=True
-updates = store_mod.check_updates()
-check("detected modified", updates[0], ("persist-mod", "locally_modified"))
+# Make update available
+_create_store_skill("pinned-skill", body="V2.")
 
-# Now read manifest from disk — locally_modified should be True
-manifest_after = store_mod.read_manifest(tmp_custom / "persist-mod")
-check_true("locally_modified persisted", manifest_after.locally_modified)
+results = store_mod.update_all()
+check("pinned skipped", len(results), 1)
+check_in("pinned msg", "pinned", results[0][2])
 
-# Calling check_updates again should not re-write (already True)
-updates2 = store_mod.check_updates()
-check("still modified", updates2[0], ("persist-mod", "locally_modified"))
-manifest_after2 = store_mod.read_manifest(tmp_custom / "persist-mod")
-check_true("still persisted", manifest_after2.locally_modified)
+# Ref should still point to old digest
+ref_after = store_mod.read_ref("pinned-skill")
+check("digest unchanged", ref_after.digest, ref.digest)
 
-# After update, locally_modified resets to False
-_create_store_skill("persist-mod", body="V2.")
-store_mod.update_skill("persist-mod")
-manifest_updated = store_mod.read_manifest(tmp_custom / "persist-mod")
-check("modified reset after update", manifest_updated.locally_modified, False)
 
 # ===========================================================================
 # Cleanup
 # ===========================================================================
 
-# Restore original dirs
-_cleanup_store_test_dirs()
+_restore_originals()
 
 # ===========================================================================
 # Summary

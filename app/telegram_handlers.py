@@ -53,7 +53,6 @@ from app.storage import (
     save_session,
     session_file,
     list_sessions,
-    sweep_skill_from_sessions,
 )
 from app.ratelimit import RateLimiter
 from app.summarize import export_chat_history, load_raw, save_raw, summarize
@@ -149,6 +148,7 @@ def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
 
     Returns list of warning strings for chats over threshold.
     """
+    from app.skills import filter_resolvable_skills
     sessions_dir = data_dir / "sessions"
     if not sessions_dir.is_dir():
         return []
@@ -159,7 +159,7 @@ def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
             session = _json.loads(session_path.read_text())
         except Exception:
             continue
-        active = session.get("active_skills", [])
+        active = filter_resolvable_skills(session.get("active_skills", []))
         if skill_name not in active:
             continue
         role = session.get("role", "")
@@ -268,11 +268,15 @@ async def keep_typing(chat) -> None:
 
 def _load(chat_id: int) -> dict[str, Any]:
     cfg = _cfg()
-    return load_session(
+    session = load_session(
         cfg.data_dir, chat_id, _prov().name,
         _prov().new_provider_state, cfg.approval_mode,
         cfg.role, cfg.default_skills,
     )
+    # Self-heal: prune active skills whose refs/dirs no longer exist
+    from app.skills import normalize_active_skills
+    normalize_active_skills(session, save_fn=lambda s: _save(chat_id, s))
+    return session
 
 
 def _save(chat_id: int, session: dict[str, Any]) -> None:
@@ -1094,6 +1098,11 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text("No sessions found.")
         return
 
+    # Filter stale active_skills that no longer resolve
+    from app.skills import filter_resolvable_skills
+    for s in sessions:
+        s["active_skills"] = filter_resolvable_skills(s["active_skills"])
+
     # Detail view for a specific chat
     if len(args) >= 2:
         try:
@@ -1187,7 +1196,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         user_creds = load_user_credentials(_cfg().data_dir, req_user_id, _encryption_key())
         lines = ["<b>Available skills:</b>"]
         for name, meta in sorted(catalog.items()):
-            from app.store import is_store_installed
+            from app.store import is_store_installed, has_custom_override
             if name in active:
                 status = " [active]"
             else:
@@ -1197,10 +1206,12 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     status = " [needs setup]" if missing else " [ready]"
                 else:
                     status = ""
-            if meta.is_custom and is_store_installed(name):
-                custom_tag = " (store)"
+            if has_custom_override(name):
+                custom_tag = " [custom override]"
             elif meta.is_custom:
                 custom_tag = " (custom)"
+            elif is_store_installed(name):
+                custom_tag = " (managed)"
             else:
                 custom_tag = ""
             desc = f" \u2014 {html.escape(meta.description)}" if meta.description else ""
@@ -1387,37 +1398,40 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     if sub == "info" and len(args) >= 2:
-        from app.store import skill_info as store_skill_info
+        from app.skills import skill_info_resolved
         name = args[1]
-        result = store_skill_info(name)
+        result = skill_info_resolved(name)
         if not result:
             await update.effective_message.reply_text(
-                f"Skill '{html.escape(name)}' not found in store.",
+                f"Skill '{html.escape(name)}' not found.",
                 parse_mode=ParseMode.HTML,
             )
             return
-        info, body = result
-        parts = [f"<b>{html.escape(info.display_name)}</b>"]
-        if info.description:
-            parts.append(html.escape(info.description))
-        # Show credential requirements (installed skill first, store fallback)
+        meta, body, source, skill_path = result
+        display_name = meta.get("display_name", name)
+        description = meta.get("description", "")
+        parts = [f"<b>{html.escape(display_name)}</b>"]
+        if description:
+            parts.append(html.escape(description))
+        # Show credential requirements
         reqs = get_skill_requirements(name)
         if reqs:
             req_keys = ", ".join(r.key for r in reqs)
             parts.append(f"Requires: {html.escape(req_keys)}")
-        elif info.has_requirements:
+        elif source == "store (not installed)":
             from app.store import get_store_skill_requirements
             store_keys = get_store_skill_requirements(name)
             if store_keys:
                 parts.append(f"Requires: {html.escape(', '.join(store_keys))}")
-        # Show provider compatibility
+        # Show provider compatibility from the resolved directory
         providers = []
-        if info.has_claude_config:
+        if (skill_path / "claude.yaml").is_file():
             providers.append("Claude")
-        if info.has_codex_config:
+        if (skill_path / "codex.yaml").is_file():
             providers.append("Codex")
         if providers:
             parts.append(f"Providers: {', '.join(providers)}")
+        parts.append(f"Resolves to: {source}")
         # Preview: up to 1000 chars, break at paragraph boundary
         if len(body) > 1000:
             cut = body.rfind("\n\n", 0, 1000)
@@ -1447,9 +1461,7 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
         name = args[1]
         cfg = _cfg()
-        def _sweep(skill_name):
-            return sweep_skill_from_sessions(cfg.data_dir, skill_name)
-        ok, msg = store_uninstall(name, cfg.default_skills, session_sweep_fn=_sweep)
+        ok, msg = store_uninstall(name, cfg.default_skills)
         await update.effective_message.reply_text(html.escape(msg), parse_mode=ParseMode.HTML)
         return
 
@@ -1460,13 +1472,11 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await update.effective_message.reply_text("No store-installed skills found.")
             return
         lines = ["<b>Store skill status:</b>"]
+        from app.store import has_custom_override
         for name, status in updates:
-            if status == "update_available":
-                lines.append(f"  <code>{html.escape(name)}</code> \u2014 update available")
-            elif status == "locally_modified":
-                lines.append(f"  <code>{html.escape(name)}</code> \u2014 locally modified")
-            else:
-                lines.append(f"  <code>{html.escape(name)}</code> \u2014 up to date")
+            label = "update available" if status == "update_available" else "up to date"
+            override = " [custom override]" if has_custom_override(name) else ""
+            lines.append(f"  <code>{html.escape(name)}</code> \u2014 {label}{override}")
         await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
         return
 
@@ -1490,19 +1500,6 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
         target = args[1]
         if target == "all":
-            from app.store import check_updates as store_check_updates, is_locally_modified
-            modified = [n for n, s in store_check_updates() if s == "locally_modified"]
-            if modified:
-                names = ", ".join(f"<code>{html.escape(n)}</code>" for n in modified)
-                kb = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("Yes, overwrite all", callback_data="skill_update_all_confirm"),
-                    InlineKeyboardButton("Cancel", callback_data="skill_update_cancel"),
-                ]])
-                await update.effective_message.reply_text(
-                    f"These skills have local modifications that will be overwritten: {names}\n\n"
-                    f"Continue?",
-                    parse_mode=ParseMode.HTML, reply_markup=kb)
-                return
             results = store_update_all()
             if not results:
                 await update.effective_message.reply_text("No store skills need updating.")
@@ -1522,18 +1519,6 @@ async def cmd_skills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     lines.append(f"  {html.escape(w)}")
             await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
         else:
-            from app.store import is_locally_modified
-            if is_locally_modified(target):
-                kb = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("Yes, overwrite", callback_data=f"skill_update_confirm:{target}"),
-                    InlineKeyboardButton("Cancel", callback_data="skill_update_cancel"),
-                ]])
-                await update.effective_message.reply_text(
-                    f"Skill <code>{html.escape(target)}</code> has local modifications. "
-                    f"Update will overwrite them. Continue?\n\n"
-                    f"Use /skills diff {html.escape(target)} to see changes.",
-                    parse_mode=ParseMode.HTML, reply_markup=kb)
-                return
             ok, msg = store_update_skill(target)
             if ok:
                 cfg = _cfg()

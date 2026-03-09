@@ -1,4 +1,4 @@
-"""Handler integration tests for skill-store flows."""
+"""Handler integration tests for skill-store flows (immutable store model)."""
 
 import asyncio
 import sys
@@ -46,16 +46,54 @@ def _store_env(tmp):
     ensure_data_dirs(data_dir)
     tmp_store = Path(tmp) / "store"
     tmp_custom = Path(tmp) / "custom"
+    tmp_managed = Path(tmp) / "managed"
+    tmp_objects = tmp_managed / "objects"
+    tmp_refs = tmp_managed / "refs"
+    tmp_tmp = tmp_managed / "tmp"
+    tmp_version = tmp_managed / "version.json"
+    tmp_lock = tmp_managed / ".lock"
+
     tmp_store.mkdir()
     tmp_custom.mkdir()
+    tmp_managed.mkdir()
+    tmp_objects.mkdir()
+    tmp_refs.mkdir()
+    tmp_tmp.mkdir()
 
-    original = (store_mod.STORE_DIR, store_mod.CUSTOM_DIR, skills_mod.CUSTOM_DIR)
+    import json
+    tmp_version.write_text(json.dumps({"schema": 1}) + "\n")
+
+    original = {
+        "STORE_DIR": store_mod.STORE_DIR,
+        "CUSTOM_DIR": store_mod.CUSTOM_DIR,
+        "MANAGED_DIR": store_mod.MANAGED_DIR,
+        "OBJECTS_DIR": store_mod.OBJECTS_DIR,
+        "REFS_DIR": store_mod.REFS_DIR,
+        "TMP_DIR": store_mod.TMP_DIR,
+        "VERSION_FILE": store_mod.VERSION_FILE,
+        "LOCK_FILE": store_mod.LOCK_FILE,
+        "skills_CUSTOM_DIR": skills_mod.CUSTOM_DIR,
+    }
     store_mod.STORE_DIR = tmp_store
     store_mod.CUSTOM_DIR = tmp_custom
+    store_mod.MANAGED_DIR = tmp_managed
+    store_mod.OBJECTS_DIR = tmp_objects
+    store_mod.REFS_DIR = tmp_refs
+    store_mod.TMP_DIR = tmp_tmp
+    store_mod.VERSION_FILE = tmp_version
+    store_mod.LOCK_FILE = tmp_lock
     skills_mod.CUSTOM_DIR = tmp_custom
 
     def cleanup():
-        store_mod.STORE_DIR, store_mod.CUSTOM_DIR, skills_mod.CUSTOM_DIR = original
+        store_mod.STORE_DIR = original["STORE_DIR"]
+        store_mod.CUSTOM_DIR = original["CUSTOM_DIR"]
+        store_mod.MANAGED_DIR = original["MANAGED_DIR"]
+        store_mod.OBJECTS_DIR = original["OBJECTS_DIR"]
+        store_mod.REFS_DIR = original["REFS_DIR"]
+        store_mod.TMP_DIR = original["TMP_DIR"]
+        store_mod.VERSION_FILE = original["VERSION_FILE"]
+        store_mod.LOCK_FILE = original["LOCK_FILE"]
+        skills_mod.CUSTOM_DIR = original["skills_CUSTOM_DIR"]
 
     return data_dir, tmp_store, tmp_custom, cleanup
 
@@ -87,7 +125,9 @@ async def test_handler_nonadmin_install_rejected():
             )
 
             checks.check_in("blocked msg mentions admin", "admin", last_reply(msg).lower())
-            checks.check_false("skill not installed", (tmp_custom / "helper").is_dir())
+            # No ref should exist
+            import app.store as store_mod
+            checks.check_false("skill not installed", store_mod.read_ref("helper") is not None)
         finally:
             cleanup()
 
@@ -95,8 +135,8 @@ async def test_handler_nonadmin_install_rejected():
 run_test("handler: non-admin install rejected", test_handler_nonadmin_install_rejected())
 
 
-async def test_handler_admin_install_writes_manifest():
-    import json
+async def test_handler_admin_install_creates_ref():
+    import app.store as store_mod
     import app.telegram_handlers as th
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -110,17 +150,20 @@ async def test_handler_admin_install_writes_manifest():
                                      "/skills install helper", ["install", "helper"])
 
             checks.check_in("reply confirms install", "installed", last_reply(msg).lower())
-            checks.check_true("skill dir created", (tmp_custom / "helper").is_dir())
-            checks.check_true("_store.json exists", (tmp_custom / "helper" / "_store.json").is_file())
 
-            manifest = json.loads((tmp_custom / "helper" / "_store.json").read_text())
-            checks.check("manifest source", manifest["source"], "store")
-            checks.check("manifest not modified", manifest["locally_modified"], False)
+            # Ref should exist
+            ref = store_mod.read_ref("helper")
+            checks.check_true("ref created", ref is not None)
+            checks.check("ref source", ref.source, "store")
+
+            # Object should exist
+            obj_dir = store_mod._object_dir(ref.digest)
+            checks.check_true("object exists", obj_dir.is_dir())
         finally:
             cleanup()
 
 
-run_test("handler: admin install writes manifest", test_handler_admin_install_writes_manifest())
+run_test("handler: admin install creates ref", test_handler_admin_install_creates_ref())
 
 
 async def test_handler_store_update_propagates():
@@ -165,8 +208,8 @@ async def test_handler_store_update_propagates():
 run_test("handler: store update propagates to provider", test_handler_store_update_propagates())
 
 
-async def test_handler_local_modification_detected_and_cleared():
-    import json
+async def test_handler_uninstall_removes_ref():
+    import app.store as store_mod
     import app.telegram_handlers as th
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -177,74 +220,19 @@ async def test_handler_local_modification_detected_and_cleared():
             setup_globals(_admin_cfg(data_dir), prov)
 
             admin = FakeUser(uid=100, username="admin")
-            chat = FakeChat(1001)
-
-            await send_command(th.cmd_skills, chat, admin, "/skills install helper", ["install", "helper"])
-            installed = tmp_custom / "helper" / "skill.md"
-            installed.write_text(installed.read_text() + "\nLOCAL_EDIT.\n")
-
-            msg = await send_command(th.cmd_skills, chat, admin, "/skills updates", ["updates"])
-            checks.check_in("locally modified reported", "locally modified", last_reply(msg))
-
-            manifest = json.loads((tmp_custom / "helper" / "_store.json").read_text())
-            checks.check("locally_modified flag set", manifest["locally_modified"], True)
-
-            (tmp_store / "helper" / "skill.md").write_text(
-                "---\nname: helper\ndisplay_name: helper\n"
-                "description: test fixture\n---\n\n" + STORE_V2 + "\n"
-            )
-            msg_update = await send_command(th.cmd_skills, chat, admin, "/skills update helper", ["update", "helper"])
-            reply = last_reply(msg_update)
-            checks.check_in("confirmation prompt shown", "local modifications", reply)
-            checks.check_in("diff hint shown", "/skills diff", reply)
-
-            # Simulate clicking "Yes, overwrite" callback
-            cb_msg = FakeMessage(chat=chat)
-            query = FakeCallbackQuery("skill_update_confirm:helper", message=cb_msg, user=admin)
-            cb_update = FakeUpdate(callback_query=query, user=admin, chat=chat)
-            await th.handle_skill_update_callback(cb_update, None)
-
-            manifest = json.loads((tmp_custom / "helper" / "_store.json").read_text())
-            checks.check("locally_modified cleared", manifest["locally_modified"], False)
-        finally:
-            cleanup()
-
-
-run_test("handler: local modification detected and cleared", test_handler_local_modification_detected_and_cleared())
-
-
-async def test_handler_uninstall_sweeps_sessions():
-    import app.telegram_handlers as th
-
-    with tempfile.TemporaryDirectory() as tmp:
-        data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
-        try:
-            make_store_skill(tmp_store, "helper", body=STORE_V1)
-            prov = FakeProvider("claude")
-            setup_globals(_admin_cfg(data_dir), prov)
-
-            admin = FakeUser(uid=100, username="admin")
-            regular = FakeUser(uid=200, username="regular")
             chat_admin = FakeChat(1001)
-            chat_user = FakeChat(2001)
 
             await send_command(th.cmd_skills, chat_admin, admin, "/skills install helper", ["install", "helper"])
-            await send_command(th.cmd_skills, chat_admin, admin, "/skills add helper", ["add", "helper"])
-            await send_command(th.cmd_skills, chat_user, regular, "/skills add helper", ["add", "helper"])
+            checks.check_true("ref exists after install", store_mod.read_ref("helper") is not None)
 
             msg = await send_command(th.cmd_skills, chat_admin, admin, "/skills uninstall helper", ["uninstall", "helper"])
             checks.check_in("reply confirms uninstall", "uninstalled", last_reply(msg).lower())
-            checks.check_false("skill dir removed", (tmp_custom / "helper").is_dir())
-
-            s1 = load_session_disk(data_dir, 1001, prov)
-            s2 = load_session_disk(data_dir, 2001, prov)
-            checks.check_not_in("admin chat swept", "helper", s1.get("active_skills", []))
-            checks.check_not_in("user chat swept", "helper", s2.get("active_skills", []))
+            checks.check("ref removed", store_mod.read_ref("helper"), None)
         finally:
             cleanup()
 
 
-run_test("handler: uninstall sweeps active sessions", test_handler_uninstall_sweeps_sessions())
+run_test("handler: uninstall removes ref", test_handler_uninstall_removes_ref())
 
 
 async def test_handler_prompt_size_warning_lists_chats():
@@ -334,14 +322,9 @@ async def test_skills_info_store_requirements():
     import app.store as store_mod
     import app.telegram_handlers as th
 
-    orig_store = store_mod.STORE_DIR
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            data_dir = Path(tmp) / "data"
-            ensure_data_dirs(data_dir)
-            tmp_store = Path(tmp) / "store"
-            store_mod.STORE_DIR = tmp_store
-
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
+        try:
             skill_dir = tmp_store / "store-cred-skill"
             skill_dir.mkdir(parents=True, exist_ok=True)
             (skill_dir / "skill.md").write_text(
@@ -358,8 +341,8 @@ async def test_skills_info_store_requirements():
             user = FakeUser(42)
             msg = await send_command(th.cmd_skills, chat, user, "/skills info store-cred-skill", ["info", "store-cred-skill"])
             checks.check_in("store skill shows Requires", "Requires: API_TOKEN", " ".join(r.get("text", "") for r in msg.replies))
-    finally:
-        store_mod.STORE_DIR = orig_store
+        finally:
+            cleanup()
 
 
 run_test("/skills info store requirements", test_skills_info_store_requirements())

@@ -19,6 +19,7 @@ from tests.support.handler_support import (
     FakeUser,
     last_reply,
     make_config,
+    make_skill,
     send_command,
     setup_globals,
 )
@@ -55,6 +56,7 @@ run_test("non-admin rejected", test_admin_requires_admin())
 
 async def test_admin_sessions_summary():
     """Admin gets session summary."""
+    import app.skills as skills_mod
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
@@ -67,22 +69,32 @@ async def test_admin_sessions_summary():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        # Create sessions
-        s1 = default_session("claude", {"session_id": "a", "started": False}, "on")
-        s1["active_skills"] = ["code-review"]
-        save_session(data_dir, 111, s1)
+        # Create a resolvable custom skill
+        tmp_custom = Path(tmp) / "custom"
+        tmp_custom.mkdir()
+        orig_custom = skills_mod.CUSTOM_DIR
+        skills_mod.CUSTOM_DIR = tmp_custom
+        try:
+            make_skill(tmp_custom, "code-review", body="Review code.")
 
-        s2 = default_session("claude", {"session_id": "b", "started": False}, "off")
-        s2["pending_request"] = {"prompt": "test", "created_at": 0}
-        save_session(data_dir, 222, s2)
+            # Create sessions
+            s1 = default_session("claude", {"session_id": "a", "started": False}, "on")
+            s1["active_skills"] = ["code-review"]
+            save_session(data_dir, 111, s1)
 
-        chat = FakeChat()
-        user = FakeUser(42, "admin")
-        msg = await send_command(th.cmd_admin, chat, user, "/admin sessions", args=["sessions"])
-        reply = last_reply(msg)
-        checks.check("shows total", "Sessions: 2" in reply, True)
-        checks.check("shows pending", "Pending approval: 1" in reply, True)
-        checks.check("shows skills", "code-review" in reply, True)
+            s2 = default_session("claude", {"session_id": "b", "started": False}, "off")
+            s2["pending_request"] = {"prompt": "test", "created_at": 0}
+            save_session(data_dir, 222, s2)
+
+            chat = FakeChat()
+            user = FakeUser(42, "admin")
+            msg = await send_command(th.cmd_admin, chat, user, "/admin sessions", args=["sessions"])
+            reply = last_reply(msg)
+            checks.check("shows total", "Sessions: 2" in reply, True)
+            checks.check("shows pending", "Pending approval: 1" in reply, True)
+            checks.check("shows skills", "code-review" in reply, True)
+        finally:
+            skills_mod.CUSTOM_DIR = orig_custom
 
 
 run_test("sessions summary", test_admin_sessions_summary())
@@ -90,6 +102,7 @@ run_test("sessions summary", test_admin_sessions_summary())
 
 async def test_admin_sessions_detail():
     """Admin gets detail view for a specific chat."""
+    import app.skills as skills_mod
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
@@ -102,19 +115,30 @@ async def test_admin_sessions_detail():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        s = default_session("claude", {"session_id": "a", "started": False}, "on")
-        s["active_skills"] = ["code-review", "deploy"]
-        save_session(data_dir, 555, s)
+        # Create resolvable custom skills
+        tmp_custom = Path(tmp) / "custom"
+        tmp_custom.mkdir()
+        orig_custom = skills_mod.CUSTOM_DIR
+        skills_mod.CUSTOM_DIR = tmp_custom
+        try:
+            make_skill(tmp_custom, "code-review", body="Review code.")
+            make_skill(tmp_custom, "deploy", body="Deploy code.")
 
-        chat = FakeChat()
-        user = FakeUser(42, "admin")
-        msg = await send_command(
-            th.cmd_admin, chat, user, "/admin sessions 555", args=["sessions", "555"])
-        reply = last_reply(msg)
-        checks.check("shows chat id", "Session 555" in reply, True)
-        checks.check("shows provider", "claude" in reply, True)
-        checks.check("shows skills count", "Skills (2)" in reply, True)
-        checks.check("shows approval mode", "Approval: on" in reply, True)
+            s = default_session("claude", {"session_id": "a", "started": False}, "on")
+            s["active_skills"] = ["code-review", "deploy"]
+            save_session(data_dir, 555, s)
+
+            chat = FakeChat()
+            user = FakeUser(42, "admin")
+            msg = await send_command(
+                th.cmd_admin, chat, user, "/admin sessions 555", args=["sessions", "555"])
+            reply = last_reply(msg)
+            checks.check("shows chat id", "Session 555" in reply, True)
+            checks.check("shows provider", "claude" in reply, True)
+            checks.check("shows skills count", "Skills (2)" in reply, True)
+            checks.check("shows approval mode", "Approval: on" in reply, True)
+        finally:
+            skills_mod.CUSTOM_DIR = orig_custom
 
 
 run_test("sessions detail", test_admin_sessions_detail())

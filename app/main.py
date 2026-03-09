@@ -9,6 +9,7 @@ from app.providers.base import Provider
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
 from app.storage import ensure_data_dirs
+from app.store import startup_recovery
 from app.telegram_handlers import build_application
 
 PROVIDERS: dict[str, type] = {
@@ -34,6 +35,15 @@ def make_provider(config: BotConfig) -> Provider:
 def run_doctor(config: BotConfig, provider: Provider) -> None:
     errors = validate_config(config)
     errors.extend(provider.check_health())
+    # Check managed store health (schema compat, dir layout)
+    try:
+        from app.store import ensure_managed_dirs, check_schema
+        ensure_managed_dirs()
+        check_schema()
+    except RuntimeError as e:
+        errors.append(str(e))
+    except Exception as e:
+        errors.append(f"Managed store check failed: {e}")
     if errors:
         for e in errors:
             print(f"  FAIL: {e}", file=sys.stderr)
@@ -56,6 +66,7 @@ def main() -> None:
 
     fail_fast(config)
     ensure_data_dirs(config.data_dir)
+    startup_recovery()
 
     log.info("Instance: %s", config.instance)
     log.info("Provider: %s", provider.name)

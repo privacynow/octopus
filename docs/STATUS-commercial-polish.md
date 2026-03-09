@@ -11,8 +11,8 @@ Current as of 2026-03-09. Tracks progress against [PLAN-commercial-polish.md](PL
 | Phase 1 | Activation & self-service | Done |
 | Phase 2 | Output quality | Done |
 | Phase 3 | Trust & cost control | Done |
-| Phase 4 | Operational hardening | Mostly done (4.1 next) |
-| Phase 5 | Ecosystem & extensibility | Not started |
+| Phase 4 | Operational hardening | Done |
+| Phase 5 | Ecosystem & extensibility | Not started (5.2 next) |
 
 ---
 
@@ -20,7 +20,7 @@ Current as of 2026-03-09. Tracks progress against [PLAN-commercial-polish.md](PL
 
 Canonical full-suite runner: `./scripts/test_all.sh`
 
-Current suite: 1,314 passing checks across 20 entrypoints.
+Current suite: 1,372 passing checks across 21 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -30,19 +30,20 @@ Current suite: 1,314 passing checks across 20 entrypoints.
 | `test_config.py` | 16 | Config loading, validation, `.env` parsing, rate limit and admin config. |
 | `test_formatting.py` | 297 | Markdown-to-Telegram HTML conversion, balanced HTML splitting, table rendering, directive extraction. |
 | `test_handlers.py` | 92 | Core handler integration: happy-path routing, role/session behavior, `/doctor` warnings (admin fallback, stale sessions, prompt size), `/help`, `/start`. |
-| `test_handlers_admin.py` | 12 | `/admin sessions` summary and detail views, access gating. |
+| `test_handlers_admin.py` | 12 | `/admin sessions` summary and detail views, access gating, stale skill filtering. |
 | `test_handlers_approval.py` | 53 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL. |
 | `test_handlers_codex.py` | 33 | Codex-specific handler behavior: thread invalidation, boot ID, retry semantics, script staging. |
 | `test_handlers_credentials.py` | 167 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection, and clear-credentials confirmation ownership. |
 | `test_handlers_export.py` | 14 | `/export` command: no history, document generation, access gating. |
 | `test_handlers_output.py` | 20 | Output presentation: `/compact`, `/raw`, table rendering, summarization flows. |
 | `test_handlers_ratelimit.py` | 11 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
-| `test_handlers_store.py` | 28 | Store handler flows: install/update/uninstall, locally modified confirmation, prompt-size warnings. |
+| `test_handlers_store.py` | 21 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle. |
 | `test_high_risk.py` | 78 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
 | `test_ratelimit.py` | 21 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_skills.py` | 201 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing. |
 | `test_storage.py` | 41 | Session CRUD, upload paths, directory creation, session sweep, `list_sessions()`. |
-| `test_store.py` | 115 | Store module: discovery, search, install/uninstall, SHA-256 provenance, locally_modified persistence. |
+| `test_store.py` | 123 | Store module: discovery, search, content hashing, install/uninstall via refs and objects, ref round-trip, update detection, custom override detection, diff, GC, startup recovery, schema guard, pinned refs. |
+| `test_store_e2e.py` | 57 | End-to-end user flows through handlers: install→add→message→prompt, update propagation, uninstall pruning, /skills info across all tiers, three-tier resolution, custom override shadowing, /admin sessions stale filtering, provider compatibility output, source label edge cases, normalization persistence, --doctor schema check. |
 | `test_summarize.py` | 33 | Ring buffer (full prompt, kind field, rotation at 50), export formatting, summarization. |
 | `test_setup.sh` | 34/35 | Installer/setup wizard flows, provider-pruned config generation. (1 systemd test skipped in CI.) |
 
@@ -76,40 +77,33 @@ Current suite: 1,314 passing checks across 20 entrypoints.
 
 ---
 
-## Planned Next Sequence
-
-Execution from the current state is:
-
-1. **4.1** — build the managed immutable skill-store foundation
-2. **5.2** — add webhook mode
-3. **5.1** — add the third-party registry on top of the 4.1 store model
-
-This order is intentional. `4.1` is no longer a narrow crash-recovery patch; it
-is the final local storage and provenance foundation that registry work will
-reuse. `5.2` is operationally independent, so it can ship before remote
-registry features. Because the project is still in development, `4.1` is being
-treated as a clean-break storage redesign rather than a migration exercise.
-
-### Bugs found and fixed
-
-| Bug | Severity | Root cause | Fix |
-|-----|----------|-----------|-----|
-| Rate limiter ineffective for implicit admins | High | Admin fallback made all users admin-exempt from rate limiting | Added `admin_users_explicit` flag; rate limiter only exempts when explicitly configured |
-| Codex health check fails in valid environments | Medium | Ping command didn't use real execution flags | Mirror `--sandbox`, `--skip-git-repo-check`, `--model`, `--profile`, `-C working_dir` |
-| `/doctor` stale scan counts fresh sessions | Medium | No age threshold — any pending request was flagged | Added `_STALE_PENDING_SECONDS = 3600`, `_STALE_SETUP_SECONDS = 600` |
-| `/doctor` false positive for explicit admin with equal user sets | Low | Warning triggered when admin set == allowed set regardless of explicit config | Check `admin_users_explicit` flag, not set equality |
-
----
-
 ## Phase 4 — Operational Hardening
 
 ### What shipped
 
+**4.1 Managed immutable skill-store foundation** (`app/store.py`, `app/skills.py`, `app/main.py`, `app/telegram_handlers.py`)
+- Content-addressed immutable objects under `managed/objects/<sha256>/`.
+- Atomic logical refs under `managed/refs/<name>.json` (write `.tmp` + `os.rename`).
+- Cross-instance `fcntl.flock` on `managed/.lock` for all mutations; read-only operations do not lock.
+- Conservative GC at startup: removes unreferenced objects older than 1 hour, cleans stale tmp dirs and ref temps.
+- Schema version guard via `managed/version.json`; refuses to operate if schema > known.
+- Three-tier skill resolution: `custom/<name>` > managed ref→object > `catalog/<name>`.
+- `_resolve_skill()` returns `(path, tier)` so source labels always match actual resolution.
+- `skill_info_resolved()` reads metadata, body, source, and skill_dir from the resolved tier.
+- `/skills info` shows content from the resolved tier (not drifted store copy), provider compatibility, and correct source label.
+- `/skills list` shows `(managed)`, `(custom)`, and `[custom override]` tags.
+- Session self-healing via `normalize_active_skills()` in `_load()` — all command paths get normalization, not just messages.
+- `/admin sessions` and `_check_prompt_size_cross_chat` filter stale active_skills via `filter_resolvable_skills()`.
+- `--doctor` checks managed store schema compatibility via `ensure_managed_dirs()` + `check_schema()`.
+- Idempotent object creation, pinned ref support, `update_all` skips pinned.
+- Clean break from old `_store.json` / mutable directory model — no migration.
+
 **4.2 Locally modified skill protection**
-- `/skills update <name>` shows confirmation prompt with inline keyboard when skill has local modifications.
-- `/skills update all` lists all locally modified skills and requires single confirmation.
-- `/skills diff <name>` shows unified diff between installed and store versions (first 2000 chars).
-- `is_locally_modified()` and `diff_skill()` in `app/store.py`.
+- Under the 4.1 immutable model, managed skills cannot be edited in place.
+- "Local modifications" only occur when a custom skill in `custom/<name>` shadows a managed ref.
+- `/skills diff <name>` compares custom override vs managed object, or managed object vs store source (update preview).
+- `/skills update <name>` updates the managed ref; if a custom override exists, the message notes it remains active.
+- Batch update via `/skills update all` skips pinned refs.
 
 **4.3 Configuration template per provider**
 - `setup.sh` prunes codex-specific config lines when provider is claude (and vice versa).
@@ -120,6 +114,7 @@ treated as a clean-break storage redesign rather than a migration exercise.
 - `/admin sessions` — summary view: total sessions, pending approvals, top skills by usage.
 - `/admin sessions <chat_id>` — detail view: provider, approval mode, skills, timestamps.
 - Admin-gated via `is_admin()`.
+- Active skills filtered through `filter_resolvable_skills()` to exclude stale refs.
 
 **4.5 Conversation export**
 - Ring buffer upgraded: full prompt storage (no truncation), `kind` field (`request`/`approval`/`system`), capacity 10 → 50.
@@ -129,21 +124,46 @@ treated as a clean-break storage redesign rather than a migration exercise.
 - Header documents scope honestly: only successful model responses and approval plans are captured; denied, timed-out, or failed requests are not.
 - `/help` updated to list `/export` and `/admin sessions`.
 
-**4.1 Managed immutable skill-store foundation** — Not started. Replaces the
-earlier intent-log approach. Will introduce immutable managed artifacts,
-logical refs, startup reconciliation, garbage collection, cross-instance
-locking, and session self-healing. This is the next planned execution item and
-the foundation for Phase 5 registry work. No migration/backward-compat support
-is planned while the project is still in development. The design is now locked
-to use atomic ref writes, idempotent object creation, a separate session
-normalization step (not validation-side mutation), and explicit custom-override
-visibility in `/skills list`, `/skills info`, and managed-update messaging.
-
 ### Design decisions
 
-**Ring buffer vs append-only log**: The `/export` feature reuses the existing ring buffer rather than building a separate conversation log. The ring buffer stores the last 50 turns with full prompts, which covers most practical export needs. A proper append-only log is a future option if unbounded history becomes a requirement. The export header documents the scope limitation honestly: only successful model responses and approval plans are captured; denied, timed-out, or failed requests are not.
+**Immutable store vs mutable directories**: The old model copied store skills into `custom/` with a `_store.json` manifest, making provenance tracking fragile and crash recovery hard. The new model separates concerns: immutable content-addressed objects hold skill content, lightweight JSON refs provide the name→digest mapping with provenance metadata, and custom skills remain in their own editable directory. Install/update become atomic ref swaps; uninstall removes the ref and lets GC handle the orphaned object.
+
+**Session normalization placement**: `normalize_active_skills()` runs inside `_load()` rather than only in `handle_message()`. This ensures every code path — `/skills`, `/skills list`, `/skills add`, `/admin sessions` — sees consistent state. Stale skills are pruned and persisted on first load after they become unresolvable.
+
+**Resolution tier tracking**: `_resolve_skill()` returns `(path, tier)` as a pair so that downstream code (e.g. `/skills info` source labels) uses the tier that actually resolved, not a re-derived guess from directory/ref existence. This prevents mislabeling when stray empty dirs or malformed skill.md files exist.
+
+**Ring buffer vs append-only log**: The `/export` feature reuses the existing ring buffer rather than building a separate conversation log. The ring buffer stores the last 50 turns with full prompts, which covers most practical export needs.
 
 **Admin session listing**: Returns all sessions sorted by `updated_at`. No pagination — bounded by number of session files on disk. Detail view shows per-session metadata without loading provider state internals.
+
+---
+
+## Planned Next Sequence
+
+Execution from the current state is:
+
+1. **5.2** — add webhook mode
+2. **5.1** — add the third-party registry on top of the 4.1 store model
+
+`5.2` is operationally independent of the store and can ship quickly. `5.1` is intentionally last so it lands on the final store model.
+
+The deferred item `3.2` (usage tracking / billing hooks) remains intentionally out of sequence.
+
+### Bugs found and fixed
+
+| Bug | Severity | Root cause | Fix |
+|-----|----------|-----------|-----|
+| `/skills info` showed drifted store content, not installed version | Medium-high | Handler always called `store_skill_info()` which reads from `STORE_DIR` | Added `skill_info_resolved()` using `_resolve_skill()` three-tier resolution |
+| Session normalization only on message path | Medium | `normalize_active_skills()` only called in `handle_message()` | Moved into `_load()` so all command paths get normalization |
+| `/admin sessions` showed stale active_skills | Medium | `list_sessions()` reads raw JSON, bypasses `_load()` normalization | Added `filter_resolvable_skills()` call in admin handler |
+| `_check_prompt_size_cross_chat` used stale skills | Medium | Reads raw session JSON directly | Added `filter_resolvable_skills()` call before checking |
+| `/skills info` lost provider compatibility output | Medium-low | Rewrite dropped `Providers: Claude, Codex` line | Restored by checking `claude.yaml`/`codex.yaml` in resolved skill_dir |
+| `/skills info` source label mislabeled with stray custom dir | Low | Source derived from dir/ref existence, not actual resolution tier | `_resolve_skill()` returns tier; `skill_info_resolved()` uses it directly |
+| `--doctor` didn't check managed store schema | Low-medium | `run_doctor()` only ran config + provider health | Added `ensure_managed_dirs()` + `check_schema()` to doctor path |
+| Rate limiter ineffective for implicit admins | High | Admin fallback made all users admin-exempt from rate limiting | Added `admin_users_explicit` flag; rate limiter only exempts when explicitly configured |
+| Codex health check fails in valid environments | Medium | Ping command didn't use real execution flags | Mirror `--sandbox`, `--skip-git-repo-check`, `--model`, `--profile`, `-C working_dir` |
+| `/doctor` stale scan counts fresh sessions | Medium | No age threshold — any pending request was flagged | Added `_STALE_PENDING_SECONDS = 3600`, `_STALE_SETUP_SECONDS = 600` |
+| `/doctor` false positive for explicit admin with equal user sets | Low | Warning triggered when admin set == allowed set regardless of explicit config | Check `admin_users_explicit` flag, not set equality |
 
 ---
 
@@ -152,6 +172,5 @@ visibility in `/skills list`, `/skills info`, and managed-update messaging.
 | Item | Status | Notes |
 |------|--------|-------|
 | 3.2 Usage tracking & quotas | Deferred | Needs token-cost mapping, billing integration |
-| 4.1 Managed immutable skill-store foundation | Not started | Next planned execution item. Replaces the earlier intent-log proposal with immutable objects, refs, recovery, GC, locking, atomic ref writes, idempotent object creation, session normalization, and a clean-break storage model. No migration/backward-compat support planned. |
-| 5.2 Webhook mode | Not started | Planned immediately after 4.1. `BOT_MODE=poll\|webhook`, aiohttp server, `/health` endpoint |
-| 5.1 Third-party skill registry | Not started | Planned after 4.1 and 5.2. Will use the managed store foundation, artifact digests, and provenance model from 4.1 |
+| 5.2 Webhook mode | Not started | Next execution item. `BOT_MODE=poll\|webhook`, webhook server, `/health` endpoint |
+| 5.1 Third-party skill registry | Not started | Planned after 5.2. Uses the managed store foundation from 4.1 |

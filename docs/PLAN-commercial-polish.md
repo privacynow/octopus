@@ -19,8 +19,8 @@ and design notes remain below.
 | Phase 1 | Done | All 8 items shipped: cancel, clear-credentials with confirmation, onboarding, credential status, skill info, error mapping, group chat visibility, stale button TTL. |
 | Phase 2 | Done | All three items shipped: table rendering, HTML fallback, and mobile summarization with `/raw` + `/compact`. |
 | Phase 3 | Done | Rate limiting, admin safety posture, proactive prompt size warnings, runtime health checks all shipped. |
-| Phase 4 | Mostly done | 4.2-4.5 shipped. 4.1 is the next execution item and is now defined as the managed immutable store foundation, not a narrow intent-log patch. This is a clean-break redesign; no backward-compat migration is planned. |
-| Phase 5 | Not started | Execution order after 4.1 is 5.2 first, then 5.1. Registry will build on the 4.1 store foundation. |
+| Phase 4 | Done | All items shipped. 4.1 managed immutable store with content-addressed objects, atomic refs, cross-instance locking, GC, session self-healing, three-tier resolution, and 7 bugs found and fixed during review. 4.2-4.5 shipped earlier. |
+| Phase 5 | Not started | Execution order: 5.2 (webhook) first, then 5.1 (registry). Registry builds on the 4.1 store foundation. |
 
 ### Phase 1 Status
 
@@ -57,7 +57,7 @@ and design notes remain below.
 
 | Item | Status | Notes |
 |---|---|---|
-| 4.1 Managed immutable skill store foundation | Not started | Replaces the earlier intent-log design. Will introduce immutable objects, refs, recovery, GC, locking, and session self-healing as the base for registry work. No migration/backward-compat support is planned. |
+| 4.1 Managed immutable skill store foundation | Done | Content-addressed objects, atomic refs, cross-instance flock, GC, schema guard, three-tier resolution, session self-healing in `_load()`, stale-skill filtering in admin/cross-chat paths, `--doctor` schema check. 7 bugs found and fixed during review. |
 | 4.2 Locally modified skill protection | Done | Confirmation prompts for update of modified skills, `/skills diff <name>`, batch update confirmation. |
 | 4.3 Configuration template per provider | Done | `setup.sh` prunes codex-specific config for claude instances and vice versa. |
 | 4.4 Admin session visibility | Done | `/admin sessions` summary and `/admin sessions <chat_id>` detail views. `list_sessions()` in storage.py. |
@@ -67,23 +67,20 @@ and design notes remain below.
 
 | Item | Status | Notes |
 |---|---|---|
-| 5.1 Third-party skill registry | Not started | Deferred until after 4.1 and 5.2. Will use the managed immutable store foundation from 4.1. |
-| 5.2 Webhook mode | Not started | Planned immediately after 4.1, before registry. |
+| 5.1 Third-party skill registry | Not started | Deferred until after 5.2. Will use the managed immutable store foundation from 4.1. |
+| 5.2 Webhook mode | Not started | Next execution item. |
 
 ---
 
 ## Planned Next Sequence
 
-Execution from this point intentionally diverges from phase numbering:
+Execution from the current state:
 
-1. **4.1** — build the final managed immutable store foundation
-2. **5.2** — add webhook mode on top of the current bot runtime
-3. **5.1** — add the third-party registry using the 4.1 store architecture
+1. **5.2** — add webhook mode on top of the current bot runtime
+2. **5.1** — add the third-party registry using the 4.1 store architecture
 
-Why this order:
-- `4.1` is no longer just crash recovery. It is the storage/provenance model the registry will depend on.
-- `5.2` is operationally independent of the store redesign and can ship before remote registry work.
-- `5.1` is intentionally last so it can land on the final store model rather than forcing a second redesign.
+`4.1` is complete. `5.2` is operationally independent and can ship quickly.
+`5.1` is last so it lands on the final store model.
 
 The deferred item `3.2` (usage tracking / billing hooks) remains intentionally out of sequence and is not part of the next execution block.
 

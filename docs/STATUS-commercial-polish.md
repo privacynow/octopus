@@ -1,10 +1,10 @@
 # Commercial Polish — Implementation Status
 
-Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
+Current as of 2026-03-09. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-10):** All tracks A–F complete with cross-feature invariant tests.
-> 592 tests passing. All plan items implemented: public trust, model profiles, settings UX,
-> compact/latency rendering, transport reliability.
+> **Latest change (2026-03-09):** Resolved execution context enforcement hardening pass.
+> Fixed 5 contract violations where downstream code read raw session/config instead of
+> resolved context. 609 tests passing.
 
 ---
 
@@ -27,6 +27,7 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 | Track D | Model + settings UX (/model, inline keyboards, /session model display) | Done |
 | Track E | Compact/latency UX (expandable blockquotes, expand/collapse, summary-first, prompt weight) | Done |
 | Track F | Transport reliability (update_id idempotency, busy/queued feedback, polling conflict detection) | Done |
+| Hardening | Resolved execution context enforcement across all runtime paths | Done |
 
 ---
 
@@ -36,26 +37,26 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **592 pytest tests** + 35 bash tests across 30 entrypoints.
+Current suite: **609 pytest tests** + 35 bash tests across 30 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
 | `test_approvals.py` | 6 | Preflight prompt building, denial formatting. |
-| `test_claude_provider.py` | 13 | Claude CLI command construction, API ping health check, file_policy inspect system prompt injection, effective_model override and fallback. |
-| `test_codex_provider.py` | 34 | Codex CLI command construction, thread invalidation, progress parsing, health check with real flags, file_policy sandbox override (inspect→read-only, edit→default), effective_model override and fallback. |
+| `test_claude_provider.py` | 13 | Claude CLI command construction, API ping health check, file_policy inspect system prompt injection, effective_model override, fallback, and run/preflight command threading. |
+| `test_codex_provider.py` | 36 | Codex CLI command construction, thread invalidation, progress parsing, health check with real flags, file_policy sandbox override (inspect→read-only, edit→default), effective_model override, fallback, and resume command threading. |
 | `test_config.py` | 23 | Config loading, validation, `.env` parsing, rate limit and admin config, BOT_SKILLS validation, webhook mode validation, `main()` mode selection (poll/webhook), `load_config` webhook env var parsing. |
 | `test_formatting.py` | 42 | Markdown-to-Telegram HTML conversion, balanced HTML splitting, table rendering, directive extraction. |
-| `test_handlers.py` | 43 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings and resilience (admin fallback, stale sessions, prompt size, missing data_dir, corrupt DB, schema version mismatch), SEND_FILE/SEND_IMAGE directive delivery, per-chat project bindings (`/project list/use/clear`, switch invalidation, context hash), file policy (`/policy inspect/edit`, session display, provider context threading, context hash). |
+| `test_handlers.py` | 51 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings and resilience (admin fallback, stale sessions, prompt size, missing data_dir, corrupt DB, schema version mismatch), SEND_FILE/SEND_IMAGE directive delivery, per-chat project bindings (`/project list/use/clear`, switch invalidation, context hash), file policy (`/policy inspect/edit`, session display, provider context threading, context hash), model profiles (`/model` command, inline keyboard settings callbacks, session display). |
 | `test_handlers_admin.py` | 7 | `/admin sessions` summary and detail views, access gating, stale skill filtering. |
-| `test_handlers_approval.py` | 12 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL, callback answer verification, button structure validation, markup removal after callbacks. |
+| `test_handlers_approval.py` | 14 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL, callback answer verification, button structure validation, markup removal after callbacks, project-active retry. |
 | `test_handlers_codex.py` | 11 | Codex-specific handler behavior: thread invalidation, boot ID, retry semantics, script staging. |
 | `test_handlers_credentials.py` | 40 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection, clear-credentials confirmation ownership, callback answer/markup verification, button structure validation, malformed validate spec resilience. |
 | `test_handlers_export.py` | 4 | `/export` command: no history, document generation, access gating. |
-| `test_handlers_output.py` | 6 | Output presentation: `/compact`, `/raw`, table rendering, summarization flows. |
+| `test_handlers_output.py` | 8 | Output presentation: `/compact`, `/raw`, table rendering, blockquote compact mode, expand/collapse, summary extraction. |
 | `test_handlers_ratelimit.py` | 6 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
 | `test_handlers_store.py` | 13 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle, callback flows (skill_add confirm/cancel, skill_update confirm/cancel/non-admin alert, unauthorized alert), markup removal verification. |
 | `test_high_risk.py` | 29 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
-| `test_invariants.py` | 75 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2). |
+| `test_invariants.py` | 99 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2), mixed ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential check with resolved skills (2), model command/callback parity (4), cross-feature invariants (4). |
 | `test_ratelimit.py` | 8 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_registry.py` | 8 | Skill registry: index parsing (valid/bad version/non-JSON), search, artifact download/extraction, store integration (digest match/mismatch). |
 | `test_skills.py` | 43 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
@@ -63,7 +64,7 @@ Current suite: **592 pytest tests** + 35 bash tests across 30 entrypoints.
 | `test_storage.py` | 11 | Session CRUD (SQLite-backed), upload paths, directory creation, path resolution, `list_sessions()`, JSON-to-SQLite migration with corrupt file handling. |
 | `test_store.py` | 21 | Store module: discovery, search, content hashing, install/uninstall via refs and objects, ref round-trip, update detection, custom override detection, diff, GC, startup recovery, schema guard, pinned refs. |
 | `test_store_e2e.py` | 26 | End-to-end user flows through handlers: install→add→message→prompt, update propagation, uninstall pruning, /skills info across all tiers, three-tier resolution, custom override shadowing, /admin sessions stale filtering, provider compatibility output, source label edge cases, normalization persistence, --doctor schema check. |
-| `test_summarize.py` | 18 | Ring buffer (full prompt, kind field, rotation at 50), export formatting, summarization. |
+| `test_summarize.py` | 21 | Ring buffer (full prompt, kind field, rotation at 50, slot-based retrieval), export formatting, summarization. |
 | `test_edge_callbacks.py` | 4 | Edge cases: approval double-click, approve after session reset, cross-user approval in shared chat, retry without pending. |
 | `test_edge_formatting.py` | 11 | Edge cases: deeply nested markdown, long lines, empty code blocks, unicode/emoji, HTML entities, split_html boundaries, inconsistent table columns, trim_text edge cases. |
 | `test_edge_providers.py` | 7 | Edge cases: provider timeout, empty response, error returncode, state persistence, codex thread_id persistence/resume, full approval flow. |
@@ -485,3 +486,57 @@ All steps complete:
 | Sandbox override not authoritative for inspect mode | High | Provider config `sandbox` could override `file_policy=inspect` read-only | Inspect mode check runs first; provider config sandbox only applies when not in inspect mode |
 | Registry blocking event loop | Medium | `fetch_index()` and `install_from_registry()` used blocking `urllib.request` | Wrapped in `asyncio.to_thread()` at call sites; now uses `httpx` sync client |
 | Digest mismatch leaves orphan objects | Medium | `install_from_registry()` created object before verifying digest | Verify digest in staging dir before `_create_object()` |
+
+---
+
+## Resolved Execution Context Enforcement Hardening
+
+Root cause analysis of 5 contract violations where downstream code read raw
+`session.*` or `config.*` instead of the resolved execution context. All
+violations follow the same pattern: a function was written before the resolved
+context existed, or was updated to accept the context but callers weren't
+updated.
+
+### What shipped
+
+**Pending validation with trust tier** (`app/request_flow.py`)
+- `current_context_hash()` now accepts `trust_tier` parameter.
+- `validate_pending()` reads `trust_tier` from the stored `PendingApproval`/`PendingRetry` object and passes it through, so the hash is recomputed with the same identity shape that created it.
+- Before: public user creates pending → hash uses public context. Approver clicks approve → hash recomputed as trusted. Hash mismatch → false "Context changed" error.
+- `PendingApproval` and `PendingRetry` now carry a `trust_tier` field (default `"trusted"` for backward compat with existing stored sessions).
+
+**Credential satisfaction with resolved skills** (`app/request_flow.py`, `app/telegram_handlers.py`)
+- `check_credential_satisfaction()` now accepts `active_skills` as an explicit parameter instead of reading `session.active_skills`.
+- `_check_credential_satisfaction()` in handlers passes `resolved.active_skills`.
+- Public users have empty resolved skills → no credential prompts, no skill credential setup.
+- Before: public user in a chat with `github-integration` active would be prompted to paste a GitHub token.
+
+**Allowed roots from resolved context** (`app/telegram_handlers.py`)
+- `_allowed_roots()` now accepts `ResolvedExecutionContext` instead of `SessionState`.
+- Uses `resolved.working_dir` and `resolved.base_extra_dirs` for root computation.
+- `send_directed_artifacts()` passes the resolved context.
+- `/send` command builds resolved context before computing allowed roots.
+- Before: project-bound chats used config default roots for file access; public users used operator roots.
+
+**Mixed trusted/public ingress** (`app/telegram_handlers.py`)
+- `is_allowed()` now admits all users when `allow_open=True`, regardless of whether explicit allow-lists exist.
+- Trust-tier enforcement happens downstream in `resolve_execution_context`, not at the ingress gate.
+- Before: `allow_open=True` with explicit `allowed_user_ids` rejected strangers entirely.
+
+**Model command/callback parity** (`app/telegram_handlers.py`)
+- `/model <profile>` now uses the same trust-tier profile filtering as `setting_model:<profile>` callbacks.
+- Public users can switch to profiles in `public_model_profiles` via both surfaces.
+- Before: `/model fast` was blocked by `_public_guard()` while the callback path allowed it.
+
+### Bugs found and fixed
+
+| Bug | Severity | Root cause | Fix |
+|-----|----------|-----------|-----|
+| Public approval immediately fails with "Context changed" | High | `validate_pending` recomputed hash as trusted, not matching stored public hash | Read `trust_tier` from pending object; pass to `current_context_hash` |
+| Public users prompted for skill credentials | Medium-high | `check_credential_satisfaction` read raw `session.active_skills` | Accept resolved `active_skills` list; public users pass `[]` |
+| Project-bound directed sends use wrong roots | Medium-high | `send_directed_artifacts` called `_allowed_roots` without resolved context | Pass `ResolvedExecutionContext` to `_allowed_roots` |
+| `/send` used session instead of resolved context for roots | Medium | `_allowed_roots` received `SessionState` after signature changed | Build resolved context in `/send` handler |
+| Mixed open+allowed mode rejected strangers at ingress | Medium-high | `is_allowed` required empty allow-lists for `allow_open` to work | Admit all users when `allow_open=True`; tier enforcement downstream |
+| `/model fast` blocked for public but callback allowed it | Medium | `/model` used blanket `_public_guard`; callback used profile filtering | Both surfaces use same trust-tier profile filtering |
+| `/session` showed operator working dir for public users | Medium | Display fell back to `cfg.working_dir` when no project bound | Use `resolved.working_dir` directly |
+| Unauthorized callback test assumed open mode rejects strangers | Low | Test used `allow_open=True` config but expected stranger rejection | Changed to `allow_open=False` for authorization test |

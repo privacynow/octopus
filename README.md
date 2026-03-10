@@ -132,6 +132,7 @@ Long responses get summarized automatically when compact mode is on. Use `/raw` 
 | `/new` | Start a fresh conversation |
 | `/cancel` | Cancel a pending request or credential setup |
 | `/session` | Show the current chat's state |
+| `/model [profile]` | View or switch the model profile |
 | `/compact on\|off` | Summarize long responses for mobile |
 | `/raw [N]` | Retrieve the full raw model output |
 | `/export` | Download recent conversation history |
@@ -163,12 +164,15 @@ Long responses get summarized automatically when compact mode is on. Use `/raw` 
 |---|---|
 | `/send <path>` | Send a local file back into Telegram |
 | `/role [text]` | Set or reset the bot persona for this chat |
+| `/project list\|use\|clear` | Manage per-chat project bindings |
+| `/policy inspect\|edit` | Set file access policy for this chat |
 | `/clear_credentials [skill]` | Remove your stored skill credentials |
 
 ## For Operators
 
 If you run the bot yourself, these resources cover setup, administration, and internals:
 
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system design and contracts
 - [docs/OPS-skill-store.md](docs/OPS-skill-store.md) — skill store operations
 - [docs/PLAN-commercial-polish.md](docs/PLAN-commercial-polish.md) — product roadmap
 - [docs/STATUS-commercial-polish.md](docs/STATUS-commercial-polish.md) — current status
@@ -197,4 +201,4 @@ If you run the bot yourself, these resources cover setup, administration, and in
 ./scripts/doctor.sh <instance>  # health check a running instance
 ```
 
-527 pytest tests + 35 bash tests across 30 entrypoints.
+609 pytest tests + 35 bash tests across 30 entrypoints.

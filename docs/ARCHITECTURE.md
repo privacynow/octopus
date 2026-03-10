@@ -104,6 +104,11 @@ Contract:
   command handlers
 - effective model selection must resolve here, not inside provider-specific
   command builders
+- downstream functions that consume execution-scope fields (credential
+  satisfaction, allowed file roots, directed artifact delivery) must receive
+  the resolved context or its specific resolved fields — never raw
+  `session.*` or `config.*` for working_dir, active_skills, file_policy,
+  extra_dirs, or project_id
 
 ### 4. Request-flow boundary
 
@@ -120,6 +125,11 @@ Contract:
   handling belong here
 - handlers decide how to render outputs and buttons, not how the business
   rules work
+- `check_credential_satisfaction` receives the resolved active_skills list,
+  not the raw session — public users pass an empty list and skip credential
+  prompts entirely
+- `validate_pending` reads trust_tier from the stored pending state so the
+  context hash is recomputed with the same identity shape that created it
 
 ### 5. Provider boundary
 
@@ -252,6 +262,7 @@ Pending state must always carry:
 - original requester identity
 - original prompt and image list
 - original context hash
+- trust tier at creation time
 - creation time
 
 `PendingRetry` additionally carries denial records used to derive retry
@@ -420,15 +431,16 @@ Contract:
 ### Normal request
 
 1. normalize inbound message
-2. authorize user
+2. authorize user, resolve trust tier
 3. serialize per-chat work
 4. load and normalize session
-5. resolve execution context
-6. check credential satisfaction
-7. build provider context
+5. resolve execution context (with trust tier)
+6. check credential satisfaction (using resolved active_skills)
+7. build provider context (from resolved context)
 8. invoke provider
 9. persist updated session state
 10. format and send response
+11. deliver directed artifacts (using resolved allowed roots)
 
 ### Approval request
 
@@ -442,7 +454,8 @@ Approval succeeds only if:
 
 - pending state exists
 - it is not expired
-- its context hash still matches the current resolved context
+- its context hash still matches the current resolved context, recomputed
+  with the same trust_tier that was stored when the request was created
 
 ### Retry request
 
@@ -518,39 +531,48 @@ Project binding controls which working directory is in scope for the session.
 
 ### Allowed roots
 
-Allowed filesystem roots derive from:
+Allowed filesystem roots derive from the resolved execution context:
 
-- effective project or default working dir
-- configured extra dirs
+- `resolved.working_dir` (project root, public root, or default)
+- `resolved.base_extra_dirs` (empty for public users)
 - chat upload dir
 - denial-derived retry dirs
 
-These roots are part of the access contract; they should not drift from what
-the provider actually receives.
+These roots must be computed from `ResolvedExecutionContext`, not from raw
+`config.working_dir` or `config.extra_dirs`. This ensures project-bound chats
+use project roots, public users use public roots, and the roots match what the
+provider actually receives.
 
 ### Public-trust enforcement
 
 Public-mode enforcement has two layers that must stay distinct.
 
-Execution-scope enforcement:
+Execution-scope enforcement (Layer 1 — in `resolve_execution_context`):
 
-- forced inspect mode
+- forced inspect file policy
 - forced public working dir
 - stripped operator extra dirs
+- stripped active skills (no credential prompts, no skill injection)
+- project binding disabled
 
-These must resolve into `ResolvedExecutionContext`, so they automatically
-affect provider context, context hash, approval freshness, and retry
-freshness.
+These resolve into `ResolvedExecutionContext` and automatically flow into
+provider context, context hash, approval/retry freshness, credential
+satisfaction, allowed file roots, and directed artifact delivery. All
+downstream functions must read from the resolved context, never raw session.
 
-Command-availability gating:
+Command-availability gating (Layer 2 — in handlers):
 
 - disabling skill management
 - disabling project changes
 - constraining `/send`
-- restricting available model profiles or settings
+- restricting available model profiles
 
 These are handler-layer concerns because they control what the user may invoke,
 not what execution resolves to.
+
+Model profile selection uses the same trust-tier filtering in both `/model`
+commands and inline keyboard callbacks — public users see only profiles in
+`public_model_profiles`.
 
 ---
 
@@ -634,10 +656,13 @@ Exercise real user entry points through Telegram handlers.
 Protect cross-cutting rules such as:
 
 - context-hash stability and sensitivity
-- approval and retry freshness
+- approval and retry freshness (including trust-tier-aware hash validation)
 - inspect-mode enforcement
-- public-trust enforcement in resolved context
+- public-trust enforcement across all runtime paths (execution, credentials,
+  file roots, approval round-trip, `/session` display)
 - effective-model propagation and invalidation
+- credential satisfaction using resolved (not raw) active_skills
+- command/callback parity (same trust-tier filtering on both surfaces)
 - registry integrity
 - async non-blocking guarantees
 - provider-context propagation
@@ -660,10 +685,13 @@ the Python test suite.
 The following are internal contracts that should only change deliberately:
 
 - `SessionState`
+- `PendingApproval` / `PendingRetry` (including `trust_tier` field)
 - `ResolvedExecutionContext`
 - `PreflightContext`
 - `RunContext`
 - `Provider` protocol
+- `check_credential_satisfaction` signature (resolved active_skills, not session)
+- `validate_pending` signature (trust_tier from stored pending)
 - transport delivery semantics (`update_id` handling, in-flight/queued rules)
 - managed store layout (`objects/`, `refs/`, `custom/`)
 - registry index format versioning
@@ -680,10 +708,18 @@ If rebuilding the bot from scratch, preserve this order of responsibility:
 2. apply transport-delivery rules (idempotency, queue/ack semantics)
 3. load typed session state
 4. resolve trust tier and authoritative execution context
-5. apply business rules (`request_flow`)
-6. build provider-facing context
+5. apply business rules using resolved context (`request_flow`)
+   - credential checks use resolved active_skills
+   - pending validation uses stored trust_tier
+6. build provider-facing context from resolved context
 7. invoke provider
 8. persist session and any durable delivery state
 9. render Telegram-safe output
+10. deliver directed artifacts using resolved allowed roots
 
 That order is more important than the exact module names.
+
+The single most important architectural rule: once `resolve_execution_context`
+produces a `ResolvedExecutionContext`, all downstream code reads execution-scope
+fields from that object. Never from raw `session.*` or `config.*` for
+working_dir, file_policy, active_skills, extra_dirs, or project_id.

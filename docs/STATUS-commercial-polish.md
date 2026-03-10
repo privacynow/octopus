@@ -2,8 +2,9 @@
 
 Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-10):** Phase 9 structural refactoring complete — typed session boundary
-> enforced, backward-compat baggage deleted, orchestration extracted to `request_flow.py`.
+> **Latest change (2026-03-10):** Track D complete — `/model` command with inline-keyboard profile
+> switching, inline buttons for `/approval`, `/compact`, `/policy` status views, settings callback
+> handler, `/session` model profile display, storage fix for `model_profile` persistence. 580 tests.
 
 ---
 
@@ -20,6 +21,10 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 | Phase 7 | Ecosystem & extensibility | Done |
 | Phase 8 | Edge case testing & coverage hardening | Done |
 | Phase 9 | Structural refactoring & invariant coverage | Done |
+| Track A | Shared contracts (trust tier, model profiles, execution context) | Done |
+| Track B | Model profiles provider plumbing (effective_model flow) | Done |
+| Track C | Public trust enforcement (command gating, doctor, rate-limit defaults) | Done |
+| Track D | Model + settings UX (/model, inline keyboards, /session model display) | Done |
 
 ---
 
@@ -29,13 +34,13 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **527 pytest tests** + 35 bash tests across 30 entrypoints.
+Current suite: **580 pytest tests** + 35 bash tests across 30 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
 | `test_approvals.py` | 6 | Preflight prompt building, denial formatting. |
-| `test_claude_provider.py` | 9 | Claude CLI command construction, API ping health check, file_policy inspect system prompt injection. |
-| `test_codex_provider.py` | 31 | Codex CLI command construction, thread invalidation, progress parsing, health check with real flags, file_policy sandbox override (inspect→read-only, edit→default). |
+| `test_claude_provider.py` | 13 | Claude CLI command construction, API ping health check, file_policy inspect system prompt injection, effective_model override and fallback. |
+| `test_codex_provider.py` | 34 | Codex CLI command construction, thread invalidation, progress parsing, health check with real flags, file_policy sandbox override (inspect→read-only, edit→default), effective_model override and fallback. |
 | `test_config.py` | 23 | Config loading, validation, `.env` parsing, rate limit and admin config, BOT_SKILLS validation, webhook mode validation, `main()` mode selection (poll/webhook), `load_config` webhook env var parsing. |
 | `test_formatting.py` | 42 | Markdown-to-Telegram HTML conversion, balanced HTML splitting, table rendering, directive extraction. |
 | `test_handlers.py` | 43 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings and resilience (admin fallback, stale sessions, prompt size, missing data_dir, corrupt DB, schema version mismatch), SEND_FILE/SEND_IMAGE directive delivery, per-chat project bindings (`/project list/use/clear`, switch invalidation, context hash), file policy (`/policy inspect/edit`, session display, provider context threading, context hash). |
@@ -48,7 +53,7 @@ Current suite: **527 pytest tests** + 35 bash tests across 30 entrypoints.
 | `test_handlers_ratelimit.py` | 6 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
 | `test_handlers_store.py` | 13 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle, callback flows (skill_add confirm/cancel, skill_update confirm/cancel/non-admin alert, unauthorized alert), markup removal verification. |
 | `test_high_risk.py` | 29 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
-| `test_invariants.py` | 37 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence. |
+| `test_invariants.py` | 75 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2). |
 | `test_ratelimit.py` | 8 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_registry.py` | 8 | Skill registry: index parsing (valid/bad version/non-JSON), search, artifact download/extraction, store integration (digest match/mismatch). |
 | `test_skills.py` | 43 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
@@ -410,7 +415,7 @@ Root cause analysis identified that the codebase optimized for feature delivery 
 - `SessionState`, `PendingApproval`, `PendingRetry`, `AwaitingSkillSetup`, `ProjectBinding` dataclasses.
 - `PendingApproval` and `PendingRetry` are separate types — no more single `PendingRequest` bag with optional `denials`.
 - Serialization uses `dataclasses.asdict()` — no hand-rolled field copying.
-- `session_from_dict()` handles deserialization with legacy `pending_request` key migration (infers type from presence of `denials`).
+- `session_from_dict()` reconstructs typed session state from the storage dict at the runtime boundary.
 - Storage layer (`storage.py`) updated: `default_session()` uses `pending_approval`/`pending_retry` keys, `_upsert()` checks both for indexed `has_pending` column, `load_session()` merges new field names.
 
 **9.2 Authoritative execution context** (`app/execution_context.py`)

@@ -177,20 +177,25 @@ The product is complete when these capability areas are in place.
 - edge-case coverage around callbacks, sessions, providers, formatting, and
   store integrity
 
-### G. User-perceived performance and model control
+### G. Public trust profile
 
-- model profiles (fast / balanced / best) as stable user-facing tier names
-- per-chat model profile selection
-- inline-keyboard driven command UX for all session settings
-- compact mode as default for mobile-oriented deployments
-
-### H. Public trust profile
-
-- restricted execution scope for unauthenticated users
+- mixed-trust auth contract: per-user resolution of `trusted | public`
+- restricted execution scope for public users
 - forced inspect-only file policy
 - isolated public working directory
 - disabled skill management for public users
 - mandatory rate limiting in public mode
+
+### H. User-perceived performance and model control
+
+- model profiles (fast / balanced / best) as stable user-facing tier names
+- per-chat model profile selection, trust-tier-aware
+- inline-keyboard driven command UX for all session settings
+- compact mode as default for mobile-oriented deployments
+- expandable blockquote and inline expand/collapse for long responses
+- summary-first response shape via prompt structure
+- sub-second first visible progress
+- prompt weight reduction for faster time-to-first-token
 
 ---
 
@@ -338,14 +343,111 @@ Acceptance:
 - high-risk cross-cutting invariants are tested directly
 - major runtime behavior is protected by contract tests, not only scenario tests
 
-### Phase I — Model profiles and perceived latency
+### Phase I — Public trust profile
 
-Goal: let users control the speed/capability tradeoff without knowing model
-identifiers.
+Goal: make the bot safe to expose publicly without relying on approval mode
+as a security boundary.
+
+Depends on: Phase B (safety controls), Phase E (execution context, file
+policy, project binding).
+
+The threat model: when `BOT_ALLOW_OPEN=1`, any Telegram user can interact
+with the bot. Approval mode is not a security boundary because the same
+anonymous user who requests can also approve. The correct model is a
+restricted trust profile with isolated scope and reduced capabilities.
+
+Architectural decision: the auth contract uses **mixed trust** — per-user
+resolution of `trusted | public`. This is not a global toggle. When
+`allow_open` is true, each user is resolved individually: users in the
+allowed set are `trusted` and get full access; all others are `public` and
+get restricted scope. This means a single bot instance can serve both
+trusted team members and anonymous public users simultaneously.
+
+#### I.1 Public-mode contract
+
+When a user is not in the allowed-user set and the bot is in open mode, the
+public trust profile applies:
+
+- `file_policy` forced to `inspect` (read-only, non-overridable)
+- working directory forced to an explicit public root
+  (`BOT_PUBLIC_WORKING_DIR`) instead of the operator's main working dir
+- `extra_dirs` restricted to public root only (no operator extra dirs)
+- skill activation, removal, setup, and management disabled
+- `/send` disabled or constrained to public root
+- `/project` disabled (public users do not get project access)
+- `/model` optionally restricted to a subset of profiles
+
+#### I.2 Mandatory rate limiting in public mode
+
+When `allow_open=True`, rate limiting must be explicitly configured or
+sensible defaults apply automatically. A public bot with no rate limit is an
+open compute endpoint.
+
+- if `rate_limit_per_minute=0` and `rate_limit_per_hour=0` in public mode,
+  apply conservative defaults (e.g., 5/min, 30/hour)
+- operator can override with explicit values
+- `/doctor` warns if public mode is active with no explicit rate limits
+
+#### I.3 Public-mode enforcement — two layers
+
+Public-mode enforcement has two distinct layers that must not be conflated:
+
+**Layer 1: Execution-scope enforcement (in `resolve_execution_context`)**
+
+Execution-scope constraints — forced inspect, forced public root, stripped
+extra_dirs — must resolve into `ResolvedExecutionContext`. This is where
+file scope and policy are enforced. If these live only as handler checks,
+they will drift between message, approval, retry, and future entry points.
+
+- `resolve_execution_context()` receives a `trust_tier` parameter
+- when `trust_tier == "public"`:
+  - `file_policy` forced to `"inspect"` regardless of session override
+  - `working_dir` forced to `BOT_PUBLIC_WORKING_DIR`
+  - `base_extra_dirs` forced to empty (no operator extra dirs)
+- these constraints flow into context hash, approval validation, retry
+  validation, provider context — automatically, because they are in the
+  resolved context
+
+**Layer 2: Command-availability gating (in handlers)**
+
+Command restrictions — disabling `/skills`, `/project`, `/send`,
+`/policy` — are handler-layer concerns. They control what a public user
+can invoke, not what the execution context resolves to.
+
+- `is_public_user(user)` predicate: `allow_open` is true and user is not
+  in any allowed-user set
+- public users cannot invoke skill management, project binding, policy
+  override, or unrestricted `/send`
+- admin and store commands remain gated by `is_admin()` (already correct)
+- approval mode may optionally be forced on for public users as a UX
+  transparency measure, but it is not the security boundary
+
+This split means: even if a handler check is missed or a new entry point is
+added, the resolved execution context still enforces the public scope.
+
+Acceptance:
+
+- a public user cannot read or write files outside the public root
+- a public user cannot activate skills or manage credentials
+- a public user cannot use the bot as an unrestricted compute endpoint
+- an operator running a public bot gets clear `/doctor` warnings about
+  missing rate limits or missing public root config
+- the public trust profile is a concrete scope restriction, not an abstract
+  identity system
+- execution-scope constraints are enforced in the resolved context, not
+  only in handler checks
+
+### Phase IIa — Model profiles: state and plumbing
+
+Goal: add an authoritative effective-model field to the resolved execution
+context so model selection works through the same contract as every other
+execution identity field.
 
 Depends on: Phase E (execution context, session state, context hash).
+Does NOT depend on Phase I (public trust). Public trust can later cap which
+profiles are available by constraining the input to the same resolution.
 
-#### I.1 Model profile mapping
+#### IIa.1 Model profile mapping
 
 Add a provider-aware model tier system:
 
@@ -364,126 +466,234 @@ This is better than raw model strings because:
   users changing anything
 - provider portability is cleaner
 
-#### I.2 Per-chat model profile selection
+"Faster default model" is not a separate initiative. It is a config choice:
+set `BOT_DEFAULT_PROFILE=balanced` in setup wizard defaults.
+
+#### IIa.2 Per-chat model profile in session state
 
 Add `model_profile` to `SessionState`:
 
 - empty string means use config default
-- `/model` with no args shows current profile + inline keyboard buttons
-- `/model use fast` or button tap sets the override
-- model profile is resolved at execution time: session override > config default
+- model profile is resolved at execution time: session override > config
+  default
 - effective model ID flows into `execution_config_digest` (already in hash)
 - changing profile correctly invalidates pending approvals and Codex threads
 
-#### I.3 Inline-keyboard UX for session settings
+#### IIa.3 Provider plumbing
 
-Convert existing text-only toggle commands to guided inline-keyboard
-interactions. When a command is invoked with no arguments, show current state
-and action buttons instead of requiring the user to type the exact value.
+- `resolve_execution_context()` resolves effective model from session
+  profile override > config default
+- effective model ID flows into `execution_config_digest`
+- provider `RunContext` receives effective model ID
+- providers use effective model ID instead of raw `config.model`
 
-Commands to convert:
+Acceptance:
 
-- `/model` → `[⚡ Fast]  [⚖️ Balanced]  [🧠 Best]`
-- `/policy` → `[👁️ Read only]  [✏️ Read & write]`
-- `/approval` → `[🛡️ Review first]  [⚡ Run immediately]`
-- `/compact` → `[📱 Short answers]  [📄 Full answers]`
-- `/project` → buttons for each configured project + `[Clear]`
-- `/skills add` (no args) → available skills as buttons
+- model profile selection flows through the authoritative execution context
+- `/session` reflects the effective model profile, not just the raw model ID
+- changing model profile invalidates stale approvals and Codex threads
+- provider receives the resolved model, not the config default
+
+### Phase IIb — Inline-keyboard UX for session settings
+
+Goal: make all session settings discoverable without typing identifiers.
+
+Depends on: Phase IIa (model profiles), existing toggle commands.
 
 This is a UX pass, not a logic change. The session mutations are the same as
 the text commands. The callback handler pattern already exists for
 approve/reject/retry.
 
+Commands to convert:
+
+- `/model` → `[Fast]  [Balanced]  [Best]`
+- `/policy` → `[Read only]  [Read & write]`
+- `/approval` → `[Review first]  [Run immediately]`
+- `/compact` → `[Short answers]  [Full answers]`
+- `/project` → buttons for each configured project + `[Clear]`
+- `/skills add` (no args) → available skills as buttons
+
+When a command is invoked with no arguments, show current state and action
+buttons instead of requiring the user to type the exact value.
+
+Public-trust integration (after Phase I lands): public users see only the
+profiles and settings they are allowed to change. Buttons for restricted
+settings are either hidden or shown as disabled with explanation.
+
 Acceptance:
 
 - a user can change model, policy, approval, compact, and project without
   typing any identifier or keyword
-- `/session` reflects the effective model profile, not just the raw model ID
-- changing model profile invalidates stale approvals and Codex threads
+- public users see only the profiles they are allowed to use
 
-### Phase J — Public trust profile
+### Phase III — Compact defaults and perceived latency
 
-Goal: make the bot safe to expose publicly without relying on approval mode
-as a security boundary.
+Goal: make the bot feel fast and readable on mobile without requiring user
+configuration.
 
-Depends on: Phase B (safety controls), Phase E (execution context, file
-policy, project binding).
+Depends on: Phase D (compact mode, `/compact`, `/raw`), Phase E (execution
+context, rendering contract).
 
-The threat model: when `BOT_ALLOW_OPEN=1`, any Telegram user can interact
-with the bot. Approval mode is not a security boundary because the same
-anonymous user who requests can also approve. The correct model is a
-restricted trust profile with isolated scope and reduced capabilities.
+This phase layers on top of the resolved context and rendering contract. It
+does not invent parallel state.
 
-#### J.1 Public-mode contract
-
-When a user is not in the allowed-user set and the bot is in open mode, the
-public trust profile applies:
-
-- `file_policy` forced to `inspect` (read-only, non-overridable)
-- working directory forced to an explicit public root
-  (`BOT_PUBLIC_WORKING_DIR`) instead of the operator's main working dir
-- `extra_dirs` restricted to public root only (no operator extra dirs)
-- skill activation, removal, setup, and management disabled
-- `/send` disabled or constrained to public root
-- `/project` disabled (public users do not get project access)
-- `/model` optionally restricted to a subset of profiles
-
-#### J.2 Mandatory rate limiting in public mode
-
-When `allow_open=True`, rate limiting must be explicitly configured or
-sensible defaults apply automatically. A public bot with no rate limit is an
-open compute endpoint.
-
-- if `rate_limit_per_minute=0` and `rate_limit_per_hour=0` in public mode,
-  apply conservative defaults (e.g., 5/min, 30/hour)
-- operator can override with explicit values
-- `/doctor` warns if public mode is active with no explicit rate limits
-
-#### J.3 Public-mode enforcement
-
-Enforcement should happen at the handler layer, not deep in business logic:
-
-- `is_public_user(user)` predicate: `allow_open` is true and user is not in
-  any allowed-user set
-- public users get a restricted session: forced inspect, forced public root,
-  no skill management commands
-- admin and store commands remain gated by `is_admin()` (already correct)
-- approval mode may optionally be forced on for public users as a UX
-  transparency measure, but it is not the security boundary
-
-Acceptance:
-
-- a public user cannot read or write files outside the public root
-- a public user cannot activate skills or manage credentials
-- a public user cannot use the bot as an unrestricted compute endpoint
-- an operator running a public bot gets clear `/doctor` warnings about
-  missing rate limits or missing public root config
-- the public trust profile is a concrete scope restriction, not an abstract
-  identity system
-
-### Phase K — Compact mode defaults
-
-Goal: make compact mode the right default for mobile-heavy deployments.
-
-Depends on: Phase D (compact mode, `/compact`, `/raw`).
-
-This is primarily a product-default decision, not a code feature:
+#### III.1 Compact mode defaults
 
 - recommend `BOT_COMPACT_MODE=1` for mobile-oriented instances
 - mention `/compact on|off` toggle in first-run welcome message
 - no device detection — Telegram's Bot API does not provide client metadata
 - no heuristics (private-vs-group guessing is unreliable and feels arbitrary)
-
-If code changes are needed, they are limited to:
-
-- adding compact mode mention to the first-run welcome
-- possibly defaulting `BOT_COMPACT_MODE=1` in new instance configs generated
+- possibly default `BOT_COMPACT_MODE=1` in new instance configs generated
   by `setup.sh`
+
+#### III.2 Expandable blockquote rendering
+
+Telegram Bot API supports `<blockquote expandable>` in HTML mode. Use this
+as the native "compact with expand" primitive:
+
+- short visible summary above the fold
+- full detail collapsed in an expandable blockquote below
+- no second LLM pass required — the rendering layer structures the existing
+  response
+
+This is the best Telegram-native primitive for "show less, expand on demand."
+
+#### III.3 Inline expand/collapse via message editing
+
+For responses that exceed the expandable-blockquote limit, use
+`editMessageText` with an inline "Show full answer" / "Collapse" button:
+
+- bot sends compact version with a `[Show full]` inline button
+- button press edits the message to show the full response (or vice versa)
+- uses the existing callback handler pattern
+- `/raw` remains available for the complete unformatted output
+
+**Storage contract for expand/collapse:** The full response is already stored
+in the raw-response ring buffer (per-chat, filesystem-backed). The
+expand/collapse flow regenerates the rendered variant from the raw ring
+buffer on button press — it does not store a second rendered copy. This
+means:
+
+- no new per-message response cache or rendered-variant store
+- the raw ring buffer is the single source of truth for response content
+- if the raw entry has been evicted (ring buffer rotated), the expand
+  button shows a "response no longer available, use /raw" message
+- the callback payload carries the ring-buffer slot index, not the content
+
+#### III.4 Summary-first response shape
+
+Ask the model to produce a structured response:
+
+- 2–4 line answer-first summary
+- then full detail below
+
+This improves perceived latency without needing a second LLM pass. It is a
+prompt/role instruction, not a post-processing step.
+
+Do not use a second fast LLM by default for compacting. If the fast model
+runs after the main answer finishes, it improves readability but worsens
+end-to-end latency. A second pass is only justified if:
+
+- it replaces the main model for the task, or
+- the summary is sent first and details delivered later
+
+#### III.5 Faster first visible progress
+
+Perceived latency improves significantly when the user sees a meaningful
+first update almost immediately. Product rule: first visible progress within
+1 second of request submission.
+
+This may require:
+
+- sending an immediate "thinking..." status before provider invocation
+- tuning progress-streaming intervals
+- ensuring the progress callback fires on first provider output, not on a
+  polling timer
+
+#### III.6 Prompt weight reduction
+
+Smaller effective prompts reduce time-to-first-token:
+
+- shorter default role text
+- fewer always-on skills (only load what the session actually uses)
+- avoid injecting capability text for inactive skills
+- measure prompt token count as part of `/doctor` or `/session` diagnostics
+
+This is less visible than model switching but contributes to perceived speed.
 
 Acceptance:
 
 - new users discover compact mode without reading docs
 - the default feels right for the deployment context
+- long responses use expandable blockquotes or inline expand/collapse
+- first visible progress arrives within 1 second
+- prompt weight is observable and minimized
+
+### Phase IV — Update delivery and burst safety
+
+Goal: ensure every inbound update gets a visible response, even under
+bursty same-user or same-chat traffic.
+
+Depends on: Phase A (transport normalization), Phase B (per-chat
+serialization), Phase E (durable runtime and session state).
+
+This is a transport reliability feature, not a latency feature. It
+strengthens the existing per-chat serialization model without changing
+the concurrency architecture. The stateful guarantees (update_id
+idempotency, queued request tracking) require the durable state
+foundation from Phase E — implementing queue/dedup semantics before
+the authoritative durable state layer risks repeating the same
+architectural mistake as a late storage migration.
+
+#### IV.1 Polling conflict detection
+
+Add a `/doctor` check for polling conflicts:
+
+- Telegram returns HTTP 409 when a second `getUpdates` call conflicts
+  with an active poller
+- `/doctor` detects this and warns the operator
+- startup logs a warning if conflict is detected
+- recommended action: switch to webhook mode or stop the other process
+
+#### IV.2 Idempotent update handling
+
+Track `update_id` to make duplicate delivery safe:
+
+- store last-seen `update_id` per ingress
+- if an update arrives with an already-processed `update_id`, skip it
+- this protects against Telegram re-delivering updates after a timeout
+
+#### IV.3 Busy/queued feedback
+
+When a request arrives while another is in-flight for the same chat:
+
+- send an immediate "still working on your previous request, yours is
+  queued" acknowledgment
+- the queued request executes normally when the in-flight request
+  completes
+- no request is silently dropped or lost
+
+#### IV.4 Content-based deduplication (optional/tunable)
+
+If the same user sends identical text within a short configurable window,
+optionally treat it as a duplicate:
+
+- off by default — intentional repeated sends must not be suppressed
+- operator-configurable window (e.g., `BOT_DEDUP_WINDOW_SECONDS=0`)
+- when enabled, respond once and acknowledge the duplicate
+- this is a convenience optimization, not a core contract
+
+The core contract is already sufficient: every inbound update gets a visible
+response, `update_id` idempotency prevents processing the same Telegram
+update twice, and burst traffic is queued with visible feedback.
+Content-based dedup is layered on top for operators who want it.
+
+Acceptance:
+
+- every inbound update receives a visible response or acknowledgment
+- duplicate `update_id` delivery is safe
+- bursty same-user traffic does not lose messages
+- polling conflict is detected and warned in `/doctor`
 
 ---
 
@@ -500,8 +710,8 @@ There is one authoritative execution identity per request. It includes:
 - skill digests
 - provider config digest (skill YAML content, scoped to active provider)
 - execution config digest (effective model — resolved from session profile
-  override or config default, codex_sandbox, codex_full_auto,
-  codex_dangerous, codex_profile)
+  override or config default, subject to trust-tier restrictions;
+  codex_sandbox, codex_full_auto, codex_dangerous, codex_profile)
 - base extra dirs
 - project id
 - effective working dir (resolved from project binding or config default)
@@ -571,6 +781,14 @@ If raw model output is unreadable in Telegram, the bot still owns the problem.
 `/doctor` and CLI doctor should be two renderers over the same health
 orchestration, not separate implementations.
 
+### Transport delivery contract
+
+- one active ingress owner per bot token (polling is single-owner)
+- every inbound update receives a visible response or acknowledgment
+- per-chat ordering is preserved; no concurrent writes out of order
+- duplicate update delivery (same `update_id`) is idempotent
+- polling conflict is detected and warned, not silently tolerated
+
 ---
 
 ## Test Strategy
@@ -598,6 +816,13 @@ Examples:
 - changing execution identity invalidates stale approvals
 - registry digest mismatch leaves no installed state
 - configured extra dirs reach provider context
+
+Cross-feature invariant examples (required before merging parallel tracks):
+
+- public mode + model switching does not allow profile escalation
+- inspect policy + model profile change preserves inspect enforcement
+- compact mode + long replies + public users renders correctly
+- project + file policy + approval + model change invalidates correctly
 
 ### 3. Edge-case suites
 
@@ -637,7 +862,7 @@ blurring the audience.
 These are legitimate product areas that sit outside the current build phases.
 They are ordered by likely relevance, not urgency.
 
-### Multi-process webhook architecture
+### Multi-worker webhook architecture
 
 Webhook mode already exists in the product. The extension area is
 multi-worker / multi-process webhook deployment. That would require:
@@ -645,6 +870,11 @@ multi-worker / multi-process webhook deployment. That would require:
 - stronger cross-process serialization guarantees
 - concurrency semantics beyond in-memory chat locks
 - explicit deployment guidance for multi-worker operation
+
+Note: polling is single-owner by design. Multi-process support means
+webhook + shared state, not multi-poller polling. Transport reliability
+for single-process operation (polling conflict detection, update_id
+idempotency, burst handling) is covered in Phase IV.
 
 ### Policy and project expansion
 
@@ -691,24 +921,73 @@ usable before billing is layered on.
 
 ## Build Priority (Next Work)
 
-The phases above (A–H) are complete. The next product work, in priority
-order:
+Phases A–H are complete. Phases I, IIa, IIb, III, and IV are built in
+parallel but share contracts that must freeze first.
 
-1. **Faster default model** — zero code. Recommend `balanced` profile in
-   setup wizard and docs. Immediate perceived-latency improvement.
+### Step zero: shared contract freeze
 
-2. **Phase I: Model profiles and inline-keyboard UX** — highest-value code
-   work. Users get speed/capability control without memorizing model IDs.
-   Inline keyboards make all session settings discoverable. Builds on the
-   existing execution context and context-hash infrastructure.
+Before any feature branch starts, agree on and lock:
 
-3. **Phase J: Public trust profile** — important if anyone will run a public
-   bot. Scope restriction and mandatory rate limiting. Depends on existing
-   safety controls (file policy, project binding, rate limiting) which are
-   already built.
+- `SessionState` additions (`model_profile`, `trust_tier`, any new fields)
+- `ResolvedExecutionContext` additions (effective model, trust tier if
+  context-visible)
+- trust-tier / public-mode semantics (`trusted | public` per-user
+  resolution, scope restrictions, what is overridable vs forced)
+- effective model / profile semantics (session override > config default,
+  trust-tier restrictions on available profiles)
+- file-policy precedence rules (trust tier may force inspect; session
+  override only within trust-tier ceiling)
+- user-visible surfaces: what `/session`, `/help`, and approval messages
+  show for new state
+- transport delivery semantics: `update_id` idempotency contract, queued
+  request acknowledgment rules, what state tracks in-flight vs queued
+  requests, where that state lives (durable vs in-memory)
 
-4. **Phase K: Compact mode defaults** — mostly a config/docs decision. Small
-   code change to mention the toggle in first-run welcome.
+This is not optional. The parallel tracks share execution context, session
+state, rendering contract, and transport delivery semantics. If the
+contracts drift during parallel development, integration produces the same
+bugs that sequential ordering was meant to prevent — just faster.
+
+### Parallel build by ownership
+
+| Track | Phase | Scope |
+|-------|-------|-------|
+| A: execution context + session schema + transport state | Step zero | `SessionState` additions, `ResolvedExecutionContext` additions, provider context plumbing, context-hash updates, trust-tier parameter, transport delivery state schema (update_id tracking, in-flight/queued request state, durable vs in-memory decision) |
+| B: model profiles (state + plumbing) | IIa | profile mapping, session field, provider plumbing, hash/invalidation |
+| C: public trust enforcement | I | `is_public_user()` predicate, execution-scope enforcement in context resolution, command gating in handlers, `/doctor` warnings, rate-limit defaults |
+| D: model + settings UX | IIb | `/model` command, inline-keyboard UX for all session settings |
+| E: compact/latency UX + rendering | III | expandable blockquotes, expand/collapse from raw ring buffer, summary-first rendering, first-progress timing, prompt weight, setup wizard defaults |
+| F: transport reliability (behavior) | IV | polling conflict detection, idempotent update handling, busy/queued feedback, deduplication window — uses state schema defined in track A |
+
+### Merge order
+
+Even if built in parallel, merge in dependency order:
+
+1. shared state / context contract (track A)
+2. model profiles state + provider plumbing (track B)
+3. public trust enforcement (track C) — execution-scope layer then command gating
+4. model + settings UX (track D)
+5. compact / latency UX (track E)
+6. transport reliability (track F)
+
+Note: tracks B and C are independent of each other — both depend on track A.
+Model profiles do not wait on public trust. Public trust can later cap
+available profiles by constraining the input to model profile resolution.
+Track F depends on track A for transport state schema (update_id tracking,
+in-flight/queued state) but is independent of tracks B–E.
+
+### Cross-feature invariant tests
+
+Before merging all tracks, add invariant tests for the dangerous
+cross-feature combinations:
+
+- public mode + model switching (can a public user escalate to `best`?)
+- inspect policy + model profile (does changing model break inspect
+  enforcement?)
+- compact mode + long replies + public users
+- project + file policy + approval + model change
+
+The risk is not "feature A broken alone." It is the cross-feature matrix.
 
 Billing and usage accounting are explicitly deferred. They are not blocking
 any of the above.
@@ -727,3 +1006,8 @@ The product is commercially ready when:
 - cross-cutting invariants are enforced by tests, not memory
 - users can control model speed/capability without knowing provider internals
 - public deployments have a concrete trust profile, not optimistic defaults
+- long responses use native Telegram primitives for progressive disclosure
+- first visible progress arrives within 1 second of request submission
+- cross-feature invariant tests cover the dangerous combination matrix
+- every inbound update receives a visible response, even under burst traffic
+- polling conflicts are detected and warned, not silently tolerated

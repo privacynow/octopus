@@ -53,8 +53,8 @@ class AwaitingSkillSetup:
     """Conversational credential collection state."""
     user_id: int
     skill: str
-    started_at: float
     remaining: list[dict[str, Any]]  # [{key, prompt, help_url, validate}, ...]
+    started_at: float = 0.0
 
 
 @dataclass
@@ -116,17 +116,13 @@ def session_from_dict(d: dict[str, Any]) -> SessionState:
         # Filter out keys not in the dataclass to tolerate legacy extras
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
         filtered = {k: v for k, v in raw.items() if k in valid_keys}
-        return cls(**filtered)
+        try:
+            return cls(**filtered)
+        except TypeError:
+            return None
 
-    # Legacy compat: old rows used a single "pending_request" key
     pending_approval_raw = d.get("pending_approval")
     pending_retry_raw = d.get("pending_retry")
-    legacy = d.get("pending_request")
-    if legacy and isinstance(legacy, dict) and not pending_approval_raw and not pending_retry_raw:
-        if legacy.get("denials"):
-            pending_retry_raw = legacy
-        else:
-            pending_approval_raw = legacy
 
     return SessionState(
         provider=d.get("provider", ""),

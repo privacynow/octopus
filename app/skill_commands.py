@@ -6,6 +6,12 @@ import html
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 
+from app.request_flow import (
+    build_setup_state,
+    foreign_setup_message,
+    foreign_skill_setup,
+    format_credential_prompt,
+)
 from app.skills import (
     build_system_prompt,
     check_credentials,
@@ -27,7 +33,7 @@ def _th():
 async def skills_show(event, update: Update) -> None:
     catalog = load_catalog()
     session = _th()._load(event.chat_id)
-    active = session.get("active_skills", [])
+    active = session.active_skills
     if active:
         lines = [f"<b>Active skills ({len(active)}):</b>"]
         for name in active:
@@ -47,7 +53,7 @@ async def skills_list(event, update: Update) -> None:
         return
     th = _th()
     session = th._load(event.chat_id)
-    active = set(session.get("active_skills", []))
+    active = set(session.active_skills)
     req_user_id = event.user.id
     user_creds = load_user_credentials(th._cfg().data_dir, req_user_id, th._encryption_key())
     lines = ["<b>Available skills:</b>"]
@@ -88,7 +94,7 @@ async def skills_add(event, update: Update, name: str) -> None:
     chat_id = event.chat_id
     async with th.CHAT_LOCKS[chat_id]:
         session = th._load(chat_id)
-        active = session.get("active_skills", [])
+        active = session.active_skills
 
         requirements = get_skill_requirements(name)
         if requirements:
@@ -96,25 +102,25 @@ async def skills_add(event, update: Update, name: str) -> None:
             user_creds = load_user_credentials(th._cfg().data_dir, user_id, key)
             missing = check_credentials(name, user_creds)
             if missing:
-                if th._foreign_skill_setup(session, user_id):
+                if foreign_skill_setup(session, user_id):
                     await update.effective_message.reply_text(
-                        th._foreign_setup_message(session.get("awaiting_skill_setup", {})),
+                        foreign_setup_message(session.awaiting_skill_setup),
                     )
                     return
-                setup = th._build_setup_state(user_id, name, missing)
-                session["awaiting_skill_setup"] = setup
+                setup = build_setup_state(user_id, name, missing)
+                session.awaiting_skill_setup = setup
                 th._save(chat_id, session)
-                first_req = setup["remaining"][0]
+                first_req = setup.remaining[0]
                 await update.effective_message.reply_text(
                     f"Skill <code>{html.escape(name)}</code> needs setup before activation.\n\n"
-                    f"{th._format_credential_prompt(first_req)}",
+                    f"{format_credential_prompt(first_req)}",
                     parse_mode=ParseMode.HTML,
                 )
                 return
 
         if name not in active:
             projected_size, over = estimate_prompt_size(
-                session.get("role", ""), active, name)
+                session.role, active, name)
             if over:
                 from app.skills import PROMPT_SIZE_WARNING_THRESHOLD
                 kb = InlineKeyboardMarkup([[
@@ -129,7 +135,6 @@ async def skills_add(event, update: Update, name: str) -> None:
                     parse_mode=ParseMode.HTML, reply_markup=kb)
                 return
             active.append(name)
-            session["active_skills"] = active
             th._save(chat_id, session)
         await update.effective_message.reply_text(
             f"Skill <code>{html.escape(name)}</code> activated.",
@@ -142,24 +147,23 @@ async def skills_remove(event, update: Update, name: str) -> None:
     async with th.CHAT_LOCKS[chat_id]:
         session = th._load(chat_id)
         req_user_id = event.user.id
-        had_setup = session.get("awaiting_skill_setup") is not None
-        if th._foreign_skill_setup(session, req_user_id, skill_name=name):
+        had_setup = session.awaiting_skill_setup is not None
+        if foreign_skill_setup(session, req_user_id, skill_name=name):
             await update.effective_message.reply_text(
-                th._foreign_setup_message(session.get("awaiting_skill_setup", {})),
+                foreign_setup_message(session.awaiting_skill_setup),
             )
             return
-        setup_expired = had_setup and session.get("awaiting_skill_setup") is None
-        active = session.get("active_skills", [])
+        setup_expired = had_setup and session.awaiting_skill_setup is None
+        active = session.active_skills
         removed = False
         if name in active:
             active.remove(name)
-            session["active_skills"] = active
             removed = True
-        setup = session.get("awaiting_skill_setup")
+        setup = session.awaiting_skill_setup
         setup_cleared = False
-        if setup and setup.get("skill") == name:
-            if setup.get("user_id") == req_user_id:
-                session["awaiting_skill_setup"] = None
+        if setup and setup.skill == name:
+            if setup.user_id == req_user_id:
+                session.awaiting_skill_setup = None
                 setup_cleared = True
         if removed or setup_cleared or setup_expired:
             th._save(chat_id, session)
@@ -189,18 +193,18 @@ async def skills_setup(event, update: Update, name: str) -> None:
     chat_id = event.chat_id
     async with th.CHAT_LOCKS[chat_id]:
         session = th._load(chat_id)
-        if th._foreign_skill_setup(session, user_id):
+        if foreign_skill_setup(session, user_id):
             await update.effective_message.reply_text(
-                th._foreign_setup_message(session.get("awaiting_skill_setup", {})),
+                foreign_setup_message(session.awaiting_skill_setup),
             )
             return
-        setup = th._build_setup_state(user_id, name, requirements)
-        session["awaiting_skill_setup"] = setup
+        setup = build_setup_state(user_id, name, requirements)
+        session.awaiting_skill_setup = setup
         th._save(chat_id, session)
-    first_req = setup["remaining"][0]
+    first_req = setup.remaining[0]
     await update.effective_message.reply_text(
         f"Setting up <code>{html.escape(name)}</code>.\n\n"
-        f"{th._format_credential_prompt(first_req)}",
+        f"{format_credential_prompt(first_req)}",
         parse_mode=ParseMode.HTML,
     )
 
@@ -211,13 +215,13 @@ async def skills_clear(event, update: Update) -> None:
     async with th.CHAT_LOCKS[chat_id]:
         session = th._load(chat_id)
         req_user_id = event.user.id
-        if th._foreign_skill_setup(session, req_user_id):
+        if foreign_skill_setup(session, req_user_id):
             await update.effective_message.reply_text(
-                th._foreign_setup_message(session.get("awaiting_skill_setup", {})),
+                foreign_setup_message(session.awaiting_skill_setup),
             )
             return
-        session["active_skills"] = []
-        session["awaiting_skill_setup"] = None
+        session.active_skills = []
+        session.awaiting_skill_setup = None
         th._save(chat_id, session)
     await update.effective_message.reply_text("All skills removed.")
 

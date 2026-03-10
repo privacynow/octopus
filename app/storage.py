@@ -132,8 +132,6 @@ def _upsert(conn: sqlite3.Connection, chat_id: int, session: dict[str, Any]) -> 
     has_pending = (
         session.get("pending_approval") is not None
         or session.get("pending_retry") is not None
-        # Legacy compat: old rows used "pending_request"
-        or session.get("pending_request") is not None
     )
     conn.execute(
         """INSERT OR REPLACE INTO sessions

@@ -20,7 +20,6 @@ from app.execution_context import ResolvedExecutionContext, resolve_execution_co
 from app.providers.base import (
     RunContext,
     RunResult,
-    compute_context_hash,
 )
 from app.providers.codex import CodexProvider
 from app.session_state import (
@@ -257,6 +256,40 @@ async def test_approval_detects_stale_context(change):
         )
 
 
+# Regression test: default working_dir must affect context hash.
+# Previously resolve_execution_context() set working_dir="" when no project
+# was bound, so changing BOT_WORKING_DIR did not invalidate pending approvals.
+
+def test_default_working_dir_affects_hash():
+    """Different config.working_dir without project must produce different hashes."""
+    from app.session_state import SessionState
+
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+    )
+    cfg_a = _make_config(working_dir=Path("/home/alice"))
+    cfg_b = _make_config(working_dir=Path("/home/bob"))
+
+    hash_a = resolve_execution_context(session, cfg_a, "claude").context_hash
+    hash_b = resolve_execution_context(session, cfg_b, "claude").context_hash
+
+    assert hash_a != hash_b, (
+        "Different default working_dir must produce different context hashes"
+    )
+
+
+def test_default_working_dir_in_resolved_context():
+    """Resolved context must carry config.working_dir when no project is bound."""
+    from app.session_state import SessionState
+
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+    )
+    cfg = _make_config(working_dir=Path("/opt/myproject"))
+    ctx = resolve_execution_context(session, cfg, "claude")
+    assert ctx.working_dir == "/opt/myproject"
+
+
 # =====================================================================
 # INVARIANT 3: Inspect mode sandbox integrity
 #
@@ -420,35 +453,24 @@ async def test_resolve_context_matches_all_paths():
             FakeContext(["inspect"]),
         )
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session_dict = load_session_disk(data_dir, 12345, prov)
+        session = session_from_dict(session_dict)
 
-        # The authoritative hash
-        resolved = th._resolve_context(session)
-        authoritative_hash = resolved.context_hash
+        # Path 1: handler adapter (_resolve_context)
+        handler_hash = th._resolve_context(session).context_hash
 
-        # The old-style manual computation (what execute_request used to do inline)
-        role = session.get("role", "")
-        active_skills = session.get("active_skills", [])
-        project_id = session.get("project_id", "")
-        file_policy = session.get("file_policy") or ""
-        project_wd = th._project_working_dir(session)
-        manual_hash = compute_context_hash(
-            role, active_skills, get_skill_digests(active_skills),
-            get_provider_config_digest(active_skills, provider_name=prov.name),
-            sorted(str(d) for d in cfg.extra_dirs),
-            project_id=project_id,
-            file_policy=file_policy,
-            working_dir=project_wd,
+        # Path 2: authoritative builder directly
+        direct_hash = resolve_execution_context(session, cfg, prov.name).context_hash
+
+        # Path 3: request_flow.current_context_hash helper
+        from app.request_flow import current_context_hash
+        helper_hash = current_context_hash(session, cfg, prov.name)
+
+        assert handler_hash == direct_hash, (
+            "Handler adapter diverged from direct resolve_execution_context"
         )
-
-        # The _current_context_hash helper
-        helper_hash = th._current_context_hash(session)
-
-        assert authoritative_hash == manual_hash, (
-            "ResolvedContext.context_hash diverged from manual computation"
-        )
-        assert authoritative_hash == helper_hash, (
-            "ResolvedContext.context_hash diverged from _current_context_hash()"
+        assert handler_hash == helper_hash, (
+            "Handler adapter diverged from current_context_hash()"
         )
 
 
@@ -513,8 +535,8 @@ async def test_registry_search_does_not_block_event_loop():
 # =====================================================================
 # INVARIANT 7: Context hash includes all identity fields
 #
-# compute_context_hash must produce a different hash when any
-# identity field changes.  This is a completeness check.
+# ResolvedExecutionContext.context_hash must produce a different
+# hash when any identity field changes.  This is a completeness check.
 # =====================================================================
 
 _HASH_FIELD_CHANGES = [
@@ -522,31 +544,32 @@ _HASH_FIELD_CHANGES = [
     pytest.param({"active_skills": ["new-skill"]}, id="skills"),
     pytest.param({"skill_digests": {"s": "changed"}}, id="skill-digests"),
     pytest.param({"provider_config_digest": "changed"}, id="provider-config"),
-    pytest.param({"extra_dirs": ["/new/dir"]}, id="extra-dirs"),
+    pytest.param({"base_extra_dirs": ["/new/dir"]}, id="extra-dirs"),
     pytest.param({"project_id": "some-project"}, id="project-id"),
     pytest.param({"file_policy": "inspect"}, id="file-policy"),
     pytest.param({"working_dir": "/opt/other"}, id="working-dir"),
 ]
 
-_BASELINE = dict(
+_BASELINE_CTX = dict(
     role="engineer",
     active_skills=["code-review"],
     skill_digests={"code-review": "aaa"},
     provider_config_digest="pcd",
-    extra_dirs=["/opt/repo"],
+    base_extra_dirs=["/opt/repo"],
     project_id="",
     file_policy="",
     working_dir="",
+    provider_name="",
 )
 
 
 @pytest.mark.parametrize("change", _HASH_FIELD_CHANGES)
 def test_hash_sensitive_to_field(change):
     """Every identity field must affect the context hash."""
-    baseline_hash = compute_context_hash(**_BASELINE)
+    baseline_hash = ResolvedExecutionContext(**_BASELINE_CTX).context_hash
 
-    modified = {**_BASELINE, **change}
-    modified_hash = compute_context_hash(**modified)
+    modified = {**_BASELINE_CTX, **change}
+    modified_hash = ResolvedExecutionContext(**modified).context_hash
 
     assert baseline_hash != modified_hash, (
         f"Context hash must change when {list(change.keys())} changes"
@@ -637,76 +660,14 @@ def test_session_round_trip_no_pending():
     assert restored.active_skills == ["lint", "deploy"]
 
 
-def test_session_round_trip_legacy_pending_no_kind():
-    """Legacy pending_request dicts (no 'kind' field) are correctly inferred."""
-    # Legacy approval: no denials, no kind
-    legacy_approval = {
-        "provider": "claude",
-        "provider_state": {},
-        "approval_mode": "on",
-        "pending_request": {
-            "request_user_id": 1,
-            "prompt": "do thing",
-            "image_paths": [],
-            "attachment_dicts": [],
-            "context_hash": "h1",
-        },
-    }
-    s1 = session_from_dict(legacy_approval)
-    assert s1.pending_approval is not None
-    assert s1.pending_retry is None
-
-    # Legacy retry: has denials, no kind
-    legacy_retry = {
-        "provider": "claude",
-        "provider_state": {},
-        "approval_mode": "off",
-        "pending_request": {
-            "request_user_id": 2,
-            "prompt": "edit file",
-            "image_paths": [],
-            "context_hash": "h2",
-            "denials": [{"tool_name": "Write"}],
-        },
-    }
-    s2 = session_from_dict(legacy_retry)
-    assert s2.pending_retry is not None
-    assert s2.pending_approval is None
-
-
 # =====================================================================
 # INVARIANT 9: ResolvedExecutionContext is the sole hash authority
 #
 # The context hash from ResolvedExecutionContext must equal what the
-# backward-compat compute_context_hash produces for the same inputs.
-# This ensures the migration preserves hash stability.
+# This section previously tested backward-compat equivalence.
+# The compat function has been removed; hash is now computed only via
+# ResolvedExecutionContext.context_hash.
 # =====================================================================
-
-def test_resolved_context_hash_matches_compat_function():
-    """ResolvedExecutionContext.context_hash == compute_context_hash for same inputs."""
-    ctx = ResolvedExecutionContext(
-        role="engineer",
-        active_skills=["code-review", "deploy"],
-        skill_digests={"code-review": "aaa", "deploy": "bbb"},
-        provider_config_digest="pcd123",
-        base_extra_dirs=["/opt/repo", "/opt/data"],
-        project_id="frontend",
-        file_policy="inspect",
-        working_dir="/opt/frontend",
-        provider_name="codex",
-    )
-    compat_hash = compute_context_hash(
-        role="engineer",
-        active_skills=["code-review", "deploy"],
-        skill_digests={"code-review": "aaa", "deploy": "bbb"},
-        provider_config_digest="pcd123",
-        extra_dirs=["/opt/repo", "/opt/data"],
-        project_id="frontend",
-        file_policy="inspect",
-        working_dir="/opt/frontend",
-    )
-    assert ctx.context_hash == compat_hash
-
 
 # =====================================================================
 # INVARIANT 10: resolve_execution_context produces same hash as
@@ -747,10 +708,10 @@ async def test_resolve_execution_context_matches_handler_adapter():
 
         # Get hash via handler adapter
         session_dict = load_session_disk(data_dir, 12345, prov)
-        handler_hash = th._resolve_context(session_dict).context_hash
+        typed = session_from_dict(session_dict)
+        handler_hash = th._resolve_context(typed).context_hash
 
         # Get hash via authoritative builder
-        typed = session_from_dict(session_dict)
         direct_hash = resolve_execution_context(typed, cfg, prov.name).context_hash
 
         assert handler_hash == direct_hash, (

@@ -886,14 +886,14 @@ def filter_resolvable_skills(names: list[str]) -> list[str]:
     return [n for n in names if _skill_dir(n) is not None]
 
 
-def normalize_active_skills(session: dict, save_fn=None) -> list[str]:
+def normalize_active_skills(session, save_fn=None) -> list[str]:
     """Prune active skills whose directories no longer resolve.
 
-    Mutates session['active_skills'] in place.  Calls save_fn(session) if
+    Mutates session.active_skills.  Calls save_fn(session) if
     any skills were removed and save_fn is provided.
     Returns list of pruned skill names.
     """
-    active = session.get("active_skills", [])
+    active = session.active_skills
     pruned: list[str] = []
     kept: list[str] = []
     for name in active:
@@ -902,7 +902,7 @@ def normalize_active_skills(session: dict, save_fn=None) -> list[str]:
         else:
             pruned.append(name)
     if pruned:
-        session["active_skills"] = kept
+        session.active_skills = kept
         if save_fn:
             save_fn(session)
     return pruned

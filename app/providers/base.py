@@ -3,54 +3,6 @@
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-# Backward-compat re-exports — these types now live in their own modules.
-# Production code should import from the authoritative module directly.
-# Tests may still reference these until fully migrated.
-from app.execution_context import ResolvedExecutionContext as ResolvedContext  # noqa: F401
-from app.execution_context import ResolvedExecutionContext  # noqa: F401
-
-
-# Backward-compat: PendingRequest was a single type for both approval and retry.
-# New code uses PendingApproval / PendingRetry from app.session_state.
-@dataclass
-class PendingRequest:
-    """DEPRECATED — use PendingApproval / PendingRetry from app.session_state."""
-    request_user_id: int
-    prompt: str
-    image_paths: list[str]
-    attachment_dicts: list[dict] = field(default_factory=list)
-    context_hash: str = ""
-    denials: list[dict] | None = None
-    created_at: float = 0.0
-
-
-def compute_context_hash(
-    role: str = "",
-    active_skills: list[str] | None = None,
-    skill_digests: dict[str, str] | None = None,
-    provider_config_digest: str = "",
-    extra_dirs: list[str] | None = None,
-    project_id: str = "",
-    file_policy: str = "",
-    working_dir: str = "",
-) -> str:
-    """Backward-compat wrapper — delegates to ResolvedExecutionContext.context_hash.
-
-    New code should use ResolvedExecutionContext.context_hash directly.
-    """
-    ctx = ResolvedExecutionContext(
-        role=role,
-        active_skills=active_skills or [],
-        skill_digests=skill_digests or {},
-        provider_config_digest=provider_config_digest,
-        base_extra_dirs=extra_dirs or [],
-        project_id=project_id,
-        working_dir=working_dir,
-        file_policy=file_policy,
-        provider_name="",
-    )
-    return ctx.context_hash
-
 
 @dataclass
 class RunResult:

@@ -1,6 +1,8 @@
 """Handler integration tests for Codex-specific session and script behavior."""
 
-from app.providers.base import RunContext, RunResult, compute_context_hash
+from app.execution_context import ResolvedExecutionContext, resolve_execution_context
+from app.providers.base import RunContext, RunResult
+from app.session_state import session_from_dict
 from app.skills import derive_encryption_key, get_provider_config_digest, save_user_credential
 from app.storage import default_session, save_session
 from tests.support.handler_support import (
@@ -76,6 +78,12 @@ async def test_codex_script_staging():
         assert "GITHUB_TOKEN" in ctx.credential_env
 
 
+def _default_hash(cfg):
+    """Compute the correct context hash for a default session with no project."""
+    raw = default_session("codex", {}, "off")
+    return resolve_execution_context(session_from_dict(raw), cfg, "codex").context_hash
+
+
 async def test_codex_retry_clears_thread():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, provider_name="codex")
@@ -83,7 +91,7 @@ async def test_codex_retry_clears_thread():
         prov.run_results = [RunResult(text="ok")]
         setup_globals(cfg, prov)
 
-        current_hash = compute_context_hash("", [], {}, get_provider_config_digest([]), [])
+        current_hash = _default_hash(cfg)
         session = default_session("codex", {"thread_id": "thread-xyz", "context_hash": current_hash}, "off")
         session["pending_retry"] = {
             "request_user_id": 42,
@@ -115,7 +123,7 @@ async def test_codex_failed_resume_clears_thread():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        current_hash = compute_context_hash("", [], {}, get_provider_config_digest([]), [])
+        current_hash = _default_hash(cfg)
         session = default_session("codex", {"thread_id": "thread-abc", "context_hash": current_hash}, "off")
         save_session(data_dir, 12345, session)
         prov.run_results = [RunResult(text="[Codex error: thread not found]", returncode=1)]
@@ -140,7 +148,7 @@ async def test_codex_timed_out_resume_preserves_thread():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        current_hash = compute_context_hash("", [], {}, get_provider_config_digest([]), [])
+        current_hash = _default_hash(cfg)
         session = default_session("codex", {"thread_id": "thread-abc", "context_hash": current_hash}, "off")
         save_session(data_dir, 12345, session)
         prov.run_results = [RunResult(text="", timed_out=True, returncode=124)]

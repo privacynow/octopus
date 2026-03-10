@@ -2,8 +2,8 @@
 
 Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-10):** Phase 9 structural refactoring — typed session models,
-> authoritative execution context, library standardization.
+> **Latest change (2026-03-10):** Phase 9 structural refactoring complete — typed session boundary
+> enforced, backward-compat baggage deleted, orchestration extracted to `request_flow.py`.
 
 ---
 
@@ -19,7 +19,7 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 | Phase 6 | Session & execution context | Done |
 | Phase 7 | Ecosystem & extensibility | Done |
 | Phase 8 | Edge case testing & coverage hardening | Done |
-| Phase 9 | Structural refactoring & invariant coverage | In progress |
+| Phase 9 | Structural refactoring & invariant coverage | Done |
 
 ---
 
@@ -29,7 +29,7 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **528 pytest tests** + 35 bash tests across 29 entrypoints.
+Current suite: **527 pytest tests** + 35 bash tests across 30 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -48,7 +48,7 @@ Current suite: **528 pytest tests** + 35 bash tests across 29 entrypoints.
 | `test_handlers_ratelimit.py` | 6 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
 | `test_handlers_store.py` | 13 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle, callback flows (skill_add confirm/cancel, skill_update confirm/cancel/non-admin alert, unauthorized alert), markup removal verification. |
 | `test_high_risk.py` | 29 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
-| `test_invariants.py` | 39 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending/legacy), resolved context hash stability, handler-vs-direct builder equivalence. |
+| `test_invariants.py` | 37 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence. |
 | `test_ratelimit.py` | 8 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_registry.py` | 8 | Skill registry: index parsing (valid/bad version/non-JSON), search, artifact download/extraction, store integration (digest match/mismatch). |
 | `test_skills.py` | 43 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
@@ -420,9 +420,9 @@ Root cause analysis identified that the codebase optimized for feature delivery 
 - `_resolve_context()` in handlers is now a thin adapter that delegates to the authoritative builder.
 
 **9.3 Object-based context hashing**
-- `compute_context_hash()` in `base.py` is now a backward-compat wrapper that delegates to `ResolvedExecutionContext.context_hash`.
-- No loose-argument-bag hash assembly in production code.
-- Tests that use `compute_context_hash()` directly continue to work via the wrapper.
+- `compute_context_hash()` and `PendingRequest` deleted from `base.py` — no backward-compat baggage.
+- `ResolvedExecutionContext.context_hash` is the sole hash computation path.
+- All tests updated to use `ResolvedExecutionContext` directly.
 
 **9.4 Library standardization**
 - `.env` parsing: replaced hand-rolled parser in `config.py` with `python-dotenv` (`dotenv_values()`). Handles escapes, multiline values, export prefixes.
@@ -430,7 +430,7 @@ Root cause analysis identified that the codebase optimized for feature delivery 
 - Serialization: `session_to_dict()` uses `dataclasses.asdict()` instead of hand-rolled field-by-field copying.
 
 **9.5 Invariant test suite** (`tests/test_invariants.py`)
-- 39 contract-shaped tests across 10 invariant categories:
+- 37 contract-shaped tests across 10 invariant categories:
   1. Approval hash round-trip (7 parametrized combos of project/policy/role)
   2. Retry hash round-trip (7 parametrized combos)
   3. Stale detection (3 parametrized: role/policy/project change)
@@ -439,21 +439,36 @@ Root cause analysis identified that the codebase optimized for feature delivery 
   6. Execution context consistency (all paths produce same hash)
   7. Async boundary (slow registry doesn't block event loop)
   8. Hash completeness (8 parametrized — every field affects hash)
-  9. Typed session round-trip (approval, retry, no-pending, legacy compat)
-  10. Resolved context hash stability (new builder matches compat function, handler adapter matches direct builder)
+  9. Typed session round-trip (approval, retry, no-pending)
+  10. Handler-vs-direct builder equivalence
 
-### What remains
+**9.6 Typed session boundary enforced**
+- `_load()` returns `SessionState`, `_save()` accepts `SessionState`.
+- Zero raw dict access (`session.get()`, `session["key"]`) in `telegram_handlers.py` or `skill_commands.py`.
+- `normalize_active_skills()` in `skills.py` operates on `SessionState` attributes.
+- Legacy `pending_request` migration deleted from `session_from_dict()`.
+- Legacy `pending_request` check deleted from `storage._upsert()`.
+
+**9.7 Orchestration extracted** (`app/request_flow.py`)
+- Pure business logic with no Telegram imports: `build_setup_state`, `format_credential_prompt`, `foreign_setup_message`, `foreign_skill_setup`, `check_credential_satisfaction`, `pending_expired`, `validate_pending`, `extra_dirs_from_denials`, `current_context_hash`.
+- `CredentialCheckResult` typed return replaces inline message-sending in credential check.
+- `validate_pending()` encapsulates expiry + stale-context checks.
+- Handlers import from `request_flow` and handle transport (messages, buttons, progress).
+- `skill_commands.py` imports directly from `request_flow` instead of `telegram_handlers` private functions.
+
+### Completion
+
+All steps complete:
 
 | Step | Description | Status |
 |------|-------------|--------|
 | 9.1 Typed session models | Done | `app/session_state.py` |
 | 9.2 Authoritative execution context | Done | `app/execution_context.py` |
-| 9.3 Object-based context hashing | Done | Compat wrapper in `base.py` |
+| 9.3 Object-based context hashing | Done | No backward-compat baggage |
 | 9.4 Library standardization | Done | `python-dotenv`, `httpx` everywhere |
-| 9.5 Invariant test suite | Done | 39 tests, 10 invariant categories |
-| 9.6 Move orchestration to `app/request_flow.py` | Not started | Extract execute/approve/reject/retry from handlers |
-| 9.7 Thin handler layer | Not started | Handlers only do transport normalization, auth, call service, render |
-| 9.8 Convert handlers from raw dicts to `SessionState` | Not started | `_load` returns `SessionState`, `_save` accepts `SessionState` |
+| 9.5 Invariant test suite | Done | 37 tests, 10 invariant categories |
+| 9.6 Typed session boundary | Done | `_load` returns `SessionState`, zero raw dict access |
+| 9.7 Orchestration extracted | Done | `app/request_flow.py` — pure business logic |
 
 ### Bugs found and fixed
 

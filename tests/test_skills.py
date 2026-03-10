@@ -20,10 +20,9 @@ import tempfile
 
 from pathlib import Path
 from app.config import load_dotenv_file, validate_config
-from app.providers.base import (
-    PendingRequest, PreflightContext, RunContext,
-    compute_context_hash,
-)
+from app.execution_context import ResolvedExecutionContext
+from app.providers.base import PreflightContext, RunContext
+from app.session_state import PendingApproval, PendingRetry
 from app.skills import (
     SkillRequirement,
     _encrypt, _decrypt, _parse_requires_yaml, _skill_dir,
@@ -38,12 +37,23 @@ from app.storage import default_session, load_session, save_session
 from tests.support.config_support import make_config
 
 
+def _hash(**kwargs):
+    """Shortcut to build ResolvedExecutionContext and get its hash."""
+    defaults = dict(
+        role="", active_skills=[], skill_digests={},
+        provider_config_digest="", base_extra_dirs=[],
+        project_id="", working_dir="", file_policy="", provider_name="",
+    )
+    defaults.update(kwargs)
+    return ResolvedExecutionContext(**defaults).context_hash
+
+
 # =====================================================================
-# §8.5 #1: Approve-as-different-user — PendingRequest preserves identity
+# §8.5 #1: Approve-as-different-user — PendingApproval preserves identity
 # =====================================================================
 
-def test_pending_request_preserves_requester_identity():
-    pending = PendingRequest(
+def test_pending_approval_preserves_requester_identity():
+    pending = PendingApproval(
         request_user_id=111,
         prompt="review this",
         image_paths=[],
@@ -53,18 +63,16 @@ def test_pending_request_preserves_requester_identity():
     assert pending.request_user_id == 111
     assert pending.context_hash == "abc123"
 
-    # Serialize to dict (as stored in session JSON)
     d = dataclasses.asdict(pending)
     assert d["request_user_id"] == 111
     assert d["context_hash"] == "abc123"
-    assert d["denials"] is None
 
-    # Retry PendingRequest has denials
-    pending_retry = PendingRequest(
+
+def test_pending_retry_preserves_fields():
+    pending_retry = PendingRetry(
         request_user_id=222,
         prompt="write file",
         image_paths=[],
-        attachment_dicts=[],
         context_hash="def456",
         denials=[{"tool_name": "Write", "tool_input": {"file_path": "/etc/hosts"}}],
     )
@@ -77,49 +85,46 @@ def test_pending_request_preserves_requester_identity():
 # =====================================================================
 
 def test_context_hash_detects_changes():
-    hash1 = compute_context_hash("engineer", ["code-review"], {"code-review": "aaa"}, "", [])
-    hash2 = compute_context_hash("engineer", ["code-review"], {"code-review": "aaa"}, "", [])
+    hash1 = _hash(role="engineer", active_skills=["code-review"], skill_digests={"code-review": "aaa"})
+    hash2 = _hash(role="engineer", active_skills=["code-review"], skill_digests={"code-review": "aaa"})
     assert hash1 == hash2
 
     # Skill added
-    hash3 = compute_context_hash("engineer", ["code-review", "testing"], {"code-review": "aaa", "testing": "bbb"}, "", [])
+    hash3 = _hash(role="engineer", active_skills=["code-review", "testing"], skill_digests={"code-review": "aaa", "testing": "bbb"})
     assert hash1 != hash3
 
     # Skill removed
-    hash4 = compute_context_hash("engineer", [], {}, "", [])
+    hash4 = _hash(role="engineer")
     assert hash1 != hash4
 
     # Role changed
-    hash5 = compute_context_hash("devops lead", ["code-review"], {"code-review": "aaa"}, "", [])
+    hash5 = _hash(role="devops lead", active_skills=["code-review"], skill_digests={"code-review": "aaa"})
     assert hash1 != hash5
 
     # Skill content changed (digest differs)
-    hash6 = compute_context_hash("engineer", ["code-review"], {"code-review": "bbb"}, "", [])
+    hash6 = _hash(role="engineer", active_skills=["code-review"], skill_digests={"code-review": "bbb"})
     assert hash1 != hash6
 
     # Extra dirs changed
-    hash7 = compute_context_hash("engineer", ["code-review"], {"code-review": "aaa"}, "", ["/opt/new"])
+    hash7 = _hash(role="engineer", active_skills=["code-review"], skill_digests={"code-review": "aaa"}, base_extra_dirs=["/opt/new"])
     assert hash1 != hash7
 
     # Order-independent: skills listed differently but same set
-    hash_a = compute_context_hash("x", ["b", "a"], {"a": "1", "b": "2"}, "", [])
-    hash_b = compute_context_hash("x", ["a", "b"], {"a": "1", "b": "2"}, "", [])
+    hash_a = _hash(role="x", active_skills=["b", "a"], skill_digests={"a": "1", "b": "2"})
+    hash_b = _hash(role="x", active_skills=["a", "b"], skill_digests={"a": "1", "b": "2"})
     assert hash_a == hash_b
 
     # Working dir changed
-    hash_wd1 = compute_context_hash("engineer", ["code-review"], {"code-review": "aaa"}, "", [])
-    hash_wd2 = compute_context_hash("engineer", ["code-review"], {"code-review": "aaa"}, "", [],
-                                     working_dir="/opt/frontend")
+    hash_wd1 = _hash(role="engineer", active_skills=["code-review"], skill_digests={"code-review": "aaa"})
+    hash_wd2 = _hash(role="engineer", active_skills=["code-review"], skill_digests={"code-review": "aaa"}, working_dir="/opt/frontend")
     assert hash_wd1 != hash_wd2
 
     # Different working dirs
-    hash_wd3 = compute_context_hash("engineer", ["code-review"], {"code-review": "aaa"}, "", [],
-                                     working_dir="/opt/backend")
+    hash_wd3 = _hash(role="engineer", active_skills=["code-review"], skill_digests={"code-review": "aaa"}, working_dir="/opt/backend")
     assert hash_wd2 != hash_wd3
 
-    # Same working dir → same hash
-    hash_wd4 = compute_context_hash("engineer", ["code-review"], {"code-review": "aaa"}, "", [],
-                                     working_dir="/opt/frontend")
+    # Same working dir -> same hash
+    hash_wd4 = _hash(role="engineer", active_skills=["code-review"], skill_digests={"code-review": "aaa"}, working_dir="/opt/frontend")
     assert hash_wd2 == hash_wd4
 
 
@@ -128,9 +133,8 @@ def test_context_hash_detects_changes():
 # =====================================================================
 
 def test_pending_invalidation():
-    # Simulating: approval stored with hash1, then role changed → hash differs
-    stored_hash = compute_context_hash("engineer", ["code-review"], {"code-review": "aaa"}, "", [])
-    current_hash = compute_context_hash("manager", ["code-review"], {"code-review": "aaa"}, "", [])
+    stored_hash = _hash(role="engineer", active_skills=["code-review"], skill_digests={"code-review": "aaa"})
+    current_hash = _hash(role="manager", active_skills=["code-review"], skill_digests={"code-review": "aaa"})
     assert stored_hash != current_hash
 
 
@@ -141,8 +145,8 @@ def test_pending_invalidation():
 def test_codex_context_hash_invalidation():
     from app.providers.codex import CodexProvider
 
-    hash1 = compute_context_hash("engineer", ["code-review"], {"code-review": "aaa"}, "", [])
-    hash3 = compute_context_hash("engineer", ["code-review", "testing"], {"code-review": "aaa", "testing": "bbb"}, "", [])
+    hash1 = _hash(role="engineer", active_skills=["code-review"], skill_digests={"code-review": "aaa"})
+    hash3 = _hash(role="engineer", active_skills=["code-review", "testing"], skill_digests={"code-review": "aaa", "testing": "bbb"})
 
     p_codex = CodexProvider(make_config(provider_name="codex"))
     state = p_codex.new_provider_state()
@@ -444,23 +448,21 @@ def test_config_bot_skills():
 
 
 # =====================================================================
-# PendingRequest serialization survives JSON round-trip
+# PendingApproval serialization survives JSON round-trip
 # =====================================================================
 
-def test_pending_request_json_roundtrip():
-    pending = PendingRequest(
+def test_pending_approval_json_roundtrip():
+    pending = PendingApproval(
         request_user_id=42,
         prompt="do stuff",
         image_paths=["/tmp/img.jpg"],
         attachment_dicts=[{"path": "/tmp/a.txt", "original_name": "a.txt", "is_image": False}],
         context_hash="deadbeef",
-        denials=[{"tool_name": "Write", "tool_input": {"file_path": "/etc/hosts"}}],
     )
     serialized = json.dumps(dataclasses.asdict(pending))
     deserialized = json.loads(serialized)
     assert deserialized["request_user_id"] == 42
     assert deserialized["context_hash"] == "deadbeef"
-    assert len(deserialized["denials"]) == 1
     assert deserialized["prompt"] == "do stuff"
 
 

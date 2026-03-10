@@ -1,7 +1,6 @@
 """Telegram command handlers, message handler, progress display, and app wiring."""
 
 import asyncio
-import dataclasses
 import html
 import logging
 import re
@@ -31,10 +30,23 @@ from app.config import BotConfig
 from app.formatting import extract_send_directives, md_to_telegram_html, split_html, trim_text
 from app.execution_context import ResolvedExecutionContext, resolve_execution_context
 from app.providers.base import Provider, RunContext, PreflightContext
+from app.request_flow import (
+    build_setup_state,
+    check_credential_satisfaction,
+    extra_dirs_from_denials,
+    foreign_setup_message,
+    foreign_skill_setup,
+    format_credential_prompt,
+    pending_expired,
+    validate_pending,
+)
 from app.session_state import (
+    AwaitingSkillSetup,
     PendingApproval,
     PendingRetry,
+    SessionState,
     session_from_dict,
+    session_to_dict,
 )
 from app.skills import (
     build_run_context, build_preflight_context,
@@ -93,8 +105,8 @@ def _encryption_key() -> bytes:
     return derive_encryption_key(_cfg().telegram_token)
 
 
-def _approval_mode_source(session: dict[str, Any]) -> str:
-    return "chat override" if session.get("approval_mode_explicit") else "instance default"
+def _approval_mode_source(session: SessionState) -> str:
+    return "chat override" if session.approval_mode_explicit else "instance default"
 
 
 # -- Data classes ----------------------------------------------------------
@@ -206,9 +218,9 @@ def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
 
 # -- Project helpers -------------------------------------------------------
 
-def _resolve_project(session: dict[str, Any]) -> tuple[str, str, tuple[str, ...]] | None:
+def _resolve_project(session: SessionState) -> tuple[str, str, tuple[str, ...]] | None:
     """Return (name, root_dir, extra_dirs) for the session's bound project, or None."""
-    project_id = session.get("project_id", "")
+    project_id = session.project_id
     if not project_id:
         return None
     for name, root_dir, extra_dirs in _cfg().projects:
@@ -217,25 +229,20 @@ def _resolve_project(session: dict[str, Any]) -> tuple[str, str, tuple[str, ...]
     return None
 
 
-def _project_working_dir(session: dict[str, Any]) -> str:
+def _project_working_dir(session: SessionState) -> str:
     """Return the working directory for this session's project, or empty string for default."""
     proj = _resolve_project(session)
     return proj[1] if proj else ""
 
 
-def _resolve_context(session: dict[str, Any]) -> ResolvedExecutionContext:
-    """Build the single authoritative execution identity from session + config.
-
-    Accepts raw dict (from _load) and delegates to the authoritative builder.
-    This is a thin adapter — the real logic lives in resolve_execution_context().
-    """
-    typed = session_from_dict(session)
-    return resolve_execution_context(typed, _cfg(), _prov().name)
+def _resolve_context(session: SessionState) -> ResolvedExecutionContext:
+    """Build the single authoritative execution identity from session + config."""
+    return resolve_execution_context(session, _cfg(), _prov().name)
 
 
 # -- Helpers ---------------------------------------------------------------
 
-def _allowed_roots(chat_id: int, session: dict[str, Any] | None = None) -> list[Path]:
+def _allowed_roots(chat_id: int, session: SessionState | None = None) -> list[Path]:
     """Return path roots this chat is allowed to access.
 
     Uses the chat-specific upload dir (not the shared uploads tree)
@@ -309,136 +316,54 @@ async def keep_typing(chat) -> None:
         pass
 
 
-def _load(chat_id: int) -> dict[str, Any]:
+def _load(chat_id: int) -> SessionState:
     cfg = _cfg()
-    session = load_session(
+    raw = load_session(
         cfg.data_dir, chat_id, _prov().name,
         _prov().new_provider_state, cfg.approval_mode,
         cfg.role, cfg.default_skills,
     )
+    session = session_from_dict(raw)
     # Self-heal: prune active skills whose refs/dirs no longer exist
     from app.skills import normalize_active_skills
     normalize_active_skills(session, save_fn=lambda s: _save(chat_id, s))
     return session
 
 
-def _save(chat_id: int, session: dict[str, Any]) -> None:
-    save_session(_cfg().data_dir, chat_id, session)
+def _save(chat_id: int, session: SessionState) -> None:
+    save_session(_cfg().data_dir, chat_id, session_to_dict(session))
 
 
 # -- Credential helpers ----------------------------------------------------
 
-def _build_setup_state(user_id: int, skill_name: str, missing: list[SkillRequirement]) -> dict:
-    """Build the awaiting_skill_setup dict for conversational credential input."""
-    return {
-        "user_id": user_id,
-        "skill": skill_name,
-        "started_at": time.time(),
-        "remaining": [
-            {"key": r.key, "prompt": r.prompt, "help_url": r.help_url,
-             "validate": r.validate}
-            for r in missing
-        ],
-    }
-
-
-def _format_credential_prompt(req: dict) -> str:
-    """Format a credential prompt for a single requirement.
-
-    Returns HTML-safe text. help_url is rendered as a clickable Telegram link.
-    """
-    text = html.escape(req["prompt"])
-    if req.get("help_url"):
-        url = html.escape(req["help_url"])
-        text += f'\n(<a href="{url}">setup guide</a>)'
-    return text
-
-
-# Foreign setup is considered expired after this many seconds.
-_SETUP_TIMEOUT_SECONDS = 300  # 5 minutes
-
-
-def _foreign_setup_message(setup: dict) -> str:
-    """Format a message about another user's in-progress credential setup."""
-    uid = setup.get("user_id", "unknown")
-    started = setup.get("started_at")
-    if started:
-        elapsed = int(time.time() - started)
-        minutes = elapsed // 60
-        time_str = f"{minutes} min ago" if minutes >= 1 else "just now"
-    else:
-        time_str = "unknown time"
-    return (
-        f"User {uid} is completing credential setup (started {time_str}). "
-        f"Please wait or ask them to finish. An admin can use /cancel to clear it."
-    )
-
-
-def _foreign_skill_setup(
-    session: dict,
-    user_id: int,
-    skill_name: str | None = None,
-) -> dict | None:
-    """Return another user's in-progress setup, optionally filtered by skill.
-
-    Auto-expires setups older than _SETUP_TIMEOUT_SECONDS so a disappeared
-    user can't wedge a shared chat indefinitely.
-    """
-    setup = session.get("awaiting_skill_setup")
-    if not setup or setup.get("user_id") == user_id:
-        return None
-    if skill_name is not None and setup.get("skill") != skill_name:
-        return None
-    # Expire stale setups — the owner may have abandoned the flow.
-    # Missing started_at (pre-existing sessions) is treated as expired.
-    started_at = setup.get("started_at")
-    if started_at is None or (time.time() - started_at) > _SETUP_TIMEOUT_SECONDS:
-        session["awaiting_skill_setup"] = None
-        return None
-    return setup
-
-
 async def _check_credential_satisfaction(
-    chat_id: int, user_id: int, session: dict, message,
+    chat_id: int, user_id: int, session: SessionState, message,
 ) -> dict[str, str] | None:
-    """Check credentials for active skills. Returns credential_env if satisfied, None if not."""
-    cfg = _cfg()
-    active_skills = session.get("active_skills", [])
-    if not active_skills:
-        return {}
+    """Check credentials for active skills. Returns credential_env if satisfied, None if not.
 
-    key = _encryption_key()
-    user_creds = load_user_credentials(cfg.data_dir, user_id, key)
+    Delegates to request_flow.check_credential_satisfaction for pure logic,
+    then handles transport (message sending, session saving).
+    """
+    result = check_credential_satisfaction(
+        session, user_id, _cfg().data_dir, _encryption_key(),
+    )
+    if result.satisfied:
+        return result.credential_env
 
-    all_missing: list[tuple[str, list[SkillRequirement]]] = []
-    for skill_name in active_skills:
-        missing = check_credentials(skill_name, user_creds)
-        if missing:
-            all_missing.append((skill_name, missing))
-
-    if all_missing:
-        # Don't overwrite another user's in-progress setup (group chat safety).
-        # Their next message would fall through to normal execution, leaking a secret.
-        if _foreign_skill_setup(session, user_id):
-            await message.reply_text(
-                _foreign_setup_message(session.get("awaiting_skill_setup", {})),
-            )
-            return None
-
-        # Start setup for the first skill with missing credentials
-        skill_name, missing = all_missing[0]
-        setup = _build_setup_state(user_id, skill_name, missing)
-        session["awaiting_skill_setup"] = setup
-        _save(chat_id, session)
-        first_req = setup["remaining"][0]
-        await message.reply_text(
-            f"Skill <code>{html.escape(skill_name)}</code> needs setup.\n\n"
-            f"{_format_credential_prompt(first_req)}",
-            parse_mode=ParseMode.HTML,
-        )
+    if result.foreign_setup:
+        await message.reply_text(foreign_setup_message(result.foreign_setup))
         return None
 
-    return build_credential_env(active_skills, user_creds)
+    # Start credential setup for missing skill
+    session.awaiting_skill_setup = result.setup_state
+    _save(chat_id, session)
+    first_req = result.setup_state.remaining[0]
+    await message.reply_text(
+        f"Skill <code>{html.escape(result.missing_skill)}</code> needs setup.\n\n"
+        f"{format_credential_prompt(first_req)}",
+        parse_mode=ParseMode.HTML,
+    )
+    return None
 
 
 # -- Core execution --------------------------------------------------------
@@ -489,42 +414,36 @@ async def execute_request(
     context_hash = resolved.context_hash
 
     # Codex thread invalidation: start fresh thread when context drifted or bot restarted.
-    # After a restart, the old thread's context may have been compacted and the model
-    # loses awareness of available tools.  A fresh thread gets full system prompt.
     if prov.name == "codex":
-        stored_hash = session["provider_state"].get("context_hash")
-        stored_boot = session["provider_state"].get("boot_id")
+        stored_hash = session.provider_state.get("context_hash")
+        stored_boot = session.provider_state.get("boot_id")
         stale_thread = (
             (stored_hash and stored_hash != context_hash)
             or (stored_boot and stored_boot != _boot_id)
         )
-        if stale_thread and session["provider_state"].get("thread_id"):
+        if stale_thread and session.provider_state.get("thread_id"):
             log.info("Clearing stale codex thread for chat %d (hash_match=%s, boot_match=%s)",
                      chat_id, stored_hash == context_hash, stored_boot == _boot_id)
-            session["provider_state"]["thread_id"] = None
-        session["provider_state"]["context_hash"] = context_hash
-        session["provider_state"]["boot_id"] = _boot_id
+            session.provider_state["thread_id"] = None
+        session.provider_state["context_hash"] = context_hash
+        session.provider_state["boot_id"] = _boot_id
         _save(chat_id, session)
 
-    is_resume = bool(session["provider_state"].get("thread_id") or session["provider_state"].get("started"))
+    is_resume = bool(session.provider_state.get("thread_id") or session.provider_state.get("started"))
     label = f"Resuming {prov.name}..." if is_resume else f"Starting {prov.name}..."
     status_msg = await message.reply_text(label)
     progress = TelegramProgress(status_msg, cfg)
     typing_task = asyncio.create_task(keep_typing(message.chat))
 
     try:
-        result = await prov.run(session["provider_state"], prompt, image_paths, progress, context=context)
+        result = await prov.run(session.provider_state, prompt, image_paths, progress, context=context)
     finally:
         typing_task.cancel()
 
     # Re-load session to pick up any changes made while the provider was running
-    # (e.g. /approval or /new issued concurrently), then merge provider state.
     session = _load(chat_id)
-    session["provider_state"].update(result.provider_state_updates)
+    session.provider_state.update(result.provider_state_updates)
 
-    # If a Codex resume returned an error (not timeout — timeouts are handled
-    # in the provider with an extended deadline for compaction), the thread is
-    # likely corrupt.  Clear thread_id so the next message starts fresh.
     resume_errored = (
         prov.name == "codex"
         and is_resume
@@ -534,7 +453,7 @@ async def execute_request(
     if resume_errored:
         log.warning("Codex resume error (rc=%s) for chat %d — clearing thread",
                      result.returncode, chat_id)
-        session["provider_state"]["thread_id"] = None
+        session.provider_state["thread_id"] = None
 
     _save(chat_id, session)
 
@@ -557,14 +476,14 @@ async def execute_request(
         await progress.update("Completed with blocked actions.", force=True)
 
         session = _load(chat_id)
-        session["pending_retry"] = dataclasses.asdict(PendingRetry(
+        session.pending_retry = PendingRetry(
             request_user_id=request_user_id,
             prompt=prompt,
             image_paths=image_paths,
             context_hash=context_hash,
             denials=result.denials,
             created_at=time.time(),
-        ))
+        )
         _save(chat_id, session)
 
         keyboard = InlineKeyboardMarkup([[
@@ -593,7 +512,7 @@ async def execute_request(
     save_raw(cfg.data_dir, chat_id, prompt, cleaned_reply)
 
     # Compact mode: summarize long responses for mobile readability
-    compact = session.get("compact_mode", cfg.compact_mode)
+    compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
     if compact and len(cleaned_reply) > 800:
         try:
             summary = await summarize(cleaned_reply, cfg.summary_model)
@@ -619,7 +538,7 @@ async def request_approval(
     prov = _prov()
     session = _load(chat_id)
 
-    if session.get("pending_approval") or session.get("pending_retry"):
+    if session.has_pending:
         await message.reply_text(
             "A preflight approval is already waiting. Use /approve or /reject first."
         )
@@ -674,14 +593,14 @@ async def request_approval(
         {"path": str(a.path), "original_name": a.original_name, "is_image": a.is_image}
         for a in attachments
     ]
-    session["pending_approval"] = dataclasses.asdict(PendingApproval(
+    session.pending_approval = PendingApproval(
         request_user_id=request_user_id,
         prompt=prompt,
         image_paths=image_paths,
         attachment_dicts=attachment_dicts,
         context_hash=context_hash,
         created_at=time.time(),
-    ))
+    )
     _save(chat_id, session)
 
     keyboard = InlineKeyboardMarkup([[
@@ -698,93 +617,28 @@ async def request_approval(
     await message.chat.send_message("Approve this preflight plan?", reply_markup=keyboard)
 
 
-def _extra_dirs_from_denials(denials: list[dict]) -> list[str]:
-    """Extract directory paths from permission denial tool_input fields.
-
-    For file paths (file_path, path): add the parent directory.
-    For directory values: add the directory itself (not its parent).
-    For commands: add "/" (needs broad access).
-    """
-    dirs: set[str] = set()
-    for d in denials:
-        inp = d.get("tool_input", {})
-        # File paths → parent directory
-        for key in ("file_path", "path"):
-            val = inp.get(key, "")
-            if val:
-                dirs.add(str(Path(val).parent))
-        # Directory → the directory itself
-        dir_val = inp.get("directory", "")
-        if dir_val:
-            dirs.add(str(Path(dir_val)))
-        if "command" in inp:
-            dirs.add("/")
-    return list(dirs)
-
-
-def _current_context_hash(session: dict[str, Any]) -> str:
-    """Compute the current context hash from session state and config.
-
-    Delegates to _resolve_context() so that all paths — execution, preflight,
-    approval validation, and retry validation — use the same field set.
-    """
-    return _resolve_context(session).context_hash
-
-
-def _pending_expired(pending: dict) -> str | None:
-    """Return an expiry message if the pending request is too old, else None."""
-    created_at = pending.get("created_at", 0)
-    if not created_at:
-        return None  # legacy requests without timestamp — allow
-    ttl = max(3600, _cfg().timeout_seconds)  # at least 1 hour
-    age = time.time() - created_at
-    if age > ttl:
-        minutes = int(age // 60)
-        return f"This request has expired (created {minutes} minutes ago). Please resend your message."
-    return None
-
-
-def _get_pending(session: dict[str, Any]) -> dict | None:
-    """Return the pending approval or retry dict, whichever is set."""
-    return session.get("pending_approval") or session.get("pending_retry")
-
-
-def _clear_pending(session: dict[str, Any]) -> None:
-    """Clear both pending fields."""
-    session["pending_approval"] = None
-    session["pending_retry"] = None
-
-
 async def approve_pending(chat_id: int, message) -> None:
     session = _load(chat_id)
-    pending = _get_pending(session)
+    pending = session.pending_approval or session.pending_retry
     if not pending:
         await message.reply_text("No pending request to approve.")
         return
 
-    # Reject expired requests
-    expiry_msg = _pending_expired(pending)
-    if expiry_msg:
-        _clear_pending(session)
+    error = validate_pending(pending, session, _cfg(), _prov().name)
+    if error:
+        session.clear_pending()
         _save(chat_id, session)
-        await message.reply_text(expiry_msg)
+        await message.reply_text(error)
         return
 
-    # Validate context hash — reject if stale
-    if pending.get("context_hash") and pending["context_hash"] != _current_context_hash(session):
-        _clear_pending(session)
-        _save(chat_id, session)
-        await message.reply_text("Context changed since this request was made. Please resend.")
-        return
-
-    denials = pending.get("denials") or []
-    extra_dirs = _extra_dirs_from_denials(denials) if denials else None
-    request_user_id = pending.get("request_user_id", 0)
-    _clear_pending(session)
+    denials = getattr(pending, 'denials', None) or []
+    denial_dirs = extra_dirs_from_denials(denials) if denials else None
+    request_user_id = pending.request_user_id
+    session.clear_pending()
     _save(chat_id, session)
     await execute_request(
-        chat_id, pending["prompt"], pending.get("image_paths", []), message,
-        extra_dirs=extra_dirs,
+        chat_id, pending.prompt, pending.image_paths, message,
+        extra_dirs=denial_dirs,
         request_user_id=request_user_id,
         skip_permissions=True,
     )
@@ -792,10 +646,10 @@ async def approve_pending(chat_id: int, message) -> None:
 
 async def reject_pending(chat_id: int, message) -> None:
     session = _load(chat_id)
-    if not _get_pending(session):
+    if not session.has_pending:
         await message.reply_text("No pending request to reject.")
         return
-    _clear_pending(session)
+    session.clear_pending()
     _save(chat_id, session)
     await message.reply_text("Pending request rejected.")
 
@@ -903,22 +757,20 @@ async def cmd_new(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     cfg = _cfg()
     prov = _prov()
     async with CHAT_LOCKS[chat_id]:
-        # Preserve approval_mode only if explicitly set via /approval command
         old_session = _load(chat_id)
         user_id = event.user.id
-        if _foreign_skill_setup(old_session, user_id):
+        if foreign_skill_setup(old_session, user_id):
             await update.effective_message.reply_text(
-                _foreign_setup_message(old_session.get("awaiting_skill_setup", {})),
+                foreign_setup_message(old_session.awaiting_skill_setup),
             )
             return
-        # Only preserve approval_mode if the user explicitly set it via /approval
-        if old_session.get("approval_mode_explicit"):
-            approval_mode = old_session.get("approval_mode", cfg.approval_mode)
+        if old_session.approval_mode_explicit:
+            approval_mode = old_session.approval_mode
         else:
             approval_mode = cfg.approval_mode
-        session = default_session(prov.name, prov.new_provider_state(), approval_mode, cfg.role, cfg.default_skills)
-        if old_session.get("approval_mode_explicit"):
-            session["approval_mode_explicit"] = True
+        session = session_from_dict(default_session(prov.name, prov.new_provider_state(), approval_mode, cfg.role, cfg.default_skills))
+        if old_session.approval_mode_explicit:
+            session.approval_mode_explicit = True
         _save(chat_id, session)
         # Clean up any staged Codex scripts for this chat
         cleanup_codex_scripts(cfg.data_dir, chat_id)
@@ -929,7 +781,7 @@ async def cmd_new(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     session = _load(event.chat_id)
     cfg = _cfg()
-    pstate = session.get("provider_state", {})
+    pstate = session.provider_state
 
     # Show provider-relevant session ID
     if _prov().name == "claude":
@@ -940,11 +792,11 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         tid = pstate.get("thread_id") or "[none yet]"
         session_line = f"Thread: <code>{html.escape(str(tid))}</code>"
 
-    pending = "yes" if _get_pending(session) else "no"
+    pending = "yes" if session.has_pending else "no"
     resolved = _resolve_context(session)
     role_display = resolved.role or "(default)"
     skills_display = ", ".join(resolved.active_skills) if resolved.active_skills else "(none)"
-    approval_mode = session.get("approval_mode", "off")
+    approval_mode = session.approval_mode
     approval_source = _approval_mode_source(session)
 
     # Resolve effective working directory for display
@@ -978,14 +830,14 @@ async def cmd_approval(event, update: Update, context: ContextTypes.DEFAULT_TYPE
     async with CHAT_LOCKS[chat_id]:
         session = _load(chat_id)
         if arg == "status":
-            mode = session.get("approval_mode", "off")
+            mode = session.approval_mode
             source = _approval_mode_source(session)
             await update.effective_message.reply_text(
                 f"Preflight approval mode is {mode} ({source})."
             )
             return
-        session["approval_mode"] = arg
-        session["approval_mode_explicit"] = True
+        session.approval_mode = arg
+        session.approval_mode_explicit = True
         _save(chat_id, session)
     await update.effective_message.reply_text(
         f"Preflight approval mode set to {arg} for this chat."
@@ -1038,7 +890,7 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         session = None
     kwargs: dict[str, Any] = {}
     if session is not None:
-        kwargs.update(session=session, user_id=event.user.id,
+        kwargs.update(session=session_to_dict(session), user_id=event.user.id,
                       encryption_key=_encryption_key())
     report = await collect_doctor_report(_cfg(), _prov(), **kwargs)
     parts: list[str] = []
@@ -1066,13 +918,13 @@ async def cmd_export(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     # Add session metadata header
     session = _load(chat_id)
-    skills = session.get("active_skills", [])
+    skills = session.active_skills
     header_lines = [
         f"Chat ID: {chat_id}",
-        f"Provider: {session.get('provider', 'unknown')}",
-        f"Approval mode: {session.get('approval_mode', 'off')}",
+        f"Provider: {session.provider}",
+        f"Approval mode: {session.approval_mode}",
         f"Active skills: {', '.join(skills) if skills else 'none'}",
-        f"Created: {session.get('created_at', 'unknown')[:19]}",
+        f"Created: {(session.created_at or 'unknown')[:19]}",
         "",
         "Note: This export contains up to 50 recent turns — only successful",
         "model responses and approval plans. Denied, timed-out, or failed",
@@ -1224,11 +1076,10 @@ async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     async with CHAT_LOCKS[chat_id]:
         session = _load(chat_id)
 
-        # Cancel credential setup — own setup, or admin can cancel foreign setup
-        setup = session.get("awaiting_skill_setup")
+        setup = session.awaiting_skill_setup
         if setup:
-            if setup.get("user_id") == user_id or is_admin(event.user):
-                session["awaiting_skill_setup"] = None
+            if setup.user_id == user_id or is_admin(event.user):
+                session.awaiting_skill_setup = None
                 _save(chat_id, session)
                 await update.effective_message.reply_text("Credential setup cancelled.")
                 return
@@ -1238,9 +1089,8 @@ async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 )
                 return
 
-        # Cancel pending approval/retry request
-        if _get_pending(session):
-            _clear_pending(session)
+        if session.has_pending:
+            session.clear_pending()
             _save(chat_id, session)
             await update.effective_message.reply_text("Pending request cancelled.")
             return
@@ -1299,21 +1149,19 @@ async def _execute_clear_credentials(
     setup_cleared = False
     async with CHAT_LOCKS[chat_id]:
         session = _load(chat_id)
-        setup = session.get("awaiting_skill_setup")
-        if setup and setup.get("user_id") == user_id:
-            if skill_name is None or setup.get("skill") == skill_name:
-                session["awaiting_skill_setup"] = None
+        setup = session.awaiting_skill_setup
+        if setup and setup.user_id == user_id:
+            if skill_name is None or setup.skill == skill_name:
+                session.awaiting_skill_setup = None
                 setup_cleared = True
 
-        # Deactivate affected skills
-        active = session.get("active_skills", [])
+        active = session.active_skills
         deactivated = []
         for name in removed:
             if name in active and get_skill_requirements(name):
                 active.remove(name)
                 deactivated.append(name)
         if deactivated or setup_cleared:
-            session["active_skills"] = active
             _save(chat_id, session)
 
     parts = []
@@ -1372,7 +1220,7 @@ async def cmd_compact(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if not args:
         session = _load(chat_id)
-        current = session.get("compact_mode", _cfg().compact_mode)
+        current = session.compact_mode if session.compact_mode is not None else _cfg().compact_mode
         state = "on" if current else "off"
         await update.effective_message.reply_text(
             f"Compact mode is <b>{state}</b>.\nUse <code>/compact on</code> or <code>/compact off</code> to change.",
@@ -1387,7 +1235,7 @@ async def cmd_compact(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     async with CHAT_LOCKS[chat_id]:
         session = _load(chat_id)
-        session["compact_mode"] = mode == "on"
+        session.compact_mode = mode == "on"
         _save(chat_id, session)
 
     label = "on — long responses will be summarized" if mode == "on" else "off"
@@ -1424,9 +1272,8 @@ async def cmd_role(event, update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     args = event.args
 
     if not args:
-        # /role — show current role
         session = _load(chat_id)
-        role = session.get("role", "")
+        role = session.role
         if role:
             await update.effective_message.reply_text(
                 f"Current role: <code>{html.escape(role)}</code>", parse_mode=ParseMode.HTML,
@@ -1439,16 +1286,15 @@ async def cmd_role(event, update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         cfg = _cfg()
         async with CHAT_LOCKS[chat_id]:
             session = _load(chat_id)
-            session["role"] = cfg.role
+            session.role = cfg.role
             _save(chat_id, session)
         await update.effective_message.reply_text("Role reset to instance default.")
         return
 
-    # /role <text> — set role
     role_text = " ".join(args)
     async with CHAT_LOCKS[chat_id]:
         session = _load(chat_id)
-        session["role"] = role_text
+        session.role = role_text
         _save(chat_id, session)
     await update.effective_message.reply_text(
         f"Role set to: <code>{html.escape(role_text)}</code>", parse_mode=ParseMode.HTML,
@@ -1492,18 +1338,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await message.chat.send_action(ChatAction.TYPING)
         session = _load(chat_id)
 
-        # Credential capture (§8.1: before approval mode check)
-        setup = session.get("awaiting_skill_setup")
-        if setup and setup.get("user_id") == user_id:
+        setup = session.awaiting_skill_setup
+        if setup and setup.user_id == user_id:
             cfg = _cfg()
             key = _encryption_key()
-            req = setup["remaining"][0]
+            req = setup.remaining[0]
             raw_value = (message.text or "").strip()
             if not raw_value:
                 await message.reply_text("Please send the credential value as a text message.")
                 return
 
-            # Validate credential if a validate spec exists
             if req.get("validate"):
                 ok, detail = await validate_credential(
                     SkillRequirement(key=req["key"], prompt=req["prompt"],
@@ -1511,7 +1355,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     raw_value,
                 )
                 if not ok:
-                    # Delete the message containing the secret before reporting failure
                     try:
                         await message.delete()
                     except Exception:
@@ -1524,33 +1367,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     return
 
             save_user_credential(
-                cfg.data_dir, user_id, setup["skill"], req["key"], raw_value, key,
+                cfg.data_dir, user_id, setup.skill, req["key"], raw_value, key,
             )
 
-            # Step 20: delete the message containing the secret
             try:
                 await message.delete()
             except Exception:
                 log.warning("Could not delete credential message for user %d", user_id)
 
-            setup["remaining"].pop(0)
-            if setup["remaining"]:
-                # Prompt for the next credential
-                next_req = setup["remaining"][0]
-                session["awaiting_skill_setup"] = setup
+            setup.remaining.pop(0)
+            if setup.remaining:
+                next_req = setup.remaining[0]
                 _save(chat_id, session)
                 await message.reply_text(
-                    _format_credential_prompt(next_req),
+                    format_credential_prompt(next_req),
                     parse_mode=ParseMode.HTML,
                 )
             else:
-                # All credentials collected — activate skill now
-                skill_name = setup["skill"]
-                session.pop("awaiting_skill_setup", None)
-                active = session.get("active_skills", [])
-                if skill_name not in active:
-                    active.append(skill_name)
-                    session["active_skills"] = active
+                skill_name = setup.skill
+                session.awaiting_skill_setup = None
+                if skill_name not in session.active_skills:
+                    session.active_skills.append(skill_name)
                 _save(chat_id, session)
                 await message.reply_text(
                     f"Skill <code>{html.escape(skill_name)}</code> is ready.",
@@ -1558,7 +1395,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 )
             return
 
-        if session.get("approval_mode") == "on":
+        if session.approval_mode == "on":
             await request_approval(chat_id, prompt, image_paths, list(msg.attachments), message, request_user_id=user_id)
             return
         await execute_request(chat_id, prompt, image_paths, message, request_user_id=user_id)
@@ -1582,7 +1419,7 @@ async def handle_callback(event, query) -> None:
 
         if event.data == "retry_skip":
             session = _load(chat_id)
-            _clear_pending(session)
+            session.clear_pending()
             _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.message.edit_text("Skipped.")
@@ -1590,46 +1427,34 @@ async def handle_callback(event, query) -> None:
 
         if event.data == "retry_allow":
             session = _load(chat_id)
-            pending = session.get("pending_retry")
+            pending = session.pending_retry
             if not pending:
                 await query.message.edit_text("Nothing to retry.")
                 return
 
-            # Reject expired requests
-            expiry_msg = _pending_expired(pending)
-            if expiry_msg:
-                _clear_pending(session)
+            error = validate_pending(pending, session, _cfg(), _prov().name)
+            if error:
+                session.clear_pending()
                 _save(chat_id, session)
                 await query.edit_message_reply_markup(reply_markup=None)
-                await query.message.edit_text(expiry_msg)
+                await query.message.edit_text(error)
                 return
 
-            # Validate context hash — reject if stale
-            if pending.get("context_hash") and pending["context_hash"] != _current_context_hash(session):
-                _clear_pending(session)
-                _save(chat_id, session)
-                await query.edit_message_reply_markup(reply_markup=None)
-                await query.message.edit_text("Context changed since this request was made. Please resend.")
-                return
+            prompt = pending.prompt
+            denials = pending.denials or []
+            request_user_id = pending.request_user_id
+            session.clear_pending()
 
-            prompt = pending["prompt"]
-            denials = pending.get("denials") or []
-            request_user_id = pending.get("request_user_id", 0)
-            _clear_pending(session)
+            denial_dirs = extra_dirs_from_denials(denials)
 
-            # Derive execution dirs: base extra_dirs + approved dirs from denials
-            denial_dirs = _extra_dirs_from_denials(denials)
-
-            # For Codex: clear thread_id when there are approved dirs so the
-            # retry starts a fresh exec with --add-dir (resume doesn't support it)
             if denial_dirs and _prov().name == "codex":
-                session["provider_state"]["thread_id"] = None
+                session.provider_state["thread_id"] = None
 
             _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
 
             await execute_request(
-                chat_id, prompt, pending.get("image_paths", []),
+                chat_id, prompt, pending.image_paths,
                 query.message, denial_dirs,
                 request_user_id=request_user_id,
                 skip_permissions=True,
@@ -1654,10 +1479,8 @@ async def handle_skill_add_callback(event, query) -> None:
         name = event.data.split(":", 1)[1]
         async with CHAT_LOCKS[chat_id]:
             session = _load(chat_id)
-            active = session.get("active_skills", [])
-            if name not in active:
-                active.append(name)
-                session["active_skills"] = active
+            if name not in session.active_skills:
+                session.active_skills.append(name)
                 _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(
@@ -1725,7 +1548,7 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
             await msg.reply_text("No projects configured. Set BOT_PROJECTS in your instance config.")
             return
         session = _load(event.chat_id)
-        current = session.get("project_id", "")
+        current = session.project_id
         lines = ["<b>Available projects:</b>"]
         for name, root_dir, _ in cfg.projects:
             marker = " (active)" if name == current else ""
@@ -1744,14 +1567,13 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
             return
         session = _load(event.chat_id)
-        old_project = session.get("project_id", "")
+        old_project = session.project_id
         if old_project == project_name:
             await msg.reply_text(f"Already using project <code>{html.escape(project_name)}</code>.", parse_mode=ParseMode.HTML)
             return
-        # Switch project — clear provider state and pending requests
-        session["project_id"] = project_name
-        session["provider_state"] = _prov().new_provider_state()
-        _clear_pending(session)
+        session.project_id = project_name
+        session.provider_state = _prov().new_provider_state()
+        session.clear_pending()
         _save(event.chat_id, session)
         proj_root = next(root for name, root, _ in cfg.projects if name == project_name)
         await msg.reply_text(
@@ -1764,12 +1586,12 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if arg == "clear":
         session = _load(event.chat_id)
-        if not session.get("project_id"):
+        if not session.project_id:
             await msg.reply_text("No project is active.")
             return
-        session["project_id"] = ""
-        session["provider_state"] = _prov().new_provider_state()
-        _clear_pending(session)
+        session.project_id = ""
+        session.provider_state = _prov().new_provider_state()
+        session.clear_pending()
         _save(event.chat_id, session)
         await msg.reply_text(
             f"Project cleared. Using instance default: <code>{html.escape(str(cfg.working_dir))}</code>\n"
@@ -1801,14 +1623,13 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if arg in ("inspect", "edit"):
         session = _load(event.chat_id)
-        old_policy = session.get("file_policy") or "edit"
+        old_policy = session.file_policy or "edit"
         if old_policy == arg:
             await msg.reply_text(f"File policy is already <code>{html.escape(arg)}</code>.", parse_mode=ParseMode.HTML)
             return
-        session["file_policy"] = arg
-        # Policy change invalidates provider state (Codex sandbox changes)
-        session["provider_state"] = _prov().new_provider_state()
-        _clear_pending(session)
+        session.file_policy = arg
+        session.provider_state = _prov().new_provider_state()
+        session.clear_pending()
         _save(event.chat_id, session)
         await msg.reply_text(
             f"File policy set to <code>{html.escape(arg)}</code>.\nProvider session reset.",
@@ -1818,7 +1639,7 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if arg == "" or arg == "status":
         session = _load(event.chat_id)
-        policy = session.get("file_policy") or "edit"
+        policy = session.file_policy or "edit"
         await msg.reply_text(
             f"File policy: <code>{html.escape(policy)}</code>\n"
             f"Use <code>/policy inspect</code> or <code>/policy edit</code> to change.",

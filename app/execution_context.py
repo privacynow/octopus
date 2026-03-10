@@ -39,7 +39,7 @@ class ResolvedExecutionContext:
     provider_config_digest: str
     base_extra_dirs: list[str]  # from config only (not uploads, not denial dirs)
     project_id: str
-    working_dir: str  # resolved from project binding; empty = config default
+    working_dir: str  # resolved: project root_dir, or config.working_dir
     file_policy: str  # "inspect", "edit", or ""
     provider_name: str
 
@@ -86,7 +86,7 @@ def resolve_execution_context(
                 project_binding = ProjectBinding(name=name, root_dir=root_dir, extra_dirs=extra_dirs)
                 break
 
-    working_dir = project_binding.root_dir if project_binding else ""
+    working_dir = project_binding.root_dir if project_binding else str(config.working_dir)
 
     return ResolvedExecutionContext(
         role=session.role,

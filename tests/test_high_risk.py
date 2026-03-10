@@ -19,7 +19,7 @@ from app.storage import (
     resolve_allowed_path,
     save_session,
 )
-from app.telegram_handlers import _extra_dirs_from_denials
+from app.request_flow import extra_dirs_from_denials as _extra_dirs_from_denials
 from tests.support.config_support import make_config as make_test_config
 
 

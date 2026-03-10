@@ -75,7 +75,8 @@ The highest-signal coverage remains in the handler integration suites. These exe
 | `app/formatting.py` | 162 | Markdown-to-Telegram HTML, text splitting, SEND_FILE directives |
 | `app/session_state.py` | ~120 | Typed session models: SessionState, PendingApproval, PendingRetry, AwaitingSkillSetup, ProjectBinding. Serialization via `dataclasses.asdict()`. |
 | `app/execution_context.py` | ~100 | Authoritative resolved execution context: `ResolvedExecutionContext`, `resolve_execution_context()`. Single source of context hashing. |
-| `app/providers/base.py` | ~110 | Provider protocol, RunResult, RunContext, PreflightContext. Backward-compat re-exports for `compute_context_hash`, `PendingRequest`, `ResolvedContext`. |
+| `app/request_flow.py` | ~210 | Pure business logic: credential satisfaction, pending validation, denial dir extraction, setup state management. No Telegram imports. |
+| `app/providers/base.py` | ~70 | Provider protocol, RunResult, RunContext, PreflightContext. |
 | `app/providers/claude.py` | 335 | Claude CLI provider (stream-json, session-id sessions, MCP config) |
 | `app/providers/codex.py` | 309 | Codex CLI provider (exec --json, thread-id sessions, context hash invalidation) |
 

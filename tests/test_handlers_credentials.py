@@ -1053,10 +1053,11 @@ async def test_friendly_validation_errors():
 
 async def test_credential_prompt_html_link():
     req = {"key": "TOKEN", "prompt": "Enter your token", "help_url": "https://example.com/guide"}
-    result = _th._format_credential_prompt(req)
+    from app.request_flow import format_credential_prompt
+    result = format_credential_prompt(req)
     assert 'href="https://example.com/guide"' in result
     assert "setup guide" in result
-    result2 = _th._format_credential_prompt({"key": "TOKEN", "prompt": "Enter your token", "help_url": None})
+    result2 = format_credential_prompt({"key": "TOKEN", "prompt": "Enter your token", "help_url": None})
     assert "href" not in result2
 
 
@@ -1080,7 +1081,9 @@ async def test_delete_user_credentials():
 
 
 async def test_foreign_setup_message_info():
-    msg = _th._foreign_setup_message({"user_id": 42, "started_at": time.time() - 120})
+    from app.session_state import AwaitingSkillSetup
+    from app.request_flow import foreign_setup_message
+    msg = foreign_setup_message(AwaitingSkillSetup(user_id=42, skill="test", remaining=[], started_at=time.time() - 120))
     assert "42" in msg
     assert "min ago" in msg
     assert "/cancel" in msg

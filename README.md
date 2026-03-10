@@ -12,13 +12,20 @@ Run **Claude Code** or **Codex CLI** through Telegram, with approvals, file exch
 - Add reusable skills and store per-user credentials securely.
 - Run multiple bots at once, each with its own token, provider, model, and history.
 
-```mermaid
-flowchart LR
-  U[Telegram user] --> B[Telegram Agent Bot]
-  B --> P[Claude Code or Codex CLI]
-  P --> W[Working directory and files]
-  P --> B
-  B --> U
+```text
+You in Telegram
+      |
+      v
+Telegram Agent Bot
+      |
+      v
+Claude Code or Codex CLI
+      |
+      v
+Your files and working directory
+      |
+      v
+Answer comes back to the same chat
 ```
 
 ## Get Started
@@ -58,20 +65,21 @@ or upload files and ask:
 
 If approval mode is on, the bot asks the provider for a read-only plan first. You approve or reject with buttons in chat.
 
-```mermaid
-sequenceDiagram
-  participant U as User
-  participant B as Bot
-  participant P as Provider CLI
-
-  U->>B: "Refactor this module"
-  B->>P: Preflight / plan
-  P-->>B: Read-only plan
-  B-->>U: Approve or Reject
-  U->>B: Approve
-  B->>P: Execute
-  P-->>B: Result + artifacts
-  B-->>U: Final response
+```text
+You ask for work
+      |
+      v
+Bot shows a plan first
+      |
+      +--> Reject -> nothing runs
+      |
+      +--> Approve
+              |
+              v
+        Bot executes the task
+              |
+              v
+        You get the result in chat
 ```
 
 ### 3. Work with results

@@ -41,7 +41,8 @@ def _hash(**kwargs):
     """Shortcut to build ResolvedExecutionContext and get its hash."""
     defaults = dict(
         role="", active_skills=[], skill_digests={},
-        provider_config_digest="", base_extra_dirs=[],
+        provider_config_digest="", execution_config_digest="",
+        base_extra_dirs=[],
         project_id="", working_dir="", file_policy="", provider_name="",
     )
     defaults.update(kwargs)

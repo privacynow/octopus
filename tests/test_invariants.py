@@ -16,7 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from app.execution_context import ResolvedExecutionContext, resolve_execution_context
+from app.execution_context import (
+    ResolvedExecutionContext,
+    _compute_execution_config_digest,
+    resolve_execution_context,
+)
 from app.providers.base import (
     RunContext,
     RunResult,
@@ -544,10 +548,12 @@ _HASH_FIELD_CHANGES = [
     pytest.param({"active_skills": ["new-skill"]}, id="skills"),
     pytest.param({"skill_digests": {"s": "changed"}}, id="skill-digests"),
     pytest.param({"provider_config_digest": "changed"}, id="provider-config"),
+    pytest.param({"execution_config_digest": "changed"}, id="execution-config"),
     pytest.param({"base_extra_dirs": ["/new/dir"]}, id="extra-dirs"),
     pytest.param({"project_id": "some-project"}, id="project-id"),
     pytest.param({"file_policy": "inspect"}, id="file-policy"),
     pytest.param({"working_dir": "/opt/other"}, id="working-dir"),
+    pytest.param({"provider_name": "codex"}, id="provider-name"),
 ]
 
 _BASELINE_CTX = dict(
@@ -555,6 +561,7 @@ _BASELINE_CTX = dict(
     active_skills=["code-review"],
     skill_digests={"code-review": "aaa"},
     provider_config_digest="pcd",
+    execution_config_digest="ecd",
     base_extra_dirs=["/opt/repo"],
     project_id="",
     file_policy="",
@@ -716,4 +723,67 @@ async def test_resolve_execution_context_matches_handler_adapter():
 
         assert handler_hash == direct_hash, (
             "Handler adapter and direct resolve must produce identical hashes"
+        )
+
+
+# =====================================================================
+# INVARIANT 10: execution_config_digest covers all BotConfig execution fields
+#
+# Changing model, codex_sandbox, codex_full_auto, codex_dangerous, or
+# codex_profile must produce a different digest — otherwise pending
+# approvals created under one config survive a config change.
+# =====================================================================
+
+_EXEC_CONFIG_FIELDS = [
+    pytest.param("model", "gpt-4", "gpt-3.5", id="model"),
+    pytest.param("codex_sandbox", "networking", "off", id="codex-sandbox"),
+    pytest.param("codex_full_auto", True, False, id="codex-full-auto"),
+    pytest.param("codex_dangerous", True, False, id="codex-dangerous"),
+    pytest.param("codex_profile", "fast", "", id="codex-profile"),
+]
+
+
+@pytest.mark.parametrize("field_name, val_a, val_b", _EXEC_CONFIG_FIELDS)
+def test_execution_config_digest_sensitive_to_field(field_name, val_a, val_b):
+    """Every BotConfig execution field must affect the execution config digest."""
+    cfg_a = _make_config(**{field_name: val_a})
+    cfg_b = _make_config(**{field_name: val_b})
+    digest_a = _compute_execution_config_digest(cfg_a)
+    digest_b = _compute_execution_config_digest(cfg_b)
+    assert digest_a != digest_b, (
+        f"execution_config_digest must change when {field_name} changes"
+    )
+
+
+# =====================================================================
+# INVARIANT 11: Configured extra_dirs reach provider context
+#
+# BOT_EXTRA_DIRS entries must appear in the RunContext.extra_dirs
+# passed to the provider, not just in the resolved execution identity.
+# =====================================================================
+
+async def test_configured_extra_dirs_forwarded_to_provider():
+    """extra_dirs from BotConfig must reach prov.run_calls[0]['context'].extra_dirs."""
+    with fresh_data_dir() as data_dir:
+        extra = Path(data_dir / "configured-extra")
+        extra.mkdir()
+        cfg = make_config(data_dir, extra_dirs=(extra,))
+        prov = FakeProvider("claude")
+        prov.run_results = [RunResult(text="ok")]
+        setup_globals(cfg, prov)
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+
+        import app.telegram_handlers as th
+
+        await th.handle_message(
+            FakeUpdate(message=FakeMessage(chat=chat, text="hello"), user=user, chat=chat),
+            FakeContext(),
+        )
+
+        assert len(prov.run_calls) == 1
+        ctx = prov.run_calls[0]["context"]
+        assert any(str(extra) in d for d in ctx.extra_dirs), (
+            f"Configured extra_dirs not found in provider context: {ctx.extra_dirs}"
         )

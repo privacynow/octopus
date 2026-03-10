@@ -392,8 +392,9 @@ async def execute_request(
         return
 
     # Always include the chat-specific upload dir (not the shared uploads tree)
+    # plus configured extra_dirs from BotConfig and any denial dirs from retries
     upload_dir = str(chat_upload_dir(cfg.data_dir, chat_id))
-    all_extra_dirs = [upload_dir] + (extra_dirs or [])
+    all_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs) + (extra_dirs or [])
 
     # Stage Codex scripts before building context so scripts_dir is in extra_dirs
     if prov.name == "codex":
@@ -554,10 +555,11 @@ async def request_approval(
     if credential_env is None:
         return
 
-    # Build preflight context
+    # Build preflight context (include config extra_dirs + upload dir)
     upload_dir = str(chat_upload_dir(cfg.data_dir, chat_id))
+    preflight_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs)
     preflight_context = build_preflight_context(
-        resolved.role, resolved.active_skills, [upload_dir],
+        resolved.role, resolved.active_skills, preflight_extra_dirs,
         provider_name=prov.name,
         working_dir=resolved.working_dir, file_policy=resolved.file_policy,
     )

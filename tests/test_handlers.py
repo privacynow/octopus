@@ -830,7 +830,7 @@ async def test_session_shows_project():
 async def test_context_hash_changes_with_project():
     """Context hash should differ when project_id changes."""
     from app.execution_context import ResolvedExecutionContext
-    _d = dict(role="role", active_skills=["skill"], skill_digests={}, provider_config_digest="", base_extra_dirs=[], working_dir="", file_policy="", provider_name="")
+    _d = dict(role="role", active_skills=["skill"], skill_digests={}, provider_config_digest="", execution_config_digest="", base_extra_dirs=[], working_dir="", file_policy="", provider_name="")
     hash1 = ResolvedExecutionContext(**_d, project_id="").context_hash
     hash2 = ResolvedExecutionContext(**_d, project_id="myproject").context_hash
     assert hash1 != hash2
@@ -965,7 +965,7 @@ async def test_policy_edit_passed_to_provider():
 async def test_context_hash_changes_with_file_policy():
     """Context hash should differ when file_policy changes."""
     from app.execution_context import ResolvedExecutionContext
-    _d = dict(role="role", active_skills=["skill"], skill_digests={}, provider_config_digest="", base_extra_dirs=[], project_id="", working_dir="", provider_name="")
+    _d = dict(role="role", active_skills=["skill"], skill_digests={}, provider_config_digest="", execution_config_digest="", base_extra_dirs=[], project_id="", working_dir="", provider_name="")
     hash1 = ResolvedExecutionContext(**_d, file_policy="").context_hash
     hash2 = ResolvedExecutionContext(**_d, file_policy="inspect").context_hash
     assert hash1 != hash2
@@ -974,7 +974,7 @@ async def test_context_hash_changes_with_file_policy():
 async def test_context_hash_changes_with_working_dir():
     """Context hash should differ when working_dir changes."""
     from app.execution_context import ResolvedExecutionContext
-    _d = dict(role="role", active_skills=["skill"], skill_digests={}, provider_config_digest="", base_extra_dirs=[], project_id="", file_policy="", provider_name="")
+    _d = dict(role="role", active_skills=["skill"], skill_digests={}, provider_config_digest="", execution_config_digest="", base_extra_dirs=[], project_id="", file_policy="", provider_name="")
     hash1 = ResolvedExecutionContext(**_d, working_dir="").context_hash
     hash2 = ResolvedExecutionContext(**_d, working_dir="/opt/frontend").context_hash
     assert hash1 != hash2

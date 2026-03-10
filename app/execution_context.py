@@ -36,7 +36,8 @@ class ResolvedExecutionContext:
     role: str
     active_skills: list[str]
     skill_digests: dict[str, str]
-    provider_config_digest: str
+    provider_config_digest: str  # hash of skill YAML content
+    execution_config_digest: str  # hash of BotConfig execution fields (model, codex_*)
     base_extra_dirs: list[str]  # from config only (not uploads, not denial dirs)
     project_id: str
     working_dir: str  # resolved: project root_dir, or config.working_dir
@@ -57,12 +58,30 @@ class ResolvedExecutionContext:
             "active_skills": sorted(self.active_skills),
             "skill_digests": {k: self.skill_digests[k] for k in sorted(self.skill_digests)},
             "provider_config_digest": self.provider_config_digest,
+            "execution_config_digest": self.execution_config_digest,
             "extra_dirs": sorted(self.base_extra_dirs),
             "project_id": self.project_id,
             "file_policy": self.file_policy,
             "working_dir": self.working_dir,
+            "provider_name": self.provider_name,
         }, sort_keys=True)
         return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _compute_execution_config_digest(config: "BotConfig") -> str:
+    """Hash the BotConfig fields that affect CLI command construction.
+
+    Covers model selection and all codex execution flags.  If any of
+    these change, pending approvals must be invalidated.
+    """
+    payload = json.dumps({
+        "model": config.model,
+        "codex_sandbox": config.codex_sandbox,
+        "codex_full_auto": config.codex_full_auto,
+        "codex_dangerous": config.codex_dangerous,
+        "codex_profile": config.codex_profile,
+    }, sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def resolve_execution_context(
@@ -95,6 +114,7 @@ def resolve_execution_context(
         provider_config_digest=get_provider_config_digest(
             session.active_skills, provider_name=provider_name,
         ),
+        execution_config_digest=_compute_execution_config_digest(config),
         base_extra_dirs=sorted(str(d) for d in config.extra_dirs),
         project_id=session.project_id,
         working_dir=working_dir,

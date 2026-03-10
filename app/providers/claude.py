@@ -219,8 +219,8 @@ class ClaudeProvider:
         timeout: int | None = None,
         extra_env: dict[str, str] | None = None,
         working_dir: str = "",
-    ) -> tuple[str, dict, int]:
-        """Spawn claude, consume output, return (accumulated_text, result_data, returncode)."""
+    ) -> tuple[str, dict, int, str]:
+        """Spawn claude, consume output, return (accumulated_text, result_data, returncode, stderr)."""
         log.info("claude: %s", " ".join(cmd[:-1] + ["<prompt>"]))
 
         env = self._clean_env()
@@ -250,12 +250,32 @@ class ClaudeProvider:
             proc.kill()
             await proc.wait()
             await stderr_task
-            return "", {}, -1  # sentinel for timeout
+            return "", {}, -1, ""  # sentinel for timeout
 
         if proc.returncode and proc.returncode != 0:
             log.error("claude error (rc=%d): %s", proc.returncode, stderr[:300])
 
-        return accumulated, result_data, proc.returncode or 0
+        return accumulated, result_data, proc.returncode or 0, stderr
+
+    @staticmethod
+    def _is_resume_failure(stderr: str) -> bool:
+        """Return True when stderr indicates the --resume target is dead/invalid.
+
+        We look for specific phrases the Claude CLI emits when a session
+        cannot be resumed.  A generic API error during a healthy resumed
+        session must NOT match — it should be retried on the same session.
+        """
+        lower = stderr.lower()
+        markers = [
+            "session not found",
+            "invalid session",
+            "could not resume",
+            "no such session",
+            "unable to resume",
+            "conversation not found",
+            "resume failed",
+        ]
+        return any(m in lower for m in markers)
 
     def _apply_provider_config(self, cmd: list[str], provider_config: dict) -> str | None:
         """Apply provider_config to command. Returns temp MCP config path or None."""
@@ -319,7 +339,8 @@ class ClaudeProvider:
         extra_env = context.credential_env if context else {}
 
         working_dir = context.working_dir if context else ""
-        accumulated, result_data, rc = await self._run_process(
+        is_resume = provider_state.get("started", False)
+        accumulated, result_data, rc, stderr = await self._run_process(
             cmd, progress, extra_env=extra_env, working_dir=working_dir,
         )
 
@@ -337,6 +358,7 @@ class ClaudeProvider:
             return RunResult(
                 text=f"[Claude error (rc={rc})]",
                 returncode=rc,
+                resume_failed=is_resume and self._is_resume_failure(stderr),
             )
 
         final_text = result_data.get("result", accumulated) or accumulated
@@ -370,7 +392,7 @@ class ClaudeProvider:
             cmd[idx:idx] = ["--append-system-prompt", system_prompt]
 
         working_dir = context.working_dir if context else ""
-        accumulated, result_data, rc = await self._run_process(
+        accumulated, result_data, rc, _stderr = await self._run_process(
             cmd, progress, timeout=120, working_dir=working_dir,
         )
 

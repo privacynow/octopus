@@ -9,12 +9,17 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 > - Bug 1 (fixed): worker_dispatch infinite replay loop. Recovered items
 >   that are interrupted again during replay now finalize instead of staying
 >   claimed forever. Replay failures re-raise so worker_loop marks failed.
-> - Bug 2 (mitigated, not fully fixed): Claude resume state poisoning.
->   Current mitigation resets provider state on any resumed non-timeout
->   non-signal error. This is overbroad — a transient Claude failure on a
->   healthy resumed session also triggers reset. Full fix requires Claude
->   provider to distinguish "dead session" from "transient error during
->   resume." See open items below.
+> - Bug 2 (narrowed, evidence gap remains): Claude resume state poisoning.
+>   `RunResult.resume_failed` field provides typed evidence from the provider.
+>   Claude provider parses stderr for session-not-found/invalid-session
+>   markers and sets `resume_failed=True` only when the resume target is
+>   dead. Generic errors during a healthy resumed session no longer trigger
+>   reset. Codex retains its existing thread_id clear on any resume error.
+>   False-positive test confirms generic errors preserve session state.
+>   **Evidence gap:** handler logic and classifier are tested, but there is
+>   no integration test proving the real Claude CLI always surfaces
+>   dead-session signals in stderr. If the CLI changes its error format,
+>   `resume_failed` will silently stop firing. See open items.
 >
 > Resource and correctness: subprocess leak fix in summarize.py, regex
 > backreference injection fix in skills.py, cancelled tasks now awaited in
@@ -22,14 +27,13 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 > content_started (heartbeat/progress race fix).
 >
 > Approval wording: all user-facing "Preflight" replaced with neutral terms.
-> Note: approval wording tests only inspect msg.replies on the original
-> message, not the returned status message where edit_text lands. See open
-> items below.
+> Tests rewritten with _StickyReplyMessage so edit_text updates on the
+> status message are visible in assertions. Positive assertions prove
+> "Approval required." and "Approval check failed:" are observed.
 >
 > Test improvements: mock.patch replaces module global mutation, sys.executable
 > replaces hardcoded python3. Engineering standards updated with pre-merge
 > gate checklist, bug decomposition rules, completion-owner rules.
-> 704 tests passing.
 
 ---
 
@@ -59,42 +63,30 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 
 ## Open Items
 
-These are known incomplete contracts from the latest round. Each needs
-its own repro, fix, and test before closing.
+### 1. Claude resume failure detection depends on unverified stderr format
 
-### 1. Claude resume reset is overbroad (mitigation, not full fix)
+**Contract:** `resume_failed` should be True when and only when the
+resume target is dead/invalid.
 
-**Contract:** Only reset Claude provider state when the resume itself
-is broken, not on every error during a resumed conversation.
+**Current state:** `ClaudeProvider._is_resume_failure()` checks stderr
+for a hardcoded list of markers (`"session not found"`, `"invalid
+session"`, etc.). Handler logic and classifier are fully tested. But
+there is no integration test against the real Claude CLI proving it
+emits these markers for a dead session. If the CLI changes its error
+wording, `resume_failed` silently stops firing and the handler falls
+back to the safe default (no reset), which means a dead session stays
+poisoned until the user runs `/new`.
 
-**Current state:** `resume_errored` in `telegram_handlers.py:810`
-triggers on any non-timeout, non-signal, non-zero rc during a resumed
-run. Claude's `run()` returns the same `rc=1` for both "dead session
-that cannot be --resumed" and "transient CLI error on a healthy resumed
-session." The reset overfires — a transient failure kills a good session.
+**What's needed:** A manual or CI smoke test that creates a session,
+deletes or invalidates it, then `--resume`s and verifies stderr
+contains a recognized marker. Alternatively, Claude CLI could expose a
+structured error code for session-not-found, which would replace the
+stderr parsing entirely.
 
-**What's needed:** Claude provider must distinguish "resume target does
-not exist" from "run failed while resumed." Options: (a) parse Claude
-CLI stderr for session-not-found, (b) retry once fresh and compare, or
-(c) add a resume-specific error code to the provider contract. Until
-then, the current reset is a mitigation that trades false resets for
-avoiding the infinite-Resuming loop.
-
-### 2. Approval wording tests are blind to status message edits
-
-**Contract:** No user-visible text in the approval flow contains
-"preflight" or other internal terminology.
-
-**Current state:** `test_approval_no_preflight_in_any_user_text` and
-`test_approval_error_no_preflight` inspect `msg.replies` on the original
-message, but `TelegramProgress.edit_text()` writes to the message
-returned by `reply_text()`. The tests cannot see `Approval check
-failed:` or `Approval required.` — those land on the returned status
-message object. Regressions in those paths pass silently.
-
-**What's needed:** Use `_StickyReplyMessage` (which returns `self` from
-`reply_text()`) so all edits accumulate on the same object. Then assert
-over the full reply chain including edit_text entries.
+**Fallback behavior:** If the classifier fails to fire, the session
+stays intact (no false reset). The user can always recover with
+`/new`. This is the safe direction — it trades stale sessions for
+no false resets.
 
 ---
 
@@ -734,18 +726,6 @@ for idle states, internal detail suppression.
 ---
 
 ## Next Steps
-
-### Immediate: close open items
-
-1. **Claude resume reset** — design a specific signal for "resume
-   target is dead" vs "transient error during resumed run." Options
-   in open items above. Until resolved, the overbroad mitigation
-   stands.
-
-2. **Approval wording test oracle** — rewrite the two approval
-   invariant tests to use `_StickyReplyMessage` so they observe
-   edit_text updates on the status message. Add assertions for
-   `Approval check failed:` and `Approval required.` paths.
 
 ### Near-term: progress UX Layer 2
 

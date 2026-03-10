@@ -3132,20 +3132,36 @@ async def test_approval_initial_status_neutral():
 
 
 async def test_approval_no_preflight_in_any_user_text():
-    """No user-facing message in the approval flow contains 'preflight'."""
+    """No user-facing message in the approval flow contains 'preflight'.
+
+    Uses _StickyReplyMessage so edit_text updates (status message edits)
+    are visible in the reply chain, not just the initial reply_text calls.
+    Positive assertion proves the test actually observes the status edit path.
+    """
     import app.telegram_handlers as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
-        msg = await send_text(chat, user, "do work with approval")
+        msg = _StickyReplyMessage(chat=chat, text="do work with approval")
+        upd = FakeUpdate(message=msg, user=user, chat=chat)
+        await th.handle_message(upd, FakeContext())
 
         all_texts = []
+        edit_texts = []
         for r in msg.replies:
             all_texts.append(r.get("text", ""))
-            all_texts.append(r.get("edit_text", ""))
+            et = r.get("edit_text", "")
+            all_texts.append(et)
+            if et:
+                edit_texts.append(et)
         for sent in chat.sent_messages:
             all_texts.append(sent.get("text", ""))
+
+        # Positive: prove the test observes the status edit path
+        assert any("Approval required." in t for t in edit_texts), (
+            f"Expected 'Approval required.' in status edits but got: {edit_texts}"
+        )
 
         for text in all_texts:
             if text:
@@ -3155,19 +3171,35 @@ async def test_approval_no_preflight_in_any_user_text():
 
 
 async def test_approval_error_no_preflight():
-    """Approval check failure message uses neutral wording."""
-    from app.providers.base import RunResult
+    """Approval check failure message uses neutral wording.
+
+    Uses _StickyReplyMessage so edit_text updates (error status edits)
+    are visible in the reply chain. Positive assertion proves the test
+    observes the error edit path.
+    """
+    import app.telegram_handlers as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
         prov.preflight_results = [RunResult(text="", returncode=1)]
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
-        msg = await send_text(chat, user, "do failing approval work")
+        msg = _StickyReplyMessage(chat=chat, text="do failing approval work")
+        upd = FakeUpdate(message=msg, user=user, chat=chat)
+        await th.handle_message(upd, FakeContext())
 
         all_texts = []
+        edit_texts = []
         for r in msg.replies:
             all_texts.append(r.get("text", ""))
-            all_texts.append(r.get("edit_text", ""))
+            et = r.get("edit_text", "")
+            all_texts.append(et)
+            if et:
+                edit_texts.append(et)
+
+        # Positive: prove the test observes the error edit path
+        assert any("Approval check failed:" in t for t in edit_texts), (
+            f"Expected 'Approval check failed:' in status edits but got: {edit_texts}"
+        )
 
         for text in all_texts:
             if text:
@@ -3333,8 +3365,8 @@ async def test_claude_resume_error_resets_provider_state():
         session = th._load(5001)
         assert session.provider_state["started"] is True
 
-        # Second request: provider fails with non-zero rc (resume broken)
-        prov.run_results = [RunResult(text="[Claude error (rc=1)]", returncode=1)]
+        # Second request: provider signals resume target is dead
+        prov.run_results = [RunResult(text="[Claude error (rc=1)]", returncode=1, resume_failed=True)]
         msg2 = _StickyReplyMessage(chat=chat, text="second request")
         upd2 = FakeUpdate(message=msg2, user=user, chat=chat)
         await th.handle_message(upd2, FakeContext())
@@ -3394,3 +3426,185 @@ async def test_codex_resume_error_still_clears_thread():
         assert session.provider_state["thread_id"] is None, (
             "Codex thread_id should be cleared on resume error"
         )
+
+
+@pytest.mark.asyncio
+async def test_claude_generic_error_during_resume_does_not_reset():
+    """Generic error on a healthy resumed session must NOT reset provider state.
+
+    This is the false-positive test: resume_failed is False, so the session
+    should keep its started=True and session_id intact for the next retry.
+    """
+    import app.telegram_handlers as th
+
+    with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
+        # First request succeeds — sets started=True
+        prov.run_results = [RunResult(
+            text="first response",
+            provider_state_updates={"started": True},
+        )]
+        chat = FakeChat(chat_id=7001)
+        user = FakeUser(uid=42)
+        msg1 = _StickyReplyMessage(chat=chat, text="first request")
+        upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
+        await th.handle_message(upd1, FakeContext())
+
+        session = th._load(7001)
+        assert session.provider_state["started"] is True
+        old_session_id = session.provider_state["session_id"]
+
+        # Second request: generic error (rc=1) but resume_failed=False
+        prov.run_results = [RunResult(text="[Claude error (rc=1)]", returncode=1)]
+        msg2 = _StickyReplyMessage(chat=chat, text="second request")
+        upd2 = FakeUpdate(message=msg2, user=user, chat=chat)
+        await th.handle_message(upd2, FakeContext())
+
+        # Session must NOT be reset — still started=True with same session_id
+        session = th._load(7001)
+        assert session.provider_state["started"] is True, (
+            "Generic error should not reset started flag"
+        )
+        assert session.provider_state["session_id"] == old_session_id, (
+            "Generic error should not change session_id"
+        )
+
+        # "starts fresh" message should NOT appear
+        all_text = " ".join(
+            r.get("text", "") + " " + r.get("edit_text", "")
+            for r in msg2.replies
+        )
+        assert "starts fresh" not in all_text.lower(), (
+            f"Generic error should not show 'starts fresh': {all_text}"
+        )
+
+
+def test_claude_is_resume_failure_classification():
+    """_is_resume_failure correctly classifies resume-specific vs generic errors."""
+    from app.providers.claude import ClaudeProvider
+
+    # Positive: resume-specific failures
+    assert ClaudeProvider._is_resume_failure("Error: session not found for id abc-123")
+    assert ClaudeProvider._is_resume_failure("Could not resume conversation")
+    assert ClaudeProvider._is_resume_failure("Invalid session ID provided")
+    assert ClaudeProvider._is_resume_failure("Conversation not found")
+
+    # Negative: generic errors that should NOT trigger reset
+    assert not ClaudeProvider._is_resume_failure("")
+    assert not ClaudeProvider._is_resume_failure("API rate limit exceeded")
+    assert not ClaudeProvider._is_resume_failure("Internal server error")
+    assert not ClaudeProvider._is_resume_failure("Connection reset by peer")
+    assert not ClaudeProvider._is_resume_failure("Authentication failed")
+
+
+# =====================================================================
+# INVARIANT: ClaudeProvider.run() sets resume_failed from real stderr
+#
+# Provider-level test proving the full path: subprocess stderr →
+# _is_resume_failure() → RunResult.resume_failed=True.  Without this,
+# the handler-level tests only prove that *injected* resume_failed
+# values are handled correctly, not that the provider produces them.
+# =====================================================================
+
+def _make_claude_provider():
+    """Build a real ClaudeProvider with a valid test config."""
+    import tempfile
+    from app.providers.claude import ClaudeProvider
+    tmp = tempfile.mkdtemp(prefix="test-claude-prov-")
+    cfg = make_config(tmp, working_dir=Path(tmp))
+    return ClaudeProvider(cfg)
+
+
+class _FakeSubprocess:
+    """Minimal subprocess fake for provider-level tests."""
+
+    def __init__(self, *, stderr_bytes: bytes = b"", returncode: int = 0):
+        self.returncode = returncode
+        self.stderr = self._FakeStderr(stderr_bytes)
+        self.stdout = self._FakeStdout()
+
+    class _FakeStdout:
+        async def readline(self):
+            return b""
+        def __aiter__(self):
+            return self
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    class _FakeStderr:
+        def __init__(self, data: bytes):
+            self._data = data
+        async def read(self):
+            return self._data
+
+    async def wait(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_claude_provider_run_sets_resume_failed_from_stderr():
+    """ClaudeProvider.run() sets resume_failed=True when stderr has session-not-found."""
+    from unittest.mock import patch
+
+    provider = _make_claude_provider()
+    state = {"session_id": "dead-session-id", "started": True}
+    proc = _FakeSubprocess(
+        stderr_bytes=b"Error: session not found for id dead-session-id",
+        returncode=1,
+    )
+
+    async def mock_exec(*args, **kwargs):
+        return proc
+
+    progress = FakeProgress()
+    with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+        result = await provider.run(state, "test prompt", [], progress)
+
+    assert result.returncode == 1
+    assert result.resume_failed is True, (
+        "resume_failed should be True when stderr contains session-not-found"
+    )
+
+
+@pytest.mark.asyncio
+async def test_claude_provider_run_no_resume_failed_on_generic_error():
+    """ClaudeProvider.run() does NOT set resume_failed on generic stderr error."""
+    from unittest.mock import patch
+
+    provider = _make_claude_provider()
+    state = {"session_id": "good-session-id", "started": True}
+    proc = _FakeSubprocess(stderr_bytes=b"API rate limit exceeded", returncode=1)
+
+    async def mock_exec(*args, **kwargs):
+        return proc
+
+    progress = FakeProgress()
+    with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+        result = await provider.run(state, "test prompt", [], progress)
+
+    assert result.returncode == 1
+    assert result.resume_failed is False, (
+        "resume_failed should be False when stderr has only generic errors"
+    )
+
+
+@pytest.mark.asyncio
+async def test_claude_provider_run_no_resume_failed_when_not_resuming():
+    """ClaudeProvider.run() does NOT set resume_failed when started=False."""
+    from unittest.mock import patch
+
+    provider = _make_claude_provider()
+    state = {"session_id": "new-session-id", "started": False}
+    # Even if stderr happens to match, started=False means no resume
+    proc = _FakeSubprocess(stderr_bytes=b"Error: session not found", returncode=1)
+
+    async def mock_exec(*args, **kwargs):
+        return proc
+
+    progress = FakeProgress()
+    with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+        result = await provider.run(state, "test prompt", [], progress)
+
+    assert result.returncode == 1
+    assert result.resume_failed is False, (
+        "resume_failed should be False when not resuming (started=False)"
+    )

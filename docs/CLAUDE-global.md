@@ -1,40 +1,39 @@
-# Engineering Standards
+# Engineering Standards for Claude
 
-Fix contracts, not call sites. Audit all equivalent paths before coding.
+Fix contracts, not call sites. Audit equivalent paths before coding.
 Test invariants, not just scenarios. Treat failure paths as first-class.
 Use resolved context as the only authority.
 
 ## Core Principles
 
-- **Build once, reuse everywhere.** Search the codebase for existing
-  modules, methods, dataclasses, and patterns before writing new code.
-  Duplicate code is a defect.
+- **Build once, reuse everywhere.** Search for existing modules,
+  dataclasses, builders, and workflows before writing new code.
 - **Prefer battle-tested libraries** over hand-rolling equivalent
-  functionality, unless the dependency cost clearly outweighs the benefit.
-- **One authoritative source per concept.** Every cross-cutting concern
-  must have exactly one owner. When a resolved context exists, use it.
-  If no authoritative builder exists, create one before patching call
-  sites.
+  functionality unless the dependency cost clearly outweighs the
+  benefit.
+- **One authoritative source per concept.** Cross-cutting concerns
+  should have one owner. If a resolved context exists, use it. If no
+  authoritative builder exists, create one before patching call sites.
 - **Durable state owns correctness.** In-memory state is optimization,
-  not authority. Recovery comes from durable state, not process memory.
-- **Failure paths are normal.** Interrupts, stale callbacks, exceptions,
-  timeouts, and duplicate delivery are part of the runtime contract.
-  Model them explicitly from the start.
+  not authority. Recovery must come from durable state, not process
+  memory.
+- **Failure paths are normal.** Interrupts, timeouts, stale callbacks,
+  duplicate delivery, and restarts are part of the runtime contract.
 - **Rendering is product correctness.** User-visible progress, output
-  handling, and error presentation are architecture, not polish.
-- **No mermaid diagrams.** Use clean ASCII diagrams instead.
+  shaping, and error presentation are architecture, not polish.
+- **Use clean ASCII diagrams** instead of mermaid when a diagram is
+  needed.
 
 ## Operating Procedure
 
 ### Before coding: contract-first preamble
 
-For any nontrivial change, write a short impact statement before
-touching code:
+For any nontrivial change, first write a short impact statement:
 
 - **Contract being changed** — what interface or invariant is affected
-- **Source of truth** — what owns this concept authoritatively
+- **Source of truth** — what owns the concept authoritatively
 - **Affected entry points** — enumerate with `rg`, do not guess
-- **State/persistence touched** — what durable or in-memory state changes
+- **State/persistence touched** — durable and in-memory state involved
 - **Failure paths** — timeout, interrupt, stale callback, exception,
   duplicate delivery, restart-in-the-middle
 - **Required invariants** — what must hold afterward across all paths
@@ -46,13 +45,12 @@ If you cannot fill this out, you are not ready to code.
 
 1. **Enumerate all call sites with `rg` before editing.** Do not assume
    there are only one or two.
-2. **Check all equivalent ingress paths for parity.** Most bugs were
+2. **Check equivalent ingress paths for parity.** Most bugs were
    "fixed in one path, broken in another."
-3. **Audit raw vs resolved reads.** If an authoritative resolved context
-   exists, search for direct raw reads and replace them unless they are
-   intentionally persistence-only.
-4. **Ban ad-hoc recomputation.** If a concept already has an
-   authoritative builder, update that builder.
+3. **Audit raw vs resolved reads.** If resolved context exists, replace
+   raw reads unless they are intentionally persistence-only.
+4. **Ban ad-hoc recomputation.** Update the authoritative builder
+   instead of reconstructing equivalent logic inline.
 5. **Separate interacting bugs into separate contracts.** If analysis
    identifies N distinct failure modes, the plan must name N contracts,
    N fixes, and N independent verifications. "Interacting" is not

@@ -9,6 +9,7 @@ class RunResult:
     text: str
     returncode: int = 0
     timed_out: bool = False
+    resume_failed: bool = False  # True only when --resume target is dead/invalid
     provider_state_updates: dict[str, Any] = field(default_factory=dict)
     denials: list[dict[str, Any]] = field(default_factory=list)
 

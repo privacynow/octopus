@@ -807,20 +807,26 @@ async def execute_request(
     session = _load(chat_id)
     session.provider_state.update(result.provider_state_updates)
 
-    resume_errored = (
-        is_resume
-        and not result.timed_out
-        and result.returncode and result.returncode != 0
-    )
-    if resume_errored:
-        log.warning("%s resume error (rc=%s) for chat %d — resetting session state",
+    # Typed resume failure: provider proved the resume target is dead/invalid.
+    # Generic errors during a healthy resumed session do NOT trigger a reset.
+    if result.resume_failed:
+        log.warning("%s resume target invalid (rc=%s) for chat %d — resetting session state",
                      prov.name, result.returncode, chat_id)
         if prov.name == "codex":
             session.provider_state["thread_id"] = None
         else:
-            # Claude (and any future provider): reset to fresh state so the
-            # next request is not forced into a broken --resume.
             session.provider_state.update(prov.new_provider_state())
+
+    # Codex also clears thread_id on any resume error (existing behavior).
+    elif (
+        prov.name == "codex"
+        and is_resume
+        and not result.timed_out
+        and result.returncode and result.returncode != 0
+    ):
+        log.warning("codex resume error (rc=%s) for chat %d — clearing thread_id",
+                     result.returncode, chat_id)
+        session.provider_state["thread_id"] = None
 
     _save(chat_id, session)
 
@@ -832,7 +838,7 @@ async def execute_request(
 
     if result.returncode != 0:
         error_text = await _format_provider_error(result.text, result.returncode)
-        if resume_errored:
+        if result.resume_failed:
             error_text += "\n\n<i>Session could not be resumed \u2014 next message starts fresh.</i>"
         await progress.update(error_text, force=True)
         return

@@ -1202,6 +1202,63 @@ async def test_duplicate_update_id_skipped():
         assert len(prov.run_calls) == 1  # not processed again
 
 
+async def test_duplicate_update_id_skipped_for_commands():
+    """Same update_id on a command should be processed only once."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=8002)
+        user = FakeUser(uid=42, username="testuser")
+
+        th._seen_update_ids.clear()
+
+        msg1 = FakeMessage(chat=chat, text="/new")
+        upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
+        dup_id = upd1.update_id
+
+        await th.cmd_new(upd1, FakeContext())
+        assert len(msg1.replies) > 0 or len(chat.sent_messages) > 0
+
+        # Replay same update_id
+        msg2 = FakeMessage(chat=chat, text="/new")
+        upd2 = FakeUpdate(message=msg2, user=user, chat=chat)
+        upd2.update_id = dup_id
+
+        await th.cmd_new(upd2, FakeContext())
+        # Second message should have no replies — deduped
+        assert len(msg2.replies) == 0
+
+
+async def test_duplicate_update_id_skipped_for_callbacks():
+    """Same update_id on a callback should be processed only once."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=8003)
+        user = FakeUser(uid=42, username="testuser")
+
+        th._seen_update_ids.clear()
+
+        # First callback
+        msg1 = FakeMessage(chat=chat)
+        query1 = FakeCallbackQuery("setting_compact:on", message=msg1, user=user)
+        upd1 = FakeUpdate(user=user, chat=chat, callback_query=query1)
+        dup_id = upd1.update_id
+
+        await th.handle_settings_callback(upd1, FakeContext())
+        assert len(msg1.replies) > 0  # processed
+
+        # Replay same update_id
+        msg2 = FakeMessage(chat=chat)
+        query2 = FakeCallbackQuery("setting_compact:off", message=msg2, user=user)
+        upd2 = FakeUpdate(user=user, chat=chat, callback_query=query2)
+        upd2.update_id = dup_id
+
+        await th.handle_settings_callback(upd2, FakeContext())
+        assert len(msg2.replies) == 0  # deduped
+
+
 # =====================================================================
 # INVARIANT 19: Doctor warnings for polling conflict
 # =====================================================================

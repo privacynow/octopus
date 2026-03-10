@@ -93,6 +93,19 @@ _seen_update_ids: set[int] = set()  # track processed update_ids for idempotency
 _MAX_SEEN_IDS = 1000  # cap the set size to prevent memory growth
 
 
+def _dedup_update(update: Update) -> bool:
+    """Return True if this update_id was already processed (duplicate). Thread-safe for single-process."""
+    uid = update.update_id
+    if uid in _seen_update_ids:
+        log.debug("Skipping duplicate update_id %d", uid)
+        return True
+    _seen_update_ids.add(uid)
+    if len(_seen_update_ids) > _MAX_SEEN_IDS:
+        sorted_ids = sorted(_seen_update_ids)
+        _seen_update_ids.difference_update(sorted_ids[:len(sorted_ids) // 2])
+    return False
+
+
 def _cfg() -> BotConfig:
     assert _config is not None
     return _config
@@ -210,10 +223,12 @@ async def _public_guard(event, update: Update) -> bool:
 
 
 def _command_handler(fn):
-    """Decorator: normalize_command → is_allowed gate → call fn(event, update, context)."""
+    """Decorator: dedup → normalize_command → is_allowed gate → call fn(event, update, context)."""
     import functools
     @functools.wraps(fn)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if _dedup_update(update):
+            return
         event = normalize_command(update, context)
         if event is None or not is_allowed(event.user):
             return
@@ -222,7 +237,7 @@ def _command_handler(fn):
 
 
 def _callback_handler(fn):
-    """Decorator: normalize_callback → is_allowed gate → call fn(event, query).
+    """Decorator: dedup → normalize_callback → is_allowed gate → call fn(event, query).
 
     Does NOT call query.answer() — handlers control their own answer semantics
     (some need alerts, some need silent acks, some answer conditionally).
@@ -230,6 +245,8 @@ def _callback_handler(fn):
     import functools
     @functools.wraps(fn)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if _dedup_update(update):
+            return
         event = normalize_callback(update)
         if event is None:
             return
@@ -1528,17 +1545,8 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Update-ID idempotency: skip already-processed updates
-    uid = update.update_id
-    if uid in _seen_update_ids:
-        log.debug("Skipping duplicate update_id %d", uid)
+    if _dedup_update(update):
         return
-    _seen_update_ids.add(uid)
-    # Cap the set size
-    if len(_seen_update_ids) > _MAX_SEEN_IDS:
-        # Discard oldest (smallest) IDs — update_ids are monotonically increasing
-        sorted_ids = sorted(_seen_update_ids)
-        _seen_update_ids.difference_update(sorted_ids[:len(sorted_ids) // 2])
 
     user = normalize_user(update.effective_user)
     if user is None or not is_allowed(user):

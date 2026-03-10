@@ -2,18 +2,34 @@
 
 Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-10):** Restart recovery and resume hardening.
-> Fixed two interacting bugs causing infinite "Resuming..." loop after restart:
-> (1) worker_dispatch now propagates LeaveClaimed so interrupted replays stay
-> claimed instead of being finalized as done; replay failures re-raise so
-> worker_loop marks them failed. (2) Claude resume errors now reset provider
-> state (started/session_id) to fresh, matching Codex thread_id reset parity.
-> Also: subprocess leak fix in summarize.py, regex backreference injection fix
-> in skills.py, cancelled tasks now awaited in finally blocks, all user-facing
-> "Preflight" wording replaced with neutral terms, heartbeat/progress race
-> fixed (first content update bypasses rate limiter after content_started).
-> Test fragility fixes: mock.patch replaces module global mutation, sys.executable
-> replaces hardcoded python3. 704 tests passing.
+> **Latest change (2026-03-10):** Restart recovery, resource hardening,
+> approval wording, and engineering standards.
+>
+> Restart recovery (two bugs, separately tracked):
+> - Bug 1 (fixed): worker_dispatch infinite replay loop. Recovered items
+>   that are interrupted again during replay now finalize instead of staying
+>   claimed forever. Replay failures re-raise so worker_loop marks failed.
+> - Bug 2 (mitigated, not fully fixed): Claude resume state poisoning.
+>   Current mitigation resets provider state on any resumed non-timeout
+>   non-signal error. This is overbroad — a transient Claude failure on a
+>   healthy resumed session also triggers reset. Full fix requires Claude
+>   provider to distinguish "dead session" from "transient error during
+>   resume." See open items below.
+>
+> Resource and correctness: subprocess leak fix in summarize.py, regex
+> backreference injection fix in skills.py, cancelled tasks now awaited in
+> finally blocks, first content update bypasses rate limiter after
+> content_started (heartbeat/progress race fix).
+>
+> Approval wording: all user-facing "Preflight" replaced with neutral terms.
+> Note: approval wording tests only inspect msg.replies on the original
+> message, not the returned status message where edit_text lands. See open
+> items below.
+>
+> Test improvements: mock.patch replaces module global mutation, sys.executable
+> replaces hardcoded python3. Engineering standards updated with pre-merge
+> gate checklist, bug decomposition rules, completion-owner rules.
+> 704 tests passing.
 
 ---
 
@@ -37,6 +53,48 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 | — | Resolved execution context enforcement hardening | Done |
 | Ext | Multi-worker webhook architecture | Done |
 | III.5 L1 | Progress UX normalization (Layer 1) | Done |
+| — | Restart recovery and resume hardening | Partial |
+
+---
+
+## Open Items
+
+These are known incomplete contracts from the latest round. Each needs
+its own repro, fix, and test before closing.
+
+### 1. Claude resume reset is overbroad (mitigation, not full fix)
+
+**Contract:** Only reset Claude provider state when the resume itself
+is broken, not on every error during a resumed conversation.
+
+**Current state:** `resume_errored` in `telegram_handlers.py:810`
+triggers on any non-timeout, non-signal, non-zero rc during a resumed
+run. Claude's `run()` returns the same `rc=1` for both "dead session
+that cannot be --resumed" and "transient CLI error on a healthy resumed
+session." The reset overfires — a transient failure kills a good session.
+
+**What's needed:** Claude provider must distinguish "resume target does
+not exist" from "run failed while resumed." Options: (a) parse Claude
+CLI stderr for session-not-found, (b) retry once fresh and compare, or
+(c) add a resume-specific error code to the provider contract. Until
+then, the current reset is a mitigation that trades false resets for
+avoiding the infinite-Resuming loop.
+
+### 2. Approval wording tests are blind to status message edits
+
+**Contract:** No user-visible text in the approval flow contains
+"preflight" or other internal terminology.
+
+**Current state:** `test_approval_no_preflight_in_any_user_text` and
+`test_approval_error_no_preflight` inspect `msg.replies` on the original
+message, but `TelegramProgress.edit_text()` writes to the message
+returned by `reply_text()`. The tests cannot see `Approval check
+failed:` or `Approval required.` — those land on the returned status
+message object. Regressions in those paths pass silently.
+
+**What's needed:** Use `_StickyReplyMessage` (which returns `self` from
+`reply_text()`) so all edits accumulate on the same object. Then assert
+over the full reply chain including edit_text entries.
 
 ---
 
@@ -665,3 +723,43 @@ for idle states, internal detail suppression.
 - **Codex content_started on any visible text**: fires on
   commentary/draft text too (not just final), since draft previews are
   visible to users.
+- **Content-first rate-limit bypass**: `TelegramProgress` bypasses the
+  rate limiter for the first non-forced update after `content_started`
+  is set. Prevents stale tool/heartbeat message remaining on screen
+  when the first text update arrives within the rate-limit window.
+- **Heartbeat/typing tasks awaited on cancel**: `finally` blocks now
+  `await asyncio.gather(heartbeat_task, typing_task, return_exceptions=True)`
+  so background tasks are fully cleaned up before execution continues.
+
+---
+
+## Next Steps
+
+### Immediate: close open items
+
+1. **Claude resume reset** — design a specific signal for "resume
+   target is dead" vs "transient error during resumed run." Options
+   in open items above. Until resolved, the overbroad mitigation
+   stands.
+
+2. **Approval wording test oracle** — rewrite the two approval
+   invariant tests to use `_StickyReplyMessage` so they observe
+   edit_text updates on the status message. Add assertions for
+   `Approval check failed:` and `Approval required.` paths.
+
+### Near-term: progress UX Layer 2
+
+PLAN III.5 Layer 2 — unified progress contract. Providers emit
+structured progress events; one shared renderer owns wording,
+formatting, heartbeat, and compact/verbose display. This replaces
+the current pattern of each provider building its own HTML strings.
+
+### Deferred: product extensions
+
+Per PLAN, these are legitimate but not blocking:
+
+- Policy and project expansion (richer scoping, granular file policies)
+- Registry trust expansion (publisher governance, organizational trust)
+- Confidence extensions (concurrency tests, streaming integration,
+  real provider smoke tests)
+- Usage accounting and billing

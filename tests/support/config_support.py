@@ -36,6 +36,13 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         summary_model="claude-haiku-4-5-20251001",
         rate_limit_per_minute=0,
         rate_limit_per_hour=0,
+        bot_mode="poll",
+        webhook_url="",
+        webhook_listen="127.0.0.1",
+        webhook_port=8443,
+        webhook_secret="",
+        projects=(),
+        registry_url="",
     )
     defaults.update(overrides)
     return BotConfig(**defaults)

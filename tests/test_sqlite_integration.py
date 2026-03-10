@@ -149,7 +149,7 @@ async def test_doctor_reads_sqlite_not_json():
     with fresh_env() as (data_dir, cfg, prov):
         # Create stale pending session directly via storage API
         s1 = default_session("claude", prov.new_provider_state(), "off")
-        s1["pending_request"] = {"prompt": "do something", "created_at": 0}
+        s1["pending_approval"] = {"prompt": "do something", "created_at": 0}
         save_session(data_dir, 9001, s1)
 
         # Create stale setup session

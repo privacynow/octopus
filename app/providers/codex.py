@@ -392,6 +392,7 @@ class CodexProvider:
         progress: ProgressSink,
         is_resume: bool = False,
         extra_env: dict[str, str] | None = None,
+        working_dir: str = "",
     ) -> RunResult:
         log.info("codex: %s", " ".join(cmd[:-1] + ["<prompt>"]))
 
@@ -399,11 +400,12 @@ class CodexProvider:
         if extra_env:
             env.update(extra_env)
 
+        cwd = working_dir or str(self.config.working_dir)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=str(self.config.working_dir),
+            cwd=cwd,
             env=env,
         )
 
@@ -517,9 +519,13 @@ class CodexProvider:
         if context and context.system_prompt:
             effective_prompt = context.system_prompt + "\n\n---\n\n" + prompt
 
-        # Apply provider_config: sandbox override, config overrides
+        # Apply provider_config: sandbox override, config overrides.
+        # inspect mode is authoritative — skill/provider configs cannot weaken it.
         sandbox_override = None
-        if context and context.provider_config:
+        inspect_mode = context and context.file_policy == "inspect"
+        if inspect_mode:
+            sandbox_override = "read-only"
+        elif context and context.provider_config:
             pc = context.provider_config
             if "sandbox" in pc:
                 sandbox_override = pc["sandbox"]
@@ -547,7 +553,8 @@ class CodexProvider:
                 cmd.insert(-1, override)
 
         extra_env = context.credential_env if context else {}
-        return await self._run_cmd(cmd, progress, is_resume=is_resume, extra_env=extra_env)
+        working_dir = context.working_dir if context else ""
+        return await self._run_cmd(cmd, progress, is_resume=is_resume, extra_env=extra_env, working_dir=working_dir)
 
     async def run_preflight(
         self,
@@ -570,4 +577,5 @@ class CodexProvider:
             effective_prompt, image_paths, sandbox="read-only", ephemeral=True, safe_mode=True,
             extra_dirs=extra_dirs,
         )
-        return await self._run_cmd(cmd, progress)
+        working_dir = context.working_dir if context else ""
+        return await self._run_cmd(cmd, progress, working_dir=working_dir)

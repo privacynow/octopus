@@ -85,11 +85,10 @@ async def test_codex_retry_clears_thread():
 
         current_hash = compute_context_hash("", [], {}, get_provider_config_digest([]), [])
         session = default_session("codex", {"thread_id": "thread-xyz", "context_hash": current_hash}, "off")
-        session["pending_request"] = {
+        session["pending_retry"] = {
             "request_user_id": 42,
             "prompt": "test",
             "image_paths": [],
-            "attachment_dicts": [],
             "context_hash": current_hash,
             "denials": [{"tool_name": "Write", "tool_input": {"file_path": "/tmp/x.txt"}}],
         }

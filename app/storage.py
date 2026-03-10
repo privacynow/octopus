@@ -129,6 +129,12 @@ def _migrate_json_files(data_dir: Path, conn: sqlite3.Connection) -> None:
 
 def _upsert(conn: sqlite3.Connection, chat_id: int, session: dict[str, Any]) -> None:
     """Insert or replace a session row from a session dict."""
+    has_pending = (
+        session.get("pending_approval") is not None
+        or session.get("pending_retry") is not None
+        # Legacy compat: old rows used "pending_request"
+        or session.get("pending_request") is not None
+    )
     conn.execute(
         """INSERT OR REPLACE INTO sessions
            (chat_id, provider, data, has_pending, has_setup,
@@ -138,7 +144,7 @@ def _upsert(conn: sqlite3.Connection, chat_id: int, session: dict[str, Any]) -> 
             chat_id,
             session.get("provider", ""),
             json.dumps(session, sort_keys=True),
-            1 if session.get("pending_request") is not None else 0,
+            1 if has_pending else 0,
             1 if session.get("awaiting_skill_setup") is not None else 0,
             session.get("project_id"),
             session.get("file_policy"),
@@ -230,7 +236,8 @@ def default_session(
         "approval_mode": approval_mode,
         "active_skills": list(default_skills),
         "role": role,
-        "pending_request": None,
+        "pending_approval": None,
+        "pending_retry": None,
         "awaiting_skill_setup": None,
         "created_at": now,
         "updated_at": now,
@@ -254,7 +261,7 @@ def load_session(
     if row is not None:
         try:
             saved = json.loads(row[0])
-            for key in ("active_skills", "role", "pending_request", "awaiting_skill_setup", "compact_mode", "created_at", "updated_at"):
+            for key in ("active_skills", "role", "pending_approval", "pending_retry", "awaiting_skill_setup", "compact_mode", "project_id", "file_policy", "created_at", "updated_at"):
                 if key in saved:
                     session[key] = saved[key]
             if saved.get("approval_mode_explicit"):

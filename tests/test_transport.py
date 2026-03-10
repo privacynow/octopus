@@ -365,7 +365,7 @@ async def test_callback_handler_uses_normalized_data():
         setup_globals(cfg, prov)
 
         session = default_session("claude", prov.new_provider_state(), "on")
-        session["pending_request"] = {
+        session["pending_approval"] = {
             "request_user_id": 42,
             "prompt": "test prompt",
             "image_paths": [],
@@ -385,7 +385,7 @@ async def test_callback_handler_uses_normalized_data():
 
         from tests.support.handler_support import load_session_disk
         saved = load_session_disk(data_dir, 12345, prov)
-        assert saved.get("pending_request") is None
+        assert saved.get("pending_approval") is None and saved.get("pending_retry") is None
 
 
 async def test_command_normalization_strips_bot_mention():

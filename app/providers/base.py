@@ -1,9 +1,55 @@
 """Provider protocol and shared result dataclass."""
 
-import hashlib
-import json
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
+
+# Backward-compat re-exports — these types now live in their own modules.
+# Production code should import from the authoritative module directly.
+# Tests may still reference these until fully migrated.
+from app.execution_context import ResolvedExecutionContext as ResolvedContext  # noqa: F401
+from app.execution_context import ResolvedExecutionContext  # noqa: F401
+
+
+# Backward-compat: PendingRequest was a single type for both approval and retry.
+# New code uses PendingApproval / PendingRetry from app.session_state.
+@dataclass
+class PendingRequest:
+    """DEPRECATED — use PendingApproval / PendingRetry from app.session_state."""
+    request_user_id: int
+    prompt: str
+    image_paths: list[str]
+    attachment_dicts: list[dict] = field(default_factory=list)
+    context_hash: str = ""
+    denials: list[dict] | None = None
+    created_at: float = 0.0
+
+
+def compute_context_hash(
+    role: str = "",
+    active_skills: list[str] | None = None,
+    skill_digests: dict[str, str] | None = None,
+    provider_config_digest: str = "",
+    extra_dirs: list[str] | None = None,
+    project_id: str = "",
+    file_policy: str = "",
+    working_dir: str = "",
+) -> str:
+    """Backward-compat wrapper — delegates to ResolvedExecutionContext.context_hash.
+
+    New code should use ResolvedExecutionContext.context_hash directly.
+    """
+    ctx = ResolvedExecutionContext(
+        role=role,
+        active_skills=active_skills or [],
+        skill_digests=skill_digests or {},
+        provider_config_digest=provider_config_digest,
+        base_extra_dirs=extra_dirs or [],
+        project_id=project_id,
+        working_dir=working_dir,
+        file_policy=file_policy,
+        provider_name="",
+    )
+    return ctx.context_hash
 
 
 @dataclass
@@ -21,6 +67,8 @@ class PreflightContext:
     extra_dirs: list[str]
     system_prompt: str
     capability_summary: str  # Phase 3; empty string in Phase 1
+    working_dir: str = ""  # Per-chat project override; empty = use config default
+    file_policy: str = ""  # "inspect" or "edit"; empty = use config default
 
 
 @dataclass
@@ -29,36 +77,6 @@ class RunContext(PreflightContext):
     provider_config: dict = field(default_factory=dict)  # Phase 3
     credential_env: dict[str, str] = field(default_factory=dict)  # Phase 2
     skip_permissions: bool = False  # bypass permission checks (user already approved)
-
-
-@dataclass
-class PendingRequest:
-    """Typed pending state for approval and retry flows."""
-    request_user_id: int
-    prompt: str
-    image_paths: list[str]
-    attachment_dicts: list[dict]  # serialized Attachment objects (approval flow)
-    context_hash: str
-    denials: list[dict] | None = None  # permission denials (retry flow only)
-    created_at: float = 0.0  # time.time() when request was created
-
-
-def compute_context_hash(
-    role: str,
-    active_skills: list[str],
-    skill_digests: dict[str, str],
-    provider_config_digest: str,
-    extra_dirs: list[str],
-) -> str:
-    """SHA-256 of the base execution context (excludes denial-approved dirs)."""
-    payload = json.dumps({
-        "role": role,
-        "active_skills": sorted(active_skills),
-        "skill_digests": {k: skill_digests[k] for k in sorted(skill_digests)},
-        "provider_config_digest": provider_config_digest,
-        "extra_dirs": sorted(extra_dirs),
-    }, sort_keys=True)
-    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 class ProgressSink(Protocol):

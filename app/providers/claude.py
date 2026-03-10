@@ -212,6 +212,7 @@ class ClaudeProvider:
         progress: ProgressSink,
         timeout: int | None = None,
         extra_env: dict[str, str] | None = None,
+        working_dir: str = "",
     ) -> tuple[str, dict, int]:
         """Spawn claude, consume output, return (accumulated_text, result_data, returncode)."""
         log.info("claude: %s", " ".join(cmd[:-1] + ["<prompt>"]))
@@ -220,11 +221,12 @@ class ClaudeProvider:
         if extra_env:
             env.update(extra_env)
 
+        cwd = working_dir or str(self.config.working_dir)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=str(self.config.working_dir),
+            cwd=cwd,
             env=env,
             limit=1024 * 1024,
         )
@@ -289,10 +291,18 @@ class ClaudeProvider:
         if context and context.skip_permissions:
             idx = cmd.index("--")
             cmd[idx:idx] = ["--dangerously-skip-permissions"]
+        system_prompt_parts = []
         if context and context.system_prompt:
-            # Insert before the "--" separator
+            system_prompt_parts.append(context.system_prompt)
+        if context and context.file_policy == "inspect":
+            system_prompt_parts.append(
+                "IMPORTANT: This session is in INSPECT (read-only) mode. "
+                "Do NOT create, modify, delete, or rename any files. "
+                "Only read and analyze code. Refuse any request that would change files."
+            )
+        if system_prompt_parts:
             idx = cmd.index("--")
-            cmd[idx:idx] = ["--append-system-prompt", context.system_prompt]
+            cmd[idx:idx] = ["--append-system-prompt", "\n\n".join(system_prompt_parts)]
 
         mcp_tmp = None
         if context and context.provider_config:
@@ -301,7 +311,10 @@ class ClaudeProvider:
         # Inject credential env
         extra_env = context.credential_env if context else {}
 
-        accumulated, result_data, rc = await self._run_process(cmd, progress, extra_env=extra_env)
+        working_dir = context.working_dir if context else ""
+        accumulated, result_data, rc = await self._run_process(
+            cmd, progress, extra_env=extra_env, working_dir=working_dir,
+        )
 
         # Cleanup temp MCP config
         if mcp_tmp:
@@ -348,8 +361,9 @@ class ClaudeProvider:
             idx = cmd.index("--")
             cmd[idx:idx] = ["--append-system-prompt", system_prompt]
 
+        working_dir = context.working_dir if context else ""
         accumulated, result_data, rc = await self._run_process(
-            cmd, progress, timeout=120
+            cmd, progress, timeout=120, working_dir=working_dir,
         )
 
         if rc == -1:

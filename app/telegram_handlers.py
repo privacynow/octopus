@@ -29,7 +29,13 @@ from app.approvals import (
 )
 from app.config import BotConfig
 from app.formatting import extract_send_directives, md_to_telegram_html, split_html, trim_text
-from app.providers.base import PendingRequest, Provider, RunContext, PreflightContext, compute_context_hash
+from app.execution_context import ResolvedExecutionContext, resolve_execution_context
+from app.providers.base import Provider, RunContext, PreflightContext
+from app.session_state import (
+    PendingApproval,
+    PendingRetry,
+    session_from_dict,
+)
 from app.skills import (
     build_run_context, build_preflight_context,
     get_provider_config_digest, get_skill_digests,
@@ -198,17 +204,53 @@ def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
     )
 
 
+# -- Project helpers -------------------------------------------------------
+
+def _resolve_project(session: dict[str, Any]) -> tuple[str, str, tuple[str, ...]] | None:
+    """Return (name, root_dir, extra_dirs) for the session's bound project, or None."""
+    project_id = session.get("project_id", "")
+    if not project_id:
+        return None
+    for name, root_dir, extra_dirs in _cfg().projects:
+        if name == project_id:
+            return (name, root_dir, extra_dirs)
+    return None
+
+
+def _project_working_dir(session: dict[str, Any]) -> str:
+    """Return the working directory for this session's project, or empty string for default."""
+    proj = _resolve_project(session)
+    return proj[1] if proj else ""
+
+
+def _resolve_context(session: dict[str, Any]) -> ResolvedExecutionContext:
+    """Build the single authoritative execution identity from session + config.
+
+    Accepts raw dict (from _load) and delegates to the authoritative builder.
+    This is a thin adapter — the real logic lives in resolve_execution_context().
+    """
+    typed = session_from_dict(session)
+    return resolve_execution_context(typed, _cfg(), _prov().name)
+
+
 # -- Helpers ---------------------------------------------------------------
 
-def _allowed_roots(chat_id: int) -> list[Path]:
+def _allowed_roots(chat_id: int, session: dict[str, Any] | None = None) -> list[Path]:
     """Return path roots this chat is allowed to access.
 
     Uses the chat-specific upload dir (not the shared uploads tree)
     so one chat cannot read another chat's uploaded files.
+    If the session has a bound project, uses the project's root dir.
     """
     cfg = _cfg()
-    roots = [cfg.working_dir, chat_upload_dir(cfg.data_dir, chat_id)]
-    roots.extend(cfg.extra_dirs)
+    proj = _resolve_project(session) if session else None
+    if proj:
+        roots: list[Path] = [Path(proj[1])]
+        roots.extend(Path(d) for d in proj[2])
+    else:
+        roots = [cfg.working_dir]
+        roots.extend(cfg.extra_dirs)
+    roots.append(chat_upload_dir(cfg.data_dir, chat_id))
     return [r.resolve() for r in roots]
 
 
@@ -414,8 +456,8 @@ async def execute_request(
     prov = _prov()
     session = _load(chat_id)
 
-    role = session.get("role", "")
-    active_skills = session.get("active_skills", [])
+    # Resolve the authoritative execution identity once
+    resolved = _resolve_context(session)
 
     # Check credential satisfaction before proceeding
     credential_env = await _check_credential_satisfaction(
@@ -430,20 +472,21 @@ async def execute_request(
 
     # Stage Codex scripts before building context so scripts_dir is in extra_dirs
     if prov.name == "codex":
-        scripts_dir = stage_codex_scripts(cfg.data_dir, chat_id, active_skills)
+        scripts_dir = stage_codex_scripts(cfg.data_dir, chat_id, resolved.active_skills)
         if scripts_dir:
             all_extra_dirs.append(str(scripts_dir))
 
     # Build execution context (includes all extra_dirs, including staged scripts)
-    context = build_run_context(role, active_skills, all_extra_dirs, provider_name=prov.name, credential_env=credential_env)
+    context = build_run_context(
+        resolved.role, resolved.active_skills, all_extra_dirs,
+        provider_name=prov.name,
+        credential_env=credential_env, working_dir=resolved.working_dir,
+        file_policy=resolved.file_policy,
+    )
     context.skip_permissions = skip_permissions
 
-    # Compute context hash using BASE dirs (from config, not upload or denial dirs)
-    context_hash = compute_context_hash(
-        role, active_skills, get_skill_digests(active_skills),
-        get_provider_config_digest(active_skills, provider_name=prov.name),
-        sorted(str(d) for d in cfg.extra_dirs),
-    )
+    # Use the single authoritative context hash
+    context_hash = resolved.context_hash
 
     # Codex thread invalidation: start fresh thread when context drifted or bot restarted.
     # After a restart, the old thread's context may have been compacted and the model
@@ -514,16 +557,14 @@ async def execute_request(
         await progress.update("Completed with blocked actions.", force=True)
 
         session = _load(chat_id)
-        pending = PendingRequest(
+        session["pending_retry"] = dataclasses.asdict(PendingRetry(
             request_user_id=request_user_id,
             prompt=prompt,
             image_paths=image_paths,
-            attachment_dicts=[],
             context_hash=context_hash,
             denials=result.denials,
             created_at=time.time(),
-        )
-        session["pending_request"] = dataclasses.asdict(pending)
+        ))
         _save(chat_id, session)
 
         keyboard = InlineKeyboardMarkup([[
@@ -578,14 +619,14 @@ async def request_approval(
     prov = _prov()
     session = _load(chat_id)
 
-    if session.get("pending_request"):
+    if session.get("pending_approval") or session.get("pending_retry"):
         await message.reply_text(
             "A preflight approval is already waiting. Use /approve or /reject first."
         )
         return
 
-    role = session.get("role", "")
-    active_skills = session.get("active_skills", [])
+    # Resolve the authoritative execution identity once
+    resolved = _resolve_context(session)
 
     # Check credential satisfaction before proceeding
     credential_env = await _check_credential_satisfaction(
@@ -596,14 +637,14 @@ async def request_approval(
 
     # Build preflight context
     upload_dir = str(chat_upload_dir(cfg.data_dir, chat_id))
-    preflight_context = build_preflight_context(role, active_skills, [upload_dir], provider_name=prov.name)
-
-    # Compute context hash using BASE dirs (from config)
-    context_hash = compute_context_hash(
-        role, active_skills, get_skill_digests(active_skills),
-        get_provider_config_digest(active_skills, provider_name=prov.name),
-        sorted(str(d) for d in cfg.extra_dirs),
+    preflight_context = build_preflight_context(
+        resolved.role, resolved.active_skills, [upload_dir],
+        provider_name=prov.name,
+        working_dir=resolved.working_dir, file_policy=resolved.file_policy,
     )
+
+    # Use the single authoritative context hash
+    context_hash = resolved.context_hash
 
     status_msg = await message.reply_text(
         "<i>Preparing preflight approval plan\u2026</i>",
@@ -633,15 +674,14 @@ async def request_approval(
         {"path": str(a.path), "original_name": a.original_name, "is_image": a.is_image}
         for a in attachments
     ]
-    pending = PendingRequest(
+    session["pending_approval"] = dataclasses.asdict(PendingApproval(
         request_user_id=request_user_id,
         prompt=prompt,
         image_paths=image_paths,
         attachment_dicts=attachment_dicts,
         context_hash=context_hash,
         created_at=time.time(),
-    )
-    session["pending_request"] = dataclasses.asdict(pending)
+    ))
     _save(chat_id, session)
 
     keyboard = InlineKeyboardMarkup([[
@@ -683,16 +723,12 @@ def _extra_dirs_from_denials(denials: list[dict]) -> list[str]:
 
 
 def _current_context_hash(session: dict[str, Any]) -> str:
-    """Compute the current context hash from session state and config."""
-    cfg = _cfg()
-    prov = _prov()
-    role = session.get("role", "")
-    active_skills = session.get("active_skills", [])
-    return compute_context_hash(
-        role, active_skills, get_skill_digests(active_skills),
-        get_provider_config_digest(active_skills, provider_name=prov.name),
-        sorted(str(d) for d in cfg.extra_dirs),
-    )
+    """Compute the current context hash from session state and config.
+
+    Delegates to _resolve_context() so that all paths — execution, preflight,
+    approval validation, and retry validation — use the same field set.
+    """
+    return _resolve_context(session).context_hash
 
 
 def _pending_expired(pending: dict) -> str | None:
@@ -708,9 +744,20 @@ def _pending_expired(pending: dict) -> str | None:
     return None
 
 
+def _get_pending(session: dict[str, Any]) -> dict | None:
+    """Return the pending approval or retry dict, whichever is set."""
+    return session.get("pending_approval") or session.get("pending_retry")
+
+
+def _clear_pending(session: dict[str, Any]) -> None:
+    """Clear both pending fields."""
+    session["pending_approval"] = None
+    session["pending_retry"] = None
+
+
 async def approve_pending(chat_id: int, message) -> None:
     session = _load(chat_id)
-    pending = session.get("pending_request")
+    pending = _get_pending(session)
     if not pending:
         await message.reply_text("No pending request to approve.")
         return
@@ -718,14 +765,14 @@ async def approve_pending(chat_id: int, message) -> None:
     # Reject expired requests
     expiry_msg = _pending_expired(pending)
     if expiry_msg:
-        session["pending_request"] = None
+        _clear_pending(session)
         _save(chat_id, session)
         await message.reply_text(expiry_msg)
         return
 
     # Validate context hash — reject if stale
     if pending.get("context_hash") and pending["context_hash"] != _current_context_hash(session):
-        session["pending_request"] = None
+        _clear_pending(session)
         _save(chat_id, session)
         await message.reply_text("Context changed since this request was made. Please resend.")
         return
@@ -733,7 +780,7 @@ async def approve_pending(chat_id: int, message) -> None:
     denials = pending.get("denials") or []
     extra_dirs = _extra_dirs_from_denials(denials) if denials else None
     request_user_id = pending.get("request_user_id", 0)
-    session["pending_request"] = None
+    _clear_pending(session)
     _save(chat_id, session)
     await execute_request(
         chat_id, pending["prompt"], pending.get("image_paths", []), message,
@@ -745,10 +792,10 @@ async def approve_pending(chat_id: int, message) -> None:
 
 async def reject_pending(chat_id: int, message) -> None:
     session = _load(chat_id)
-    if not session.get("pending_request"):
+    if not _get_pending(session):
         await message.reply_text("No pending request to reject.")
         return
-    session["pending_request"] = None
+    _clear_pending(session)
     _save(chat_id, session)
     await message.reply_text("Pending request rejected.")
 
@@ -767,6 +814,7 @@ HELP_TEMPLATE = (
     "/cancel — cancel credential setup or a pending request\n"
     "/clear_credentials — remove your stored credentials\n"
     "/send &lt;path&gt; — retrieve a file from the server\n"
+    "/policy inspect|edit — set file access policy\n"
     "/session — show current session info\n"
     "/id — show your Telegram user ID\n"
     "/doctor — run health checks\n""/export — download recent conversation history\n""/admin sessions — session overview (admin only)\n\n"
@@ -892,19 +940,28 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         tid = pstate.get("thread_id") or "[none yet]"
         session_line = f"Thread: <code>{html.escape(str(tid))}</code>"
 
-    pending = "yes" if session.get("pending_request") else "no"
-    role = session.get("role", "") or "(default)"
-    active_skills = session.get("active_skills", [])
-    skills_display = ", ".join(active_skills) if active_skills else "(none)"
+    pending = "yes" if _get_pending(session) else "no"
+    resolved = _resolve_context(session)
+    role_display = resolved.role or "(default)"
+    skills_display = ", ".join(resolved.active_skills) if resolved.active_skills else "(none)"
     approval_mode = session.get("approval_mode", "off")
     approval_source = _approval_mode_source(session)
+
+    # Resolve effective working directory for display
+    if resolved.project_id:
+        wd_display = f"{resolved.working_dir} (project: {resolved.project_id})"
+    else:
+        wd_display = str(cfg.working_dir)
+
+    file_policy = resolved.file_policy or "edit"
     await update.effective_message.reply_text(
         f"Provider: <code>{html.escape(_prov().name)}</code>\n"
         f"Instance: <code>{html.escape(cfg.instance)}</code>\n"
-        f"Working dir: <code>{html.escape(str(cfg.working_dir))}</code>\n"
+        f"Working dir: <code>{html.escape(wd_display)}</code>\n"
+        f"File policy: <code>{html.escape(file_policy)}</code>\n"
         f"{session_line}\n"
         f"Preflight approval mode: <code>{approval_mode}</code> ({approval_source})\n"
-        f"Role: <code>{html.escape(role)}</code>\n"
+        f"Role: <code>{html.escape(role_display)}</code>\n"
         f"Skills: <code>{html.escape(skills_display)}</code>\n"
         f"Pending: <code>{pending}</code>",
         parse_mode=ParseMode.HTML,
@@ -953,7 +1010,8 @@ async def cmd_send(event, update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.effective_message.reply_text("Usage: /send <path>")
         return
     raw_path = " ".join(event.args)
-    resolved = resolve_allowed_path(raw_path, _allowed_roots(event.chat_id))
+    session = _load(event.chat_id)
+    resolved = resolve_allowed_path(raw_path, _allowed_roots(event.chat_id, session))
     if not resolved:
         await update.effective_message.reply_text("Path is missing or outside allowed roots.")
         return
@@ -1180,10 +1238,9 @@ async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 )
                 return
 
-        # Cancel pending approval request
-        pending = session.get("pending_request")
-        if pending:
-            session["pending_request"] = None
+        # Cancel pending approval/retry request
+        if _get_pending(session):
+            _clear_pending(session)
             _save(chat_id, session)
             await update.effective_message.reply_text("Pending request cancelled.")
             return
@@ -1525,7 +1582,7 @@ async def handle_callback(event, query) -> None:
 
         if event.data == "retry_skip":
             session = _load(chat_id)
-            session["pending_request"] = None
+            _clear_pending(session)
             _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.message.edit_text("Skipped.")
@@ -1533,7 +1590,7 @@ async def handle_callback(event, query) -> None:
 
         if event.data == "retry_allow":
             session = _load(chat_id)
-            pending = session.get("pending_request")
+            pending = session.get("pending_retry")
             if not pending:
                 await query.message.edit_text("Nothing to retry.")
                 return
@@ -1541,7 +1598,7 @@ async def handle_callback(event, query) -> None:
             # Reject expired requests
             expiry_msg = _pending_expired(pending)
             if expiry_msg:
-                session["pending_request"] = None
+                _clear_pending(session)
                 _save(chat_id, session)
                 await query.edit_message_reply_markup(reply_markup=None)
                 await query.message.edit_text(expiry_msg)
@@ -1549,7 +1606,7 @@ async def handle_callback(event, query) -> None:
 
             # Validate context hash — reject if stale
             if pending.get("context_hash") and pending["context_hash"] != _current_context_hash(session):
-                session["pending_request"] = None
+                _clear_pending(session)
                 _save(chat_id, session)
                 await query.edit_message_reply_markup(reply_markup=None)
                 await query.message.edit_text("Context changed since this request was made. Please resend.")
@@ -1558,7 +1615,7 @@ async def handle_callback(event, query) -> None:
             prompt = pending["prompt"]
             denials = pending.get("denials") or []
             request_user_id = pending.get("request_user_id", 0)
-            session["pending_request"] = None
+            _clear_pending(session)
 
             # Derive execution dirs: base extra_dirs + approved dirs from denials
             denial_dirs = _extra_dirs_from_denials(denials)
@@ -1657,6 +1714,121 @@ async def handle_skill_update_callback(event, query) -> None:
         await query.edit_message_reply_markup(reply_markup=None)
         await query.edit_message_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
+@_command_handler
+async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    cfg = _cfg()
+    msg = update.effective_message
+    arg = event.args[0].lower() if event.args else ""
+
+    if arg == "list":
+        if not cfg.projects:
+            await msg.reply_text("No projects configured. Set BOT_PROJECTS in your instance config.")
+            return
+        session = _load(event.chat_id)
+        current = session.get("project_id", "")
+        lines = ["<b>Available projects:</b>"]
+        for name, root_dir, _ in cfg.projects:
+            marker = " (active)" if name == current else ""
+            lines.append(f"  <code>{html.escape(name)}</code> \u2192 {html.escape(root_dir)}{marker}")
+        await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        return
+
+    if arg == "use" and len(event.args) >= 2:
+        project_name = event.args[1]
+        found = any(name == project_name for name, _, _ in cfg.projects)
+        if not found:
+            await msg.reply_text(
+                f"Unknown project: <code>{html.escape(project_name)}</code>\n"
+                f"Use /project list to see available projects.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        session = _load(event.chat_id)
+        old_project = session.get("project_id", "")
+        if old_project == project_name:
+            await msg.reply_text(f"Already using project <code>{html.escape(project_name)}</code>.", parse_mode=ParseMode.HTML)
+            return
+        # Switch project — clear provider state and pending requests
+        session["project_id"] = project_name
+        session["provider_state"] = _prov().new_provider_state()
+        _clear_pending(session)
+        _save(event.chat_id, session)
+        proj_root = next(root for name, root, _ in cfg.projects if name == project_name)
+        await msg.reply_text(
+            f"Switched to project <code>{html.escape(project_name)}</code>\n"
+            f"Working dir: <code>{html.escape(proj_root)}</code>\n"
+            f"Provider session reset.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if arg == "clear":
+        session = _load(event.chat_id)
+        if not session.get("project_id"):
+            await msg.reply_text("No project is active.")
+            return
+        session["project_id"] = ""
+        session["provider_state"] = _prov().new_provider_state()
+        _clear_pending(session)
+        _save(event.chat_id, session)
+        await msg.reply_text(
+            f"Project cleared. Using instance default: <code>{html.escape(str(cfg.working_dir))}</code>\n"
+            f"Provider session reset.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # Default: show current project
+    session = _load(event.chat_id)
+    proj = _resolve_project(session)
+    if proj:
+        await msg.reply_text(
+            f"Project: <code>{html.escape(proj[0])}</code>\n"
+            f"Working dir: <code>{html.escape(proj[1])}</code>",
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await msg.reply_text(
+            f"No project active. Using instance default: <code>{html.escape(str(cfg.working_dir))}</code>",
+            parse_mode=ParseMode.HTML,
+        )
+
+
+@_command_handler
+async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    arg = event.args[0].lower() if event.args else ""
+
+    if arg in ("inspect", "edit"):
+        session = _load(event.chat_id)
+        old_policy = session.get("file_policy") or "edit"
+        if old_policy == arg:
+            await msg.reply_text(f"File policy is already <code>{html.escape(arg)}</code>.", parse_mode=ParseMode.HTML)
+            return
+        session["file_policy"] = arg
+        # Policy change invalidates provider state (Codex sandbox changes)
+        session["provider_state"] = _prov().new_provider_state()
+        _clear_pending(session)
+        _save(event.chat_id, session)
+        await msg.reply_text(
+            f"File policy set to <code>{html.escape(arg)}</code>.\nProvider session reset.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if arg == "" or arg == "status":
+        session = _load(event.chat_id)
+        policy = session.get("file_policy") or "edit"
+        await msg.reply_text(
+            f"File policy: <code>{html.escape(policy)}</code>\n"
+            f"Use <code>/policy inspect</code> or <code>/policy edit</code> to change.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    await msg.reply_text("Use /policy inspect, /policy edit, or /policy status.")
+
+
 def build_application(config: BotConfig, provider: Provider) -> Application:
     global _config, _provider, _boot_id, _rate_limiter
     _config = config
@@ -1684,6 +1856,8 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     app.add_handler(CommandHandler("send", cmd_send))
     app.add_handler(CommandHandler("id", cmd_id))
     app.add_handler(CommandHandler("doctor", cmd_doctor))
+    app.add_handler(CommandHandler("project", cmd_project))
+    app.add_handler(CommandHandler("policy", cmd_policy))
     app.add_handler(CommandHandler("export", cmd_export))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CallbackQueryHandler(handle_callback, pattern=r"^(retry_|approval_)"))

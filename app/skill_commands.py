@@ -1,5 +1,6 @@
 """Subcommand handlers for /skills, extracted from telegram_handlers."""
 
+import asyncio
 import html
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -236,16 +237,38 @@ async def skills_create(event, update: Update, name: str) -> None:
 async def skills_search(event, update: Update, query: str) -> None:
     from app.store import search as store_search
     results = store_search(query)
-    if not results:
+    lines: list[str] = []
+    if results:
+        lines.append(f"<b>Store skills matching '{html.escape(query)}':</b>")
+        for info in results:
+            desc = f" \u2014 {html.escape(info.description)}" if info.description else ""
+            lines.append(f"  <code>{html.escape(info.name)}</code>{desc}")
+
+    # Search registry if configured
+    registry_url = _th()._cfg().registry_url
+    if registry_url:
+        try:
+            from app.registry import fetch_index, search_index
+            index = await asyncio.to_thread(fetch_index, registry_url)
+            reg_results = search_index(index, query)
+            # Exclude skills already in store results
+            store_names = {r.name for r in results}
+            reg_only = [r for r in reg_results if r.name not in store_names]
+            if reg_only:
+                lines.append(f"\n<b>Registry skills matching '{html.escape(query)}':</b>")
+                for skill in reg_only:
+                    desc = f" \u2014 {html.escape(skill.description)}" if skill.description else ""
+                    pub = f" (by {html.escape(skill.publisher)})" if skill.publisher else ""
+                    lines.append(f"  <code>{html.escape(skill.name)}</code>{desc}{pub}")
+        except Exception as e:
+            lines.append(f"\n<i>Registry search failed: {html.escape(str(e)[:200])}</i>")
+
+    if not lines:
         await update.effective_message.reply_text(
-            f"No store skills matching '{html.escape(query)}'.",
+            f"No skills matching '{html.escape(query)}'.",
             parse_mode=ParseMode.HTML,
         )
         return
-    lines = [f"<b>Store skills matching '{html.escape(query)}':</b>"]
-    for info in results:
-        desc = f" \u2014 {html.escape(info.description)}" if info.description else ""
-        lines.append(f"  <code>{html.escape(info.name)}</code>{desc}")
     lines.append("\nUse /skills info <name> for details, /skills install <name> to install.")
     await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
@@ -294,13 +317,45 @@ async def skills_info(event, update: Update, name: str) -> None:
 
 
 async def skills_install(event, update: Update, name: str) -> None:
-    from app.store import install as store_install
+    from app.store import install as store_install, STORE_DIR
     th = _th()
     if not th.is_admin(event.user):
-        await update.effective_message.reply_text("Only admins can install store skills.")
+        await update.effective_message.reply_text("Only admins can install skills.")
         return
-    ok, msg = store_install(name)
-    await update.effective_message.reply_text(html.escape(msg), parse_mode=ParseMode.HTML)
+
+    # Try bundled store first
+    store_path = STORE_DIR / name
+    if store_path.is_dir() and (store_path / "skill.md").is_file():
+        ok, msg = store_install(name)
+        await update.effective_message.reply_text(html.escape(msg), parse_mode=ParseMode.HTML)
+        return
+
+    # Fall back to registry
+    registry_url = th._cfg().registry_url
+    if not registry_url:
+        await update.effective_message.reply_text(
+            f"Skill '{html.escape(name)}' not found in bundled store and no registry configured.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    try:
+        from app.registry import fetch_index
+        from app.store import install_from_registry
+        index = await asyncio.to_thread(fetch_index, registry_url)
+        if name not in index:
+            await update.effective_message.reply_text(
+                f"Skill '{html.escape(name)}' not found in store or registry.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        ok, msg = await asyncio.to_thread(install_from_registry, name, index[name])
+        await update.effective_message.reply_text(html.escape(msg), parse_mode=ParseMode.HTML)
+    except Exception as e:
+        await update.effective_message.reply_text(
+            f"Registry install failed: {html.escape(str(e)[:300])}",
+            parse_mode=ParseMode.HTML,
+        )
 
 
 async def skills_uninstall(event, update: Update, name: str) -> None:

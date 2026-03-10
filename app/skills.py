@@ -739,6 +739,8 @@ def build_run_context(
     extra_dirs: list[str],
     provider_name: str = "",
     credential_env: dict[str, str] | None = None,
+    working_dir: str = "",
+    file_policy: str = "",
 ) -> RunContext:
     """Convenience builder for RunContext."""
     cred_env = credential_env or {}
@@ -750,6 +752,8 @@ def build_run_context(
         capability_summary=cap_summary,
         provider_config=provider_config,
         credential_env=cred_env,
+        working_dir=working_dir,
+        file_policy=file_policy,
     )
 
 
@@ -758,6 +762,8 @@ def build_preflight_context(
     active_skills: list[str],
     extra_dirs: list[str],
     provider_name: str = "",
+    working_dir: str = "",
+    file_policy: str = "",
 ) -> PreflightContext:
     """Convenience builder for PreflightContext."""
     cap_summary = build_capability_summary(provider_name, active_skills) if provider_name else ""
@@ -765,6 +771,8 @@ def build_preflight_context(
         extra_dirs=extra_dirs,
         system_prompt=build_system_prompt(role, active_skills),
         capability_summary=cap_summary,
+        working_dir=working_dir,
+        file_policy=file_policy,
     )
 
 

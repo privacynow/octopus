@@ -111,7 +111,7 @@ def scan_stale_sessions(
             data_dir, info["chat_id"], provider_name,
             provider_state_factory, approval_mode,
         )
-        pending = session_data.get("pending_request")
+        pending = session_data.get("pending_approval") or session_data.get("pending_retry")
         if pending and (now - pending.get("created_at", 0)) > _STALE_PENDING_SECONDS:
             stale_pending += 1
         setup = session_data.get("awaiting_skill_setup")

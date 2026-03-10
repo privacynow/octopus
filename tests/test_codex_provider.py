@@ -96,13 +96,103 @@ def test_command_building_ephemeral():
     assert "read-only" in cmd8
 
 
+# -- file_policy behaviour --
+
+async def test_file_policy_inspect_sets_sandbox_readonly():
+    """file_policy=inspect should override sandbox to read-only on new exec."""
+    provider = CodexProvider(make_config())
+    calls: list[tuple[list[str], bool]] = []
+
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+        calls.append((cmd, is_resume))
+        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+
+    provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
+    progress = FakeProgress()
+    context = RunContext(extra_dirs=[], system_prompt="", capability_summary="",
+                         provider_config={}, credential_env={}, file_policy="inspect")
+
+    await provider.run({"thread_id": None}, "analyze code", [], progress, context=context)
+    cmd, _ = calls[-1]
+    # Should have read-only sandbox
+    sandbox_idx = cmd.index("--sandbox")
+    assert cmd[sandbox_idx + 1] == "read-only"
+
+
+async def test_file_policy_edit_uses_default_sandbox():
+    """file_policy=edit (or empty) should use default sandbox from config."""
+    provider = CodexProvider(make_config(codex_sandbox="workspace-write"))
+    calls: list[tuple[list[str], bool]] = []
+
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+        calls.append((cmd, is_resume))
+        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+
+    provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
+    progress = FakeProgress()
+    context = RunContext(extra_dirs=[], system_prompt="", capability_summary="",
+                         provider_config={}, credential_env={}, file_policy="edit")
+
+    await provider.run({"thread_id": None}, "write code", [], progress, context=context)
+    cmd, _ = calls[-1]
+    sandbox_idx = cmd.index("--sandbox")
+    assert cmd[sandbox_idx + 1] == "workspace-write"
+
+
+async def test_file_policy_inspect_overrides_provider_config_sandbox():
+    """file_policy=inspect must be authoritative — provider_config sandbox cannot weaken it."""
+    provider = CodexProvider(make_config())
+    calls: list[tuple[list[str], bool]] = []
+
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+        calls.append((cmd, is_resume))
+        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+
+    provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
+    progress = FakeProgress()
+    # Skill config says workspace-write, but inspect mode must win
+    context = RunContext(extra_dirs=[], system_prompt="", capability_summary="",
+                         provider_config={"sandbox": "workspace-write"},
+                         credential_env={}, file_policy="inspect")
+
+    await provider.run({"thread_id": None}, "analyze code", [], progress, context=context)
+    cmd, _ = calls[-1]
+    sandbox_idx = cmd.index("--sandbox")
+    assert cmd[sandbox_idx + 1] == "read-only", (
+        f"inspect mode must force read-only, got {cmd[sandbox_idx + 1]}"
+    )
+
+
+async def test_provider_config_sandbox_applies_without_inspect():
+    """When file_policy is not inspect, provider_config sandbox should apply."""
+    provider = CodexProvider(make_config(codex_sandbox="workspace-write"))
+    calls: list[tuple[list[str], bool]] = []
+
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+        calls.append((cmd, is_resume))
+        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+
+    provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
+    progress = FakeProgress()
+    context = RunContext(extra_dirs=[], system_prompt="", capability_summary="",
+                         provider_config={"sandbox": "read-only"},
+                         credential_env={}, file_policy="edit")
+
+    await provider.run({"thread_id": None}, "write code", [], progress, context=context)
+    cmd, _ = calls[-1]
+    sandbox_idx = cmd.index("--sandbox")
+    assert cmd[sandbox_idx + 1] == "read-only", (
+        f"provider_config sandbox should apply when not in inspect mode, got {cmd[sandbox_idx + 1]}"
+    )
+
+
 # -- skip_permissions behaviour --
 
 async def test_skip_permissions_fresh_exec():
     provider = CodexProvider(make_config(codex_full_auto=True))
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 
@@ -121,7 +211,7 @@ async def test_skip_permissions_resume():
     provider = CodexProvider(make_config(codex_full_auto=True))
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 

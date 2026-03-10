@@ -1,6 +1,6 @@
 # Agent Roles & Skills — Implementation Status
 
-Current as of 2026-03-09. Tracks progress against [PLAN-agent-roles-and-skills.md](PLAN-agent-roles-and-skills.md).
+Current as of 2026-03-10. Tracks progress against [PLAN-agent-roles-and-skills.md](PLAN-agent-roles-and-skills.md).
 
 ---
 
@@ -73,7 +73,9 @@ The highest-signal coverage remains in the handler integration suites. These exe
 | `app/store.py` | 396 | Skill store: discovery, search, install/uninstall, update checking, SHA-256 provenance |
 | `app/approvals.py` | 48 | Preflight prompt building, denial formatting |
 | `app/formatting.py` | 162 | Markdown-to-Telegram HTML, text splitting, SEND_FILE directives |
-| `app/providers/base.py` | 99 | Provider protocol, RunResult, RunContext, PreflightContext, PendingRequest, compute_context_hash |
+| `app/session_state.py` | ~120 | Typed session models: SessionState, PendingApproval, PendingRetry, AwaitingSkillSetup, ProjectBinding. Serialization via `dataclasses.asdict()`. |
+| `app/execution_context.py` | ~100 | Authoritative resolved execution context: `ResolvedExecutionContext`, `resolve_execution_context()`. Single source of context hashing. |
+| `app/providers/base.py` | ~110 | Provider protocol, RunResult, RunContext, PreflightContext. Backward-compat re-exports for `compute_context_hash`, `PendingRequest`, `ResolvedContext`. |
 | `app/providers/claude.py` | 335 | Claude CLI provider (stream-json, session-id sessions, MCP config) |
 | `app/providers/codex.py` | 309 | Codex CLI provider (exec --json, thread-id sessions, context hash invalidation) |
 
@@ -216,7 +218,7 @@ This means a malformed custom skill in `~/.config/telegram-agent-bot/skills/` wi
 
 ### Credential isolation
 
-Credentials are per-user, not per-chat. The `request_user_id` field in `PendingRequest` ensures that when Alice requests and Bob approves, Alice's credentials (not Bob's) are injected into the provider subprocess. This is tested in scenario 27 (cross-user credential isolation).
+Credentials are per-user, not per-chat. The `request_user_id` field in `PendingApproval` / `PendingRetry` (typed models in `app/session_state.py`) ensures that when Alice requests and Bob approves, Alice's credentials (not Bob's) are injected into the provider subprocess. This is tested in scenario 27 (cross-user credential isolation).
 
 ### Group chat credential setup safety
 
@@ -233,10 +235,12 @@ The canonical skill identifier is the **directory name**, not the frontmatter `n
 
 ### Context hash
 
-`compute_context_hash()` covers role, active_skills, skill file digests, provider config digest (scoped to the active provider), and base extra_dirs. It does NOT cover denial-approved dirs (those are ephemeral). The hash is used for:
+Context hashing is centralized in `ResolvedExecutionContext.context_hash` (`app/execution_context.py`). The hash covers: role, active_skills, skill file digests, provider config digest (scoped to the active provider), base extra_dirs, project_id, file_policy, and working_dir. It does NOT cover denial-approved dirs (those are ephemeral). The hash is used for:
 
 - Codex thread invalidation (hash change → clear thread_id)
 - Pending request staleness (hash mismatch → reject retry/approval)
+
+All paths — execute, preflight, approve, retry, /session display — use `resolve_execution_context()` as the single builder. The old `compute_context_hash()` function in `base.py` is a backward-compat wrapper.
 
 ### Test infrastructure
 

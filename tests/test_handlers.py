@@ -1,5 +1,6 @@
-"""Core handler integration tests: happy-path routing, session lifecycle, /help, /start, /doctor."""
+"""Core handler integration tests: happy-path routing, session lifecycle, /help, /start, /doctor, /project."""
 
+import tempfile
 from pathlib import Path
 
 from app.providers.base import RunContext, RunResult
@@ -18,6 +19,7 @@ from tests.support.handler_support import (
     send_text,
     setup_globals,
     fresh_data_dir,
+    fresh_env,
 )
 
 
@@ -99,7 +101,7 @@ async def test_provider_timeout():
         assert "partial output" not in reply_texts
         assert sum(1 for r in msg.replies if "text" in r) == 1
         session = load_session_disk(data_dir, 12345, prov)
-        assert session.get("pending_request") == None
+        assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
 async def test_provider_error_returncode():
@@ -122,7 +124,7 @@ async def test_provider_error_returncode():
         assert "segfault" not in reply_texts
         assert sum(1 for r in msg.replies if "text" in r) == 1
         session = load_session_disk(data_dir, 12345, prov)
-        assert session.get("pending_request") == None
+        assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
 async def test_cmd_role():
@@ -395,7 +397,7 @@ async def test_doctor_stale_session_warnings():
         setup_globals(cfg, prov)
 
         session1 = default_session("claude", prov.new_provider_state(), "off")
-        session1["pending_request"] = {"prompt": "do something", "created_at": 0}
+        session1["pending_approval"] = {"prompt": "do something", "created_at": 0}
         save_session(data_dir, 100, session1)
 
         session2 = default_session("claude", prov.new_provider_state(), "off")
@@ -446,7 +448,7 @@ async def test_doctor_no_stale_warning_for_fresh_sessions():
         setup_globals(cfg, prov)
 
         session1 = default_session("claude", prov.new_provider_state(), "off")
-        session1["pending_request"] = {"prompt": "do something", "created_at": _time.time()}
+        session1["pending_approval"] = {"prompt": "do something", "created_at": _time.time()}
         save_session(data_dir, 100, session1)
 
         session2 = default_session("claude", prov.new_provider_state(), "off")
@@ -663,3 +665,316 @@ async def test_send_image_directive():
         # Should have a reply_photo entry
         photo_replies = [r for r in msg.replies if r.get("photo")]
         assert len(photo_replies) >= 1
+
+
+# ---------------------------------------------------------------------------
+# /project command tests
+# ---------------------------------------------------------------------------
+
+async def test_project_list_no_projects():
+    """When no projects are configured, /project list says so."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(1)
+        msg = await send_command(th.cmd_project, chat, user, "/project", args=["list"])
+        reply = last_reply(msg)
+        assert "No projects configured" in reply
+
+
+async def test_project_list_shows_projects():
+    """When projects are configured, /project list shows them."""
+    import app.telegram_handlers as th
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("myapp", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(1)
+            user = FakeUser(1)
+            msg = await send_command(th.cmd_project, chat, user, "/project", args=["list"])
+            reply = last_reply(msg)
+            assert "myapp" in reply
+            assert proj_dir in reply
+
+
+async def test_project_use_switches_project():
+    """'/project use <name>' binds the chat to a project and resets provider state."""
+    import app.telegram_handlers as th
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("frontend", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(2001)
+            user = FakeUser(1)
+
+            # First send a message to create session state
+            prov.run_results = [RunResult(text="ok")]
+            await send_text(chat, user, "hello")
+
+            # Now switch project
+            msg = await send_command(th.cmd_project, chat, user, "/project", args=["use", "frontend"])
+            reply = last_reply(msg)
+            assert "Switched to project" in reply
+            assert "frontend" in reply
+            assert "Provider session reset" in reply
+
+            # Verify session has project_id set and provider state reset
+            session = load_session_disk(data_dir, 2001, prov)
+            assert session["project_id"] == "frontend"
+            # Provider state should be fresh
+            assert session["provider_state"].get("started") is not True
+
+
+async def test_project_use_unknown_project():
+    """'/project use <unknown>' returns error."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (("myapp", "/tmp", ()),),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(1)
+        msg = await send_command(th.cmd_project, chat, user, "/project", args=["use", "nonexistent"])
+        reply = last_reply(msg)
+        assert "Unknown project" in reply
+
+
+async def test_project_clear_resets_to_default():
+    """'/project clear' removes the project binding and resets provider state."""
+    import app.telegram_handlers as th
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("myapp", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(3001)
+            user = FakeUser(1)
+
+            # Bind to project first
+            prov.run_results = [RunResult(text="ok")]
+            await send_text(chat, user, "hello")
+            await send_command(th.cmd_project, chat, user, "/project", args=["use", "myapp"])
+
+            # Clear
+            msg = await send_command(th.cmd_project, chat, user, "/project", args=["clear"])
+            reply = last_reply(msg)
+            assert "Project cleared" in reply
+
+            session = load_session_disk(data_dir, 3001, prov)
+            assert session.get("project_id", "") == ""
+
+
+async def test_project_show_current():
+    """'/project' with no args shows the current project."""
+    import app.telegram_handlers as th
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("backend", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(4001)
+            user = FakeUser(1)
+
+            # No project active
+            msg = await send_command(th.cmd_project, chat, user, "/project")
+            reply = last_reply(msg)
+            assert "No project active" in reply
+
+            # Bind and check
+            await send_command(th.cmd_project, chat, user, "/project", args=["use", "backend"])
+            msg = await send_command(th.cmd_project, chat, user, "/project")
+            reply = last_reply(msg)
+            assert "backend" in reply
+
+
+async def test_project_switch_invalidates_pending():
+    """Switching projects clears pending approval requests."""
+    import app.telegram_handlers as th
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("proj1", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(5001)
+            user = FakeUser(1)
+
+            # Create a session with a pending request
+            session = default_session("claude", prov.new_provider_state(), "on")
+            session["pending_approval"] = {"prompt": "do something", "created_at": 0}
+            save_session(data_dir, 5001, session)
+
+            # Switch project
+            await send_command(th.cmd_project, chat, user, "/project", args=["use", "proj1"])
+
+            # Pending should be cleared
+            session = load_session_disk(data_dir, 5001, prov)
+            assert session.get("pending_approval") is None and session.get("pending_retry") is None
+
+
+async def test_session_shows_project():
+    """/session shows the active project when one is bound."""
+    import app.telegram_handlers as th
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("webapp", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(6001)
+            user = FakeUser(1)
+
+            # Bind to project
+            await send_command(th.cmd_project, chat, user, "/project", args=["use", "webapp"])
+
+            # Check /session output
+            msg = await send_command(th.cmd_session, chat, user, "/session")
+            reply = last_reply(msg)
+            assert "webapp" in reply
+            assert proj_dir in reply
+
+
+async def test_context_hash_changes_with_project():
+    """Context hash should differ when project_id changes."""
+    from app.providers.base import compute_context_hash
+    hash1 = compute_context_hash("role", ["skill"], {}, "", [])
+    hash2 = compute_context_hash("role", ["skill"], {}, "", [], project_id="myproject")
+    assert hash1 != hash2
+
+
+# ---------------------------------------------------------------------------
+# /policy — file policy (6.3)
+# ---------------------------------------------------------------------------
+
+async def test_policy_default_is_edit():
+    """/policy with no args shows current policy; default is edit."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        msg = await send_command(th.cmd_policy, chat, user, "/policy")
+        reply = last_reply(msg)
+        assert "edit" in reply
+
+
+async def test_policy_set_inspect():
+    """/policy inspect switches to read-only mode and resets provider state."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+
+        # Send a message to create session with provider state
+        await send_text(chat, user, "hello")
+        session = load_session_disk(data_dir, 1001, prov)
+        assert session.get("file_policy", "") != "inspect"
+
+        # Set inspect
+        msg = await send_command(th.cmd_policy, chat, user, "/policy", args=["inspect"])
+        reply = last_reply(msg)
+        assert "inspect" in reply
+        assert "reset" in reply.lower()
+
+        # Verify persisted
+        session = load_session_disk(data_dir, 1001, prov)
+        assert session.get("file_policy") == "inspect"
+
+
+async def test_policy_set_edit():
+    """/policy edit switches back to edit mode."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+
+        # Set inspect first
+        await send_command(th.cmd_policy, chat, user, "/policy", args=["inspect"])
+        # Switch to edit
+        msg = await send_command(th.cmd_policy, chat, user, "/policy", args=["edit"])
+        reply = last_reply(msg)
+        assert "edit" in reply
+
+        session = load_session_disk(data_dir, 1001, prov)
+        assert session.get("file_policy") == "edit"
+
+
+async def test_policy_same_value_noop():
+    """/policy edit when already edit shows already-set message, no reset."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        msg = await send_command(th.cmd_policy, chat, user, "/policy", args=["edit"])
+        # Default is edit, so should say "already"
+        reply = last_reply(msg)
+        assert "already" in reply.lower()
+
+
+async def test_policy_invalid_arg():
+    """/policy with bad argument shows usage hint."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        msg = await send_command(th.cmd_policy, chat, user, "/policy", args=["delete"])
+        reply = last_reply(msg)
+        assert "inspect" in reply and "edit" in reply  # usage hint
+
+
+async def test_policy_shown_in_session():
+    """/session output includes file policy."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+
+        # Set inspect
+        await send_command(th.cmd_policy, chat, user, "/policy", args=["inspect"])
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+        reply = last_reply(msg)
+        assert "inspect" in reply
+        assert "File policy" in reply
+
+
+async def test_policy_inspect_passed_to_provider():
+    """When file_policy=inspect, provider run() receives it in context."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+
+        # Set inspect
+        await send_command(th.cmd_policy, chat, user, "/policy", args=["inspect"])
+        # Send a message
+        await send_text(chat, user, "analyze the code")
+
+        assert len(prov.run_calls) == 1
+        ctx = prov.run_calls[0]["context"]
+        assert ctx.file_policy == "inspect"
+
+
+async def test_policy_edit_passed_to_provider():
+    """When file_policy=edit (default), provider run() gets empty or 'edit'."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+
+        await send_text(chat, user, "write code")
+
+        assert len(prov.run_calls) == 1
+        ctx = prov.run_calls[0]["context"]
+        # Default: empty string (no file_policy set in session)
+        assert ctx.file_policy == ""
+
+
+async def test_context_hash_changes_with_file_policy():
+    """Context hash should differ when file_policy changes."""
+    from app.providers.base import compute_context_hash
+    hash1 = compute_context_hash("role", ["skill"], {}, "", [])
+    hash2 = compute_context_hash("role", ["skill"], {}, "", [], file_policy="inspect")
+    assert hash1 != hash2
+
+
+async def test_context_hash_changes_with_working_dir():
+    """Context hash should differ when working_dir changes."""
+    from app.providers.base import compute_context_hash
+    hash1 = compute_context_hash("role", ["skill"], {}, "", [])
+    hash2 = compute_context_hash("role", ["skill"], {}, "", [], working_dir="/opt/frontend")
+    assert hash1 != hash2
+    # Two different working dirs should produce different hashes
+    hash3 = compute_context_hash("role", ["skill"], {}, "", [], working_dir="/opt/backend")
+    assert hash2 != hash3

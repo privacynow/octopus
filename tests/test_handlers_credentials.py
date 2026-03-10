@@ -383,7 +383,7 @@ async def test_cross_user_credential_isolation():
             assert len(prov.preflight_calls) == 1
 
             session = load_session_disk(data_dir, 12345, prov)
-            assert session["pending_request"]["request_user_id"] == 100
+            assert session["pending_approval"]["request_user_id"] == 100
 
             cb_msg = FakeMessage(chat=chat)
             query = FakeCallbackQuery("approval_approve", message=cb_msg)

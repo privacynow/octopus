@@ -6,25 +6,19 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotenv import dotenv_values
+
 
 def load_dotenv_file(path: Path) -> dict[str, str]:
-    """Parse a .env file. Returns the key-value pairs found."""
-    result: dict[str, str] = {}
+    """Parse a .env file. Returns the key-value pairs found.
+
+    Uses python-dotenv for robust handling of quoting, escapes,
+    multiline values, and inline comments.
+    """
     if not path.exists():
-        return result
-    for raw_line in path.read_text().splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key, value = key.strip(), value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        elif "#" in value:
-            # Strip inline comments (only for unquoted values)
-            value = value[:value.index("#")].rstrip()
-        result[key] = value
-    return result
+        return {}
+    raw = dotenv_values(path)
+    return {k: v for k, v in raw.items() if v is not None}
 
 
 def env_path_for_instance(instance: str) -> Path:
@@ -85,6 +79,36 @@ class BotConfig:
     # Rate limiting (0 = disabled)
     rate_limit_per_minute: int
     rate_limit_per_hour: int
+    # Transport mode
+    bot_mode: str  # "poll" or "webhook"
+    webhook_url: str
+    webhook_listen: str
+    webhook_port: int
+    webhook_secret: str
+    # Projects — optional named working directories
+    projects: tuple[tuple[str, str, tuple[str, ...]], ...]  # ((name, root_dir, extra_dirs), ...)
+    # Skill registry
+    registry_url: str  # URL to a JSON skill registry index (empty = disabled)
+
+
+def _parse_projects(raw: str) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+    """Parse BOT_PROJECTS into a tuple of (name, root_dir, extra_dirs).
+
+    Format: "name1:/path/to/dir1,name2:/path/to/dir2"
+    Each entry is "name:path" where path is the project root directory.
+    """
+    if not raw.strip():
+        return ()
+    projects: list[tuple[str, str, tuple[str, ...]]] = []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry or ":" not in entry:
+            continue
+        name, path = entry.split(":", 1)
+        name, path = name.strip(), path.strip()
+        if name and path:
+            projects.append((name, path, ()))
+    return tuple(projects)
 
 
 def load_config(instance: str | None = None) -> BotConfig:
@@ -193,6 +217,13 @@ def load_config(instance: str | None = None) -> BotConfig:
         summary_model=get("BOT_SUMMARY_MODEL", "claude-haiku-4-5-20251001"),
         rate_limit_per_minute=get_int("BOT_RATE_LIMIT_PER_MINUTE", "0"),
         rate_limit_per_hour=get_int("BOT_RATE_LIMIT_PER_HOUR", "0"),
+        bot_mode=get("BOT_MODE", "poll").lower(),
+        webhook_url=get("BOT_WEBHOOK_URL"),
+        webhook_listen=get("BOT_WEBHOOK_LISTEN", "127.0.0.1"),
+        webhook_port=get_int("BOT_WEBHOOK_PORT", "8443"),
+        webhook_secret=get("BOT_WEBHOOK_SECRET"),
+        projects=_parse_projects(get("BOT_PROJECTS")),
+        registry_url=get("BOT_REGISTRY_URL"),
     )
 
 
@@ -232,6 +263,23 @@ def validate_config(config: BotConfig) -> list[str]:
 
     if config.codex_full_auto and config.codex_dangerous:
         errors.append("CODEX_FULL_AUTO and CODEX_DANGEROUS cannot both be set")
+
+    if config.bot_mode not in {"poll", "webhook"}:
+        errors.append(
+            f"BOT_MODE must be 'poll' or 'webhook', got '{config.bot_mode}'"
+        )
+
+    if config.bot_mode == "webhook":
+        if not config.webhook_url:
+            errors.append("BOT_WEBHOOK_URL is required when BOT_MODE=webhook")
+
+    seen_project_names: set[str] = set()
+    for name, root_dir, _ in config.projects:
+        if name in seen_project_names:
+            errors.append(f"Duplicate project name: '{name}'")
+        seen_project_names.add(name)
+        if not Path(root_dir).is_dir():
+            errors.append(f"Project '{name}' root dir does not exist: {root_dir}")
 
     # Validate default_skills against catalog
     if config.default_skills:

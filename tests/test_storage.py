@@ -148,7 +148,7 @@ def test_list_sessions():
         save_session(data_dir, 111, s1)
 
         s2 = default_session("codex", {"thread_id": None}, "off")
-        s2["pending_request"] = {"prompt": "test", "created_at": 0}
+        s2["pending_approval"] = {"prompt": "test", "created_at": 0}
         save_session(data_dir, 222, s2)
 
         result = list_sessions(data_dir)

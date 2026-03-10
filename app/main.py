@@ -79,11 +79,27 @@ def main() -> None:
         log.warning("Bot is open to everyone (BOT_ALLOW_OPEN=1)")
 
     app = build_application(config, provider)
-    log.info("Bot starting (long-poll)...")
-    try:
-        app.run_polling()
-    finally:
-        close_db(config.data_dir)
+
+    if config.bot_mode == "webhook":
+        log.info("Bot starting (webhook)...")
+        log.info("Webhook URL: %s", config.webhook_url)
+        log.info("Listening on %s:%d", config.webhook_listen, config.webhook_port)
+        try:
+            app.run_webhook(
+                listen=config.webhook_listen,
+                port=config.webhook_port,
+                webhook_url=config.webhook_url,
+                secret_token=config.webhook_secret or None,
+                url_path="/webhook",
+            )
+        finally:
+            close_db(config.data_dir)
+    else:
+        log.info("Bot starting (long-poll)...")
+        try:
+            app.run_polling()
+        finally:
+            close_db(config.data_dir)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,9 @@
 
 Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
+> **Latest change (2026-03-10):** Phase 9 structural refactoring — typed session models,
+> authoritative execution context, library standardization.
+
 ---
 
 ## Phase Completion Summary
@@ -12,10 +15,11 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 | Phase 2 | Output quality | Done |
 | Phase 3 | Trust & cost control | Done |
 | Phase 4 | Operational hardening | Done |
-| Phase 5 | Transport & webhook foundation | In progress (5.1 done, 5.2 next) |
-| Phase 6 | Session & execution context | In progress (6.1 done, 6.2 next) |
-| Phase 7 | Ecosystem & extensibility | Not started |
-| Phase 8 | Edge case testing & coverage hardening | Not started |
+| Phase 5 | Transport & webhook foundation | Done |
+| Phase 6 | Session & execution context | Done |
+| Phase 7 | Ecosystem & extensibility | Done |
+| Phase 8 | Edge case testing & coverage hardening | Done |
+| Phase 9 | Structural refactoring & invariant coverage | In progress |
 
 ---
 
@@ -25,16 +29,16 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **417 pytest tests** + 35 bash tests across 24 entrypoints.
+Current suite: **528 pytest tests** + 35 bash tests across 29 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
 | `test_approvals.py` | 6 | Preflight prompt building, denial formatting. |
-| `test_claude_provider.py` | 8 | Claude CLI command construction, API ping health check. |
-| `test_codex_provider.py` | 29 | Codex CLI command construction, thread invalidation, progress parsing, health check with real flags. |
-| `test_config.py` | 14 | Config loading, validation, `.env` parsing, rate limit and admin config, BOT_SKILLS validation. |
+| `test_claude_provider.py` | 9 | Claude CLI command construction, API ping health check, file_policy inspect system prompt injection. |
+| `test_codex_provider.py` | 31 | Codex CLI command construction, thread invalidation, progress parsing, health check with real flags, file_policy sandbox override (inspect→read-only, edit→default). |
+| `test_config.py` | 23 | Config loading, validation, `.env` parsing, rate limit and admin config, BOT_SKILLS validation, webhook mode validation, `main()` mode selection (poll/webhook), `load_config` webhook env var parsing. |
 | `test_formatting.py` | 42 | Markdown-to-Telegram HTML conversion, balanced HTML splitting, table rendering, directive extraction. |
-| `test_handlers.py` | 24 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings and resilience (admin fallback, stale sessions, prompt size, missing data_dir, corrupt DB, schema version mismatch), SEND_FILE/SEND_IMAGE directive delivery. |
+| `test_handlers.py` | 43 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings and resilience (admin fallback, stale sessions, prompt size, missing data_dir, corrupt DB, schema version mismatch), SEND_FILE/SEND_IMAGE directive delivery, per-chat project bindings (`/project list/use/clear`, switch invalidation, context hash), file policy (`/policy inspect/edit`, session display, provider context threading, context hash). |
 | `test_handlers_admin.py` | 7 | `/admin sessions` summary and detail views, access gating, stale skill filtering. |
 | `test_handlers_approval.py` | 12 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL, callback answer verification, button structure validation, markup removal after callbacks. |
 | `test_handlers_codex.py` | 11 | Codex-specific handler behavior: thread invalidation, boot ID, retry semantics, script staging. |
@@ -44,13 +48,19 @@ Current suite: **417 pytest tests** + 35 bash tests across 24 entrypoints.
 | `test_handlers_ratelimit.py` | 6 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
 | `test_handlers_store.py` | 13 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle, callback flows (skill_add confirm/cancel, skill_update confirm/cancel/non-admin alert, unauthorized alert), markup removal verification. |
 | `test_high_risk.py` | 29 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
+| `test_invariants.py` | 39 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending/legacy), resolved context hash stability, handler-vs-direct builder equivalence. |
 | `test_ratelimit.py` | 8 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
+| `test_registry.py` | 8 | Skill registry: index parsing (valid/bad version/non-JSON), search, artifact download/extraction, store integration (digest match/mismatch). |
 | `test_skills.py` | 43 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
 | `test_sqlite_integration.py` | 9 | SQLite session backend integration: handler→SQLite round-trip, JSON-to-SQLite migration under handler load, `cmd_doctor` stale scan from SQLite, `delete_session`, `close_db`/reopen lifecycle, multi-chat independence, cross-chat prompt size scan, no-JSON-artifact verification, fd leak regression on schema error. |
 | `test_storage.py` | 11 | Session CRUD (SQLite-backed), upload paths, directory creation, path resolution, `list_sessions()`, JSON-to-SQLite migration with corrupt file handling. |
 | `test_store.py` | 21 | Store module: discovery, search, content hashing, install/uninstall via refs and objects, ref round-trip, update detection, custom override detection, diff, GC, startup recovery, schema guard, pinned refs. |
 | `test_store_e2e.py` | 26 | End-to-end user flows through handlers: install→add→message→prompt, update propagation, uninstall pruning, /skills info across all tiers, three-tier resolution, custom override shadowing, /admin sessions stale filtering, provider compatibility output, source label edge cases, normalization persistence, --doctor schema check. |
 | `test_summarize.py` | 18 | Ring buffer (full prompt, kind field, rotation at 50), export formatting, summarization. |
+| `test_edge_callbacks.py` | 4 | Edge cases: approval double-click, approve after session reset, cross-user approval in shared chat, retry without pending. |
+| `test_edge_formatting.py` | 11 | Edge cases: deeply nested markdown, long lines, empty code blocks, unicode/emoji, HTML entities, split_html boundaries, inconsistent table columns, trim_text edge cases. |
+| `test_edge_providers.py` | 7 | Edge cases: provider timeout, empty response, error returncode, state persistence, codex thread_id persistence/resume, full approval flow. |
+| `test_edge_sessions.py` | 7 | Edge cases: message after /new reset, role change with pending, /compact toggle, /session info, codex thread display, /cancel clears pending, empty message ignored. |
 | `test_transport.py` | 30 | Inbound transport normalization: user/command/callback/message normalization, frozen dataclasses (tuples not lists), bot-mention stripping, None-user safety for all handler types, behavioral integration (empty-content skip, caption-to-provider), handler integration proving normalized types flow through. |
 | `test_setup.sh` | 35 | Installer/setup wizard flows, provider-pruned config generation. |
 
@@ -168,10 +178,20 @@ Current suite: **417 pytest tests** + 35 bash tests across 24 entrypoints.
   - `InboundCommand.args` and `InboundMessage.attachments` used mutable lists despite frozen dataclass claim
 - Post-review cleanup: removed dead code (`serialize_pending_request`, `clear_pending_request`, `sweep_skill_from_sessions`), removed unused imports, moved 9 misplaced tests from catch-all `test_handlers.py` to proper specialized suites, fixed test runner bug in `test_transport.py` that masked exceptions.
 
+**5.2 Webhook mode** (`app/main.py`, `app/config.py`)
+- `BOT_MODE=poll|webhook` config with `BOT_WEBHOOK_URL`, `BOT_WEBHOOK_LISTEN`, `BOT_WEBHOOK_PORT`, `BOT_WEBHOOK_SECRET`.
+- Uses `python-telegram-bot`'s built-in `run_webhook()` — no separate web framework needed.
+- `requirements.txt` updated to `python-telegram-bot[webhooks]>=21.0` (adds tornado).
+- Webhook and polling share the same `build_application()` — identical handler registration, same normalized inbound path from 5.1.
+- `validate_config()` enforces `BOT_WEBHOOK_URL` is required when `BOT_MODE=webhook`, rejects invalid mode values.
+- Empty `BOT_WEBHOOK_SECRET` passes `secret_token=None` (no verification); non-empty value enables Telegram's `X-Telegram-Bot-Api-Secret-Token` header check.
+- Single-process only — current in-memory per-chat locks remain the concurrency guard.
+- 9 new tests: config validation (invalid mode, missing URL, valid webhook, poll mode), `load_config` env var parsing, `main()` mode selection (poll calls `run_polling`, webhook calls `run_webhook` with correct args, empty secret → None).
+
 | Item | Status | Notes |
 |------|--------|-------|
 | 5.1 Thin inbound transport normalization | Done | All handlers normalized. New `app/transport.py` module. |
-| 5.2 Webhook mode | Not started | Deferred until after 6.1 SQLite — lands on transactional storage. First cut remains single-process. |
+| 5.2 Webhook mode | Done | `BOT_MODE=webhook` uses `run_webhook()`. Single-process, same handler path as polling. |
 
 ---
 
@@ -193,19 +213,72 @@ Current suite: **417 pytest tests** + 35 bash tests across 24 entrypoints.
 - `_db()` closes the connection on initialization errors (schema mismatch, corruption) before re-raising, preventing fd leaks on repeated failures.
 - 9 integration tests in `test_sqlite_integration.py` exercise real handler→SQLite round-trips, including fd leak regression on schema errors.
 
+**6.2 Per-chat project model** (`app/config.py`, `app/telegram_handlers.py`, `app/providers/base.py`, `app/providers/claude.py`, `app/providers/codex.py`, `app/skills.py`)
+- `BOT_PROJECTS=name1:/path1,name2:/path2` config with validation (duplicate names, non-existent dirs).
+- `/project` command: `list`, `use <name>`, `clear`, or show current binding.
+- Project switch resets provider state, clears pending requests, invalidates context hash.
+- `PreflightContext.working_dir` and `RunContext` pass project working directory to providers.
+- Provider subprocess `cwd` overridable: `cwd = working_dir or str(self.config.working_dir)`.
+- `compute_context_hash()` includes `project_id` — stale Codex threads invalidated on project switch.
+- `_allowed_roots()` scopes file access to project dirs when a project is bound.
+- `cmd_session` shows active project in working directory display.
+- `project_id` persisted in both SQLite column (indexed) and JSON `data` blob; restored on session load.
+- 9 new tests: list (empty/populated), use (valid/invalid), clear, switch invalidation, context hash, session display.
+
+**6.3 File policy** (`app/providers/base.py`, `app/providers/codex.py`, `app/providers/claude.py`, `app/skills.py`, `app/telegram_handlers.py`)
+- `/policy inspect|edit` command to set per-chat file access policy.
+- `file_policy` field on `PreflightContext`/`RunContext`, threaded through skills builders and providers.
+- Codex: `file_policy=inspect` overrides sandbox to `read-only` on new exec.
+- Claude: `file_policy=inspect` appends a read-only system prompt instruction.
+- `compute_context_hash()` includes `file_policy` — stale Codex threads invalidated on policy change.
+- `/session` shows active file policy.
+- Policy switch resets provider state and clears pending requests (same pattern as project switch).
+- `file_policy` persisted in SQLite `file_policy` column and JSON blob; restored on session load.
+- 12 new tests: handler tests (default, set inspect/edit, same-value noop, invalid arg, session display, provider context threading, context hash), Codex sandbox override, Claude system prompt.
+
 | Item | Status | Notes |
 |------|--------|-------|
 | 6.1 SQLite session backend | Done | WAL mode, schema versioning, JSON migration, indexed query columns. |
-| 6.2 Per-chat project model | Not started | Optional named project bindings layered on top of the current working-dir model. |
-| 6.3 File policy | Not started | `inspect|edit` persisted in session/project/provider context. |
+| 6.2 Per-chat project model | Done | Named project bindings per chat, provider/pending invalidation on switch, project-scoped file access. |
+| 6.3 File policy | Done | `inspect|edit` per-chat, Codex sandbox override, Claude system prompt enforcement, context hash invalidation. |
 
 ---
 
 ## Phase 7 — Ecosystem & Extensibility
 
+### What shipped
+
+**7.1 Third-party skill registry** (`app/registry.py`, `app/store.py`, `app/skill_commands.py`, `app/config.py`)
+- New `app/registry.py` module: fetch JSON index, search, download `.tar.gz` artifacts, extract with path traversal protection.
+- Registry index format: `{"version": 1, "skills": {"name": {...metadata, digest, artifact_url}}}`.
+- `install_from_registry()` in `app/store.py`: downloads artifact, verifies SHA-256 digest matches registry entry, creates immutable object, writes ref with `source="registry"` and publisher/version metadata.
+- Digest mismatch rejects the install — no ref created for tampered artifacts.
+- `/skills search` falls back to registry when `BOT_REGISTRY_URL` is configured; results deduplicated against bundled store.
+- `/skills install` falls back to registry when skill not found in bundled store.
+- `BOT_REGISTRY_URL` config field (empty = disabled).
+- Uses `httpx` (sync client) — consistent with the rest of the codebase.
+- 8 tests with real HTTP servers: index parsing (valid, bad version, non-JSON), search, artifact download (valid, missing skill.md), store integration (digest match, digest mismatch).
+
 | Item | Status | Notes |
 |------|--------|-------|
-| 7.1 Third-party skill registry | Not started | Lands after phases 5 and 6 on top of the 4.1 managed store foundation. |
+| 7.1 Third-party skill registry | Done | Remote index, artifact download, digest verification, managed store integration. |
+
+---
+
+## Phase 8 — Edge Case Testing and Coverage Hardening
+
+### What shipped
+
+**8.1 Edge case testing** (`tests/test_edge_callbacks.py`, `tests/test_edge_sessions.py`, `tests/test_edge_providers.py`, `tests/test_edge_formatting.py`)
+- 29 new tests across 4 domains exercising boundary conditions and error paths.
+- **Callbacks (4)**: approval double-click idempotency, approve after session reset (stale pending), cross-user approval in shared chat, retry callback without pending request.
+- **Sessions (7)**: message after `/new` uses fresh state, role change with pending approval, `/compact` toggle persistence, `/session` displays provider info, codex thread display, `/cancel` clears pending, empty message ignored.
+- **Providers (7)**: timeout handling, empty response, error returncode, provider state persistence, codex thread_id persistence and resume, full approval-to-execution flow.
+- **Formatting (11)**: deeply nested markdown, extremely long single-line, empty code blocks, code block with language tag, unicode/emoji mix, HTML entity escaping, split_html single chunk, split_html content preservation, inconsistent table columns, trim_text empty/boundary.
+
+| Item | Status | Notes |
+|------|--------|-------|
+| 8.1 Edge case testing | Done | 29 tests across callbacks, sessions, providers, formatting. |
 
 ---
 
@@ -215,15 +288,14 @@ Execution from the current state is:
 
 1. ~~**5.1** — add thin inbound transport normalization~~ Done.
 2. ~~**6.1** — move chat sessions from JSON blobs to SQLite~~ Done.
-3. **5.2** — add webhook mode on top of SQLite + normalized inbound path
+3. ~~**5.2** — add webhook mode on top of SQLite + normalized inbound path~~ Done.
 4. **6.2** — add optional per-chat project bindings
 5. **6.3** — add file policy (`inspect|edit`)
 6. **7.1** — add the third-party registry on top of the 4.1 store model
 7. **8.1** — edge case testing and coverage hardening
 
-`5.1` and `6.1` are complete. `5.2` is next — webhook ingress writes to
-SQLite from the start. `6.2` and `6.3` use the `project_id` and `file_policy`
-columns already present in the schema. `8.1` runs last as a systematic sweep.
+All planned items are complete. Only `3.2` (usage tracking/billing) remains
+intentionally deferred.
 
 The deferred item `3.2` (usage tracking / billing hooks) remains intentionally out of sequence.
 
@@ -320,8 +392,74 @@ Systematic audit of `FakeCallbackQuery`, `FakeMessage`, `FakeChat`, and other te
 | Item | Status | Notes |
 |------|--------|-------|
 | 3.2 Usage tracking & quotas | Deferred | Needs token-cost mapping, billing integration |
-| 5.2 Webhook mode | Not started | Next execution item. `BOT_MODE=poll\|webhook`, webhook server, `/health` endpoint, single-process only in first cut. |
-| 6.2 Per-chat project model | Not started | Named project bindings per chat, with provider/pending invalidation on switch. |
-| 6.3 File policy | Not started | `inspect|edit` surfaced in session/provider context. |
-| 7.1 Third-party skill registry | Not started | Planned after phases 5 and 6. Uses the managed store foundation from 4.1 |
-| 8.1 Edge case testing | Not started | Systematic boundary/error/interaction testing across callbacks, files, providers, skills, sessions, formatting. |
+| 5.2 Webhook mode | Done | `BOT_MODE=webhook` uses `run_webhook()`. Single-process, same handler path as polling. |
+| 6.2 Per-chat project model | Done | Named project bindings per chat, provider/pending invalidation on switch, project-scoped file access. |
+| 6.3 File policy | Done | `inspect|edit` per-chat, Codex sandbox override, Claude system prompt enforcement, context hash invalidation. |
+| 7.1 Third-party skill registry | Done | Remote index, artifact download, digest verification, managed store integration. |
+| 8.1 Edge case testing | Done | 29 tests across 4 domains: callbacks, sessions, providers, formatting. |
+
+---
+
+## Phase 9 — Structural Refactoring & Invariant Coverage
+
+Root cause analysis identified that the codebase optimized for feature delivery but not for invariant coverage across cross-cutting changes. A new field added to the execution identity (e.g. `working_dir`, `file_policy`) required updates in 3–5 independent call sites; missing one caused silent approval/retry failures. The fix is structural: one authoritative context builder, typed session models, contract-shaped tests.
+
+### What shipped
+
+**9.1 Typed session models** (`app/session_state.py`)
+- `SessionState`, `PendingApproval`, `PendingRetry`, `AwaitingSkillSetup`, `ProjectBinding` dataclasses.
+- `PendingApproval` and `PendingRetry` are separate types — no more single `PendingRequest` bag with optional `denials`.
+- Serialization uses `dataclasses.asdict()` — no hand-rolled field copying.
+- `session_from_dict()` handles deserialization with legacy `pending_request` key migration (infers type from presence of `denials`).
+- Storage layer (`storage.py`) updated: `default_session()` uses `pending_approval`/`pending_retry` keys, `_upsert()` checks both for indexed `has_pending` column, `load_session()` merges new field names.
+
+**9.2 Authoritative execution context** (`app/execution_context.py`)
+- `ResolvedExecutionContext` (frozen dataclass) — single authoritative snapshot of execution identity.
+- `context_hash` property — the ONLY place context hashes are computed. Adding a field to the hash means adding it to this one object.
+- `resolve_execution_context(session, config, provider_name)` — the ONLY builder. All paths (execute, preflight, approve, retry, /session display, thread invalidation) use this.
+- `_resolve_context()` in handlers is now a thin adapter that delegates to the authoritative builder.
+
+**9.3 Object-based context hashing**
+- `compute_context_hash()` in `base.py` is now a backward-compat wrapper that delegates to `ResolvedExecutionContext.context_hash`.
+- No loose-argument-bag hash assembly in production code.
+- Tests that use `compute_context_hash()` directly continue to work via the wrapper.
+
+**9.4 Library standardization**
+- `.env` parsing: replaced hand-rolled parser in `config.py` with `python-dotenv` (`dotenv_values()`). Handles escapes, multiline values, export prefixes.
+- HTTP client: replaced `urllib.request` in `registry.py` with `httpx` (sync client). `httpx` was already a dependency; now used consistently across the codebase.
+- Serialization: `session_to_dict()` uses `dataclasses.asdict()` instead of hand-rolled field-by-field copying.
+
+**9.5 Invariant test suite** (`tests/test_invariants.py`)
+- 39 contract-shaped tests across 10 invariant categories:
+  1. Approval hash round-trip (7 parametrized combos of project/policy/role)
+  2. Retry hash round-trip (7 parametrized combos)
+  3. Stale detection (3 parametrized: role/policy/project change)
+  4. Inspect mode sandbox integrity (5 parametrized provider_config combos)
+  5. Registry integrity (digest mismatch leaves no residue)
+  6. Execution context consistency (all paths produce same hash)
+  7. Async boundary (slow registry doesn't block event loop)
+  8. Hash completeness (8 parametrized — every field affects hash)
+  9. Typed session round-trip (approval, retry, no-pending, legacy compat)
+  10. Resolved context hash stability (new builder matches compat function, handler adapter matches direct builder)
+
+### What remains
+
+| Step | Description | Status |
+|------|-------------|--------|
+| 9.1 Typed session models | Done | `app/session_state.py` |
+| 9.2 Authoritative execution context | Done | `app/execution_context.py` |
+| 9.3 Object-based context hashing | Done | Compat wrapper in `base.py` |
+| 9.4 Library standardization | Done | `python-dotenv`, `httpx` everywhere |
+| 9.5 Invariant test suite | Done | 39 tests, 10 invariant categories |
+| 9.6 Move orchestration to `app/request_flow.py` | Not started | Extract execute/approve/reject/retry from handlers |
+| 9.7 Thin handler layer | Not started | Handlers only do transport normalization, auth, call service, render |
+| 9.8 Convert handlers from raw dicts to `SessionState` | Not started | `_load` returns `SessionState`, `_save` accepts `SessionState` |
+
+### Bugs found and fixed
+
+| Bug | Severity | Root cause | Fix |
+|-----|----------|-----------|-----|
+| `_current_context_hash()` missing `working_dir` | High | Added `working_dir` to hash but missed one of three call sites | Refactored to single `_resolve_context()` → `resolve_execution_context()` chain |
+| Sandbox override not authoritative for inspect mode | High | Provider config `sandbox` could override `file_policy=inspect` read-only | Inspect mode check runs first; provider config sandbox only applies when not in inspect mode |
+| Registry blocking event loop | Medium | `fetch_index()` and `install_from_registry()` used blocking `urllib.request` | Wrapped in `asyncio.to_thread()` at call sites; now uses `httpx` sync client |
+| Digest mismatch leaves orphan objects | Medium | `install_from_registry()` created object before verifying digest | Verify digest in staging dir before `_create_object()` |

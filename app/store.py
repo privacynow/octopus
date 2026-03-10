@@ -675,6 +675,79 @@ def gc(grace_seconds: int = _GC_GRACE_SECONDS) -> list[str]:
 # Startup recovery
 # ---------------------------------------------------------------------------
 
+def install_from_registry(
+    name: str,
+    registry_skill: "RegistrySkill",
+) -> tuple[bool, str]:
+    """Install a skill from a registry artifact.
+
+    Downloads the artifact, verifies its digest matches the registry entry,
+    creates an immutable object, and writes a ref.
+    Returns (success, message).
+    """
+    from app.registry import RegistrySkill, download_artifact
+
+    with _store_lock():
+        existing_ref = read_ref(name)
+
+        # Check for custom skill blocking
+        custom_path = CUSTOM_DIR / name
+        if custom_path.is_dir() and existing_ref is None:
+            return False, (
+                f"Skill '{name}' already exists as a custom skill. "
+                f"Remove it first to install from registry."
+            )
+
+        # Download and extract to a temp dir
+        TMP_DIR.mkdir(parents=True, exist_ok=True)
+        staging = TMP_DIR / f"registry_{name}_{time.time():.0f}"
+        try:
+            download_artifact(registry_skill.artifact_url, staging)
+        except Exception as e:
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+            return False, f"Failed to download artifact: {e}"
+
+        # Verify digest BEFORE creating the immutable object so tampered
+        # artifacts never enter the object store.
+        # Remove metadata files that _create_object would strip, so the
+        # pre-check hash matches what _create_object would compute.
+        for meta in ("_store.json", "_ref.json"):
+            meta_path = staging / meta
+            if meta_path.exists():
+                meta_path.unlink()
+        staging_digest = hash_directory(staging)
+        if staging_digest != registry_skill.digest:
+            shutil.rmtree(staging, ignore_errors=True)
+            return False, (
+                f"Digest mismatch for '{name}': "
+                f"expected {registry_skill.digest[:16]}..., "
+                f"got {staging_digest[:16]}..."
+            )
+
+        digest = _create_object(staging)
+        # Clean up staging (object creation copies it)
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+
+        ref = SkillRef(
+            schema_version=_SCHEMA_VERSION,
+            digest=digest,
+            source="registry",
+            source_uri=registry_skill.artifact_url,
+            installed_at=datetime.now(timezone.utc).isoformat(),
+            version=registry_skill.version or None,
+            publisher=registry_skill.publisher or None,
+        )
+        _write_ref(name, ref)
+
+    if existing_ref:
+        action = "updated" if existing_ref.digest != digest else "reinstalled"
+    else:
+        action = "installed"
+    return True, f"Skill '{name}' {action} from registry. Use /skills add {name} to activate."
+
+
 def startup_recovery() -> None:
     """Run on startup: ensure dirs, check schema, GC under lock."""
     ensure_managed_dirs()

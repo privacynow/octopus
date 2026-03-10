@@ -6,7 +6,7 @@ Covers:
 - Config loading (role, skills)
 - Provider command building (system prompt injection)
 - Codex thread invalidation
-- Session state (active_skills, role, pending_request)
+- Session state (active_skills, role, pending_approval, pending_retry)
 - Phase 2: credential encryption round-trip, per-user isolation,
   requires.yaml parsing, credential satisfaction, env injection,
   awaiting_skill_setup persistence
@@ -105,6 +105,22 @@ def test_context_hash_detects_changes():
     hash_a = compute_context_hash("x", ["b", "a"], {"a": "1", "b": "2"}, "", [])
     hash_b = compute_context_hash("x", ["a", "b"], {"a": "1", "b": "2"}, "", [])
     assert hash_a == hash_b
+
+    # Working dir changed
+    hash_wd1 = compute_context_hash("engineer", ["code-review"], {"code-review": "aaa"}, "", [])
+    hash_wd2 = compute_context_hash("engineer", ["code-review"], {"code-review": "aaa"}, "", [],
+                                     working_dir="/opt/frontend")
+    assert hash_wd1 != hash_wd2
+
+    # Different working dirs
+    hash_wd3 = compute_context_hash("engineer", ["code-review"], {"code-review": "aaa"}, "", [],
+                                     working_dir="/opt/backend")
+    assert hash_wd2 != hash_wd3
+
+    # Same working dir → same hash
+    hash_wd4 = compute_context_hash("engineer", ["code-review"], {"code-review": "aaa"}, "", [],
+                                     working_dir="/opt/frontend")
+    assert hash_wd2 == hash_wd4
 
 
 # =====================================================================

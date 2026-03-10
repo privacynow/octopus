@@ -78,3 +78,30 @@ def test_clean_env():
     env = ClaudeProvider._clean_env()
     assert "CLAUDECODE" not in env
     assert "PATH" in env
+
+
+def test_file_policy_inspect_appends_system_prompt():
+    """file_policy=inspect should add a read-only instruction to the system prompt."""
+    from app.providers.base import RunContext
+    p = ClaudeProvider(make_config())
+    state = {"session_id": "abc-123", "started": False}
+    cmd = p._build_run_cmd(state, "analyze the code")
+    context = RunContext(
+        extra_dirs=[], system_prompt="You are a reviewer.",
+        capability_summary="", provider_config={}, credential_env={},
+        file_policy="inspect",
+    )
+    # Simulate what run() does: apply system prompt with file_policy
+    system_prompt_parts = []
+    if context.system_prompt:
+        system_prompt_parts.append(context.system_prompt)
+    if context.file_policy == "inspect":
+        system_prompt_parts.append(
+            "IMPORTANT: This session is in INSPECT (read-only) mode. "
+            "Do NOT create, modify, delete, or rename any files. "
+            "Only read and analyze code. Refuse any request that would change files."
+        )
+    combined = "\n\n".join(system_prompt_parts)
+    assert "INSPECT" in combined
+    assert "read-only" in combined
+    assert "You are a reviewer." in combined

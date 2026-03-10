@@ -58,7 +58,7 @@ async def test_approval_flow():
         assert "approval_reject" in cb_values
 
         session = load_session_disk(data_dir, 12345, prov)
-        assert session.get("pending_request") is not None
+        assert session.get("pending_approval") is not None
 
         cb_msg = FakeMessage(chat=chat)
         query = FakeCallbackQuery("approval_approve", message=cb_msg)
@@ -74,7 +74,7 @@ async def test_approval_flow():
         approved_ctx = prov.run_calls[0]["context"]
         assert approved_ctx.skip_permissions is True
         session = load_session_disk(data_dir, 12345, prov)
-        assert session.get("pending_request") == None
+        assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
 async def test_approval_wording():
@@ -148,8 +148,8 @@ async def test_denial_retry_flow():
         assert "retry_skip" in retry_cbs
 
         session = load_session_disk(data_dir, 12345, prov)
-        assert session.get("pending_request") is not None
-        assert session["pending_request"].get("denials") is not None
+        assert session.get("pending_retry") is not None
+        assert session["pending_retry"].get("denials") is not None
 
         cb_msg = FakeMessage(chat=chat)
         query = FakeCallbackQuery("retry_allow", message=cb_msg)
@@ -168,7 +168,7 @@ async def test_denial_retry_flow():
         assert retry_ctx.skip_permissions is True
 
         session = load_session_disk(data_dir, 12345, prov)
-        assert session.get("pending_request") == None
+        assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
 async def test_retry_skip():
@@ -178,11 +178,10 @@ async def test_retry_skip():
         setup_globals(cfg, prov)
 
         session = default_session("claude", prov.new_provider_state(), "off")
-        session["pending_request"] = {
+        session["pending_retry"] = {
             "request_user_id": 42,
             "prompt": "test",
             "image_paths": [],
-            "attachment_dicts": [],
             "context_hash": "somehash",
             "denials": [{"tool_name": "X"}],
         }
@@ -201,7 +200,7 @@ async def test_retry_skip():
 
         assert has_markup_removal(cb_msg)
         session = load_session_disk(data_dir, 12345, prov)
-        assert session.get("pending_request") == None
+        assert session.get("pending_approval") is None and session.get("pending_retry") is None
         assert len(prov.run_calls) == 0
 
 
@@ -212,11 +211,10 @@ async def test_stale_context_hash():
         setup_globals(cfg, prov)
 
         session = default_session("claude", prov.new_provider_state(), "off")
-        session["pending_request"] = {
+        session["pending_retry"] = {
             "request_user_id": 42,
             "prompt": "test",
             "image_paths": [],
-            "attachment_dicts": [],
             "context_hash": "definitely_stale_hash",
             "denials": [{"tool_name": "X"}],
         }
@@ -237,7 +235,7 @@ async def test_stale_context_hash():
         assert has_markup_removal(cb_msg)
 
         session = load_session_disk(data_dir, 12345, prov)
-        assert session.get("pending_request") == None
+        assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
         reply_texts = " ".join(r.get("edit_text", r.get("text", "")) for r in cb_msg.replies)
         assert "Context changed" in reply_texts
@@ -264,7 +262,7 @@ async def test_cross_user_approval():
         assert len(prov.preflight_calls) == 1
 
         session = load_session_disk(data_dir, 12345, prov)
-        pending = session.get("pending_request")
+        pending = session.get("pending_approval")
         assert pending is not None
         assert pending["request_user_id"] == 100
 
@@ -277,7 +275,7 @@ async def test_cross_user_approval():
         assert len(prov.run_calls) == 1
 
         session = load_session_disk(data_dir, 12345, prov)
-        assert session.get("pending_request") == None
+        assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
 async def test_approval_preflight_timeout():
@@ -300,7 +298,7 @@ async def test_approval_preflight_timeout():
         assert len(prov.run_calls) == 0
 
         session = load_session_disk(data_dir, 12345, prov)
-        assert session.get("pending_request") == None
+        assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
         chat_msgs = " ".join(m.get("text", "") for m in chat.sent_messages)
         assert "Approve" not in chat_msgs
@@ -326,7 +324,7 @@ async def test_approval_preflight_error():
         assert len(prov.run_calls) == 0
 
         session = load_session_disk(data_dir, 12345, prov)
-        assert session.get("pending_request") == None
+        assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
 async def test_duplicate_pending_blocked():
@@ -352,7 +350,7 @@ async def test_duplicate_pending_blocked():
         await th.handle_message(update2, FakeContext())
 
         session = load_session_disk(data_dir, 12345, prov)
-        assert session.get("pending_request") is not None
+        assert (session.get("pending_approval") or session.get("pending_retry")) is not None
 
 
 async def test_denial_preserves_request_user_id():
@@ -377,7 +375,7 @@ async def test_denial_preserves_request_user_id():
         await th.handle_message(update, FakeContext())
 
         session = load_session_disk(data_dir, 12345, prov)
-        pending = session.get("pending_request")
+        pending = session.get("pending_retry")
         assert pending is not None
         assert pending["request_user_id"] == 100
         assert len(pending.get("denials", [])) > 0
@@ -395,7 +393,7 @@ async def test_cancel_pending():
         user = FakeUser(42)
 
         session = default_session(prov.name, prov.new_provider_state(), "off")
-        session["pending_request"] = {
+        session["pending_approval"] = {
             "request_user_id": 42,
             "prompt": "test",
             "image_paths": [],
@@ -413,7 +411,7 @@ async def test_cancel_pending():
         assert "Pending request cancelled" in reply
 
         session = load_session_disk(data_dir, 12345, prov)
-        assert session.get("pending_request") == None
+        assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
 async def test_stale_pending_ttl():
@@ -428,7 +426,7 @@ async def test_stale_pending_ttl():
         user = FakeUser(42)
 
         session = default_session(prov.name, prov.new_provider_state(), "on")
-        session["pending_request"] = {
+        session["pending_approval"] = {
             "request_user_id": 42,
             "prompt": "old request",
             "image_paths": [],
@@ -444,3 +442,121 @@ async def test_stale_pending_ttl():
         reply = " ".join(r.get("text", "") for r in msg.replies)
         assert "expired" in reply.lower()
         assert len(prov.run_calls) == 0
+
+
+async def test_approval_with_project_active():
+    """Approval flow must succeed when a project is active.
+
+    Regression test: the stored context_hash (from request_approval) must match
+    what _current_context_hash computes at approval time. Both must include
+    working_dir from the project.
+    """
+    import tempfile
+    with fresh_data_dir() as data_dir:
+        project_dir = tempfile.mkdtemp()
+        cfg = make_config(
+            data_dir, approval_mode="on",
+            projects=(("frontend", project_dir, ()),),
+        )
+        prov = FakeProvider("claude")
+        prov.preflight_results = [RunResult(text="Plan: review frontend")]
+        prov.run_results = [RunResult(text="Done")]
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+
+        # Bind project
+        await th.cmd_project(
+            FakeUpdate(message=FakeMessage(chat=chat, text="/project use frontend"), user=user, chat=chat),
+            FakeContext(["use", "frontend"]),
+        )
+        session = load_session_disk(data_dir, 12345, prov)
+        assert session.get("project_id") == "frontend"
+
+        # Send message — triggers preflight
+        msg = FakeMessage(chat=chat, text="review the code")
+        await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        assert len(prov.preflight_calls) == 1
+        assert len(prov.run_calls) == 0
+
+        session = load_session_disk(data_dir, 12345, prov)
+        assert session.get("pending_approval") is not None
+
+        # Approve — this must NOT say "Context changed"
+        cb_msg = FakeMessage(chat=chat)
+        query = FakeCallbackQuery("approval_approve", message=cb_msg)
+        cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
+        cb_update.effective_message = cb_msg
+        await th.handle_callback(cb_update, FakeContext())
+
+        assert len(prov.run_calls) == 1, (
+            "Approval should have executed the request, not rejected it as stale"
+        )
+        reply_texts = " ".join(
+            r.get("edit_text", r.get("text", "")) for r in cb_msg.replies
+        )
+        assert "Context changed" not in reply_texts
+
+        session = load_session_disk(data_dir, 12345, prov)
+        assert session.get("pending_approval") is None and session.get("pending_retry") is None
+
+
+async def test_retry_with_project_active():
+    """Denial retry flow must succeed when a project is active.
+
+    Same hash consistency check as approval: the context_hash stored when
+    denials are recorded must match _current_context_hash at retry time.
+    """
+    import tempfile
+    with fresh_data_dir() as data_dir:
+        project_dir = tempfile.mkdtemp()
+        cfg = make_config(
+            data_dir,
+            projects=(("backend", project_dir, ()),),
+        )
+        prov = FakeProvider("claude")
+        prov.run_results = [
+            RunResult(
+                text="partial",
+                denials=[{"tool_name": "Write", "tool_input": {"file_path": "/opt/app/config.yaml"}}],
+            ),
+            RunResult(text="Success after retry"),
+        ]
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+
+        # Bind project
+        await th.cmd_project(
+            FakeUpdate(message=FakeMessage(chat=chat, text="/project use backend"), user=user, chat=chat),
+            FakeContext(["use", "backend"]),
+        )
+
+        # Send message — gets denied
+        msg = FakeMessage(chat=chat, text="edit config")
+        await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        assert len(prov.run_calls) == 1
+
+        session = load_session_disk(data_dir, 12345, prov)
+        assert session.get("pending_retry") is not None
+
+        # Retry — must NOT say "Context changed"
+        cb_msg = FakeMessage(chat=chat)
+        query = FakeCallbackQuery("retry_allow", message=cb_msg)
+        cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
+        cb_update.effective_message = cb_msg
+        await th.handle_callback(cb_update, FakeContext())
+
+        assert len(prov.run_calls) == 2, (
+            "Retry should have executed, not rejected as stale"
+        )
+        reply_texts = " ".join(
+            r.get("edit_text", r.get("text", "")) for r in cb_msg.replies
+        )
+        assert "Context changed" not in reply_texts

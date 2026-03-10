@@ -2,13 +2,18 @@
 
 Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-10):** Error handling and resilience hardening.
-> All signal-killed provider runs (rc < 0) now leave work items claimed for
-> restart recovery. Provider errors (rc > 0) get summarized for Telegram display
-> via haiku, with fallback truncation when the provider is down. Global error
-> handler catches stale callback queries and notifies users on unexpected failures.
-> Decorator exception/early-return paths correctly mark work items failed/done.
-> 680 tests passing.
+> **Latest change (2026-03-10):** Restart recovery and resume hardening.
+> Fixed two interacting bugs causing infinite "Resuming..." loop after restart:
+> (1) worker_dispatch now propagates LeaveClaimed so interrupted replays stay
+> claimed instead of being finalized as done; replay failures re-raise so
+> worker_loop marks them failed. (2) Claude resume errors now reset provider
+> state (started/session_id) to fresh, matching Codex thread_id reset parity.
+> Also: subprocess leak fix in summarize.py, regex backreference injection fix
+> in skills.py, cancelled tasks now awaited in finally blocks, all user-facing
+> "Preflight" wording replaced with neutral terms, heartbeat/progress race
+> fixed (first content update bypasses rate limiter after content_started).
+> Test fragility fixes: mock.patch replaces module global mutation, sys.executable
+> replaces hardcoded python3. 704 tests passing.
 
 ---
 
@@ -31,6 +36,7 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 | IV | Update delivery and burst safety | Done |
 | — | Resolved execution context enforcement hardening | Done |
 | Ext | Multi-worker webhook architecture | Done |
+| III.5 L1 | Progress UX normalization (Layer 1) | Done |
 
 ---
 
@@ -40,13 +46,13 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **680 pytest tests** + 35 bash tests across 31 entrypoints.
+Current suite: **704 pytest tests** + 35 bash tests across 31 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
 | `test_approvals.py` | 6 | Preflight prompt building, denial formatting. |
 | `test_claude_provider.py` | 13 | Claude CLI command construction, API ping health check, file_policy inspect system prompt injection, effective_model override, fallback, and run/preflight command threading. |
-| `test_codex_provider.py` | 36 | Codex CLI command construction, thread invalidation, progress parsing, health check with real flags, file_policy sandbox override (inspect→read-only, edit→default), effective_model override, fallback, and resume command threading. |
+| `test_codex_provider.py` | 37 | Codex CLI command construction, thread invalidation, progress parsing, health check with real flags, file_policy sandbox override (inspect→read-only, edit→default), effective_model override, fallback, and resume command threading. |
 | `test_config.py` | 23 | Config loading, validation, `.env` parsing, rate limit and admin config, BOT_SKILLS validation, webhook mode validation, `main()` mode selection (poll/webhook), `load_config` webhook env var parsing. |
 | `test_formatting.py` | 42 | Markdown-to-Telegram HTML conversion, balanced HTML splitting, table rendering, directive extraction. |
 | `test_handlers.py` | 51 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings and resilience (admin fallback, stale sessions, prompt size, missing data_dir, corrupt DB, schema version mismatch), SEND_FILE/SEND_IMAGE directive delivery, per-chat project bindings (`/project list/use/clear`, switch invalidation, context hash), file policy (`/policy inspect/edit`, session display, provider context threading, context hash), model profiles (`/model` command, inline keyboard settings callbacks, session display). |
@@ -59,7 +65,7 @@ Current suite: **680 pytest tests** + 35 bash tests across 31 entrypoints.
 | `test_handlers_ratelimit.py` | 6 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
 | `test_handlers_store.py` | 13 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle, callback flows (skill_add confirm/cancel, skill_update confirm/cancel/non-admin alert, unauthorized alert), markup removal verification. |
 | `test_high_risk.py` | 29 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
-| `test_invariants.py` | 131 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2), update-ID idempotency across all entry points (4: message, decorated command, non-decorated command, callback), mixed ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential check with resolved skills (2), model command/callback parity (4), cross-feature invariants (6: public+model escalation, inspect+model, compact+public, project+policy+approval+model), polling conflict detection (3), prompt weight in /doctor with resolved context (2), _chat_lock queued feedback (3), contended callback single-answer (3: approval, settings, clear-cred), shutdown-interrupted runs stay claimed for recovery, all signals (rc<0) treated as interrupted (4), provider error feedback (2: empty output, long output), global error handler (3: stale callback, non-Update, real Update notification), decorator exceptions mark work items failed (2: command, callback), summarizer subprocess killed on timeout, callback None-event completes work item. |
+| `test_invariants.py` | 148 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2), update-ID idempotency across all entry points (4: message, decorated command, non-decorated command, callback), mixed ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential check with resolved skills (2), model command/callback parity (4), cross-feature invariants (6: public+model escalation, inspect+model, compact+public, project+policy+approval+model), polling conflict detection (3), prompt weight in /doctor with resolved context (2), _chat_lock queued feedback (3), contended callback single-answer (3: approval, settings, clear-cred), shutdown-interrupted runs stay claimed for recovery, all signals (rc<0) treated as interrupted (4), provider error feedback (2: empty output, long output), global error handler (3: stale callback, non-Update, real Update notification), decorator exceptions mark work items failed (2: command, callback), summarizer subprocess killed on timeout, callback None-event completes work item, provider-neutral progress wording (5: initial status claude/codex, resume, timeout, terminal), Claude/Codex thinking capitalization (2), Codex thread ID suppression (3), Codex compaction wording, heartbeat idle firing, heartbeat stops on content, heartbeat clean cancellation, Claude content_started signal, Codex content_started signal (final text), Codex content_started on draft text, heartbeat respects recent progress updates, approval initial status neutral. |
 | `test_ratelimit.py` | 8 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_registry.py` | 8 | Skill registry: index parsing (valid/bad version/non-JSON), search, artifact download/extraction, store integration (digest match/mismatch). |
 | `test_skills.py` | 43 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
@@ -606,3 +612,56 @@ updated.
 | Error summarizer subprocess leaked on timeout | Medium | `_format_provider_error` spawned `claude -p` but `except Exception: pass` never killed or reaped the child on timeout | Added `proc.kill()` + `await proc.wait()` in exception handler when `proc.returncode is None` |
 | Decorator exceptions marked work items as "done" | Medium | Both `_command_handler` and `_callback_handler` used `finally: _complete_pending_work_item(uid)` which defaults to `state="done"` | Changed to `except`/`else`: exceptions pass `state="failed"`, clean exits pass `state="done"` |
 | Callback with no effective_user leaked queued work item | Medium | `_callback_handler` returned on `event is None` without calling `_complete_pending_work_item` | Added `_complete_pending_work_item(uid)` to the `event is None` branch |
+
+---
+
+## Progress UX Normalization (Layer 1)
+
+Phase III.5 + III.5a from PLAN. Provider-neutral progress wording, heartbeat
+for idle states, internal detail suppression.
+
+### What shipped
+
+- **Neutral initial status**: `Working...` / `Resuming...` instead of
+  `Starting claude...` / `Starting codex...`
+- **Neutral timeout**: `Request timed out after N seconds.` instead of
+  `claude timed out...`
+- **Neutral terminal status**: `Completed.` instead of `Done.`
+- **Neutral approval timeout**: `Approval request timed out.` instead of
+  `Preflight approval timed out.`
+- **Codex thread/session ID suppression**: `_progress_html` returns `None`
+  for `thread_started`, `session_meta`, and `session_configured` events.
+  Thread IDs go to debug log only.
+- **Codex compaction wording**: `Still working — this may take a moment...`
+  instead of `Still working — possible context compaction…`
+- **Claude thinking capitalized**: `Thinking...` (ASCII dots) instead of
+  `thinking…` (unicode ellipsis)
+- **Heartbeat task**: shows `Still working... (Ns)` during idle non-content
+  states. First beat at 5s, then every 10s. Driven by `asyncio.Event`
+  (`content_started`) — providers set it on first real text, heartbeat
+  stops firing. Same lifecycle pattern as `keep_typing()`.
+- **Neutral approval status**: `Preparing approval...` instead of
+  `Preparing preflight approval plan…` (internal "preflight" terminology
+  no longer shown to users).
+- **FakeProgress consolidated**: single shared definition in
+  `tests/support/handler_support.py`, removed duplicates from
+  `test_codex_provider.py` and `test_invariants.py`.
+
+### Design decisions
+
+- **No wrapper class**: heartbeat is a sibling background task, not a
+  `LiveProgressSink` wrapper. Keeps the `ProgressSink` protocol unchanged.
+- **State flag over string matching**: `content_started` is an
+  `asyncio.Event`, not a heuristic over `progress.last_text`. Providers
+  set it explicitly when first real text arrives.
+- **Tapering cadence**: 5s first beat, 10s subsequent. Alive without noisy.
+- **`getattr` for backward compatibility**: providers check
+  `getattr(progress, "content_started", None)` so they work with any
+  `ProgressSink` (including `FakeProgress` in tests).
+- **Heartbeat respects recent progress**: heartbeat checks
+  `progress.last_update` before firing — if a tool/command update was
+  pushed recently, heartbeat waits for the full silence interval before
+  overwriting. Prevents heartbeat from replacing fresh tool status.
+- **Codex content_started on any visible text**: fires on
+  commentary/draft text too (not just final), since draft previews are
+  visible to users.

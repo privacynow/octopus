@@ -41,6 +41,49 @@ def fresh_env(*, config_overrides=None, provider_name="claude", boot_id="test-bo
         yield data_dir, cfg, prov
 
 
+class FakeProgress:
+    """Test double for TelegramProgress that matches production shape.
+
+    Mirrors all public attributes that production code reads:
+    - last_text: last HTML text passed to update()
+    - last_update: monotonic time of last update() call
+    - content_started: asyncio.Event set by providers on first real text
+    - _content_delivered: tracks whether first post-content update landed
+    - updates: list of all HTML texts passed to update() (test-only)
+
+    Models the same rate-limiting behaviour as TelegramProgress so tests
+    catch suppression bugs (e.g. first content update dropped after a
+    forced tool status edit).
+    """
+    def __init__(self, *, interval: float = 0.0):
+        import asyncio
+        import time as _time
+        self.updates: list[str] = []
+        self.last_text: str = ""
+        self.last_update: float = 0.0
+        self.content_started: asyncio.Event = asyncio.Event()
+        self._content_delivered: bool = False
+        self._interval: float = interval
+        self._time = _time
+
+    async def update(self, html_text: str, *, force: bool = False) -> None:
+        if not html_text or html_text == self.last_text:
+            return
+        now = self._time.monotonic()
+        # Mirror production: first non-forced update after content_started
+        # bypasses rate limiting so the user sees real reply text.
+        cs = self.content_started
+        if not force and not self._content_delivered and cs and cs.is_set():
+            force = True
+        if not force and now - self.last_update < self._interval:
+            return
+        self.updates.append(html_text)
+        self.last_text = html_text
+        self.last_update = now
+        if cs and cs.is_set():
+            self._content_delivered = True
+
+
 class FakeChat:
     def __init__(self, chat_id=12345):
         self.id = chat_id

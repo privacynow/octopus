@@ -292,12 +292,19 @@ class TelegramProgress:
         self.last_text = ""
         self.last_update = 0.0
         self._interval = config.stream_update_interval_seconds
+        self._content_delivered = False
 
     async def update(self, html_text: str, *, force: bool = False) -> None:
         html_text = trim_text(html_text, 3500)
         if not html_text or html_text == self.last_text:
             return
         now = time.monotonic()
+        # After content_started is set, the first real (non-forced) update
+        # must bypass rate limiting so the user sees reply text instead of a
+        # stale tool/heartbeat message.
+        cs = getattr(self, "content_started", None)
+        if not force and not self._content_delivered and cs and cs.is_set():
+            force = True
         if not force and now - self.last_update < self._interval:
             return
         try:
@@ -308,6 +315,8 @@ class TelegramProgress:
                 return
         self.last_text = html_text
         self.last_update = now
+        if cs and cs.is_set():
+            self._content_delivered = True
 
 
 # -- Auth ------------------------------------------------------------------
@@ -607,6 +616,38 @@ async def keep_typing(chat) -> None:
         pass
 
 
+# Heartbeat cadence: first beat at 5s, then every 10s.
+_HEARTBEAT_FIRST = 5.0
+_HEARTBEAT_SUBSEQUENT = 10.0
+
+
+async def _heartbeat(progress, content_started: asyncio.Event) -> None:
+    """Show elapsed time on the progress message while idle.
+
+    Stops firing once *content_started* is set (meaning the provider has
+    begun streaming real reply text).  Only fires after a period of visible
+    silence — if the provider recently pushed a tool/command status update,
+    the heartbeat waits until that update goes stale before overwriting it.
+    Uses the same background-task lifecycle pattern as keep_typing().
+    """
+    try:
+        start = time.monotonic()
+        await asyncio.sleep(_HEARTBEAT_FIRST)
+        while not content_started.is_set():
+            # Check if a recent progress update was made — don't overwrite it
+            last = getattr(progress, "last_update", 0.0)
+            since_last = time.monotonic() - last if last else _HEARTBEAT_FIRST
+            if since_last < _HEARTBEAT_SUBSEQUENT:
+                # Recent update exists; wait for the remaining silence period
+                await asyncio.sleep(_HEARTBEAT_SUBSEQUENT - since_last)
+                continue
+            elapsed = int(time.monotonic() - start)
+            await progress.update(f"<i>Still working... ({elapsed}s)</i>", force=True)
+            await asyncio.sleep(_HEARTBEAT_SUBSEQUENT)
+    except asyncio.CancelledError:
+        pass
+
+
 def _load(chat_id: int) -> SessionState:
     cfg = _cfg()
     raw = load_session(
@@ -742,15 +783,20 @@ async def execute_request(
         _save(chat_id, session)
 
     is_resume = bool(session.provider_state.get("thread_id") or session.provider_state.get("started"))
-    label = f"Resuming {prov.name}..." if is_resume else f"Starting {prov.name}..."
+    label = "Resuming..." if is_resume else "Working..."
     status_msg = await message.reply_text(label)
     progress = TelegramProgress(status_msg, cfg)
+    content_started = asyncio.Event()
+    progress.content_started = content_started  # providers set this when real text arrives
     typing_task = asyncio.create_task(keep_typing(message.chat))
+    heartbeat_task = asyncio.create_task(_heartbeat(progress, content_started))
 
     try:
         result = await prov.run(session.provider_state, prompt, image_paths, progress, context=context)
     finally:
+        heartbeat_task.cancel()
         typing_task.cancel()
+        await asyncio.gather(heartbeat_task, typing_task, return_exceptions=True)
 
     if _run_result_was_interrupted(result.returncode):
         log.info("%s interrupted for chat %d (rc=%s); leaving work item claimed",
@@ -762,28 +808,32 @@ async def execute_request(
     session.provider_state.update(result.provider_state_updates)
 
     resume_errored = (
-        prov.name == "codex"
-        and is_resume
+        is_resume
         and not result.timed_out
         and result.returncode and result.returncode != 0
     )
     if resume_errored:
-        log.warning("Codex resume error (rc=%s) for chat %d — clearing thread",
-                     result.returncode, chat_id)
-        session.provider_state["thread_id"] = None
+        log.warning("%s resume error (rc=%s) for chat %d — resetting session state",
+                     prov.name, result.returncode, chat_id)
+        if prov.name == "codex":
+            session.provider_state["thread_id"] = None
+        else:
+            # Claude (and any future provider): reset to fresh state so the
+            # next request is not forced into a broken --resume.
+            session.provider_state.update(prov.new_provider_state())
 
     _save(chat_id, session)
 
     if result.timed_out:
         await progress.update(
-            f"{prov.name} timed out after {cfg.timeout_seconds} seconds.", force=True
+            f"Request timed out after {cfg.timeout_seconds} seconds.", force=True
         )
         return
 
     if result.returncode != 0:
         error_text = await _format_provider_error(result.text, result.returncode)
         if resume_errored:
-            error_text += "\n\n<i>Thread could not be resumed — next message starts a fresh session.</i>"
+            error_text += "\n\n<i>Session could not be resumed \u2014 next message starts fresh.</i>"
         await progress.update(error_text, force=True)
         return
 
@@ -822,7 +872,7 @@ async def execute_request(
             await send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
         return
 
-    await progress.update("Done.", force=True)
+    await progress.update("Completed.", force=True)
 
     cleaned_reply, directives = extract_send_directives(result.text)
 
@@ -854,7 +904,7 @@ async def request_approval(
 
     if session.has_pending:
         await message.reply_text(
-            "A preflight approval is already waiting. Use /approve or /reject first."
+            "An approval is already waiting. Use /approve or /reject first."
         )
         return
 
@@ -881,17 +931,21 @@ async def request_approval(
     context_hash = resolved.context_hash
 
     status_msg = await message.reply_text(
-        "<i>Preparing preflight approval plan\u2026</i>",
-        parse_mode=ParseMode.HTML,
+        "Preparing approval...",
     )
     progress = TelegramProgress(status_msg, cfg)
+    content_started = asyncio.Event()
+    progress.content_started = content_started
     typing_task = asyncio.create_task(keep_typing(message.chat))
+    heartbeat_task = asyncio.create_task(_heartbeat(progress, content_started))
 
     preflight_prompt = build_preflight_prompt(prompt, prov.name)
     try:
         plan_result = await prov.run_preflight(preflight_prompt, image_paths, progress, context=preflight_context)
     finally:
+        heartbeat_task.cancel()
         typing_task.cancel()
+        await asyncio.gather(heartbeat_task, typing_task, return_exceptions=True)
 
     if _run_result_was_interrupted(plan_result.returncode):
         log.info("Preflight interrupted for chat %d (rc=%s); leaving work item claimed",
@@ -899,12 +953,12 @@ async def request_approval(
         raise work_queue.LeaveClaimed()
 
     if plan_result.timed_out:
-        await progress.update("Preflight approval timed out.", force=True)
+        await progress.update("Approval request timed out.", force=True)
         return
 
     if plan_result.returncode != 0:
         error_text = await _format_provider_error(plan_result.text, plan_result.returncode)
-        await progress.update(f"Preflight failed:\n{error_text}", force=True)
+        await progress.update(f"Approval check failed:\n{error_text}", force=True)
         return
 
     attachment_dicts = [
@@ -926,14 +980,14 @@ async def request_approval(
         InlineKeyboardButton("\u2705 Approve plan", callback_data="approval_approve"),
         InlineKeyboardButton("\u274c Reject plan", callback_data="approval_reject"),
     ]])
-    await progress.update("Preflight approval required.", force=True)
+    await progress.update("Approval required.", force=True)
     plan_text = plan_result.text or "[empty plan]"
     save_raw(cfg.data_dir, chat_id, prompt, plan_text, kind="approval")
     await send_formatted_reply(
         message,
-        "**Preflight approval plan:**\n\n" + plan_text,
+        "**Approval plan:**\n\n" + plan_text,
     )
-    await message.chat.send_message("Approve this preflight plan?", reply_markup=keyboard)
+    await message.chat.send_message("Approve this plan?", reply_markup=keyboard)
 
 
 async def approve_pending(chat_id: int, message) -> None:
@@ -1162,7 +1216,7 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"Compact: <code>{compact_display}</code>\n"
         f"Prompt weight: <code>{html.escape(prompt_weight)}</code>\n"
         f"{session_line}\n"
-        f"Preflight approval mode: <code>{approval_mode}</code> ({approval_source})\n"
+        f"Approval mode: <code>{approval_mode}</code> ({approval_source})\n"
         f"Role: <code>{html.escape(role_display)}</code>\n"
         f"Skills: <code>{html.escape(skills_display)}</code>\n"
         f"Pending: <code>{pending}</code>",
@@ -1191,7 +1245,7 @@ async def cmd_approval(event, update: Update, context: ContextTypes.DEFAULT_TYPE
                     callback_data="setting_approval:off"),
             ]
             await update.effective_message.reply_text(
-                f"Preflight approval mode is <b>{mode}</b> ({source}).",
+                f"Approval mode is <b>{mode}</b> ({source}).",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([buttons]),
             )
@@ -1200,7 +1254,7 @@ async def cmd_approval(event, update: Update, context: ContextTypes.DEFAULT_TYPE
         session.approval_mode_explicit = True
         _save(chat_id, session)
     await update.effective_message.reply_text(
-        f"Preflight approval mode set to {arg} for this chat."
+        f"Approval mode set to {arg} for this chat."
     )
 
 
@@ -2029,7 +2083,7 @@ async def handle_settings_callback(event, query) -> None:
             _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(
-                f"Preflight approval mode set to {value} for this chat.")
+                f"Approval mode set to {value} for this chat.")
 
         elif setting == "compact":
             session.compact_mode = value == "on"
@@ -2343,6 +2397,21 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
                         chat_id, prompt, image_paths, message,
                         request_user_id=event.user.id, trust_tier=trust,
                     )
+        except work_queue.LeaveClaimed:
+            # Provider was interrupted again during replay (e.g. another
+            # restart).  This item already survived one recovery — keeping
+            # it claimed would create an infinite boot loop.  Accept the
+            # loss and let worker_loop finalize it.
+            log.warning("Recovered replay interrupted again for chat %d; giving up", chat_id)
+            try:
+                await bot.send_message(
+                    chat_id,
+                    "Your recovered request was interrupted again during replay. "
+                    "Please re-send your message.",
+                )
+            except Exception:
+                pass
+            return
         except Exception:
             log.exception("Worker replay failed for chat %d", chat_id)
             try:
@@ -2352,6 +2421,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
                 )
             except Exception:
                 pass
+            raise
         return
 
     if isinstance(event, (InboundCommand, InboundCallback)):

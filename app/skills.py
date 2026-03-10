@@ -347,10 +347,11 @@ async def validate_credential(req: SkillRequirement, value: str) -> tuple[bool, 
     except (ValueError, TypeError):
         return False, f"Invalid expect_status in validate spec: {spec.get('expect_status')!r}"
 
-    # Resolve ${KEY} in header with the credential value
+    # Resolve ${KEY} in header with the credential value.
+    # Use a lambda to avoid backref interpretation of special chars in value.
     header_value = re.sub(
         r'\$\{' + re.escape(req.key) + r'\}',
-        value,
+        lambda _m: value,
         header_template,
     )
 

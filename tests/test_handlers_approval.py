@@ -47,9 +47,9 @@ async def test_approval_flow():
         assert len(prov.preflight_calls[0]["prompt"]) > 0
 
         preflight_texts = " ".join(r.get("text", "") for r in msg.replies)
-        assert "Preflight approval plan" in preflight_texts
+        assert "Approval plan" in preflight_texts
         chat_msgs = " ".join(m.get("text", "") for m in chat.sent_messages)
-        assert "Approve this preflight plan?" in chat_msgs
+        assert "Approve this plan?" in chat_msgs
 
         # Verify approval buttons have correct callback_data
         approval_msg = chat.sent_messages[-1]
@@ -101,14 +101,14 @@ async def test_approval_wording():
         await th.cmd_approval(set_update, FakeContext(["off"]))
 
         set_texts = " ".join(r.get("text", "") for r in set_msg.replies)
-        assert "Preflight approval mode set to off for this chat." in set_texts
+        assert "Approval mode set to off for this chat." in set_texts
 
         session_msg = FakeMessage(chat=chat, text="/session")
         session_update = FakeUpdate(message=session_msg, user=user, chat=chat)
         await th.cmd_session(session_update, FakeContext())
 
         session_texts = " ".join(r.get("text", "") for r in session_msg.replies)
-        assert "Preflight approval mode" in session_texts
+        assert "Approval mode" in session_texts
         assert "chat override" in session_texts
 
 

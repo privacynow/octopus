@@ -537,6 +537,21 @@ context, rendering contract).
 This phase layers on top of the resolved context and rendering contract. It
 does not invent parallel state.
 
+#### Execution sequencing
+
+Phase III covers several distinct workstreams. The recommended build order is:
+
+1. **III.5 Layer 1 + III.5a** — progress normalization + heartbeat.
+   Low risk, fully specified, ships independently.
+2. **III.1–III.4** — compact defaults, expandable blockquote rendering,
+   inline expand/collapse, summary-first response shape. Separate
+   workstream from progress — touches rendering and prompt structure.
+3. **III.5 Layer 2 + III.5b** — structured progress events, unified
+   progress renderer, verbose/debug mode. Build after Layer 1 proves
+   out in production.
+4. **III.6** — prompt weight reduction. Independent of the above, can
+   happen at any point.
+
 #### III.1 Compact mode defaults
 
 - recommend `BOT_COMPACT_MODE=1` for mobile-oriented instances
@@ -601,14 +616,122 @@ end-to-end latency. A second pass is only justified if:
 
 Perceived latency improves significantly when the user sees a meaningful
 first update almost immediately. Product rule: immediate visible progress
-before provider invocation.
+before provider invocation, with provider-neutral wording.
 
-Implementation:
+This should be built in two layers:
 
-- send an immediate status message ("Starting provider..." / "Resuming...")
-  before invoking the provider subprocess
-- send an immediate status message before preflight approval
-- progress callback fires on provider output, not on a fixed polling timer
+**Layer 1: immediate UX normalization**
+
+- send an immediate neutral status message before invoking the provider
+  subprocess:
+  - `Working...`
+  - `Resuming...`
+  - `Preparing approval...`
+- do not expose provider names in normal user progress:
+  - not `Starting claude...`
+  - not `Starting codex...`
+  - not `codex timed out...`
+- do not expose provider-internal ids or terms in normal user progress:
+  - thread ids
+  - session ids
+  - internal compaction terminology
+- timeout and terminal states should also use provider-neutral wording:
+  - `Request timed out after N seconds.`
+  - `Completed.` or equivalent neutral terminal state if the progress message
+    remains visible after the final reply is sent
+- the progress message and the final reply are separate Telegram messages
+  (progress is created at `execute_request():746`, final reply is sent via
+  `send_formatted_reply():502`). The progress message must reach a clean
+  terminal state — do not leave it stuck on the last heartbeat or thinking
+  indicator. For Layer 1, keep a neutral terminal like `Completed.`
+
+**Layer 2: unified progress contract**
+
+The long-term architecture should not rely on each provider owning the final
+user-facing HTML vocabulary. Providers may observe different underlying events,
+but the product should expose one progress language.
+
+That means:
+
+- providers emit a small normalized progress state or structured progress event
+- one shared progress renderer owns:
+  - wording
+  - formatting
+  - liveness heartbeat
+  - compact vs verbose progress display
+- provider-specific detail can still exist, but only when it is intentionally
+  exposed as user-meaningful progress rather than leaking implementation
+  internals
+
+The first implementation pass may normalize strings while keeping the current
+`ProgressSink` boundary, but the target contract is a shared progress model,
+not endless provider-specific HTML tweaks.
+
+#### III.5a Liveness heartbeat for idle states
+
+Weak liveness is a separate problem from first visible progress.
+
+If the model is reasoning internally and has not yet emitted visible text, the
+status should not appear frozen. Add a heartbeat for idle non-content states:
+
+- `Working...`
+- `Still working... 10s`
+- `Still working... 25s`
+
+Rules:
+
+- heartbeat should fire when there has been no visible progress change for a
+  short interval
+- heartbeat applies only while the bot is in a known non-content phase, not
+  by inspecting or classifying arbitrary HTML from the provider
+- the heartbeat decision is driven by an explicit state flag, not by string
+  comparison against `progress.last_text`:
+  - the code that sends initial status (Working..., Resuming..., etc.) sets
+    `content_started = False`
+  - the provider streaming path sets `content_started = True` the first time
+    real reply text arrives (claude.py: first text_delta, codex.py: first
+    final_text assignment)
+  - the heartbeat loop checks the flag; once True, it stops firing
+  - this avoids any coupling to the exact wording of status messages and
+    naturally extends into Layer 2's structured progress model
+- once actual reply text is streaming, heartbeat must stop rather than
+  appending elapsed time onto the draft content
+- cadence should taper: first heartbeat at ~5s, then every ~10-15s — alive
+  without being noisy
+- typing indicators remain useful ambient presence, but heartbeat is the
+  explicit visible liveness signal
+
+Implementation shape:
+
+- heartbeat is a sibling background task (same pattern as `keep_typing()`),
+  not a wrapper class around `ProgressSink`
+- the flag is a simple `asyncio.Event` shared between the heartbeat task and
+  the provider call site — when set, heartbeat stops
+- heartbeat calls `progress.update(..., force=True)` — same interface, no new
+  protocol
+- lifecycle: `asyncio.create_task()` at request start, `.cancel()` in finally
+  block alongside `typing_task.cancel()`
+
+#### III.5b Provider detail policy
+
+Not all intermediate provider events should be shown to normal end users.
+
+Default product behavior:
+
+- show user-meaningful phases:
+  - working
+  - thinking
+  - using tools
+  - drafting reply
+  - finishing
+- hide provider-specific implementation details:
+  - provider names
+  - thread/session ids
+  - raw provider resume mechanics
+
+Tool and command detail should be treated as a product decision, not an
+accidental provider leak. If detailed tool activity is shown, it should still
+use the shared progress vocabulary and formatting shape.
 
 #### III.6 Prompt weight reduction
 
@@ -627,6 +750,8 @@ Acceptance:
 - the default feels right for the deployment context
 - long responses use expandable blockquotes or inline expand/collapse
 - first visible progress is sent before provider invocation
+- idle waiting states show visible liveness rather than freezing indefinitely
+- normal user progress does not expose provider names or thread/session ids
 - prompt weight is observable in `/session` and `/doctor`
 
 ### Phase IV — Update delivery and burst safety

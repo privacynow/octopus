@@ -149,7 +149,7 @@ class ClaudeProvider:
             if accumulated_text:
                 parts.append(md_to_telegram_html(trim_text(accumulated_text, 3200)))
             else:
-                parts.append("<i>thinking\u2026</i>")
+                parts.append("<i>Thinking...</i>")
             return "\n".join(parts)
 
         while True:
@@ -174,6 +174,10 @@ class ClaudeProvider:
                     delta = inner.get("delta", {})
                     if delta.get("type") == "text_delta":
                         accumulated_text += delta.get("text", "")
+                        # Signal that real content is streaming — stops heartbeat
+                        cs = getattr(progress, "content_started", None)
+                        if cs and not cs.is_set():
+                            cs.set()
                         await progress.update(build_display())
                 elif itype == "content_block_start":
                     cb = inner.get("content_block", {})
@@ -375,7 +379,7 @@ class ClaudeProvider:
 
         if rc != 0:
             return RunResult(
-                text=f"[Preflight error (rc={rc})]",
+                text=f"[Approval check error (rc={rc})]",
                 returncode=rc,
             )
 

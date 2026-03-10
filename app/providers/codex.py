@@ -284,16 +284,15 @@ class CodexProvider:
     ) -> str | None:
         etype = cls._normalize_type(event.get("type"))
         if etype in {"thread_started", "session_configured"}:
-            tid = html.escape(str(cls._extract_thread_id(event) or ""))
-            label = "Resumed" if is_resume else "Started"
+            # Thread/session IDs are internal — log only, don't show to users.
+            tid = cls._extract_thread_id(event)
             if tid:
-                return f"<i>{label} Codex thread</i>\n<code>{tid}</code>"
-            return f"<i>{label} Codex thread</i>"
+                log.debug("Codex thread: %s", tid)
+            return None
         if etype == "session_meta":
-            tid = html.escape(str(event.get("payload", {}).get("id", "")))
+            tid = event.get("payload", {}).get("id")
             if tid:
-                label = "Resumed" if is_resume else "Started"
-                return f"<i>{label} Codex thread</i>\n<code>{tid}</code>"
+                log.debug("Codex session: %s", tid)
             return None
         if etype in {"turn_started", "task_started"}:
             return "<i>Thinking...</i>"
@@ -329,8 +328,7 @@ class CodexProvider:
         if etype == "event_msg" and ptype == "session_configured":
             tid = cls._extract_thread_id(event)
             if tid:
-                label = "Resumed" if is_resume else "Started"
-                return f"<i>{label} Codex thread</i>\n<code>{html.escape(tid)}</code>"
+                log.debug("Codex session configured: %s", tid)
             return None
 
         if etype == "event_msg" and ptype == "exec_command_begin":
@@ -443,6 +441,12 @@ class CodexProvider:
 
                 text, phase = self._extract_assistant_text(event)
                 if text:
+                    # Signal that visible content is streaming — stops heartbeat.
+                    # Fires on any text (including draft/commentary) since those
+                    # produce visible progress updates.
+                    cs = getattr(progress, "content_started", None)
+                    if cs and not cs.is_set():
+                        cs.set()
                     if phase == "commentary":
                         draft_text = text
                     else:
@@ -471,7 +475,7 @@ class CodexProvider:
                 # Warn the user and give it one more timeout period.
                 log.info("codex resume still running after %ds — extending for compaction",
                          self.config.timeout_seconds)
-                await progress.update("<i>Still working — possible context compaction…</i>")
+                await progress.update("<i>Still working — this may take a moment...</i>")
                 try:
                     await asyncio.wait_for(stdout_task, timeout=self.config.timeout_seconds)
                     stderr = (await stderr_task).decode("utf-8", errors="replace").strip()

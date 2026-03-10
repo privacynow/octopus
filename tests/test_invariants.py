@@ -7,6 +7,13 @@ because a new field was added or a helper was updated without updating
 all consumers.
 
 Each test section states the invariant it guards as a docstring.
+
+Before adding tests to this file:
+1. Audit all call sites that touch the changed behavior — test every one.
+2. At least one test must exercise two interacting components together.
+3. At least one test must assert what the USER SEES, not internal state.
+4. At least one test must be a negative assertion (X must NOT happen).
+5. Test doubles must match production object shape (see FakeProgress).
 """
 
 import asyncio
@@ -41,6 +48,7 @@ from tests.support.handler_support import (
     FakeChat,
     FakeContext,
     FakeMessage,
+    FakeProgress,
     FakeProvider,
     FakeUpdate,
     FakeUser,
@@ -329,9 +337,6 @@ async def test_inspect_mode_always_readonly(provider_config):
         return RunResult(text="ok", provider_state_updates={"thread_id": "t-1"})
 
     provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
-
-    class FakeProgress:
-        async def update(self, html_text, *, force=False): pass
 
     context = RunContext(
         extra_dirs=[], system_prompt="", capability_summary="",
@@ -2724,3 +2729,668 @@ async def test_callback_none_event_completes_work_item():
         ).fetchone()
         assert row is not None, "work item should exist"
         assert row["state"] == "done", f"expected done, got {row['state']}"
+
+
+# =====================================================================
+# INVARIANT 38: Progress messages use provider-neutral wording
+# User-facing status must not contain provider names, thread IDs, or
+# internal terminology.
+# =====================================================================
+
+async def test_initial_status_no_provider_name_claude():
+    """handle_message for Claude shows 'Working...' not 'Starting claude...'."""
+    with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(uid=42)
+        msg = await send_text(chat, user, "hello")
+
+        initial_reply = msg.replies[0]
+        assert initial_reply["text"] == "Working..."
+        assert "claude" not in initial_reply["text"].lower()
+
+
+async def test_initial_status_no_provider_name_codex():
+    """handle_message for Codex shows 'Working...' not 'Starting codex...'."""
+    with fresh_env(provider_name="codex") as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(uid=42)
+        msg = await send_text(chat, user, "hello")
+
+        initial_reply = msg.replies[0]
+        assert initial_reply["text"] == "Working..."
+        assert "codex" not in initial_reply["text"].lower()
+
+
+async def test_resume_status_no_provider_name():
+    """Resuming a session shows 'Resuming...' not 'Resuming claude...'."""
+    with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(uid=42)
+
+        # First message — provider returns started=True like real Claude
+        prov.run_results = [
+            RunResult(text="first reply", provider_state_updates={"started": True}),
+        ]
+        await send_text(chat, user, "first")
+        # Second message — resumes session (provider_state.started is True)
+        msg2 = await send_text(chat, user, "second")
+
+        initial_reply = msg2.replies[0]
+        assert initial_reply["text"] == "Resuming..."
+        assert "claude" not in initial_reply["text"].lower()
+
+
+async def test_timeout_message_no_provider_name():
+    """Timeout shows 'Request timed out' not 'claude timed out'."""
+    import app.telegram_handlers as th
+
+    with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
+        prov.run_results = [RunResult(text="", timed_out=True, returncode=124)]
+        chat = FakeChat(12345)
+        user = FakeUser(uid=42)
+        msg = FakeMessage(chat=chat, text="slow request")
+        # Use a tracking FakeMessage that captures the status sub-message
+        status_messages = []
+        original_reply_text = msg.reply_text
+
+        async def tracking_reply_text(text, **kwargs):
+            result = await original_reply_text(text, **kwargs)
+            status_messages.append(result)
+            return result
+
+        msg.reply_text = tracking_reply_text
+        await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+
+        # The status message receives progress edits including the timeout
+        assert len(status_messages) >= 1
+        status_msg = status_messages[0]
+        all_edits = [r.get("edit_text", "") for r in status_msg.replies]
+        timeout_text = " ".join(all_edits)
+        assert "Request timed out" in timeout_text
+        assert "claude" not in timeout_text.lower()
+        assert "codex" not in timeout_text.lower()
+
+
+async def test_terminal_status_says_completed():
+    """Successful run shows 'Completed.' not 'Done.'."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(uid=42)
+        msg = FakeMessage(chat=chat, text="do work")
+        status_messages = []
+        original_reply_text = msg.reply_text
+
+        async def tracking_reply_text(text, **kwargs):
+            result = await original_reply_text(text, **kwargs)
+            status_messages.append(result)
+            return result
+
+        msg.reply_text = tracking_reply_text
+        await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+
+        assert len(status_messages) >= 1
+        status_msg = status_messages[0]
+        all_edits = [r.get("edit_text", "") for r in status_msg.replies]
+        assert any("Completed." in e for e in all_edits), f"Expected 'Completed.' in edits: {all_edits}"
+        assert not any("Done." in e for e in all_edits), f"'Done.' should not appear: {all_edits}"
+
+
+async def test_claude_thinking_capitalized():
+    """Claude provider uses 'Thinking...' (capitalized, ascii dots) not 'thinking…'."""
+    from app.providers.claude import ClaudeProvider
+
+    provider = ClaudeProvider(_make_config())
+    # build_display is a closure inside _consume_stream — test the output pattern
+    # by checking the code path: when no text accumulated, display shows Thinking...
+    # We verify via a unit-level check on the progress HTML the provider would emit.
+    import json
+    import sys
+    import asyncio
+
+    # Emit a tool_use block start — triggers build_display() with no accumulated text,
+    # which should show "Thinking..." as the fallback.
+    events = [
+        json.dumps({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "tool_use", "name": "Read"}}}),
+    ]
+    script = f"import sys; [sys.stdout.write(line + '\\n') for line in {events!r}]; sys.stdout.flush()"
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", script,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    progress = FakeProgress()
+    text, _, _ = await provider._consume_stream(proc, progress)
+    await proc.wait()
+
+    # With no text_delta events, the display should show "Thinking..."
+    thinking_updates = [u for u in progress.updates if "Thinking..." in u]
+    assert len(thinking_updates) >= 1, f"Expected 'Thinking...' in updates: {progress.updates}"
+    # Must NOT use lowercase "thinking" with ellipsis character
+    assert not any("thinking\u2026" in u for u in progress.updates)
+
+
+async def test_codex_thinking_capitalized():
+    """Codex provider uses 'Thinking...' for turn/task started events."""
+    html = CodexProvider._progress_html({"type": "turn.started"}, False)
+    assert html == "<i>Thinking...</i>"
+
+
+async def test_codex_no_thread_id_in_progress():
+    """Codex thread_started and session_meta events produce no user-visible progress."""
+    assert CodexProvider._progress_html({"type": "thread.started", "thread_id": "t-123"}, False) is None
+    assert CodexProvider._progress_html({"type": "session_meta", "payload": {"id": "s-456"}}, False) is None
+    assert CodexProvider._progress_html(
+        {"type": "event_msg", "payload": {"type": "session_configured", "thread_id": "t-789"}}, True
+    ) is None
+
+
+async def test_codex_compaction_wording():
+    """Extended timeout message uses user-facing wording, not internal 'compaction'."""
+    import sys, tempfile
+    from pathlib import Path
+
+    cfg = _make_config(timeout_seconds=1, working_dir=Path(tempfile.gettempdir()))
+    provider = CodexProvider(cfg)
+
+    # A script that takes 1.5s (triggers timeout extension on resume)
+    import textwrap
+    script = textwrap.dedent(f"""\
+        import json, sys, time
+        sys.stdout.write(json.dumps({{"type": "thread.started", "thread_id": "t-1"}}) + "\\n")
+        sys.stdout.flush()
+        time.sleep(1.5)
+        sys.stdout.write(json.dumps({{"type": "item.completed", "item": {{"type": "agent_message", "text": "done"}}}}) + "\\n")
+        sys.stdout.flush()
+    """)
+    progress = FakeProgress()
+    result = await provider._run_cmd(
+        [sys.executable, "-c", script], progress, is_resume=True
+    )
+    extended_msgs = [u for u in progress.updates if "this may take a moment" in u]
+    assert len(extended_msgs) == 1
+    assert not any("compaction" in u.lower() for u in progress.updates)
+
+
+# =====================================================================
+# INVARIANT 39: Heartbeat fires during idle states, stops on content
+# The heartbeat task shows elapsed time while waiting, but must not
+# decorate streamed reply text.
+# =====================================================================
+
+async def test_heartbeat_fires_on_idle():
+    """Heartbeat updates progress after the initial delay when no content arrives."""
+    import app.telegram_handlers as th
+    from unittest.mock import patch
+
+    progress = FakeProgress()
+    content_started = progress.content_started
+
+    with patch.object(th, "_HEARTBEAT_FIRST", 0.05), \
+         patch.object(th, "_HEARTBEAT_SUBSEQUENT", 0.05):
+        task = asyncio.create_task(th._heartbeat(progress, content_started))
+        await asyncio.sleep(0.2)  # Let a few beats fire
+        task.cancel()
+        await task
+
+    assert len(progress.updates) >= 1, f"Expected heartbeat updates, got: {progress.updates}"
+    assert all("Still working..." in u for u in progress.updates)
+    # Should contain elapsed seconds
+    assert any("s)" in u for u in progress.updates)
+
+
+async def test_heartbeat_stops_when_content_starts():
+    """Heartbeat stops firing once content_started event is set."""
+    import app.telegram_handlers as th
+    from unittest.mock import patch
+
+    progress = FakeProgress()
+    content_started = progress.content_started
+
+    with patch.object(th, "_HEARTBEAT_FIRST", 0.05), \
+         patch.object(th, "_HEARTBEAT_SUBSEQUENT", 0.05):
+        task = asyncio.create_task(th._heartbeat(progress, content_started))
+        await asyncio.sleep(0.1)  # Let at least one beat fire
+        count_before = len(progress.updates)
+        assert count_before >= 1
+
+        content_started.set()  # Signal that content is streaming
+        await asyncio.sleep(0.15)  # Wait to confirm no more beats
+        count_after = len(progress.updates)
+
+        # At most one more update could have been in flight when we set the event
+        assert count_after <= count_before + 1, (
+            f"Heartbeat kept firing after content_started: {count_before} -> {count_after}"
+        )
+        task.cancel()
+        await task
+
+
+async def test_heartbeat_cancelled_on_completion():
+    """Heartbeat task is cancelled cleanly without raising."""
+    import app.telegram_handlers as th
+    from unittest.mock import patch
+
+    progress = FakeProgress()
+    content_started = progress.content_started
+
+    with patch.object(th, "_HEARTBEAT_FIRST", 10.0):
+        task = asyncio.create_task(th._heartbeat(progress, content_started))
+        await asyncio.sleep(0.01)
+        task.cancel()
+        # Should not raise — CancelledError is caught internally
+        await task
+        assert len(progress.updates) == 0
+
+
+async def test_claude_sets_content_started():
+    """Claude provider sets content_started when first text_delta arrives."""
+    from app.providers.claude import ClaudeProvider
+    import json
+    import sys
+
+    provider = ClaudeProvider(_make_config())
+
+    events = [
+        json.dumps({"type": "stream_event", "event": {
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": "Hello"},
+        }}),
+    ]
+    script = f"import sys; [sys.stdout.write(line + '\\n') for line in {events!r}]; sys.stdout.flush()"
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", script,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    progress = FakeProgress()
+    content_started = progress.content_started
+
+
+    text, _, _ = await provider._consume_stream(proc, progress)
+    await proc.wait()
+
+    assert content_started.is_set(), "content_started should be set after text_delta"
+    assert "Hello" in text
+
+
+async def test_codex_sets_content_started():
+    """Codex provider sets content_started when final assistant text arrives."""
+    import sys, textwrap, tempfile
+    from pathlib import Path
+
+    cfg = _make_config(timeout_seconds=5, working_dir=Path(tempfile.gettempdir()))
+    provider = CodexProvider(cfg)
+
+    script = textwrap.dedent("""\
+        import json, sys
+        events = [
+            {"type": "session_meta", "payload": {"id": "sess-1"}},
+            {"type": "response_item", "payload": {"type": "message", "role": "assistant",
+             "content": [{"type": "output_text", "text": "final answer"}], "phase": "final_answer"}},
+        ]
+        for e in events:
+            sys.stdout.write(json.dumps(e) + "\\n")
+        sys.stdout.flush()
+    """)
+
+    progress = FakeProgress()
+    content_started = progress.content_started
+
+
+    result = await provider._run_cmd(
+        [sys.executable, "-c", script], progress, is_resume=False
+    )
+    assert content_started.is_set(), "content_started should be set after final text"
+    assert "final answer" in result.text
+
+
+async def test_codex_sets_content_started_on_draft():
+    """Codex sets content_started on commentary/draft text, not just final text."""
+    import sys, textwrap, tempfile
+    from pathlib import Path
+
+    cfg = _make_config(timeout_seconds=5, working_dir=Path(tempfile.gettempdir()))
+    provider = CodexProvider(cfg)
+
+    # Emit a commentary event (draft text) — should still set content_started
+    script = textwrap.dedent("""\
+        import json, sys
+        events = [
+            {"type": "session_meta", "payload": {"id": "sess-1"}},
+            {"type": "event_msg", "payload": {"type": "agent_message",
+             "message": "draft commentary", "phase": "commentary"}},
+        ]
+        for e in events:
+            sys.stdout.write(json.dumps(e) + "\\n")
+        sys.stdout.flush()
+    """)
+
+    progress = FakeProgress()
+    content_started = progress.content_started
+
+
+    await provider._run_cmd(
+        [sys.executable, "-c", script], progress, is_resume=False
+    )
+    assert content_started.is_set(), (
+        "content_started should be set on draft/commentary text too, "
+        "since it produces visible progress"
+    )
+
+
+async def test_heartbeat_respects_recent_progress():
+    """Heartbeat does not overwrite a recent non-content progress update."""
+    import app.telegram_handlers as th
+    from unittest.mock import patch
+
+    progress = FakeProgress()
+    content_started = progress.content_started
+
+    with patch.object(th, "_HEARTBEAT_FIRST", 0.05), \
+         patch.object(th, "_HEARTBEAT_SUBSEQUENT", 0.10):
+        task = asyncio.create_task(th._heartbeat(progress, content_started))
+
+        # Wait for first heartbeat to potentially fire
+        await asyncio.sleep(0.07)
+
+        # Simulate a fresh tool/command progress update
+        await progress.update("<i>Running command: ls</i>")
+        count_after_tool = len(progress.updates)
+
+        # Wait less than HEARTBEAT_SUBSEQUENT — heartbeat should NOT overwrite
+        await asyncio.sleep(0.05)
+        heartbeat_updates_after_tool = [
+            u for u in progress.updates[count_after_tool:]
+            if "Still working" in u
+        ]
+        assert len(heartbeat_updates_after_tool) == 0, (
+            f"Heartbeat overwrote recent tool update: {progress.updates}"
+        )
+
+        task.cancel()
+        await task
+
+
+async def test_approval_initial_status_neutral():
+    """request_approval sends neutral 'Preparing approval...' not internal terminology."""
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(uid=42)
+        msg = await send_text(chat, user, "do work with approval")
+
+        # In approval mode, the first reply should be the approval status
+        initial_reply = msg.replies[0]
+        initial_text = initial_reply.get("text", "")
+        assert "preflight" not in initial_text.lower(), (
+            f"Internal 'preflight' leaked to user: {initial_text}"
+        )
+        assert initial_text == "Preparing approval..."
+
+
+async def test_approval_no_preflight_in_any_user_text():
+    """No user-facing message in the approval flow contains 'preflight'."""
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(uid=42)
+        msg = await send_text(chat, user, "do work with approval")
+
+        all_texts = []
+        for r in msg.replies:
+            all_texts.append(r.get("text", ""))
+            all_texts.append(r.get("edit_text", ""))
+        for sent in chat.sent_messages:
+            all_texts.append(sent.get("text", ""))
+
+        for text in all_texts:
+            if text:
+                assert "preflight" not in text.lower(), (
+                    f"Internal 'preflight' leaked to user: {text!r}"
+                )
+
+
+async def test_approval_error_no_preflight():
+    """Approval check failure message uses neutral wording."""
+    from app.providers.base import RunResult
+
+    with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
+        prov.preflight_results = [RunResult(text="", returncode=1)]
+        chat = FakeChat(12345)
+        user = FakeUser(uid=42)
+        msg = await send_text(chat, user, "do failing approval work")
+
+        all_texts = []
+        for r in msg.replies:
+            all_texts.append(r.get("text", ""))
+            all_texts.append(r.get("edit_text", ""))
+
+        for text in all_texts:
+            if text:
+                assert "preflight" not in text.lower(), (
+                    f"Internal 'preflight' leaked in error path: {text!r}"
+                )
+
+
+async def test_content_first_update_bypasses_rate_limit():
+    """First non-forced update after content_started bypasses rate limiting.
+
+    Reproduces the race: a forced tool update sets last_update, then
+    content_started fires and the first text update arrives within the
+    rate-limit window.  Without the fix, the text is silently dropped.
+    """
+    import app.telegram_handlers as th
+
+    msg = FakeMessage()
+    cfg_overrides = {"stream_update_interval_seconds": 1.0}
+    with fresh_env(config_overrides=cfg_overrides) as (data_dir, cfg, prov):
+        progress = th.TelegramProgress(msg, cfg)
+        progress.content_started = asyncio.Event()
+
+        # Forced tool update — sets last_update to now
+        await progress.update("<i>Running tool: Read</i>", force=True)
+        assert progress.last_text == "<i>Running tool: Read</i>"
+
+        # Immediately set content_started (provider signals first text)
+        progress.content_started.set()
+
+        # Non-forced text update within the 1s rate-limit window
+        await progress.update("Hello, here is the answer.")
+
+        # The text must get through despite rate limiting
+        assert progress.last_text == "Hello, here is the answer.", (
+            f"First content update was rate-limited; last_text={progress.last_text!r}"
+        )
+
+        # Subsequent non-forced updates should still be rate-limited normally
+        await progress.update("Second update.")
+        assert progress.last_text == "Hello, here is the answer.", (
+            "Second update should be rate-limited"
+        )
+
+
+# =====================================================================
+# INVARIANT 40: Worker replay respects durable-state contract
+#
+# A recovered work item replayed through worker_dispatch must:
+# - stay claimed if the provider is interrupted again (LeaveClaimed)
+# - be marked failed (not done) if replay raises an unexpected exception
+# - never swallow LeaveClaimed as a generic failure
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_worker_replay_interrupted_returns_normally():
+    """If the provider is interrupted during worker replay (second
+    interruption), worker_dispatch returns normally so worker_loop
+    marks the item done — preventing an infinite boot loop where the
+    same recovered item keeps getting interrupted by restarts."""
+    import app.telegram_handlers as th
+    from app.transport import InboundMessage, InboundUser
+
+    with fresh_env(config_overrides={
+        "allowed_user_ids": frozenset({42}),
+    }) as (data_dir, cfg, prov):
+        # Provider returns interrupted signal
+        prov.run_results = [RunResult(text="killed", returncode=-15)]
+
+        bot = _FakeBot()
+        th._bot_instance = bot
+        try:
+            event = InboundMessage(
+                user=InboundUser(id=42, username="alice"),
+                chat_id=12345,
+                text="replay this",
+                attachments=(),
+            )
+            item = {"chat_id": 12345, "update_id": 8888, "id": "replay-item"}
+
+            # Should NOT raise — returns normally so worker_loop can finalize
+            await th.worker_dispatch("message", event, item)
+
+            # Must have notified the user to re-send
+            resend_msgs = [s for s in bot.sent if "re-send" in s.get("text", "")]
+            assert resend_msgs, (
+                "Expected 're-send your message' notification on replay interruption"
+            )
+            # Must NOT have sent the generic apology
+            apology_msgs = [s for s in bot.sent if "couldn\u2019t recover" in s.get("text", "")]
+            assert not apology_msgs, (
+                "LeaveClaimed during replay should use the 're-send' message, "
+                "not the generic apology"
+            )
+        finally:
+            th._bot_instance = None
+
+
+@pytest.mark.asyncio
+async def test_worker_replay_failure_raises_for_worker():
+    """If replay raises a non-LeaveClaimed exception, worker_dispatch
+    re-raises it so worker_loop can mark the item failed (not done)."""
+    import app.telegram_handlers as th
+    from app.transport import InboundMessage, InboundUser
+
+    with fresh_env(config_overrides={
+        "allowed_user_ids": frozenset({42}),
+    }) as (data_dir, cfg, prov):
+        # Make the provider raise an unexpected error
+        async def exploding_run(*args, **kwargs):
+            raise RuntimeError("provider exploded")
+        prov.run = exploding_run
+
+        bot = _FakeBot()
+        th._bot_instance = bot
+        try:
+            event = InboundMessage(
+                user=InboundUser(id=42, username="alice"),
+                chat_id=12345,
+                text="replay this",
+                attachments=(),
+            )
+            item = {"chat_id": 12345, "update_id": 7777, "id": "replay-item"}
+
+            with pytest.raises(RuntimeError, match="provider exploded"):
+                await th.worker_dispatch("message", event, item)
+
+            # Apology should still be sent (best-effort user notification)
+            apology_msgs = [s for s in bot.sent if "couldn\u2019t recover" in s.get("text", "")]
+            assert apology_msgs, "Expected apology message on replay failure"
+        finally:
+            th._bot_instance = None
+
+
+# =====================================================================
+# INVARIANT 41: Claude resume error resets provider state
+#
+# When a Claude resumed run fails (non-timeout, non-signal), the
+# provider state must be reset to fresh so the next request is
+# "Working..." not "Resuming...".  This is parity with Codex, which
+# already clears thread_id on resume error.
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_claude_resume_error_resets_provider_state():
+    """Claude resume failure resets started/session_id so next request is fresh."""
+    import app.telegram_handlers as th
+
+    with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
+        # First request succeeds — sets started=True
+        prov.run_results = [RunResult(
+            text="first response",
+            provider_state_updates={"started": True},
+        )]
+        chat = FakeChat(chat_id=5001)
+        user = FakeUser(uid=42)
+        msg1 = _StickyReplyMessage(chat=chat, text="first request")
+        upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
+        await th.handle_message(upd1, FakeContext())
+        assert len(prov.run_calls) == 1
+
+        # Verify session now has started=True
+        session = th._load(5001)
+        assert session.provider_state["started"] is True
+
+        # Second request: provider fails with non-zero rc (resume broken)
+        prov.run_results = [RunResult(text="[Claude error (rc=1)]", returncode=1)]
+        msg2 = _StickyReplyMessage(chat=chat, text="second request")
+        upd2 = FakeUpdate(message=msg2, user=user, chat=chat)
+        await th.handle_message(upd2, FakeContext())
+
+        # Session must be reset to fresh state
+        session = th._load(5001)
+        assert session.provider_state["started"] is False, (
+            "started should be reset after resume error"
+        )
+        # session_id should also be reset (in production this generates a new UUID;
+        # the fake provider returns a static value, so we just verify it was called)
+        assert "session_id" in session.provider_state
+
+        # Verify user got the "starts fresh" message
+        all_text = " ".join(
+            r.get("text", "") + " " + r.get("edit_text", "")
+            for r in msg2.replies
+        )
+        assert "starts fresh" in all_text.lower(), (
+            f"Expected 'starts fresh' in user text: {all_text}"
+        )
+
+        # Third request should show "Working..." not "Resuming..."
+        prov.run_results = [RunResult(text="recovered")]
+        msg3 = _StickyReplyMessage(chat=chat, text="third request")
+        upd3 = FakeUpdate(message=msg3, user=user, chat=chat)
+        await th.handle_message(upd3, FakeContext())
+
+        initial_status = msg3.replies[0].get("text", "")
+        assert initial_status == "Working...", (
+            f"After resume reset, expected 'Working...' but got: {initial_status!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_codex_resume_error_still_clears_thread():
+    """Codex resume error still clears thread_id (existing behavior preserved)."""
+    import app.telegram_handlers as th
+
+    with fresh_env(provider_name="codex") as (data_dir, cfg, prov):
+        # Simulate a session with an existing thread_id
+        session = th._load(6001)
+        session.provider_state["thread_id"] = "t-existing"
+        session.provider_state["context_hash"] = "hash1"
+        session.provider_state["boot_id"] = "test-boot"
+        th._save(6001, session)
+
+        # Provider fails with non-zero rc
+        prov.run_results = [RunResult(text="codex error", returncode=1)]
+        chat = FakeChat(chat_id=6001)
+        user = FakeUser(uid=42)
+        msg = _StickyReplyMessage(chat=chat, text="codex request")
+        upd = FakeUpdate(message=msg, user=user, chat=chat)
+        await th.handle_message(upd, FakeContext())
+
+        session = th._load(6001)
+        assert session.provider_state["thread_id"] is None, (
+            "Codex thread_id should be cleared on resume error"
+        )

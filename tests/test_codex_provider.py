@@ -8,15 +8,7 @@ from pathlib import Path
 from app.providers.base import RunContext, RunResult
 from app.providers.codex import CodexProvider
 from tests.support.config_support import make_config
-
-
-class FakeProgress:
-    """Minimal ProgressSink that records update calls."""
-    def __init__(self):
-        self.updates: list[str] = []
-
-    async def update(self, html_text: str, *, force: bool = False) -> None:
-        self.updates.append(html_text)
+from tests.support.handler_support import FakeProgress
 
 
 # -- new_provider_state --
@@ -276,16 +268,16 @@ async def test_skip_permissions_resume():
 
 # -- progress_html --
 
-def test_progress_html_thread_started():
+def test_progress_html_thread_started_suppressed():
+    """Thread-started events should not produce user-visible progress (thread IDs are internal)."""
     html1 = CodexProvider._progress_html({"type": "thread.started", "thread_id": "abc"}, False)
-    assert "Started" in html1
-    assert "abc" in html1
+    assert html1 is None
 
 
-def test_progress_html_thread_resumed():
+def test_progress_html_thread_resumed_suppressed():
+    """Thread-resumed events should not produce user-visible progress."""
     html2 = CodexProvider._progress_html({"type": "thread.started", "thread_id": "abc"}, True)
-    assert "Resumed" in html2
-    assert "abc" in html2
+    assert html2 is None
 
 
 def test_progress_html_turn_started():
@@ -309,12 +301,12 @@ def test_progress_html_agent_message():
     assert "Done!" in html5
 
 
-def test_progress_html_session_meta():
+def test_progress_html_session_meta_suppressed():
+    """Session-meta events should not produce user-visible progress (session IDs are internal)."""
     html7 = CodexProvider._progress_html(
         {"type": "session_meta", "payload": {"id": "sess-modern"}}, False
     )
-    assert "Started" in html7
-    assert "sess-modern" in html7
+    assert html7 is None
 
 
 def test_progress_html_event_msg_agent_message():
@@ -381,7 +373,8 @@ def test_progress_html_response_item_assistant_message():
     assert "modern response item draft" in html10
 
 
-def test_progress_html_session_configured_resumed():
+def test_progress_html_session_configured_suppressed():
+    """session_configured events should not produce user-visible progress."""
     html11 = CodexProvider._progress_html(
         {
             "type": "event_msg",
@@ -389,8 +382,7 @@ def test_progress_html_session_configured_resumed():
         },
         True,
     )
-    assert "Resumed" in html11
-    assert "resume-modern" in html11
+    assert html11 is None
 
 
 def test_progress_html_unknown_event():
@@ -514,8 +506,8 @@ async def test_timeout_non_resume():
     result1 = await provider._run_cmd(slow_cmd(1.5), progress1, is_resume=False)
     assert result1.timed_out is True
     assert result1.returncode == 124
-    compaction_msgs = [u for u in progress1.updates if "compaction" in u]
-    assert len(compaction_msgs) == 0
+    extended_msgs = [u for u in progress1.updates if "this may take a moment" in u]
+    assert len(extended_msgs) == 0
 
 
 async def test_timeout_resume_compaction_succeeds():
@@ -531,8 +523,8 @@ async def test_timeout_resume_compaction_succeeds():
     assert result2.timed_out is False
     assert "done" in result2.text
     assert result2.provider_state_updates.get("thread_id") == "t-123"
-    compaction_msgs2 = [u for u in progress2.updates if "compaction" in u]
-    assert len(compaction_msgs2) == 1
+    extended_msgs2 = [u for u in progress2.updates if "this may take a moment" in u]
+    assert len(extended_msgs2) == 1
 
 
 async def test_timeout_resume_double_timeout():
@@ -547,8 +539,8 @@ async def test_timeout_resume_double_timeout():
     result3 = await provider._run_cmd(slow_cmd(3), progress3, is_resume=True)
     assert result3.timed_out is True
     assert result3.returncode == 124
-    compaction_msgs3 = [u for u in progress3.updates if "compaction" in u]
-    assert len(compaction_msgs3) == 1
+    extended_msgs3 = [u for u in progress3.updates if "this may take a moment" in u]
+    assert len(extended_msgs3) == 1
 
 
 async def test_timeout_fast_non_resume():
@@ -575,7 +567,9 @@ async def test_modern_schema_new():
     result1 = await provider._run_cmd([sys.executable, "-c", _modern_codex_script()], progress1)
     assert result1.text == "final modern reply"
     assert result1.provider_state_updates.get("thread_id") == "sess-modern"
-    assert any("Started Codex thread" in u for u in progress1.updates)
+    # Thread/session IDs should NOT appear in user-facing progress
+    assert not any("Codex thread" in u for u in progress1.updates)
+    assert not any("sess-modern" in u for u in progress1.updates)
     assert any("Thinking" in u for u in progress1.updates)
     assert any("Running command" in u and "git status" in u for u in progress1.updates)
     assert any("Command finished" in u and "M app/providers/codex.py" in u for u in progress1.updates)
@@ -594,5 +588,7 @@ async def test_modern_schema_resume():
     )
     assert result2.text == "resume final reply"
     assert result2.provider_state_updates.get("thread_id") == "resume-modern"
-    assert any("Resumed Codex thread" in u and "resume-modern" in u for u in progress2.updates)
+    # Thread/session IDs should NOT appear in user-facing progress
+    assert not any("Codex thread" in u for u in progress2.updates)
+    assert not any("resume-modern" in u for u in progress2.updates)
     assert any("resume final reply" in u for u in progress2.updates)

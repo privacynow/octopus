@@ -182,6 +182,19 @@ Contract:
 - compact/full response presentation is a rendering concern
 - long-response progressive disclosure (expandable blockquote, expand/collapse
   buttons) should derive from one stored response source of truth
+- progress/liveness presentation is also a rendering concern:
+  - providers may observe different low-level events
+  - users should still see one coherent progress vocabulary
+  - provider names, thread ids, and other internal execution details should not
+    leak into normal user-facing progress by default
+
+Progress contract:
+
+- providers should not own the product wording for progress forever
+- the target shape is a shared progress model rendered once for Telegram
+- heartbeat/liveness indicators apply to idle non-content states
+- once visible reply text is streaming, heartbeat should stop rather than
+  editing the draft body with timer text
 
 ---
 

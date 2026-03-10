@@ -144,6 +144,7 @@ async def summarize(text: str, model: str, timeout: int = 30) -> str:
 
     prompt = _SUMMARY_PROMPT + text
 
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p",
@@ -156,6 +157,9 @@ async def summarize(text: str, model: str, timeout: int = 30) -> str:
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except (asyncio.TimeoutError, TimeoutError, OSError) as e:
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            await proc.wait()
         log.warning("summarization failed: %s", e)
         return text
 

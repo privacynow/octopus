@@ -6,13 +6,18 @@ Talk to **Claude Code** or **Codex CLI** from Telegram — your phone, desktop, 
 
 ## How It Works
 
-```mermaid
-flowchart LR
-    You -->|message or file| Bot[Telegram Agent Bot]
-    Bot -->|runs| Agent[Claude Code / Codex CLI]
-    Agent -->|reads & writes| Files[Your Files]
-    Agent -->|result| Bot
-    Bot -->|reply| You
+```
+  +----------+       +-------------------+       +--------------------+
+  |          |  msg  |                   |  run  |                    |
+  |   You    +-------> Telegram Agent Bot+------->  Claude / Codex   |
+  |          |       |                   |       |                    |
+  +----+-----+       +--------+----------+       +---------+----------+
+       ^                      |                            |
+       |        reply         |         reads & writes     |
+       +----------------------+                   +--------v---------+
+                                                  |   Your Files &   |
+                                                  |  Working Directory|
+                                                  +------------------+
 ```
 
 You send a message in Telegram. The bot forwards it to a local coding agent. The agent works on your files and sends the answer back to the same chat.
@@ -62,13 +67,22 @@ Upload files and ask:
 
 Turn on approval mode and the bot shows you a plan before doing anything.
 
-```mermaid
-flowchart TD
-    Ask[You send a request] --> Plan[Bot generates a plan]
-    Plan --> Review{You review}
-    Review -->|Approve| Execute[Bot executes the task]
-    Review -->|Reject| Stop[Nothing runs]
-    Execute --> Result[You get the result]
+```
+                     You send a request
+                            |
+                            v
+                  Bot generates a plan
+                            |
+                            v
+                    +-------+-------+
+                    |               |
+                 Approve          Reject
+                    |               |
+                    v               v
+           Bot executes task   Nothing runs
+                    |
+                    v
+          You get the result
 ```
 
 Use `/approval on` to enable this. Use `/approve` or `/reject` (or the inline buttons) to respond.
@@ -77,12 +91,13 @@ Use `/approval on` to enable this. Use `/approve` or `/reject` (or the inline bu
 
 Upload logs, screenshots, or documents alongside your message. The bot passes them to the agent and can send files back when done.
 
-```mermaid
-flowchart LR
-    Upload[You upload a file] --> Bot[Bot saves it locally]
-    Bot --> Agent[Agent reads & processes it]
-    Agent --> Output[Agent creates output files]
-    Output --> Send[Bot sends files back to you]
+```
+  You upload         Bot saves         Agent reads        Agent creates
+   a file     --->   it locally  --->  & processes  --->  output files
+                                                              |
+                                                              v
+                                                     Bot sends files
+                                                      back to you
 ```
 
 Use `/send <path>` to retrieve any file the agent created.
@@ -91,13 +106,14 @@ Use `/send <path>` to retrieve any file the agent created.
 
 Skills extend the bot with domain knowledge, integrations, and custom behavior.
 
-```mermaid
-flowchart LR
-    List["/skills list"] --> Pick["/skills add github-integration"]
-    Pick --> Creds{Needs credentials?}
-    Creds -->|Yes| Setup[Bot asks, then deletes the secret message]
-    Creds -->|No| Ready[Skill is active]
-    Setup --> Ready
+```
+  /skills list             /skills add             Needs           Skill
+  See what's    --->    github-integration  --->  credentials? --> is active!
+  available                                        |
+                                                   v
+                                              Bot asks you,
+                                              then deletes
+                                             the secret message
 ```
 
 If a skill would make the prompt too large, the bot warns you first.
@@ -181,4 +197,4 @@ If you run the bot yourself, these resources cover setup, administration, and in
 ./scripts/doctor.sh <instance>  # health check a running instance
 ```
 
-416 pytest tests + 35 bash tests across 24 entrypoints.
+417 pytest tests + 35 bash tests across 24 entrypoints.

@@ -46,10 +46,10 @@ To add another bot, run `./setup.sh` again. Each instance gets its own token, co
 
 ```mermaid
 flowchart LR
-  A[my-claude] --> TA[@BotFather token A]
-  A --> PA[Claude]
-  B[my-codex] --> TB[@BotFather token B]
-  B --> PB[Codex]
+  A["my-claude"] --> TA["@BotFather token A"]
+  A --> PA["Claude"]
+  B["my-codex"] --> TB["@BotFather token B"]
+  B --> PB["Codex"]
 ```
 
 ## What Using It Feels Like

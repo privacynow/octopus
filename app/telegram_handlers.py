@@ -119,18 +119,21 @@ async def _chat_lock(chat_id: int, *, message=None, query=None):
         # Claim the next durable work item for this chat
         item = work_queue.claim_next(data_dir, chat_id, _boot_id)
         item_id = item["id"] if item else None
+        claimed_update_id = item["update_id"] if item else None
         try:
             yield sent_feedback
         except Exception:
             # Mark as failed on unhandled exception
             if item_id:
                 work_queue.complete_work_item(data_dir, item_id, state="failed")
-                _pending_work_items.pop(chat_id, None)
+                if claimed_update_id:
+                    _pending_work_items.pop(claimed_update_id, None)
             raise
         else:
             if item_id:
                 work_queue.complete_work_item(data_dir, item_id, state="done")
-                _pending_work_items.pop(chat_id, None)
+                if claimed_update_id:
+                    _pending_work_items.pop(claimed_update_id, None)
 
 
 # These get set by build_application()
@@ -138,38 +141,35 @@ _config: BotConfig | None = None
 _provider: Provider | None = None
 _boot_id: str = ""  # unique per process; detects restart to clear stale threads
 _rate_limiter: RateLimiter | None = None
-# Tracks the work item ID for the most recent update per chat, so handlers
-# that don't use _chat_lock can still complete their work items.
-_pending_work_items: dict[int, str] = {}  # chat_id -> latest work_item_id
+# Tracks work item ID per update_id so each handler can complete its own item.
+# Keyed by update_id (not chat_id) to prevent same-chat overlap corruption.
+_pending_work_items: dict[int, str] = {}  # update_id -> work_item_id
 
 
 def _dedup_update(update: Update, kind: str = "unknown", payload: str = "{}") -> bool:
     """Return True if this update_id was already processed (duplicate).
 
-    Uses durable SQLite storage so dedup survives restarts.
-    Also enqueues a work item for the update.
-
-    The ``payload`` parameter should be the serialized inbound event
-    (from ``serialize_inbound``).  When non-empty, it is stored with the
-    update so that a future worker can reconstruct the event without
-    holding the original Telegram ``Update`` object.
+    Atomically records the update AND enqueues a work item in a single
+    SQLite transaction.  A crash cannot leave an update row without its
+    corresponding work item.
     """
     uid = update.update_id
     chat_id = update.effective_chat.id if update.effective_chat else 0
     user_id = update.effective_user.id if update.effective_user else 0
     data_dir = _cfg().data_dir
-    is_new = work_queue.record_update(data_dir, uid, chat_id, user_id, kind, payload=payload)
+    is_new, item_id = work_queue.record_and_enqueue(
+        data_dir, uid, chat_id, user_id, kind, payload=payload,
+    )
     if not is_new:
         log.debug("Skipping duplicate update_id %d", uid)
         return True
-    item_id = work_queue.enqueue_work_item(data_dir, chat_id, uid)
-    _pending_work_items[chat_id] = item_id
+    _pending_work_items[uid] = item_id
     return False
 
 
-def _complete_pending_work_item(chat_id: int, state: str = "done") -> None:
-    """Complete the pending work item for a chat if _chat_lock hasn't already."""
-    item_id = _pending_work_items.pop(chat_id, None)
+def _complete_pending_work_item(update_id: int, state: str = "done") -> None:
+    """Complete the pending work item for an update if _chat_lock hasn't already."""
+    item_id = _pending_work_items.pop(update_id, None)
     if item_id:
         try:
             work_queue.complete_work_item(_cfg().data_dir, item_id, state=state)
@@ -302,13 +302,14 @@ def _command_handler(fn):
         payload = serialize_inbound(event) if event else "{}"
         if _dedup_update(update, kind="command", payload=payload):
             return
+        uid = update.update_id
         if event is None or not is_allowed(event.user):
-            _complete_pending_work_item(update.effective_chat.id)
+            _complete_pending_work_item(uid)
             return
         try:
             await fn(event, update, context)
         finally:
-            _complete_pending_work_item(event.chat_id)
+            _complete_pending_work_item(uid)
     return wrapper
 
 
@@ -325,17 +326,18 @@ def _callback_handler(fn):
         payload = serialize_inbound(event) if event else "{}"
         if _dedup_update(update, kind="callback", payload=payload):
             return
+        uid = update.update_id
         if event is None:
             return
         query = update.callback_query
         if not is_allowed(event.user):
             await query.answer("Not authorized.", show_alert=True)
-            _complete_pending_work_item(event.chat_id)
+            _complete_pending_work_item(uid)
             return
         try:
             await fn(event, query)
         finally:
-            _complete_pending_work_item(event.chat_id)
+            _complete_pending_work_item(uid)
     return wrapper
 
 
@@ -946,14 +948,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     payload = serialize_inbound(event) if event else "{}"
     if _dedup_update(update, kind="command", payload=payload):
         return
+    uid = update.update_id
     if event is None or not is_allowed(event.user):
         await update.effective_message.reply_text("Not authorized.")
-        _complete_pending_work_item(update.effective_chat.id)
+        _complete_pending_work_item(uid)
         return
     cfg = _cfg()
     text = HELP_TEMPLATE.format(provider=_prov().name.capitalize(), instance=cfg.instance)
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
-    _complete_pending_work_item(event.chat_id)
+    _complete_pending_work_item(uid)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -962,9 +965,10 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     payload = serialize_inbound(event) if event else "{}"
     if _dedup_update(update, kind="command", payload=payload):
         return
+    uid = update.update_id
     if event is None or not is_allowed(event.user):
         await update.effective_message.reply_text("Not authorized.")
-        _complete_pending_work_item(update.effective_chat.id)
+        _complete_pending_work_item(uid)
         return
     cfg = _cfg()
     args = event.args
@@ -974,17 +978,17 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         topic_text = _HELP_TOPICS.get(topic)
         if topic_text:
             await update.effective_message.reply_text(topic_text, parse_mode=ParseMode.HTML)
-            _complete_pending_work_item(event.chat_id)
+            _complete_pending_work_item(uid)
             return
         await update.effective_message.reply_text(
             "Unknown help topic. Try: /help skills, /help approval, or /help credentials."
         )
-        _complete_pending_work_item(event.chat_id)
+        _complete_pending_work_item(uid)
         return
 
     text = HELP_TEMPLATE.format(provider=_prov().name.capitalize(), instance=cfg.instance)
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
-    _complete_pending_work_item(event.chat_id)
+    _complete_pending_work_item(uid)
 
 
 @_command_handler
@@ -1650,10 +1654,11 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if _dedup_update(update, kind="message"):
         return
+    uid = update.update_id
 
     user = normalize_user(update.effective_user)
     if user is None or not is_allowed(user):
-        _complete_pending_work_item(update.effective_chat.id)
+        _complete_pending_work_item(uid)
         return
 
     # Rate limit check (admins exempt)
@@ -1662,12 +1667,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not allowed:
             await update.effective_message.reply_text(
                 f"Rate limit reached. Please wait {retry_after} seconds.")
-            _complete_pending_work_item(update.effective_chat.id)
+            _complete_pending_work_item(uid)
             return
 
     msg = await normalize_message(update, context, _cfg().data_dir)
     if msg is None:
-        _complete_pending_work_item(update.effective_chat.id)
+        _complete_pending_work_item(uid)
         return
 
     # Store serialized payload now that normalization is complete
@@ -2158,42 +2163,118 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await msg.reply_text("Use /policy inspect, /policy edit, or /policy status.")
 
 
+class _BotMessage:
+    """Minimal message proxy for worker replay — sends via Bot API directly."""
+
+    def __init__(self, bot, chat_id: int):
+        self._bot = bot
+        self.chat = self
+        self.chat_id = chat_id
+        self.text = None
+        self.replies: list[str] = []
+
+    async def reply_text(self, text, **kwargs):
+        await self._bot.send_message(self.chat_id, text, **kwargs)
+        self.replies.append(text)
+
+    async def reply_document(self, document, **kwargs):
+        await self._bot.send_document(self.chat_id, document, **kwargs)
+
+    async def reply_photo(self, photo, **kwargs):
+        await self._bot.send_photo(self.chat_id, photo, **kwargs)
+
+    async def send_action(self, action):
+        try:
+            await self._bot.send_chat_action(self.chat_id, action)
+        except Exception:
+            pass
+
+    async def send_message(self, text, **kwargs):
+        await self._bot.send_message(self.chat_id, text, **kwargs)
+
+    async def edit_text(self, text, **kwargs):
+        pass  # No original message to edit in replay
+
+    async def delete(self):
+        pass  # Nothing to delete in replay
+
+
+_bot_instance = None  # Set by build_application
+
+
 async def worker_dispatch(kind: str, event, item: dict) -> None:
     """Dispatch a deserialized inbound event from the worker loop.
 
-    This is called for work items claimed by the background worker —
-    typically orphaned items recovered after a crash.  For messages,
-    we can send a notification to the chat that the request was lost.
-    For commands and callbacks, we log and discard since the user
-    context (inline keyboards, etc.) is no longer available.
-
-    In a future multi-worker architecture, this function would fully
-    process the event (load session, run provider, send response).
+    Called for work items claimed by the background worker — typically
+    items recovered after a crash.  Messages are replayed through the
+    provider.  Commands and callbacks get a user notification since the
+    original UI context (inline keyboards etc.) is gone.
     """
     from app.transport import InboundMessage, InboundCommand, InboundCallback
 
     chat_id = item.get("chat_id", 0)
-    if not chat_id:
-        log.warning("Worker dispatch: no chat_id for item %s", item.get("id"))
+    if not chat_id or not _bot_instance:
+        log.warning("Worker dispatch: no chat_id or bot for item %s", item.get("id"))
         return
 
+    bot = _bot_instance
+
     if isinstance(event, InboundMessage):
-        log.info("Worker recovered orphaned message for chat %d (update %s)",
+        log.info("Worker replaying recovered message for chat %d (update %s)",
                  chat_id, item.get("update_id"))
-        # In single-worker mode, message was lost due to crash.
-        # Future: re-process via provider.
+        if not is_allowed(event.user):
+            return
+        prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
+        trust = _trust_tier(event.user)
+        message = _BotMessage(bot, chat_id)
+        try:
+            await bot.send_message(
+                chat_id,
+                "<i>Replaying your request after restart\u2026</i>",
+                parse_mode=ParseMode.HTML,
+            )
+            async with _chat_lock(chat_id, message=message):
+                session = _load(chat_id)
+                if session.approval_mode == "on":
+                    await request_approval(
+                        chat_id, prompt, image_paths, list(event.attachments),
+                        message, request_user_id=event.user.id, trust_tier=trust,
+                    )
+                else:
+                    await execute_request(
+                        chat_id, prompt, image_paths, message,
+                        request_user_id=event.user.id, trust_tier=trust,
+                    )
+        except Exception:
+            log.exception("Worker replay failed for chat %d", chat_id)
+            try:
+                await bot.send_message(
+                    chat_id,
+                    "Sorry, I couldn\u2019t recover your previous request after restart.",
+                )
+            except Exception:
+                pass
         return
 
     if isinstance(event, (InboundCommand, InboundCallback)):
         log.info("Worker recovered orphaned %s for chat %d (update %s)",
                  kind, chat_id, item.get("update_id"))
+        try:
+            detail = f"/{event.command}" if isinstance(event, InboundCommand) else "a button action"
+            await bot.send_message(
+                chat_id,
+                f"<i>Your {detail} was interrupted by a restart and could not be replayed.</i>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
         return
 
     log.warning("Worker dispatch: unknown event type for item %s", item.get("id"))
 
 
 def build_application(config: BotConfig, provider: Provider) -> Application:
-    global _config, _provider, _boot_id, _rate_limiter
+    global _config, _provider, _boot_id, _rate_limiter, _bot_instance
     _config = config
     _provider = provider
     _boot_id = uuid.uuid4().hex
@@ -2207,6 +2288,7 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     _rate_limiter = RateLimiter(per_minute=per_minute, per_hour=per_hour)
 
     app = Application.builder().token(config.telegram_token).build()
+    _bot_instance = app.bot
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("new", cmd_new))

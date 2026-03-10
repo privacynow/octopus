@@ -2256,3 +2256,48 @@ async def test_contended_clear_cred_callback_single_answer():
             f"Expected exactly 1 answer under contention, got {len(query.answers)}: {query.answers}")
         assert "queued" in str(query.answers[0].get("text", "")).lower(), (
             f"Expected queued feedback, got: {query.answers}")
+
+
+# ---------------------------------------------------------------------------
+# INVARIANT 29: same-chat overlapping updates complete their own work items
+# ---------------------------------------------------------------------------
+
+async def test_same_chat_overlapping_updates_complete_correctly():
+    """Two sequential updates for the same chat must each complete their own
+    work item.  Before the fix, _pending_work_items was keyed by chat_id,
+    so the second update overwrote the first's entry and the first item was
+    left queued forever.
+    """
+    import app.telegram_handlers as th
+    from app.work_queue import _transport_db
+
+    with fresh_env() as (data_dir, cfg, prov):
+        prov.run_results = [RunResult(text="reply1"), RunResult(text="reply2")]
+        chat = FakeChat(chat_id=9001)
+        user = FakeUser(uid=42, username="testuser")
+
+        msg1 = FakeMessage(chat=chat, text="first")
+        upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
+        uid1 = upd1.update_id
+
+        msg2 = FakeMessage(chat=chat, text="second")
+        upd2 = FakeUpdate(message=msg2, user=user, chat=chat)
+        uid2 = upd2.update_id
+
+        await th.handle_message(upd1, FakeContext())
+        await th.handle_message(upd2, FakeContext())
+
+        # Both requests were processed
+        assert len(prov.run_calls) == 2
+
+        # Both work items are done (not queued)
+        conn = _transport_db(data_dir)
+        rows = conn.execute(
+            "SELECT update_id, state FROM work_items WHERE chat_id = 9001 "
+            "ORDER BY update_id"
+        ).fetchall()
+        assert len(rows) == 2
+        for row in rows:
+            assert row["state"] == "done", (
+                f"Work item for update {row['update_id']} is '{row['state']}', expected 'done'"
+            )

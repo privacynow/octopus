@@ -117,6 +117,43 @@ def _reset_transport_db(data_dir: Path) -> None:
 # Update journal
 # ---------------------------------------------------------------------------
 
+def record_and_enqueue(
+    data_dir: Path,
+    update_id: int,
+    chat_id: int,
+    user_id: int,
+    kind: str,
+    payload: str = "{}",
+) -> tuple[bool, str | None]:
+    """Atomically record an update AND enqueue its work item in one transaction.
+
+    Returns ``(is_new, item_id)``.  If the update is a duplicate,
+    returns ``(False, None)`` — neither row is inserted.  A crash
+    between the two INSERTs is impossible because they share a single
+    ``BEGIN IMMEDIATE`` transaction.
+    """
+    conn = _transport_db(data_dir)
+    now = datetime.now(timezone.utc).isoformat()
+    item_id = uuid.uuid4().hex
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            "INSERT INTO updates (update_id, chat_id, user_id, kind, payload, received_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (update_id, chat_id, user_id, kind, payload, now),
+        )
+        conn.execute(
+            "INSERT INTO work_items (id, chat_id, update_id, state, created_at) "
+            "VALUES (?, ?, ?, 'queued', ?)",
+            (item_id, chat_id, update_id, now),
+        )
+        conn.execute("COMMIT")
+        return True, item_id
+    except sqlite3.IntegrityError:
+        conn.execute("ROLLBACK")
+        return False, None
+
+
 def record_update(
     data_dir: Path,
     update_id: int,
@@ -125,7 +162,11 @@ def record_update(
     kind: str,
     payload: str = "{}",
 ) -> bool:
-    """Record an inbound Telegram update.  Returns True if new, False if duplicate."""
+    """Record an inbound update WITHOUT creating a work item.
+
+    Only used by tests that exercise low-level primitives separately.
+    Production code should use ``record_and_enqueue``.
+    """
     conn = _transport_db(data_dir)
     now = datetime.now(timezone.utc).isoformat()
     try:
@@ -140,22 +181,12 @@ def record_update(
         return False
 
 
-def update_payload(data_dir: Path, update_id: int, payload: str) -> None:
-    """Update the stored payload for an already-recorded update."""
-    conn = _transport_db(data_dir)
-    conn.execute(
-        "UPDATE updates SET payload = ? WHERE update_id = ?",
-        (payload, update_id),
-    )
-    conn.commit()
-
-
-# ---------------------------------------------------------------------------
-# Work items
-# ---------------------------------------------------------------------------
-
 def enqueue_work_item(data_dir: Path, chat_id: int, update_id: int) -> str:
-    """Create a queued work item for the given update.  Returns the item id."""
+    """Create a queued work item for an already-recorded update.
+
+    Only used by tests that exercise low-level primitives separately.
+    Production code should use ``record_and_enqueue``.
+    """
     conn = _transport_db(data_dir)
     item_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
@@ -166,6 +197,16 @@ def enqueue_work_item(data_dir: Path, chat_id: int, update_id: int) -> str:
     )
     conn.commit()
     return item_id
+
+
+def update_payload(data_dir: Path, update_id: int, payload: str) -> None:
+    """Update the stored payload for an already-recorded update."""
+    conn = _transport_db(data_dir)
+    conn.execute(
+        "UPDATE updates SET payload = ? WHERE update_id = ?",
+        (payload, update_id),
+    )
+    conn.commit()
 
 
 def claim_next(data_dir: Path, chat_id: int, worker_id: str) -> dict[str, Any] | None:

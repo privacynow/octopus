@@ -19,6 +19,7 @@ from app.work_queue import (
     has_queued_or_claimed,
     get_update_payload,
     purge_old,
+    record_and_enqueue,
     record_update,
     recover_stale_claims,
     update_payload,
@@ -567,3 +568,99 @@ def test_recovery_after_crash(data_dir):
     restored = deserialize_inbound(item["kind"], item["payload"])
     assert isinstance(restored, InboundMessage)
     assert restored.text == "before crash"
+
+
+# -- REGRESSION: atomic record+enqueue ------------------------------------
+
+def test_record_and_enqueue_atomic_new(data_dir):
+    """record_and_enqueue creates both update and work item atomically."""
+    is_new, item_id = record_and_enqueue(
+        data_dir, update_id=2000, chat_id=1, user_id=42,
+        kind="message", payload='{"text":"atomic"}',
+    )
+    assert is_new is True
+    assert item_id is not None
+
+    # Both rows exist
+    assert get_update_payload(data_dir, 2000) == '{"text":"atomic"}'
+    assert has_queued_or_claimed(data_dir, chat_id=1) is True
+
+
+def test_record_and_enqueue_duplicate(data_dir):
+    """record_and_enqueue rejects duplicate update_id — no orphan update row."""
+    is_new, item_id = record_and_enqueue(
+        data_dir, update_id=2001, chat_id=1, user_id=42, kind="message",
+    )
+    assert is_new is True
+
+    # Second call for same update_id
+    is_new2, item_id2 = record_and_enqueue(
+        data_dir, update_id=2001, chat_id=1, user_id=42, kind="message",
+    )
+    assert is_new2 is False
+    assert item_id2 is None
+
+
+def test_record_and_enqueue_no_orphan_update(data_dir):
+    """After duplicate rejection, redelivery must NOT see a ghost update row
+    with zero work items (the original bug)."""
+    # First: atomic insert succeeds
+    record_and_enqueue(data_dir, update_id=2002, chat_id=1, user_id=42, kind="message")
+
+    # Verify work item exists
+    conn = _transport_db(data_dir)
+    row = conn.execute(
+        "SELECT count(*) FROM work_items WHERE update_id = 2002"
+    ).fetchone()
+    assert row[0] == 1
+
+    # Simulate: redelivery returns duplicate
+    is_new, _ = record_and_enqueue(
+        data_dir, update_id=2002, chat_id=1, user_id=42, kind="message",
+    )
+    assert is_new is False
+    # Still exactly 1 work item
+    row = conn.execute(
+        "SELECT count(*) FROM work_items WHERE update_id = 2002"
+    ).fetchone()
+    assert row[0] == 1
+
+
+# -- REGRESSION: worker replay with real dispatch -------------------------
+
+async def test_worker_replay_calls_dispatch_for_message(data_dir):
+    """Worker loop calls dispatch (not just logs) for recovered messages,
+    proving the recovered work item is actually processed."""
+    from app.worker import worker_loop
+
+    record_update(data_dir, 2100, chat_id=1, user_id=42, kind="message",
+                  payload=serialize_inbound(InboundMessage(
+                      user=InboundUser(id=42, username="alice"),
+                      chat_id=1, text="replay me", attachments=())))
+    enqueue_work_item(data_dir, chat_id=1, update_id=2100)
+    # Claim by old worker, then recover
+    claim_next(data_dir, chat_id=1, worker_id="old-worker")
+    recover_stale_claims(data_dir, current_worker_id="new-worker")
+
+    dispatched = []
+    async def dispatch(kind, event, item):
+        dispatched.append((kind, event.text if hasattr(event, "text") else None))
+
+    stop = asyncio.Event()
+    async def run_then_stop():
+        await asyncio.sleep(0.3)
+        stop.set()
+
+    await asyncio.gather(
+        worker_loop(data_dir, "new-worker", dispatch, poll_interval=0.05, stop_event=stop),
+        run_then_stop(),
+    )
+
+    # Dispatch was called (not silently dropped)
+    assert len(dispatched) == 1
+    assert dispatched[0] == ("message", "replay me")
+
+    # Item is marked done
+    conn = _transport_db(data_dir)
+    row = conn.execute("SELECT state FROM work_items WHERE update_id = 2100").fetchone()
+    assert row["state"] == "done"

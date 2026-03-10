@@ -45,27 +45,31 @@ def _db(data_dir: Path) -> sqlite3.Connection:
         return _db_connections[data_dir]
     db_path = data_dir / "sessions.db"
     conn = sqlite3.connect(str(db_path), isolation_level="DEFERRED")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.executescript(_CREATE_SQL)
-    # Schema version guard
-    row = conn.execute(
-        "SELECT value FROM meta WHERE key='schema_version'"
-    ).fetchone()
-    if row is None:
-        conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
-            (str(_SCHEMA_VERSION),),
-        )
-        conn.commit()
-    else:
-        stored = int(row[0])
-        if stored > _SCHEMA_VERSION:
-            raise RuntimeError(
-                f"Session DB schema version {stored} is newer than supported "
-                f"version {_SCHEMA_VERSION}. Upgrade the bot."
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.executescript(_CREATE_SQL)
+        # Schema version guard
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key='schema_version'"
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+                (str(_SCHEMA_VERSION),),
             )
-    _migrate_json_files(data_dir, conn)
+            conn.commit()
+        else:
+            stored = int(row[0])
+            if stored > _SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Session DB schema version {stored} is newer than supported "
+                    f"version {_SCHEMA_VERSION}. Upgrade the bot."
+                )
+        _migrate_json_files(data_dir, conn)
+    except Exception:
+        conn.close()
+        raise
     _db_connections[data_dir] = conn
     return conn
 

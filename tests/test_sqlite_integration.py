@@ -11,6 +11,7 @@ Exercises real production code paths end-to-end:
 """
 
 import json
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -341,3 +342,52 @@ async def test_fresh_db_no_json_artifacts():
 
         # DB file exists
         assert (data_dir / "sessions.db").exists() is True
+
+
+# ---------------------------------------------------------------------------
+# 9. _db() does not leak connections on schema/corruption errors
+# ---------------------------------------------------------------------------
+
+async def test_db_no_fd_leak_on_schema_error():
+    """Regression: _db() must close the SQLite connection when it raises
+    due to schema version mismatch. Previously the connection was opened
+    but never cached or closed on error paths, leaking a file descriptor
+    per call (fds grew from 4 to 45 after 20 calls)."""
+    import os
+
+    from app.storage import _db, _db_connections
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        db_path = data_dir / "sessions.db"
+
+        # Create a valid DB then bump schema_version to force RuntimeError
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript(
+            "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '99')"
+        )
+        conn.commit()
+        conn.close()
+
+        fd_count_before = len(os.listdir(f"/proc/{os.getpid()}/fd"))
+
+        # Repeatedly trigger the error — should NOT accumulate open fds
+        for _ in range(20):
+            try:
+                _db(data_dir)
+            except RuntimeError:
+                pass
+
+        fd_count_after = len(os.listdir(f"/proc/{os.getpid()}/fd"))
+
+        # The data_dir should never have been cached
+        assert data_dir not in _db_connections
+        # The actual bug: each failed call leaked an open fd.
+        # Allow at most 2 fd variance for unrelated runtime activity.
+        assert fd_count_after - fd_count_before <= 2, (
+            f"file descriptor leak: started at {fd_count_before}, "
+            f"ended at {fd_count_after} after 20 failed _db() calls"
+        )

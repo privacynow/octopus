@@ -1,6 +1,6 @@
 # Commercial Polish — Implementation Status
 
-Current as of 2026-03-09. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
+Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
 ---
 
@@ -25,7 +25,7 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **416 pytest tests** + 35 bash tests across 24 entrypoints.
+Current suite: **417 pytest tests** + 35 bash tests across 24 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -46,7 +46,7 @@ Current suite: **416 pytest tests** + 35 bash tests across 24 entrypoints.
 | `test_high_risk.py` | 29 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
 | `test_ratelimit.py` | 8 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_skills.py` | 43 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
-| `test_sqlite_integration.py` | 8 | SQLite session backend integration: handler→SQLite round-trip, JSON-to-SQLite migration under handler load, `cmd_doctor` stale scan from SQLite, `delete_session`, `close_db`/reopen lifecycle, multi-chat independence, cross-chat prompt size scan, no-JSON-artifact verification. |
+| `test_sqlite_integration.py` | 9 | SQLite session backend integration: handler→SQLite round-trip, JSON-to-SQLite migration under handler load, `cmd_doctor` stale scan from SQLite, `delete_session`, `close_db`/reopen lifecycle, multi-chat independence, cross-chat prompt size scan, no-JSON-artifact verification, fd leak regression on schema error. |
 | `test_storage.py` | 11 | Session CRUD (SQLite-backed), upload paths, directory creation, path resolution, `list_sessions()`, JSON-to-SQLite migration with corrupt file handling. |
 | `test_store.py` | 21 | Store module: discovery, search, content hashing, install/uninstall via refs and objects, ref round-trip, update detection, custom override detection, diff, GC, startup recovery, schema guard, pinned refs. |
 | `test_store_e2e.py` | 26 | End-to-end user flows through handlers: install→add→message→prompt, update propagation, uninstall pruning, /skills info across all tiers, three-tier resolution, custom override shadowing, /admin sessions stale filtering, provider compatibility output, source label edge cases, normalization persistence, --doctor schema check. |
@@ -190,7 +190,8 @@ Current suite: **416 pytest tests** + 35 bash tests across 24 entrypoints.
 - New: `session_exists()`, `delete_session()`, `close_db()`.
 - All handler-side session scans (`cmd_doctor` stale scan, `_check_prompt_size_cross_chat`) converted from JSON glob to `list_sessions()` / `load_session()`.
 - DB connection cleanup via `fresh_data_dir()` context manager prevents leaked connections.
-- 8 integration tests in `test_sqlite_integration.py` exercise real handler→SQLite round-trips.
+- `_db()` closes the connection on initialization errors (schema mismatch, corruption) before re-raising, preventing fd leaks on repeated failures.
+- 9 integration tests in `test_sqlite_integration.py` exercise real handler→SQLite round-trips, including fd leak regression on schema errors.
 
 | Item | Status | Notes |
 |------|--------|-------|
@@ -263,6 +264,9 @@ The deferred item `3.2` (usage tracking / billing hooks) remains intentionally o
 | `/doctor` and `--doctor` crash on corrupt session database | Medium | `scan_stale_sessions()` calls `list_sessions()` → `_db()` → SQLite open, which throws `DatabaseError` on junk/corrupt `sessions.db`. The health command — the one tool meant to diagnose problems — crashed instead of reporting them. | Wrapped stale session scan in `collect_doctor_report` with `sqlite3.DatabaseError`/`OperationalError` handler. Reports corruption as an error in the health report. |
 | Telegram `/doctor` crashes on corrupt DB before reaching health checks | Medium | `cmd_doctor` calls `_load()` which hits SQLite before `collect_doctor_report`. Corrupt DB raised unhandled `DatabaseError`, user saw nothing. | `cmd_doctor` wraps `_load()` in `DatabaseError`/`OperationalError` handler; on failure, passes `session=None` to `collect_doctor_report` which still runs all non-session checks. |
 | `/doctor` crashes on newer session DB schema version | Medium | `storage._db()` raises `RuntimeError` when `schema_version > supported`, but both `collect_doctor_report` and `cmd_doctor` only caught `sqlite3` exceptions. Downgrading the bot with an existing DB crashed the health command. | Added `RuntimeError` to exception handlers in both `collect_doctor_report` (stale session scan) and `cmd_doctor` (`_load()` wrapper). Regression tests for both CLI and Telegram paths. |
+| `_db()` leaks file descriptors on schema/corruption errors | Medium | `sqlite3.connect()` opens a connection, but if schema version check or `executescript` raises, the connection is never cached in `_db_connections` or closed. Repeated calls (e.g. `/doctor` retries) accumulate open fds (4→45 after 20 calls). | Wrapped `_db()` initialization in `try/except` that calls `conn.close()` before re-raising. Connection only cached after successful init. Regression test measures fd count via `/proc/{pid}/fd`. |
+| `bootstrap.sh` installs dev deps in production setup | Low-medium | `scripts/bootstrap.sh` unconditionally installed `requirements-dev.txt` (pytest, xdist). `setup.sh` calls bootstrap, so operator installs got test tooling. | Dev deps only installed when `BOT_SETUP_RUNNING` is unset (standalone bootstrap, not setup.sh). |
+| `test_all.sh` runs bash tests even with pytest filters | Low-medium | `test_all.sh` forwarded args to pytest then always ran `tests/test_setup.sh`. So `-k doctor` or `-x` only filtered pytest; bash suite ran in full regardless. | Bash tests only run when no arguments are passed (full suite run). |
 
 ---
 
@@ -276,7 +280,7 @@ Seven code smells identified and fixed in a single pass. All tests pass after ea
 | Session-scan queries (`scan_stale_sessions`, `check_prompt_size_cross_chat`) lived in `telegram_handlers.py` | Moved to `app/doctor.py` as pure functions taking explicit parameters | `app/doctor.py`, `app/telegram_handlers.py` |
 | Every command handler repeated `normalize_command → is_allowed` boilerplate | `@_command_handler` and `@_callback_handler` decorators. 16 command handlers and 4 callback handlers converted. | `app/telegram_handlers.py` |
 | `cmd_skills` was a 370-line monolith with 13 subcommands | Extracted `app/skill_commands.py` (374 lines) with one function per subcommand. `cmd_skills` is now a 30-line dispatcher. | `app/skill_commands.py` (new), `app/telegram_handlers.py` (−330 lines) |
-| Custom test runner with manual assertion helpers | Migrated all 23 test files to **pytest** with pytest-asyncio (auto mode). Removed `Checks` class, `run_test()` registration, `sys.path.insert` hacks, and per-file `__main__` runners. Deleted `tests/support/assertions.py`. | `pyproject.toml` (new), all 23 test files, `scripts/test_all.sh`, `tests/support/handler_support.py` |
+| Custom test runner with manual assertion helpers | Migrated all 23 test files to **pytest** with pytest-asyncio (auto mode). Removed `Checks` class, `run_test()` registration, `sys.path.insert` hacks, and per-file `__main__` runners. Deleted `tests/support/assertions.py`. `test_all.sh` skips bash tests when pytest filters are active. `bootstrap.sh` only installs dev deps when run standalone (not from `setup.sh`). | `pyproject.toml` (new), all 23 test files, `scripts/test_all.sh`, `scripts/bootstrap.sh`, `tests/support/handler_support.py` |
 | Dead `session_file()` / `_SessionPath` compatibility shim in storage | Deleted (~15 lines). No callers after SQLite migration. | `app/storage.py` |
 | `store._object_dir()` was private but accessed from `skills.py`; `store._parse_skill_md()` duplicated frontmatter parsing | Renamed to `store.object_dir()` (public API). `_parse_skill_md()` delegates to `skills._load_skill_md()`. Removed duplicate `import frontmatter`. | `app/store.py`, `app/skills.py`, 2 test files |
 

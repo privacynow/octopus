@@ -2174,8 +2174,9 @@ class _BotMessage:
         self.replies: list[str] = []
 
     async def reply_text(self, text, **kwargs):
-        await self._bot.send_message(self.chat_id, text, **kwargs)
+        sent = await self._bot.send_message(self.chat_id, text, **kwargs)
         self.replies.append(text)
+        return sent
 
     async def reply_document(self, document, **kwargs):
         await self._bot.send_document(self.chat_id, document, **kwargs)
@@ -2190,7 +2191,7 @@ class _BotMessage:
             pass
 
     async def send_message(self, text, **kwargs):
-        await self._bot.send_message(self.chat_id, text, **kwargs)
+        return await self._bot.send_message(self.chat_id, text, **kwargs)
 
     async def edit_text(self, text, **kwargs):
         pass  # No original message to edit in replay

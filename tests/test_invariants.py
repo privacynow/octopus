@@ -2301,3 +2301,62 @@ async def test_same_chat_overlapping_updates_complete_correctly():
             assert row["state"] == "done", (
                 f"Work item for update {row['update_id']} is '{row['state']}', expected 'done'"
             )
+
+
+# =====================================================================
+# INVARIANT 30: Worker dispatch replay survives TelegramProgress
+#
+# worker_dispatch() creates a _BotMessage whose reply_text() must return
+# a Message-like object with edit_text(), because execute_request passes
+# that return value into TelegramProgress.  If reply_text() returns None,
+# the first progress update crashes with AttributeError.
+# =====================================================================
+
+class _FakeBot:
+    """Minimal bot for worker_dispatch — send_message returns a FakeMessage."""
+    def __init__(self):
+        self.sent = []
+
+    async def send_message(self, chat_id, text, **kwargs):
+        msg = FakeMessage(chat=FakeChat(chat_id), text=text)
+        self.sent.append({"chat_id": chat_id, "text": text, **kwargs})
+        return msg
+
+    async def send_chat_action(self, chat_id, action):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_worker_dispatch_message_replay_survives_progress():
+    """worker_dispatch with an InboundMessage calls execute_request, which
+    creates a TelegramProgress from the reply_text return value.  This test
+    proves the full path works — _BotMessage.reply_text() must return a
+    message object that TelegramProgress can call edit_text() on."""
+    import app.telegram_handlers as th
+    from app.transport import InboundMessage, InboundUser
+
+    with fresh_env(config_overrides={
+        "allowed_user_ids": frozenset({42}),
+    }) as (data_dir, cfg, prov):
+        bot = _FakeBot()
+        th._bot_instance = bot
+        try:
+            event = InboundMessage(
+                user=InboundUser(id=42, username="alice"),
+                chat_id=12345,
+                text="replay this message",
+                attachments=(),
+            )
+            item = {"chat_id": 12345, "update_id": 9999, "id": "test-item"}
+
+            await th.worker_dispatch("message", event, item)
+
+            # Provider was called — replay survived TelegramProgress
+            assert len(prov.run_calls) == 1, (
+                f"Expected 1 provider call, got {len(prov.run_calls)}"
+            )
+            # Bot sent the "Replaying…" notification
+            replay_msgs = [s for s in bot.sent if "Replaying" in s.get("text", "")]
+            assert replay_msgs, "Expected 'Replaying your request' notification"
+        finally:
+            th._bot_instance = None

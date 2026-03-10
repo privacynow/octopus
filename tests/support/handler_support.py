@@ -159,6 +159,8 @@ class FakeProvider:
             "image_paths": image_paths,
             "context": context,
         })
+        # Exercise the progress path so tests catch broken status messages
+        await progress.update("working…", force=True)
         if self.run_results:
             return self.run_results.pop(0)
         return RunResult(text="default response")

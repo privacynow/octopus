@@ -140,6 +140,16 @@ def record_update(
         return False
 
 
+def update_payload(data_dir: Path, update_id: int, payload: str) -> None:
+    """Update the stored payload for an already-recorded update."""
+    conn = _transport_db(data_dir)
+    conn.execute(
+        "UPDATE updates SET payload = ? WHERE update_id = ?",
+        (payload, update_id),
+    )
+    conn.commit()
+
+
 # ---------------------------------------------------------------------------
 # Work items
 # ---------------------------------------------------------------------------
@@ -193,6 +203,46 @@ def claim_next(data_dir: Path, chat_id: int, worker_id: str) -> dict[str, Any] |
 
     item = conn.execute(
         "SELECT * FROM work_items WHERE id = ?", (item_id,)
+    ).fetchone()
+    return dict(item) if item else None
+
+
+def claim_next_any(data_dir: Path, worker_id: str) -> dict[str, Any] | None:
+    """Atomically claim the next queued work item across all chats.
+
+    Only claims items in chats that have no currently-claimed item
+    (per-chat serialization).  Returns None if nothing is claimable.
+    """
+    conn = _transport_db(data_dir)
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT id, chat_id FROM work_items "
+            "WHERE state = 'queued' "
+            "AND chat_id NOT IN ("
+            "  SELECT DISTINCT chat_id FROM work_items WHERE state = 'claimed'"
+            ") "
+            "ORDER BY created_at LIMIT 1",
+        ).fetchone()
+        if row is None:
+            conn.execute("COMMIT")
+            return None
+        item_id = row["id"]
+        conn.execute(
+            "UPDATE work_items SET state = 'claimed', worker_id = ?, claimed_at = ? "
+            "WHERE id = ?",
+            (worker_id, now, item_id),
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+    item = conn.execute(
+        "SELECT w.*, u.kind, u.payload FROM work_items w "
+        "JOIN updates u ON w.update_id = u.update_id WHERE w.id = ?",
+        (item_id,),
     ).fetchone()
     return dict(item) if item else None
 

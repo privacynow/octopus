@@ -1,5 +1,6 @@
 """Tests for the durable transport layer (app/work_queue.py)."""
 
+import asyncio
 import tempfile
 import time
 from datetime import datetime, timedelta, timezone
@@ -11,6 +12,7 @@ from app.work_queue import (
     _reset_transport_db,
     _transport_db,
     claim_next,
+    claim_next_any,
     close_transport_db,
     complete_work_item,
     enqueue_work_item,
@@ -19,6 +21,7 @@ from app.work_queue import (
     purge_old,
     record_update,
     recover_stale_claims,
+    update_payload,
 )
 from app.transport import (
     InboundCallback,
@@ -298,3 +301,269 @@ def test_one_work_item_per_update(data_dir):
     enqueue_work_item(data_dir, chat_id=1, update_id=800)
     with pytest.raises(Exception):
         enqueue_work_item(data_dir, chat_id=1, update_id=800)
+
+
+# -- update_payload --------------------------------------------------------
+
+def test_update_payload(data_dir):
+    """update_payload replaces the stored payload for an existing update."""
+    record_update(data_dir, 900, chat_id=1, user_id=42, kind="message", payload="{}")
+    assert get_update_payload(data_dir, 900) == "{}"
+
+    update_payload(data_dir, 900, '{"text":"hello"}')
+    assert get_update_payload(data_dir, 900) == '{"text":"hello"}'
+
+
+# -- claim_next_any --------------------------------------------------------
+
+def test_claim_next_any_empty(data_dir):
+    """claim_next_any returns None on empty queue."""
+    assert claim_next_any(data_dir, "w1") is None
+
+
+def test_claim_next_any_single_item(data_dir):
+    """claim_next_any claims a single queued item."""
+    record_update(data_dir, 1000, chat_id=1, user_id=42, kind="message", payload='{"text":"hi"}')
+    enqueue_work_item(data_dir, chat_id=1, update_id=1000)
+
+    item = claim_next_any(data_dir, "w1")
+    assert item is not None
+    assert item["chat_id"] == 1
+    assert item["state"] == "claimed"
+    assert item["kind"] == "message"
+    assert item["payload"] == '{"text":"hi"}'
+
+
+def test_claim_next_any_skips_busy_chat(data_dir):
+    """claim_next_any skips chats that already have a claimed item."""
+    # Chat 1: two items
+    record_update(data_dir, 1100, chat_id=1, user_id=42, kind="message")
+    record_update(data_dir, 1101, chat_id=1, user_id=42, kind="message")
+    enqueue_work_item(data_dir, chat_id=1, update_id=1100)
+    enqueue_work_item(data_dir, chat_id=1, update_id=1101)
+
+    first = claim_next_any(data_dir, "w1")
+    assert first is not None
+    assert first["chat_id"] == 1
+
+    # Second claim should return None (only chat 1, and it's busy)
+    second = claim_next_any(data_dir, "w1")
+    assert second is None
+
+
+def test_claim_next_any_cross_chat(data_dir):
+    """claim_next_any claims items from different chats concurrently."""
+    record_update(data_dir, 1200, chat_id=1, user_id=42, kind="message")
+    record_update(data_dir, 1201, chat_id=2, user_id=42, kind="command")
+    enqueue_work_item(data_dir, chat_id=1, update_id=1200)
+    enqueue_work_item(data_dir, chat_id=2, update_id=1201)
+
+    first = claim_next_any(data_dir, "w1")
+    assert first is not None
+
+    second = claim_next_any(data_dir, "w1")
+    assert second is not None
+
+    # Different chats
+    assert first["chat_id"] != second["chat_id"]
+
+
+def test_claim_next_any_includes_payload(data_dir):
+    """claim_next_any returns kind and payload from the joined updates table."""
+    msg = InboundMessage(
+        user=InboundUser(id=42, username="alice"),
+        chat_id=5, text="test message",
+        attachments=(),
+    )
+    payload = serialize_inbound(msg)
+    record_update(data_dir, 1300, chat_id=5, user_id=42, kind="message", payload=payload)
+    enqueue_work_item(data_dir, chat_id=5, update_id=1300)
+
+    item = claim_next_any(data_dir, "w1")
+    assert item["kind"] == "message"
+    restored = deserialize_inbound(item["kind"], item["payload"])
+    assert isinstance(restored, InboundMessage)
+    assert restored.text == "test message"
+    assert restored.user.id == 42
+
+
+# -- Worker loop -----------------------------------------------------------
+
+async def test_worker_loop_processes_items(data_dir):
+    """Worker loop claims and dispatches items from the queue."""
+    from app.worker import worker_loop
+
+    # Set up two items in different chats
+    record_update(data_dir, 1400, chat_id=1, user_id=42, kind="message",
+                  payload=serialize_inbound(InboundMessage(
+                      user=InboundUser(id=42, username="alice"),
+                      chat_id=1, text="hello", attachments=())))
+    enqueue_work_item(data_dir, chat_id=1, update_id=1400)
+
+    record_update(data_dir, 1401, chat_id=2, user_id=42, kind="command",
+                  payload=serialize_inbound(InboundCommand(
+                      user=InboundUser(id=42, username="alice"),
+                      chat_id=2, command="help", args=())))
+    enqueue_work_item(data_dir, chat_id=2, update_id=1401)
+
+    dispatched = []
+
+    async def dispatch(kind, event, item):
+        dispatched.append((kind, event, item["chat_id"]))
+
+    stop = asyncio.Event()
+
+    async def run_then_stop():
+        # Let the worker process items, then stop
+        await asyncio.sleep(0.2)
+        stop.set()
+
+    await asyncio.gather(
+        worker_loop(data_dir, "w1", dispatch, poll_interval=0.05, stop_event=stop),
+        run_then_stop(),
+    )
+
+    assert len(dispatched) == 2
+    kinds = {d[0] for d in dispatched}
+    assert kinds == {"message", "command"}
+
+    # Both items should be completed
+    conn = _transport_db(data_dir)
+    rows = conn.execute("SELECT state FROM work_items ORDER BY update_id").fetchall()
+    assert all(r["state"] == "done" for r in rows)
+
+
+async def test_worker_loop_handles_dispatch_failure(data_dir):
+    """Worker loop marks items as failed when dispatch raises."""
+    from app.worker import worker_loop
+
+    record_update(data_dir, 1500, chat_id=1, user_id=42, kind="message",
+                  payload=serialize_inbound(InboundMessage(
+                      user=InboundUser(id=42, username="alice"),
+                      chat_id=1, text="fail", attachments=())))
+    enqueue_work_item(data_dir, chat_id=1, update_id=1500)
+
+    async def failing_dispatch(kind, event, item):
+        raise RuntimeError("provider crash")
+
+    stop = asyncio.Event()
+    async def run_then_stop():
+        await asyncio.sleep(0.2)
+        stop.set()
+
+    await asyncio.gather(
+        worker_loop(data_dir, "w1", failing_dispatch, poll_interval=0.05, stop_event=stop),
+        run_then_stop(),
+    )
+
+    conn = _transport_db(data_dir)
+    row = conn.execute("SELECT state, error FROM work_items WHERE update_id = 1500").fetchone()
+    assert row["state"] == "failed"
+    assert "provider crash" in row["error"]
+
+
+async def test_worker_loop_handles_bad_payload(data_dir):
+    """Worker loop marks items as failed when payload can't be deserialized."""
+    from app.worker import worker_loop
+
+    record_update(data_dir, 1600, chat_id=1, user_id=42, kind="message",
+                  payload="not-valid-json")
+    enqueue_work_item(data_dir, chat_id=1, update_id=1600)
+
+    dispatched = []
+    async def dispatch(kind, event, item):
+        dispatched.append(kind)
+
+    stop = asyncio.Event()
+    async def run_then_stop():
+        await asyncio.sleep(0.2)
+        stop.set()
+
+    await asyncio.gather(
+        worker_loop(data_dir, "w1", dispatch, poll_interval=0.05, stop_event=stop),
+        run_then_stop(),
+    )
+
+    # Dispatch should not have been called (deserialization failed)
+    assert len(dispatched) == 0
+
+    conn = _transport_db(data_dir)
+    row = conn.execute("SELECT state, error FROM work_items WHERE update_id = 1600").fetchone()
+    assert row["state"] == "failed"
+    assert row["error"] == "deserialize_error"
+
+
+async def test_worker_loop_respects_per_chat_serialization(data_dir):
+    """Worker loop processes items from the same chat in order."""
+    from app.worker import worker_loop
+
+    # Two items in same chat
+    for uid in (1700, 1701):
+        record_update(data_dir, uid, chat_id=1, user_id=42, kind="message",
+                      payload=serialize_inbound(InboundMessage(
+                          user=InboundUser(id=42, username="alice"),
+                          chat_id=1, text=f"msg-{uid}", attachments=())))
+        enqueue_work_item(data_dir, chat_id=1, update_id=uid)
+
+    order = []
+    async def dispatch(kind, event, item):
+        order.append(item["update_id"])
+
+    stop = asyncio.Event()
+    async def run_then_stop():
+        await asyncio.sleep(0.3)
+        stop.set()
+
+    await asyncio.gather(
+        worker_loop(data_dir, "w1", dispatch, poll_interval=0.05, stop_event=stop),
+        run_then_stop(),
+    )
+
+    assert order == [1700, 1701]
+
+
+# -- Handler integration: payload storage ----------------------------------
+
+def test_handler_dedup_stores_command_payload(data_dir):
+    """_dedup_update with a payload stores it in the update journal."""
+    cmd = InboundCommand(
+        user=InboundUser(id=42, username="alice"),
+        chat_id=1, command="help", args=("skills",),
+    )
+    payload = serialize_inbound(cmd)
+    record_update(data_dir, 1800, chat_id=1, user_id=42, kind="command", payload=payload)
+
+    stored = get_update_payload(data_dir, 1800)
+    restored = deserialize_inbound("command", stored)
+    assert isinstance(restored, InboundCommand)
+    assert restored.command == "help"
+    assert restored.args == ("skills",)
+
+
+def test_recovery_after_crash(data_dir):
+    """Simulate crash: items claimed by old worker are recovered and re-claimable."""
+    # Worker "old" claims an item then "crashes"
+    record_update(data_dir, 1900, chat_id=1, user_id=42, kind="message",
+                  payload=serialize_inbound(InboundMessage(
+                      user=InboundUser(id=42, username="alice"),
+                      chat_id=1, text="before crash", attachments=())))
+    enqueue_work_item(data_dir, chat_id=1, update_id=1900)
+    item = claim_next(data_dir, chat_id=1, worker_id="old-worker")
+    assert item is not None
+
+    # Verify it's not claimable while held
+    assert claim_next(data_dir, chat_id=1, worker_id="new-worker") is None
+
+    # New worker starts, recovers stale claims
+    recovered = recover_stale_claims(data_dir, current_worker_id="new-worker")
+    assert recovered == 1
+
+    # Now it's claimable by the new worker
+    item = claim_next_any(data_dir, "new-worker")
+    assert item is not None
+    assert item["update_id"] == 1900
+
+    # And the payload is intact
+    restored = deserialize_inbound(item["kind"], item["payload"])
+    assert isinstance(restored, InboundMessage)
+    assert restored.text == "before crash"

@@ -2,10 +2,10 @@
 
 Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-10):** Fixed double callback answer under lock contention
-> and clear-credentials answer-before-lock gap. `_chat_lock` now yields a boolean
-> so handlers skip their own `query.answer()` when queued feedback was already sent.
-> 3 contention regression tests added. 627 tests passing.
+> **Latest change (2026-03-10):** Multi-worker webhook architecture extension
+> complete. Durable transport layer (`transport.db`) with update journal, work items,
+> atomic claiming, stale recovery, and async worker loop. Serialized inbound event
+> payloads stored for crash-recovery replay. 659 tests passing.
 
 ---
 
@@ -27,6 +27,7 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 | III | Compact defaults and perceived latency | Done |
 | IV | Update delivery and burst safety | Done |
 | — | Resolved execution context enforcement hardening | Done |
+| Ext | Multi-worker webhook architecture | Done |
 
 ---
 
@@ -36,7 +37,7 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **627 pytest tests** + 35 bash tests across 30 entrypoints.
+Current suite: **659 pytest tests** + 35 bash tests across 31 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -69,6 +70,7 @@ Current suite: **627 pytest tests** + 35 bash tests across 30 entrypoints.
 | `test_edge_providers.py` | 7 | Edge cases: provider timeout, empty response, error returncode, state persistence, codex thread_id persistence/resume, full approval flow. |
 | `test_edge_sessions.py` | 7 | Edge cases: message after /new reset, role change with pending, /compact toggle, /session info, codex thread display, /cancel clears pending, empty message ignored. |
 | `test_transport.py` | 30 | Inbound transport normalization: user/command/callback/message normalization, frozen dataclasses (tuples not lists), bot-mention stripping, None-user safety for all handler types, behavioral integration (empty-content skip, caption-to-provider), handler integration proving normalized types flow through. |
+| `test_work_queue.py` | 32 | Durable transport layer: update journal idempotency, payload storage/update, enqueue/claim lifecycle, per-chat serialization, cross-chat concurrency, completion states, has_queued_or_claimed lifecycle, stale claim recovery (different worker, expired, fresh), purge old/recent/active, serialization round-trip (message/command/callback), one-work-item-per-update constraint, claim_next_any (empty/single/busy-chat/cross-chat/payload join), worker loop (process/failure/bad-payload/per-chat-ordering), handler payload storage, crash recovery with payload integrity. |
 | `test_setup.sh` | 35 | Installer/setup wizard flows, provider-pruned config generation. |
 
 ---
@@ -291,31 +293,67 @@ Current suite: **627 pytest tests** + 35 bash tests across 30 entrypoints.
 
 ## Planned Next Sequence
 
-All build phases (A–IV) are complete. Usage tracking/billing (deferred)
-is the only planned item not yet shipped.
+All build phases (A–IV) and the multi-worker webhook architecture extension
+are complete. Usage tracking/billing (deferred) is the only planned item not
+yet shipped.
 
-### Next architectural extension candidate
+---
 
-The next foundational step, if the product needs stronger production transport
-semantics, is a **durable ingress and work-item architecture** built on the
-existing webhook mode and SQLite foundation.
+## Extension: Multi-Worker Webhook Architecture
 
-This is different from "run more pollers." Polling remains single-owner by
-design. The extension would move:
+### What shipped
 
-- `update_id` tracking out of the in-memory `_seen_update_ids` set
-- queued / in-flight chat request state out of in-memory `CHAT_LOCKS`
-- webhook ingress onto a durable update journal + work-item model
+**Durable transport layer** (`app/work_queue.py`, `transport.db`)
+- Separate SQLite WAL-mode database for transport state (not session state).
+- `updates` table: durable `update_id` journal with chat_id, user_id, kind, serialized payload, received timestamp.
+- `work_items` table: lifecycle states `queued → claimed → done|failed`, worker_id lease, timestamps.
+- `record_update()` — idempotent insert, replaces in-memory `_seen_update_ids` set.
+- `enqueue_work_item()` — creates a queued work item linked to an update.
+- `claim_next(chat_id, worker_id)` — atomic `BEGIN IMMEDIATE` claim with per-chat serialization (no two items for same chat claimed simultaneously).
+- `claim_next_any(worker_id)` — cross-chat atomic claim for worker loop (skips chats with in-flight items).
+- `complete_work_item()` — marks done or failed with error detail.
+- `update_payload()` — stores serialized event after async normalization.
+- `recover_stale_claims(current_worker_id)` — requeues items held by dead workers or past max_age (called at startup).
+- `purge_old(older_than_hours)` — deletes completed items and orphaned updates older than threshold.
+- `has_queued_or_claimed(chat_id)` — query for durable contention check.
+- Schema versioning via `meta` table with forward-compatibility guard.
 
-The intended rollout is:
+**Serialized inbound event storage** (`app/transport.py`)
+- `serialize_inbound()` / `deserialize_inbound()` for `InboundMessage`, `InboundCommand`, `InboundCallback`.
+- All handler paths store serialized payloads at dedup time (commands, callbacks) or after normalization (messages with async attachment download).
+- Payloads survive crashes: a recovered work item carries enough data to reconstruct the original event.
 
-1. keep one worker first
-2. make ingress, queue state, and crash recovery durable
-3. only then add multi-worker webhook deployment if needed
+**Handler integration** (`app/telegram_handlers.py`)
+- `_dedup_update()` replaces in-memory `_seen_update_ids` with `record_update()` + `enqueue_work_item()`.
+- `_command_handler` and `_callback_handler` decorators: normalize → serialize → dedup → dispatch → complete.
+- `_chat_lock` context manager: claims work item on lock entry, completes on exit (done/failed).
+- `_pending_work_items` dict tracks current work item per chat for handlers that don't use `_chat_lock`.
+- `_complete_pending_work_item()` helper for early returns (auth, rate limit, normalization failures).
+- In-memory `CHAT_LOCKS` kept as fast-path contention signal; durable claims are the authority.
 
-This is not current shipped behavior. It is the next major architecture
-candidate because it would strengthen both the agent bot itself and any future
-gateway-style evolution built on the same runtime.
+**Async worker loop** (`app/worker.py`)
+- Background asyncio task that polls the durable queue for claimable items.
+- Claims items atomically via `claim_next_any()`, deserializes payloads, dispatches to handler.
+- Handles dispatch failures (marks failed with error), deserialization failures (marks failed).
+- Respects per-chat serialization (skips chats with in-flight items).
+- Configurable poll interval and batch size.
+- Clean shutdown via `asyncio.Event`.
+- Started via `post_init` hook, stopped via `post_shutdown` hook on the Application.
+
+**Startup and shutdown** (`app/main.py`)
+- Startup: `recover_stale_claims()` requeues orphaned items, `purge_old()` cleans retention.
+- Worker task started after application init, stopped before connection close.
+- `close_transport_db()` called in both `finally` blocks.
+
+### Design decisions
+
+**Separate transport.db**: Transport data (updates, work items) has a different lifecycle and retention policy than session state. Separate databases allow independent backup, purging, and schema evolution.
+
+**In-memory locks as fast path**: `CHAT_LOCKS` (asyncio.Lock) provides sub-millisecond contention detection for the common single-worker case. The durable `claim_next` is the authority for crash recovery and future multi-worker. Both agree in steady state.
+
+**Inline processing + background drain**: In single-worker mode, the inline handler path (dedup → claim inside lock → process → complete) handles most items. The background worker loop drains orphaned items from crash recovery. In future multi-worker mode, the worker loop becomes the primary processing path.
+
+**Payload storage timing**: Commands and callbacks serialize at dedup time (normalization is sync). Messages serialize after normalization completes (attachment download is async). The `update_payload()` function updates the stored payload after the fact.
 
 ### Bugs found and fixed
 

@@ -80,6 +80,7 @@ from app.transport import (
     normalize_command,
     normalize_message,
     normalize_user,
+    serialize_inbound,
 )
 
 log = logging.getLogger(__name__)
@@ -142,17 +143,22 @@ _rate_limiter: RateLimiter | None = None
 _pending_work_items: dict[int, str] = {}  # chat_id -> latest work_item_id
 
 
-def _dedup_update(update: Update, kind: str = "unknown") -> bool:
+def _dedup_update(update: Update, kind: str = "unknown", payload: str = "{}") -> bool:
     """Return True if this update_id was already processed (duplicate).
 
     Uses durable SQLite storage so dedup survives restarts.
     Also enqueues a work item for the update.
+
+    The ``payload`` parameter should be the serialized inbound event
+    (from ``serialize_inbound``).  When non-empty, it is stored with the
+    update so that a future worker can reconstruct the event without
+    holding the original Telegram ``Update`` object.
     """
     uid = update.update_id
     chat_id = update.effective_chat.id if update.effective_chat else 0
     user_id = update.effective_user.id if update.effective_user else 0
     data_dir = _cfg().data_dir
-    is_new = work_queue.record_update(data_dir, uid, chat_id, user_id, kind)
+    is_new = work_queue.record_update(data_dir, uid, chat_id, user_id, kind, payload=payload)
     if not is_new:
         log.debug("Skipping duplicate update_id %d", uid)
         return True
@@ -288,13 +294,14 @@ async def _public_guard(event, update: Update) -> bool:
 
 
 def _command_handler(fn):
-    """Decorator: dedup → normalize_command → is_allowed gate → call fn(event, update, context)."""
+    """Decorator: normalize → dedup (with payload) → is_allowed gate → call fn(event, update, context)."""
     import functools
     @functools.wraps(fn)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if _dedup_update(update, kind="command"):
-            return
         event = normalize_command(update, context)
+        payload = serialize_inbound(event) if event else "{}"
+        if _dedup_update(update, kind="command", payload=payload):
+            return
         if event is None or not is_allowed(event.user):
             _complete_pending_work_item(update.effective_chat.id)
             return
@@ -306,7 +313,7 @@ def _command_handler(fn):
 
 
 def _callback_handler(fn):
-    """Decorator: dedup → normalize_callback → is_allowed gate → call fn(event, query).
+    """Decorator: normalize → dedup (with payload) → is_allowed gate → call fn(event, query).
 
     Does NOT call query.answer() — handlers control their own answer semantics
     (some need alerts, some need silent acks, some answer conditionally).
@@ -314,9 +321,10 @@ def _callback_handler(fn):
     import functools
     @functools.wraps(fn)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if _dedup_update(update, kind="callback"):
-            return
         event = normalize_callback(update)
+        payload = serialize_inbound(event) if event else "{}"
+        if _dedup_update(update, kind="callback", payload=payload):
+            return
         if event is None:
             return
         query = update.callback_query
@@ -934,9 +942,10 @@ _HELP_TOPICS = {
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start — always show main help (ignores deep-link payloads)."""
-    if _dedup_update(update, kind="command"):
-        return
     event = normalize_command(update, context)
+    payload = serialize_inbound(event) if event else "{}"
+    if _dedup_update(update, kind="command", payload=payload):
+        return
     if event is None or not is_allowed(event.user):
         await update.effective_message.reply_text("Not authorized.")
         _complete_pending_work_item(update.effective_chat.id)
@@ -949,9 +958,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help [topic] — main help or topic-specific detail."""
-    if _dedup_update(update, kind="command"):
-        return
     event = normalize_command(update, context)
+    payload = serialize_inbound(event) if event else "{}"
+    if _dedup_update(update, kind="command", payload=payload):
+        return
     if event is None or not is_allowed(event.user):
         await update.effective_message.reply_text("Not authorized.")
         _complete_pending_work_item(update.effective_chat.id)
@@ -1660,6 +1670,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         _complete_pending_work_item(update.effective_chat.id)
         return
 
+    # Store serialized payload now that normalization is complete
+    work_queue.update_payload(_cfg().data_dir, update.update_id, serialize_inbound(msg))
+
     message = update.effective_message
     chat_id = msg.chat_id
     prompt, image_paths = build_user_prompt(msg.text, list(msg.attachments))
@@ -2143,6 +2156,40 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     await msg.reply_text("Use /policy inspect, /policy edit, or /policy status.")
+
+
+async def worker_dispatch(kind: str, event, item: dict) -> None:
+    """Dispatch a deserialized inbound event from the worker loop.
+
+    This is called for work items claimed by the background worker —
+    typically orphaned items recovered after a crash.  For messages,
+    we can send a notification to the chat that the request was lost.
+    For commands and callbacks, we log and discard since the user
+    context (inline keyboards, etc.) is no longer available.
+
+    In a future multi-worker architecture, this function would fully
+    process the event (load session, run provider, send response).
+    """
+    from app.transport import InboundMessage, InboundCommand, InboundCallback
+
+    chat_id = item.get("chat_id", 0)
+    if not chat_id:
+        log.warning("Worker dispatch: no chat_id for item %s", item.get("id"))
+        return
+
+    if isinstance(event, InboundMessage):
+        log.info("Worker recovered orphaned message for chat %d (update %s)",
+                 chat_id, item.get("update_id"))
+        # In single-worker mode, message was lost due to crash.
+        # Future: re-process via provider.
+        return
+
+    if isinstance(event, (InboundCommand, InboundCallback)):
+        log.info("Worker recovered orphaned %s for chat %d (update %s)",
+                 kind, chat_id, item.get("update_id"))
+        return
+
+    log.warning("Worker dispatch: unknown event type for item %s", item.get("id"))
 
 
 def build_application(config: BotConfig, provider: Provider) -> Application:

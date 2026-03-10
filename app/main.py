@@ -1,6 +1,7 @@
 """Entry point: load config, build provider, run bot."""
 
 import argparse
+import asyncio
 import logging
 import sys
 
@@ -10,6 +11,7 @@ from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
 from app.storage import close_db, ensure_data_dirs
 from app.work_queue import close_transport_db, recover_stale_claims, purge_old
+from app.worker import start_worker_task
 from app.store import startup_recovery
 from app.telegram_handlers import build_application
 
@@ -85,6 +87,31 @@ def main() -> None:
     from app.telegram_handlers import _boot_id as boot_id
     recover_stale_claims(config.data_dir, boot_id)
     purge_old(config.data_dir)
+
+    # Worker loop: drains orphaned/recovered work items from the durable queue.
+    # In single-worker mode the inline handler path handles most items; the
+    # worker loop catches items that survived a crash or were left behind.
+    _worker_task = None
+    _worker_stop = None
+
+    async def _on_post_init(_app) -> None:
+        nonlocal _worker_task, _worker_stop
+        from app.telegram_handlers import worker_dispatch
+        _worker_task, _worker_stop = start_worker_task(
+            config.data_dir, boot_id, worker_dispatch,
+        )
+
+    async def _on_post_shutdown(_app) -> None:
+        if _worker_stop:
+            _worker_stop.set()
+        if _worker_task:
+            try:
+                await asyncio.wait_for(_worker_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                _worker_task.cancel()
+
+    app.post_init = _on_post_init
+    app.post_shutdown = _on_post_shutdown
 
     if config.bot_mode == "webhook":
         log.info("Bot starting (webhook)...")

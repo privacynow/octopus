@@ -600,15 +600,15 @@ end-to-end latency. A second pass is only justified if:
 #### III.5 Faster first visible progress
 
 Perceived latency improves significantly when the user sees a meaningful
-first update almost immediately. Product rule: first visible progress within
-1 second of request submission.
+first update almost immediately. Product rule: immediate visible progress
+before provider invocation.
 
-This may require:
+Implementation:
 
-- sending an immediate "thinking..." status before provider invocation
-- tuning progress-streaming intervals
-- ensuring the progress callback fires on first provider output, not on a
-  polling timer
+- send an immediate status message ("Starting provider..." / "Resuming...")
+  before invoking the provider subprocess
+- send an immediate status message before preflight approval
+- progress callback fires on provider output, not on a fixed polling timer
 
 #### III.6 Prompt weight reduction
 
@@ -617,7 +617,7 @@ Smaller effective prompts reduce time-to-first-token:
 - shorter default role text
 - fewer always-on skills (only load what the session actually uses)
 - avoid injecting capability text for inactive skills
-- measure prompt token count as part of `/doctor` or `/session` diagnostics
+- measure prompt size (character estimate) in both `/session` and `/doctor`
 
 This is less visible than model switching but contributes to perceived speed.
 
@@ -626,8 +626,8 @@ Acceptance:
 - new users discover compact mode without reading docs
 - the default feels right for the deployment context
 - long responses use expandable blockquotes or inline expand/collapse
-- first visible progress arrives within 1 second
-- prompt weight is observable and minimized
+- first visible progress is sent before provider invocation
+- prompt weight is observable in `/session` and `/doctor`
 
 ### Phase IV — Update delivery and burst safety
 
@@ -864,17 +864,145 @@ They are ordered by likely relevance, not urgency.
 
 ### Multi-worker webhook architecture
 
-Webhook mode already exists in the product. The extension area is
-multi-worker / multi-process webhook deployment. That would require:
+Webhook mode already exists in the product. The next structural extension is
+not "run more pollers." It is a durable ingress and work-item architecture
+that can start single-worker and later scale to multi-worker / multi-process
+webhook deployment.
 
-- stronger cross-process serialization guarantees
-- concurrency semantics beyond in-memory chat locks
-- explicit deployment guidance for multi-worker operation
+The product goal is:
 
-Note: polling is single-owner by design. Multi-process support means
-webhook + shared state, not multi-poller polling. Transport reliability
-for single-process operation (polling conflict detection, update_id
-idempotency, burst handling) is covered in Phase IV.
+- no inbound Telegram update is lost because a process dies
+- duplicate delivery is safe across restarts and workers
+- per-chat ordering survives process boundaries
+- queued/busy behavior is durable, not only in-memory
+- the same foundation can later support gateway-style agent routing
+
+Polling remains single-owner by design. Multi-process support means webhook +
+shared durable state, not multi-poller polling.
+
+#### Durable ingress contract
+
+The transport architecture should evolve toward these contracts:
+
+- one ingress owner per bot token
+- inbound Telegram updates are durably recorded before business logic runs
+- `update_id` idempotency is enforced in durable state, not only in memory
+- chat-scoped execution ownership is enforced in durable state, not only by
+  `CHAT_LOCKS`
+- a worker may crash without silently losing the update it was handling
+- the system may run with one worker first, but the contracts must not assume
+  one process forever
+
+#### Target architecture
+
+The intended shape is:
+
+1. Webhook ingress accepts the Telegram update and normalizes it.
+2. The normalized update is inserted into a durable `updates` store keyed by
+   `update_id`.
+3. The transport layer creates or enqueues a chat-scoped `work_item`.
+4. A worker claims the next runnable work item for a chat that is not already
+   in flight.
+5. The worker loads session state, resolves execution context, runs the
+   request, and commits the resulting state transitions.
+6. Completion, retryability, and failure are written back durably so recovery
+   after crash/restart is explicit.
+
+This is deliberately the same architecture needed for a future multi-agent
+gateway bot, just without agent routing yet.
+
+#### SQLite-first implementation strategy
+
+SQLite is the right first backend for this extension because the current bot is
+still local-first and single-host oriented.
+
+Use SQLite for:
+
+- durable update journal
+- durable in-flight / queued request state
+- chat work-item claiming
+- ingress idempotency (`update_id`)
+- restart-safe acknowledgment and recovery
+
+Do not begin with Postgres unless the deployment target already requires
+multi-host workers. Design the schema so a future move is possible, but treat
+SQLite + WAL as the default foundation.
+
+#### Data model
+
+The extension should introduce explicit durable transport state, separate from
+the existing session table. The exact names may vary, but the architecture
+needs equivalents of:
+
+- `updates`
+  - `update_id`
+  - `chat_id`
+  - `user_id`
+  - `kind`
+  - normalized payload
+  - received timestamp
+  - processing state
+- `work_items`
+  - stable work-item id
+  - `chat_id`
+  - origin update reference
+  - queued / claimed / done / failed state
+  - claimant / lease metadata
+  - timestamps
+- optional `chat_leases` or an equivalent claim model if the lease is not kept
+  directly on `work_items`
+
+The bot does not need a separate distributed queue system for this stage. The
+important step is to move delivery ownership and in-flight state into durable
+storage.
+
+#### Worker model
+
+Start with one worker even after the durable transport model lands.
+
+That first step already buys:
+
+- crash recovery
+- durable burst handling
+- webhook robustness
+- explicit queue/in-flight state
+- removal of the weakest in-memory delivery guarantees
+
+Only after that foundation is stable should the product add multiple workers.
+
+When multiple workers are introduced, the contract is:
+
+- workers claim runnable work items atomically
+- no long-lived database transaction is held while the provider is running
+- provider execution happens outside the claim transaction
+- completion is committed in a separate write
+- expired claims can be recovered safely
+
+#### Build sequence
+
+If this extension is taken on, the recommended order is:
+
+1. Add durable `update_id` tracking in SQLite.
+2. Add durable queued / in-flight work-item state.
+3. Make webhook ingress write durable update records before handler execution.
+4. Route the current single-process bot through the durable work-item path.
+5. Replace in-memory-only burst handling with durable queue state.
+6. Add worker claiming semantics while still running a single worker.
+7. Only then consider multi-worker webhook deployment.
+
+This sequencing matters. It avoids repeating the earlier mistake of building
+important behavior on top of a weaker state model and retrofitting the
+foundation later.
+
+#### Not in scope for this extension
+
+- supporting multiple pollers on the same Telegram token
+- distributed multi-host coordination from day one
+- a full outbox/reliable-send subsystem before the durable ingress layer exists
+
+The purpose of this extension is to make transport and request ownership
+durable first. Multi-worker scale is a later deployment mode enabled by that
+foundation.
 
 ### Policy and project expansion
 
@@ -1007,7 +1135,7 @@ The product is commercially ready when:
 - users can control model speed/capability without knowing provider internals
 - public deployments have a concrete trust profile, not optimistic defaults
 - long responses use native Telegram primitives for progressive disclosure
-- first visible progress arrives within 1 second of request submission
+- first visible progress is sent before provider invocation
 - cross-feature invariant tests cover the dangerous combination matrix
 - every inbound update receives a visible response, even under burst traffic
 - polling conflicts are detected and warned, not silently tolerated

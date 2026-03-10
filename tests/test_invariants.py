@@ -49,7 +49,9 @@ from tests.support.handler_support import (
     last_reply,
     load_session_disk,
     make_config,
+    send_callback,
     send_command,
+    send_text,
     setup_globals,
 )
 
@@ -1843,3 +1845,274 @@ async def test_model_callback_public_user_allowed_for_available_profile():
         replies = cb_msg.replies
         assert any("fast" in str(r).lower() for r in replies)
         assert not any("restricted" in str(r).lower() for r in replies)
+
+
+# =====================================================================
+# INVARIANT 25: Polling conflict detection (real HTTP 409 probe)
+#
+# /doctor must detect a conflicting poller via a getUpdates probe that
+# returns HTTP 409, not just a config heuristic.
+# =====================================================================
+
+
+@pytest.mark.asyncio
+async def test_doctor_detects_polling_conflict_409():
+    """check_polling_conflict returns a warning when Telegram returns 409."""
+    from unittest.mock import AsyncMock, patch
+    from app.doctor import check_polling_conflict
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 409
+
+    with patch("app.doctor.httpx.AsyncClient") as MockClient:
+        client_instance = AsyncMock()
+        client_instance.post.return_value = mock_response
+        client_instance.__aenter__ = AsyncMock(return_value=client_instance)
+        client_instance.__aexit__ = AsyncMock(return_value=False)
+        MockClient.return_value = client_instance
+
+        result = await check_polling_conflict("123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij")
+    assert result is not None
+    assert "409" in result
+    assert "conflict" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_doctor_no_conflict_on_200():
+    """check_polling_conflict returns None when Telegram returns 200 (no conflict)."""
+    from unittest.mock import AsyncMock, patch
+    from app.doctor import check_polling_conflict
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+
+    with patch("app.doctor.httpx.AsyncClient") as MockClient:
+        client_instance = AsyncMock()
+        client_instance.post.return_value = mock_response
+        client_instance.__aenter__ = AsyncMock(return_value=client_instance)
+        client_instance.__aexit__ = AsyncMock(return_value=False)
+        MockClient.return_value = client_instance
+
+        result = await check_polling_conflict("123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_doctor_conflict_check_survives_network_error():
+    """check_polling_conflict returns None on network failure, not crash."""
+    from unittest.mock import AsyncMock, patch
+    from app.doctor import check_polling_conflict
+
+    with patch("app.doctor.httpx.AsyncClient") as MockClient:
+        client_instance = AsyncMock()
+        client_instance.post.side_effect = Exception("network error")
+        client_instance.__aenter__ = AsyncMock(return_value=client_instance)
+        client_instance.__aexit__ = AsyncMock(return_value=False)
+        MockClient.return_value = client_instance
+
+        result = await check_polling_conflict("123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij")
+    assert result is None
+
+
+# =====================================================================
+# INVARIANT 26: Prompt weight observable in /doctor
+#
+# /doctor must report prompt weight (system prompt size) when a session
+# context is available.
+# =====================================================================
+
+
+@pytest.mark.asyncio
+async def test_doctor_reports_prompt_weight():
+    """/doctor shows prompt weight when session has a role (non-empty system prompt)."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session["role"] = "You are a senior Python engineer specializing in async systems."
+        save_session(data_dir, 1, session)
+
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_doctor, chat, user, "/doctor")
+        all_text = " ".join(r.get("text", "") for r in msg.replies)
+        assert "Prompt weight" in all_text
+        assert "chars" in all_text
+
+
+# =====================================================================
+# CROSS-FEATURE INVARIANT: compact + long reply + public user
+#
+# A public user with compact mode on receiving a long response must get
+# the compact rendering (blockquote or expand button) with public
+# execution scope still enforced.
+# =====================================================================
+
+
+@pytest.mark.asyncio
+async def test_compact_long_reply_public_user():
+    """Public user + compact mode + long response → blockquote/expand, inspect enforced."""
+    import app.telegram_handlers as th
+    from app.providers.base import RunResult
+
+    with fresh_env(config_overrides={
+        "allow_open": True,
+        "allowed_user_ids": frozenset({42}),
+        "compact_mode": True,
+        "public_working_dir": "/tmp/pub",
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(2001)
+        stranger = FakeUser(uid=999, username="nobody")
+
+        long_response = "Summary line.\n\nDetailed paragraph of analysis. " * 40
+        prov.run_results = [RunResult(text=long_response)]
+
+        msg = await send_text(chat, stranger, "analyze this")
+
+        all_text = " ".join(str(r.get("text", "")) for r in msg.replies)
+        # Should have compact rendering (blockquote or expand button)
+        has_blockquote = "blockquote" in all_text
+        has_expand_button = any(r.get("reply_markup") is not None for r in msg.replies)
+        assert has_blockquote or has_expand_button, (
+            f"Expected compact rendering for public user, got: {all_text[:200]}")
+
+        # Verify execution scope was enforced: provider received inspect context
+        assert prov.run_calls, "Provider should have been called"
+        ctx = prov.run_calls[-1]["context"]
+        assert ctx.file_policy == "inspect"
+        assert ctx.working_dir == "/tmp/pub"
+
+
+# =====================================================================
+# CROSS-FEATURE INVARIANT: project + file_policy + approval + model change
+#
+# With a project bound, file_policy set, and an approval pending,
+# changing model profile must invalidate the pending approval.
+# =====================================================================
+
+
+def test_project_file_policy_approval_model_change_invalidates():
+    """Pending approval with project+file_policy is invalidated by model change."""
+    from app.execution_context import resolve_execution_context
+    from app.request_flow import validate_pending
+
+    cfg = _make_config(
+        model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
+        default_model_profile="fast",
+        projects=(("proj-a", "/opt/a", []),),
+    )
+
+    # Create session with project + file_policy + model=fast
+    session = SessionState(provider="claude", provider_state={}, approval_mode="on")
+    session.project_id = "proj-a"
+    session.file_policy = "inspect"
+    session.model_profile = "fast"
+
+    ctx = resolve_execution_context(session, cfg, "claude")
+    pending = PendingApproval(
+        request_user_id=42,
+        prompt="do work",
+        image_paths=[],
+        attachment_dicts=[],
+        context_hash=ctx.context_hash,
+        trust_tier="trusted",
+    )
+
+    # Validate immediately — should pass
+    assert validate_pending(pending, session, cfg, "claude") is None
+
+    # Change model profile
+    session.model_profile = "best"
+    error = validate_pending(pending, session, cfg, "claude")
+    assert error is not None
+    assert "Context changed" in error
+
+    # Also verify that changing file_policy invalidates
+    session.model_profile = "fast"  # reset model
+    session.file_policy = "edit"
+    error2 = validate_pending(pending, session, cfg, "claude")
+    assert error2 is not None
+    assert "Context changed" in error2
+
+
+# =====================================================================
+# INVARIANT 27: Busy/queued feedback for commands and callbacks
+#
+# When a command or callback arrives while the chat lock is held,
+# the user gets visible queued feedback, not silent waiting.
+# =====================================================================
+
+
+@pytest.mark.asyncio
+async def test_command_queued_feedback_when_chat_locked():
+    """Command arriving while chat lock held sends queued feedback.
+
+    Uses cmd_session which does NOT acquire the lock itself, so no deadlock.
+    The decorator checks lock.locked() and sends feedback before the handler runs.
+    """
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        save_session(data_dir, 1, session)
+
+        chat = FakeChat(1)
+        user = FakeUser(42)
+
+        # Acquire the chat lock to simulate in-flight request
+        lock = th.CHAT_LOCKS[1]
+        await lock.acquire()
+        try:
+            msg = await send_command(th.cmd_session, chat, user, "/session")
+            all_text = " ".join(str(r.get("text", "")) for r in msg.replies)
+            assert "queued" in all_text.lower(), (
+                f"Expected queued feedback, got: {all_text[:200]}")
+        finally:
+            lock.release()
+
+
+@pytest.mark.asyncio
+async def test_command_no_queued_feedback_when_lock_free():
+    """Command arriving when chat lock is free does NOT send queued feedback."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        save_session(data_dir, 1, session)
+
+        chat = FakeChat(1)
+        user = FakeUser(42)
+
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+        all_text = " ".join(str(r.get("text", "")) for r in msg.replies)
+        assert "queued" not in all_text.lower()
+
+
+@pytest.mark.asyncio
+async def test_callback_queued_feedback_when_chat_locked():
+    """Callback arriving while chat lock held sends queued answer.
+
+    Uses a callback handler that does NOT acquire the lock (expand: handler),
+    to avoid deadlock while still testing the decorator feedback path.
+    """
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+
+        # Pre-create a raw response so the expand handler has something to read
+        from app.summarize import save_raw
+        save_raw(data_dir, 1, "test prompt", "Full response text here.", kind="request")
+
+        lock = th.CHAT_LOCKS[1]
+        await lock.acquire()
+        try:
+            query, cb_msg = await send_callback(
+                th.handle_expand_callback, chat, user, "expand:1:0")
+            # The query should have received a "queued" answer
+            assert query.answers, "Expected callback answer for queued feedback"
+            assert any("queued" in str(a.get("text", "")).lower() for a in query.answers), (
+                f"Expected queued feedback in callback answer, got: {query.answers}")
+        finally:
+            lock.release()

@@ -183,7 +183,7 @@ class FakeProvider:
 def make_config(data_dir, **overrides):
     defaults = dict(
         data_dir=Path(data_dir),
-        telegram_token="1234567890:AABBCCDDEEFFaabbccddeeff_01234567",
+        telegram_token="0:test_token_not_real",
         approval_mode="off",
         stream_update_interval_seconds=0.0,
         typing_interval_seconds=60.0,

@@ -1,14 +1,19 @@
 """Health checks and session diagnostics — shared by CLI and Telegram /doctor."""
 
 import dataclasses
+import logging
 import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Callable
 
+import httpx
+
 from app.config import BotConfig, validate_config
 from app.providers.base import Provider
 from app.storage import list_sessions, load_session
+
+log = logging.getLogger(__name__)
 
 _STALE_PENDING_SECONDS = 3600   # 1 hour
 _STALE_SETUP_SECONDS = 600      # 10 minutes
@@ -18,6 +23,7 @@ _STALE_SETUP_SECONDS = 600      # 10 minutes
 class DoctorReport:
     errors: list[str] = dataclasses.field(default_factory=list)
     warnings: list[str] = dataclasses.field(default_factory=list)
+    prompt_weight_chars: int = 0
 
 
 async def collect_doctor_report(
@@ -55,15 +61,19 @@ async def collect_doctor_report(
     if not report.errors:
         report.errors.extend(await provider.check_runtime_health())
 
-    # Per-chat skill validation (only from Telegram /doctor)
+    # Per-chat skill validation and prompt weight (only from Telegram /doctor)
     if session is not None and user_id is not None and encryption_key is not None:
-        from app.skills import validate_active_skills
+        from app.skills import validate_active_skills, build_system_prompt
+        active_skills = session.get("active_skills", [])
         report.errors.extend(validate_active_skills(
-            session.get("active_skills", []),
+            active_skills,
             user_id=user_id,
             data_dir=config.data_dir,
             encryption_key=encryption_key,
         ))
+        sys_prompt = build_system_prompt(session.get("role", ""), active_skills)
+        if sys_prompt:
+            report.prompt_weight_chars = len(sys_prompt)
 
     # Advisory: admin not explicitly set
     total_users = len(config.allowed_user_ids) + len(config.allowed_usernames)
@@ -72,12 +82,15 @@ async def collect_doctor_report(
             "BOT_ADMIN_USERS not set \u2014 all allowed users have admin "
             "privileges (install/uninstall skills). Set BOT_ADMIN_USERS to restrict.")
 
-    # Polling conflict advisory
+    # Polling conflict detection
     if config.bot_mode == "poll" and config.webhook_url:
         report.warnings.append(
             "Bot is in polling mode but BOT_WEBHOOK_URL is configured. "
             "If another process is running in webhook mode, updates may conflict. "
             "Use only one delivery mode per bot token.")
+    conflict = await check_polling_conflict(config.telegram_token)
+    if conflict:
+        report.warnings.append(conflict)
 
     # Public mode advisories
     if config.allow_open:
@@ -139,6 +152,32 @@ def scan_stale_sessions(
         if setup and (now - setup.get("started_at", 0)) > _STALE_SETUP_SECONDS:
             stale_setup += 1
     return stale_pending, stale_setup
+
+
+async def check_polling_conflict(token: str) -> str | None:
+    """Probe Telegram getUpdates to detect a conflicting poller.
+
+    Telegram returns HTTP 409 Conflict when another process is already
+    polling with the same token.  Returns a warning string if conflict
+    detected, None otherwise.
+    """
+    # Skip probe if the token looks invalid (test tokens, placeholders)
+    # Real tokens are ~46 chars like "123456789:AABBCCDDEEFFGGHHIIJJKKLLMMNNOOPPxx"
+    parts = token.split(":", 1)
+    if len(parts) != 2 or not parts[0].isdigit() or len(parts[1]) < 30:
+        return None
+    url = f"https://api.telegram.org/bot{token}/getUpdates"
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(url, json={"limit": 1, "timeout": 0})
+        if resp.status_code == 409:
+            return (
+                "Polling conflict detected (HTTP 409) — another process is already "
+                "polling with this bot token. Stop the other process or switch to "
+                "webhook mode.")
+    except Exception as e:
+        log.debug("Polling conflict check failed: %s", e)
+    return None
 
 
 def check_prompt_size_cross_chat(

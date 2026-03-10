@@ -223,7 +223,7 @@ async def _public_guard(event, update: Update) -> bool:
 
 
 def _command_handler(fn):
-    """Decorator: dedup → normalize_command → is_allowed gate → call fn(event, update, context)."""
+    """Decorator: dedup → normalize_command → is_allowed gate → queued feedback → call fn(event, update, context)."""
     import functools
     @functools.wraps(fn)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -232,12 +232,17 @@ def _command_handler(fn):
         event = normalize_command(update, context)
         if event is None or not is_allowed(event.user):
             return
+        lock = CHAT_LOCKS[event.chat_id]
+        if lock.locked():
+            await update.effective_message.reply_text(
+                "<i>Working on your previous request — yours is queued.</i>",
+                parse_mode=ParseMode.HTML)
         await fn(event, update, context)
     return wrapper
 
 
 def _callback_handler(fn):
-    """Decorator: dedup → normalize_callback → is_allowed gate → call fn(event, query).
+    """Decorator: dedup → normalize_callback → is_allowed gate → queued feedback → call fn(event, query).
 
     Does NOT call query.answer() — handlers control their own answer semantics
     (some need alerts, some need silent acks, some answer conditionally).
@@ -254,6 +259,9 @@ def _callback_handler(fn):
         if not is_allowed(event.user):
             await query.answer("Not authorized.", show_alert=True)
             return
+        lock = CHAT_LOCKS[event.chat_id]
+        if lock.locked():
+            await query.answer("Working on your previous request — yours is queued.")
         await fn(event, query)
     return wrapper
 
@@ -1071,6 +1079,8 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         parts.extend(f"\u274c {html.escape(e)}" for e in report.errors)
     if report.warnings:
         parts.extend(f"\u26a0\ufe0f {html.escape(w)}" for w in report.warnings)
+    if report.prompt_weight_chars:
+        parts.append(f"Prompt weight: ~{report.prompt_weight_chars} chars")
     if parts:
         await update.effective_message.reply_text(
             "\n".join(parts), parse_mode=ParseMode.HTML)

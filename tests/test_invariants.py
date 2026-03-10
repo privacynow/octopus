@@ -2360,3 +2360,58 @@ async def test_worker_dispatch_message_replay_survives_progress():
             assert replay_msgs, "Expected 'Replaying your request' notification"
         finally:
             th._bot_instance = None
+
+
+# =====================================================================
+# INVARIANT 31: Shutdown-interrupted runs stay replayable
+#
+# A provider child killed by service shutdown (rc=-15) must not be turned
+# into a normal provider error and marked done. The durable work item must
+# remain claimed so the next boot can recover and replay it.
+# =====================================================================
+
+class _StickyReplyMessage(FakeMessage):
+    """Test message whose status updates land on the same reply log."""
+
+    async def reply_text(self, text, **kwargs):
+        self.replies.append({"text": text, **kwargs})
+        return self
+
+
+@pytest.mark.asyncio
+async def test_interrupted_message_run_stays_claimed_for_recovery():
+    import app.telegram_handlers as th
+    from app.work_queue import _transport_db, recover_stale_claims
+
+    with fresh_env() as (data_dir, cfg, prov):
+        prov.run_results = [RunResult(text="[Claude error (rc=-15)]", returncode=-15)]
+        chat = FakeChat(chat_id=9101)
+        user = FakeUser(uid=42, username="testuser")
+        msg = _StickyReplyMessage(chat=chat, text="hello after restart")
+        upd = FakeUpdate(message=msg, user=user, chat=chat)
+
+        await th.handle_message(upd, FakeContext())
+
+        assert len(prov.run_calls) == 1
+        joined = " ".join(
+            entry.get("text", "") + " " + entry.get("edit_text", "")
+            for entry in msg.replies
+        )
+        assert "Claude error" not in joined
+
+        conn = _transport_db(data_dir)
+        row = conn.execute(
+            "SELECT state, worker_id FROM work_items WHERE update_id = ?",
+            (upd.update_id,),
+        ).fetchone()
+        assert row["state"] == "claimed"
+        assert row["worker_id"] == "test-boot"
+
+        recovered = recover_stale_claims(data_dir, current_worker_id="next-boot")
+        assert recovered == 1
+        row = conn.execute(
+            "SELECT state, worker_id FROM work_items WHERE update_id = ?",
+            (upd.update_id,),
+        ).fetchone()
+        assert row["state"] == "queued"
+        assert row["worker_id"] is None

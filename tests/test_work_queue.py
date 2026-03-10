@@ -11,6 +11,7 @@ import pytest
 from app.work_queue import (
     _reset_transport_db,
     _transport_db,
+    LeaveClaimed,
     claim_next,
     claim_next_any,
     close_transport_db,
@@ -664,3 +665,35 @@ async def test_worker_replay_calls_dispatch_for_message(data_dir):
     conn = _transport_db(data_dir)
     row = conn.execute("SELECT state FROM work_items WHERE update_id = 2100").fetchone()
     assert row["state"] == "done"
+
+
+async def test_worker_loop_leaves_interrupted_item_claimed(data_dir):
+    """Worker interruption should leave the claimed item for restart recovery."""
+    from app.worker import worker_loop
+
+    record_update(data_dir, 2200, chat_id=1, user_id=42, kind="message",
+                  payload=serialize_inbound(InboundMessage(
+                      user=InboundUser(id=42, username="alice"),
+                      chat_id=1, text="recover me", attachments=())))
+    enqueue_work_item(data_dir, chat_id=1, update_id=2200)
+
+    async def dispatch(kind, event, item):
+        raise LeaveClaimed()
+
+    stop = asyncio.Event()
+
+    async def run_then_stop():
+        await asyncio.sleep(0.3)
+        stop.set()
+
+    await asyncio.gather(
+        worker_loop(data_dir, "worker-a", dispatch, poll_interval=0.05, stop_event=stop),
+        run_then_stop(),
+    )
+
+    conn = _transport_db(data_dir)
+    row = conn.execute(
+        "SELECT state, worker_id FROM work_items WHERE update_id = 2200"
+    ).fetchone()
+    assert row["state"] == "claimed"
+    assert row["worker_id"] == "worker-a"

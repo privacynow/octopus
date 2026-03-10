@@ -88,6 +88,18 @@ log = logging.getLogger(__name__)
 CHAT_LOCKS: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
+def _run_result_was_interrupted(returncode: int) -> bool:
+    """Return True for subprocess exits caused by external termination.
+
+    In practice this is how a provider child process surfaces bot shutdown:
+    SIGTERM from systemd becomes ``-15`` and a forced kill would become ``-9``.
+    Those requests should be replayed after restart instead of being finalized
+    as ordinary provider errors.
+    """
+
+    return returncode in (-15, -9)
+
+
 @contextlib.asynccontextmanager
 async def _chat_lock(chat_id: int, *, message=None, query=None):
     """Acquire the per-chat lock with visible queued feedback.
@@ -122,6 +134,11 @@ async def _chat_lock(chat_id: int, *, message=None, query=None):
         claimed_update_id = item["update_id"] if item else None
         try:
             yield sent_feedback
+        except work_queue.LeaveClaimed:
+            if item_id:
+                log.info("Leaving work item %s claimed for restart recovery", item_id)
+                return
+            raise
         except Exception:
             # Mark as failed on unhandled exception
             if item_id:
@@ -663,6 +680,11 @@ async def execute_request(
     finally:
         typing_task.cancel()
 
+    if _run_result_was_interrupted(result.returncode):
+        log.info("%s interrupted for chat %d (rc=%s); leaving work item claimed",
+                 prov.name, chat_id, result.returncode)
+        raise work_queue.LeaveClaimed()
+
     # Re-load session to pick up any changes made while the provider was running
     session = _load(chat_id)
     session.provider_state.update(result.provider_state_updates)
@@ -798,6 +820,11 @@ async def request_approval(
         plan_result = await prov.run_preflight(preflight_prompt, image_paths, progress, context=preflight_context)
     finally:
         typing_task.cancel()
+
+    if _run_result_was_interrupted(plan_result.returncode):
+        log.info("Preflight interrupted for chat %d (rc=%s); leaving work item claimed",
+                 chat_id, plan_result.returncode)
+        raise work_queue.LeaveClaimed()
 
     if plan_result.timed_out:
         await progress.update("Preflight approval timed out.", force=True)

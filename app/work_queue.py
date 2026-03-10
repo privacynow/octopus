@@ -23,6 +23,15 @@ log = logging.getLogger(__name__)
 
 _SCHEMA_VERSION = 1
 
+
+class LeaveClaimed(Exception):
+    """Control-flow signal: leave the current claimed work item unreconciled.
+
+    Used when a request is interrupted by process shutdown. The item stays in
+    ``claimed`` so the next boot can recover it via ``recover_stale_claims()``.
+    """
+
+
 _CREATE_SQL = """\
 CREATE TABLE IF NOT EXISTS updates (
     update_id   INTEGER PRIMARY KEY,

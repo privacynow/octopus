@@ -2,13 +2,13 @@
 
 Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-10):** Multi-worker webhook architecture extension
-> complete. Durable transport layer (`transport.db`) with update journal, work items,
-> atomic claiming, stale recovery, and async worker loop. Serialized inbound event
-> payloads stored for crash-recovery replay. Durability fixes: atomic record+enqueue
-> boundary, update_id-keyed pending items, `_BotMessage.reply_text()` returns sent
-> message for `TelegramProgress` compatibility, and shutdown-interrupted runs stay
-> claimed for replay after restart. 667 tests passing.
+> **Latest change (2026-03-10):** Error handling and resilience hardening.
+> All signal-killed provider runs (rc < 0) now leave work items claimed for
+> restart recovery. Provider errors (rc > 0) get summarized for Telegram display
+> via haiku, with fallback truncation when the provider is down. Global error
+> handler catches stale callback queries and notifies users on unexpected failures.
+> Decorator exception/early-return paths correctly mark work items failed/done.
+> 680 tests passing.
 
 ---
 
@@ -40,7 +40,7 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **667 pytest tests** + 35 bash tests across 31 entrypoints.
+Current suite: **680 pytest tests** + 35 bash tests across 31 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -59,7 +59,7 @@ Current suite: **667 pytest tests** + 35 bash tests across 31 entrypoints.
 | `test_handlers_ratelimit.py` | 6 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
 | `test_handlers_store.py` | 13 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle, callback flows (skill_add confirm/cancel, skill_update confirm/cancel/non-admin alert, unauthorized alert), markup removal verification. |
 | `test_high_risk.py` | 29 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
-| `test_invariants.py` | 118 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2), update-ID idempotency across all entry points (4: message, decorated command, non-decorated command, callback), mixed ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential check with resolved skills (2), model command/callback parity (4), cross-feature invariants (6: public+model escalation, inspect+model, compact+public, project+policy+approval+model), polling conflict detection (3), prompt weight in /doctor with resolved context (2), _chat_lock queued feedback (3), contended callback single-answer (3: approval, settings, clear-cred), shutdown-interrupted runs stay claimed for recovery. |
+| `test_invariants.py` | 131 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2), update-ID idempotency across all entry points (4: message, decorated command, non-decorated command, callback), mixed ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential check with resolved skills (2), model command/callback parity (4), cross-feature invariants (6: public+model escalation, inspect+model, compact+public, project+policy+approval+model), polling conflict detection (3), prompt weight in /doctor with resolved context (2), _chat_lock queued feedback (3), contended callback single-answer (3: approval, settings, clear-cred), shutdown-interrupted runs stay claimed for recovery, all signals (rc<0) treated as interrupted (4), provider error feedback (2: empty output, long output), global error handler (3: stale callback, non-Update, real Update notification), decorator exceptions mark work items failed (2: command, callback), summarizer subprocess killed on timeout, callback None-event completes work item. |
 | `test_ratelimit.py` | 8 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_registry.py` | 8 | Skill registry: index parsing (valid/bad version/non-JSON), search, artifact download/extraction, store integration (digest match/mismatch). |
 | `test_skills.py` | 43 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
@@ -599,3 +599,10 @@ updated.
 | `handle_callback` answered before entering lock | Medium | `query.answer()` consumed the callback answer slot before `_chat_lock` could send queued feedback | Moved `query.answer()` inside `_chat_lock` for `handle_callback`, `handle_settings_callback`, and `handle_skill_add_callback` |
 | Contended callbacks answered twice | Medium | `_chat_lock` sent queued feedback via `query.answer()`, then the handler called `query.answer()` again after acquiring the lock | `_chat_lock` now yields `sent_feedback` boolean; handlers skip their own `query.answer()` when `True`. 3 contention tests added. |
 | `handle_clear_cred_callback` answered before entering lock | Medium | `query.answer()` called before `_execute_clear_credentials` entered `_chat_lock`, so queued feedback was ineffective under contention | Confirm branches defer `query.answer()` to `_execute_clear_credentials`, which passes `query=` to `_chat_lock` and answers after lock acquisition (skipped when queued feedback already sent). Cancel branch answers immediately (no lock needed). |
+| Shutdown-killed provider showed confusing error to user | Medium-high | rc=-15 from SIGTERM fell through to normal error path: saved partial provider_state, displayed "Claude error (rc=-15)" | `_run_result_was_interrupted` catches all signals (rc < 0), raises `LeaveClaimed` before session save or error display |
+| Only SIGTERM/SIGKILL treated as interrupted | Medium | `_run_result_was_interrupted` only checked rc=-15/-9; SIGINT (-2), SIGABRT (-6) etc. still surfaced as provider errors | Changed to `returncode < 0` — any signal is treated as interrupted |
+| No global error handler | Medium | Unhandled exceptions (e.g. stale callback `BadRequest`) logged full tracebacks with "No error handlers registered" and user got no feedback | Added `_global_error_handler`: suppresses stale callback queries, logs other exceptions, notifies user |
+| Long provider errors shown raw in Telegram | Medium | `execute_request` passed raw error text (up to 3000 chars) directly to user with only `html.escape` | Added `_format_provider_error`: tries haiku summarization for long errors, falls back to head+tail truncation, handles empty output |
+| Error summarizer subprocess leaked on timeout | Medium | `_format_provider_error` spawned `claude -p` but `except Exception: pass` never killed or reaped the child on timeout | Added `proc.kill()` + `await proc.wait()` in exception handler when `proc.returncode is None` |
+| Decorator exceptions marked work items as "done" | Medium | Both `_command_handler` and `_callback_handler` used `finally: _complete_pending_work_item(uid)` which defaults to `state="done"` | Changed to `except`/`else`: exceptions pass `state="failed"`, clean exits pass `state="done"` |
+| Callback with no effective_user leaked queued work item | Medium | `_callback_handler` returned on `event is None` without calling `_complete_pending_work_item` | Added `_complete_pending_work_item(uid)` to the `event is None` branch |

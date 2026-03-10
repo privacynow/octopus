@@ -89,15 +89,80 @@ CHAT_LOCKS: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
 def _run_result_was_interrupted(returncode: int) -> bool:
-    """Return True for subprocess exits caused by external termination.
+    """Return True for subprocess exits caused by a signal.
 
-    In practice this is how a provider child process surfaces bot shutdown:
-    SIGTERM from systemd becomes ``-15`` and a forced kill would become ``-9``.
-    Those requests should be replayed after restart instead of being finalized
-    as ordinary provider errors.
+    Any negative return code means the child was killed by a signal:
+    SIGTERM (-15) from systemd stop, SIGKILL (-9) from forced kill,
+    SIGINT (-2) from Ctrl+C, etc.  These should be replayed after
+    restart instead of being surfaced as provider errors.
     """
+    return returncode < 0
 
-    return returncode in (-15, -9)
+
+# Maximum chars of raw error text to show if summarization fails.
+_ERROR_DISPLAY_LIMIT = 1500
+
+_ERROR_SUMMARY_PROMPT = """\
+Summarize the following provider error for a Telegram chat user.
+
+Rules:
+- Keep it under 400 characters.
+- Preserve: error type, root cause, actionable next step if obvious.
+- Drop: full stack traces, repeated lines, internal paths.
+- If the error is empty or uninformative, say so.
+- Output plain text, no markdown headers.
+
+Error (rc={rc}):
+{text}
+"""
+
+
+async def _format_provider_error(raw_text: str, returncode: int) -> str:
+    """Format a provider error for Telegram display.
+
+    Tries to summarize long errors via the provider CLI.  If the provider
+    is down or fails, falls back to a truncated version.
+    """
+    raw_text = raw_text.strip()
+    if not raw_text:
+        return f"Provider exited with code {returncode} (no output)."
+
+    # Short errors don't need summarization
+    if len(raw_text) <= _ERROR_DISPLAY_LIMIT:
+        return html.escape(raw_text)
+
+    # Try to summarize via a lightweight provider call
+    proc = None
+    try:
+        from app.summarize import _clean_env
+        prompt = _ERROR_SUMMARY_PROMPT.format(rc=returncode, text=raw_text[:4000])
+        proc = await asyncio.create_subprocess_exec(
+            "claude", "-p",
+            "--model", "claude-haiku-4-5-20251001",
+            "--output-format", "text",
+            "--", prompt,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_clean_env(),
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+        if proc.returncode == 0:
+            summary = stdout.decode("utf-8", errors="replace").strip()
+            if summary:
+                return html.escape(summary)
+    except Exception:
+        if proc and proc.returncode is None:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+
+    # Fallback: truncate intelligently — show beginning and end
+    head = raw_text[:800]
+    tail = raw_text[-400:]
+    truncated = f"{head}\n\n[…truncated…]\n\n{tail}"
+    return html.escape(truncated)
 
 
 @contextlib.asynccontextmanager
@@ -325,7 +390,10 @@ def _command_handler(fn):
             return
         try:
             await fn(event, update, context)
-        finally:
+        except Exception:
+            _complete_pending_work_item(uid, state="failed")
+            raise
+        else:
             _complete_pending_work_item(uid)
     return wrapper
 
@@ -345,6 +413,7 @@ def _callback_handler(fn):
             return
         uid = update.update_id
         if event is None:
+            _complete_pending_work_item(uid)
             return
         query = update.callback_query
         if not is_allowed(event.user):
@@ -353,7 +422,10 @@ def _callback_handler(fn):
             return
         try:
             await fn(event, query)
-        finally:
+        except Exception:
+            _complete_pending_work_item(uid, state="failed")
+            raise
+        else:
             _complete_pending_work_item(uid)
     return wrapper
 
@@ -709,7 +781,7 @@ async def execute_request(
         return
 
     if result.returncode != 0:
-        error_text = html.escape(trim_text(result.text, 3000))
+        error_text = await _format_provider_error(result.text, result.returncode)
         if resume_errored:
             error_text += "\n\n<i>Thread could not be resumed — next message starts a fresh session.</i>"
         await progress.update(error_text, force=True)
@@ -831,10 +903,8 @@ async def request_approval(
         return
 
     if plan_result.returncode != 0:
-        await progress.update(
-            f"Preflight approval failed:\n{trim_text(plan_result.text, 3000)}",
-            force=True,
-        )
+        error_text = await _format_provider_error(plan_result.text, plan_result.returncode)
+        await progress.update(f"Preflight failed:\n{error_text}", force=True)
         return
 
     attachment_dicts = [
@@ -2350,4 +2420,28 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
             handle_message,
         )
     )
+    app.add_error_handler(_global_error_handler)
     return app
+
+
+async def _global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Catch unhandled exceptions so the user always gets feedback."""
+    error = context.error
+
+    # Stale callback queries are harmless — Telegram's 30-second answer
+    # window expired while the bot was busy.  Suppress the noise.
+    if isinstance(error, BadRequest) and "query is too old" in str(error).lower():
+        log.debug("Stale callback query (ignored): %s", error)
+        return
+
+    log.exception("Unhandled exception in handler", exc_info=error)
+
+    # Try to notify the user
+    if update and isinstance(update, Update) and update.effective_chat:
+        try:
+            await context.bot.send_message(
+                update.effective_chat.id,
+                "Something went wrong processing your request. Please try again.",
+            )
+        except Exception:
+            pass

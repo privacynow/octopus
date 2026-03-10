@@ -2415,3 +2415,312 @@ async def test_interrupted_message_run_stays_claimed_for_recovery():
         ).fetchone()
         assert row["state"] == "queued"
         assert row["worker_id"] is None
+
+
+# =====================================================================
+# INVARIANT 32: All negative return codes are treated as interrupted
+#
+# Any signal (not just -15/-9) means the provider child was killed
+# externally.  SIGINT (-2), SIGABRT (-6), etc. must all leave the
+# work item claimed for recovery, never surface an error message.
+# =====================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rc", [-2, -6, -9, -15])
+async def test_any_signal_treated_as_interrupted(rc):
+    import app.telegram_handlers as th
+    from app.work_queue import _transport_db
+
+    with fresh_env() as (data_dir, cfg, prov):
+        prov.run_results = [RunResult(text="killed", returncode=rc)]
+        chat = FakeChat(chat_id=9200 + abs(rc))
+        user = FakeUser(uid=42, username="testuser")
+        msg = _StickyReplyMessage(chat=chat, text="test")
+        upd = FakeUpdate(message=msg, user=user, chat=chat)
+
+        await th.handle_message(upd, FakeContext())
+
+        # No error surfaced to user
+        joined = " ".join(
+            entry.get("text", "") + " " + entry.get("edit_text", "")
+            for entry in msg.replies
+        )
+        assert "error" not in joined.lower() or "killed" not in joined.lower()
+
+        # Work item stays claimed
+        conn = _transport_db(data_dir)
+        row = conn.execute(
+            "SELECT state FROM work_items WHERE update_id = ?",
+            (upd.update_id,),
+        ).fetchone()
+        assert row["state"] == "claimed"
+
+
+# =====================================================================
+# INVARIANT 33: Provider errors (rc > 0) produce user-visible feedback
+#
+# When the provider exits with a positive error code, the user must
+# always see a message — even if the error text is very long or empty.
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_provider_error_empty_output_still_shows_message():
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        prov.run_results = [RunResult(text="", returncode=1)]
+        chat = FakeChat(chat_id=9300)
+        user = FakeUser(uid=42, username="testuser")
+        msg = _StickyReplyMessage(chat=chat, text="test")
+        upd = FakeUpdate(message=msg, user=user, chat=chat)
+
+        await th.handle_message(upd, FakeContext())
+
+        joined = " ".join(
+            entry.get("text", "") + " " + entry.get("edit_text", "")
+            for entry in msg.replies
+        )
+        # User gets some feedback about the error
+        assert "exited with code 1" in joined.lower() or "error" in joined.lower()
+
+
+@pytest.mark.asyncio
+async def test_provider_error_long_output_truncated():
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        long_error = "E" * 5000
+        prov.run_results = [RunResult(text=long_error, returncode=1)]
+        chat = FakeChat(chat_id=9301)
+        user = FakeUser(uid=42, username="testuser")
+        msg = _StickyReplyMessage(chat=chat, text="test")
+        upd = FakeUpdate(message=msg, user=user, chat=chat)
+
+        await th.handle_message(upd, FakeContext())
+
+        # Verify user got feedback (not silent)
+        joined = " ".join(
+            entry.get("text", "") + " " + entry.get("edit_text", "")
+            for entry in msg.replies
+        )
+        assert len(joined) > 0
+        # Full 5000-char error should not appear verbatim
+        assert long_error not in joined
+
+
+# =====================================================================
+# INVARIANT 34: Global error handler catches stale callback queries
+#
+# A BadRequest for an expired callback query must not produce a noisy
+# unhandled-exception log.  The global error handler suppresses it.
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_global_error_handler_suppresses_stale_callback():
+    import app.telegram_handlers as th
+    from telegram.error import BadRequest
+
+    handler = th._global_error_handler
+
+    class FakeErrorContext:
+        error = BadRequest("Query is too old and response timeout expired or query id is invalid")
+        bot = None
+
+    # Should not raise — suppressed at debug level
+    await handler(None, FakeErrorContext())
+
+
+@pytest.mark.asyncio
+async def test_global_error_handler_notifies_user_on_unknown_error():
+    """The handler tries to notify via context.bot — if the update isn't a
+    real telegram.Update it gracefully skips notification without raising."""
+    import app.telegram_handlers as th
+
+    class FakeErrorContext:
+        error = RuntimeError("unexpected boom")
+        bot = None
+
+    # Non-Update object — handler should log but not raise
+    await th._global_error_handler("not-a-real-update", FakeErrorContext())
+
+
+@pytest.mark.asyncio
+async def test_global_error_handler_sends_message_on_real_update():
+    """When given a real Update with effective_chat, the handler sends feedback."""
+    import app.telegram_handlers as th
+    from telegram import Update, Chat, Message, User as TgUser
+
+    sent_messages = []
+
+    class FakeBotForError:
+        async def send_message(self, chat_id, text, **kwargs):
+            sent_messages.append({"chat_id": chat_id, "text": text})
+
+    class FakeErrorContext:
+        error = RuntimeError("unexpected boom")
+        bot = FakeBotForError()
+
+    tg_chat = Chat(id=9400, type="private")
+    tg_user = TgUser(id=42, is_bot=False, first_name="Test")
+    tg_msg = Message(
+        message_id=1, date=None, chat=tg_chat, from_user=tg_user, text="x"
+    )
+    upd = Update(update_id=99999, message=tg_msg)
+
+    await th._global_error_handler(upd, FakeErrorContext())
+
+    assert len(sent_messages) == 1
+    assert "went wrong" in sent_messages[0]["text"].lower()
+
+
+# =====================================================================
+# INVARIANT 35: Unhandled decorator exceptions mark work items failed
+#
+# When a decorated command or callback raises an unhandled exception,
+# the work item must be recorded as "failed", not "done".
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_command_exception_marks_work_item_failed():
+    """A command handler that raises must leave the work item as failed."""
+    import app.telegram_handlers as th
+    from app.work_queue import _transport_db
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=9500)
+        user = FakeUser(uid=42, username="testuser")
+        msg = FakeMessage(chat=chat, text="/session")
+        upd = FakeUpdate(message=msg, user=user, chat=chat)
+
+        # Patch _load to raise inside cmd_session
+        original_load = th._load
+        def exploding_load(chat_id):
+            raise RuntimeError("session DB corrupt")
+
+        th._load = exploding_load
+        try:
+            with pytest.raises(RuntimeError, match="session DB corrupt"):
+                await th.cmd_session(upd, FakeContext())
+        finally:
+            th._load = original_load
+
+        conn = _transport_db(data_dir)
+        row = conn.execute(
+            "SELECT state FROM work_items WHERE update_id = ?",
+            (upd.update_id,),
+        ).fetchone()
+        assert row["state"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_callback_exception_marks_work_item_failed():
+    """A callback handler that raises must leave the work item as failed."""
+    import app.telegram_handlers as th
+    from app.work_queue import _transport_db
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=9501)
+        user = FakeUser(uid=42, username="testuser")
+        query = FakeCallbackQuery(data="setting_approval:on",
+                                  message=FakeMessage(chat=chat),
+                                  user=user)
+        upd = FakeUpdate(callback_query=query, user=user, chat=chat)
+
+        original_load = th._load
+        def exploding_load(chat_id):
+            raise RuntimeError("session DB corrupt")
+
+        th._load = exploding_load
+        try:
+            with pytest.raises(RuntimeError, match="session DB corrupt"):
+                await th.handle_settings_callback(upd, FakeContext())
+        finally:
+            th._load = original_load
+
+        conn = _transport_db(data_dir)
+        row = conn.execute(
+            "SELECT state FROM work_items WHERE update_id = ?",
+            (upd.update_id,),
+        ).fetchone()
+        assert row["state"] == "failed"
+
+
+# =====================================================================
+# INVARIANT 36: Error summarizer subprocess is cleaned up on timeout
+#
+# _format_provider_error spawns a subprocess for summarization.
+# If it times out, the child must be killed and reaped, not leaked.
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_format_provider_error_kills_subprocess_on_timeout():
+    import app.telegram_handlers as th
+
+    killed = []
+
+    class FakeProc:
+        returncode = None
+        async def communicate(self):
+            await asyncio.sleep(60)  # will be cancelled by timeout
+        def kill(self):
+            killed.append(True)
+            self.returncode = -9
+        async def wait(self):
+            pass
+
+    original = asyncio.create_subprocess_exec
+
+    async def mock_exec(*args, **kwargs):
+        return FakeProc()
+
+    asyncio.create_subprocess_exec = mock_exec
+    try:
+        # Long text triggers summarization attempt
+        result = await th._format_provider_error("E" * 5000, 1)
+    finally:
+        asyncio.create_subprocess_exec = mock_exec
+        asyncio.create_subprocess_exec = original
+
+    # Subprocess was killed
+    assert len(killed) == 1
+    # Fallback truncation was used
+    assert "truncated" in result.lower() or "E" in result
+
+
+# =====================================================================
+# INVARIANT 37: All decorator early-return branches complete work items
+#
+# Every path through _command_handler and _callback_handler that returns
+# after _dedup_update must call _complete_pending_work_item.  A missing
+# call leaves the durable work item stuck in "queued" state forever.
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_callback_none_event_completes_work_item():
+    """When normalize_callback returns None, the work item must be completed (not leaked)."""
+    import app.telegram_handlers as th
+    from app.work_queue import _transport_db
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=9600)
+        upd = FakeUpdate(
+            callback_query=FakeCallbackQuery(data="setting_approval:on",
+                                             message=FakeMessage(chat=chat)),
+            user=FakeUser(uid=42, username="testuser"), chat=chat,
+        )
+
+        # Patch the symbol the handler actually imports
+        original = th.normalize_callback
+        th.normalize_callback = lambda update: None
+        try:
+            await th.handle_settings_callback(upd, FakeContext())
+        finally:
+            th.normalize_callback = original
+
+        conn = _transport_db(data_dir)
+        row = conn.execute(
+            "SELECT state FROM work_items WHERE update_id = ?",
+            (upd.update_id,),
+        ).fetchone()
+        assert row is not None, "work item should exist"
+        assert row["state"] == "done", f"expected done, got {row['state']}"

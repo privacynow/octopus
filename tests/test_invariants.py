@@ -1186,9 +1186,6 @@ async def test_duplicate_update_id_skipped():
         chat = FakeChat(chat_id=8001)
         user = FakeUser(uid=42, username="testuser")
 
-        # Clear seen IDs
-        th._seen_update_ids.clear()
-
         msg1 = FakeMessage(chat=chat, text="hello")
         upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
         dup_id = upd1.update_id
@@ -1211,8 +1208,6 @@ async def test_duplicate_update_id_skipped_for_commands():
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=8002)
         user = FakeUser(uid=42, username="testuser")
-
-        th._seen_update_ids.clear()
 
         msg1 = FakeMessage(chat=chat, text="/new")
         upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
@@ -1239,8 +1234,6 @@ async def test_duplicate_update_id_skipped_for_help():
         chat = FakeChat(chat_id=8004)
         user = FakeUser(uid=42, username="testuser")
 
-        th._seen_update_ids.clear()
-
         msg1 = FakeMessage(chat=chat, text="/help")
         upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
         dup_id = upd1.update_id
@@ -1265,8 +1258,6 @@ async def test_duplicate_update_id_skipped_for_callbacks():
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=8003)
         user = FakeUser(uid=42, username="testuser")
-
-        th._seen_update_ids.clear()
 
         # First callback
         msg1 = FakeMessage(chat=chat)

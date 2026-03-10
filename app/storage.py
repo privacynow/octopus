@@ -160,8 +160,10 @@ def ensure_data_dirs(data_dir: Path) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "uploads").mkdir(parents=True, exist_ok=True)
     (data_dir / "credentials").mkdir(parents=True, exist_ok=True)
-    # Initialize SQLite database (creates sessions.db if needed)
+    # Initialize SQLite databases
     _db(data_dir)
+    from app.work_queue import _transport_db
+    _transport_db(data_dir)
 
 
 def sanitize_filename(name: str) -> str:

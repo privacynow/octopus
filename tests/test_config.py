@@ -185,6 +185,9 @@ def test_main_calls_run_polling_in_poll_mode():
          patch("app.main.startup_recovery"), \
          patch("app.main.build_application", return_value=mock_app), \
          patch("app.main.close_db"), \
+         patch("app.main.close_transport_db"), \
+         patch("app.main.recover_stale_claims"), \
+         patch("app.main.purge_old"), \
          patch("sys.argv", ["bot"]):
         from app.main import main
         main()
@@ -209,6 +212,9 @@ def test_main_calls_run_webhook_in_webhook_mode():
          patch("app.main.startup_recovery"), \
          patch("app.main.build_application", return_value=mock_app), \
          patch("app.main.close_db"), \
+         patch("app.main.close_transport_db"), \
+         patch("app.main.recover_stale_claims"), \
+         patch("app.main.purge_old"), \
          patch("sys.argv", ["bot"]):
         from app.main import main
         main()
@@ -237,6 +243,9 @@ def test_main_webhook_empty_secret_passes_none():
          patch("app.main.startup_recovery"), \
          patch("app.main.build_application", return_value=mock_app), \
          patch("app.main.close_db"), \
+         patch("app.main.close_transport_db"), \
+         patch("app.main.recover_stale_claims"), \
+         patch("app.main.purge_old"), \
          patch("sys.argv", ["bot"]):
         from app.main import main
         main()

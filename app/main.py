@@ -9,6 +9,7 @@ from app.providers.base import Provider
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
 from app.storage import close_db, ensure_data_dirs
+from app.work_queue import close_transport_db, recover_stale_claims, purge_old
 from app.store import startup_recovery
 from app.telegram_handlers import build_application
 
@@ -80,6 +81,11 @@ def main() -> None:
 
     app = build_application(config, provider)
 
+    # Recover stale work items from previous boot and purge old transport data
+    from app.telegram_handlers import _boot_id as boot_id
+    recover_stale_claims(config.data_dir, boot_id)
+    purge_old(config.data_dir)
+
     if config.bot_mode == "webhook":
         log.info("Bot starting (webhook)...")
         log.info("Webhook URL: %s", config.webhook_url)
@@ -93,12 +99,14 @@ def main() -> None:
                 url_path="/webhook",
             )
         finally:
+            close_transport_db(config.data_dir)
             close_db(config.data_dir)
     else:
         log.info("Bot starting (long-poll)...")
         try:
             app.run_polling()
         finally:
+            close_transport_db(config.data_dir)
             close_db(config.data_dir)
 
 

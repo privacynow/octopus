@@ -72,6 +72,7 @@ from app.storage import (
 )
 from app.ratelimit import RateLimiter
 from app.summarize import export_chat_history, load_raw, save_raw, summarize
+from app import work_queue
 from app.transport import (
     InboundAttachment,
     InboundUser,
@@ -101,7 +102,11 @@ async def _chat_lock(chat_id: int, *, message=None, query=None):
     """
     lock = CHAT_LOCKS[chat_id]
     sent_feedback = False
-    if lock.locked():
+    # In-memory lock is the primary contention signal.  The durable check
+    # only matters on restart recovery (lock not held but stale work items exist).
+    data_dir = _cfg().data_dir
+    is_busy = lock.locked()
+    if is_busy:
         sent_feedback = True
         if message is not None:
             await message.reply_text(
@@ -110,7 +115,21 @@ async def _chat_lock(chat_id: int, *, message=None, query=None):
         elif query is not None:
             await query.answer("Working on your previous request \u2014 yours is queued.")
     async with lock:
-        yield sent_feedback
+        # Claim the next durable work item for this chat
+        item = work_queue.claim_next(data_dir, chat_id, _boot_id)
+        item_id = item["id"] if item else None
+        try:
+            yield sent_feedback
+        except Exception:
+            # Mark as failed on unhandled exception
+            if item_id:
+                work_queue.complete_work_item(data_dir, item_id, state="failed")
+                _pending_work_items.pop(chat_id, None)
+            raise
+        else:
+            if item_id:
+                work_queue.complete_work_item(data_dir, item_id, state="done")
+                _pending_work_items.pop(chat_id, None)
 
 
 # These get set by build_application()
@@ -118,21 +137,38 @@ _config: BotConfig | None = None
 _provider: Provider | None = None
 _boot_id: str = ""  # unique per process; detects restart to clear stale threads
 _rate_limiter: RateLimiter | None = None
-_seen_update_ids: set[int] = set()  # track processed update_ids for idempotency
-_MAX_SEEN_IDS = 1000  # cap the set size to prevent memory growth
+# Tracks the work item ID for the most recent update per chat, so handlers
+# that don't use _chat_lock can still complete their work items.
+_pending_work_items: dict[int, str] = {}  # chat_id -> latest work_item_id
 
 
-def _dedup_update(update: Update) -> bool:
-    """Return True if this update_id was already processed (duplicate). Thread-safe for single-process."""
+def _dedup_update(update: Update, kind: str = "unknown") -> bool:
+    """Return True if this update_id was already processed (duplicate).
+
+    Uses durable SQLite storage so dedup survives restarts.
+    Also enqueues a work item for the update.
+    """
     uid = update.update_id
-    if uid in _seen_update_ids:
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    user_id = update.effective_user.id if update.effective_user else 0
+    data_dir = _cfg().data_dir
+    is_new = work_queue.record_update(data_dir, uid, chat_id, user_id, kind)
+    if not is_new:
         log.debug("Skipping duplicate update_id %d", uid)
         return True
-    _seen_update_ids.add(uid)
-    if len(_seen_update_ids) > _MAX_SEEN_IDS:
-        sorted_ids = sorted(_seen_update_ids)
-        _seen_update_ids.difference_update(sorted_ids[:len(sorted_ids) // 2])
+    item_id = work_queue.enqueue_work_item(data_dir, chat_id, uid)
+    _pending_work_items[chat_id] = item_id
     return False
+
+
+def _complete_pending_work_item(chat_id: int, state: str = "done") -> None:
+    """Complete the pending work item for a chat if _chat_lock hasn't already."""
+    item_id = _pending_work_items.pop(chat_id, None)
+    if item_id:
+        try:
+            work_queue.complete_work_item(_cfg().data_dir, item_id, state=state)
+        except Exception:
+            log.debug("Work item %s already completed", item_id)
 
 
 def _cfg() -> BotConfig:
@@ -256,12 +292,16 @@ def _command_handler(fn):
     import functools
     @functools.wraps(fn)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if _dedup_update(update):
+        if _dedup_update(update, kind="command"):
             return
         event = normalize_command(update, context)
         if event is None or not is_allowed(event.user):
+            _complete_pending_work_item(update.effective_chat.id)
             return
-        await fn(event, update, context)
+        try:
+            await fn(event, update, context)
+        finally:
+            _complete_pending_work_item(event.chat_id)
     return wrapper
 
 
@@ -274,7 +314,7 @@ def _callback_handler(fn):
     import functools
     @functools.wraps(fn)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if _dedup_update(update):
+        if _dedup_update(update, kind="callback"):
             return
         event = normalize_callback(update)
         if event is None:
@@ -282,8 +322,12 @@ def _callback_handler(fn):
         query = update.callback_query
         if not is_allowed(event.user):
             await query.answer("Not authorized.", show_alert=True)
+            _complete_pending_work_item(event.chat_id)
             return
-        await fn(event, query)
+        try:
+            await fn(event, query)
+        finally:
+            _complete_pending_work_item(event.chat_id)
     return wrapper
 
 
@@ -890,24 +934,27 @@ _HELP_TOPICS = {
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start — always show main help (ignores deep-link payloads)."""
-    if _dedup_update(update):
+    if _dedup_update(update, kind="command"):
         return
     event = normalize_command(update, context)
     if event is None or not is_allowed(event.user):
         await update.effective_message.reply_text("Not authorized.")
+        _complete_pending_work_item(update.effective_chat.id)
         return
     cfg = _cfg()
     text = HELP_TEMPLATE.format(provider=_prov().name.capitalize(), instance=cfg.instance)
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+    _complete_pending_work_item(event.chat_id)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help [topic] — main help or topic-specific detail."""
-    if _dedup_update(update):
+    if _dedup_update(update, kind="command"):
         return
     event = normalize_command(update, context)
     if event is None or not is_allowed(event.user):
         await update.effective_message.reply_text("Not authorized.")
+        _complete_pending_work_item(update.effective_chat.id)
         return
     cfg = _cfg()
     args = event.args
@@ -917,14 +964,17 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         topic_text = _HELP_TOPICS.get(topic)
         if topic_text:
             await update.effective_message.reply_text(topic_text, parse_mode=ParseMode.HTML)
+            _complete_pending_work_item(event.chat_id)
             return
         await update.effective_message.reply_text(
             "Unknown help topic. Try: /help skills, /help approval, or /help credentials."
         )
+        _complete_pending_work_item(event.chat_id)
         return
 
     text = HELP_TEMPLATE.format(provider=_prov().name.capitalize(), instance=cfg.instance)
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+    _complete_pending_work_item(event.chat_id)
 
 
 @_command_handler
@@ -1588,11 +1638,12 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if _dedup_update(update):
+    if _dedup_update(update, kind="message"):
         return
 
     user = normalize_user(update.effective_user)
     if user is None or not is_allowed(user):
+        _complete_pending_work_item(update.effective_chat.id)
         return
 
     # Rate limit check (admins exempt)
@@ -1601,10 +1652,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not allowed:
             await update.effective_message.reply_text(
                 f"Rate limit reached. Please wait {retry_after} seconds.")
+            _complete_pending_work_item(update.effective_chat.id)
             return
 
     msg = await normalize_message(update, context, _cfg().data_dir)
     if msg is None:
+        _complete_pending_work_item(update.effective_chat.id)
         return
 
     message = update.effective_message

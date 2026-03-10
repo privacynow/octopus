@@ -170,3 +170,64 @@ def normalize_callback(update) -> InboundCallback | None:
     chat_id = update.effective_chat.id
     data = update.callback_query.data or ""
     return InboundCallback(user=user, chat_id=chat_id, data=data)
+
+
+# ---------------------------------------------------------------------------
+# Serialization for durable storage
+# ---------------------------------------------------------------------------
+
+import json
+
+
+def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback) -> str:
+    """Serialize a normalized inbound event to JSON for durable storage."""
+    if isinstance(event, InboundMessage):
+        return json.dumps({
+            "user_id": event.user.id,
+            "username": event.user.username,
+            "chat_id": event.chat_id,
+            "text": event.text,
+            "attachments": [
+                {"path": str(a.path), "original_name": a.original_name,
+                 "is_image": a.is_image, "mime_type": a.mime_type}
+                for a in event.attachments
+            ],
+        })
+    if isinstance(event, InboundCommand):
+        return json.dumps({
+            "user_id": event.user.id,
+            "username": event.user.username,
+            "chat_id": event.chat_id,
+            "command": event.command,
+            "args": list(event.args),
+        })
+    if isinstance(event, InboundCallback):
+        return json.dumps({
+            "user_id": event.user.id,
+            "username": event.user.username,
+            "chat_id": event.chat_id,
+            "data": event.data,
+        })
+    raise TypeError(f"Unknown inbound type: {type(event)}")
+
+
+def deserialize_inbound(kind: str, payload_json: str) -> InboundMessage | InboundCommand | InboundCallback:
+    """Reconstruct a normalized inbound event from stored JSON."""
+    d = json.loads(payload_json)
+    user = InboundUser(id=d["user_id"], username=d.get("username", ""))
+    if kind == "message":
+        attachments = tuple(
+            InboundAttachment(
+                path=Path(a["path"]), original_name=a["original_name"],
+                is_image=a["is_image"], mime_type=a.get("mime_type"),
+            )
+            for a in d.get("attachments", [])
+        )
+        return InboundMessage(user=user, chat_id=d["chat_id"], text=d.get("text", ""),
+                              attachments=attachments)
+    if kind == "command":
+        return InboundCommand(user=user, chat_id=d["chat_id"],
+                              command=d["command"], args=tuple(d.get("args", [])))
+    if kind == "callback":
+        return InboundCallback(user=user, chat_id=d["chat_id"], data=d.get("data", ""))
+    raise ValueError(f"Unknown kind: {kind}")

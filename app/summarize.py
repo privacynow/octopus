@@ -43,7 +43,7 @@ def save_raw(
     prompt: str,
     raw_text: str,
     kind: str = "request",
-) -> None:
+) -> int:
     """Append a conversation turn to the ring buffer, rotating old entries.
 
     *kind* distinguishes turn types: "request" (normal user->model),
@@ -74,6 +74,7 @@ def save_raw(
     tmp = target.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False))
     tmp.rename(target)
+    return new_num
 
 
 def load_raw(data_dir: Path, chat_id: int, n: int = 1) -> str | None:
@@ -83,6 +84,17 @@ def load_raw(data_dir: Path, chat_id: int, n: int = 1) -> str | None:
     if not entries or n < 1 or n > len(entries):
         return None
     target = entries[-n]
+    try:
+        return json.loads(target.read_text()).get("raw_text")
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def load_raw_by_slot(data_dir: Path, chat_id: int, slot: int) -> str | None:
+    """Load a raw response by its ring-buffer slot number. Returns None if evicted."""
+    target = _ring_dir(data_dir, chat_id) / f"{slot:06d}.json"
+    if not target.exists():
+        return None
     try:
         return json.loads(target.read_text()).get("raw_text")
     except (json.JSONDecodeError, OSError):

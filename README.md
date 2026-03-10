@@ -197,4 +197,4 @@ If you run the bot yourself, these resources cover setup, administration, and in
 ./scripts/doctor.sh <instance>  # health check a running instance
 ```
 
-537 pytest tests + 35 bash tests across 30 entrypoints.
+527 pytest tests + 35 bash tests across 30 entrypoints.

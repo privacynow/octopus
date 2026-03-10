@@ -88,6 +88,32 @@ def test_command_building_profile():
     assert "myprofile" in cmd7
 
 
+def test_effective_model_overrides_config_model():
+    """effective_model should override config.model in codex commands."""
+    p = CodexProvider(make_config(model="o3"))
+    cmd = p._build_new_cmd("test", [], effective_model="o4-mini")
+    assert "--model" in cmd
+    assert "o4-mini" in cmd
+    assert "o3" not in cmd
+
+
+def test_effective_model_empty_falls_back_to_config():
+    """When effective_model is empty, codex should use config.model."""
+    p = CodexProvider(make_config(model="o3"))
+    cmd = p._build_new_cmd("test", [])
+    assert "--model" in cmd
+    assert "o3" in cmd
+
+
+def test_effective_model_in_resume_cmd():
+    """effective_model should flow through _build_resume_cmd."""
+    p = CodexProvider(make_config(model="o3"))
+    cmd = p._build_resume_cmd("thread-123", "continue", [], effective_model="o4-mini")
+    assert "--model" in cmd
+    assert "o4-mini" in cmd
+    assert "o3" not in cmd
+
+
 def test_command_building_ephemeral():
     p = CodexProvider(make_config())
     cmd8 = p._build_new_cmd("test", [], sandbox="read-only", ephemeral=True)

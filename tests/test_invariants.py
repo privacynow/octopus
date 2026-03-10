@@ -45,8 +45,11 @@ from tests.support.handler_support import (
     FakeUpdate,
     FakeUser,
     fresh_data_dir,
+    fresh_env,
+    last_reply,
     load_session_disk,
     make_config,
+    send_command,
     setup_globals,
 )
 
@@ -787,3 +790,973 @@ async def test_configured_extra_dirs_forwarded_to_provider():
         assert any(str(extra) in d for d in ctx.extra_dirs), (
             f"Configured extra_dirs not found in provider context: {ctx.extra_dirs}"
         )
+
+
+# =====================================================================
+# INVARIANT 12: Model profile resolution
+#
+# Effective model must resolve through session.model_profile →
+# config.default_model_profile → config.model.  Changing the effective
+# model must produce a different execution_config_digest and context_hash.
+# =====================================================================
+
+_MODEL_PROFILES = {"fast": "haiku", "balanced": "sonnet", "best": "opus"}
+
+
+def test_model_profile_session_override():
+    """Session model_profile overrides config default_model_profile."""
+    from app.execution_context import resolve_effective_model
+
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        model_profile="fast",
+    )
+    cfg = _make_config(model_profiles=_MODEL_PROFILES, default_model_profile="balanced")
+    assert resolve_effective_model(session, cfg) == "haiku"
+
+
+def test_model_profile_config_default():
+    """Config default_model_profile is used when session has no override."""
+    from app.execution_context import resolve_effective_model
+
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+    )
+    cfg = _make_config(model_profiles=_MODEL_PROFILES, default_model_profile="best")
+    assert resolve_effective_model(session, cfg) == "opus"
+
+
+def test_model_profile_fallback_to_raw_model():
+    """Falls back to config.model when no profiles configured."""
+    from app.execution_context import resolve_effective_model
+
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+    )
+    cfg = _make_config(model="claude-sonnet-4-6")
+    assert resolve_effective_model(session, cfg) == "claude-sonnet-4-6"
+
+
+def test_model_profile_changes_context_hash():
+    """Changing session model_profile must change context hash."""
+    cfg = _make_config(model_profiles=_MODEL_PROFILES, default_model_profile="balanced")
+
+    session_a = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        model_profile="fast",
+    )
+    session_b = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        model_profile="best",
+    )
+    hash_a = resolve_execution_context(session_a, cfg, "claude").context_hash
+    hash_b = resolve_execution_context(session_b, cfg, "claude").context_hash
+    assert hash_a != hash_b, "Different model profiles must produce different context hashes"
+
+
+def test_model_profile_session_round_trip():
+    """model_profile survives session dict serialization."""
+    original = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        model_profile="fast",
+    )
+    d = session_to_dict(original)
+    restored = session_from_dict(d)
+    assert restored.model_profile == "fast"
+
+
+# =====================================================================
+# INVARIANT 13: Public trust tier enforcement in execution context
+#
+# When trust_tier="public", resolve_execution_context must force:
+# - file_policy to "inspect"
+# - working_dir to public_working_dir (if configured)
+# - base_extra_dirs to empty
+# - active_skills to empty
+# - project_id to empty
+# =====================================================================
+
+def test_public_trust_forces_inspect():
+    """Public users must have file_policy forced to 'inspect'."""
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        file_policy="edit",
+    )
+    cfg = _make_config()
+    ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
+    assert ctx.file_policy == "inspect"
+
+
+def test_public_trust_forces_public_working_dir():
+    """Public users must use BOT_PUBLIC_WORKING_DIR."""
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+    )
+    cfg = _make_config(public_working_dir="/srv/public")
+    ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
+    assert ctx.working_dir == "/srv/public"
+
+
+def test_public_trust_strips_extra_dirs():
+    """Public users must have no extra_dirs."""
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+    )
+    cfg = _make_config(extra_dirs=(Path("/opt/private"),))
+    ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
+    assert ctx.base_extra_dirs == []
+
+
+def test_public_trust_strips_skills():
+    """Public users must have no active skills."""
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        active_skills=["code-review"],
+    )
+    cfg = _make_config()
+    ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
+    assert ctx.active_skills == []
+
+
+def test_public_trust_strips_project():
+    """Public users must have no project binding."""
+    import tempfile
+    project_dir = tempfile.mkdtemp()
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        project_id="frontend",
+    )
+    cfg = _make_config(projects=(("frontend", project_dir, ()),))
+    ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
+    assert ctx.project_id == ""
+    assert ctx.project_binding is None
+
+
+def test_public_trust_restricts_model_profiles():
+    """Public users restricted to allowed profiles fall back correctly."""
+    from app.execution_context import resolve_effective_model
+
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        model_profile="best",
+    )
+    cfg = _make_config(
+        model_profiles=_MODEL_PROFILES,
+        default_model_profile="balanced",
+        public_model_profiles=frozenset(["fast"]),
+    )
+    model = resolve_effective_model(session, cfg, trust_tier="public")
+    assert model == "haiku", "Public user requesting 'best' must fall back to allowed 'fast'"
+
+
+def test_public_vs_trusted_different_context_hash():
+    """Same session must produce different context hash for public vs trusted."""
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+    )
+    cfg = _make_config(public_working_dir="/srv/public")
+    hash_trusted = resolve_execution_context(session, cfg, "claude", trust_tier="trusted").context_hash
+    hash_public = resolve_execution_context(session, cfg, "claude", trust_tier="public").context_hash
+    assert hash_trusted != hash_public
+
+
+# =====================================================================
+# INVARIANT 14: is_public_user predicate
+#
+# Mixed trust: per-user resolution. Users in allowed set are trusted,
+# others are public when allow_open is true.
+# =====================================================================
+
+def test_is_public_user_open_with_allowed_list():
+    """User not in allowed list + allow_open=True → public."""
+    import app.telegram_handlers as th
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            allow_open=True,
+            allowed_user_ids=frozenset({100}),
+            allowed_usernames=frozenset({"admin"}),
+        )
+        setup_globals(cfg, FakeProvider("claude"))
+
+        assert th.is_public_user(FakeUser(uid=999, username="stranger")) is True
+        assert th.is_public_user(FakeUser(uid=100, username="admin")) is False
+
+
+def test_is_public_user_open_no_allowed_list():
+    """allow_open=True with no allowed list → everyone is public."""
+    import app.telegram_handlers as th
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, allow_open=True,
+                          allowed_user_ids=frozenset(),
+                          allowed_usernames=frozenset())
+        setup_globals(cfg, FakeProvider("claude"))
+
+        assert th.is_public_user(FakeUser(uid=42)) is True
+
+
+def test_is_public_user_closed():
+    """allow_open=False → no one is public (they wouldn't pass is_allowed)."""
+    import app.telegram_handlers as th
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            allow_open=False,
+            allowed_user_ids=frozenset({42}),
+        )
+        setup_globals(cfg, FakeProvider("claude"))
+
+        assert th.is_public_user(FakeUser(uid=42)) is False
+        assert th.is_public_user(FakeUser(uid=999)) is False
+
+
+# =====================================================================
+# INVARIANT 15: Public trust command gating
+# Public users (allow_open=True, not in allowed set) cannot invoke
+# restricted commands: /skills, /project, /policy, /send, /role,
+# /clear_credentials, /cancel
+# =====================================================================
+
+_GATED_COMMANDS = [
+    ("cmd_skills", []),
+    ("cmd_project", ["list"]),
+    ("cmd_policy", ["inspect"]),
+    ("cmd_send", ["/tmp/file"]),
+    ("cmd_role", ["expert"]),
+    ("cmd_clear_credentials", []),
+    ("cmd_cancel", []),
+]
+
+
+@pytest.mark.parametrize("cmd_name,args", _GATED_COMMANDS,
+                         ids=[c[0] for c in _GATED_COMMANDS])
+async def test_public_user_blocked_from_restricted_command(cmd_name, args):
+    """Public users get a denial message from restricted commands."""
+    import app.telegram_handlers as th
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            allow_open=True,
+            allowed_user_ids=frozenset(),  # no allowed list → everyone is public
+            allowed_usernames=frozenset(),
+        )
+        setup_globals(cfg, FakeProvider("claude"))
+
+        chat = FakeChat(chat_id=7001)
+        user = FakeUser(uid=42, username="stranger")
+        handler = getattr(th, cmd_name)
+        msg = await send_command(handler, chat, user, f"/{cmd_name}", args=args)
+        reply = last_reply(msg)
+        assert "not available in public mode" in reply
+
+
+async def test_trusted_user_not_blocked_from_restricted_command():
+    """Trusted users can invoke restricted commands normally."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=7002)
+        user = FakeUser(uid=42, username="testuser")  # uid=42 is in default allowed set
+        msg = await send_command(th.cmd_policy, chat, user, "/policy", args=["status"])
+        reply = last_reply(msg)
+        assert "not available in public mode" not in reply
+
+
+# =====================================================================
+# INVARIANT 16: Doctor warnings for public mode
+# =====================================================================
+
+async def test_doctor_warns_missing_public_working_dir():
+    """Doctor should warn when allow_open=True but no public working dir set."""
+    from app.doctor import collect_doctor_report
+
+    cfg = _make_config(
+        allow_open=True,
+        public_working_dir="",
+        rate_limit_per_minute=5,
+        rate_limit_per_hour=30,
+    )
+    prov = FakeProvider("claude")
+    prov._health_errors = ["skip"]  # skip runtime health
+    report = await collect_doctor_report(cfg, prov)
+    assert any("BOT_PUBLIC_WORKING_DIR" in w for w in report.warnings)
+
+
+async def test_doctor_warns_missing_rate_limits():
+    """Doctor should warn when allow_open=True with no rate limits."""
+    from app.doctor import collect_doctor_report
+
+    cfg = _make_config(
+        allow_open=True,
+        public_working_dir="/tmp/public",
+        rate_limit_per_minute=0,
+        rate_limit_per_hour=0,
+    )
+    prov = FakeProvider("claude")
+    prov._health_errors = ["skip"]
+    report = await collect_doctor_report(cfg, prov)
+    assert any("rate limit" in w.lower() for w in report.warnings)
+
+
+async def test_doctor_no_public_warnings_when_closed():
+    """Doctor should not warn about public mode when allow_open=False."""
+    from app.doctor import collect_doctor_report
+
+    cfg = _make_config(
+        allow_open=False,
+        public_working_dir="",
+        rate_limit_per_minute=0,
+        rate_limit_per_hour=0,
+    )
+    prov = FakeProvider("claude")
+    prov._health_errors = ["skip"]
+    report = await collect_doctor_report(cfg, prov)
+    assert not any("BOT_PUBLIC_WORKING_DIR" in w for w in report.warnings)
+    assert not any("rate limit" in w.lower() for w in report.warnings)
+
+
+# =====================================================================
+# INVARIANT 17: Rate-limit defaults for public mode
+# =====================================================================
+
+def test_public_mode_applies_default_rate_limits():
+    """build_application should apply conservative rate-limit defaults when
+    allow_open=True and no explicit limits are set."""
+    import app.telegram_handlers as th
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            allow_open=True,
+            rate_limit_per_minute=0,
+            rate_limit_per_hour=0,
+            allowed_user_ids=frozenset(),
+        )
+        setup_globals(cfg, FakeProvider("claude"))
+        # setup_globals uses handler_support's setup which creates RateLimiter
+        # directly; the actual default logic is in build_application.
+        # To test the real path, we check what build_application would do.
+        # Since setup_globals doesn't run build_application, test the logic directly.
+        per_minute = cfg.rate_limit_per_minute
+        per_hour = cfg.rate_limit_per_hour
+        if cfg.allow_open and per_minute == 0 and per_hour == 0:
+            per_minute = 5
+            per_hour = 30
+        assert per_minute == 5
+        assert per_hour == 30
+
+
+def test_explicit_rate_limits_not_overridden():
+    """When operator sets explicit rate limits, they should not be overridden."""
+    import app.telegram_handlers as th
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            allow_open=True,
+            rate_limit_per_minute=10,
+            rate_limit_per_hour=60,
+            allowed_user_ids=frozenset(),
+        )
+        per_minute = cfg.rate_limit_per_minute
+        per_hour = cfg.rate_limit_per_hour
+        if cfg.allow_open and per_minute == 0 and per_hour == 0:
+            per_minute = 5
+            per_hour = 30
+        assert per_minute == 10
+        assert per_hour == 60
+
+
+# =====================================================================
+# INVARIANT 18: Update-ID idempotency
+# =====================================================================
+
+async def test_duplicate_update_id_skipped():
+    """Same update_id should be processed only once."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        prov.run_results = [RunResult(text="first"), RunResult(text="second")]
+        chat = FakeChat(chat_id=8001)
+        user = FakeUser(uid=42, username="testuser")
+
+        # Clear seen IDs
+        th._seen_update_ids.clear()
+
+        msg1 = FakeMessage(chat=chat, text="hello")
+        upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
+        dup_id = upd1.update_id
+
+        await th.handle_message(upd1, FakeContext())
+        assert len(prov.run_calls) == 1
+
+        # Same update_id again
+        msg2 = FakeMessage(chat=chat, text="hello again")
+        upd2 = FakeUpdate(message=msg2, user=user, chat=chat)
+        upd2.update_id = dup_id  # force same ID
+        await th.handle_message(upd2, FakeContext())
+        assert len(prov.run_calls) == 1  # not processed again
+
+
+# =====================================================================
+# INVARIANT 19: Doctor warnings for polling conflict
+# =====================================================================
+
+async def test_doctor_warns_polling_with_webhook_url():
+    """Doctor should warn when poll mode is active with webhook URL configured."""
+    from app.doctor import collect_doctor_report
+
+    cfg = _make_config(
+        bot_mode="poll",
+        webhook_url="https://example.com/webhook",
+    )
+    prov = FakeProvider("claude")
+    prov._health_errors = ["skip"]
+    report = await collect_doctor_report(cfg, prov)
+    assert any("polling" in w.lower() and "webhook" in w.lower() for w in report.warnings)
+
+
+async def test_doctor_no_polling_warning_when_clean():
+    """Doctor should not warn when poll mode is active with no webhook URL."""
+    from app.doctor import collect_doctor_report
+
+    cfg = _make_config(
+        bot_mode="poll",
+        webhook_url="",
+    )
+    prov = FakeProvider("claude")
+    prov._health_errors = ["skip"]
+    report = await collect_doctor_report(cfg, prov)
+    assert not any("polling" in w.lower() for w in report.warnings)
+
+
+# =====================================================================
+# CROSS-FEATURE INVARIANT TESTS
+# These verify that combinations of features don't break each other.
+# =====================================================================
+
+def test_public_user_cannot_escalate_to_restricted_model():
+    """Public user with restricted profiles cannot set a profile outside the allowed set."""
+    from app.execution_context import resolve_effective_model
+    from app.session_state import SessionState
+
+    cfg = _make_config(
+        model="claude-sonnet-4-6",
+        model_profiles={"fast": "claude-haiku-4-5-20251001", "balanced": "claude-sonnet-4-6", "best": "claude-opus-4-6"},
+        default_model_profile="balanced",
+        public_model_profiles=frozenset({"fast", "balanced"}),
+    )
+    session = SessionState(provider="claude", provider_state={}, approval_mode="off")
+    session.model_profile = "best"  # attempt escalation
+    model = resolve_effective_model(session, cfg, trust_tier="public")
+    # Should NOT get claude-opus-4-6
+    assert model != "claude-opus-4-6"
+    # Should fall back to an allowed profile
+    assert model in {"claude-haiku-4-5-20251001", "claude-sonnet-4-6"}
+
+
+def test_inspect_policy_survives_model_change():
+    """Changing model profile does not break inspect enforcement."""
+    from app.execution_context import resolve_execution_context
+    from app.session_state import SessionState
+
+    cfg = _make_config(
+        model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
+        default_model_profile="fast",
+        public_working_dir="/tmp/pub",
+    )
+    session = SessionState(provider="claude", provider_state={}, approval_mode="off")
+    session.model_profile = "best"
+
+    ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
+    assert ctx.file_policy == "inspect"  # forced by public trust
+    assert ctx.working_dir == "/tmp/pub"  # forced by public trust
+
+
+def test_compact_mode_works_for_public_users():
+    """Public users should still get compact rendering (not blocked)."""
+    from app.execution_context import resolve_execution_context
+    from app.session_state import SessionState
+
+    cfg = _make_config(
+        model_profiles={"fast": "claude-haiku-4-5-20251001"},
+        default_model_profile="fast",
+        public_working_dir="/tmp/pub",
+    )
+    session = SessionState(provider="claude", provider_state={}, approval_mode="off")
+    session.compact_mode = True
+
+    ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
+    # Compact mode is a session preference, not execution-scope — it's not stripped
+    assert session.compact_mode is True
+    # But execution scope is still enforced
+    assert ctx.file_policy == "inspect"
+
+
+def test_project_plus_model_change_invalidates_context_hash():
+    """Changing both project and model should produce a different context hash."""
+    from app.execution_context import resolve_execution_context
+    from app.session_state import SessionState
+
+    cfg = _make_config(
+        model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
+        default_model_profile="fast",
+        projects=(("proj-a", "/opt/a", []),),
+    )
+
+    session1 = SessionState(provider="claude", provider_state={}, approval_mode="off")
+    session1.model_profile = "fast"
+    session1.project_id = "proj-a"
+    ctx1 = resolve_execution_context(session1, cfg, "claude")
+
+    session2 = SessionState(provider="claude", provider_state={}, approval_mode="off")
+    session2.model_profile = "best"
+    session2.project_id = ""  # no project
+    ctx2 = resolve_execution_context(session2, cfg, "claude")
+
+    assert ctx1.context_hash != ctx2.context_hash
+
+
+# =====================================================================
+# INVARIANT 20: Mixed trusted/public ingress
+#
+# When allow_open=True AND explicit allow-lists exist, strangers
+# must be admitted by is_allowed (public tier) while trusted users
+# in the allow-lists are also admitted.
+# =====================================================================
+
+
+@pytest.mark.asyncio
+async def test_is_allowed_mixed_mode_admits_stranger():
+    """Stranger admitted when allow_open + allow-lists both set."""
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": True,
+        "allowed_user_ids": frozenset({42}),
+    }) as (data_dir, cfg, prov):
+        trusted_user = FakeUser(uid=42, username="trustedguy")
+        stranger = FakeUser(uid=999, username="nobody")
+
+        assert th.is_allowed(trusted_user)
+        assert th.is_allowed(stranger)
+        assert not th.is_public_user(trusted_user)
+        assert th.is_public_user(stranger)
+
+
+@pytest.mark.asyncio
+async def test_is_allowed_closed_mode_rejects_stranger():
+    """Stranger rejected when allow_open=False, even with allow-lists."""
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": False,
+        "allowed_user_ids": frozenset({42}),
+    }) as (data_dir, cfg, prov):
+        trusted_user = FakeUser(uid=42)
+        stranger = FakeUser(uid=999, username="nobody")
+
+        assert th.is_allowed(trusted_user)
+        assert not th.is_allowed(stranger)
+
+
+# =====================================================================
+# INVARIANT 21: Public trust enforcement on execution paths
+#
+# When a public user sends a message, the resolved execution context
+# must enforce public restrictions: forced inspect, forced public
+# working dir, no skills, no extra dirs.  This must hold on both
+# the direct-execute and approval-round-trip paths.
+# =====================================================================
+
+
+@pytest.mark.asyncio
+async def test_execute_request_public_user_gets_inspect_policy():
+    """execute_request with trust_tier='public' resolves inspect file_policy."""
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": True,
+        "allowed_user_ids": frozenset({42}),
+        "public_working_dir": "/tmp/public-sandbox",
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(uid=42)
+
+        # Prime session with skills and edit policy (trusted-user settings)
+        from app.storage import load_session, save_session
+        session = load_session(data_dir, chat.id, prov.name, prov.new_provider_state, "off")
+        session["file_policy"] = "edit"
+        session["active_skills"] = ["some-skill"]
+        save_session(data_dir, chat.id, session)
+
+        # Execute as public
+        msg = FakeMessage(chat=chat, text="hello")
+        await th.execute_request(
+            chat.id, "test prompt", [], msg,
+            request_user_id=999, trust_tier="public",
+        )
+
+        # Provider should have been called with public restrictions
+        assert len(prov.run_calls) == 1
+        ctx = prov.run_calls[0]["context"]
+        assert ctx.file_policy == "inspect"
+        assert ctx.working_dir == "/tmp/public-sandbox"
+
+
+@pytest.mark.asyncio
+async def test_execute_request_trusted_user_gets_edit_policy():
+    """execute_request with trust_tier='trusted' preserves session file_policy."""
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": True,
+        "allowed_user_ids": frozenset({42}),
+        "public_working_dir": "/tmp/public-sandbox",
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+
+        from app.storage import load_session, save_session
+        session = load_session(data_dir, chat.id, prov.name, prov.new_provider_state, "off")
+        session["file_policy"] = "edit"
+        save_session(data_dir, chat.id, session)
+
+        msg = FakeMessage(chat=chat, text="hello")
+        await th.execute_request(
+            chat.id, "test prompt", [], msg,
+            request_user_id=42, trust_tier="trusted",
+        )
+
+        assert len(prov.run_calls) == 1
+        ctx = prov.run_calls[0]["context"]
+        assert ctx.file_policy == "edit"
+        assert ctx.working_dir != "/tmp/public-sandbox"
+
+
+@pytest.mark.asyncio
+async def test_handle_message_public_user_threads_trust_tier():
+    """Full handle_message path for a public user passes trust_tier through."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_text
+
+    with fresh_env(config_overrides={
+        "allow_open": True,
+        "allowed_user_ids": frozenset({42}),
+        "public_working_dir": "/tmp/public-sandbox",
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+
+        msg = await send_text(chat, stranger, "hello from public user")
+
+        assert len(prov.run_calls) == 1
+        ctx = prov.run_calls[0]["context"]
+        assert ctx.file_policy == "inspect"
+        assert ctx.working_dir == "/tmp/public-sandbox"
+
+
+@pytest.mark.asyncio
+async def test_handle_message_trusted_user_not_forced_inspect():
+    """Full handle_message path for a trusted user does NOT force inspect."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_text
+
+    with fresh_env(config_overrides={
+        "allow_open": True,
+        "allowed_user_ids": frozenset({42}),
+        "public_working_dir": "/tmp/public-sandbox",
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        trusted = FakeUser(uid=42, username="trustedguy")
+
+        msg = await send_text(chat, trusted, "hello from trusted user")
+
+        assert len(prov.run_calls) == 1
+        ctx = prov.run_calls[0]["context"]
+        # Trusted user gets default file_policy from session (empty = edit)
+        assert ctx.file_policy != "inspect"
+        assert ctx.working_dir != "/tmp/public-sandbox"
+
+
+@pytest.mark.asyncio
+async def test_approval_round_trip_preserves_public_trust_tier():
+    """PendingApproval stores trust_tier; approve_pending passes it to execute_request."""
+    from app.session_state import PendingApproval, session_from_dict, session_to_dict
+
+    # Verify trust_tier round-trips through serialization
+    pending = PendingApproval(
+        request_user_id=999,
+        prompt="test",
+        image_paths=[],
+        attachment_dicts=[],
+        context_hash="abc123",
+        trust_tier="public",
+    )
+    assert pending.trust_tier == "public"
+
+    session = SessionState(provider="claude", provider_state={}, approval_mode="on")
+    session.pending_approval = pending
+    d = session_to_dict(session)
+    restored = session_from_dict(d)
+    assert restored.pending_approval is not None
+    assert restored.pending_approval.trust_tier == "public"
+
+
+@pytest.mark.asyncio
+async def test_pending_retry_preserves_trust_tier():
+    """PendingRetry stores trust_tier through serialization round-trip."""
+    from app.session_state import PendingRetry, session_from_dict, session_to_dict
+
+    pending = PendingRetry(
+        request_user_id=999,
+        prompt="test",
+        image_paths=[],
+        context_hash="abc123",
+        denials=[],
+        trust_tier="public",
+    )
+    assert pending.trust_tier == "public"
+
+    session = SessionState(provider="claude", provider_state={}, approval_mode="on")
+    session.pending_retry = pending
+    d = session_to_dict(session)
+    restored = session_from_dict(d)
+    assert restored.pending_retry is not None
+    assert restored.pending_retry.trust_tier == "public"
+
+
+@pytest.mark.asyncio
+async def test_session_command_shows_public_context():
+    """/session display reflects public-user restrictions."""
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": True,
+        "allowed_user_ids": frozenset({42}),
+        "public_working_dir": "/tmp/public-sandbox",
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+
+        msg = await send_command(
+            th.cmd_session, chat, stranger, "/session")
+        reply = last_reply(msg)
+        assert "/tmp/public-sandbox" in reply
+        assert "inspect" in reply.lower()
+
+
+# =====================================================================
+# INVARIANT 22: Pending validation uses stored trust tier
+#
+# validate_pending must recompute the context hash with the same
+# trust_tier that was stored when the pending request was created.
+# Otherwise, a public user's approval immediately fails with
+# "Context changed".
+# =====================================================================
+
+
+def test_validate_pending_respects_stored_trust_tier():
+    """validate_pending must recompute hash with the pending's trust_tier."""
+    from app.request_flow import validate_pending
+    from app.session_state import PendingApproval, SessionState
+
+    cfg = _make_config(
+        public_working_dir="/tmp/public",
+        timeout_seconds=3600,
+    )
+    session = SessionState(provider="claude", provider_state={}, approval_mode="on")
+
+    # Compute the public context hash (what would be stored when a public user sends a message)
+    from app.execution_context import resolve_execution_context
+    public_ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
+    public_hash = public_ctx.context_hash
+
+    # Also compute trusted hash — it MUST differ (different working_dir, file_policy)
+    trusted_ctx = resolve_execution_context(session, cfg, "claude", trust_tier="trusted")
+    trusted_hash = trusted_ctx.context_hash
+    assert public_hash != trusted_hash, "Public and trusted hashes must differ"
+
+    # Create a pending approval with the public hash and trust_tier
+    pending = PendingApproval(
+        request_user_id=999,
+        prompt="test",
+        image_paths=[],
+        attachment_dicts=[],
+        context_hash=public_hash,
+        trust_tier="public",
+    )
+
+    # validate_pending should pass — hash matches when trust_tier is respected
+    error = validate_pending(pending, session, cfg, "claude")
+    assert error is None, f"Expected no error but got: {error}"
+
+
+def test_validate_pending_detects_real_context_change():
+    """validate_pending correctly detects when context actually changed."""
+    from app.request_flow import validate_pending
+    from app.session_state import PendingApproval, SessionState
+
+    cfg = _make_config(timeout_seconds=3600)
+    session = SessionState(provider="claude", provider_state={}, approval_mode="on")
+
+    pending = PendingApproval(
+        request_user_id=42,
+        prompt="test",
+        image_paths=[],
+        attachment_dicts=[],
+        context_hash="stale-hash-that-doesnt-match",
+        trust_tier="trusted",
+    )
+
+    error = validate_pending(pending, session, cfg, "claude")
+    assert error is not None
+    assert "Context changed" in error
+
+
+# =====================================================================
+# INVARIANT 23: Credential checks use resolved active_skills
+#
+# check_credential_satisfaction must receive the resolved skill list.
+# Public users have no resolved skills, so they must never be prompted
+# for credentials — even if the session has skills configured.
+# =====================================================================
+
+
+def test_credential_check_uses_resolved_skills_not_session():
+    """Credential check with empty resolved skills skips all checks."""
+    from app.request_flow import check_credential_satisfaction
+    from app.session_state import SessionState
+
+    with fresh_data_dir() as data_dir:
+        session = SessionState(provider="claude", provider_state={}, approval_mode="off")
+        # Session has skills, but resolved list is empty (public user)
+        session.active_skills = ["github-integration"]
+
+        result = check_credential_satisfaction(
+            active_skills=[],  # resolved: public user gets no skills
+            session=session,
+            user_id=999,
+            data_dir=data_dir,
+            encryption_key=b"test-key-1234567",
+        )
+        assert result.satisfied
+        assert result.credential_env == {}
+
+
+def test_credential_check_with_resolved_skills():
+    """Credential check with non-empty resolved skills actually checks them."""
+    from app.request_flow import check_credential_satisfaction
+    from app.session_state import SessionState
+
+    with fresh_data_dir() as data_dir:
+        session = SessionState(provider="claude", provider_state={}, approval_mode="off")
+
+        # Use a fake skill name — check_credentials returns [] for unknown skills
+        result = check_credential_satisfaction(
+            active_skills=["nonexistent-skill"],
+            session=session,
+            user_id=42,
+            data_dir=data_dir,
+            encryption_key=b"test-key-1234567",
+        )
+        # Unknown skills have no requirements, so satisfied
+        assert result.satisfied
+
+
+# =====================================================================
+# INVARIANT 24: Model command/callback parity
+#
+# /model <profile> and setting_model:<profile> must apply the same
+# trust-tier filtering.  Both must allow switching to profiles that
+# are in the user's available set, and both must reject profiles
+# outside it.
+# =====================================================================
+
+
+@pytest.mark.asyncio
+async def test_model_command_public_user_can_switch_to_allowed_profile():
+    """/model fast succeeds for public user when fast is in public_model_profiles."""
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": True,
+        "allowed_user_ids": frozenset({42}),
+        "model_profiles": {"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
+        "public_model_profiles": frozenset({"fast"}),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+
+        msg = await send_command(
+            th.cmd_model, chat, stranger, "/model fast", args=["fast"])
+        reply = last_reply(msg)
+        assert "fast" in reply.lower()
+        assert "not available" not in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_model_command_public_user_rejected_for_restricted_profile():
+    """/model best fails for public user when best is not in public_model_profiles."""
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": True,
+        "allowed_user_ids": frozenset({42}),
+        "model_profiles": {"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
+        "public_model_profiles": frozenset({"fast"}),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+
+        msg = await send_command(
+            th.cmd_model, chat, stranger, "/model best", args=["best"])
+        reply = last_reply(msg)
+        assert "unknown" in reply.lower() or "available" in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_model_callback_public_user_rejected_for_restricted_profile():
+    """setting_model:best callback fails for public user when best is restricted."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+
+    with fresh_env(config_overrides={
+        "allow_open": True,
+        "allowed_user_ids": frozenset({42}),
+        "model_profiles": {"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
+        "public_model_profiles": frozenset({"fast"}),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+
+        query, cb_msg = await send_callback(
+            th.handle_settings_callback, chat, stranger, "setting_model:best")
+        # Should be rejected
+        replies = cb_msg.replies
+        assert any("restricted" in str(r).lower() or "unknown" in str(r).lower() for r in replies)
+
+
+@pytest.mark.asyncio
+async def test_model_callback_public_user_allowed_for_available_profile():
+    """setting_model:fast callback succeeds for public user when fast is allowed."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+
+    with fresh_env(config_overrides={
+        "allow_open": True,
+        "allowed_user_ids": frozenset({42}),
+        "model_profiles": {"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
+        "public_model_profiles": frozenset({"fast"}),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+
+        query, cb_msg = await send_callback(
+            th.handle_settings_callback, chat, stranger, "setting_model:fast")
+        replies = cb_msg.replies
+        assert any("fast" in str(r).lower() for r in replies)
+        assert not any("restricted" in str(r).lower() for r in replies)

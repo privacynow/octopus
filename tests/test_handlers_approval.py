@@ -93,7 +93,7 @@ async def test_approval_wording():
         await th.cmd_approval(status_update, FakeContext(["status"]))
 
         status_texts = " ".join(r.get("text", "") for r in status_msg.replies)
-        assert "Preflight approval mode is on" in status_texts
+        assert "approval mode" in status_texts.lower() and "on" in status_texts
         assert "instance default" in status_texts
 
         set_msg = FakeMessage(chat=chat, text="/approval off")

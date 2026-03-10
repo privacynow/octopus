@@ -29,6 +29,7 @@ class RunContext(PreflightContext):
     provider_config: dict = field(default_factory=dict)  # Phase 3
     credential_env: dict[str, str] = field(default_factory=dict)  # Phase 2
     skip_permissions: bool = False  # bypass permission checks (user already approved)
+    effective_model: str = ""  # resolved from model profiles; empty = use config.model
 
 
 class ProgressSink(Protocol):

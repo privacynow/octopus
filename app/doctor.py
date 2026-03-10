@@ -72,6 +72,27 @@ async def collect_doctor_report(
             "BOT_ADMIN_USERS not set \u2014 all allowed users have admin "
             "privileges (install/uninstall skills). Set BOT_ADMIN_USERS to restrict.")
 
+    # Polling conflict advisory
+    if config.bot_mode == "poll" and config.webhook_url:
+        report.warnings.append(
+            "Bot is in polling mode but BOT_WEBHOOK_URL is configured. "
+            "If another process is running in webhook mode, updates may conflict. "
+            "Use only one delivery mode per bot token.")
+
+    # Public mode advisories
+    if config.allow_open:
+        if not config.public_working_dir:
+            report.warnings.append(
+                "BOT_ALLOW_OPEN=1 but BOT_PUBLIC_WORKING_DIR not set \u2014 "
+                "public users will use the operator's main working directory. "
+                "Set BOT_PUBLIC_WORKING_DIR to isolate public access.")
+        if config.rate_limit_per_minute == 0 and config.rate_limit_per_hour == 0:
+            report.warnings.append(
+                "BOT_ALLOW_OPEN=1 with no rate limits configured \u2014 "
+                "public users could overwhelm the bot. "
+                "Set BOT_RATE_LIMIT_PER_MINUTE / BOT_RATE_LIMIT_PER_HOUR "
+                "or defaults of 5/min, 30/hr will apply.")
+
     # Stale session scan — skip if data_dir doesn't exist yet (CLI --doctor before first run)
     if config.data_dir.is_dir():
         try:

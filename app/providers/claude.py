@@ -85,14 +85,15 @@ class ClaudeProvider:
 
     # -- command building --------------------------------------------------
 
-    def _base_cmd(self) -> list[str]:
+    def _base_cmd(self, effective_model: str = "") -> list[str]:
         cmd = [
             "claude", "-p",
             "--output-format", "stream-json",
             "--verbose",
         ]
-        if self.config.model:
-            cmd.extend(["--model", self.config.model])
+        model = effective_model or self.config.model
+        if model:
+            cmd.extend(["--model", model])
         return cmd
 
     def _extra_dir_args(self, extra_dirs: list[str] | None = None) -> list[str]:
@@ -108,8 +109,9 @@ class ClaudeProvider:
         provider_state: dict[str, Any],
         prompt: str,
         extra_dirs: list[str] | None = None,
+        effective_model: str = "",
     ) -> list[str]:
-        cmd = self._base_cmd()
+        cmd = self._base_cmd(effective_model)
         sid = provider_state["session_id"]
         if provider_state.get("started"):
             cmd.extend(["--resume", sid])
@@ -119,8 +121,8 @@ class ClaudeProvider:
         cmd.extend(["--", prompt])
         return cmd
 
-    def _build_preflight_cmd(self, prompt: str, extra_dirs: list[str] | None = None) -> list[str]:
-        cmd = self._base_cmd()
+    def _build_preflight_cmd(self, prompt: str, extra_dirs: list[str] | None = None, effective_model: str = "") -> list[str]:
+        cmd = self._base_cmd(effective_model)
         cmd.extend(["--permission-mode", "plan"])
         cmd.extend(self._extra_dir_args(extra_dirs))
         cmd.extend(["--", prompt])
@@ -287,7 +289,8 @@ class ClaudeProvider:
         context: RunContext | None = None,
     ) -> RunResult:
         extra_dirs = context.extra_dirs if context else None
-        cmd = self._build_run_cmd(provider_state, prompt, extra_dirs=extra_dirs)
+        effective_model = context.effective_model if context else ""
+        cmd = self._build_run_cmd(provider_state, prompt, extra_dirs=extra_dirs, effective_model=effective_model)
         if context and context.skip_permissions:
             idx = cmd.index("--")
             cmd[idx:idx] = ["--dangerously-skip-permissions"]
@@ -349,7 +352,8 @@ class ClaudeProvider:
         context: PreflightContext | None = None,
     ) -> RunResult:
         extra_dirs = context.extra_dirs if context else None
-        cmd = self._build_preflight_cmd(prompt, extra_dirs=extra_dirs)
+        effective_model = getattr(context, 'effective_model', '') if context else ""
+        cmd = self._build_preflight_cmd(prompt, extra_dirs=extra_dirs, effective_model=effective_model)
         system_prompt = ""
         if context and context.system_prompt:
             system_prompt = context.system_prompt

@@ -91,8 +91,13 @@ class FakeUser:
         self.username = username
 
 
+_next_update_id = 0
+
 class FakeUpdate:
     def __init__(self, message=None, user=None, chat=None, callback_query=None):
+        global _next_update_id
+        _next_update_id += 1
+        self.update_id = _next_update_id
         self.effective_user = user or FakeUser()
         self.effective_chat = chat or (message.chat if message else FakeChat())
         self.effective_message = message or FakeMessage(chat=self.effective_chat, user=self.effective_user)
@@ -182,6 +187,9 @@ def make_config(data_dir, **overrides):
         approval_mode="off",
         stream_update_interval_seconds=0.0,
         typing_interval_seconds=60.0,
+        # Default test users are trusted — covers UIDs commonly used in tests.
+        # Excludes 999 (test-stranger used for unauthorized user tests).
+        allowed_user_ids=frozenset({1, 2, 3, 42, 50, 99, 100, 200}),
     )
     defaults.update(overrides)
     return _make_config(**defaults)

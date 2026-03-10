@@ -89,6 +89,8 @@ _config: BotConfig | None = None
 _provider: Provider | None = None
 _boot_id: str = ""  # unique per process; detects restart to clear stale threads
 _rate_limiter: RateLimiter | None = None
+_seen_update_ids: set[int] = set()  # track processed update_ids for idempotency
+_MAX_SEEN_IDS = 1000  # cap the set size to prevent memory growth
 
 
 def _cfg() -> BotConfig:
@@ -158,7 +160,8 @@ def is_allowed(user) -> bool:
     if u is None:
         return False
     cfg = _cfg()
-    if cfg.allow_open and not cfg.allowed_user_ids and not cfg.allowed_usernames:
+    # Open mode admits everyone (public users get restricted at execution layer)
+    if cfg.allow_open:
         return True
     if not cfg.allowed_user_ids and not cfg.allowed_usernames:
         return False
@@ -172,6 +175,38 @@ def is_admin(user) -> bool:
         return False
     cfg = _cfg()
     return u.id in cfg.admin_user_ids or u.username in cfg.admin_usernames
+
+
+def is_public_user(user) -> bool:
+    """Check if user is a public (untrusted) user.
+
+    A user is public when allow_open is true AND the user is not in
+    any allowed-user set.  Returns False if allow_open is off (the user
+    wouldn't have passed is_allowed at all).
+    """
+    u = _to_inbound_user(user)
+    if u is None:
+        return False
+    cfg = _cfg()
+    if not cfg.allow_open:
+        return False
+    # If there are no allowed lists, everyone is public
+    if not cfg.allowed_user_ids and not cfg.allowed_usernames:
+        return True
+    return u.id not in cfg.allowed_user_ids and u.username not in cfg.allowed_usernames
+
+
+def _trust_tier(user) -> str:
+    """Resolve the trust tier for a user: 'trusted' or 'public'."""
+    return "public" if is_public_user(user) else "trusted"
+
+
+async def _public_guard(event, update: Update) -> bool:
+    """Return True (and send denial) if the user is public. Use at top of restricted commands."""
+    if is_public_user(event.user):
+        await update.effective_message.reply_text("This command is not available in public mode.")
+        return True
+    return False
 
 
 def _command_handler(fn):
@@ -235,25 +270,24 @@ def _project_working_dir(session: SessionState) -> str:
     return proj[1] if proj else ""
 
 
-def _resolve_context(session: SessionState) -> ResolvedExecutionContext:
+def _resolve_context(session: SessionState, trust_tier: str = "trusted") -> ResolvedExecutionContext:
     """Build the single authoritative execution identity from session + config."""
-    return resolve_execution_context(session, _cfg(), _prov().name)
+    return resolve_execution_context(session, _cfg(), _prov().name, trust_tier=trust_tier)
 
 
 # -- Helpers ---------------------------------------------------------------
 
-def _allowed_roots(chat_id: int, session: SessionState | None = None) -> list[Path]:
+def _allowed_roots(chat_id: int, resolved: ResolvedExecutionContext | None = None) -> list[Path]:
     """Return path roots this chat is allowed to access.
 
-    Uses the chat-specific upload dir (not the shared uploads tree)
-    so one chat cannot read another chat's uploaded files.
-    If the session has a bound project, uses the project's root dir.
+    Uses the resolved execution context for working_dir and extra_dirs,
+    so public users get public roots and project-bound chats get project roots.
+    Falls back to config defaults only when no resolved context is available.
     """
     cfg = _cfg()
-    proj = _resolve_project(session) if session else None
-    if proj:
-        roots: list[Path] = [Path(proj[1])]
-        roots.extend(Path(d) for d in proj[2])
+    if resolved:
+        roots: list[Path] = [Path(resolved.working_dir)]
+        roots.extend(Path(d) for d in resolved.base_extra_dirs)
     else:
         roots = [cfg.working_dir]
         roots.extend(cfg.extra_dirs)
@@ -289,6 +323,71 @@ async def send_formatted_reply(message, text: str) -> None:
             await message.reply_text(plain[:4096])
 
 
+def _extract_summary(text: str, max_lines: int = 4) -> tuple[str, str]:
+    """Split text into a short summary (first few lines) and the rest."""
+    lines = text.split("\n")
+    # Take up to max_lines non-empty lines as summary
+    summary_lines = []
+    rest_start = 0
+    for i, line in enumerate(lines):
+        if line.strip():
+            summary_lines.append(line)
+        if len(summary_lines) >= max_lines:
+            rest_start = i + 1
+            break
+    else:
+        rest_start = len(lines)
+
+    summary = "\n".join(lines[:rest_start])
+    rest = "\n".join(lines[rest_start:]).strip()
+    return summary, rest
+
+
+async def _send_compact_reply(message, text: str, chat_id: int, slot: int) -> None:
+    """Send a compact response using expandable blockquote or expand button."""
+    summary, detail = _extract_summary(text)
+    formatted_summary = md_to_telegram_html(summary) if summary else ""
+
+    if detail:
+        # Use expandable blockquote for the detail
+        formatted_detail = md_to_telegram_html(detail)
+        compact_html = (
+            f"{formatted_summary}\n\n"
+            f"<blockquote expandable>{formatted_detail}</blockquote>"
+        )
+
+        # If the combined text fits in a single message, send with expandable blockquote
+        if len(compact_html) <= 4000:
+            try:
+                await message.reply_text(
+                    compact_html, parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
+                )
+                return
+            except BadRequest:
+                pass  # Fall through to button approach
+
+        # Too long for blockquote — send summary with "Show full" button
+        button_text = f"{formatted_summary}\n\n<i>Response truncated</i>"
+        try:
+            await message.reply_text(
+                button_text[:4000], parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "Show full answer",
+                        callback_data=f"expand:{chat_id}:{slot}",
+                    ),
+                ]]),
+            )
+            return
+        except BadRequest:
+            pass
+
+    # Fallback: send as regular formatted reply
+    await send_formatted_reply(message, text)
+
+
 async def send_path_to_chat(message, path: Path, *, force_image: bool | None = None) -> None:
     should_image = force_image if force_image is not None else is_image_path(path)
     with path.open("rb") as f:
@@ -298,13 +397,16 @@ async def send_path_to_chat(message, path: Path, *, force_image: bool | None = N
             await message.reply_document(document=f)
 
 
-async def send_directed_artifacts(chat_id: int, message, directives: list[tuple[str, str]]) -> None:
+async def send_directed_artifacts(
+    chat_id: int, message, directives: list[tuple[str, str]],
+    resolved_ctx: ResolvedExecutionContext | None = None,
+) -> None:
     for dtype, raw_path in directives:
-        resolved = resolve_allowed_path(raw_path, _allowed_roots(chat_id))
-        if not resolved:
+        allowed_path = resolve_allowed_path(raw_path, _allowed_roots(chat_id, resolved_ctx))
+        if not allowed_path:
             await message.reply_text(f"[Cannot send: {raw_path}]")
             continue
-        await send_path_to_chat(message, resolved, force_image=(dtype == "IMAGE"))
+        await send_path_to_chat(message, allowed_path, force_image=(dtype == "IMAGE"))
 
 
 async def keep_typing(chat) -> None:
@@ -338,14 +440,19 @@ def _save(chat_id: int, session: SessionState) -> None:
 
 async def _check_credential_satisfaction(
     chat_id: int, user_id: int, session: SessionState, message,
+    resolved: ResolvedExecutionContext | None = None,
 ) -> dict[str, str] | None:
     """Check credentials for active skills. Returns credential_env if satisfied, None if not.
+
+    Uses resolved.active_skills (not raw session.active_skills) so public users
+    with no resolved skills skip credential checks entirely.
 
     Delegates to request_flow.check_credential_satisfaction for pure logic,
     then handles transport (message sending, session saving).
     """
+    active_skills = resolved.active_skills if resolved else session.active_skills
     result = check_credential_satisfaction(
-        session, user_id, _cfg().data_dir, _encryption_key(),
+        active_skills, session, user_id, _cfg().data_dir, _encryption_key(),
     )
     if result.satisfied:
         return result.credential_env
@@ -376,23 +483,24 @@ async def execute_request(
     extra_dirs: list[str] | None = None,
     request_user_id: int = 0,
     skip_permissions: bool = False,
+    trust_tier: str = "trusted",
 ) -> None:
     cfg = _cfg()
     prov = _prov()
     session = _load(chat_id)
 
     # Resolve the authoritative execution identity once
-    resolved = _resolve_context(session)
+    resolved = _resolve_context(session, trust_tier=trust_tier)
 
-    # Check credential satisfaction before proceeding
+    # Check credential satisfaction using resolved active_skills
     credential_env = await _check_credential_satisfaction(
-        chat_id, request_user_id, session, message,
+        chat_id, request_user_id, session, message, resolved=resolved,
     )
     if credential_env is None:
         return
 
     # Always include the chat-specific upload dir (not the shared uploads tree)
-    # plus configured extra_dirs from BotConfig and any denial dirs from retries
+    # plus resolved extra_dirs from execution context and any denial dirs from retries
     upload_dir = str(chat_upload_dir(cfg.data_dir, chat_id))
     all_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs) + (extra_dirs or [])
 
@@ -408,8 +516,22 @@ async def execute_request(
         provider_name=prov.name,
         credential_env=credential_env, working_dir=resolved.working_dir,
         file_policy=resolved.file_policy,
+        effective_model=resolved.effective_model,
     )
     context.skip_permissions = skip_permissions
+
+    # Compact mode: add summary-first instruction to system prompt
+    compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
+    if compact and context.system_prompt:
+        context.system_prompt += (
+            "\n\nIMPORTANT: Structure your response with a 2-4 line summary first, "
+            "then provide detailed explanation below. Lead with the answer."
+        )
+    elif compact:
+        context.system_prompt = (
+            "Structure your response with a 2-4 line summary first, "
+            "then provide detailed explanation below. Lead with the answer."
+        )
 
     # Use the single authoritative context hash
     context_hash = resolved.context_hash
@@ -483,6 +605,7 @@ async def execute_request(
             image_paths=image_paths,
             context_hash=context_hash,
             denials=result.denials,
+            trust_tier=trust_tier,
             created_at=time.time(),
         )
         _save(chat_id, session)
@@ -502,7 +625,7 @@ async def execute_request(
         cleaned_reply, directives = extract_send_directives(result.text)
         if cleaned_reply.strip():
             await send_formatted_reply(message, cleaned_reply)
-            await send_directed_artifacts(chat_id, message, directives)
+            await send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
         return
 
     await progress.update("Done.", force=True)
@@ -510,21 +633,16 @@ async def execute_request(
     cleaned_reply, directives = extract_send_directives(result.text)
 
     # Save raw response to ring buffer for /raw retrieval
-    save_raw(cfg.data_dir, chat_id, prompt, cleaned_reply)
+    from app.summarize import load_raw_by_slot
+    slot = save_raw(cfg.data_dir, chat_id, prompt, cleaned_reply)
 
-    # Compact mode: summarize long responses for mobile readability
+    # Compact mode: use expandable blockquote or inline expand for long responses
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
     if compact and len(cleaned_reply) > 800:
-        try:
-            summary = await summarize(cleaned_reply, cfg.summary_model)
-        except Exception as exc:
-            log.warning("compact summarization failed: %s", exc)
-        else:
-            if summary != cleaned_reply:
-                cleaned_reply = summary + "\n\n<i>Summarized — /raw for full response</i>"
-
-    await send_formatted_reply(message, cleaned_reply)
-    await send_directed_artifacts(chat_id, message, directives)
+        await _send_compact_reply(message, cleaned_reply, chat_id, slot)
+    else:
+        await send_formatted_reply(message, cleaned_reply)
+    await send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
 
 
 async def request_approval(
@@ -534,6 +652,7 @@ async def request_approval(
     attachments: list[Attachment],
     message,
     request_user_id: int = 0,
+    trust_tier: str = "trusted",
 ) -> None:
     cfg = _cfg()
     prov = _prov()
@@ -546,11 +665,11 @@ async def request_approval(
         return
 
     # Resolve the authoritative execution identity once
-    resolved = _resolve_context(session)
+    resolved = _resolve_context(session, trust_tier=trust_tier)
 
-    # Check credential satisfaction before proceeding
+    # Check credential satisfaction using resolved active_skills
     credential_env = await _check_credential_satisfaction(
-        chat_id, request_user_id, session, message,
+        chat_id, request_user_id, session, message, resolved=resolved,
     )
     if credential_env is None:
         return
@@ -601,6 +720,7 @@ async def request_approval(
         image_paths=image_paths,
         attachment_dicts=attachment_dicts,
         context_hash=context_hash,
+        trust_tier=trust_tier,
         created_at=time.time(),
     )
     _save(chat_id, session)
@@ -636,6 +756,7 @@ async def approve_pending(chat_id: int, message) -> None:
     denials = getattr(pending, 'denials', None) or []
     denial_dirs = extra_dirs_from_denials(denials) if denials else None
     request_user_id = pending.request_user_id
+    trust_tier = getattr(pending, 'trust_tier', 'trusted')
     session.clear_pending()
     _save(chat_id, session)
     await execute_request(
@@ -643,6 +764,7 @@ async def approve_pending(chat_id: int, message) -> None:
         extra_dirs=denial_dirs,
         request_user_id=request_user_id,
         skip_permissions=True,
+        trust_tier=trust_tier,
     )
 
 
@@ -670,6 +792,8 @@ HELP_TEMPLATE = (
     "/cancel — cancel credential setup or a pending request\n"
     "/clear_credentials — remove your stored credentials\n"
     "/send &lt;path&gt; — retrieve a file from the server\n"
+    "/model — switch model profile (fast/balanced/best)\n"
+    "/compact on|off — toggle short/full answers\n"
     "/policy inspect|edit — set file access policy\n"
     "/session — show current session info\n"
     "/id — show your Telegram user ID\n"
@@ -795,7 +919,7 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         session_line = f"Thread: <code>{html.escape(str(tid))}</code>"
 
     pending = "yes" if session.has_pending else "no"
-    resolved = _resolve_context(session)
+    resolved = _resolve_context(session, trust_tier=_trust_tier(event.user))
     role_display = resolved.role or "(default)"
     skills_display = ", ".join(resolved.active_skills) if resolved.active_skills else "(none)"
     approval_mode = session.approval_mode
@@ -805,14 +929,27 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     if resolved.project_id:
         wd_display = f"{resolved.working_dir} (project: {resolved.project_id})"
     else:
-        wd_display = str(cfg.working_dir)
+        wd_display = resolved.working_dir
 
     file_policy = resolved.file_policy or "edit"
+    model_profile = session.model_profile or cfg.default_model_profile or "(default)"
+    model_id = resolved.effective_model or cfg.model or "(default)"
+    compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
+    compact_display = "on" if compact else "off"
+
+    # Prompt weight estimate (chars of system prompt)
+    from app.skills import build_system_prompt
+    sys_prompt = build_system_prompt(resolved.role, resolved.active_skills)
+    prompt_weight = f"~{len(sys_prompt)} chars" if sys_prompt else "minimal"
+
     await update.effective_message.reply_text(
         f"Provider: <code>{html.escape(_prov().name)}</code>\n"
         f"Instance: <code>{html.escape(cfg.instance)}</code>\n"
         f"Working dir: <code>{html.escape(wd_display)}</code>\n"
         f"File policy: <code>{html.escape(file_policy)}</code>\n"
+        f"Model: <code>{html.escape(model_profile)}</code> ({html.escape(model_id)})\n"
+        f"Compact: <code>{compact_display}</code>\n"
+        f"Prompt weight: <code>{html.escape(prompt_weight)}</code>\n"
         f"{session_line}\n"
         f"Preflight approval mode: <code>{approval_mode}</code> ({approval_source})\n"
         f"Role: <code>{html.escape(role_display)}</code>\n"
@@ -834,8 +971,18 @@ async def cmd_approval(event, update: Update, context: ContextTypes.DEFAULT_TYPE
         if arg == "status":
             mode = session.approval_mode
             source = _approval_mode_source(session)
+            buttons = [
+                InlineKeyboardButton(
+                    f"\u2705 Review first" if mode == "on" else "Review first",
+                    callback_data="setting_approval:on"),
+                InlineKeyboardButton(
+                    f"\u2705 Run immediately" if mode == "off" else "Run immediately",
+                    callback_data="setting_approval:off"),
+            ]
             await update.effective_message.reply_text(
-                f"Preflight approval mode is {mode} ({source})."
+                f"Preflight approval mode is <b>{mode}</b> ({source}).",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([buttons]),
             )
             return
         session.approval_mode = arg
@@ -860,12 +1007,15 @@ async def cmd_reject(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 @_command_handler
 async def cmd_send(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await _public_guard(event, update):
+        return
     if not event.args:
         await update.effective_message.reply_text("Usage: /send <path>")
         return
     raw_path = " ".join(event.args)
     session = _load(event.chat_id)
-    resolved = resolve_allowed_path(raw_path, _allowed_roots(event.chat_id, session))
+    resolved_ctx = _resolve_context(session, trust_tier=_trust_tier(event.user))
+    resolved = resolve_allowed_path(raw_path, _allowed_roots(event.chat_id, resolved_ctx))
     if not resolved:
         await update.effective_message.reply_text("Path is missing or outside allowed roots.")
         return
@@ -1029,6 +1179,8 @@ async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 @_command_handler
 async def cmd_skills(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await _public_guard(event, update):
+        return
     from app.skill_commands import (
         skills_show, skills_list, skills_add, skills_remove,
         skills_setup, skills_clear, skills_create, skills_search,
@@ -1072,6 +1224,8 @@ async def cmd_skills(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 @_command_handler
 async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await _public_guard(event, update):
+        return
     chat_id = event.chat_id
     user_id = event.user.id
 
@@ -1102,6 +1256,8 @@ async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 @_command_handler
 async def cmd_clear_credentials(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await _public_guard(event, update):
+        return
     user_id = event.user.id
     args = event.args
     skill_name = args[0] if args else None
@@ -1224,9 +1380,18 @@ async def cmd_compact(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         session = _load(chat_id)
         current = session.compact_mode if session.compact_mode is not None else _cfg().compact_mode
         state = "on" if current else "off"
+        buttons = [
+            InlineKeyboardButton(
+                "\u2705 Short answers" if current else "Short answers",
+                callback_data="setting_compact:on"),
+            InlineKeyboardButton(
+                "\u2705 Full answers" if not current else "Full answers",
+                callback_data="setting_compact:off"),
+        ]
         await update.effective_message.reply_text(
-            f"Compact mode is <b>{state}</b>.\nUse <code>/compact on</code> or <code>/compact off</code> to change.",
+            f"Compact mode is <b>{state}</b>.",
             parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([buttons]),
         )
         return
 
@@ -1270,6 +1435,8 @@ async def cmd_raw(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 @_command_handler
 async def cmd_role(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await _public_guard(event, update):
+        return
     chat_id = event.chat_id
     args = event.args
 
@@ -1303,7 +1470,76 @@ async def cmd_role(event, update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
 
+@_command_handler
+async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    cfg = _cfg()
+    msg = update.effective_message
+    chat_id = event.chat_id
+
+    if not cfg.model_profiles:
+        await msg.reply_text("No model profiles configured. Set BOT_MODEL_PROFILES.")
+        return
+
+    # Determine available profiles
+    trust = _trust_tier(event.user)
+    if trust == "public" and cfg.public_model_profiles:
+        available = sorted(cfg.public_model_profiles & cfg.model_profiles.keys())
+    else:
+        available = sorted(cfg.model_profiles.keys())
+
+    arg = event.args[0].lower() if event.args else ""
+
+    if arg and arg != "status":
+        if arg not in available:
+            await msg.reply_text(
+                f"Unknown profile. Available: {', '.join(available)}")
+            return
+        async with CHAT_LOCKS[chat_id]:
+            session = _load(chat_id)
+            session.model_profile = arg
+            _save(chat_id, session)
+        await msg.reply_text(
+            f"Model profile set to <b>{html.escape(arg)}</b> "
+            f"(<code>{html.escape(cfg.model_profiles[arg])}</code>).",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # Show current + inline keyboard
+    session = _load(chat_id)
+    current = session.model_profile or cfg.default_model_profile or "(none)"
+    from app.execution_context import resolve_effective_model
+    effective = resolve_effective_model(session, cfg, trust)
+
+    buttons = []
+    for profile in available:
+        label = f"\u2705 {profile}" if profile == current else profile
+        buttons.append(InlineKeyboardButton(label, callback_data=f"setting_model:{profile}"))
+
+    text = (
+        f"Model profile: <b>{html.escape(current)}</b>\n"
+        f"Effective model: <code>{html.escape(effective or cfg.model or '(default)')}</code>"
+    )
+    if buttons:
+        await msg.reply_text(text, parse_mode=ParseMode.HTML,
+                             reply_markup=InlineKeyboardMarkup([buttons]))
+    else:
+        await msg.reply_text(text, parse_mode=ParseMode.HTML)
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Update-ID idempotency: skip already-processed updates
+    uid = update.update_id
+    if uid in _seen_update_ids:
+        log.debug("Skipping duplicate update_id %d", uid)
+        return
+    _seen_update_ids.add(uid)
+    # Cap the set size
+    if len(_seen_update_ids) > _MAX_SEEN_IDS:
+        # Discard oldest (smallest) IDs — update_ids are monotonically increasing
+        sorted_ids = sorted(_seen_update_ids)
+        _seen_update_ids.difference_update(sorted_ids[:len(sorted_ids) // 2])
+
     user = normalize_user(update.effective_user)
     if user is None or not is_allowed(user):
         return
@@ -1336,7 +1572,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             welcome += "\nApproval mode is on \u2014 I'll show a plan before acting."
         await message.chat.send_message(welcome)
 
-    async with CHAT_LOCKS[chat_id]:
+    # Busy/queued feedback: if another request is in-flight for this chat, acknowledge
+    lock = CHAT_LOCKS[chat_id]
+    if lock.locked():
+        await message.reply_text("<i>Working on your previous request \u2014 yours is queued.</i>",
+                                 parse_mode=ParseMode.HTML)
+
+    async with lock:
         await message.chat.send_action(ChatAction.TYPING)
         session = _load(chat_id)
 
@@ -1397,10 +1639,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 )
             return
 
+        trust = _trust_tier(user)
+
         if session.approval_mode == "on":
-            await request_approval(chat_id, prompt, image_paths, list(msg.attachments), message, request_user_id=user_id)
+            await request_approval(chat_id, prompt, image_paths, list(msg.attachments), message, request_user_id=user_id, trust_tier=trust)
             return
-        await execute_request(chat_id, prompt, image_paths, message, request_user_id=user_id)
+        await execute_request(chat_id, prompt, image_paths, message, request_user_id=user_id, trust_tier=trust)
 
 
 @_callback_handler
@@ -1445,6 +1689,7 @@ async def handle_callback(event, query) -> None:
             prompt = pending.prompt
             denials = pending.denials or []
             request_user_id = pending.request_user_id
+            trust_tier = getattr(pending, 'trust_tier', 'trusted')
             session.clear_pending()
 
             denial_dirs = extra_dirs_from_denials(denials)
@@ -1460,11 +1705,143 @@ async def handle_callback(event, query) -> None:
                 query.message, denial_dirs,
                 request_user_id=request_user_id,
                 skip_permissions=True,
+                trust_tier=trust_tier,
+            )
+
+
+# -- Expand/collapse callback handler --------------------------------------
+
+
+@_callback_handler
+async def handle_expand_callback(event, query) -> None:
+    """Handle 'Show full answer' button presses."""
+    await query.answer()
+    data = event.data  # e.g. "expand:12345:42"
+    parts = data.split(":")
+    if len(parts) != 3:
+        return
+    _, chat_id_str, slot_str = parts
+    try:
+        target_chat = int(chat_id_str)
+        slot = int(slot_str)
+    except ValueError:
+        return
+
+    from app.summarize import load_raw_by_slot
+    cfg = _cfg()
+    raw_text = load_raw_by_slot(cfg.data_dir, target_chat, slot)
+    if raw_text is None:
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.edit_text(
+            "<i>Response no longer available (ring buffer rotated). Use /raw to check.</i>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # Replace the compact message with the full response
+    await query.edit_message_reply_markup(reply_markup=None)
+    formatted = md_to_telegram_html(raw_text)
+    # If it fits in one message, edit in-place
+    if len(formatted) <= 4000:
+        try:
+            await query.message.edit_text(
+                formatted, parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+            return
+        except BadRequest:
+            pass
+    # Too long to edit — send as new messages
+    for chunk in split_html(formatted, 4096):
+        try:
+            await query.message.chat.send_message(
+                chunk, parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+        except BadRequest:
+            plain = re.sub(r"<[^>]+>", "", chunk)
+            await query.message.chat.send_message(plain[:4096])
+
+
+# -- Settings callback handler ---------------------------------------------
+
+
+@_callback_handler
+async def handle_settings_callback(event, query) -> None:
+    """Handle inline-keyboard callbacks for session settings."""
+    await query.answer()
+    chat_id = event.chat_id
+    data = event.data  # e.g. "setting_model:fast", "setting_approval:on"
+
+    if not data.startswith("setting_"):
+        return
+
+    _, rest = data.split("_", 1)
+    if ":" not in rest:
+        return
+    setting, value = rest.split(":", 1)
+
+    async with CHAT_LOCKS[chat_id]:
+        session = _load(chat_id)
+
+        if setting == "model":
+            cfg = _cfg()
+            # Use the same availability logic as /model command
+            trust = _trust_tier(event.user)
+            if trust == "public" and cfg.public_model_profiles:
+                available = cfg.public_model_profiles & cfg.model_profiles.keys()
+            else:
+                available = set(cfg.model_profiles.keys())
+            if value not in available:
+                await query.edit_message_text(f"Unknown or restricted profile: {value}")
+                return
+            session.model_profile = value
+            _save(chat_id, session)
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.edit_message_text(
+                f"Model profile set to <b>{html.escape(value)}</b> "
+                f"(<code>{html.escape(cfg.model_profiles[value])}</code>).",
+                parse_mode=ParseMode.HTML,
+            )
+
+        elif setting == "approval":
+            if value not in {"on", "off"}:
+                return
+            session.approval_mode = value
+            session.approval_mode_explicit = True
+            _save(chat_id, session)
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.edit_message_text(
+                f"Preflight approval mode set to {value} for this chat.")
+
+        elif setting == "compact":
+            session.compact_mode = value == "on"
+            _save(chat_id, session)
+            await query.edit_message_reply_markup(reply_markup=None)
+            label = "on — long responses will be summarized" if value == "on" else "off"
+            await query.edit_message_text(
+                f"Compact mode set to <b>{label}</b>.",
+                parse_mode=ParseMode.HTML,
+            )
+
+        elif setting == "policy":
+            if is_public_user(event.user):
+                await query.edit_message_text("File policy cannot be changed in public mode.")
+                return
+            if value not in {"inspect", "edit"}:
+                return
+            session.file_policy = value
+            session.provider_state = _prov().new_provider_state()
+            session.clear_pending()
+            _save(chat_id, session)
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.edit_message_text(
+                f"File policy set to <code>{html.escape(value)}</code>. Provider session reset.",
+                parse_mode=ParseMode.HTML,
             )
 
 
 # -- Application builder ---------------------------------------------------
-
 
 
 @_callback_handler
@@ -1541,6 +1918,8 @@ async def handle_skill_update_callback(event, query) -> None:
 
 @_command_handler
 async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await _public_guard(event, update):
+        return
     cfg = _cfg()
     msg = update.effective_message
     arg = event.args[0].lower() if event.args else ""
@@ -1620,6 +1999,8 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @_command_handler
 async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await _public_guard(event, update):
+        return
     msg = update.effective_message
     arg = event.args[0].lower() if event.args else ""
 
@@ -1642,10 +2023,18 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if arg == "" or arg == "status":
         session = _load(event.chat_id)
         policy = session.file_policy or "edit"
+        buttons = [
+            InlineKeyboardButton(
+                "\u2705 Read only" if policy == "inspect" else "Read only",
+                callback_data="setting_policy:inspect"),
+            InlineKeyboardButton(
+                "\u2705 Read & write" if policy == "edit" else "Read & write",
+                callback_data="setting_policy:edit"),
+        ]
         await msg.reply_text(
-            f"File policy: <code>{html.escape(policy)}</code>\n"
-            f"Use <code>/policy inspect</code> or <code>/policy edit</code> to change.",
+            f"File policy: <b>{html.escape(policy)}</b>",
             parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([buttons]),
         )
         return
 
@@ -1657,10 +2046,14 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     _config = config
     _provider = provider
     _boot_id = uuid.uuid4().hex
-    _rate_limiter = RateLimiter(
-        per_minute=config.rate_limit_per_minute,
-        per_hour=config.rate_limit_per_hour,
-    )
+    # Apply conservative rate-limit defaults for public mode
+    per_minute = config.rate_limit_per_minute
+    per_hour = config.rate_limit_per_hour
+    if config.allow_open and per_minute == 0 and per_hour == 0:
+        per_minute = 5
+        per_hour = 30
+        log.info("Public mode: applying default rate limits (5/min, 30/hr)")
+    _rate_limiter = RateLimiter(per_minute=per_minute, per_hour=per_hour)
 
     app = Application.builder().token(config.telegram_token).build()
     app.add_handler(CommandHandler("start", cmd_start))
@@ -1681,9 +2074,12 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     app.add_handler(CommandHandler("doctor", cmd_doctor))
     app.add_handler(CommandHandler("project", cmd_project))
     app.add_handler(CommandHandler("policy", cmd_policy))
+    app.add_handler(CommandHandler("model", cmd_model))
     app.add_handler(CommandHandler("export", cmd_export))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CallbackQueryHandler(handle_callback, pattern=r"^(retry_|approval_)"))
+    app.add_handler(CallbackQueryHandler(handle_settings_callback, pattern=r"^setting_"))
+    app.add_handler(CallbackQueryHandler(handle_expand_callback, pattern=r"^expand:"))
     app.add_handler(CallbackQueryHandler(handle_skill_add_callback, pattern=r"^skill_add_"))
     app.add_handler(CallbackQueryHandler(handle_skill_update_callback, pattern=r"^skill_update_"))
     app.add_handler(CallbackQueryHandler(handle_clear_cred_callback, pattern=r"^clear_cred_"))

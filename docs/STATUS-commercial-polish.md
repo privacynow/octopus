@@ -2,9 +2,9 @@
 
 Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-10):** Track D complete — `/model` command with inline-keyboard profile
-> switching, inline buttons for `/approval`, `/compact`, `/policy` status views, settings callback
-> handler, `/session` model profile display, storage fix for `model_profile` persistence. 580 tests.
+> **Latest change (2026-03-10):** All tracks A–F complete with cross-feature invariant tests.
+> 592 tests passing. All plan items implemented: public trust, model profiles, settings UX,
+> compact/latency rendering, transport reliability.
 
 ---
 
@@ -25,6 +25,8 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 | Track B | Model profiles provider plumbing (effective_model flow) | Done |
 | Track C | Public trust enforcement (command gating, doctor, rate-limit defaults) | Done |
 | Track D | Model + settings UX (/model, inline keyboards, /session model display) | Done |
+| Track E | Compact/latency UX (expandable blockquotes, expand/collapse, summary-first, prompt weight) | Done |
+| Track F | Transport reliability (update_id idempotency, busy/queued feedback, polling conflict detection) | Done |
 
 ---
 
@@ -34,7 +36,7 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **580 pytest tests** + 35 bash tests across 30 entrypoints.
+Current suite: **592 pytest tests** + 35 bash tests across 30 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|

@@ -741,6 +741,7 @@ def build_run_context(
     credential_env: dict[str, str] | None = None,
     working_dir: str = "",
     file_policy: str = "",
+    effective_model: str = "",
 ) -> RunContext:
     """Convenience builder for RunContext."""
     cred_env = credential_env or {}
@@ -754,6 +755,7 @@ def build_run_context(
         credential_env=cred_env,
         working_dir=working_dir,
         file_policy=file_policy,
+        effective_model=effective_model,
     )
 
 

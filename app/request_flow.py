@@ -9,6 +9,8 @@ Design rules:
 - No Telegram imports.  No message sending.  No progress updates.
 - Functions receive explicit parameters (no module-global singletons).
 - Returns typed results; handlers decide how to render them.
+- Execution-scope fields (active_skills, working_dir, file_policy, etc.)
+  must come from ResolvedExecutionContext, never from raw SessionState.
 """
 
 from __future__ import annotations
@@ -125,6 +127,7 @@ class CredentialCheckResult:
 
 
 def check_credential_satisfaction(
+    active_skills: list[str],
     session: SessionState,
     user_id: int,
     data_dir: Path,
@@ -132,10 +135,12 @@ def check_credential_satisfaction(
 ) -> CredentialCheckResult:
     """Check whether all active skills have credentials.
 
+    active_skills: the resolved skill list (from ResolvedExecutionContext),
+    NOT raw session.active_skills.  Public users pass an empty list.
+
     Pure logic — does not send messages or save session.
     Caller must handle the result (send prompts, save setup state, etc.).
     """
-    active_skills = session.active_skills
     if not active_skills:
         return CredentialCheckResult(satisfied=True, credential_env={})
 
@@ -193,12 +198,14 @@ def current_context_hash(
     session: SessionState,
     config: "BotConfig",
     provider_name: str,
+    trust_tier: str = "trusted",
 ) -> str:
     """Compute the current context hash from session + config.
 
-    Uses resolve_execution_context so all paths share the same field set.
+    trust_tier must match the tier used when the pending request was created,
+    otherwise the hash will differ even when nothing actually changed.
     """
-    return resolve_execution_context(session, config, provider_name).context_hash
+    return resolve_execution_context(session, config, provider_name, trust_tier=trust_tier).context_hash
 
 
 def validate_pending(
@@ -207,11 +214,18 @@ def validate_pending(
     config: "BotConfig",
     provider_name: str,
 ) -> str | None:
-    """Validate a pending request. Returns error message, or None if valid."""
+    """Validate a pending request. Returns error message, or None if valid.
+
+    Reads trust_tier from the pending object so the hash is recomputed
+    with the same identity shape that created it.
+    """
     expiry_msg = pending_expired(pending, config.timeout_seconds)
     if expiry_msg:
         return expiry_msg
-    if pending.context_hash and pending.context_hash != current_context_hash(session, config, provider_name):
+    trust_tier = getattr(pending, 'trust_tier', 'trusted')
+    if pending.context_hash and pending.context_hash != current_context_hash(
+        session, config, provider_name, trust_tier=trust_tier,
+    ):
         return "Context changed since this request was made. Please resend."
     return None
 

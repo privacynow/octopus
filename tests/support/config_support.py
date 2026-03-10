@@ -42,6 +42,10 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         webhook_port=8443,
         webhook_secret="",
         projects=(),
+        model_profiles={},
+        default_model_profile="",
+        public_working_dir="",
+        public_model_profiles=frozenset(),
         registry_url="",
     )
     defaults.update(overrides)

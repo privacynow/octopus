@@ -83,10 +83,11 @@ class CodexProvider:
 
     # -- command building --------------------------------------------------
 
-    def _common_args(self) -> list[str]:
+    def _common_args(self, effective_model: str = "") -> list[str]:
         args: list[str] = []
-        if self.config.model:
-            args.extend(["--model", self.config.model])
+        model = effective_model or self.config.model
+        if model:
+            args.extend(["--model", model])
         if self.config.codex_profile:
             args.extend(["--profile", self.config.codex_profile])
         if self.config.codex_dangerous:
@@ -112,16 +113,18 @@ class CodexProvider:
         ephemeral: bool = False,
         safe_mode: bool = False,
         extra_dirs: list[str] | None = None,
+        effective_model: str = "",
     ) -> list[str]:
         cmd = ["codex", "exec", "--json"]
         if safe_mode:
             # Preflight: model and profile only, no --full-auto or --dangerous
-            if self.config.model:
-                cmd.extend(["--model", self.config.model])
+            model = effective_model or self.config.model
+            if model:
+                cmd.extend(["--model", model])
             if self.config.codex_profile:
                 cmd.extend(["--profile", self.config.codex_profile])
         else:
-            cmd.extend(self._common_args())
+            cmd.extend(self._common_args(effective_model))
         cmd.extend(["--sandbox", sandbox or self.config.codex_sandbox])
         if self.config.codex_skip_git_repo_check:
             cmd.append("--skip-git-repo-check")
@@ -140,11 +143,12 @@ class CodexProvider:
         image_paths: list[str],
         *,
         ephemeral: bool = False,
+        effective_model: str = "",
     ) -> list[str]:
         # NOTE: codex exec resume does NOT support --add-dir (verified on
         # codex-cli 0.111.0).  Extra dirs are only passed on initial exec.
         cmd = ["codex", "exec", "resume", "--json"]
-        cmd.extend(self._common_args())
+        cmd.extend(self._common_args(effective_model))
         if self.config.codex_skip_git_repo_check:
             cmd.append("--skip-git-repo-check")
         if ephemeral:
@@ -530,12 +534,13 @@ class CodexProvider:
             if "sandbox" in pc:
                 sandbox_override = pc["sandbox"]
 
+        effective_model = context.effective_model if context else ""
         if thread_id:
-            cmd = self._build_resume_cmd(thread_id, effective_prompt, image_paths)
+            cmd = self._build_resume_cmd(thread_id, effective_prompt, image_paths, effective_model=effective_model)
         else:
             cmd = self._build_new_cmd(
                 effective_prompt, image_paths, extra_dirs=extra_dirs,
-                sandbox=sandbox_override,
+                sandbox=sandbox_override, effective_model=effective_model,
             )
 
         # Preserve resume semantics after a bot-level approval. Changing a resumed
@@ -573,9 +578,10 @@ class CodexProvider:
         if system_prompt:
             effective_prompt = system_prompt + "\n\n---\n\n" + prompt
         extra_dirs = context.extra_dirs if context else None
+        effective_model = getattr(context, 'effective_model', '') if context else ""
         cmd = self._build_new_cmd(
             effective_prompt, image_paths, sandbox="read-only", ephemeral=True, safe_mode=True,
-            extra_dirs=extra_dirs,
+            extra_dirs=extra_dirs, effective_model=effective_model,
         )
         working_dir = context.working_dir if context else ""
         return await self._run_cmd(cmd, progress, working_dir=working_dir)

@@ -87,8 +87,33 @@ class BotConfig:
     webhook_secret: str
     # Projects — optional named working directories
     projects: tuple[tuple[str, str, tuple[str, ...]], ...]  # ((name, root_dir, extra_dirs), ...)
+    # Model profiles — stable user-facing tier names mapped to provider model IDs
+    model_profiles: dict[str, str]  # e.g. {"fast": "claude-haiku-4-5-20251001", ...}
+    default_model_profile: str  # "fast", "balanced", "best", or "" (use raw BOT_MODEL)
+    # Public trust profile
+    public_working_dir: str  # forced working dir for public users (empty = use working_dir)
+    public_model_profiles: frozenset[str]  # allowed profiles for public users (empty = all)
     # Skill registry
     registry_url: str  # URL to a JSON skill registry index (empty = disabled)
+
+
+def _parse_model_profiles(raw: str) -> dict[str, str]:
+    """Parse BOT_MODEL_PROFILES into a dict of {profile_name: model_id}.
+
+    Format: "fast:claude-haiku-4-5-20251001,balanced:claude-sonnet-4-6,best:claude-opus-4-6"
+    """
+    if not raw.strip():
+        return {}
+    profiles: dict[str, str] = {}
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry or ":" not in entry:
+            continue
+        name, model_id = entry.split(":", 1)
+        name, model_id = name.strip(), model_id.strip()
+        if name and model_id:
+            profiles[name] = model_id
+    return profiles
 
 
 def _parse_projects(raw: str) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
@@ -223,6 +248,12 @@ def load_config(instance: str | None = None) -> BotConfig:
         webhook_port=get_int("BOT_WEBHOOK_PORT", "8443"),
         webhook_secret=get("BOT_WEBHOOK_SECRET"),
         projects=_parse_projects(get("BOT_PROJECTS")),
+        model_profiles=_parse_model_profiles(get("BOT_MODEL_PROFILES")),
+        default_model_profile=get("BOT_DEFAULT_PROFILE"),
+        public_working_dir=get("BOT_PUBLIC_WORKING_DIR"),
+        public_model_profiles=frozenset(
+            s.strip() for s in get("BOT_PUBLIC_MODEL_PROFILES").split(",") if s.strip()
+        ),
         registry_url=get("BOT_REGISTRY_URL"),
     )
 

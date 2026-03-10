@@ -980,3 +980,115 @@ async def test_context_hash_changes_with_working_dir():
     assert hash1 != hash2
     hash3 = ResolvedExecutionContext(**_d, working_dir="/opt/backend").context_hash
     assert hash2 != hash3
+
+
+# ===========================================================================
+# /model command + settings inline keyboard
+# ===========================================================================
+
+_PROFILES = {"fast": "claude-haiku-4-5-20251001", "balanced": "claude-sonnet-4-6", "best": "claude-opus-4-6"}
+
+async def test_model_command_shows_profiles():
+    """/model with no args shows current profile and inline buttons."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": _PROFILES, "default_model_profile": "balanced",
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_model, chat, user, "/model")
+        reply = msg.replies[-1]
+        assert "balanced" in reply.get("text", "")
+        # Should have inline keyboard buttons
+        markup = reply.get("reply_markup")
+        assert markup is not None
+
+
+async def test_model_command_switches_profile():
+    """/model fast should switch the session model profile."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": _PROFILES, "default_model_profile": "balanced",
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_model, chat, user, "/model", args=["fast"])
+        reply = last_reply(msg)
+        assert "fast" in reply.lower()
+        session = load_session_disk(data_dir, 1, prov)
+        assert session.get("model_profile") == "fast"
+
+
+async def test_model_command_no_profiles_configured():
+    """/model should say no profiles if none configured."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_model, chat, user, "/model")
+        reply = last_reply(msg)
+        assert "no model profiles" in reply.lower()
+
+
+async def test_settings_callback_model():
+    """Inline button setting_model:fast should switch model profile."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    with fresh_env(config_overrides={
+        "model_profiles": _PROFILES, "default_model_profile": "balanced",
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        query, _ = await send_callback(th.handle_settings_callback, chat, user, "setting_model:fast")
+        session = load_session_disk(data_dir, 1, prov)
+        assert session.get("model_profile") == "fast"
+
+
+async def test_settings_callback_approval():
+    """Inline button setting_approval:off should change approval mode."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        query, _ = await send_callback(th.handle_settings_callback, chat, user, "setting_approval:off")
+        session = load_session_disk(data_dir, 1, prov)
+        assert session.get("approval_mode") == "off"
+
+
+async def test_settings_callback_compact():
+    """Inline button setting_compact:on should enable compact mode."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        query, _ = await send_callback(th.handle_settings_callback, chat, user, "setting_compact:on")
+        session = load_session_disk(data_dir, 1, prov)
+        assert session.get("compact_mode") is True
+
+
+async def test_settings_callback_policy():
+    """Inline button setting_policy:inspect should change file policy."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        query, _ = await send_callback(th.handle_settings_callback, chat, user, "setting_policy:inspect")
+        session = load_session_disk(data_dir, 1, prov)
+        assert session.get("file_policy") == "inspect"
+
+
+async def test_session_shows_model_profile():
+    """/session should display the model profile and effective model."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": _PROFILES, "default_model_profile": "balanced",
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+        reply = last_reply(msg)
+        assert "balanced" in reply
+        assert "claude-sonnet-4-6" in reply

@@ -259,7 +259,7 @@ def load_session(
     if row is not None:
         try:
             saved = json.loads(row[0])
-            for key in ("active_skills", "role", "pending_approval", "pending_retry", "awaiting_skill_setup", "compact_mode", "project_id", "file_policy", "created_at", "updated_at"):
+            for key in ("active_skills", "role", "pending_approval", "pending_retry", "awaiting_skill_setup", "compact_mode", "project_id", "file_policy", "model_profile", "created_at", "updated_at"):
                 if key in saved:
                     session[key] = saved[key]
             if saved.get("approval_mode_explicit"):

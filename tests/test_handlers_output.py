@@ -2,6 +2,7 @@
 
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
+from app.telegram_handlers import _extract_summary
 from tests.support.handler_support import (
     FakeChat,
     FakeProvider,
@@ -96,7 +97,8 @@ async def test_e2e_table_in_provider_response():
         assert "---|---" not in all_replies
 
 
-async def test_e2e_compact_mode_summarizes():
+async def test_e2e_compact_mode_uses_blockquote():
+    """Compact mode should use expandable blockquote for long responses."""
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
@@ -106,29 +108,25 @@ async def test_e2e_compact_mode_summarizes():
         session["compact_mode"] = True
         save_session(data_dir, 1, session)
 
-        long_response = "Detailed analysis paragraph. " * 40
+        long_response = "Summary line one.\n\nDetailed analysis paragraph. " * 30
         prov.run_results = [RunResult(text=long_response)]
 
         chat = FakeChat(1)
         user = FakeUser(42)
 
-        import app.telegram_handlers as th
-        original_summarize = th.summarize
-
-        async def fake_summarize(text, model, timeout=30):
-            return "Short summary of the analysis."
-
-        th.summarize = fake_summarize
-        try:
-            msg = await send_text(chat, user, "analyze this")
-        finally:
-            th.summarize = original_summarize
+        msg = await send_text(chat, user, "analyze this")
 
         all_replies = " ".join(r.get("text", "") for r in msg.replies)
-        assert "Short summary" in all_replies
-        assert "/raw" in all_replies
-        assert "Detailed analysis paragraph. Detailed" not in all_replies
+        # Should contain expandable blockquote or a "Show full" button
+        has_blockquote = "blockquote" in all_replies
+        has_expand_button = any(
+            r.get("reply_markup") is not None for r in msg.replies
+        )
+        assert has_blockquote or has_expand_button, (
+            f"Expected blockquote or expand button, got: {all_replies[:200]}"
+        )
 
+        import app.telegram_handlers as th
         msg2 = await send_command(th.cmd_raw, chat, user, "/raw")
         raw_reply = last_reply(msg2)
         assert "Detailed analysis paragraph" in raw_reply
@@ -159,7 +157,8 @@ async def test_e2e_compact_off_no_summarize():
         assert "Full verbose response" in last_reply(msg2)
 
 
-async def test_e2e_compact_mode_summarize_exception_falls_back():
+async def test_e2e_compact_mode_short_response_no_blockquote():
+    """Compact mode should not use blockquote for short responses (<800 chars)."""
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
@@ -169,28 +168,30 @@ async def test_e2e_compact_mode_summarize_exception_falls_back():
         session["compact_mode"] = True
         save_session(data_dir, 1, session)
 
-        long_response = "Verbose output block. " * 60
-        prov.run_results = [RunResult(text=long_response)]
+        short_response = "Quick answer: 42."
+        prov.run_results = [RunResult(text=short_response)]
 
         chat = FakeChat(1)
         user = FakeUser(42)
-
-        import app.telegram_handlers as th
-        original_summarize = th.summarize
-
-        async def broken_summarize(text, model, timeout=30):
-            raise RuntimeError("boom")
-
-        th.summarize = broken_summarize
-        try:
-            msg = await send_text(chat, user, "summarize this")
-        finally:
-            th.summarize = original_summarize
+        msg = await send_text(chat, user, "what is the answer")
 
         all_replies = " ".join(r.get("text", "") for r in msg.replies)
-        assert "Verbose output block." in all_replies
-        assert "/raw for full response" not in all_replies
+        assert "42" in all_replies
+        assert "blockquote" not in all_replies
 
-        import app.telegram_handlers as th2
-        msg2 = await send_command(th2.cmd_raw, chat, user, "/raw")
-        assert "Verbose output block." in last_reply(msg2)
+
+# -- _extract_summary unit tests --
+
+def test_extract_summary_splits_at_line_boundary():
+    text = "Line one\nLine two\nLine three\nLine four\nLine five\nLine six"
+    summary, rest = _extract_summary(text, max_lines=3)
+    assert "Line one" in summary
+    assert "Line three" in summary
+    assert "Line five" in rest
+
+
+def test_extract_summary_short_text():
+    text = "Just one line"
+    summary, rest = _extract_summary(text, max_lines=4)
+    assert summary == "Just one line"
+    assert rest == ""

@@ -34,6 +34,7 @@ class PendingApproval:
     image_paths: list[str]
     attachment_dicts: list[dict[str, Any]]
     context_hash: str
+    trust_tier: str = "trusted"
     created_at: float = field(default_factory=time.time)
 
 
@@ -45,6 +46,7 @@ class PendingRetry:
     image_paths: list[str]
     context_hash: str
     denials: list[dict[str, Any]]
+    trust_tier: str = "trusted"
     created_at: float = field(default_factory=time.time)
 
 
@@ -77,6 +79,7 @@ class SessionState:
     compact_mode: bool | None = None  # None = use config default
     project_id: str = ""
     file_policy: str = ""  # "inspect", "edit", or "" (use config default)
+    model_profile: str = ""  # "fast", "balanced", "best", or "" (use config default)
     created_at: str = ""
     updated_at: str = ""
 
@@ -137,6 +140,7 @@ def session_from_dict(d: dict[str, Any]) -> SessionState:
         compact_mode=d.get("compact_mode"),
         project_id=d.get("project_id", ""),
         file_policy=d.get("file_policy") or "",
+        model_profile=d.get("model_profile") or "",
         created_at=d.get("created_at", ""),
         updated_at=d.get("updated_at", ""),
     )

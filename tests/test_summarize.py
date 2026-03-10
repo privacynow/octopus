@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from app.summarize import _RING_SIZE, _SHORT_THRESHOLD, export_chat_history, load_raw, save_raw, summarize
+from app.summarize import _RING_SIZE, _SHORT_THRESHOLD, export_chat_history, load_raw, load_raw_by_slot, save_raw, summarize
 
 
 class _FakeProc:
@@ -198,3 +198,34 @@ def test_export_kind_labels():
 
 def test_ring_size():
     assert _RING_SIZE == 50
+
+
+# -- save_raw returns slot number --
+
+def test_save_raw_returns_slot():
+    """save_raw should return the slot number of the saved entry."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        slot1 = save_raw(data_dir, 1, "prompt1", "response1")
+        assert slot1 == 1
+        slot2 = save_raw(data_dir, 1, "prompt2", "response2")
+        assert slot2 == 2
+
+
+# -- load_raw_by_slot --
+
+def test_load_raw_by_slot():
+    """load_raw_by_slot should retrieve by exact slot number."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        slot1 = save_raw(data_dir, 1, "p1", "response one")
+        slot2 = save_raw(data_dir, 1, "p2", "response two")
+        assert load_raw_by_slot(data_dir, 1, slot1) == "response one"
+        assert load_raw_by_slot(data_dir, 1, slot2) == "response two"
+
+
+def test_load_raw_by_slot_missing():
+    """load_raw_by_slot returns None for nonexistent slot."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        assert load_raw_by_slot(data_dir, 1, 999) is None

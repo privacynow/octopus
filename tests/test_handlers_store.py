@@ -484,7 +484,14 @@ async def test_callback_unauthorized_alert():
         data_dir, tmp_store, tmp_custom, cleanup = _store_env(tmp)
         try:
             prov = FakeProvider("claude")
-            setup_globals(_admin_cfg(data_dir), prov)
+            cfg = make_config(
+                data_dir=data_dir,
+                allow_open=False,
+                admin_user_ids=frozenset({100}),
+                admin_usernames=frozenset({"admin"}),
+                allowed_user_ids=frozenset({100, 200}),
+            )
+            setup_globals(cfg, prov)
 
             # User 999 is not in allowed_user_ids
             stranger = FakeUser(uid=999, username="nobody")

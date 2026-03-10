@@ -80,6 +80,42 @@ def test_clean_env():
     assert "PATH" in env
 
 
+def test_effective_model_overrides_config_model():
+    """effective_model from RunContext should override config.model in the command."""
+    p = ClaudeProvider(make_config(model="claude-sonnet-4-6"))
+    state = {"session_id": "abc-123", "started": False}
+    # _base_cmd with effective_model should use it, not config.model
+    cmd = p._base_cmd(effective_model="claude-haiku-4-5-20251001")
+    assert "--model" in cmd
+    assert "claude-haiku-4-5-20251001" in cmd
+    assert "claude-sonnet-4-6" not in cmd
+
+
+def test_effective_model_empty_falls_back_to_config():
+    """When effective_model is empty, _base_cmd should use config.model."""
+    p = ClaudeProvider(make_config(model="claude-sonnet-4-6"))
+    cmd = p._base_cmd(effective_model="")
+    assert "--model" in cmd
+    assert "claude-sonnet-4-6" in cmd
+
+
+def test_effective_model_in_run_cmd():
+    """effective_model should flow through _build_run_cmd to the command line."""
+    p = ClaudeProvider(make_config(model="claude-sonnet-4-6"))
+    state = {"session_id": "abc-123", "started": False}
+    cmd = p._build_run_cmd(state, "hello", effective_model="claude-opus-4-6")
+    assert "claude-opus-4-6" in cmd
+    assert "claude-sonnet-4-6" not in cmd
+
+
+def test_effective_model_in_preflight_cmd():
+    """effective_model should flow through _build_preflight_cmd to the command line."""
+    p = ClaudeProvider(make_config(model="claude-sonnet-4-6"))
+    cmd = p._build_preflight_cmd("test", effective_model="claude-haiku-4-5-20251001")
+    assert "claude-haiku-4-5-20251001" in cmd
+    assert "claude-sonnet-4-6" not in cmd
+
+
 def test_file_policy_inspect_appends_system_prompt():
     """file_policy=inspect should add a read-only instruction to the system prompt."""
     from app.providers.base import RunContext

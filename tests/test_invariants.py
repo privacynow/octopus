@@ -1203,7 +1203,7 @@ async def test_duplicate_update_id_skipped():
 
 
 async def test_duplicate_update_id_skipped_for_commands():
-    """Same update_id on a command should be processed only once."""
+    """Same update_id on a decorated command should be processed only once."""
     import app.telegram_handlers as th
 
     with fresh_env() as (data_dir, cfg, prov):
@@ -1226,6 +1226,32 @@ async def test_duplicate_update_id_skipped_for_commands():
 
         await th.cmd_new(upd2, FakeContext())
         # Second message should have no replies — deduped
+        assert len(msg2.replies) == 0
+
+
+async def test_duplicate_update_id_skipped_for_help():
+    """Same update_id on /help (non-decorated handler) should be processed only once."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=8004)
+        user = FakeUser(uid=42, username="testuser")
+
+        th._seen_update_ids.clear()
+
+        msg1 = FakeMessage(chat=chat, text="/help")
+        upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
+        dup_id = upd1.update_id
+
+        await th.cmd_help(upd1, FakeContext())
+        assert len(msg1.replies) > 0
+
+        # Replay same update_id
+        msg2 = FakeMessage(chat=chat, text="/help")
+        upd2 = FakeUpdate(message=msg2, user=user, chat=chat)
+        upd2.update_id = dup_id
+
+        await th.cmd_help(upd2, FakeContext())
         assert len(msg2.replies) == 0
 
 

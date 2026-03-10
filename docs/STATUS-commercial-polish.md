@@ -2,9 +2,9 @@
 
 Current as of 2026-03-09. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-09):** Resolved execution context enforcement hardening pass.
-> Fixed 5 contract violations where downstream code read raw session/config instead of
-> resolved context. 609 tests passing.
+> **Latest change (2026-03-09):** Update-ID idempotency now covers all entry points.
+> Extracted `_dedup_update()` helper used by `_command_handler`, `_callback_handler`,
+> `handle_message`, `cmd_start`, and `cmd_help`. 612 tests passing.
 
 ---
 
@@ -37,7 +37,7 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **609 pytest tests** + 35 bash tests across 30 entrypoints.
+Current suite: **612 pytest tests** + 35 bash tests across 30 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -56,7 +56,7 @@ Current suite: **609 pytest tests** + 35 bash tests across 30 entrypoints.
 | `test_handlers_ratelimit.py` | 6 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
 | `test_handlers_store.py` | 13 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle, callback flows (skill_add confirm/cancel, skill_update confirm/cancel/non-admin alert, unauthorized alert), markup removal verification. |
 | `test_high_risk.py` | 29 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
-| `test_invariants.py` | 99 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2), mixed ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential check with resolved skills (2), model command/callback parity (4), cross-feature invariants (4). |
+| `test_invariants.py` | 102 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2), update-ID idempotency across all entry points (4: message, decorated command, non-decorated command, callback), mixed ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential check with resolved skills (2), model command/callback parity (4), cross-feature invariants (4). |
 | `test_ratelimit.py` | 8 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_registry.py` | 8 | Skill registry: index parsing (valid/bad version/non-JSON), search, artifact download/extraction, store integration (digest match/mismatch). |
 | `test_skills.py` | 43 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
@@ -540,3 +540,4 @@ updated.
 | `/model fast` blocked for public but callback allowed it | Medium | `/model` used blanket `_public_guard`; callback used profile filtering | Both surfaces use same trust-tier profile filtering |
 | `/session` showed operator working dir for public users | Medium | Display fell back to `cfg.working_dir` when no project bound | Use `resolved.working_dir` directly |
 | Unauthorized callback test assumed open mode rejects strangers | Low | Test used `allow_open=True` config but expected stranger rejection | Changed to `allow_open=False` for authorization test |
+| `/start` and `/help` bypassed update_id dedup | Low-medium | These handlers inline normalize/auth instead of using `@_command_handler` decorator | Added `_dedup_update()` call at top of both handlers |

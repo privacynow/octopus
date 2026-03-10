@@ -861,6 +861,8 @@ _HELP_TOPICS = {
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start — always show main help (ignores deep-link payloads)."""
+    if _dedup_update(update):
+        return
     event = normalize_command(update, context)
     if event is None or not is_allowed(event.user):
         await update.effective_message.reply_text("Not authorized.")
@@ -872,6 +874,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help [topic] — main help or topic-specific detail."""
+    if _dedup_update(update):
+        return
     event = normalize_command(update, context)
     if event is None or not is_allowed(event.user):
         await update.effective_message.reply_text("Not authorized.")

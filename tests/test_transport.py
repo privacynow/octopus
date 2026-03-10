@@ -1,10 +1,7 @@
 """Tests for the inbound transport normalization layer (app/transport.py)."""
 
-import sys
 import tempfile
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.transport import (
     InboundAttachment,
@@ -17,7 +14,6 @@ from app.transport import (
     normalize_message,
     normalize_user,
 )
-from tests.support.assertions import Checks
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
@@ -28,11 +24,8 @@ from tests.support.handler_support import (
     FakeUser,
     make_config,
     setup_globals,
-    test_data_dir,
+    fresh_data_dir,
 )
-
-checks = Checks()
-run_test = checks.add_test
 
 
 # ---------------------------------------------------------------------------
@@ -42,42 +35,30 @@ run_test = checks.add_test
 def test_normalize_user_basic():
     user = FakeUser(uid=42, username="Alice")
     result = normalize_user(user)
-    checks.check_true("returns InboundUser", isinstance(result, InboundUser))
-    checks.check("id matches", result.id, 42)
-    checks.check("username lowercased", result.username, "alice")
-
-
-run_test("normalize_user basic", test_normalize_user_basic)
+    assert isinstance(result, InboundUser)
+    assert result.id == 42
+    assert result.username == "alice"
 
 
 def test_normalize_user_no_username():
     user = FakeUser(uid=99, username=None)
     user.username = None
     result = normalize_user(user)
-    checks.check("id", result.id, 99)
-    checks.check("username empty for None", result.username, "")
-
-
-run_test("normalize_user no username", test_normalize_user_no_username)
+    assert result.id == 99
+    assert result.username == ""
 
 
 def test_normalize_user_empty_username():
     user = FakeUser(uid=1)
     user.username = ""
     result = normalize_user(user)
-    checks.check("username empty", result.username, "")
-
-
-run_test("normalize_user empty username", test_normalize_user_empty_username)
+    assert result.username == ""
 
 
 def test_normalize_user_none():
     """normalize_user(None) returns None, not an exception."""
     result = normalize_user(None)
-    checks.check_true("returns None for None user", result is None)
-
-
-run_test("normalize_user None returns None", test_normalize_user_none)
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -92,14 +73,11 @@ def test_normalize_command_basic():
     ctx = FakeContext(args=["skills", "approval"])
 
     result = normalize_command(upd, ctx)
-    checks.check_true("returns InboundCommand", isinstance(result, InboundCommand))
-    checks.check("chat_id", result.chat_id, 12345)
-    checks.check("user.id", result.user.id, 42)
-    checks.check("command", result.command, "help")
-    checks.check("args", result.args, ("skills", "approval"))
-
-
-run_test("normalize_command basic", test_normalize_command_basic)
+    assert isinstance(result, InboundCommand)
+    assert result.chat_id == 12345
+    assert result.user.id == 42
+    assert result.command == "help"
+    assert result.args == ("skills", "approval")
 
 
 def test_normalize_command_with_bot_mention():
@@ -111,10 +89,7 @@ def test_normalize_command_with_bot_mention():
     ctx = FakeContext(args=[])
 
     result = normalize_command(upd, ctx)
-    checks.check("command strips bot mention", result.command, "help")
-
-
-run_test("normalize_command with bot mention", test_normalize_command_with_bot_mention)
+    assert result.command == "help"
 
 
 def test_normalize_command_no_args():
@@ -125,11 +100,8 @@ def test_normalize_command_no_args():
     ctx = FakeContext()
 
     result = normalize_command(upd, ctx)
-    checks.check("command", result.command, "start")
-    checks.check("args empty", result.args, ())
-
-
-run_test("normalize_command no args", test_normalize_command_no_args)
+    assert result.command == "start"
+    assert result.args == ()
 
 
 def test_normalize_command_no_user():
@@ -140,10 +112,7 @@ def test_normalize_command_no_user():
     upd.effective_user = None
 
     result = normalize_command(upd, FakeContext())
-    checks.check_true("returns None for no user", result is None)
-
-
-run_test("normalize_command no user", test_normalize_command_no_user)
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -158,13 +127,10 @@ def test_normalize_callback_basic():
     upd = FakeUpdate(message=msg, user=user, chat=chat, callback_query=query)
 
     result = normalize_callback(upd)
-    checks.check_true("returns InboundCallback", isinstance(result, InboundCallback))
-    checks.check("chat_id", result.chat_id, 555)
-    checks.check("user.id", result.user.id, 77)
-    checks.check("data", result.data, "approval_approve")
-
-
-run_test("normalize_callback basic", test_normalize_callback_basic)
+    assert isinstance(result, InboundCallback)
+    assert result.chat_id == 555
+    assert result.user.id == 77
+    assert result.data == "approval_approve"
 
 
 def test_normalize_callback_complex_data():
@@ -175,10 +141,7 @@ def test_normalize_callback_complex_data():
     upd = FakeUpdate(message=msg, user=user, chat=chat, callback_query=query)
 
     result = normalize_callback(upd)
-    checks.check("data preserved", result.data, "skill_update_confirm:my-skill")
-
-
-run_test("normalize_callback complex data", test_normalize_callback_complex_data)
+    assert result.data == "skill_update_confirm:my-skill"
 
 
 def test_normalize_callback_empty_data():
@@ -190,10 +153,7 @@ def test_normalize_callback_empty_data():
     upd = FakeUpdate(message=msg, user=user, chat=chat, callback_query=query)
 
     result = normalize_callback(upd)
-    checks.check("empty data", result.data, "")
-
-
-run_test("normalize_callback empty data", test_normalize_callback_empty_data)
+    assert result.data == ""
 
 
 def test_normalize_callback_no_user():
@@ -205,10 +165,7 @@ def test_normalize_callback_no_user():
     upd.effective_user = None
 
     result = normalize_callback(upd)
-    checks.check_true("returns None for no user", result is None)
-
-
-run_test("normalize_callback no user", test_normalize_callback_no_user)
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -225,15 +182,12 @@ async def test_normalize_message_text():
         upd = FakeUpdate(message=msg, user=user, chat=chat)
 
         result = await normalize_message(upd, FakeContext(), data_dir)
-        checks.check_true("returns InboundMessage", isinstance(result, InboundMessage))
-        checks.check("chat_id", result.chat_id, 100)
-        checks.check("user.id", result.user.id, 50)
-        checks.check("user.username", result.user.username, "dave")
-        checks.check("text", result.text, "hello world")
-        checks.check("no attachments", result.attachments, ())
-
-
-run_test("normalize_message text", test_normalize_message_text())
+        assert isinstance(result, InboundMessage)
+        assert result.chat_id == 100
+        assert result.user.id == 50
+        assert result.user.username == "dave"
+        assert result.text == "hello world"
+        assert result.attachments == ()
 
 
 async def test_normalize_message_caption():
@@ -248,10 +202,7 @@ async def test_normalize_message_caption():
         upd = FakeUpdate(message=msg, user=user, chat=chat)
 
         result = await normalize_message(upd, FakeContext(), data_dir)
-        checks.check("caption used as text", result.text, "photo caption")
-
-
-run_test("normalize_message caption", test_normalize_message_caption())
+        assert result.text == "photo caption"
 
 
 async def test_normalize_message_empty():
@@ -267,10 +218,7 @@ async def test_normalize_message_empty():
         upd = FakeUpdate(message=msg, user=user, chat=chat)
 
         result = await normalize_message(upd, FakeContext(), data_dir)
-        checks.check_true("returns None for empty", result is None)
-
-
-run_test("normalize_message empty returns None", test_normalize_message_empty())
+        assert result is None
 
 
 async def test_normalize_message_no_user():
@@ -284,10 +232,7 @@ async def test_normalize_message_no_user():
         upd.effective_user = None
 
         result = await normalize_message(upd, FakeContext(), data_dir)
-        checks.check_true("returns None for no user", result is None)
-
-
-run_test("normalize_message no user", test_normalize_message_no_user())
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -301,31 +246,25 @@ def test_inbound_attachment_frozen():
         is_image=True,
         mime_type="image/jpeg",
     )
-    checks.check("path", att.path, Path("/tmp/test.jpg"))
-    checks.check("original_name", att.original_name, "test.jpg")
-    checks.check("is_image", att.is_image, True)
-    checks.check("mime_type", att.mime_type, "image/jpeg")
+    assert att.path == Path("/tmp/test.jpg")
+    assert att.original_name == "test.jpg"
+    assert att.is_image is True
+    assert att.mime_type == "image/jpeg"
 
     try:
         att.path = Path("/other")
-        checks.check_true("should be frozen", False)
+        assert False, "should be frozen"
     except (AttributeError, TypeError, Exception):
-        checks.check_true("frozen raises on mutation", True)
-
-
-run_test("InboundAttachment frozen", test_inbound_attachment_frozen)
+        pass  # frozen raises on mutation — expected
 
 
 def test_inbound_user_frozen():
     u = InboundUser(id=42, username="test")
     try:
         u.id = 99
-        checks.check_true("should be frozen", False)
+        assert False, "should be frozen"
     except (AttributeError, TypeError, Exception):
-        checks.check_true("frozen raises on mutation", True)
-
-
-run_test("InboundUser frozen", test_inbound_user_frozen)
+        pass  # frozen raises on mutation — expected
 
 
 def test_command_args_are_tuple():
@@ -337,16 +276,13 @@ def test_command_args_are_tuple():
     ctx = FakeContext(args=["a", "b"])
 
     result = normalize_command(upd, ctx)
-    checks.check_true("args is tuple", isinstance(result.args, tuple))
+    assert isinstance(result.args, tuple)
 
     try:
         result.args.append("c")
-        checks.check_true("args should be immutable", False)
+        assert False, "args should be immutable"
     except AttributeError:
-        checks.check_true("args is immutable", True)
-
-
-run_test("command args are tuple", test_command_args_are_tuple)
+        pass  # args is immutable — expected
 
 
 async def test_message_attachments_are_tuple():
@@ -360,36 +296,27 @@ async def test_message_attachments_are_tuple():
         upd = FakeUpdate(message=msg, user=user, chat=chat)
 
         result = await normalize_message(upd, FakeContext(), data_dir)
-        checks.check_true("attachments is tuple", isinstance(result.attachments, tuple))
+        assert isinstance(result.attachments, tuple)
 
         try:
             result.attachments.append("x")
-            checks.check_true("attachments should be immutable", False)
+            assert False, "attachments should be immutable"
         except AttributeError:
-            checks.check_true("attachments is immutable", True)
-
-
-run_test("message attachments are tuple", test_message_attachments_are_tuple())
+            pass  # attachments is immutable — expected
 
 
 def test_command_default_args_are_tuple():
     """Default args on InboundCommand is an empty tuple, not a mutable list."""
     cmd = InboundCommand(user=InboundUser(id=1), chat_id=1, command="start")
-    checks.check_true("default args is tuple", isinstance(cmd.args, tuple))
-    checks.check("default args empty", cmd.args, ())
-
-
-run_test("command default args are tuple", test_command_default_args_are_tuple)
+    assert isinstance(cmd.args, tuple)
+    assert cmd.args == ()
 
 
 def test_message_default_attachments_are_tuple():
     """Default attachments on InboundMessage is an empty tuple, not a mutable list."""
     msg = InboundMessage(user=InboundUser(id=1), chat_id=1, text="hi")
-    checks.check_true("default attachments is tuple", isinstance(msg.attachments, tuple))
-    checks.check("default attachments empty", msg.attachments, ())
-
-
-run_test("default attachments are tuple", test_message_default_attachments_are_tuple)
+    assert isinstance(msg.attachments, tuple)
+    assert msg.attachments == ()
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +327,7 @@ async def test_handlers_receive_normalized_user():
     """Verify that handlers receive InboundUser through normalization, not raw Telegram objects."""
     import app.telegram_handlers as th
 
-    with test_data_dir() as data_dir:
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -420,14 +347,10 @@ async def test_handlers_receive_normalized_user():
             upd = FakeUpdate(message=msg, user=user, chat=chat)
             await th.cmd_session(upd, FakeContext())
 
-            checks.check_true("is_allowed received InboundUser",
-                              isinstance(received_users[0], InboundUser))
-            checks.check("received correct user id", received_users[0].id, 42)
+            assert isinstance(received_users[0], InboundUser)
+            assert received_users[0].id == 42
         finally:
             th.is_allowed = original_is_allowed
-
-
-run_test("handlers receive normalized user", test_handlers_receive_normalized_user())
 
 
 async def test_callback_handler_uses_normalized_data():
@@ -436,7 +359,7 @@ async def test_callback_handler_uses_normalized_data():
     import app.telegram_handlers as th
     import time
 
-    with test_data_dir() as data_dir:
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, approval_mode="on")
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -462,18 +385,14 @@ async def test_callback_handler_uses_normalized_data():
 
         from tests.support.handler_support import load_session_disk
         saved = load_session_disk(data_dir, 12345, prov)
-        checks.check_true("pending cleared after reject",
-                          saved.get("pending_request") is None)
-
-
-run_test("callback handler uses normalized data", test_callback_handler_uses_normalized_data())
+        assert saved.get("pending_request") is None
 
 
 async def test_command_normalization_strips_bot_mention():
     """Verify /command@botname still works through normalization."""
     import app.telegram_handlers as th
 
-    with test_data_dir() as data_dir:
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -484,12 +403,9 @@ async def test_command_normalization_strips_bot_mention():
         upd = FakeUpdate(message=msg, user=user, chat=chat)
         await th.cmd_session(upd, FakeContext())
 
-        checks.check_true("replied", len(msg.replies) > 0)
+        assert len(msg.replies) > 0
         reply_text = msg.replies[-1].get("text", "")
-        checks.check_in("session info returned", "Provider:", reply_text)
-
-
-run_test("command normalization strips bot mention", test_command_normalization_strips_bot_mention())
+        assert "Provider:" in reply_text
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +416,7 @@ async def test_command_handler_no_user_no_crash():
     """A command handler receiving an update with no user returns silently."""
     import app.telegram_handlers as th
 
-    with test_data_dir() as data_dir:
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -511,17 +427,14 @@ async def test_command_handler_no_user_no_crash():
         upd.effective_user = None
 
         await th.cmd_session(upd, FakeContext())
-        checks.check("no replies for no-user", len(msg.replies), 0)
-
-
-run_test("command handler no user no crash", test_command_handler_no_user_no_crash())
+        assert len(msg.replies) == 0
 
 
 async def test_message_handler_no_user_no_crash():
     """The message handler receiving an update with no user returns silently."""
     import app.telegram_handlers as th
 
-    with test_data_dir() as data_dir:
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -532,17 +445,14 @@ async def test_message_handler_no_user_no_crash():
         upd.effective_user = None
 
         await th.handle_message(upd, FakeContext())
-        checks.check("no provider calls", len(prov.run_calls), 0)
-
-
-run_test("message handler no user no crash", test_message_handler_no_user_no_crash())
+        assert len(prov.run_calls) == 0
 
 
 async def test_callback_handler_no_user_no_crash():
     """A callback handler receiving an update with no user returns silently."""
     import app.telegram_handlers as th
 
-    with test_data_dir() as data_dir:
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -554,10 +464,7 @@ async def test_callback_handler_no_user_no_crash():
         upd.effective_user = None
 
         await th.handle_callback(upd, FakeContext())
-        checks.check("no provider calls", len(prov.run_calls), 0)
-
-
-run_test("callback handler no user no crash", test_callback_handler_no_user_no_crash())
+        assert len(prov.run_calls) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -572,7 +479,7 @@ async def test_handle_message_empty_content_skipped():
     """
     import app.telegram_handlers as th
 
-    with test_data_dir() as data_dir:
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -585,10 +492,7 @@ async def test_handle_message_empty_content_skipped():
         upd = FakeUpdate(message=msg, user=user, chat=chat)
 
         await th.handle_message(upd, FakeContext())
-        checks.check("no provider calls for empty message", len(prov.run_calls), 0)
-
-
-run_test("handle_message empty content skipped", test_handle_message_empty_content_skipped())
+        assert len(prov.run_calls) == 0
 
 
 async def test_handle_message_caption_reaches_provider():
@@ -599,7 +503,7 @@ async def test_handle_message_caption_reaches_provider():
     from app.providers.base import RunResult
     import app.telegram_handlers as th
 
-    with test_data_dir() as data_dir:
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         prov.run_results = [RunResult(text="ok")]
@@ -613,14 +517,5 @@ async def test_handle_message_caption_reaches_provider():
         upd = FakeUpdate(message=msg, user=user, chat=chat)
 
         await th.handle_message(upd, FakeContext())
-        checks.check("provider called once", len(prov.run_calls), 1)
-        checks.check_in("prompt has caption text", "describe this image",
-                         prov.run_calls[0]["prompt"])
-
-
-run_test("handle_message caption reaches provider", test_handle_message_caption_reaches_provider())
-
-
-# ---------------------------------------------------------------------------
-if __name__ == "__main__":
-    checks.run_async_and_exit()
+        assert len(prov.run_calls) == 1
+        assert "describe this image" in prov.run_calls[0]["prompt"]

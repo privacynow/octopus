@@ -20,9 +20,10 @@ and design notes remain below.
 | Phase 2 | Done | All three items shipped: table rendering, HTML fallback, and mobile summarization with `/raw` + `/compact`. |
 | Phase 3 | Done | Rate limiting, admin safety posture, proactive prompt size warnings, runtime health checks all shipped. |
 | Phase 4 | Done | All items shipped. 4.1 managed immutable store with content-addressed objects, atomic refs, cross-instance locking, GC, session self-healing, three-tier resolution, and 7 bugs found and fixed during review. 4.2-4.5 shipped earlier. |
-| Phase 5 | In progress | Transport/webhook foundation. 5.1 transport normalization done. 5.2 webhook mode deferred until after 6.1 (SQLite). |
-| Phase 6 | In progress | Session and execution-context work: 6.1 SQLite sessions next, then per-chat projects, then file policy. |
+| Phase 5 | In progress | Transport/webhook foundation. 5.1 transport normalization done. 5.2 webhook mode next. |
+| Phase 6 | In progress | Session and execution-context work: 6.1 SQLite sessions done, 6.2 per-chat projects next, then file policy. |
 | Phase 7 | Not started | Ecosystem work. 7.1 registry lands after phases 5 and 6. |
+| Phase 8 | Not started | Edge case testing and coverage hardening. |
 
 ### Phase 1 Status
 
@@ -70,13 +71,13 @@ and design notes remain below.
 | Item | Status | Notes |
 |---|---|---|
 | 5.1 Thin inbound transport normalization | Done | `app/transport.py` with frozen inbound dataclasses. All handlers normalized. |
-| 5.2 Webhook mode | Not started | Deferred until after 6.1 SQLite — lands on transactional storage instead of JSON files. |
+| 5.2 Webhook mode | Not started | Next execution item. Lands on SQLite + normalized transport. |
 
 ### Phase 6 Status
 
 | Item | Status | Notes |
 |---|---|---|
-| 6.1 SQLite session backend | Not started | Next execution item. Replaces per-chat JSON session blobs; schema includes future `project_id` and `file_policy` fields from day one. |
+| 6.1 SQLite session backend | Done | WAL mode, schema versioning, JSON migration, indexed query columns. `project_id` and `file_policy` columns present from day one. |
 | 6.2 Per-chat project model | Not started | Named chat bindings on top of the current working-dir model. |
 | 6.3 File policy | Not started | `inspect|edit` threaded through session/project/provider context. |
 
@@ -93,20 +94,18 @@ and design notes remain below.
 Execution from the current state:
 
 1. ~~**5.1** — add thin inbound transport normalization~~ Done.
-2. **6.1** — move chat sessions from JSON blobs to SQLite
+2. ~~**6.1** — move chat sessions from JSON blobs to SQLite~~ Done.
 3. **5.2** — add webhook mode on top of SQLite + normalized inbound path
 4. **6.2** — add optional per-chat project bindings
 5. **6.3** — add file policy (`inspect|edit`)
 6. **7.1** — add the third-party registry using the 4.1 store architecture
+7. **8.1** — edge case testing and coverage hardening
 
-`5.1` is complete. `6.1` is next — SQLite gives webhook, projects, and file
-policy a transactional foundation instead of building on per-chat JSON files.
-The schema carries `project_id` and `file_policy` columns from day one so
-later phases fill in existing columns rather than requiring migrations.
-
-`5.2` lands after `6.1` so the webhook ingress path writes to SQLite from day
-one. The first webhook cut remains **single-process** — SQLite WAL mode
-replaces the in-memory `CHAT_LOCKS` dict for write serialization.
+`5.1` and `6.1` are complete. `5.2` is next — webhook ingress writes to
+SQLite from the start. The first webhook cut remains **single-process** —
+SQLite WAL mode replaces the in-memory `CHAT_LOCKS` dict for write
+serialization. `6.2` and `6.3` use the `project_id` and `file_policy`
+columns already present in the schema.
 
 The deferred item `3.2` (usage tracking / billing hooks) remains intentionally out of sequence and is not part of the next execution block.
 
@@ -1045,6 +1044,49 @@ provenance and trust verification.
 
 ---
 
+## Phase 8 — Edge Case Testing and Coverage Hardening
+
+### 8.1 — Edge Case Testing
+
+**Goal**: systematically exercise boundary conditions, error paths, and
+interaction sequences that normal happy-path tests miss.
+
+**Scope**:
+- Callback interactions: double-click, expired markup, cross-user button
+  clicks, concurrent approval + cancel, callback after session reset.
+- File exchange: oversized uploads, missing files on `/send`, unsupported
+  MIME types, upload during active provider run.
+- Provider edge cases: timeout mid-stream, empty response, provider crash
+  after plan approval, malformed output.
+- Skill lifecycle: activate skill with missing credentials mid-conversation,
+  remove skill while provider is running, install over existing custom skill,
+  prompt size boundary (just under / just over threshold).
+- Session state: message after `/new` reset, `/compact` toggle during active
+  response, `/role` change with pending approval, rapid command interleaving.
+- Rate limiting: exact boundary (Nth request at limit), burst across
+  minute/hour window rollover.
+- Formatting: deeply nested markdown, extremely long single-line output,
+  unicode edge cases, empty code blocks, tables with inconsistent columns.
+
+**Approach**:
+- One test file per domain (callbacks, files, providers, skills, sessions,
+  formatting) to keep test suites focused.
+- Every test exercises production code through the same entry points users
+  hit — no shortcutting through internals.
+- Harness fakes must capture all side effects; any new `pass` stub is a
+  test-debt item that gets logged and fixed immediately.
+
+**Files**:
+- `tests/test_edge_callbacks.py`
+- `tests/test_edge_files.py`
+- `tests/test_edge_providers.py`
+- `tests/test_edge_skills.py`
+- `tests/test_edge_sessions.py`
+- `tests/test_edge_formatting.py`
+- Harness updates in `tests/support/handler_support.py` as needed.
+
+---
+
 ## Implementation Notes
 
 - Ordering principle: activation before abuse control. Phase 1 fixes the flows
@@ -1053,8 +1095,8 @@ provenance and trust verification.
   Phases 5-7 add the transport, session, and ecosystem work needed for the
   next product step-up.
 - Execution sequence from the current state is: `5.2` single-process webhook
-  mode (`5.1` done), `6.1` SQLite sessions, `6.2` per-chat projects, `6.3`
-  file policy, then `7.1` registry.
+  mode (`5.1` done, `6.1` done), `6.2` per-chat projects, `6.3`
+  file policy, `7.1` registry, then `8.1` edge case testing.
 - `4.1` is intentionally broader than "repairable ops" because the registry
   should land on the final storage/provenance architecture, not on a temporary
   mutable-store patch.

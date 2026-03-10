@@ -18,15 +18,11 @@ Covers:
 """
 
 import json
-import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from app.providers.base import RunResult
 from app.storage import close_db, ensure_data_dirs
-from tests.support.assertions import Checks
 from tests.support.handler_support import (
     FakeChat,
     FakeMessage,
@@ -43,9 +39,6 @@ from tests.support.handler_support import (
     setup_globals,
     load_session_disk,
 )
-
-checks = Checks()
-run_test = checks.add_test
 
 MARKER_V1 = "UNIQUE_V1_MARKER_e2e_a9c4"
 MARKER_V2 = "UNIQUE_V2_MARKER_e2e_f7b2"
@@ -149,7 +142,7 @@ async def test_install_add_message_prompt():
 
             # Install
             msg = await send_command(th.cmd_skills, chat, admin, "/skills install helper", ["install", "helper"])
-            checks.check_in("install reply", "installed", last_reply(msg).lower())
+            assert "installed" in last_reply(msg).lower()
 
             # Add to session
             await send_command(th.cmd_skills, chat, admin, "/skills add helper", ["add", "helper"])
@@ -158,13 +151,10 @@ async def test_install_add_message_prompt():
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "do something")
             ctx = last_run_context(prov)
-            checks.check_true("prompt exists", ctx is not None and ctx.system_prompt)
-            checks.check_in("V1 marker in prompt", MARKER_V1, ctx.system_prompt)
+            assert ctx is not None and ctx.system_prompt
+            assert MARKER_V1 in ctx.system_prompt
         finally:
             cleanup()
-
-
-run_test("e2e: install → add → message → correct prompt", test_install_add_message_prompt())
 
 
 # ============================================================================
@@ -191,7 +181,7 @@ async def test_update_propagates_to_prompt():
             # Verify V1
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go")
-            checks.check_in("V1 before update", MARKER_V1, last_run_context(prov).system_prompt)
+            assert MARKER_V1 in last_run_context(prov).system_prompt
             prov.run_calls.clear()
 
             # Update the store source and run update
@@ -202,13 +192,10 @@ async def test_update_propagates_to_prompt():
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go again")
             prompt = last_run_context(prov).system_prompt
-            checks.check_in("V2 after update", MARKER_V2, prompt)
-            checks.check_not_in("V1 gone after update", MARKER_V1, prompt)
+            assert MARKER_V2 in prompt
+            assert MARKER_V1 not in prompt
         finally:
             cleanup()
-
-
-run_test("e2e: update → new content in prompt", test_update_propagates_to_prompt())
 
 
 # ============================================================================
@@ -236,7 +223,7 @@ async def test_uninstall_prunes_from_skills_command():
 
             # Verify it's active
             msg = await send_command(th.cmd_skills, chat, admin, "/skills", [])
-            checks.check_in("helper is active before uninstall", "helper", last_reply(msg).lower())
+            assert "helper" in last_reply(msg).lower()
 
             # Uninstall
             await send_command(th.cmd_skills, chat, admin, "/skills uninstall helper", ["uninstall", "helper"])
@@ -244,12 +231,9 @@ async def test_uninstall_prunes_from_skills_command():
             # /skills (bare) — helper must NOT appear as active
             msg2 = await send_command(th.cmd_skills, chat, admin, "/skills", [])
             reply = last_reply(msg2)
-            checks.check_in("no active skills", "No active skills", reply)
+            assert "No active skills" in reply
         finally:
             cleanup()
-
-
-run_test("e2e: uninstall → /skills shows no active", test_uninstall_prunes_from_skills_command())
 
 
 # ============================================================================
@@ -275,7 +259,7 @@ async def test_uninstall_clears_active_in_list():
 
             # Verify active tag
             msg = await send_command(th.cmd_skills, chat, admin, "/skills list", ["list"])
-            checks.check_in("active tag before", "[active]", last_reply(msg))
+            assert "[active]" in last_reply(msg)
 
             # Uninstall
             await send_command(th.cmd_skills, chat, admin, "/skills uninstall helper", ["uninstall", "helper"])
@@ -283,12 +267,9 @@ async def test_uninstall_clears_active_in_list():
             # /skills list — helper should NOT be [active] (it shouldn't even be listed)
             msg2 = await send_command(th.cmd_skills, chat, admin, "/skills list", ["list"])
             reply2 = last_reply(msg2)
-            checks.check_not_in("no active tag", "[active]", reply2)
+            assert "[active]" not in reply2
         finally:
             cleanup()
-
-
-run_test("e2e: uninstall → /skills list no stale [active]", test_uninstall_clears_active_in_list())
 
 
 # ============================================================================
@@ -318,14 +299,11 @@ async def test_skills_info_shows_installed_content_not_store():
             # /skills info should show V1 (installed version), NOT V2 (store version)
             msg = await send_command(th.cmd_skills, chat, admin, "/skills info helper", ["info", "helper"])
             reply = last_reply(msg)
-            checks.check_in("shows V1 content", MARKER_V1, reply)
-            checks.check_not_in("does not show V2", MARKER_V2, reply)
-            checks.check_in("shows managed source", "managed", reply.lower())
+            assert MARKER_V1 in reply
+            assert MARKER_V2 not in reply
+            assert "managed" in reply.lower()
         finally:
             cleanup()
-
-
-run_test("e2e: /skills info shows installed content, not drifted store", test_skills_info_shows_installed_content_not_store())
 
 
 # ============================================================================
@@ -351,14 +329,11 @@ async def test_skills_info_custom_only():
 
             msg = await send_command(th.cmd_skills, chat, admin, "/skills info my-custom", ["info", "my-custom"])
             reply = last_reply(msg)
-            checks.check_not_in("no 404", "not found", reply.lower())
-            checks.check_in("shows custom content", MARKER_CUSTOM, reply)
-            checks.check_in("identifies as custom", "custom", reply.lower())
+            assert "not found" not in reply.lower()
+            assert MARKER_CUSTOM in reply
+            assert "custom" in reply.lower()
         finally:
             cleanup()
-
-
-run_test("e2e: /skills info works for custom-only skill", test_skills_info_custom_only())
 
 
 # ============================================================================
@@ -383,14 +358,11 @@ async def test_skills_info_catalog():
 
             msg = await send_command(th.cmd_skills, chat, admin, "/skills info builtin-tool", ["info", "builtin-tool"])
             reply = last_reply(msg)
-            checks.check_not_in("no 404", "not found", reply.lower())
-            checks.check_in("shows catalog content", MARKER_CATALOG, reply)
-            checks.check_in("identifies as catalog", "catalog", reply.lower())
+            assert "not found" not in reply.lower()
+            assert MARKER_CATALOG in reply
+            assert "catalog" in reply.lower()
         finally:
             cleanup()
-
-
-run_test("e2e: /skills info works for catalog skill", test_skills_info_catalog())
 
 
 # ============================================================================
@@ -420,14 +392,11 @@ async def test_skills_info_custom_override():
 
             msg = await send_command(th.cmd_skills, chat, admin, "/skills info helper", ["info", "helper"])
             reply = last_reply(msg)
-            checks.check_in("shows custom body", MARKER_CUSTOM, reply)
-            checks.check_not_in("not managed body", MARKER_V1, reply)
-            checks.check_in("identifies override", "overriding", reply.lower())
+            assert MARKER_CUSTOM in reply
+            assert MARKER_V1 not in reply
+            assert "overriding" in reply.lower()
         finally:
             cleanup()
-
-
-run_test("e2e: /skills info custom override shows custom content", test_skills_info_custom_override())
 
 
 # ============================================================================
@@ -459,13 +428,10 @@ async def test_custom_override_shadows_managed_in_prompt():
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go")
             prompt = last_run_context(prov).system_prompt
-            checks.check_in("custom in prompt", MARKER_CUSTOM, prompt)
-            checks.check_not_in("managed not in prompt", MARKER_V1, prompt)
+            assert MARKER_CUSTOM in prompt
+            assert MARKER_V1 not in prompt
         finally:
             cleanup()
-
-
-run_test("e2e: custom override shadows managed in provider prompt", test_custom_override_shadows_managed_in_prompt())
 
 
 # ============================================================================
@@ -495,12 +461,9 @@ async def test_uninstall_message_doesnt_crash():
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go")
             prompt = last_run_context(prov).system_prompt
-            checks.check_not_in("stale content gone", MARKER_V1, prompt)
+            assert MARKER_V1 not in prompt
         finally:
             cleanup()
-
-
-run_test("e2e: uninstall → message works, no stale content", test_uninstall_message_doesnt_crash())
 
 
 # ============================================================================
@@ -531,12 +494,9 @@ async def test_cross_user_managed_skill():
             await send_command(th.cmd_skills, user_chat, regular, "/skills add helper", ["add", "helper"])
             prov.run_results = [RunResult(text="ok")]
             await send_text(user_chat, regular, "hello")
-            checks.check_in("user sees installed skill", MARKER_V1, last_run_context(prov).system_prompt)
+            assert MARKER_V1 in last_run_context(prov).system_prompt
         finally:
             cleanup()
-
-
-run_test("e2e: regular user uses admin-installed managed skill", test_cross_user_managed_skill())
 
 
 # ============================================================================
@@ -569,8 +529,8 @@ async def test_three_tier_resolution_in_prompt():
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go")
             prompt = last_run_context(prov).system_prompt
-            checks.check_in("managed wins over catalog", MARKER_V1, prompt)
-            checks.check_not_in("catalog not used", MARKER_CATALOG, prompt)
+            assert MARKER_V1 in prompt
+            assert MARKER_CATALOG not in prompt
             prov.run_calls.clear()
 
             # Add custom override — should use custom, not managed or catalog
@@ -578,14 +538,11 @@ async def test_three_tier_resolution_in_prompt():
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go again")
             prompt2 = last_run_context(prov).system_prompt
-            checks.check_in("custom wins over all", MARKER_CUSTOM, prompt2)
-            checks.check_not_in("managed not used", MARKER_V1, prompt2)
-            checks.check_not_in("catalog not used 2", MARKER_CATALOG, prompt2)
+            assert MARKER_CUSTOM in prompt2
+            assert MARKER_V1 not in prompt2
+            assert MARKER_CATALOG not in prompt2
         finally:
             cleanup()
-
-
-run_test("e2e: three-tier resolution ordering in prompt", test_three_tier_resolution_in_prompt())
 
 
 # ============================================================================
@@ -610,12 +567,9 @@ async def test_skills_list_shows_managed_tag():
 
             msg = await send_command(th.cmd_skills, chat, admin, "/skills list", ["list"])
             reply = last_reply(msg)
-            checks.check_in("managed tag", "(managed)", reply)
+            assert "(managed)" in reply
         finally:
             cleanup()
-
-
-run_test("e2e: /skills list shows (managed) tag", test_skills_list_shows_managed_tag())
 
 
 # ============================================================================
@@ -640,12 +594,9 @@ async def test_skills_list_shows_custom_override_tag():
 
             msg = await send_command(th.cmd_skills, chat, admin, "/skills list", ["list"])
             reply = last_reply(msg)
-            checks.check_in("override tag", "[custom override]", reply)
+            assert "[custom override]" in reply
         finally:
             cleanup()
-
-
-run_test("e2e: /skills list shows [custom override] tag", test_skills_list_shows_custom_override_tag())
 
 
 # ============================================================================
@@ -670,17 +621,14 @@ async def test_skills_updates_shows_update_available():
 
             # Up to date
             msg = await send_command(th.cmd_skills, chat, admin, "/skills updates", ["updates"])
-            checks.check_in("up to date", "up to date", last_reply(msg))
+            assert "up to date" in last_reply(msg)
 
             # Advance store source
             make_store_skill(tmp_store, "helper", body=MARKER_V2)
             msg2 = await send_command(th.cmd_skills, chat, admin, "/skills updates", ["updates"])
-            checks.check_in("update available", "update available", last_reply(msg2))
+            assert "update available" in last_reply(msg2)
         finally:
             cleanup()
-
-
-run_test("e2e: /skills updates shows correct status", test_skills_updates_shows_update_available())
 
 
 # ============================================================================
@@ -717,13 +665,10 @@ async def test_normalization_on_skills_add_path():
             # Check active skills — only 'other', not stale 'helper'
             msg = await send_command(th.cmd_skills, chat, admin, "/skills", [])
             reply = last_reply(msg)
-            checks.check_in("other is active", "other", reply.lower())
-            checks.check_not_in("helper pruned", "helper", reply.lower())
+            assert "other" in reply.lower()
+            assert "helper" not in reply.lower()
         finally:
             cleanup()
-
-
-run_test("e2e: normalization prunes stale on /skills add", test_normalization_on_skills_add_path())
 
 
 # ============================================================================
@@ -748,13 +693,10 @@ async def test_skills_info_uninstalled_store():
             # Don't install — just preview
             msg = await send_command(th.cmd_skills, chat, admin, "/skills info helper", ["info", "helper"])
             reply = last_reply(msg)
-            checks.check_in("shows store content", MARKER_V1, reply)
-            checks.check_in("not installed hint", "not installed", reply.lower())
+            assert MARKER_V1 in reply
+            assert "not installed" in reply.lower()
         finally:
             cleanup()
-
-
-run_test("e2e: /skills info preview for uninstalled store skill", test_skills_info_uninstalled_store())
 
 
 # ============================================================================
@@ -775,12 +717,9 @@ async def test_skills_info_nonexistent():
 
             msg = await send_command(th.cmd_skills, chat, admin, "/skills info nope", ["info", "nope"])
             reply = last_reply(msg)
-            checks.check_in("not found", "not found", reply.lower())
+            assert "not found" in reply.lower()
         finally:
             cleanup()
-
-
-run_test("e2e: /skills info 404 for nonexistent", test_skills_info_nonexistent())
 
 
 # ============================================================================
@@ -803,14 +742,11 @@ async def test_doctor_catches_bad_schema():
             from app.main import _run_doctor
             try:
                 await _run_doctor(cfg, prov)
-                checks.check_true("should have raised SystemExit", False)
+                assert False, "should have raised SystemExit"
             except SystemExit as e:
-                checks.check("doctor exits 1", e.code, 1)
+                assert e.code == 1
         finally:
             cleanup()
-
-
-run_test("e2e: --doctor catches incompatible schema", test_doctor_catches_bad_schema())
 
 
 # ============================================================================
@@ -837,12 +773,9 @@ async def test_catalog_skill_usable_without_install():
 
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go")
-            checks.check_in("catalog content in prompt", MARKER_CATALOG, last_run_context(prov).system_prompt)
+            assert MARKER_CATALOG in last_run_context(prov).system_prompt
         finally:
             cleanup()
-
-
-run_test("e2e: catalog skill usable without install", test_catalog_skill_usable_without_install())
 
 
 # ============================================================================
@@ -870,13 +803,10 @@ async def test_skills_diff_managed_vs_store():
 
             msg = await send_command(th.cmd_skills, chat, admin, "/skills diff helper", ["diff", "helper"])
             reply = last_reply(msg)
-            checks.check_in("diff shows V1", MARKER_V1, reply)
-            checks.check_in("diff shows V2", MARKER_V2, reply)
+            assert MARKER_V1 in reply
+            assert MARKER_V2 in reply
         finally:
             cleanup()
-
-
-run_test("e2e: /skills diff shows meaningful output", test_skills_diff_managed_vs_store())
 
 
 # ============================================================================
@@ -907,18 +837,15 @@ async def test_admin_sessions_filters_stale_skills():
             # /admin sessions detail — should NOT show helper
             msg = await send_command(th.cmd_admin, chat, admin, "/admin sessions 1001", ["sessions", "1001"])
             reply = last_reply(msg)
-            checks.check_in("shows Skills (0)", "Skills (0)", reply)
-            checks.check_not_in("helper not in detail", "helper", reply.lower().replace("skills (0): none", ""))
+            assert "Skills (0)" in reply
+            assert "helper" not in reply.lower().replace("skills (0): none", "")
 
             # /admin sessions summary — helper should not appear in top skills
             msg2 = await send_command(th.cmd_admin, chat, admin, "/admin sessions", ["sessions"])
             reply2 = last_reply(msg2)
-            checks.check_not_in("helper not in summary", "helper", reply2.lower())
+            assert "helper" not in reply2.lower()
         finally:
             cleanup()
-
-
-run_test("e2e: /admin sessions filters stale skills", test_admin_sessions_filters_stale_skills())
 
 
 # ============================================================================
@@ -955,14 +882,11 @@ async def test_skills_info_shows_providers():
             # /skills info should show providers
             msg = await send_command(th.cmd_skills, chat, admin, "/skills info provider-skill", ["info", "provider-skill"])
             reply = last_reply(msg)
-            checks.check_in("shows Claude provider", "Claude", reply)
-            checks.check_in("shows Codex provider", "Codex", reply)
-            checks.check_in("shows Providers label", "Providers:", reply)
+            assert "Claude" in reply
+            assert "Codex" in reply
+            assert "Providers:" in reply
         finally:
             cleanup()
-
-
-run_test("e2e: /skills info shows provider compatibility", test_skills_info_shows_providers())
 
 
 # ============================================================================
@@ -993,15 +917,12 @@ async def test_skills_info_source_stray_custom_dir():
 
             msg = await send_command(th.cmd_skills, chat, admin, "/skills info helper", ["info", "helper"])
             reply = last_reply(msg)
-            checks.check_in("shows managed content", MARKER_V1, reply)
+            assert MARKER_V1 in reply
             # Should say "managed", NOT "custom (overriding managed)"
-            checks.check_in("identifies as managed", "Resolves to: managed", reply)
-            checks.check_not_in("not labeled as override", "overriding", reply.lower())
+            assert "Resolves to: managed" in reply
+            assert "overriding" not in reply.lower()
         finally:
             cleanup()
-
-
-run_test("e2e: /skills info correct source with stray custom dir", test_skills_info_source_stray_custom_dir())
 
 
 # ============================================================================
@@ -1031,13 +952,10 @@ async def test_skills_info_source_malformed_custom():
 
             msg = await send_command(th.cmd_skills, chat, admin, "/skills info helper", ["info", "helper"])
             reply = last_reply(msg)
-            checks.check_in("falls through to managed", MARKER_V1, reply)
-            checks.check_in("labeled managed", "Resolves to: managed", reply)
+            assert MARKER_V1 in reply
+            assert "Resolves to: managed" in reply
         finally:
             cleanup()
-
-
-run_test("e2e: /skills info falls through malformed custom to managed", test_skills_info_source_malformed_custom())
 
 
 # ============================================================================
@@ -1068,18 +986,11 @@ async def test_normalization_persists_to_disk():
 
             # First load triggers normalization and save
             msg1 = await send_command(th.cmd_skills, chat, admin, "/skills", [])
-            checks.check_in("first load: no active", "No active skills", last_reply(msg1))
+            assert "No active skills" in last_reply(msg1)
 
             # Read from SQLite — should have empty active_skills
             from app.storage import load_session
             raw = load_session(data_dir, 1001, "claude", prov.new_provider_state, "off")
-            checks.check("disk state pruned", raw.get("active_skills", []), [])
+            assert raw.get("active_skills", []) == []
         finally:
             cleanup()
-
-
-run_test("e2e: normalization persists pruned state to disk", test_normalization_persists_to_disk())
-
-
-if __name__ == "__main__":
-    checks.run_async_and_exit()

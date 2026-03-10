@@ -16,6 +16,11 @@ else
     echo "Dependencies installed."
 fi
 
+# Install dev/test dependencies only when run standalone (not from setup.sh).
+if [ -z "${BOT_SETUP_RUNNING:-}" ]; then
+    "$REPO_DIR/.venv/bin/pip" install -r "$REPO_DIR/requirements-dev.txt" -q
+fi
+
 # Only show next-steps when run standalone (not from setup.sh)
 if [ -z "${BOT_SETUP_RUNNING:-}" ]; then
     echo

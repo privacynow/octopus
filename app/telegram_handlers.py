@@ -972,14 +972,17 @@ async def cmd_id(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 @_command_handler
 async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    import sqlite3
     from app.doctor import collect_doctor_report
-    session = _load(event.chat_id)
-    report = await collect_doctor_report(
-        _cfg(), _prov(),
-        session=session,
-        user_id=event.user.id,
-        encryption_key=_encryption_key(),
-    )
+    try:
+        session = _load(event.chat_id)
+    except (sqlite3.DatabaseError, sqlite3.OperationalError, RuntimeError):
+        session = None
+    kwargs: dict[str, Any] = {}
+    if session is not None:
+        kwargs.update(session=session, user_id=event.user.id,
+                      encryption_key=_encryption_key())
+    report = await collect_doctor_report(_cfg(), _prov(), **kwargs)
     parts: list[str] = []
     if report.errors:
         parts.extend(f"\u274c {html.escape(e)}" for e in report.errors)

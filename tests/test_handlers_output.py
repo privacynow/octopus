@@ -1,13 +1,7 @@
 """Handler integration tests for output presentation and raw-response helpers."""
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
-from tests.support.assertions import Checks
 from tests.support.handler_support import (
     FakeChat,
     FakeProvider,
@@ -18,15 +12,12 @@ from tests.support.handler_support import (
     send_command,
     send_text,
     setup_globals,
-    test_data_dir,
+    fresh_data_dir,
 )
-
-checks = Checks()
-run_test = checks.add_test
 
 
 async def test_compact_toggle():
-    with test_data_dir() as data_dir:
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
@@ -40,24 +31,21 @@ async def test_compact_toggle():
         import app.telegram_handlers as th
 
         msg1 = await send_command(th.cmd_compact, chat, user, "/compact")
-        checks.check("compact default is off", "off" in last_reply(msg1).lower(), True)
+        assert "off" in last_reply(msg1).lower()
 
         msg2 = await send_command(th.cmd_compact, chat, user, "/compact on", args=["on"])
-        checks.check("compact turned on", "on" in last_reply(msg2).lower(), True)
+        assert "on" in last_reply(msg2).lower()
         session = load_session_disk(data_dir, 1, prov)
-        checks.check("compact_mode stored true", session.get("compact_mode"), True)
+        assert session.get("compact_mode") == True
 
         msg3 = await send_command(th.cmd_compact, chat, user, "/compact off", args=["off"])
-        checks.check("compact turned off", "off" in last_reply(msg3).lower(), True)
+        assert "off" in last_reply(msg3).lower()
         session = load_session_disk(data_dir, 1, prov)
-        checks.check("compact_mode stored false", session.get("compact_mode"), False)
-
-
-run_test("/compact toggle", test_compact_toggle())
+        assert session.get("compact_mode") == False
 
 
 async def test_raw_retrieves_response():
-    with test_data_dir() as data_dir:
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
@@ -74,17 +62,14 @@ async def test_raw_retrieves_response():
         import app.telegram_handlers as th
 
         msg = await send_command(th.cmd_raw, chat, user, "/raw")
-        checks.check("raw has response text", "full response" in last_reply(msg), True)
+        assert "full response" in last_reply(msg)
 
         msg2 = await send_command(th.cmd_raw, FakeChat(999), user, "/raw")
-        checks.check("raw empty chat", "no stored" in last_reply(msg2).lower(), True)
-
-
-run_test("/raw retrieves response", test_raw_retrieves_response())
+        assert "no stored" in last_reply(msg2).lower()
 
 
 async def test_e2e_table_in_provider_response():
-    with test_data_dir() as data_dir:
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
@@ -106,16 +91,13 @@ async def test_e2e_table_in_provider_response():
         msg = await send_text(chat, user, "show scores")
 
         all_replies = " ".join(r.get("text", "") for r in msg.replies)
-        checks.check("table reply has pre", "<pre>" in all_replies, True)
-        checks.check("table reply has alice", "Alice" in all_replies, True)
-        checks.check("table reply no pipes", "---|---" not in all_replies, True)
-
-
-run_test("e2e table in provider response", test_e2e_table_in_provider_response())
+        assert "<pre>" in all_replies
+        assert "Alice" in all_replies
+        assert "---|---" not in all_replies
 
 
 async def test_e2e_compact_mode_summarizes():
-    with test_data_dir() as data_dir:
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
@@ -143,24 +125,17 @@ async def test_e2e_compact_mode_summarizes():
             th.summarize = original_summarize
 
         all_replies = " ".join(r.get("text", "") for r in msg.replies)
-        checks.check("compact reply has summary", "Short summary" in all_replies, True)
-        checks.check("compact reply has footer", "/raw" in all_replies, True)
-        checks.check(
-            "compact reply not full text",
-            "Detailed analysis paragraph. Detailed" not in all_replies,
-            True,
-        )
+        assert "Short summary" in all_replies
+        assert "/raw" in all_replies
+        assert "Detailed analysis paragraph. Detailed" not in all_replies
 
         msg2 = await send_command(th.cmd_raw, chat, user, "/raw")
         raw_reply = last_reply(msg2)
-        checks.check("raw has original text", "Detailed analysis paragraph" in raw_reply, True)
-
-
-run_test("e2e compact mode summarizes", test_e2e_compact_mode_summarizes())
+        assert "Detailed analysis paragraph" in raw_reply
 
 
 async def test_e2e_compact_off_no_summarize():
-    with test_data_dir() as data_dir:
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
@@ -176,19 +151,16 @@ async def test_e2e_compact_off_no_summarize():
         msg = await send_text(chat, user, "do something")
 
         all_replies = " ".join(r.get("text", "") for r in msg.replies)
-        checks.check("no-compact has full text", "Full verbose response" in all_replies, True)
-        checks.check("no-compact no footer", "/raw for full" not in all_replies, True)
+        assert "Full verbose response" in all_replies
+        assert "/raw for full" not in all_replies
 
         import app.telegram_handlers as th
         msg2 = await send_command(th.cmd_raw, chat, user, "/raw")
-        checks.check("raw still works without compact", "Full verbose response" in last_reply(msg2), True)
-
-
-run_test("e2e compact off no summarize", test_e2e_compact_off_no_summarize())
+        assert "Full verbose response" in last_reply(msg2)
 
 
 async def test_e2e_compact_mode_summarize_exception_falls_back():
-    with test_data_dir() as data_dir:
+    with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
@@ -216,19 +188,9 @@ async def test_e2e_compact_mode_summarize_exception_falls_back():
             th.summarize = original_summarize
 
         all_replies = " ".join(r.get("text", "") for r in msg.replies)
-        checks.check("fallback keeps full response", "Verbose output block." in all_replies, True)
-        checks.check("fallback omits compact footer", "/raw for full response" in all_replies, False)
+        assert "Verbose output block." in all_replies
+        assert "/raw for full response" not in all_replies
 
         import app.telegram_handlers as th2
         msg2 = await send_command(th2.cmd_raw, chat, user, "/raw")
-        checks.check("raw retains original after summarize error", "Verbose output block." in last_reply(msg2), True)
-
-
-run_test(
-    "e2e compact summarize exception falls back",
-    test_e2e_compact_mode_summarize_exception_falls_back(),
-)
-
-
-if __name__ == "__main__":
-    checks.run_async_and_exit()
+        assert "Verbose output block." in last_reply(msg2)

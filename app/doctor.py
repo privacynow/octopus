@@ -1,6 +1,7 @@
 """Health checks and session diagnostics — shared by CLI and Telegram /doctor."""
 
 import dataclasses
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -40,11 +41,7 @@ async def collect_doctor_report(
     # Provider health — cheap local check
     report.errors.extend(provider.check_health())
 
-    # Provider runtime health — expensive, skip if already broken
-    if not report.errors:
-        report.errors.extend(await provider.check_runtime_health())
-
-    # Managed store health
+    # Managed store health — cheap local check, run before expensive runtime probe
     try:
         from app.store import ensure_managed_dirs, check_schema
         ensure_managed_dirs()
@@ -53,6 +50,10 @@ async def collect_doctor_report(
         report.errors.append(str(e))
     except Exception as e:
         report.errors.append(f"Managed store check failed: {e}")
+
+    # Provider runtime health — expensive, skip if any cheap check already failed
+    if not report.errors:
+        report.errors.extend(await provider.check_runtime_health())
 
     # Per-chat skill validation (only from Telegram /doctor)
     if session is not None and user_id is not None and encryption_key is not None:
@@ -71,17 +72,21 @@ async def collect_doctor_report(
             "BOT_ADMIN_USERS not set \u2014 all allowed users have admin "
             "privileges (install/uninstall skills). Set BOT_ADMIN_USERS to restrict.")
 
-    # Stale session scan
-    stale_pending, stale_setup = scan_stale_sessions(
-        config.data_dir, config.provider_name,
-        provider.new_provider_state, config.approval_mode,
-    )
-    if stale_pending:
-        report.warnings.append(
-            f"{stale_pending} session(s) with stale pending approval requests (>1h old).")
-    if stale_setup:
-        report.warnings.append(
-            f"{stale_setup} session(s) with stale credential setup (>10m old).")
+    # Stale session scan — skip if data_dir doesn't exist yet (CLI --doctor before first run)
+    if config.data_dir.is_dir():
+        try:
+            stale_pending, stale_setup = scan_stale_sessions(
+                config.data_dir, config.provider_name,
+                provider.new_provider_state, config.approval_mode,
+            )
+            if stale_pending:
+                report.warnings.append(
+                    f"{stale_pending} session(s) with stale pending approval requests (>1h old).")
+            if stale_setup:
+                report.warnings.append(
+                    f"{stale_setup} session(s) with stale credential setup (>10m old).")
+        except (sqlite3.DatabaseError, sqlite3.OperationalError, RuntimeError) as e:
+            report.errors.append(f"Session database error: {e}")
 
     return report
 

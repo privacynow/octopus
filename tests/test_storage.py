@@ -1,11 +1,9 @@
 """Tests for storage.py — session CRUD (SQLite-backed), path resolution, uploads."""
 
 import json
-import sys
 import tempfile
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
-
 from pathlib import Path
+
 from app.storage import (
     _reset_db,
     build_upload_path,
@@ -19,182 +17,201 @@ from app.storage import (
     save_session,
     session_exists,
 )
-from tests.support.assertions import Checks
-
-checks = Checks()
-check = checks.check
 
 
 # -- sanitize_filename --
-print("\n=== sanitize_filename ===")
-check("clean", sanitize_filename("hello.txt"), "hello.txt")
-check("spaces", sanitize_filename("my file (1).doc"), "my_file_1_.doc")
-check("empty", sanitize_filename("..."), "attachment")
+
+def test_sanitize_filename_clean():
+    assert sanitize_filename("hello.txt") == "hello.txt"
+
+
+def test_sanitize_filename_spaces():
+    assert sanitize_filename("my file (1).doc") == "my_file_1_.doc"
+
+
+def test_sanitize_filename_empty():
+    assert sanitize_filename("...") == "attachment"
+
 
 # -- is_image_path --
-print("\n=== is_image_path ===")
-check("png", is_image_path(Path("test.png")), True)
-check("jpg", is_image_path(Path("test.JPG")), True)
-check("txt", is_image_path(Path("test.txt")), False)
+
+def test_is_image_path_png():
+    assert is_image_path(Path("test.png")) is True
+
+
+def test_is_image_path_jpg():
+    assert is_image_path(Path("test.JPG")) is True
+
+
+def test_is_image_path_txt():
+    assert is_image_path(Path("test.txt")) is False
+
 
 # -- session management --
-print("\n=== session management ===")
-with tempfile.TemporaryDirectory() as tmp:
-    data_dir = Path(tmp)
-    ensure_data_dirs(data_dir)
-    check("db file exists", (data_dir / "sessions.db").exists(), True)
-    check("uploads dir exists", (data_dir / "uploads").is_dir(), True)
 
-    # default_session
-    s = default_session("claude", {"session_id": "abc", "started": False}, "on")
-    check("provider set", s["provider"], "claude")
-    check("provider_state set", s["provider_state"]["session_id"], "abc")
-    check("approval mode", s["approval_mode"], "on")
-    check("has created_at", "created_at" in s, True)
-    check("has updated_at", "updated_at" in s, True)
+def test_session_management():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        assert (data_dir / "sessions.db").exists()
+        assert (data_dir / "uploads").is_dir()
 
-    # save + load
-    save_session(data_dir, 12345, s)
-    check("session_exists after save", session_exists(data_dir, 12345), True)
-    check("session_exists for unknown", session_exists(data_dir, 99998), False)
+        # default_session
+        s = default_session("claude", {"session_id": "abc", "started": False}, "on")
+        assert s["provider"] == "claude"
+        assert s["provider_state"]["session_id"] == "abc"
+        assert s["approval_mode"] == "on"
+        assert "created_at" in s
+        assert "updated_at" in s
 
-    loaded = load_session(data_dir, 12345, "claude", lambda: {"session_id": "abc", "started": False}, "on")
-    check("loaded provider", loaded["provider"], "claude")
-    check("loaded state", loaded["provider_state"]["session_id"], "abc")
+        # save + load
+        save_session(data_dir, 12345, s)
+        assert session_exists(data_dir, 12345)
+        assert not session_exists(data_dir, 99998)
 
-    # load with new provider_state keys (migration-safe)
-    loaded2 = load_session(data_dir, 12345, "claude", lambda: {"session_id": "abc", "started": False, "new_key": "default"}, "on")
-    check("new key filled", loaded2["provider_state"]["new_key"], "default")
+        loaded = load_session(data_dir, 12345, "claude", lambda: {"session_id": "abc", "started": False}, "on")
+        assert loaded["provider"] == "claude"
+        assert loaded["provider_state"]["session_id"] == "abc"
 
-    # explicit approval mode survives reload, including its source flag
-    s["approval_mode"] = "off"
-    s["approval_mode_explicit"] = True
-    save_session(data_dir, 12345, s)
-    loaded3 = load_session(
-        data_dir,
-        12345,
-        "claude",
-        lambda: {"session_id": "abc", "started": False},
-        "on",
-    )
-    check("explicit approval mode restored", loaded3["approval_mode"], "off")
-    check("explicit approval source restored", loaded3["approval_mode_explicit"], True)
+        # load with new provider_state keys (migration-safe)
+        loaded2 = load_session(data_dir, 12345, "claude", lambda: {"session_id": "abc", "started": False, "new_key": "default"}, "on")
+        assert loaded2["provider_state"]["new_key"] == "default"
 
-    # fresh session for new chat
-    fresh = load_session(data_dir, 99999, "codex", lambda: {"thread_id": None}, "off")
-    check("fresh session provider", fresh["provider"], "codex")
-    check("fresh session state", fresh["provider_state"]["thread_id"], None)
+        # explicit approval mode survives reload, including its source flag
+        s["approval_mode"] = "off"
+        s["approval_mode_explicit"] = True
+        save_session(data_dir, 12345, s)
+        loaded3 = load_session(
+            data_dir,
+            12345,
+            "claude",
+            lambda: {"session_id": "abc", "started": False},
+            "on",
+        )
+        assert loaded3["approval_mode"] == "off"
+        assert loaded3["approval_mode_explicit"] is True
 
-    _reset_db(data_dir)
+        # fresh session for new chat
+        fresh = load_session(data_dir, 99999, "codex", lambda: {"thread_id": None}, "off")
+        assert fresh["provider"] == "codex"
+        assert fresh["provider_state"]["thread_id"] is None
+
+        _reset_db(data_dir)
+
 
 # -- resolve_allowed_path --
-print("\n=== resolve_allowed_path ===")
-with tempfile.TemporaryDirectory() as tmp:
-    test_file = Path(tmp) / "test.txt"
-    test_file.write_text("x")
-    roots = [Path(tmp)]
 
-    resolved = resolve_allowed_path(str(test_file), roots)
-    check("absolute allowed", resolved, test_file.resolve())
+def test_resolve_allowed_path():
+    with tempfile.TemporaryDirectory() as tmp:
+        test_file = Path(tmp) / "test.txt"
+        test_file.write_text("x")
+        roots = [Path(tmp)]
 
-    resolved2 = resolve_allowed_path("test.txt", roots)
-    check("relative allowed", resolved2, test_file.resolve())
+        resolved = resolve_allowed_path(str(test_file), roots)
+        assert resolved == test_file.resolve()
 
-    resolved3 = resolve_allowed_path("/etc/passwd", roots)
-    check("outside roots", resolved3, None)
+        resolved2 = resolve_allowed_path("test.txt", roots)
+        assert resolved2 == test_file.resolve()
 
-    resolved4 = resolve_allowed_path("/nonexistent/file", roots)
-    check("nonexistent", resolved4, None)
+        resolved3 = resolve_allowed_path("/etc/passwd", roots)
+        assert resolved3 is None
+
+        resolved4 = resolve_allowed_path("/nonexistent/file", roots)
+        assert resolved4 is None
+
 
 # -- build_upload_path --
-print("\n=== build_upload_path ===")
-with tempfile.TemporaryDirectory() as tmp:
-    data_dir = Path(tmp)
-    ensure_data_dirs(data_dir)
-    path = build_upload_path(data_dir, 42, "photo.jpg")
-    check("upload in chat dir", str(path).startswith(str(data_dir / "uploads" / "42")), True)
-    check("upload has safe name", path.name.endswith("_photo.jpg"), True)
-    _reset_db(data_dir)
+
+def test_build_upload_path():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        path = build_upload_path(data_dir, 42, "photo.jpg")
+        assert str(path).startswith(str(data_dir / "uploads" / "42"))
+        assert path.name.endswith("_photo.jpg")
+        _reset_db(data_dir)
+
 
 # -- list_sessions --
-print("\n=== list_sessions ===")
-with tempfile.TemporaryDirectory() as tmp:
-    data_dir = Path(tmp)
-    ensure_data_dirs(data_dir)
 
-    # Empty database
-    check("empty sessions", list_sessions(data_dir), [])
+def test_list_sessions():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
 
-    # Create two sessions
-    s1 = default_session("claude", {"session_id": "a", "started": False}, "on")
-    s1["active_skills"] = ["code-review"]
-    save_session(data_dir, 111, s1)
+        # Empty database
+        assert list_sessions(data_dir) == []
 
-    s2 = default_session("codex", {"thread_id": None}, "off")
-    s2["pending_request"] = {"prompt": "test", "created_at": 0}
-    save_session(data_dir, 222, s2)
+        # Create two sessions
+        s1 = default_session("claude", {"session_id": "a", "started": False}, "on")
+        s1["active_skills"] = ["code-review"]
+        save_session(data_dir, 111, s1)
 
-    result = list_sessions(data_dir)
-    check("two sessions returned", len(result), 2)
+        s2 = default_session("codex", {"thread_id": None}, "off")
+        s2["pending_request"] = {"prompt": "test", "created_at": 0}
+        save_session(data_dir, 222, s2)
 
-    # Most recently updated should be first
-    check("sorted by updated_at", result[0]["chat_id"], 222)
-    check("second session", result[1]["chat_id"], 111)
+        result = list_sessions(data_dir)
+        assert len(result) == 2
 
-    # Check fields
-    s222 = result[0]
-    check("provider field", s222["provider"], "codex")
-    check("has_pending", s222["has_pending"], True)
-    check("has_setup", s222["has_setup"], False)
-    check("approval_mode field", s222["approval_mode"], "off")
+        # Most recently updated should be first
+        assert result[0]["chat_id"] == 222
+        assert result[1]["chat_id"] == 111
 
-    s111 = result[1]
-    check("active_skills", s111["active_skills"], ["code-review"])
-    check("provider field 2", s111["provider"], "claude")
-    check("has_pending 2", s111["has_pending"], False)
+        # Check fields
+        s222 = result[0]
+        assert s222["provider"] == "codex"
+        assert s222["has_pending"] is True
+        assert s222["has_setup"] is False
+        assert s222["approval_mode"] == "off"
 
-    _reset_db(data_dir)
+        s111 = result[1]
+        assert s111["active_skills"] == ["code-review"]
+        assert s111["provider"] == "claude"
+        assert s111["has_pending"] is False
+
+        _reset_db(data_dir)
+
 
 # -- JSON file migration --
-print("\n=== JSON file migration ===")
-with tempfile.TemporaryDirectory() as tmp:
-    data_dir = Path(tmp)
-    (data_dir / "uploads").mkdir(parents=True)
-    (data_dir / "credentials").mkdir(parents=True)
 
-    # Create legacy JSON session files
-    sessions_dir = data_dir / "sessions"
-    sessions_dir.mkdir()
-    s = default_session("claude", {"session_id": "migrated"}, "on")
-    s["active_skills"] = ["github-integration"]
-    (sessions_dir / "12345.json").write_text(json.dumps(s))
+def test_json_file_migration():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        (data_dir / "uploads").mkdir(parents=True)
+        (data_dir / "credentials").mkdir(parents=True)
 
-    s2 = default_session("codex", {"thread_id": "t1"}, "off")
-    (sessions_dir / "67890.json").write_text(json.dumps(s2))
+        # Create legacy JSON session files
+        sessions_dir = data_dir / "sessions"
+        sessions_dir.mkdir()
+        s = default_session("claude", {"session_id": "migrated"}, "on")
+        s["active_skills"] = ["github-integration"]
+        (sessions_dir / "12345.json").write_text(json.dumps(s))
 
-    # Also a corrupt file — should be skipped
-    (sessions_dir / "bad.json").write_text("{corrupt")
+        s2 = default_session("codex", {"thread_id": "t1"}, "off")
+        (sessions_dir / "67890.json").write_text(json.dumps(s2))
 
-    # Initialize DB — should migrate JSON files
-    ensure_data_dirs(data_dir)
+        # Also a corrupt file — should be skipped
+        (sessions_dir / "bad.json").write_text("{corrupt")
 
-    check("json dir removed after migration", sessions_dir.exists(), False)
-    check("db file created", (data_dir / "sessions.db").exists(), True)
+        # Initialize DB — should migrate JSON files
+        ensure_data_dirs(data_dir)
 
-    # Verify migrated data
-    loaded = load_session(data_dir, 12345, "claude", lambda: {"session_id": "new"}, "on")
-    check("migrated provider_state", loaded["provider_state"]["session_id"], "migrated")
-    check("migrated skills", loaded["active_skills"], ["github-integration"])
+        assert not sessions_dir.exists()
+        assert (data_dir / "sessions.db").exists()
 
-    loaded2 = load_session(data_dir, 67890, "codex", lambda: {"thread_id": None}, "off")
-    check("migrated codex state", loaded2["provider_state"]["thread_id"], "t1")
+        # Verify migrated data
+        loaded = load_session(data_dir, 12345, "claude", lambda: {"session_id": "new"}, "on")
+        assert loaded["provider_state"]["session_id"] == "migrated"
+        assert loaded["active_skills"] == ["github-integration"]
 
-    # Corrupt file was skipped — no session for "bad"
-    check("corrupt skipped", session_exists(data_dir, 0), False)
+        loaded2 = load_session(data_dir, 67890, "codex", lambda: {"thread_id": None}, "off")
+        assert loaded2["provider_state"]["thread_id"] == "t1"
 
-    result = list_sessions(data_dir)
-    check("migrated session count", len(result), 2)
+        # Corrupt file was skipped — no session for "bad"
+        assert not session_exists(data_dir, 0)
 
-    _reset_db(data_dir)
+        result = list_sessions(data_dir)
+        assert len(result) == 2
 
-checks.run_and_exit()
+        _reset_db(data_dir)

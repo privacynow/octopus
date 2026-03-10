@@ -177,6 +177,21 @@ The product is complete when these capability areas are in place.
 - edge-case coverage around callbacks, sessions, providers, formatting, and
   store integrity
 
+### G. User-perceived performance and model control
+
+- model profiles (fast / balanced / best) as stable user-facing tier names
+- per-chat model profile selection
+- inline-keyboard driven command UX for all session settings
+- compact mode as default for mobile-oriented deployments
+
+### H. Public trust profile
+
+- restricted execution scope for unauthenticated users
+- forced inspect-only file policy
+- isolated public working directory
+- disabled skill management for public users
+- mandatory rate limiting in public mode
+
 ---
 
 ## Build Program
@@ -323,6 +338,153 @@ Acceptance:
 - high-risk cross-cutting invariants are tested directly
 - major runtime behavior is protected by contract tests, not only scenario tests
 
+### Phase I — Model profiles and perceived latency
+
+Goal: let users control the speed/capability tradeoff without knowing model
+identifiers.
+
+Depends on: Phase E (execution context, session state, context hash).
+
+#### I.1 Model profile mapping
+
+Add a provider-aware model tier system:
+
+- three stable profile names: `fast`, `balanced`, `best`
+- each maps to a provider-specific model ID in config
+- operator configures available profiles and the default profile
+- config: `BOT_MODEL_PROFILES=fast:claude-haiku-4-5-20251001,balanced:claude-sonnet-4-6,best:claude-opus-4-6`
+- config: `BOT_DEFAULT_PROFILE=balanced`
+
+The profile names are what users see. Model IDs are what providers receive.
+This is better than raw model strings because:
+
+- users don't need to remember model identifiers
+- validation is trivial (three valid values)
+- when Anthropic ships a new model, the operator updates the mapping without
+  users changing anything
+- provider portability is cleaner
+
+#### I.2 Per-chat model profile selection
+
+Add `model_profile` to `SessionState`:
+
+- empty string means use config default
+- `/model` with no args shows current profile + inline keyboard buttons
+- `/model use fast` or button tap sets the override
+- model profile is resolved at execution time: session override > config default
+- effective model ID flows into `execution_config_digest` (already in hash)
+- changing profile correctly invalidates pending approvals and Codex threads
+
+#### I.3 Inline-keyboard UX for session settings
+
+Convert existing text-only toggle commands to guided inline-keyboard
+interactions. When a command is invoked with no arguments, show current state
+and action buttons instead of requiring the user to type the exact value.
+
+Commands to convert:
+
+- `/model` → `[⚡ Fast]  [⚖️ Balanced]  [🧠 Best]`
+- `/policy` → `[👁️ Read only]  [✏️ Read & write]`
+- `/approval` → `[🛡️ Review first]  [⚡ Run immediately]`
+- `/compact` → `[📱 Short answers]  [📄 Full answers]`
+- `/project` → buttons for each configured project + `[Clear]`
+- `/skills add` (no args) → available skills as buttons
+
+This is a UX pass, not a logic change. The session mutations are the same as
+the text commands. The callback handler pattern already exists for
+approve/reject/retry.
+
+Acceptance:
+
+- a user can change model, policy, approval, compact, and project without
+  typing any identifier or keyword
+- `/session` reflects the effective model profile, not just the raw model ID
+- changing model profile invalidates stale approvals and Codex threads
+
+### Phase J — Public trust profile
+
+Goal: make the bot safe to expose publicly without relying on approval mode
+as a security boundary.
+
+Depends on: Phase B (safety controls), Phase E (execution context, file
+policy, project binding).
+
+The threat model: when `BOT_ALLOW_OPEN=1`, any Telegram user can interact
+with the bot. Approval mode is not a security boundary because the same
+anonymous user who requests can also approve. The correct model is a
+restricted trust profile with isolated scope and reduced capabilities.
+
+#### J.1 Public-mode contract
+
+When a user is not in the allowed-user set and the bot is in open mode, the
+public trust profile applies:
+
+- `file_policy` forced to `inspect` (read-only, non-overridable)
+- working directory forced to an explicit public root
+  (`BOT_PUBLIC_WORKING_DIR`) instead of the operator's main working dir
+- `extra_dirs` restricted to public root only (no operator extra dirs)
+- skill activation, removal, setup, and management disabled
+- `/send` disabled or constrained to public root
+- `/project` disabled (public users do not get project access)
+- `/model` optionally restricted to a subset of profiles
+
+#### J.2 Mandatory rate limiting in public mode
+
+When `allow_open=True`, rate limiting must be explicitly configured or
+sensible defaults apply automatically. A public bot with no rate limit is an
+open compute endpoint.
+
+- if `rate_limit_per_minute=0` and `rate_limit_per_hour=0` in public mode,
+  apply conservative defaults (e.g., 5/min, 30/hour)
+- operator can override with explicit values
+- `/doctor` warns if public mode is active with no explicit rate limits
+
+#### J.3 Public-mode enforcement
+
+Enforcement should happen at the handler layer, not deep in business logic:
+
+- `is_public_user(user)` predicate: `allow_open` is true and user is not in
+  any allowed-user set
+- public users get a restricted session: forced inspect, forced public root,
+  no skill management commands
+- admin and store commands remain gated by `is_admin()` (already correct)
+- approval mode may optionally be forced on for public users as a UX
+  transparency measure, but it is not the security boundary
+
+Acceptance:
+
+- a public user cannot read or write files outside the public root
+- a public user cannot activate skills or manage credentials
+- a public user cannot use the bot as an unrestricted compute endpoint
+- an operator running a public bot gets clear `/doctor` warnings about
+  missing rate limits or missing public root config
+- the public trust profile is a concrete scope restriction, not an abstract
+  identity system
+
+### Phase K — Compact mode defaults
+
+Goal: make compact mode the right default for mobile-heavy deployments.
+
+Depends on: Phase D (compact mode, `/compact`, `/raw`).
+
+This is primarily a product-default decision, not a code feature:
+
+- recommend `BOT_COMPACT_MODE=1` for mobile-oriented instances
+- mention `/compact on|off` toggle in first-run welcome message
+- no device detection — Telegram's Bot API does not provide client metadata
+- no heuristics (private-vs-group guessing is unreliable and feels arbitrary)
+
+If code changes are needed, they are limited to:
+
+- adding compact mode mention to the first-run welcome
+- possibly defaulting `BOT_COMPACT_MODE=1` in new instance configs generated
+  by `setup.sh`
+
+Acceptance:
+
+- new users discover compact mode without reading docs
+- the default feels right for the deployment context
+
 ---
 
 ## Cross-Cutting Contracts
@@ -337,7 +499,8 @@ There is one authoritative execution identity per request. It includes:
 - active skills
 - skill digests
 - provider config digest (skill YAML content, scoped to active provider)
-- execution config digest (model, codex_sandbox, codex_full_auto,
+- execution config digest (effective model — resolved from session profile
+  override or config default, codex_sandbox, codex_full_auto,
   codex_dangerous, codex_profile)
 - base extra dirs
 - project id
@@ -471,18 +634,8 @@ blurring the audience.
 
 ## Product Extensions
 
-These are legitimate product areas, but they are intentionally outside the
-core build described above.
-
-### Usage accounting and billing
-
-The core product does not require billing hooks to be coherent. A commercial
-layer can be added later for:
-
-- token and cost accounting
-- quota enforcement
-- billing integration
-- usage reporting
+These are legitimate product areas that sit outside the current build phases.
+They are ordered by likely relevance, not urgency.
 
 ### Multi-process webhook architecture
 
@@ -492,16 +645,6 @@ multi-worker / multi-process webhook deployment. That would require:
 - stronger cross-process serialization guarantees
 - concurrency semantics beyond in-memory chat locks
 - explicit deployment guidance for multi-worker operation
-
-### Confidence extensions
-
-The current test strategy covers product behavior well, but a larger product
-surface can justify deeper confidence layers such as:
-
-- concurrency-focused handler tests
-- richer attachment transport integration tests
-- streaming progress integration tests
-- real provider CLI smoke tests
 
 ### Policy and project expansion
 
@@ -521,6 +664,55 @@ broader ecosystem may later require:
 - more explicit organizational trust configuration
 - richer registry metadata and policy controls
 
+### Confidence extensions
+
+The current test strategy covers product behavior well, but a larger product
+surface can justify deeper confidence layers such as:
+
+- concurrency-focused handler tests
+- richer attachment transport integration tests
+- streaming progress integration tests
+- real provider CLI smoke tests
+
+### Usage accounting and billing (deferred)
+
+The core product does not require billing hooks to be coherent. A commercial
+layer can be added later for:
+
+- token and cost accounting
+- quota enforcement
+- billing integration
+- usage reporting
+
+This is intentionally last. The product should feel complete, safe, and
+usable before billing is layered on.
+
+---
+
+## Build Priority (Next Work)
+
+The phases above (A–H) are complete. The next product work, in priority
+order:
+
+1. **Faster default model** — zero code. Recommend `balanced` profile in
+   setup wizard and docs. Immediate perceived-latency improvement.
+
+2. **Phase I: Model profiles and inline-keyboard UX** — highest-value code
+   work. Users get speed/capability control without memorizing model IDs.
+   Inline keyboards make all session settings discoverable. Builds on the
+   existing execution context and context-hash infrastructure.
+
+3. **Phase J: Public trust profile** — important if anyone will run a public
+   bot. Scope restriction and mandatory rate limiting. Depends on existing
+   safety controls (file policy, project binding, rate limiting) which are
+   already built.
+
+4. **Phase K: Compact mode defaults** — mostly a config/docs decision. Small
+   code change to mention the toggle in first-run welcome.
+
+Billing and usage accounting are explicitly deferred. They are not blocking
+any of the above.
+
 ---
 
 ## Completion Standard
@@ -533,3 +725,5 @@ The product is commercially ready when:
 - the output is Telegram-native and mobile-friendly
 - operators can diagnose and manage the system confidently
 - cross-cutting invariants are enforced by tests, not memory
+- users can control model speed/capability without knowing provider internals
+- public deployments have a concrete trust profile, not optimistic defaults

@@ -32,16 +32,16 @@ async def collect_doctor_report(
     session: dict[str, Any] | None = None,
     user_id: int | None = None,
     encryption_key: bytes | None = None,
-    caller_is_polling: bool = False,
+    caller_is_bot: bool = False,
 ) -> DoctorReport:
     """Run all health checks and return a structured report.
 
     If session/user_id/encryption_key are provided, also validates
     active skills for the caller's chat.
 
-    caller_is_polling: set True when called from within a running poll-mode
-    bot.  This skips the getUpdates conflict probe, which would 409 against
-    the bot's own poller.
+    caller_is_bot: set True when called from within a running bot process
+    (poll or webhook mode).  This skips the getUpdates conflict probe,
+    which would 409 against its own poller or conflict with an active webhook.
     """
     report = DoctorReport()
 
@@ -88,9 +88,10 @@ async def collect_doctor_report(
             "Bot is in polling mode but BOT_WEBHOOK_URL is configured. "
             "If another process is running in webhook mode, updates may conflict. "
             "Use only one delivery mode per bot token.")
-    # Only probe getUpdates when we are NOT the active poller — otherwise
-    # we 409 against ourselves.  CLI --doctor and webhook-mode /doctor are safe.
-    if not caller_is_polling:
+    # Only probe getUpdates from CLI --doctor.  A running bot in poll mode
+    # would 409 against its own poller; in webhook mode, getUpdates conflicts
+    # with the active webhook per Telegram API contract.
+    if not caller_is_bot:
         conflict = await check_polling_conflict(config.telegram_token)
         if conflict:
             report.warnings.append(conflict)

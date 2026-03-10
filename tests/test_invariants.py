@@ -2112,15 +2112,18 @@ async def test_chat_lock_sends_callback_feedback_when_locked():
         lock = th.CHAT_LOCKS[1]
         await lock.acquire()
         try:
+            yielded = None
             async def use_lock():
-                async with th._chat_lock(1, query=query):
-                    pass
+                nonlocal yielded
+                async with th._chat_lock(1, query=query) as sent:
+                    yielded = sent
 
             task = asyncio.create_task(use_lock())
             await asyncio.sleep(0)
             lock.release()
             await task
 
+            assert yielded is True, "Expected _chat_lock to yield True when lock was held"
             assert query.answers, "Expected callback answer for queued feedback"
             assert any("queued" in str(a.get("text", "")).lower() for a in query.answers), (
                 f"Expected queued feedback in callback answer, got: {query.answers}")
@@ -2137,8 +2140,128 @@ async def test_chat_lock_no_feedback_when_free():
     with fresh_env() as (data_dir, cfg, prov):
         msg = FakeMessage(chat=FakeChat(1))
 
-        async with th._chat_lock(1, message=msg):
-            pass
+        async with th._chat_lock(1, message=msg) as sent:
+            assert sent is False, "Expected _chat_lock to yield False when lock was free"
 
         all_text = " ".join(str(r.get("text", "")) for r in msg.replies)
         assert "queued" not in all_text.lower()
+
+
+# =====================================================================
+# INVARIANT 28: Contended callbacks produce exactly one answer
+#
+# When a callback handler runs while the chat lock is held, the handler
+# must not call query.answer() again after _chat_lock already consumed
+# the answer slot with queued feedback.
+# =====================================================================
+
+
+@pytest.mark.asyncio
+async def test_contended_approval_callback_single_answer():
+    """Approval callback under contention produces exactly one callback answer."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 1
+        chat = FakeChat(chat_id)
+        user = FakeUser(next(iter(cfg.allowed_user_ids)))
+        session = th._load(chat_id)
+        from app.session_state import PendingApproval
+        ctx_hash = th._resolve_context(session).context_hash
+        session.pending_approval = PendingApproval(
+            request_user_id=user.id, prompt="test", image_paths=[],
+            attachment_dicts=[], context_hash=ctx_hash,
+            created_at=0, trust_tier="trusted",
+        )
+        th._save(chat_id, session)
+
+        from app.providers.base import RunResult
+        prov.run_results.append(RunResult(text="done"))
+
+        lock = th.CHAT_LOCKS[chat_id]
+        await lock.acquire()
+        try:
+            async def contended_approve():
+                query, _ = await send_callback(
+                    th.handle_callback, chat, user, "approval_approve")
+                return query
+
+            task = asyncio.create_task(contended_approve())
+            await asyncio.sleep(0)
+            lock.release()
+            query = await task
+        finally:
+            if lock.locked():
+                lock.release()
+
+        assert len(query.answers) == 1, (
+            f"Expected exactly 1 answer under contention, got {len(query.answers)}: {query.answers}")
+        assert "queued" in str(query.answers[0].get("text", "")).lower()
+
+
+@pytest.mark.asyncio
+async def test_contended_settings_callback_single_answer():
+    """Settings callback under contention produces exactly one callback answer."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 1
+        chat = FakeChat(chat_id)
+        user = FakeUser(next(iter(cfg.allowed_user_ids)))
+        session = th._load(chat_id)
+        th._save(chat_id, session)
+
+        lock = th.CHAT_LOCKS[chat_id]
+        await lock.acquire()
+        try:
+            async def contended_settings():
+                query, _ = await send_callback(
+                    th.handle_settings_callback, chat, user, "setting_compact:on")
+                return query
+
+            task = asyncio.create_task(contended_settings())
+            await asyncio.sleep(0)
+            lock.release()
+            query = await task
+        finally:
+            if lock.locked():
+                lock.release()
+
+        assert len(query.answers) == 1, (
+            f"Expected exactly 1 answer under contention, got {len(query.answers)}: {query.answers}")
+        assert "queued" in str(query.answers[0].get("text", "")).lower()
+
+
+@pytest.mark.asyncio
+async def test_contended_clear_cred_callback_single_answer():
+    """Clear-credentials callback under contention produces exactly one callback answer."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 1
+        chat = FakeChat(chat_id)
+        user = FakeUser(next(iter(cfg.allowed_user_ids)))
+        session = th._load(chat_id)
+        th._save(chat_id, session)
+
+        lock = th.CHAT_LOCKS[chat_id]
+        await lock.acquire()
+        try:
+            async def contended_clear():
+                query, _ = await send_callback(
+                    th.handle_clear_cred_callback, chat, user,
+                    f"clear_cred_confirm_all:{user.id}")
+                return query
+
+            task = asyncio.create_task(contended_clear())
+            await asyncio.sleep(0)
+            lock.release()
+            query = await task
+        finally:
+            if lock.locked():
+                lock.release()
+
+        assert len(query.answers) == 1, (
+            f"Expected exactly 1 answer under contention, got {len(query.answers)}: {query.answers}")
+        assert "queued" in str(query.answers[0].get("text", "")).lower(), (
+            f"Expected queued feedback, got: {query.answers}")

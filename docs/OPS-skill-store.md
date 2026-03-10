@@ -2,121 +2,176 @@
 
 ## Overview
 
-The skill store is a local directory (`skills/store/`) that acts as a curated catalog of installable skills. Admins can browse, install, update, and uninstall store skills via Telegram commands. Installed skills are copied to the custom skills directory (`~/.config/telegram-agent-bot/skills/`) with a `_store.json` provenance manifest.
+The skill store provides managed skill distribution via an immutable
+content-addressed object store. Admins install, update, and uninstall
+skills through Telegram commands. Skills resolve through a three-tier
+model: **custom** overrides take priority, then **managed** refs, then
+**built-in catalog** skills.
+
+When `BOT_REGISTRY_URL` is configured, skills can also be fetched from a
+remote registry with SHA-256 digest verification.
 
 ## Directory Layout
 
 ```
 skills/
-  catalog/          # built-in skills, always available
-  store/            # store skills, installable by admins
+  catalog/              # built-in skills, always available
+  store/                # bundled skill sources for install
     my-skill/
-      skill.md      # required — frontmatter + instructions
-      requires.yaml # optional — credential requirements
-      claude.yaml   # optional — Claude provider config
-      codex.yaml    # optional — Codex provider config
+      skill.md          # required — frontmatter + instructions
+      requires.yaml     # optional — credential requirements
+      claude.yaml       # optional — Claude provider config
+      codex.yaml        # optional — Codex provider config
 
-~/.config/telegram-agent-bot/skills/
-  my-skill/         # installed copy (same structure as above)
-    _store.json     # provenance manifest (auto-generated)
+<data_dir>/skills/
+  custom/               # user-created skills (editable)
+    my-custom-skill/
+      skill.md
+  managed/
+    objects/<sha256>/    # immutable content-addressed skill content
+    refs/<name>.json    # name → digest mapping with provenance
+    version.json        # schema version guard
+    .lock               # cross-instance file lock for mutations
 ```
+
+## Three-Tier Resolution
+
+When the bot resolves a skill name, it checks in order:
+
+1. `custom/<name>` — user-created, fully editable
+2. `managed/refs/<name>.json` → `managed/objects/<digest>/` — immutable managed skill
+3. `catalog/<name>` — built-in, ships with the repo
+
+The first match wins. A custom skill with the same name as a managed
+skill shadows it. `/skills info` and `/skills list` always show the
+resolved tier.
 
 ## Configuration
 
 ### BOT_ADMIN_USERS
 
-Controls who can install, uninstall, and update store skills.
+Controls who can install, uninstall, and update managed skills.
 
 ```bash
-# In your instance .env file:
-BOT_ADMIN_USERS=@alice,123456789    # comma-separated usernames and/or IDs
+BOT_ADMIN_USERS=@alice,123456789
 ```
 
-If unset, falls back to `BOT_ALLOWED_USERS` (all allowed users are admins). Set this explicitly in multi-user deployments.
+If unset, falls back to `BOT_ALLOWED_USERS`. Set explicitly in
+multi-user deployments.
 
 ### BOT_SKILLS
 
-Default skills activated for new chats. Store-installed skills can be listed here after installation.
+Default skills activated for new chats.
 
 ```bash
-BOT_SKILLS=code-review,debugging,my-store-skill
+BOT_SKILLS=code-review,debugging
 ```
 
-Note: you cannot uninstall a skill that is listed in `BOT_SKILLS`. Remove it from the config first.
+### BOT_REGISTRY_URL
+
+Remote skill registry for `/skills search` and `/skills install`
+fallback.
+
+```bash
+BOT_REGISTRY_URL=https://registry.example.com/skills/index.json
+```
 
 ## Telegram Commands
-
-All store commands are subcommands of `/skills`.
 
 ### Browsing
 
 | Command | Who | Description |
 |---|---|---|
-| `/skills search <query>` | any user | Substring search on skill name and description |
-| `/skills info <name>` | any user | Show skill metadata and full instructions |
+| `/skills search <query>` | any user | Search bundled store and registry |
+| `/skills info <name>` | any user | Show resolved skill details and compatibility |
 
 ### Installation
 
 | Command | Who | Description |
 |---|---|---|
-| `/skills install <name>` | admin | Copy skill from store to custom dir |
-| `/skills uninstall <name>` | admin | Remove store-installed skill, sweep from all chats |
+| `/skills install <name>` | admin | Install from bundled store or registry |
+| `/skills uninstall <name>` | admin | Remove managed ref and sweep from all sessions |
 
-Install copies the skill directory and writes `_store.json`. If a custom (user-created) skill with the same name exists, install refuses — uninstall the custom skill first.
+Install creates an immutable object and writes a ref. If a custom skill
+with the same name exists, it shadows the managed version (both coexist).
 
-Uninstall:
-1. Checks the skill is not in `BOT_SKILLS` (config guard)
-2. Removes the skill from `active_skills` in all saved sessions (session sweep)
-3. Deletes the installed directory
+Uninstall removes the ref. Orphaned objects are cleaned up by GC at
+startup.
 
 ### Updates
 
 | Command | Who | Description |
 |---|---|---|
-| `/skills updates` | any user | Compare installed skills against store, show status |
-| `/skills update <name>` | admin | Re-install a single skill from store |
-| `/skills update all` | admin | Re-install all skills with available updates |
+| `/skills updates` | any user | Compare managed refs against store sources |
+| `/skills update <name>` | admin | Update the managed ref to current store content |
+| `/skills update all` | admin | Update all non-pinned managed refs |
+| `/skills diff <name>` | any user | Show content diff for a managed skill |
 
-Status values from `/skills updates`:
-- **up to date** — installed hash matches store
-- **update available** — store content changed since install
-- **locally modified** — installed content was edited after install
-
-Both `/skills update <name>` and `/skills update all` check prompt size across all chats where updated skills are active and warn if the composed prompt exceeds 8,000 characters.
+Both update commands check prompt size across all chats where updated
+skills are active and warn if the composed prompt exceeds the threshold.
 
 ### Per-Chat Activation
-
-After installing, users activate/deactivate store skills like any other skill:
 
 | Command | Description |
 |---|---|
 | `/skills add <name>` | Activate in current chat |
 | `/skills remove <name>` | Deactivate from current chat |
-| `/skills list` | Show active skills (store-installed show `(store)` tag) |
+| `/skills list` | Show active skills with tier tags |
 
-## Provenance Manifest (_store.json)
+`/skills list` shows `(managed)`, `(custom)`, and `[custom override]`
+tags to indicate the resolved tier.
 
-Every store-installed skill gets a `_store.json` file:
+## Managed Ref Format
+
+Each managed ref is a JSON file at `managed/refs/<name>.json`:
 
 ```json
 {
-  "content_sha256": "a1b2c3...",
-  "installed_at": "2026-03-08T15:30:00+00:00",
-  "locally_modified": false,
+  "digest": "a1b2c3...",
   "source": "store",
-  "store_path": "skills/store/my-skill"
+  "installed_at": "2026-03-08T15:30:00+00:00",
+  "pinned": false
 }
 ```
 
 | Field | Purpose |
 |---|---|
-| `source` | Always `"store"` — distinguishes from user-created skills |
-| `store_path` | Relative path to the store source directory |
-| `installed_at` | ISO 8601 UTC timestamp of last install/update |
-| `content_sha256` | SHA-256 of all files at install time (excludes `_store.json`) |
-| `locally_modified` | Set to `true` when `check_updates()` detects local edits |
+| `digest` | SHA-256 of the skill content — points to `objects/<digest>/` |
+| `source` | `"store"` or `"registry"` |
+| `installed_at` | ISO 8601 timestamp |
+| `pinned` | If true, `/skills update all` skips this ref |
 
-The hash is computed deterministically: files sorted by relative path, each contributing its path and content bytes to a single SHA-256 digest.
+Registry-installed refs also carry `publisher` and `version` metadata.
+
+## Immutable Object Store
+
+Objects live at `managed/objects/<sha256>/` and are never modified after
+creation. Content hashing is deterministic: files sorted by relative
+path, each contributing path and content bytes to a single SHA-256 digest.
+
+Install and update are atomic ref swaps — the new object is written
+first, then the ref is updated via write-to-tmp + `os.rename`.
+
+## Registry Integration
+
+When `BOT_REGISTRY_URL` is set:
+
+- `/skills search` falls back to the registry after checking the bundled
+  store
+- `/skills install` falls back to the registry when a skill is not found
+  locally
+- Downloaded artifacts are verified against the registry's SHA-256 digest
+  before creating objects
+- Digest mismatch rejects the install — no ref is created
+
+## Startup GC
+
+At startup, the store runs conservative garbage collection:
+
+- Unreferenced objects older than 1 hour are removed
+- Stale `.tmp` directories and ref temps are cleaned
+- Schema version is checked; the store refuses to operate if the schema
+  is newer than the code supports
 
 ## Authoring a Store Skill
 
@@ -134,14 +189,9 @@ description: One-line description shown in search results
 Instructions injected into the system prompt when this skill is active.
 ```
 
-The frontmatter fields:
-- `name` — must match the directory name
-- `display_name` — human-readable name
-- `description` — shown in `/skills search` and `/skills info`
-
 ### Optional files
 
-**`requires.yaml`** — credential requirements. The bot prompts users for setup via `/skills setup <name>`:
+**`requires.yaml`** — credential requirements:
 
 ```yaml
 credentials:
@@ -155,32 +205,28 @@ credentials:
       expect_status: 200
 ```
 
-**`claude.yaml`** / **`codex.yaml`** — provider-specific config (tool permissions, allowed commands, etc.).
+**`claude.yaml`** / **`codex.yaml`** — provider-specific config.
 
 ### Prompt size
 
-The bot warns when the composed system prompt (role + all active skills) exceeds 8,000 characters. Keep skill instructions concise. Test with `/skills add` and check if a warning appears.
-
-## Content Hashing
-
-SHA-256 verification runs at two points:
-
-1. **Post-install** — immediately after copying, the installed directory is re-hashed and compared against the store source. If they differ (filesystem corruption), the install is rolled back.
-2. **Update check** — `check_updates()` compares the installed hash against the manifest hash (local modification detection) and the store hash (update detection).
+The bot warns when the composed system prompt exceeds the threshold. Keep
+skill instructions concise. Test with `/skills add` and check for
+warnings.
 
 ## Troubleshooting
 
 ### "Only admins can install store skills"
-The user is not in `BOT_ADMIN_USERS`. Either add them or set the variable to include their username/ID.
+The user is not in `BOT_ADMIN_USERS`.
 
-### "Skill 'X' already exists as a custom skill"
-A user-created skill in `~/.config/telegram-agent-bot/skills/X/` has no `_store.json`. Remove it manually or via the filesystem before installing the store version.
+### "Skill not found"
+Not in bundled store, custom dir, or registry. Check the name and
+whether `BOT_REGISTRY_URL` is configured.
 
-### "Skill 'X' is listed in BOT_SKILLS"
-Cannot uninstall a skill that the operator configured as a default. Remove it from `BOT_SKILLS` in the `.env` file first.
+### "Schema version mismatch"
+The managed store was written by a newer version of the bot. Update the
+bot code or delete `managed/version.json` to reset (will lose managed
+state).
 
-### "SHA-256 verification failed after install"
-Filesystem issue during copy. Check disk space and permissions on `~/.config/telegram-agent-bot/skills/`.
-
-### Locally modified skill won't update
-Updates overwrite local modifications with a warning. This is intentional — the store version is the source of truth. If you need local customizations, create a separate custom skill instead.
+### Custom skill shadows managed version
+A custom skill in `custom/<name>` takes priority. Remove the custom
+skill to use the managed version, or keep it as an intentional override.

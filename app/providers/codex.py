@@ -545,10 +545,13 @@ class CodexProvider:
 
         # Preserve resume semantics after a bot-level approval. Changing a resumed
         # thread to --dangerously-bypass-approvals-and-sandbox can break continuity.
-        # Retry flows that truly need permission bypass already clear thread_id and
-        # therefore come through here as a fresh exec.
+        # Fresh execs only need the dangerous flag when full-auto is not already
+        # enabled; codex-cli 0.111.0 rejects the combination of both flags.
         if context and context.skip_permissions and not is_resume:
-            if "--dangerously-bypass-approvals-and-sandbox" not in cmd:
+            if (
+                "--dangerously-bypass-approvals-and-sandbox" not in cmd
+                and "--full-auto" not in cmd
+            ):
                 cmd.insert(3, "--dangerously-bypass-approvals-and-sandbox")
 
         # Inject config_overrides as -c flags

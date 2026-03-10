@@ -94,9 +94,15 @@ async def _chat_lock(chat_id: int, *, message=None, query=None):
     visible acknowledgment before blocking.  Only handlers that actually
     serialize on the lock should use this — lightweight read-only commands
     like /session should use the lock directly or not at all.
+
+    Yields ``True`` if queued feedback was sent (callback answer slot
+    consumed), ``False`` otherwise.  Callback handlers should skip their
+    own ``query.answer()`` when the yielded value is ``True``.
     """
     lock = CHAT_LOCKS[chat_id]
+    sent_feedback = False
     if lock.locked():
+        sent_feedback = True
         if message is not None:
             await message.reply_text(
                 "<i>Working on your previous request \u2014 yours is queued.</i>",
@@ -104,7 +110,7 @@ async def _chat_lock(chat_id: int, *, message=None, query=None):
         elif query is not None:
             await query.answer("Working on your previous request \u2014 yours is queued.")
     async with lock:
-        yield
+        yield sent_feedback
 
 
 # These get set by build_application()
@@ -627,7 +633,7 @@ async def execute_request(
         return
 
     if result.returncode != 0:
-        error_text = trim_text(result.text, 3000)
+        error_text = html.escape(trim_text(result.text, 3000))
         if resume_errored:
             error_text += "\n\n<i>Thread could not be resumed — next message starts a fresh session.</i>"
         await progress.update(error_text, force=True)
@@ -926,7 +932,7 @@ async def cmd_new(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chat_id = event.chat_id
     cfg = _cfg()
     prov = _prov()
-    async with CHAT_LOCKS[chat_id]:
+    async with _chat_lock(chat_id, message=update.effective_message):
         old_session = _load(chat_id)
         user_id = event.user.id
         if foreign_skill_setup(old_session, user_id):
@@ -1010,7 +1016,7 @@ async def cmd_approval(event, update: Update, context: ContextTypes.DEFAULT_TYPE
     if arg not in {"on", "off", "status"}:
         await update.effective_message.reply_text("Use /approval on, /approval off, or /approval status.")
         return
-    async with CHAT_LOCKS[chat_id]:
+    async with _chat_lock(chat_id, message=update.effective_message):
         session = _load(chat_id)
         if arg == "status":
             mode = session.approval_mode
@@ -1039,13 +1045,13 @@ async def cmd_approval(event, update: Update, context: ContextTypes.DEFAULT_TYPE
 
 @_command_handler
 async def cmd_approve(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    async with CHAT_LOCKS[event.chat_id]:
+    async with _chat_lock(event.chat_id, message=update.effective_message):
         await approve_pending(event.chat_id, update.effective_message)
 
 
 @_command_handler
 async def cmd_reject(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    async with CHAT_LOCKS[event.chat_id]:
+    async with _chat_lock(event.chat_id, message=update.effective_message):
         await reject_pending(event.chat_id, update.effective_message)
 
 
@@ -1090,7 +1096,7 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         kwargs.update(session=session_to_dict(session), user_id=event.user.id,
                       encryption_key=_encryption_key())
     report = await collect_doctor_report(
-        cfg, _prov(), caller_is_polling=(cfg.bot_mode == "poll"), **kwargs)
+        cfg, _prov(), caller_is_bot=True, **kwargs)
     parts: list[str] = []
     if report.errors:
         parts.extend(f"\u274c {html.escape(e)}" for e in report.errors)
@@ -1282,7 +1288,7 @@ async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     chat_id = event.chat_id
     user_id = event.user.id
 
-    async with CHAT_LOCKS[chat_id]:
+    async with _chat_lock(chat_id, message=update.effective_message):
         session = _load(chat_id)
 
         setup = session.awaiting_skill_setup
@@ -1358,7 +1364,9 @@ async def _execute_clear_credentials(
 
     # Clear in-progress setup even if no credentials were saved yet
     setup_cleared = False
-    async with CHAT_LOCKS[chat_id]:
+    async with _chat_lock(chat_id, query=query) as already_answered:
+        if not already_answered:
+            await query.answer()
         session = _load(chat_id)
         setup = session.awaiting_skill_setup
         if setup and setup.user_id == user_id:
@@ -1405,9 +1413,8 @@ async def handle_clear_cred_callback(event, query) -> None:
             await query.answer("This button is for another user.", show_alert=True)
             return
 
-    await query.answer()
-
     if parts[0] == "clear_cred_cancel":
+        await query.answer()
         await query.edit_message_reply_markup(reply_markup=None)
         await query.edit_message_text("Credential clear cancelled.")
         return
@@ -1453,7 +1460,7 @@ async def cmd_compact(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.effective_message.reply_text("Usage: /compact on|off")
         return
 
-    async with CHAT_LOCKS[chat_id]:
+    async with _chat_lock(chat_id, message=update.effective_message):
         session = _load(chat_id)
         session.compact_mode = mode == "on"
         _save(chat_id, session)
@@ -1506,7 +1513,7 @@ async def cmd_role(event, update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if args[0].lower() == "clear":
         cfg = _cfg()
-        async with CHAT_LOCKS[chat_id]:
+        async with _chat_lock(chat_id, message=update.effective_message):
             session = _load(chat_id)
             session.role = cfg.role
             _save(chat_id, session)
@@ -1514,7 +1521,7 @@ async def cmd_role(event, update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     role_text = " ".join(args)
-    async with CHAT_LOCKS[chat_id]:
+    async with _chat_lock(chat_id, message=update.effective_message):
         session = _load(chat_id)
         session.role = role_text
         _save(chat_id, session)
@@ -1547,7 +1554,7 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await msg.reply_text(
                 f"Unknown profile. Available: {', '.join(available)}")
             return
-        async with CHAT_LOCKS[chat_id]:
+        async with _chat_lock(chat_id, message=msg):
             session = _load(chat_id)
             session.model_profile = arg
             _save(chat_id, session)
@@ -1687,10 +1694,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 @_callback_handler
 async def handle_callback(event, query) -> None:
-    await query.answer()
     chat_id = event.chat_id
 
-    async with _chat_lock(chat_id, query=query):
+    async with _chat_lock(chat_id, query=query) as already_answered:
+        if not already_answered:
+            await query.answer()
         if event.data == "approval_approve":
             await query.edit_message_reply_markup(reply_markup=None)
             await approve_pending(chat_id, query.message)
@@ -1807,19 +1815,22 @@ async def handle_expand_callback(event, query) -> None:
 @_callback_handler
 async def handle_settings_callback(event, query) -> None:
     """Handle inline-keyboard callbacks for session settings."""
-    await query.answer()
     chat_id = event.chat_id
     data = event.data  # e.g. "setting_model:fast", "setting_approval:on"
 
     if not data.startswith("setting_"):
+        await query.answer()
         return
 
     _, rest = data.split("_", 1)
     if ":" not in rest:
+        await query.answer()
         return
     setting, value = rest.split(":", 1)
 
-    async with CHAT_LOCKS[chat_id]:
+    async with _chat_lock(chat_id, query=query) as already_answered:
+        if not already_answered:
+            await query.answer()
         session = _load(chat_id)
 
         if setting == "model":
@@ -1884,17 +1895,19 @@ async def handle_settings_callback(event, query) -> None:
 
 @_callback_handler
 async def handle_skill_add_callback(event, query) -> None:
-    await query.answer()
     chat_id = event.chat_id
 
     if event.data == "skill_add_cancel":
+        await query.answer()
         await query.edit_message_reply_markup(reply_markup=None)
         await query.edit_message_text("Skill activation cancelled.")
         return
 
     if event.data.startswith("skill_add_confirm:"):
         name = event.data.split(":", 1)[1]
-        async with CHAT_LOCKS[chat_id]:
+        async with _chat_lock(chat_id, query=query) as already_answered:
+            if not already_answered:
+                await query.answer()
             session = _load(chat_id)
             if name not in session.active_skills:
                 session.active_skills.append(name)

@@ -214,8 +214,28 @@ async def test_provider_config_sandbox_applies_without_inspect():
 
 # -- skip_permissions behaviour --
 
-async def test_skip_permissions_fresh_exec():
+async def test_skip_permissions_fresh_exec_preserves_full_auto():
     provider = CodexProvider(make_config(codex_full_auto=True))
+    calls: list[tuple[list[str], bool]] = []
+
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+        calls.append((cmd, is_resume))
+        return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
+
+    provider._run_cmd = fake_run_cmd  # type: ignore[method-assign]
+    progress = FakeProgress()
+    context = RunContext(extra_dirs=[], system_prompt="", capability_summary="",
+                         provider_config={}, credential_env={}, skip_permissions=True)
+
+    await provider.run({"thread_id": None}, "start", [], progress, context=context)
+    cmd_new, is_resume_new = calls[-1]
+    assert is_resume_new is False
+    assert "--full-auto" in cmd_new
+    assert "--dangerously-bypass-approvals-and-sandbox" not in cmd_new
+
+
+async def test_skip_permissions_fresh_exec_adds_dangerous_when_needed():
+    provider = CodexProvider(make_config(codex_full_auto=False))
     calls: list[tuple[list[str], bool]] = []
 
     async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):

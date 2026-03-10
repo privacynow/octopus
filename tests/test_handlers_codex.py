@@ -191,6 +191,44 @@ async def test_codex_new_exec_failure_preserves_no_thread():
         assert session["provider_state"].get("thread_id") is None
 
 
+async def test_codex_error_text_is_html_escaped():
+    class CaptureReplyMessage(FakeMessage):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.reply_messages = []
+
+        async def reply_text(self, text, **kwargs):
+            self.replies.append({"text": text, **kwargs})
+            reply = FakeMessage(chat=self.chat, text=text)
+            self.reply_messages.append(reply)
+            return reply
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, provider_name="codex")
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        session = default_session("codex", {"thread_id": None}, "off")
+        save_session(data_dir, 12345, session)
+        prov.run_results = [RunResult(text="[Codex error: Usage: <MODEL>]", returncode=2)]
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = CaptureReplyMessage(chat=chat, text="do something")
+
+        import app.telegram_handlers as th
+
+        await th.handle_message(
+            FakeUpdate(message=msg, user=user, chat=chat),
+            FakeContext(),
+        )
+
+        status_msg = msg.reply_messages[0]
+        edits = [reply for reply in status_msg.replies if "edit_text" in reply]
+        assert edits
+        assert "&lt;MODEL&gt;" in edits[-1]["edit_text"]
+
+
 async def test_codex_boot_id_clears_stale_thread():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, provider_name="codex")

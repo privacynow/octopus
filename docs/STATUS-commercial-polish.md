@@ -1,35 +1,32 @@
 # Commercial Polish — Implementation Status
 
-Current as of 2026-03-09. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
+Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-10):** Three review findings fixed on previous audit patch.
-> Polling probe skipped when bot is the active poller (avoids self-409). Queued
-> feedback moved from decorators to `_chat_lock` context manager so only handlers
-> that actually block on the lock send feedback. Prompt weight in `/doctor` now uses
-> resolved execution context (respects trust tier). 622 tests passing.
+> **Latest change (2026-03-10):** Fixed double callback answer under lock contention
+> and clear-credentials answer-before-lock gap. `_chat_lock` now yields a boolean
+> so handlers skip their own `query.answer()` when queued feedback was already sent.
+> 3 contention regression tests added. 627 tests passing.
 
 ---
 
 ## Phase Completion Summary
 
-| Phase | Scope | Status |
-|-------|-------|--------|
-| Phase 1 | Activation & self-service | Done |
-| Phase 2 | Output quality | Done |
-| Phase 3 | Trust & cost control | Done |
-| Phase 4 | Operational hardening | Done |
-| Phase 5 | Transport & webhook foundation | Done |
-| Phase 6 | Session & execution context | Done |
-| Phase 7 | Ecosystem & extensibility | Done |
-| Phase 8 | Edge case testing & coverage hardening | Done |
-| Phase 9 | Structural refactoring & invariant coverage | Done |
-| Track A | Shared contracts (trust tier, model profiles, execution context) | Done |
-| Track B | Model profiles provider plumbing (effective_model flow) | Done |
-| Track C | Public trust enforcement (command gating, doctor, rate-limit defaults) | Done |
-| Track D | Model + settings UX (/model, inline keyboards, /session model display) | Done |
-| Track E | Compact/latency UX (expandable blockquotes, expand/collapse, summary-first, prompt weight) | Done |
-| Track F | Transport reliability (update_id idempotency, busy/queued feedback, polling conflict detection) | Done |
-| Hardening | Resolved execution context enforcement across all runtime paths | Done |
+| PLAN Phase | Scope | Status |
+|------------|-------|--------|
+| A | Core Telegram product loop | Done |
+| B | Safety and trust controls | Done |
+| C | Skills and credentials | Done |
+| D | Output quality and mobile usability | Done |
+| E | Durable runtime and execution context | Done |
+| F | Managed capability distribution | Done |
+| G | Registry and ecosystem | Done |
+| H | Hardening and invariants | Done |
+| I | Public trust profile | Done |
+| IIa | Model profiles — state and plumbing | Done |
+| IIb | Inline-keyboard UX for session settings | Done |
+| III | Compact defaults and perceived latency | Done |
+| IV | Update delivery and burst safety | Done |
+| — | Resolved execution context enforcement hardening | Done |
 
 ---
 
@@ -39,7 +36,7 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **622 pytest tests** + 35 bash tests across 30 entrypoints.
+Current suite: **627 pytest tests** + 35 bash tests across 30 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -58,7 +55,7 @@ Current suite: **622 pytest tests** + 35 bash tests across 30 entrypoints.
 | `test_handlers_ratelimit.py` | 6 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
 | `test_handlers_store.py` | 13 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle, callback flows (skill_add confirm/cancel, skill_update confirm/cancel/non-admin alert, unauthorized alert), markup removal verification. |
 | `test_high_risk.py` | 29 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
-| `test_invariants.py` | 112 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2), update-ID idempotency across all entry points (4: message, decorated command, non-decorated command, callback), mixed ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential check with resolved skills (2), model command/callback parity (4), cross-feature invariants (6: public+model escalation, inspect+model, compact+public, project+policy+approval+model), polling conflict detection (3), prompt weight in /doctor with resolved context (2), _chat_lock queued feedback (3). |
+| `test_invariants.py` | 115 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2), update-ID idempotency across all entry points (4: message, decorated command, non-decorated command, callback), mixed ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential check with resolved skills (2), model command/callback parity (4), cross-feature invariants (6: public+model escalation, inspect+model, compact+public, project+policy+approval+model), polling conflict detection (3), prompt weight in /doctor with resolved context (2), _chat_lock queued feedback (3), contended callback single-answer (3: approval, settings, clear-cred). |
 | `test_ratelimit.py` | 8 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_registry.py` | 8 | Skill registry: index parsing (valid/bad version/non-JSON), search, artifact download/extraction, store integration (digest match/mismatch). |
 | `test_skills.py` | 43 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
@@ -294,20 +291,8 @@ Current suite: **622 pytest tests** + 35 bash tests across 30 entrypoints.
 
 ## Planned Next Sequence
 
-Execution from the current state is:
-
-1. ~~**5.1** — add thin inbound transport normalization~~ Done.
-2. ~~**6.1** — move chat sessions from JSON blobs to SQLite~~ Done.
-3. ~~**5.2** — add webhook mode on top of SQLite + normalized inbound path~~ Done.
-4. **6.2** — add optional per-chat project bindings
-5. **6.3** — add file policy (`inspect|edit`)
-6. **7.1** — add the third-party registry on top of the 4.1 store model
-7. **8.1** — edge case testing and coverage hardening
-
-All planned items are complete. Only `3.2` (usage tracking/billing) remains
-intentionally deferred.
-
-The deferred item `3.2` (usage tracking / billing hooks) remains intentionally out of sequence.
+All build phases (A–IV) are complete. Usage tracking/billing (deferred)
+is the only planned item not yet shipped.
 
 ### Next architectural extension candidate
 
@@ -420,16 +405,11 @@ Systematic audit of `FakeCallbackQuery`, `FakeMessage`, `FakeChat`, and other te
 
 ---
 
-## What's Not Yet Implemented
+## Deferred
 
-| Item | Status | Notes |
-|------|--------|-------|
-| 3.2 Usage tracking & quotas | Deferred | Needs token-cost mapping, billing integration |
-| 5.2 Webhook mode | Done | `BOT_MODE=webhook` uses `run_webhook()`. Single-process, same handler path as polling. |
-| 6.2 Per-chat project model | Done | Named project bindings per chat, provider/pending invalidation on switch, project-scoped file access. |
-| 6.3 File policy | Done | `inspect|edit` per-chat, Codex sandbox override, Claude system prompt enforcement, context hash invalidation. |
-| 7.1 Third-party skill registry | Done | Remote index, artifact download, digest verification, managed store integration. |
-| 8.1 Edge case testing | Done | 29 tests across 4 domains: callbacks, sessions, providers, formatting. |
+| Item | Notes |
+|------|-------|
+| Usage tracking & quotas | Needs token-cost mapping, billing integration. Intentionally deferred. |
 
 ---
 
@@ -571,6 +551,10 @@ updated.
 | Commands and callbacks had no busy/queued feedback | Medium | Only `handle_message` checked `lock.locked()` before queuing | Added lock check with visible feedback to `_command_handler` and `_callback_handler` decorators |
 | Cross-feature invariant matrix incomplete | Medium | Only 2 of 4 PLAN-specified combos tested | Added: compact+public+long reply, project+file_policy+approval+model change |
 | Plan overstated first-progress and prompt-weight criteria | Low-medium | Plan said "1 second" and "token count" but implementation uses immediate messages and char estimates | Updated PLAN to match what was built: immediate pre-invocation messages, char-based prompt size |
-| Polling probe false-warns against own poller | Medium-high | `/doctor` ran `getUpdates` probe while `run_polling()` was the active poller, triggering self-409 | Added `caller_is_polling` parameter; Telegram `/doctor` passes `True` in poll mode, CLI `--doctor` passes `False` |
+| Polling probe false-warns from running bot | Medium-high | `/doctor` ran `getUpdates` probe while the bot was running — self-409 in poll mode, webhook conflict in webhook mode | Renamed to `caller_is_bot`; Telegram `/doctor` always passes `True`, CLI `--doctor` passes `False` (only safe caller) |
 | Queued feedback fired for non-blocking handlers | Medium | Decorator checked `lock.locked()` before handler ran, so `/session` and other lock-free commands showed "queued" then responded immediately | Moved feedback to `_chat_lock` context manager; only handlers that actually block send feedback |
 | `/doctor` prompt weight used raw session, not resolved context | Medium | `collect_doctor_report` computed prompt weight from `session["active_skills"]`, ignoring public trust tier stripping | Moved computation to `cmd_doctor` handler using `_resolve_context` with trust tier |
+| Commands used bare `CHAT_LOCKS` bypassing queued feedback | Medium | 12 command/callback handlers used `async with CHAT_LOCKS[chat_id]` directly instead of `_chat_lock`, so queued feedback never appeared | Converted all 12 sites to `_chat_lock` with appropriate `message=`/`query=` parameter |
+| `handle_callback` answered before entering lock | Medium | `query.answer()` consumed the callback answer slot before `_chat_lock` could send queued feedback | Moved `query.answer()` inside `_chat_lock` for `handle_callback`, `handle_settings_callback`, and `handle_skill_add_callback` |
+| Contended callbacks answered twice | Medium | `_chat_lock` sent queued feedback via `query.answer()`, then the handler called `query.answer()` again after acquiring the lock | `_chat_lock` now yields `sent_feedback` boolean; handlers skip their own `query.answer()` when `True`. 3 contention tests added. |
+| `handle_clear_cred_callback` answered before entering lock | Medium | `query.answer()` called before `_execute_clear_credentials` entered `_chat_lock`, so queued feedback was ineffective under contention | Confirm branches defer `query.answer()` to `_execute_clear_credentials`, which passes `query=` to `_chat_lock` and answers after lock acquisition (skipped when queued feedback already sent). Cancel branch answers immediately (no lock needed). |

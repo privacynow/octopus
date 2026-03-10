@@ -17,6 +17,8 @@ from tests.support.handler_support import (
     FakeProvider,
     FakeUpdate,
     FakeUser,
+    get_callback_data_values,
+    has_markup_removal,
     load_session_disk,
     make_config,
     setup_globals,
@@ -60,6 +62,12 @@ async def test_approval_flow():
         chat_msgs = " ".join(m.get("text", "") for m in chat.sent_messages)
         checks.check_in("preflight approval prompt", "Approve this preflight plan?", chat_msgs)
 
+        # Verify approval buttons have correct callback_data
+        approval_msg = chat.sent_messages[-1]
+        cb_values = get_callback_data_values(approval_msg)
+        checks.check_in("approve button present", "approval_approve", cb_values)
+        checks.check_in("reject button present", "approval_reject", cb_values)
+
         session = load_session_disk(data_dir, 12345, prov)
         checks.check_true("pending_request saved", session.get("pending_request") is not None)
 
@@ -70,8 +78,9 @@ async def test_approval_flow():
 
         await th.handle_callback(cb_update, FakeContext())
 
-        checks.check_true("approve: query answered", query.answered)
+        checks.check("approve: single answer", len(query.answers), 1)
         checks.check_false("approve: not an alert", query.answer_show_alert)
+        checks.check_true("approve: buttons removed", has_markup_removal(cb_msg))
         checks.check("run called after approval", len(prov.run_calls), 1)
         approved_ctx = prov.run_calls[0]["context"]
         checks.check_true("approved run skips permissions", approved_ctx.skip_permissions is True)
@@ -153,6 +162,12 @@ async def test_denial_retry_flow():
         checks.check_in("runtime permission label", "Permission needed", chat_msgs)
         checks.check_in("retry prompt", "Grant access and retry from the beginning", chat_msgs)
 
+        # Verify retry buttons have correct callback_data
+        retry_msg = chat.sent_messages[-1]
+        retry_cbs = get_callback_data_values(retry_msg)
+        checks.check_in("retry_allow button", "retry_allow", retry_cbs)
+        checks.check_in("retry_skip button", "retry_skip", retry_cbs)
+
         session = load_session_disk(data_dir, 12345, prov)
         checks.check_true("pending_request saved", session.get("pending_request") is not None)
         checks.check_true("pending has denials", session["pending_request"].get("denials") is not None)
@@ -164,6 +179,7 @@ async def test_denial_retry_flow():
 
         await th.handle_callback(cb_update, FakeContext())
 
+        checks.check_true("retry: buttons removed", has_markup_removal(cb_msg))
         checks.check("run called twice (after retry)", len(prov.run_calls), 2)
 
         retry_ctx = prov.run_calls[1]["context"]
@@ -207,6 +223,7 @@ async def test_retry_skip():
 
         await th.handle_callback(cb_update, FakeContext())
 
+        checks.check_true("skip: buttons removed", has_markup_removal(cb_msg))
         session = load_session_disk(data_dir, 12345, prov)
         checks.check("pending cleared", session.get("pending_request"), None)
         checks.check("run not called", len(prov.run_calls), 0)
@@ -244,6 +261,7 @@ async def test_stale_context_hash():
         await th.handle_callback(cb_update, FakeContext())
 
         checks.check("run NOT called (stale hash)", len(prov.run_calls), 0)
+        checks.check_true("stale: buttons removed", has_markup_removal(cb_msg))
 
         session = load_session_disk(data_dir, 12345, prov)
         checks.check("pending_request cleared", session.get("pending_request"), None)

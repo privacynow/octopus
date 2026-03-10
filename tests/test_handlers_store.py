@@ -17,6 +17,7 @@ from tests.support.handler_support import (
     FakeProvider,
     FakeUpdate,
     FakeUser,
+    has_markup_removal,
     last_reply,
     last_run_context,
     load_session_disk,
@@ -362,7 +363,7 @@ async def test_skill_update_callback_nonadmin_alert():
             query, cb_msg = await send_callback(
                 th.handle_skill_update_callback, chat, regular, "skill_update_confirm:helper")
 
-            checks.check_true("answer sent", query.answered)
+            checks.check("single answer", len(query.answers), 1)
             checks.check_true("answer is alert", query.answer_show_alert)
             checks.check_in("alert mentions admin", "admin", query.answer_text.lower())
             checks.check("no edit made", len(cb_msg.replies), 0)
@@ -403,8 +404,9 @@ async def test_skill_update_callback_admin_confirm():
             query, cb_msg = await send_callback(
                 th.handle_skill_update_callback, chat, admin, "skill_update_confirm:helper")
 
-            checks.check_true("answered", query.answered)
+            checks.check("single answer", len(query.answers), 1)
             checks.check_false("not alert", query.answer_show_alert)
+            checks.check_true("update: buttons removed", has_markup_removal(cb_msg))
             reply_text = cb_msg.replies[-1].get("edit_text", "") if cb_msg.replies else ""
             checks.check_in("shows update result", "helper", reply_text)
 
@@ -434,7 +436,8 @@ async def test_skill_update_callback_cancel():
             query, cb_msg = await send_callback(
                 th.handle_skill_update_callback, chat, admin, "skill_update_cancel")
 
-            checks.check_true("answered", query.answered)
+            checks.check("single answer", len(query.answers), 1)
+            checks.check_true("cancel: buttons removed", has_markup_removal(cb_msg))
             reply_text = cb_msg.replies[-1].get("edit_text", "") if cb_msg.replies else ""
             checks.check_in("shows cancelled", "cancelled", reply_text.lower())
         finally:
@@ -466,8 +469,9 @@ async def test_skill_add_callback_confirm():
             query, cb_msg = await send_callback(
                 th.handle_skill_add_callback, chat, admin, "skill_add_confirm:helper")
 
-            checks.check_true("answered", query.answered)
+            checks.check("single answer", len(query.answers), 1)
             checks.check_false("not alert", query.answer_show_alert)
+            checks.check_true("confirm: buttons removed", has_markup_removal(cb_msg))
             reply_text = cb_msg.replies[-1].get("edit_text", "") if cb_msg.replies else ""
             checks.check_in("shows activated", "activated", reply_text.lower())
 
@@ -500,7 +504,8 @@ async def test_skill_add_callback_cancel():
             query, cb_msg = await send_callback(
                 th.handle_skill_add_callback, chat, admin, "skill_add_cancel")
 
-            checks.check_true("answered", query.answered)
+            checks.check("single answer", len(query.answers), 1)
+            checks.check_true("cancel: buttons removed", has_markup_removal(cb_msg))
             reply_text = cb_msg.replies[-1].get("edit_text", "") if cb_msg.replies else ""
             checks.check_in("shows cancelled", "cancelled", reply_text.lower())
 
@@ -531,7 +536,7 @@ async def test_callback_unauthorized_alert():
             query, cb_msg = await send_callback(
                 th.handle_callback, chat, stranger, "approval_approve")
 
-            checks.check_true("answered", query.answered)
+            checks.check("single answer", len(query.answers), 1)
             checks.check_true("is alert", query.answer_show_alert)
             checks.check_in("says not authorized", "not authorized", query.answer_text.lower())
             checks.check("no edits", len(cb_msg.replies), 0)

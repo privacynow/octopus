@@ -19,6 +19,7 @@ from tests.support.handler_support import (
     load_session_disk,
     make_config,
     send_command,
+    send_text,
     setup_globals,
     test_data_dir,
 )
@@ -519,6 +520,56 @@ async def test_doctor_no_stale_warning_for_fresh_sessions():
 
 
 run_test("/doctor no stale warning for fresh sessions", test_doctor_no_stale_warning_for_fresh_sessions())
+
+
+async def test_send_file_directive():
+    """Provider response with SEND_FILE: directive delivers the file to chat."""
+    with test_data_dir() as data_dir:
+        cfg = make_config(data_dir, working_dir=data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        # Create a file within the allowed working_dir
+        test_file = data_dir / "output.txt"
+        test_file.write_text("file contents here")
+
+        prov.run_results = [RunResult(text=f"Here is the file\nSEND_FILE: {test_file}")]
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = await send_text(chat, user, "generate a file")
+
+        # Should have a reply_document entry
+        doc_replies = [r for r in msg.replies if r.get("document")]
+        checks.check_true("document sent", len(doc_replies) >= 1)
+
+
+run_test("SEND_FILE directive delivers file", test_send_file_directive())
+
+
+async def test_send_image_directive():
+    """Provider response with SEND_IMAGE: directive delivers the image to chat."""
+    with test_data_dir() as data_dir:
+        cfg = make_config(data_dir, working_dir=data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        # Create a fake image file within the allowed working_dir
+        test_img = data_dir / "chart.png"
+        test_img.write_bytes(b"\x89PNG fake image data")
+
+        prov.run_results = [RunResult(text=f"Here is the chart\nSEND_IMAGE: {test_img}")]
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = await send_text(chat, user, "make a chart")
+
+        # Should have a reply_photo entry
+        photo_replies = [r for r in msg.replies if r.get("photo")]
+        checks.check_true("photo sent", len(photo_replies) >= 1)
+
+
+run_test("SEND_IMAGE directive delivers image", test_send_image_directive())
 
 
 if __name__ == "__main__":

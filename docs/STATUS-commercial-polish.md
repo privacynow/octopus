@@ -22,7 +22,7 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 
 Canonical full-suite runner: `./scripts/test_all.sh`
 
-Current suite: 1,540 passing checks across 24 entrypoints.
+Current suite: 1,580 passing checks across 24 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -31,16 +31,16 @@ Current suite: 1,540 passing checks across 24 entrypoints.
 | `test_codex_provider.py` | 55 | Codex CLI command construction, thread invalidation, progress parsing, health check with real flags. |
 | `test_config.py` | 19 | Config loading, validation, `.env` parsing, rate limit and admin config, BOT_SKILLS validation. |
 | `test_formatting.py` | 297 | Markdown-to-Telegram HTML conversion, balanced HTML splitting, table rendering, directive extraction. |
-| `test_handlers.py` | 51 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings (admin fallback, stale sessions, prompt size). |
+| `test_handlers.py` | 53 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings (admin fallback, stale sessions, prompt size), SEND_FILE/SEND_IMAGE directive delivery. |
 
 | `test_handlers_admin.py` | 12 | `/admin sessions` summary and detail views, access gating, stale skill filtering. |
-| `test_handlers_approval.py` | 55 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL, callback answer verification. |
+| `test_handlers_approval.py` | 63 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL, callback answer verification, button structure validation, markup removal after callbacks. |
 | `test_handlers_codex.py` | 33 | Codex-specific handler behavior: thread invalidation, boot ID, retry semantics, script staging. |
-| `test_handlers_credentials.py` | 178 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection, clear-credentials confirmation ownership, callback answer verification, malformed validate spec resilience. |
+| `test_handlers_credentials.py` | 184 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection, clear-credentials confirmation ownership, callback answer/markup verification, button structure validation, malformed validate spec resilience. |
 | `test_handlers_export.py` | 14 | `/export` command: no history, document generation, access gating. |
 | `test_handlers_output.py` | 20 | Output presentation: `/compact`, `/raw`, table rendering, summarization flows. |
 | `test_handlers_ratelimit.py` | 11 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
-| `test_handlers_store.py` | 43 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle, callback flows (skill_add confirm/cancel, skill_update confirm/cancel/non-admin alert, unauthorized alert). |
+| `test_handlers_store.py` | 47 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle, callback flows (skill_add confirm/cancel, skill_update confirm/cancel/non-admin alert, unauthorized alert), markup removal verification. |
 | `test_high_risk.py` | 78 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
 | `test_ratelimit.py` | 21 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_skills.py` | 235 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
@@ -251,12 +251,16 @@ The deferred item `3.2` (usage tracking / billing hooks) remains intentionally o
 | Doctor runs expensive runtime probe after cheap check fails | Low-medium | Both `/doctor` and `--doctor` always called `check_runtime_health()` even when `check_health()` already found errors (e.g. binary missing) | Short-circuit: skip runtime probes when cheap precheck has failures |
 | `_callback_handler` decorator erased handler-specific callback feedback | Medium | Decorator eagerly called `query.answer()` before handler ran, swallowing per-handler alerts (foreign-user rejection in clear-cred, non-admin rejection in skill-update) | Removed blanket `query.answer()` from decorator; each handler controls its own answer semantics. Restored lost alerts. |
 | `FakeCallbackQuery` discarded answer payload | Medium | Test harness `answer()` only set `answered=True`, discarding `text` and `show_alert` — made callback feedback regression structurally undetectable | `FakeCallbackQuery.answer()` now captures `answer_text` and `answer_show_alert`. Added `send_callback()` test helper. 23 new callback feedback assertions. |
+| `edit_message_reply_markup()` silently discarded on both fakes | High | 17 production calls to remove buttons after callback click — zero test coverage. Buttons failing to disappear would pass all tests. | Both `FakeMessage` and `FakeCallbackQuery` now record the call. `has_markup_removal()` helper. 10 callback paths assert markup removal. |
+| `FakeCallbackQuery.answer()` overwrote on double-call | Medium | If a handler called `query.answer()` twice, the first call's payload (e.g., an alert) would be silently overwritten by the second | Changed to `answers` list with backward-compat properties. All callback tests assert `len(query.answers) == 1`. |
+| Keyboard button callback_data never validated in tests | Medium | Tests checked `"reply_markup" in reply` (key exists) but never verified button content. Wrong callback_data values would route to wrong handler undetected. | Added `get_callback_data_values()` helper. Tests verify exact callback_data for approval, retry, credential-clear buttons. |
+| `SEND_FILE`/`SEND_IMAGE` directive delivery untested | Medium | Full handler path from provider response → directive extraction → `reply_document`/`reply_photo` had zero integration coverage | Added end-to-end tests: provider returns directive text, handler delivers file/image to chat. |
 
 ---
 
 ## Architecture Cleanup
 
-Seven code smells identified and fixed in a single pass. All 1,540 tests pass after each change.
+Seven code smells identified and fixed in a single pass. All tests pass after each change.
 
 | Smell | Fix | Files changed |
 |-------|-----|---------------|
@@ -269,6 +273,33 @@ Seven code smells identified and fixed in a single pass. All 1,540 tests pass af
 | `store._object_dir()` was private but accessed from `skills.py`; `store._parse_skill_md()` duplicated frontmatter parsing | Renamed to `store.object_dir()` (public API). `_parse_skill_md()` delegates to `skills._load_skill_md()`. Removed duplicate `import frontmatter`. | `app/store.py`, `app/skills.py`, 2 test files |
 
 Net result: `telegram_handlers.py` reduced from 2,015 to 1,685 lines. Two new focused modules (`doctor.py`, `skill_commands.py`). Test runner boilerplate eliminated across 23 files.
+
+---
+
+## Test Harness Audit
+
+Systematic audit of `FakeCallbackQuery`, `FakeMessage`, `FakeChat`, and other test fakes to find silent data discards — places where fakes accept production calls but throw away the data, making regressions structurally undetectable.
+
+### Blind spots found and fixed
+
+| Blind spot | Severity | What was invisible | Fix |
+|-----------|----------|-------------------|-----|
+| `edit_message_reply_markup()` silently no-oped on both `FakeMessage` and `FakeCallbackQuery` | High | Buttons not disappearing after callback click (17 production call sites, 0 tests) | Both fakes now record the call in `replies`. Added `has_markup_removal()` helper. 10 callback paths now assert markup removal. |
+| `FakeCallbackQuery.answer()` stored only latest call, not history | Medium | Double `query.answer()` regression would overwrite first (meaningful alert) with second (blank ack) | Changed to `answers` list. Properties provide backward compat. All 10 callback tests now assert `len(query.answers) == 1`. |
+| Keyboard button callback_data never validated | Medium | Wrong `callback_data` values on buttons (routing to wrong handler) would pass tests | Added `get_callback_data_values()` helper. Tests now verify exact callback_data for approval, retry, and credential-clear buttons. |
+| `send_message(reply_markup=)` captured but never asserted | Medium | Approval and permission-retry buttons could vanish from chat without test failure | Approval flow tests now verify button presence and callback_data in `sent_messages`. |
+| `SEND_FILE` / `SEND_IMAGE` directive path untested end-to-end | Medium | Provider returning file/image directives could silently stop delivering files | Added integration tests: provider returns directive → handler calls `reply_document`/`reply_photo` with real files in allowed roots. |
+| `reply_photo()` never exercised in integration | Medium | Image-sending feature had zero handler-level test coverage | Covered by new `SEND_IMAGE` directive test. |
+
+### Confirmed non-issues
+
+| Fake method | Status | Notes |
+|-------------|--------|-------|
+| `FakeChat.send_action()` | Correct no-op | Typing indicators are fire-and-forget |
+| `FakeMessage.delete()` | Well tested | 10+ credential tests verify `.deleted` |
+| `FakeMessage.edit_text()` | Well tested | Heavily used across callback tests |
+| `FakeCallbackQuery.edit_message_text()` | Well tested | Verified in approval and credential tests |
+| `FakeMessage.reply_document()` | Partially tested | Export path covered; directive path now covered |
 
 ---
 

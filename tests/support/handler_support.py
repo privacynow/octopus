@@ -82,7 +82,7 @@ class FakeMessage:
         self.replies.append({"document": True, **kwargs})
 
     async def edit_message_reply_markup(self, **kwargs):
-        pass
+        self.replies.append({"edit_reply_markup": True, **kwargs})
 
 
 class FakeUser:
@@ -104,17 +104,25 @@ class FakeCallbackQuery:
         self.data = data
         self.message = message or FakeMessage()
         self._user = user
-        self.answered = False
-        self.answer_text = None
-        self.answer_show_alert = False
+        self.answers = []
+
+    @property
+    def answered(self):
+        return len(self.answers) > 0
+
+    @property
+    def answer_text(self):
+        return self.answers[-1]["text"] if self.answers else None
+
+    @property
+    def answer_show_alert(self):
+        return self.answers[-1]["show_alert"] if self.answers else False
 
     async def answer(self, text=None, show_alert=False):
-        self.answered = True
-        self.answer_text = text
-        self.answer_show_alert = show_alert
+        self.answers.append({"text": text, "show_alert": show_alert})
 
     async def edit_message_reply_markup(self, reply_markup=None):
-        pass
+        self.message.replies.append({"edit_reply_markup": True, "reply_markup": reply_markup})
 
     async def edit_message_text(self, text, **kwargs):
         self.message.replies.append({"edit_text": text, **kwargs})
@@ -222,6 +230,26 @@ def last_reply(msg):
         return ""
     reply = msg.replies[-1]
     return reply.get("text", reply.get("edit_text", ""))
+
+
+def has_markup_removal(msg_or_replies):
+    """Check if any reply entry is an edit_reply_markup with reply_markup=None."""
+    replies = msg_or_replies if isinstance(msg_or_replies, list) else msg_or_replies.replies
+    return any(r.get("edit_reply_markup") and r.get("reply_markup") is None for r in replies)
+
+
+def get_callback_data_values(reply):
+    """Extract callback_data strings from a reply_markup InlineKeyboardMarkup."""
+    markup = reply.get("reply_markup")
+    if markup is None:
+        return []
+    # InlineKeyboardMarkup.inline_keyboard is a list of rows (lists of buttons)
+    values = []
+    for row in markup.inline_keyboard:
+        for btn in row:
+            if btn.callback_data:
+                values.append(btn.callback_data)
+    return values
 
 
 def last_run_call(provider):

@@ -47,9 +47,33 @@ The setup wizard walks you through:
 3. selecting a provider and model
 4. choosing who can talk to the bot
 5. reviewing the config
-6. optionally launching it as a background service
+6. optionally launching it as a `systemd --user` service
 
 When it finishes, message your bot in Telegram and start using it.
+
+## Running the Bot
+
+The recommended way to run a bot instance is as a `systemd --user` service.
+Each instance becomes its own service:
+
+- `telegram-agent-bot@m1.service`
+- `telegram-agent-bot@m2.service`
+- `telegram-agent-bot@my-claude.service`
+
+Common commands:
+
+```bash
+systemctl --user status telegram-agent-bot@m1.service
+systemctl --user restart telegram-agent-bot@m1.service
+journalctl --user -u telegram-agent-bot@m1.service -f
+```
+
+If `systemd --user` is not available on your machine, you can run an instance
+directly instead:
+
+```bash
+./scripts/run.sh m1
+```
 
 ## Using the Bot
 

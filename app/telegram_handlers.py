@@ -1,6 +1,7 @@
 """Telegram command handlers, message handler, progress display, and app wiring."""
 
 import asyncio
+import contextlib
 import html
 import logging
 import re
@@ -83,6 +84,28 @@ from app.transport import (
 log = logging.getLogger(__name__)
 
 CHAT_LOCKS: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+
+@contextlib.asynccontextmanager
+async def _chat_lock(chat_id: int, *, message=None, query=None):
+    """Acquire the per-chat lock with visible queued feedback.
+
+    If the lock is already held (another request is in-flight), send a
+    visible acknowledgment before blocking.  Only handlers that actually
+    serialize on the lock should use this — lightweight read-only commands
+    like /session should use the lock directly or not at all.
+    """
+    lock = CHAT_LOCKS[chat_id]
+    if lock.locked():
+        if message is not None:
+            await message.reply_text(
+                "<i>Working on your previous request \u2014 yours is queued.</i>",
+                parse_mode=ParseMode.HTML)
+        elif query is not None:
+            await query.answer("Working on your previous request \u2014 yours is queued.")
+    async with lock:
+        yield
+
 
 # These get set by build_application()
 _config: BotConfig | None = None
@@ -223,7 +246,7 @@ async def _public_guard(event, update: Update) -> bool:
 
 
 def _command_handler(fn):
-    """Decorator: dedup → normalize_command → is_allowed gate → queued feedback → call fn(event, update, context)."""
+    """Decorator: dedup → normalize_command → is_allowed gate → call fn(event, update, context)."""
     import functools
     @functools.wraps(fn)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -232,17 +255,12 @@ def _command_handler(fn):
         event = normalize_command(update, context)
         if event is None or not is_allowed(event.user):
             return
-        lock = CHAT_LOCKS[event.chat_id]
-        if lock.locked():
-            await update.effective_message.reply_text(
-                "<i>Working on your previous request — yours is queued.</i>",
-                parse_mode=ParseMode.HTML)
         await fn(event, update, context)
     return wrapper
 
 
 def _callback_handler(fn):
-    """Decorator: dedup → normalize_callback → is_allowed gate → queued feedback → call fn(event, query).
+    """Decorator: dedup → normalize_callback → is_allowed gate → call fn(event, query).
 
     Does NOT call query.answer() — handlers control their own answer semantics
     (some need alerts, some need silent acks, some answer conditionally).
@@ -259,9 +277,6 @@ def _callback_handler(fn):
         if not is_allowed(event.user):
             await query.answer("Not authorized.", show_alert=True)
             return
-        lock = CHAT_LOCKS[event.chat_id]
-        if lock.locked():
-            await query.answer("Working on your previous request — yours is queued.")
         await fn(event, query)
     return wrapper
 
@@ -1069,18 +1084,25 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         session = _load(event.chat_id)
     except (sqlite3.DatabaseError, sqlite3.OperationalError, RuntimeError):
         session = None
+    cfg = _cfg()
     kwargs: dict[str, Any] = {}
     if session is not None:
         kwargs.update(session=session_to_dict(session), user_id=event.user.id,
                       encryption_key=_encryption_key())
-    report = await collect_doctor_report(_cfg(), _prov(), **kwargs)
+    report = await collect_doctor_report(
+        cfg, _prov(), caller_is_polling=(cfg.bot_mode == "poll"), **kwargs)
     parts: list[str] = []
     if report.errors:
         parts.extend(f"\u274c {html.escape(e)}" for e in report.errors)
     if report.warnings:
         parts.extend(f"\u26a0\ufe0f {html.escape(w)}" for w in report.warnings)
-    if report.prompt_weight_chars:
-        parts.append(f"Prompt weight: ~{report.prompt_weight_chars} chars")
+    # Prompt weight from resolved execution context (respects trust tier)
+    if session is not None:
+        from app.skills import build_system_prompt
+        resolved = _resolve_context(session, trust_tier=_trust_tier(event.user))
+        sys_prompt = build_system_prompt(resolved.role, resolved.active_skills)
+        if sys_prompt:
+            parts.append(f"Prompt weight: ~{len(sys_prompt)} chars")
     if parts:
         await update.effective_message.reply_text(
             "\n".join(parts), parse_mode=ParseMode.HTML)
@@ -1594,13 +1616,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             welcome += "\nApproval mode is on \u2014 I'll show a plan before acting."
         await message.chat.send_message(welcome)
 
-    # Busy/queued feedback: if another request is in-flight for this chat, acknowledge
-    lock = CHAT_LOCKS[chat_id]
-    if lock.locked():
-        await message.reply_text("<i>Working on your previous request \u2014 yours is queued.</i>",
-                                 parse_mode=ParseMode.HTML)
-
-    async with lock:
+    async with _chat_lock(chat_id, message=message):
         await message.chat.send_action(ChatAction.TYPING)
         session = _load(chat_id)
 
@@ -1674,7 +1690,7 @@ async def handle_callback(event, query) -> None:
     await query.answer()
     chat_id = event.chat_id
 
-    async with CHAT_LOCKS[chat_id]:
+    async with _chat_lock(chat_id, query=query):
         if event.data == "approval_approve":
             await query.edit_message_reply_markup(reply_markup=None)
             await approve_pending(chat_id, query.message)

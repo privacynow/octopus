@@ -23,7 +23,6 @@ _STALE_SETUP_SECONDS = 600      # 10 minutes
 class DoctorReport:
     errors: list[str] = dataclasses.field(default_factory=list)
     warnings: list[str] = dataclasses.field(default_factory=list)
-    prompt_weight_chars: int = 0
 
 
 async def collect_doctor_report(
@@ -33,11 +32,16 @@ async def collect_doctor_report(
     session: dict[str, Any] | None = None,
     user_id: int | None = None,
     encryption_key: bytes | None = None,
+    caller_is_polling: bool = False,
 ) -> DoctorReport:
     """Run all health checks and return a structured report.
 
     If session/user_id/encryption_key are provided, also validates
     active skills for the caller's chat.
+
+    caller_is_polling: set True when called from within a running poll-mode
+    bot.  This skips the getUpdates conflict probe, which would 409 against
+    the bot's own poller.
     """
     report = DoctorReport()
 
@@ -61,19 +65,15 @@ async def collect_doctor_report(
     if not report.errors:
         report.errors.extend(await provider.check_runtime_health())
 
-    # Per-chat skill validation and prompt weight (only from Telegram /doctor)
+    # Per-chat skill validation (only from Telegram /doctor)
     if session is not None and user_id is not None and encryption_key is not None:
-        from app.skills import validate_active_skills, build_system_prompt
-        active_skills = session.get("active_skills", [])
+        from app.skills import validate_active_skills
         report.errors.extend(validate_active_skills(
-            active_skills,
+            session.get("active_skills", []),
             user_id=user_id,
             data_dir=config.data_dir,
             encryption_key=encryption_key,
         ))
-        sys_prompt = build_system_prompt(session.get("role", ""), active_skills)
-        if sys_prompt:
-            report.prompt_weight_chars = len(sys_prompt)
 
     # Advisory: admin not explicitly set
     total_users = len(config.allowed_user_ids) + len(config.allowed_usernames)
@@ -88,9 +88,12 @@ async def collect_doctor_report(
             "Bot is in polling mode but BOT_WEBHOOK_URL is configured. "
             "If another process is running in webhook mode, updates may conflict. "
             "Use only one delivery mode per bot token.")
-    conflict = await check_polling_conflict(config.telegram_token)
-    if conflict:
-        report.warnings.append(conflict)
+    # Only probe getUpdates when we are NOT the active poller — otherwise
+    # we 409 against ourselves.  CLI --doctor and webhook-mode /doctor are safe.
+    if not caller_is_polling:
+        conflict = await check_polling_conflict(config.telegram_token)
+        if conflict:
+            report.warnings.append(conflict)
 
     # Public mode advisories
     if config.allow_open:

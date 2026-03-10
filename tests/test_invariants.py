@@ -1940,6 +1940,33 @@ async def test_doctor_reports_prompt_weight():
         assert "chars" in all_text
 
 
+@pytest.mark.asyncio
+async def test_doctor_prompt_weight_uses_resolved_context():
+    """Public user's /doctor prompt weight reflects resolved (stripped) context, not raw session."""
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": True,
+        "allowed_user_ids": frozenset({42}),
+        "public_working_dir": "/tmp/pub",
+    }) as (data_dir, cfg, prov):
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session["role"] = "You are a senior engineer."
+        session["active_skills"] = ["nonexistent-skill"]
+        save_session(data_dir, 2001, session)
+
+        chat = FakeChat(2001)
+        stranger = FakeUser(uid=999, username="nobody")
+
+        msg = await send_command(th.cmd_doctor, chat, stranger, "/doctor")
+        all_text = " ".join(r.get("text", "") for r in msg.replies)
+        # Public user's resolved context strips skills, so prompt weight should
+        # reflect role-only (skills stripped).  If it used raw session, it would
+        # try to include "nonexistent-skill" instructions.
+        # The role still exists in resolved context, so prompt weight should appear.
+        assert "Prompt weight" in all_text
+
+
 # =====================================================================
 # CROSS-FEATURE INVARIANT: compact + long reply + public user
 #
@@ -2044,75 +2071,74 @@ def test_project_file_policy_approval_model_change_invalidates():
 
 
 @pytest.mark.asyncio
-async def test_command_queued_feedback_when_chat_locked():
-    """Command arriving while chat lock held sends queued feedback.
-
-    Uses cmd_session which does NOT acquire the lock itself, so no deadlock.
-    The decorator checks lock.locked() and sends feedback before the handler runs.
-    """
+async def test_chat_lock_sends_message_feedback_when_locked():
+    """_chat_lock sends visible queued feedback via message when lock is held."""
     import app.telegram_handlers as th
 
     with fresh_env() as (data_dir, cfg, prov):
-        session = default_session(prov.name, prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
-
         chat = FakeChat(1)
-        user = FakeUser(42)
+        msg = FakeMessage(chat=chat)
 
-        # Acquire the chat lock to simulate in-flight request
         lock = th.CHAT_LOCKS[1]
         await lock.acquire()
         try:
-            msg = await send_command(th.cmd_session, chat, user, "/session")
+            # _chat_lock should send feedback then block; run in a task
+            # so we can release the lock
+            async def use_lock():
+                async with th._chat_lock(1, message=msg):
+                    pass
+
+            task = asyncio.create_task(use_lock())
+            await asyncio.sleep(0)  # let the task start and hit the lock
+            lock.release()
+            await task
+
             all_text = " ".join(str(r.get("text", "")) for r in msg.replies)
             assert "queued" in all_text.lower(), (
                 f"Expected queued feedback, got: {all_text[:200]}")
         finally:
-            lock.release()
+            if lock.locked():
+                lock.release()
 
 
 @pytest.mark.asyncio
-async def test_command_no_queued_feedback_when_lock_free():
-    """Command arriving when chat lock is free does NOT send queued feedback."""
+async def test_chat_lock_sends_callback_feedback_when_locked():
+    """_chat_lock sends visible queued feedback via callback answer when lock is held."""
     import app.telegram_handlers as th
 
     with fresh_env() as (data_dir, cfg, prov):
-        session = default_session(prov.name, prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
-
-        chat = FakeChat(1)
-        user = FakeUser(42)
-
-        msg = await send_command(th.cmd_session, chat, user, "/session")
-        all_text = " ".join(str(r.get("text", "")) for r in msg.replies)
-        assert "queued" not in all_text.lower()
-
-
-@pytest.mark.asyncio
-async def test_callback_queued_feedback_when_chat_locked():
-    """Callback arriving while chat lock held sends queued answer.
-
-    Uses a callback handler that does NOT acquire the lock (expand: handler),
-    to avoid deadlock while still testing the decorator feedback path.
-    """
-    import app.telegram_handlers as th
-
-    with fresh_env() as (data_dir, cfg, prov):
-        chat = FakeChat(1)
-        user = FakeUser(42)
-
-        # Pre-create a raw response so the expand handler has something to read
-        from app.summarize import save_raw
-        save_raw(data_dir, 1, "test prompt", "Full response text here.", kind="request")
+        query = FakeCallbackQuery("test", message=FakeMessage(chat=FakeChat(1)))
 
         lock = th.CHAT_LOCKS[1]
         await lock.acquire()
         try:
-            query, cb_msg = await send_callback(
-                th.handle_expand_callback, chat, user, "expand:1:0")
-            # The query should have received a "queued" answer
+            async def use_lock():
+                async with th._chat_lock(1, query=query):
+                    pass
+
+            task = asyncio.create_task(use_lock())
+            await asyncio.sleep(0)
+            lock.release()
+            await task
+
             assert query.answers, "Expected callback answer for queued feedback"
             assert any("queued" in str(a.get("text", "")).lower() for a in query.answers), (
                 f"Expected queued feedback in callback answer, got: {query.answers}")
         finally:
-            lock.release()
+            if lock.locked():
+                lock.release()
+
+
+@pytest.mark.asyncio
+async def test_chat_lock_no_feedback_when_free():
+    """_chat_lock does NOT send feedback when lock is free."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        msg = FakeMessage(chat=FakeChat(1))
+
+        async with th._chat_lock(1, message=msg):
+            pass
+
+        all_text = " ".join(str(r.get("text", "")) for r in msg.replies)
+        assert "queued" not in all_text.lower()

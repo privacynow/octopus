@@ -5,6 +5,7 @@ import tempfile
 import textwrap
 from pathlib import Path
 
+from app.progress import render as render_progress
 from app.providers.base import RunContext, RunResult
 from app.providers.codex import CodexProvider
 from tests.support.config_support import make_config
@@ -266,60 +267,64 @@ async def test_skip_permissions_resume():
     assert "thread-123" in cmd_resume
 
 
-# -- progress_html --
+# -- _map_event + render_progress --
 
-def test_progress_html_thread_started_suppressed():
+def _render_event(raw_event, is_resume=False, tool_calls=None):
+    """Helper: map raw event → ProgressEvent → rendered HTML (or None)."""
+    evt = CodexProvider._map_event(raw_event, is_resume, tool_calls)
+    if evt is None:
+        return None
+    return render_progress(evt)
+
+
+def test_progress_thread_started_suppressed():
     """Thread-started events should not produce user-visible progress (thread IDs are internal)."""
-    html1 = CodexProvider._progress_html({"type": "thread.started", "thread_id": "abc"}, False)
-    assert html1 is None
+    assert _render_event({"type": "thread.started", "thread_id": "abc"}) is None
 
 
-def test_progress_html_thread_resumed_suppressed():
+def test_progress_thread_resumed_suppressed():
     """Thread-resumed events should not produce user-visible progress."""
-    html2 = CodexProvider._progress_html({"type": "thread.started", "thread_id": "abc"}, True)
-    assert html2 is None
+    assert _render_event({"type": "thread.started", "thread_id": "abc"}, is_resume=True) is None
 
 
-def test_progress_html_turn_started():
-    html3 = CodexProvider._progress_html({"type": "turn.started"}, False)
-    assert "Thinking" in html3
+def test_progress_turn_started():
+    html = _render_event({"type": "turn.started"})
+    assert "Thinking" in html
 
 
-def test_progress_html_command_started():
-    html4 = CodexProvider._progress_html(
-        {"type": "item.started", "item": {"type": "command_execution", "command": "ls -la"}}, False
+def test_progress_command_started():
+    html = _render_event(
+        {"type": "item.started", "item": {"type": "command_execution", "command": "ls -la"}},
     )
-    assert "Running command" in html4
-    assert "ls -la" in html4
+    assert "Running command" in html
+    assert "ls -la" in html
 
 
-def test_progress_html_agent_message():
-    html5 = CodexProvider._progress_html(
-        {"type": "item.completed", "item": {"type": "agent_message", "text": "Done!"}}, False
+def test_progress_agent_message():
+    html = _render_event(
+        {"type": "item.completed", "item": {"type": "agent_message", "text": "Done!"}},
     )
-    assert "Draft reply" in html5
-    assert "Done!" in html5
+    assert "Draft reply" in html
+    assert "Done!" in html
 
 
-def test_progress_html_session_meta_suppressed():
+def test_progress_session_meta_suppressed():
     """Session-meta events should not produce user-visible progress (session IDs are internal)."""
-    html7 = CodexProvider._progress_html(
-        {"type": "session_meta", "payload": {"id": "sess-modern"}}, False
-    )
-    assert html7 is None
+    assert _render_event(
+        {"type": "session_meta", "payload": {"id": "sess-modern"}},
+    ) is None
 
 
-def test_progress_html_event_msg_agent_message():
-    html8 = CodexProvider._progress_html(
+def test_progress_event_msg_agent_message():
+    html = _render_event(
         {"type": "event_msg", "payload": {"type": "agent_message", "message": "modern draft"}},
-        False,
     )
-    assert "Draft reply" in html8
-    assert "modern draft" in html8
+    assert "Draft reply" in html
+    assert "modern draft" in html
 
 
-def test_progress_html_response_item_function_call():
-    html9 = CodexProvider._progress_html(
+def test_progress_response_item_function_call():
+    html = _render_event(
         {
             "type": "response_item",
             "payload": {
@@ -329,16 +334,15 @@ def test_progress_html_response_item_function_call():
                 "arguments": "{\"cmd\":\"git status\"}",
             },
         },
-        False,
-        {},
+        tool_calls={},
     )
-    assert "Running command" in html9
-    assert "git status" in html9
+    assert "Running command" in html
+    assert "git status" in html
 
 
-def test_progress_html_response_item_function_call_output():
+def test_progress_response_item_function_call_output():
     tool_calls = {"call-1": {"name": "exec_command", "command": "git status"}}
-    html9b = CodexProvider._progress_html(
+    html = _render_event(
         {
             "type": "response_item",
             "payload": {
@@ -347,17 +351,16 @@ def test_progress_html_response_item_function_call_output():
                 "output": "M app/providers/codex.py",
             },
         },
-        False,
-        tool_calls,
+        tool_calls=tool_calls,
     )
-    assert "Command finished" in html9b
-    assert "git status" in html9b
-    assert "M app/providers/codex.py" in html9b
+    assert "Command finished" in html
+    assert "git status" in html
+    assert "M app/providers/codex.py" in html
     assert tool_calls == {}
 
 
-def test_progress_html_response_item_assistant_message():
-    html10 = CodexProvider._progress_html(
+def test_progress_response_item_assistant_message():
+    html = _render_event(
         {
             "type": "response_item",
             "payload": {
@@ -367,27 +370,24 @@ def test_progress_html_response_item_assistant_message():
                 "phase": "commentary",
             },
         },
-        False,
     )
-    assert "Draft reply" in html10
-    assert "modern response item draft" in html10
+    assert "Draft reply" in html
+    assert "modern response item draft" in html
 
 
-def test_progress_html_session_configured_suppressed():
+def test_progress_session_configured_suppressed():
     """session_configured events should not produce user-visible progress."""
-    html11 = CodexProvider._progress_html(
+    assert _render_event(
         {
             "type": "event_msg",
             "payload": {"type": "session_configured", "thread_id": "resume-modern"},
         },
-        True,
-    )
-    assert html11 is None
+        is_resume=True,
+    ) is None
 
 
-def test_progress_html_unknown_event():
-    html6 = CodexProvider._progress_html({"type": "unknown"}, False)
-    assert html6 is None
+def test_progress_unknown_event():
+    assert _render_event({"type": "unknown"}) is None
 
 
 # -- helper scripts for _run_cmd tests --

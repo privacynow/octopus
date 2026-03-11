@@ -1929,6 +1929,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         welcome = "I'm ready. Send me a message or type /help to see what I can do."
         if cfg.approval_mode == "on":
             welcome += "\nApproval mode is on \u2014 I'll show a plan before acting."
+        effective_compact = cfg.compact_mode  # no session override yet
+        if effective_compact:
+            welcome += "\nCompact mode is on \u2014 long answers are summarized. Use /compact off for full answers."
         await message.chat.send_message(welcome)
 
     try:
@@ -2240,20 +2243,25 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
 # -- Expand/collapse callback handler --------------------------------------
 
 
+def _parse_expand_collapse_data(data: str) -> tuple[int, int] | None:
+    """Parse 'expand:{chat_id}:{slot}' or 'collapse:{chat_id}:{slot}' callback data."""
+    parts = data.split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        return int(parts[1]), int(parts[2])
+    except ValueError:
+        return None
+
+
 @_callback_handler
 async def handle_expand_callback(event, query) -> None:
     """Handle 'Show full answer' button presses."""
     await query.answer()
-    data = event.data  # e.g. "expand:12345:42"
-    parts = data.split(":")
-    if len(parts) != 3:
+    parsed = _parse_expand_collapse_data(event.data)
+    if parsed is None:
         return
-    _, chat_id_str, slot_str = parts
-    try:
-        target_chat = int(chat_id_str)
-        slot = int(slot_str)
-    except ValueError:
-        return
+    target_chat, slot = parsed
 
     from app.summarize import load_raw_by_slot
     cfg = _cfg()
@@ -2267,19 +2275,25 @@ async def handle_expand_callback(event, query) -> None:
         return
 
     # Replace the compact message with the full response
-    await query.edit_message_reply_markup(reply_markup=None)
     formatted = md_to_telegram_html(raw_text)
-    # If it fits in one message, edit in-place
+    # If it fits in one message, edit in-place with a Collapse button
     if len(formatted) <= 4000:
         try:
             await query.message.edit_text(
                 formatted, parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "Collapse",
+                        callback_data=f"collapse:{target_chat}:{slot}",
+                    ),
+                ]]),
             )
             return
         except BadRequest:
             pass
-    # Too long to edit — send as new messages
+    # Too long to edit — send as new messages, remove button
+    await query.edit_message_reply_markup(reply_markup=None)
     for chunk in split_html(formatted, 4096):
         try:
             await query.message.chat.send_message(
@@ -2289,6 +2303,41 @@ async def handle_expand_callback(event, query) -> None:
         except BadRequest:
             plain = re.sub(r"<[^>]+>", "", chunk)
             await query.message.chat.send_message(plain[:4096])
+
+
+@_callback_handler
+async def handle_collapse_callback(event, query) -> None:
+    """Handle 'Collapse' button presses — re-render compact view."""
+    await query.answer()
+    parsed = _parse_expand_collapse_data(event.data)
+    if parsed is None:
+        return
+    target_chat, slot = parsed
+
+    from app.summarize import load_raw_by_slot
+    cfg = _cfg()
+    raw_text = load_raw_by_slot(cfg.data_dir, target_chat, slot)
+    if raw_text is None:
+        await query.edit_message_reply_markup(reply_markup=None)
+        return
+
+    # Re-render compact version with "Show full answer" button
+    summary, detail = _extract_summary(raw_text)
+    formatted_summary = md_to_telegram_html(summary) if summary else ""
+    button_text = f"{formatted_summary}\n\n<i>Response truncated</i>" if formatted_summary else "<i>Response truncated</i>"
+    try:
+        await query.message.edit_text(
+            button_text[:4000], parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "Show full answer",
+                    callback_data=f"expand:{target_chat}:{slot}",
+                ),
+            ]]),
+        )
+    except BadRequest:
+        await query.edit_message_reply_markup(reply_markup=None)
 
 
 # -- Settings callback handler ---------------------------------------------
@@ -2726,6 +2775,7 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     app.add_handler(CallbackQueryHandler(handle_recovery_callback, pattern=r"^recovery_"))
     app.add_handler(CallbackQueryHandler(handle_settings_callback, pattern=r"^setting_"))
     app.add_handler(CallbackQueryHandler(handle_expand_callback, pattern=r"^expand:"))
+    app.add_handler(CallbackQueryHandler(handle_collapse_callback, pattern=r"^collapse:"))
     app.add_handler(CallbackQueryHandler(handle_skill_add_callback, pattern=r"^skill_add_"))
     app.add_handler(CallbackQueryHandler(handle_skill_update_callback, pattern=r"^skill_update_"))
     app.add_handler(CallbackQueryHandler(handle_clear_cred_callback, pattern=r"^clear_cred_"))

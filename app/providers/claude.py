@@ -1,7 +1,6 @@
 """Claude CLI provider — stream-json, session-id based sessions."""
 
 import asyncio
-import html
 import json
 import logging
 import os
@@ -11,7 +10,11 @@ import uuid
 from typing import Any
 
 from app.config import BotConfig
-from app.formatting import md_to_telegram_html, trim_text
+from app.formatting import trim_text
+from app.progress import (
+    CommandFinish, ContentDelta, Denial, ToolStart,
+    Thinking, render as render_progress,
+)
 from app.providers.base import PreflightContext, ProgressSink, RunContext, RunResult
 
 log = logging.getLogger(__name__)
@@ -140,17 +143,10 @@ class ClaudeProvider:
         tool_activity: list[str] = []
         result_data: dict = {}
 
-        def build_display() -> str:
-            parts = []
-            if tool_activity:
-                parts.append(
-                    "<i>" + html.escape(" \u2192 ".join(tool_activity[-3:])) + "</i>"
-                )
-            if accumulated_text:
-                parts.append(md_to_telegram_html(trim_text(accumulated_text, 3200)))
-            else:
-                parts.append("<i>Thinking...</i>")
-            return "\n".join(parts)
+        async def _emit(evt, *, force: bool = False) -> None:
+            rendered = render_progress(evt)
+            if rendered:
+                await progress.update(rendered, force=force)
 
         while True:
             line = await proc.stdout.readline()
@@ -179,12 +175,18 @@ class ClaudeProvider:
                         cs = getattr(progress, "content_started", None)
                         if cs and not cs.is_set():
                             cs.set()
-                        await progress.update(build_display())
+                        await _emit(ContentDelta(
+                            text=accumulated_text,
+                            tool_activity=tuple(tool_activity),
+                        ))
                 elif itype == "content_block_start":
                     cb = inner.get("content_block", {})
                     if cb.get("type") == "tool_use":
                         tool_activity.append(f"\u2699 {cb.get('name', '?')}")
-                        await progress.update(build_display(), force=True)
+                        await _emit(ContentDelta(
+                            text=accumulated_text,
+                            tool_activity=tuple(tool_activity),
+                        ), force=True)
 
             elif etype == "assistant":
                 msg = event.get("message", {})
@@ -198,7 +200,10 @@ class ClaudeProvider:
                         block.get("content", "")
                     ).lower():
                         tool_activity.append("\u26d4 denied")
-                        await progress.update(build_display(), force=True)
+                        await _emit(ContentDelta(
+                            text=accumulated_text,
+                            tool_activity=tuple(tool_activity),
+                        ), force=True)
 
             elif etype == "result":
                 result_data = event

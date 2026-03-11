@@ -246,6 +246,41 @@ async def test_first_run_welcome():
         assert "Approval mode is on" in sent
 
 
+async def test_first_run_welcome_compact_mode():
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, compact_mode=True)
+        prov = FakeProvider("claude")
+        prov.run_results = [RunResult(text="hi")]
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = FakeMessage(chat=chat, text="hello")
+        await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        sent = " ".join(m.get("text", "") for m in chat.sent_messages)
+        assert "Compact mode is on" in sent
+        assert "/compact off" in sent
+
+
+async def test_first_run_welcome_no_compact():
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, compact_mode=False)
+        prov = FakeProvider("claude")
+        prov.run_results = [RunResult(text="hi")]
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = FakeMessage(chat=chat, text="hello")
+        await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        sent = " ".join(m.get("text", "") for m in chat.sent_messages)
+        assert "Compact mode" not in sent
+
+
 async def test_start_deep_link():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -1092,3 +1127,14 @@ async def test_session_shows_model_profile():
         reply = last_reply(msg)
         assert "balanced" in reply
         assert "claude-sonnet-4-6" in reply
+
+
+async def test_session_shows_prompt_weight():
+    """/session should display prompt weight estimate."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+        reply = last_reply(msg)
+        assert "Prompt weight" in reply

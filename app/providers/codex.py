@@ -1,7 +1,6 @@
 """Codex CLI provider — codex exec --json, thread-id based sessions."""
 
 import asyncio
-import html
 import json
 import logging
 import os
@@ -10,7 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from app.config import BotConfig
-from app.formatting import md_to_telegram_html, trim_text
+from app.formatting import trim_text
+from app.progress import (
+    CommandFinish, CommandStart, DraftReply, Liveness, Thinking,
+    ToolFinish, ToolStart, render as render_progress,
+)
+from app.progress import ProgressEvent
 from app.providers.base import PreflightContext, ProgressSink, RunContext, RunResult
 
 log = logging.getLogger(__name__)
@@ -245,46 +249,19 @@ class CodexProvider:
         return (None, "")
 
     @classmethod
-    def _render_agent_preview(cls, text: str) -> str:
-        preview = trim_text(text.strip(), 700)
-        if preview:
-            return f"<i>Draft reply received:</i>\n\n{md_to_telegram_html(preview)}"
-        return "<i>Reply received.</i>"
-
-    @classmethod
-    def _render_command_start(cls, command: str) -> str:
-        if command:
-            return f"<i>Running command:</i>\n<pre>{html.escape(trim_text(command, 600))}</pre>"
-        return "<i>Running command...</i>"
-
-    @classmethod
-    def _render_command_finish(
-        cls,
-        command: str,
-        *,
-        output: str = "",
-        exit_code: Any = None,
-    ) -> str:
-        if exit_code is None:
-            parts = ["<i>Command finished.</i>"]
-        else:
-            parts = [f"<i>Command finished (exit {html.escape(str(exit_code))}):</i>"]
-        if command:
-            parts[0] += f"\n<pre>{html.escape(trim_text(command, 400))}</pre>"
-        if output:
-            parts.append(f"<i>Output:</i>\n<pre>{html.escape(trim_text(output, 700))}</pre>")
-        return "\n\n".join(parts)
-
-    @classmethod
-    def _progress_html(
+    def _map_event(
         cls,
         event: dict[str, Any],
         is_resume: bool,
         tool_calls: dict[str, dict[str, str]] | None = None,
-    ) -> str | None:
+    ) -> ProgressEvent | None:
+        """Map a raw Codex CLI event to a normalized ProgressEvent.
+
+        Returns None for events that should not produce visible output
+        (internal IDs, session meta, etc.).
+        """
         etype = cls._normalize_type(event.get("type"))
         if etype in {"thread_started", "session_configured"}:
-            # Thread/session IDs are internal — log only, don't show to users.
             tid = cls._extract_thread_id(event)
             if tid:
                 log.debug("Codex thread: %s", tid)
@@ -295,23 +272,24 @@ class CodexProvider:
                 log.debug("Codex session: %s", tid)
             return None
         if etype in {"turn_started", "task_started"}:
-            return "<i>Thinking...</i>"
+            return Thinking()
 
         item = event.get("item", {})
         itype = cls._normalize_type(item.get("type")) if isinstance(item, dict) else ""
 
         if etype == "item_started" and itype == "command_execution":
-            return cls._render_command_start(cls._trimmed_text(item.get("command")))
+            return CommandStart(command=cls._trimmed_text(item.get("command")))
 
         if etype == "item_completed" and itype == "command_execution":
-            return cls._render_command_finish(
-                cls._trimmed_text(item.get("command")),
-                output=cls._trimmed_text(item.get("aggregated_output")),
+            return CommandFinish(
+                command=cls._trimmed_text(item.get("command")),
+                output_preview=cls._trimmed_text(item.get("aggregated_output")),
                 exit_code=item.get("exit_code"),
             )
 
         if etype == "item_completed" and itype == "agent_message":
-            return cls._render_agent_preview(cls._trimmed_text(item.get("text")))
+            text = cls._trimmed_text(item.get("text"))
+            return DraftReply(text=text) if text else None
 
         payload = event.get("payload")
         if not isinstance(payload, dict):
@@ -320,10 +298,11 @@ class CodexProvider:
         ptype = cls._normalize_type(payload.get("type"))
 
         if ptype in {"task_started", "turn_started", "reasoning", "agent_reasoning", "agent_reasoning_delta"}:
-            return "<i>Thinking...</i>"
+            return Thinking()
 
         if etype == "event_msg" and ptype == "agent_message":
-            return cls._render_agent_preview(cls._trimmed_text(payload.get("message")))
+            text = cls._trimmed_text(payload.get("message"))
+            return DraftReply(text=text) if text else None
 
         if etype == "event_msg" and ptype == "session_configured":
             tid = cls._extract_thread_id(event)
@@ -337,7 +316,7 @@ class CodexProvider:
                 or cls._trimmed_text(payload.get("cmd"))
                 or cls._parse_command(payload.get("arguments"))
             )
-            return cls._render_command_start(command)
+            return CommandStart(command=command)
 
         if etype == "event_msg" and ptype == "exec_command_end":
             command = (
@@ -345,9 +324,9 @@ class CodexProvider:
                 or cls._trimmed_text(payload.get("cmd"))
                 or cls._parse_command(payload.get("arguments"))
             )
-            return cls._render_command_finish(
-                command,
-                output=cls._trimmed_text(payload.get("output")),
+            return CommandFinish(
+                command=command,
+                output_preview=cls._trimmed_text(payload.get("output")),
                 exit_code=payload.get("exit_code"),
             )
 
@@ -360,8 +339,8 @@ class CodexProvider:
             if tool_calls is not None and call_id:
                 tool_calls[call_id] = {"name": raw_name, "command": command}
             if name == "exec_command":
-                return cls._render_command_start(command)
-            return f"<i>Using tool:</i>\n<code>{html.escape(trim_text(raw_name, 120))}</code>"
+                return CommandStart(command=command)
+            return ToolStart(name=raw_name)
 
         if etype == "response_item" and ptype == "function_call_output":
             call_id = str(payload.get("call_id") or "")
@@ -369,20 +348,18 @@ class CodexProvider:
             raw_name = call_info.get("name", "")
             output = cls._trimmed_text(payload.get("output"))
             if cls._normalize_type(raw_name) == "exec_command":
-                return cls._render_command_finish(call_info.get("command", ""), output=output)
+                return CommandFinish(command=call_info.get("command", ""), output_preview=output)
             if raw_name:
-                parts = [f"<i>Tool finished:</i>\n<code>{html.escape(trim_text(raw_name, 120))}</code>"]
-                if output:
-                    parts.append(f"<i>Output:</i>\n<pre>{html.escape(trim_text(output, 700))}</pre>")
-                return "\n\n".join(parts)
+                return ToolFinish(name=raw_name, output_preview=output)
+            # Anonymous tool output — render as ToolFinish with empty name
             if output:
-                return f"<i>Tool output:</i>\n<pre>{html.escape(trim_text(output, 700))}</pre>"
+                return ToolFinish(name="", output_preview=output)
 
         if etype == "response_item" and ptype == "message":
             text = cls._assistant_output_text(payload)
             phase = cls._normalize_type(payload.get("phase"))
             if text and phase not in {"final_answer", "task_complete"}:
-                return cls._render_agent_preview(text)
+                return DraftReply(text=text)
 
         return None
 
@@ -453,9 +430,11 @@ class CodexProvider:
                         append_unique(messages, text)
                         final_text = text
 
-                html_update = self._progress_html(event, is_resume, tool_calls)
-                if html_update:
-                    await progress.update(html_update)
+                evt = self._map_event(event, is_resume, tool_calls)
+                if evt is not None:
+                    rendered = render_progress(evt)
+                    if rendered:
+                        await progress.update(rendered)
 
             await proc.wait()
 
@@ -475,7 +454,7 @@ class CodexProvider:
                 # Warn the user and give it one more timeout period.
                 log.info("codex resume still running after %ds — extending for compaction",
                          self.config.timeout_seconds)
-                await progress.update("<i>Still working — this may take a moment...</i>")
+                await progress.update(render_progress(Liveness(detail="Still working — this may take a moment...")))
                 try:
                     await asyncio.wait_for(stdout_task, timeout=self.config.timeout_seconds)
                     stderr = (await stderr_task).decode("utf-8", errors="replace").strip()

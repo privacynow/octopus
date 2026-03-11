@@ -303,6 +303,10 @@ else
         fi
     fi
 
+    # --- Compact mode ---
+    # Default to on for mobile-friendly output
+    set_env_value "$ENV_FILE" "BOT_COMPACT_MODE" "1"
+
     # --- Default skills ---
     echo
     echo "Default skills for new conversations (comma-separated, optional)."

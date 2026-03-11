@@ -2,11 +2,20 @@
 
 Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-10):** User-intent-owned replay — recovered
-> messages after restart are no longer auto-replayed through the provider.
-> Instead, the user sees a recovery notice with Replay/Discard buttons.
-> This prevents blind re-execution of context-dependent messages like
-> "Yes do that" which could re-trigger side effects.
+> **Latest change (2026-03-10):** Phase III coverage hardening —
+> (1) III.3 collapse path: expand shows "Collapse" button, collapse
+> restores compact with "Show full answer" (two-way toggle per plan).
+> (2) III.5 L2 compaction bypass fixed: Codex resume-compaction timeout
+> routes through `render_progress(Liveness(...))`.
+> (3) III.4 contract test: summary-first instruction verified at
+> execution context boundary.
+> (4) Claude progress parity: 5 `_consume_stream` integration tests
+> (text delta, tool activity, denial, content_started, no-internals).
+> (5) `/session` prompt weight assertion added.
+> (6) `test_setup.sh` compact-mode default assertion added.
+>
+> Prior: Progress UX Layer 2, user-intent-owned replay, restart recovery
+> hardening, supersede_recovery guard, ReclaimBlocked exception.
 >
 > Prior: Claude resume timeout fix, work-item claim fix, mid-flight
 > mutation serialization, preflight model parity, export trust
@@ -107,6 +116,9 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 | — | Resolved execution context enforcement hardening | Done |
 | Ext | Multi-worker webhook architecture | Done |
 | III.5 L1 | Progress UX normalization (Layer 1) | Done |
+| III.5 L2 | Progress UX normalization (Layer 2) | Done |
+| III.5b | Provider detail policy | Done (covered by Layer 2) |
+| III.7 | Workflow state-machine extraction | Deferred (conditional) |
 | — | Restart recovery and resume hardening | Done |
 
 ---
@@ -140,26 +152,27 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **736 pytest tests** + 35 bash tests across 32 entrypoints.
+Current suite: **791 pytest tests** + 36 bash tests across 33 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
 | `test_approvals.py` | 6 | Preflight prompt building, denial formatting. |
 | `test_claude_provider.py` | 13 | Claude CLI command construction, API ping health check, file_policy inspect system prompt injection, effective_model override, fallback, and run/preflight command threading. |
-| `test_codex_provider.py` | 37 | Codex CLI command construction, thread invalidation, progress parsing, health check with real flags, file_policy sandbox override (inspect→read-only, edit→default), effective_model override, fallback, and resume command threading. |
+| `test_codex_provider.py` | 37 | Codex CLI command construction, thread invalidation, progress event mapping, health check with real flags, file_policy sandbox override (inspect→read-only, edit→default), effective_model override, fallback, and resume command threading. |
 | `test_config.py` | 23 | Config loading, validation, `.env` parsing, rate limit and admin config, BOT_SKILLS validation, webhook mode validation, `main()` mode selection (poll/webhook), `load_config` webhook env var parsing. |
 | `test_formatting.py` | 42 | Markdown-to-Telegram HTML conversion, balanced HTML splitting, table rendering, directive extraction. |
-| `test_handlers.py` | 51 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings and resilience (admin fallback, stale sessions, prompt size, missing data_dir, corrupt DB, schema version mismatch), SEND_FILE/SEND_IMAGE directive delivery, per-chat project bindings (`/project list/use/clear`, switch invalidation, context hash), file policy (`/policy inspect/edit`, session display, provider context threading, context hash), model profiles (`/model` command, inline keyboard settings callbacks, session display). |
+| `test_handlers.py` | 54 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings and resilience (admin fallback, stale sessions, prompt size, missing data_dir, corrupt DB, schema version mismatch), SEND_FILE/SEND_IMAGE directive delivery, per-chat project bindings (`/project list/use/clear`, switch invalidation, context hash), file policy (`/policy inspect/edit`, session display, provider context threading, context hash), model profiles (`/model` command, inline keyboard settings callbacks, session display). |
 | `test_handlers_admin.py` | 7 | `/admin sessions` summary and detail views, access gating, stale skill filtering. |
 | `test_handlers_approval.py` | 14 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL, callback answer verification, button structure validation, markup removal after callbacks, project-active retry. |
 | `test_handlers_codex.py` | 12 | Codex-specific handler behavior: thread invalidation, boot ID, retry semantics, script staging. |
 | `test_handlers_credentials.py` | 40 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection, clear-credentials confirmation ownership, callback answer/markup verification, button structure validation, malformed validate spec resilience. |
 | `test_handlers_export.py` | 4 | `/export` command: no history, document generation, access gating. |
-| `test_handlers_output.py` | 8 | Output presentation: `/compact`, `/raw`, table rendering, blockquote compact mode, expand/collapse, summary extraction. |
+| `test_handlers_output.py` | 15 | Output presentation: `/compact`, `/raw`, table rendering, blockquote compact mode, button-path threshold (long response forces expand button), expand callback (full response via new messages for long text, in-place edit with Collapse button for short text), collapse callback (restores compact with Show full button), expand→collapse round trip, rotated-buffer expand fallback, summary-first prompt injection at execution context boundary (compact on/off), summary extraction. |
 | `test_handlers_ratelimit.py` | 6 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
 | `test_handlers_store.py` | 13 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle, callback flows (skill_add confirm/cancel, skill_update confirm/cancel/non-admin alert, unauthorized alert), markup removal verification. |
 | `test_high_risk.py` | 29 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
 | `test_invariants.py` | 165 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2), update-ID idempotency across all entry points (4: message, decorated command, non-decorated command, callback), mixed ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential check with resolved skills (2), model command/callback parity (4), cross-feature invariants (6: public+model escalation, inspect+model, compact+public, project+policy+approval+model), polling conflict detection (3), prompt weight in /doctor with resolved context (2), _chat_lock queued feedback (3), contended callback single-answer (3: approval, settings, clear-cred), shutdown-interrupted runs stay claimed for recovery, all signals (rc<0) treated as interrupted (4), provider error feedback (2: empty output, long output), global error handler (3: stale callback, non-Update, real Update notification), decorator exceptions mark work items failed (2: command, callback), summarizer subprocess killed on timeout, callback None-event completes work item, provider-neutral progress wording (5: initial status claude/codex, resume, timeout, terminal), Claude/Codex thinking capitalization (2), Codex thread ID suppression (3), Codex compaction wording, heartbeat idle firing, heartbeat stops on content, heartbeat clean cancellation, Claude content_started signal, Codex content_started signal (final text), Codex content_started on draft text, heartbeat respects recent progress updates, approval initial status neutral. |
+| `test_progress.py` | 45 | Progress event contract tests: render() output for all 9 event types, no-internals-leak checks, Codex _map_event type mapping (thinking, command start/finish, tool start/finish, draft reply, suppressed internals), end-to-end raw-event→render pipeline, tool_activity truncation, empty-text fallback, Claude _consume_stream integration (text delta, tool activity, denial, content_started signal, no-internals parity). |
 | `test_ratelimit.py` | 8 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_registry.py` | 8 | Skill registry: index parsing (valid/bad version/non-JSON), search, artifact download/extraction, store integration (digest match/mismatch). |
 | `test_skills.py` | 44 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
@@ -175,7 +188,7 @@ Current suite: **736 pytest tests** + 35 bash tests across 32 entrypoints.
 | `test_transport.py` | 30 | Inbound transport normalization: user/command/callback/message normalization, frozen dataclasses (tuples not lists), bot-mention stripping, None-user safety for all handler types, behavioral integration (empty-content skip, caption-to-provider), handler integration proving normalized types flow through. |
 | `test_work_queue.py` | 37 | Durable transport layer: update journal idempotency, payload storage/update, enqueue/claim lifecycle, per-chat serialization, cross-chat concurrency, completion states, has_queued_or_claimed lifecycle, stale claim recovery (different worker, expired, fresh), purge old/recent/active, serialization round-trip (message/command/callback), one-work-item-per-update constraint, claim_next_any (empty/single/busy-chat/cross-chat/payload join), worker loop (process/failure/bad-payload/per-chat-ordering), handler payload storage, crash recovery with payload integrity, interrupted worker items left claimed for recovery. |
 | `test_workitem_integration.py` | 22 | Real integration tests for work-item claim serialization and recovery: fresh message does not consume stale recovered item, concurrent messages each claim own item, claim_for_update blocked by existing claimed item, approval callback does not consume stale item, /project switch serializes with in-flight request, preflight and execution use same model, live command blocked by worker-claimed item, live message blocked by worker-claimed item, blocked item processable after worker completes, live callback blocked by worker and query answered, worker_dispatch sends recovery notice (not auto-replay), recovery discard callback finalizes item, recovery replay callback executes original, fresh message supersedes pending_recovery, double-click on recovery buttons is idempotent, failed notice delivery marks item failed via worker_loop, multiple pending_recovery items each addressable by update_id, discard race after replay answers already-handled, replay reclaim blocked by existing claimed item (ReclaimBlocked), blocked replay informs user "in progress", command does not supersede pending_recovery, reclaim distinguishes gone from blocked. Real SQLite, real asyncio locks, real handler code — only fakes are Telegram transport and provider subprocess. |
-| `test_setup.sh` | 35 | Installer/setup wizard flows, provider-pruned config generation. |
+| `test_setup.sh` | 36 | Installer/setup wizard flows, provider-pruned config generation. |
 
 ---
 
@@ -724,7 +737,7 @@ for idle states, internal detail suppression.
 - **Neutral terminal status**: `Completed.` instead of `Done.`
 - **Neutral approval timeout**: `Approval request timed out.` instead of
   `Preflight approval timed out.`
-- **Codex thread/session ID suppression**: `_progress_html` returns `None`
+- **Codex thread/session ID suppression**: `_map_event` returns `None`
   for `thread_started`, `session_meta`, and `session_configured` events.
   Thread IDs go to debug log only.
 - **Codex compaction wording**: `Still working — this may take a moment...`
@@ -803,12 +816,18 @@ for idle states, internal detail suppression.
 
 ## Next Steps
 
-### Near-term: progress UX Layer 2
+### ~~Near-term: progress UX Layer 2~~ (shipped)
 
-PLAN III.5 Layer 2 — unified progress contract. Providers emit
-structured progress events; one shared renderer owns wording,
-formatting, heartbeat, and compact/verbose display. This replaces
-the current pattern of each provider building its own HTML strings.
+PLAN III.5 Layer 2 — unified progress contract. `app/progress.py`
+defines a `ProgressEvent` dataclass family (Thinking, CommandStart,
+CommandFinish, ToolStart, ToolFinish, ContentDelta, DraftReply,
+Denial, Liveness) and a single `render()` function that owns all
+user-facing HTML wording. Both providers now emit events through
+`_map_event` (Codex) or inline event construction (Claude) and
+delegate rendering to `render_progress()`. No provider builds HTML
+strings directly — including the Codex resume-compaction timeout
+path, which now emits `Liveness(...)` through the shared renderer.
+40 contract tests in `test_progress.py`.
 
 ### Deferred: product extensions
 

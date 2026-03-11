@@ -33,6 +33,7 @@ from app.providers.base import (
     RunContext,
     RunResult,
 )
+from app.progress import render as render_progress
 from app.providers.codex import CodexProvider
 from app.session_state import (
     PendingApproval,
@@ -2893,15 +2894,16 @@ async def test_claude_thinking_capitalized():
 
 async def test_codex_thinking_capitalized():
     """Codex provider uses 'Thinking...' for turn/task started events."""
-    html = CodexProvider._progress_html({"type": "turn.started"}, False)
+    evt = CodexProvider._map_event({"type": "turn.started"}, False)
+    html = render_progress(evt)
     assert html == "<i>Thinking...</i>"
 
 
 async def test_codex_no_thread_id_in_progress():
     """Codex thread_started and session_meta events produce no user-visible progress."""
-    assert CodexProvider._progress_html({"type": "thread.started", "thread_id": "t-123"}, False) is None
-    assert CodexProvider._progress_html({"type": "session_meta", "payload": {"id": "s-456"}}, False) is None
-    assert CodexProvider._progress_html(
+    assert CodexProvider._map_event({"type": "thread.started", "thread_id": "t-123"}, False) is None
+    assert CodexProvider._map_event({"type": "session_meta", "payload": {"id": "s-456"}}, False) is None
+    assert CodexProvider._map_event(
         {"type": "event_msg", "payload": {"type": "session_configured", "thread_id": "t-789"}}, True
     ) is None
 

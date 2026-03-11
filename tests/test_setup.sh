@@ -149,6 +149,9 @@ check "model is opus" "$model_val" "claude-opus-4-6"
 users_val=$(grep "^BOT_ALLOWED_USERS=" "$ENV_FILE" | cut -d= -f2)
 check "allowed users set" "$users_val" "@alice,@bob"
 
+compact_val=$(grep "^BOT_COMPACT_MODE=" "$ENV_FILE" | cut -d= -f2)
+check "compact mode defaults to 1" "$compact_val" "1"
+
 echo
 echo "=== Wizard: codex instance ==="
 

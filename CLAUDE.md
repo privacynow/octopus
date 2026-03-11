@@ -64,6 +64,18 @@ change.
     original message are blind to status edits. Use
     `_StickyReplyMessage` (or equivalent) when testing flows that
     create a status message and then update it via progress.
+14. **State-transition bypass.** A new helper that transitions durable
+    state (e.g. `reclaim_for_replay`) may bypass invariants enforced
+    by the existing transition helpers (e.g. `claim_next_any`'s
+    per-chat serialization check). Every new state-transition function
+    must be audited against the full set of invariants on the table it
+    modifies — not just the invariant the new path is about.
+15. **Test boundary mismatch.** Testing `worker_dispatch()` directly
+    when `worker_loop()` owns finalization. The test proved the
+    function's return value was correct but was blind to what the
+    caller does with it. Integration tests for completion semantics
+    must exercise through the real ownership boundary, not one layer
+    below it.
 
 ## Repo-Specific Process
 

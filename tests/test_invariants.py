@@ -2333,17 +2333,27 @@ class _FakeBot:
 
 
 @pytest.mark.asyncio
-async def test_worker_dispatch_message_replay_survives_progress():
-    """worker_dispatch with an InboundMessage calls execute_request, which
-    creates a TelegramProgress from the reply_text return value.  This test
-    proves the full path works — _BotMessage.reply_text() must return a
-    message object that TelegramProgress can call edit_text() on."""
+async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
+    """worker_dispatch with an InboundMessage must send a recovery notice
+    with Replay/Discard buttons instead of auto-replaying through the
+    provider.  The item transitions to pending_recovery and PendingRecovery
+    is raised so worker_loop skips completion."""
     import app.telegram_handlers as th
     from app.transport import InboundMessage, InboundUser
+    from app.work_queue import PendingRecovery, record_and_enqueue, _transport_db
 
     with fresh_env(config_overrides={
         "allowed_user_ids": frozenset({42}),
     }) as (data_dir, cfg, prov):
+        # Create a real claimed work item in the DB.
+        _, item_id = record_and_enqueue(data_dir, 9999, 12345, 42, "message")
+        conn = _transport_db(data_dir)
+        conn.execute(
+            "UPDATE work_items SET state = 'claimed', worker_id = 'test' WHERE id = ?",
+            (item_id,),
+        )
+        conn.commit()
+
         bot = _FakeBot()
         th._bot_instance = bot
         try:
@@ -2353,17 +2363,26 @@ async def test_worker_dispatch_message_replay_survives_progress():
                 text="replay this message",
                 attachments=(),
             )
-            item = {"chat_id": 12345, "update_id": 9999, "id": "test-item"}
+            item = {"chat_id": 12345, "update_id": 9999, "id": item_id}
 
-            await th.worker_dispatch("message", event, item)
+            with pytest.raises(PendingRecovery):
+                await th.worker_dispatch("message", event, item)
 
-            # Provider was called — replay survived TelegramProgress
-            assert len(prov.run_calls) == 1, (
-                f"Expected 1 provider call, got {len(prov.run_calls)}"
+            # Provider must NOT have been called — no auto-replay.
+            assert len(prov.run_calls) == 0, (
+                f"Expected 0 provider calls, got {len(prov.run_calls)}"
             )
-            # Bot sent the "Replaying…" notification
-            replay_msgs = [s for s in bot.sent if "Replaying" in s.get("text", "")]
-            assert replay_msgs, "Expected 'Replaying your request' notification"
+            # Bot sent the recovery notice with buttons.
+            notice_msgs = [s for s in bot.sent if "interrupted" in s.get("text", "")]
+            assert notice_msgs, "Expected recovery notice message"
+            assert "replay_markup" in notice_msgs[0] or notice_msgs[0].get("reply_markup"), (
+                "Expected inline keyboard with Replay/Discard buttons"
+            )
+            # Work item is now pending_recovery.
+            row = conn.execute(
+                "SELECT state FROM work_items WHERE id = ?", (item_id,)
+            ).fetchone()
+            assert row["state"] == "pending_recovery"
         finally:
             th._bot_instance = None
 
@@ -3256,20 +3275,16 @@ async def test_content_first_update_bypasses_rate_limit():
 # =====================================================================
 
 @pytest.mark.asyncio
-async def test_worker_replay_interrupted_returns_normally():
-    """If the provider is interrupted during worker replay (second
-    interruption), worker_dispatch returns normally so worker_loop
-    marks the item done — preventing an infinite boot loop where the
-    same recovered item keeps getting interrupted by restarts."""
+async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
+    """worker_dispatch for a disallowed user returns normally without
+    sending a recovery notice — the item completes silently."""
     import app.telegram_handlers as th
     from app.transport import InboundMessage, InboundUser
 
     with fresh_env(config_overrides={
-        "allowed_user_ids": frozenset({42}),
+        "allowed_user_ids": frozenset({99}),  # user 42 is not allowed
+        "allow_open": False,
     }) as (data_dir, cfg, prov):
-        # Provider returns interrupted signal
-        prov.run_results = [RunResult(text="killed", returncode=-15)]
-
         bot = _FakeBot()
         th._bot_instance = bot
         try:
@@ -3281,56 +3296,44 @@ async def test_worker_replay_interrupted_returns_normally():
             )
             item = {"chat_id": 12345, "update_id": 8888, "id": "replay-item"}
 
-            # Should NOT raise — returns normally so worker_loop can finalize
+            # Should return normally (not raise PendingRecovery)
             await th.worker_dispatch("message", event, item)
 
-            # Must have notified the user to re-send
-            resend_msgs = [s for s in bot.sent if "re-send" in s.get("text", "")]
-            assert resend_msgs, (
-                "Expected 're-send your message' notification on replay interruption"
-            )
-            # Must NOT have sent the generic apology
-            apology_msgs = [s for s in bot.sent if "couldn\u2019t recover" in s.get("text", "")]
-            assert not apology_msgs, (
-                "LeaveClaimed during replay should use the 're-send' message, "
-                "not the generic apology"
-            )
+            # No notice sent, no provider call
+            assert len(bot.sent) == 0
+            assert len(prov.run_calls) == 0
         finally:
             th._bot_instance = None
 
 
 @pytest.mark.asyncio
-async def test_worker_replay_failure_raises_for_worker():
-    """If replay raises a non-LeaveClaimed exception, worker_dispatch
-    re-raises it so worker_loop can mark the item failed (not done)."""
+async def test_worker_dispatch_command_still_notifies():
+    """worker_dispatch for InboundCommand still sends a notification
+    that the command was lost (commands are not replay-safe)."""
     import app.telegram_handlers as th
-    from app.transport import InboundMessage, InboundUser
+    from app.transport import InboundCommand, InboundUser
 
     with fresh_env(config_overrides={
         "allowed_user_ids": frozenset({42}),
     }) as (data_dir, cfg, prov):
-        # Make the provider raise an unexpected error
-        async def exploding_run(*args, **kwargs):
-            raise RuntimeError("provider exploded")
-        prov.run = exploding_run
-
         bot = _FakeBot()
         th._bot_instance = bot
         try:
-            event = InboundMessage(
+            event = InboundCommand(
                 user=InboundUser(id=42, username="alice"),
                 chat_id=12345,
-                text="replay this",
-                attachments=(),
+                command="new",
+                args="",
             )
-            item = {"chat_id": 12345, "update_id": 7777, "id": "replay-item"}
+            item = {"chat_id": 12345, "update_id": 7777, "id": "cmd-item"}
 
-            with pytest.raises(RuntimeError, match="provider exploded"):
-                await th.worker_dispatch("message", event, item)
+            await th.worker_dispatch("command", event, item)
 
-            # Apology should still be sent (best-effort user notification)
-            apology_msgs = [s for s in bot.sent if "couldn\u2019t recover" in s.get("text", "")]
-            assert apology_msgs, "Expected apology message on replay failure"
+            # Notification about interrupted command
+            cmd_msgs = [s for s in bot.sent if "interrupted" in s.get("text", "")]
+            assert cmd_msgs, "Expected interrupted-command notification"
+            # No provider call
+            assert len(prov.run_calls) == 0
         finally:
             th._bot_instance = None
 

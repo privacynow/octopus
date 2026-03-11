@@ -176,7 +176,7 @@ class ClaimBlocked(Exception):
 
 @contextlib.asynccontextmanager
 async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int | None = None,
-                     worker_item: dict | None = None):
+                     worker_item: dict | None = None, supersede_recovery: bool = False):
     """Acquire the per-chat lock with visible queued feedback.
 
     If the lock is already held (another request is in-flight), send a
@@ -245,6 +245,11 @@ async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int |
 
         item_id = item["id"] if item else None
         claimed_update_id = item["update_id"] if item else None
+        # Fresh message supersedes any pending_recovery for this chat.
+        # Only handle_message passes supersede_recovery=True; commands
+        # like /approval and /new must NOT supersede recovery items.
+        if item_id and supersede_recovery:
+            work_queue.supersede_pending_recovery(data_dir, chat_id)
         try:
             yield sent_feedback
         except work_queue.LeaveClaimed:
@@ -496,6 +501,10 @@ def _callback_handler(fn):
             await fn(event, query)
         except ClaimBlocked:
             _pending_work_items.pop(uid, None)
+            try:
+                await query.answer("Working on your previous request — yours is queued.")
+            except Exception:
+                pass
             return
         except Exception:
             _complete_pending_work_item(uid, state="failed")
@@ -1923,7 +1932,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await message.chat.send_message(welcome)
 
     try:
-        async with _chat_lock(chat_id, message=message, update_id=update.update_id):
+        async with _chat_lock(chat_id, message=message, update_id=update.update_id,
+                              supersede_recovery=True):
             await message.chat.send_action(ChatAction.TYPING)
             session = _load(chat_id)
 
@@ -2057,6 +2067,174 @@ async def handle_callback(event, query) -> None:
                 skip_permissions=True,
                 trust_tier=trust_tier,
             )
+
+
+# -- Recovery replay/discard callback handler --------------------------------
+
+
+async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle Replay / Discard buttons from post-restart recovery notices.
+
+    This handler bypasses ``_callback_handler`` because:
+    - The callback's own update_id should not create a work item.
+    - Replay creates a fresh execution with ``_chat_lock`` using the
+      recovered item, not the callback's update.
+    """
+    query = update.callback_query
+    user = _to_inbound_user(update.effective_user)
+    if user is None or not is_allowed(user):
+        await query.answer("Not authorized.", show_alert=True)
+        return
+
+    data = query.data or ""
+    parts = data.split(":", 1)
+    if len(parts) != 2:
+        await query.answer("Invalid recovery action.")
+        return
+    action, update_id_str = parts
+    try:
+        update_id = int(update_id_str)
+    except (ValueError, TypeError):
+        await query.answer("Invalid recovery action.")
+        return
+
+    chat_id = update.effective_chat.id
+    data_dir = _cfg().data_dir
+
+    # Find the pending_recovery item for this chat + update_id.
+    recovery_item = work_queue.get_pending_recovery(data_dir, chat_id, update_id=update_id)
+    if recovery_item is None:
+        # Already handled (double-click, superseded, etc.) — idempotent.
+        await query.answer("This recovery has already been handled.")
+        return
+
+    # -- Discard path --
+    if action == "recovery_discard":
+        if not work_queue.finalize_recovery(data_dir, recovery_item["id"], disposition="discarded"):
+            # Lost race to replay/supersede/another discard.
+            await query.answer("This recovery has already been handled.")
+            return
+        await query.answer("Discarded.")
+        try:
+            await query.edit_message_text(
+                "<i>Recovered request discarded.</i>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+        return
+
+    # -- Replay path --
+    if action != "recovery_replay":
+        await query.answer("Unknown action.")
+        return
+
+    await query.answer("Replaying\u2026")
+
+    # Reclaim the item for replay execution.
+    try:
+        item = work_queue.reclaim_for_replay(data_dir, recovery_item["id"], _boot_id)
+    except work_queue.ReclaimBlocked:
+        # Another request is in progress — item is still pending_recovery.
+        try:
+            await query.edit_message_text(
+                "<i>Another request is in progress \u2014 try again shortly.</i>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+        return
+    if item is None:
+        # Race: already handled between our check and reclaim.
+        try:
+            await query.edit_message_text(
+                "<i>This recovery has already been handled.</i>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+        return
+
+    # Retrieve original payload and deserialize.
+    from app.transport import deserialize_inbound, InboundMessage
+    payload_str = item.get("payload") or work_queue.get_update_payload(data_dir, update_id)
+    if not payload_str:
+        work_queue.complete_work_item(data_dir, item["id"], state="failed", error="payload_missing")
+        try:
+            await query.edit_message_text(
+                "<i>Could not retrieve the original request.</i>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+        return
+
+    try:
+        event = deserialize_inbound("message", payload_str)
+    except Exception:
+        work_queue.complete_work_item(data_dir, item["id"], state="failed", error="deserialize_error")
+        try:
+            await query.edit_message_text(
+                "<i>Could not replay this request.</i>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+        return
+
+    if not isinstance(event, InboundMessage):
+        work_queue.complete_work_item(data_dir, item["id"], state="failed", error="not_message")
+        try:
+            await query.edit_message_text(
+                "<i>Could not replay this request type.</i>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+        return
+
+    # Update the notice to show replay is in progress.
+    try:
+        await query.edit_message_text(
+            "<i>Replaying your request\u2026</i>",
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception:
+        pass
+
+    # Execute through _chat_lock with worker_item (lock-only, no claiming).
+    prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
+    trust = _trust_tier(event.user)
+    message = _BotMessage(_bot_instance, chat_id)
+    try:
+        async with _chat_lock(chat_id, message=message, worker_item=item):
+            session = _load(chat_id)
+            if session.approval_mode == "on":
+                await request_approval(
+                    chat_id, prompt, image_paths, list(event.attachments),
+                    message, request_user_id=event.user.id, trust_tier=trust,
+                )
+            else:
+                await execute_request(
+                    chat_id, prompt, image_paths, message,
+                    request_user_id=event.user.id, trust_tier=trust,
+                )
+        work_queue.complete_work_item(data_dir, item["id"], state="done")
+    except work_queue.LeaveClaimed:
+        # Replay interrupted by another restart — item stays claimed.
+        # Next boot will recover it and send a new notice.
+        log.warning("Replay interrupted for chat %d; item stays claimed for re-recovery", chat_id)
+    except Exception:
+        log.exception("Replay failed for chat %d", chat_id)
+        work_queue.complete_work_item(data_dir, item["id"], state="failed",
+                                       error="replay_failed")
+        try:
+            await _bot_instance.send_message(
+                chat_id,
+                "Sorry, replaying your recovered request failed. Please re-send your message.",
+            )
+        except Exception:
+            pass
 
 
 # -- Expand/collapse callback handler --------------------------------------
@@ -2457,57 +2635,38 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
     bot = _bot_instance
 
     if isinstance(event, InboundMessage):
-        log.info("Worker replaying recovered message for chat %d (update %s)",
+        log.info("Worker sending recovery notice for chat %d (update %s)",
                  chat_id, item.get("update_id"))
         if not is_allowed(event.user):
             return
-        prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
-        trust = _trust_tier(event.user)
-        message = _BotMessage(bot, chat_id)
+        update_id = item.get("update_id", 0)
+        original_text = event.text or ""
+        preview = html.escape(original_text[:200] + ("\u2026" if len(original_text) > 200 else ""))
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("\u25b6\ufe0f Replay request", callback_data=f"recovery_replay:{update_id}"),
+            InlineKeyboardButton("\u2716 Discard", callback_data=f"recovery_discard:{update_id}"),
+        ]])
         try:
             await bot.send_message(
                 chat_id,
-                "<i>Replaying your request after restart\u2026</i>",
+                "<i>Your previous request was interrupted by a restart:</i>\n\n"
+                f"{preview}\n\n"
+                "Would you like to replay it or discard?",
                 parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
             )
-            async with _chat_lock(chat_id, message=message, worker_item=item):
-                session = _load(chat_id)
-                if session.approval_mode == "on":
-                    await request_approval(
-                        chat_id, prompt, image_paths, list(event.attachments),
-                        message, request_user_id=event.user.id, trust_tier=trust,
-                    )
-                else:
-                    await execute_request(
-                        chat_id, prompt, image_paths, message,
-                        request_user_id=event.user.id, trust_tier=trust,
-                    )
-        except work_queue.LeaveClaimed:
-            # Provider was interrupted again during replay (e.g. another
-            # restart).  This item already survived one recovery — keeping
-            # it claimed would create an infinite boot loop.  Accept the
-            # loss and let worker_loop finalize it.
-            log.warning("Recovered replay interrupted again for chat %d; giving up", chat_id)
-            try:
-                await bot.send_message(
-                    chat_id,
-                    "Your recovered request was interrupted again during replay. "
-                    "Please re-send your message.",
-                )
-            except Exception:
-                pass
-            return
         except Exception:
-            log.exception("Worker replay failed for chat %d", chat_id)
-            try:
-                await bot.send_message(
-                    chat_id,
-                    "Sorry, I couldn\u2019t recover your previous request after restart.",
-                )
-            except Exception:
-                pass
+            # Notice never reached the user — do NOT move to pending_recovery.
+            # Re-raise so worker_loop marks the item failed (not done).
+            # The user never saw buttons; the item must not look like it
+            # completed successfully.
+            log.exception("Failed to send recovery notice for chat %d", chat_id)
             raise
-        return
+        # Notice delivered — transition to pending_recovery.
+        # Worker_loop skips completion (PendingRecovery).
+        data_dir = _cfg().data_dir
+        work_queue.mark_pending_recovery(data_dir, item["id"])
+        raise work_queue.PendingRecovery(item["id"])
 
     if isinstance(event, (InboundCommand, InboundCallback)):
         log.info("Worker recovered orphaned %s for chat %d (update %s)",
@@ -2564,6 +2723,7 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     app.add_handler(CommandHandler("export", cmd_export))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CallbackQueryHandler(handle_callback, pattern=r"^(retry_|approval_)"))
+    app.add_handler(CallbackQueryHandler(handle_recovery_callback, pattern=r"^recovery_"))
     app.add_handler(CallbackQueryHandler(handle_settings_callback, pattern=r"^setting_"))
     app.add_handler(CallbackQueryHandler(handle_expand_callback, pattern=r"^expand:"))
     app.add_handler(CallbackQueryHandler(handle_skill_add_callback, pattern=r"^skill_add_"))

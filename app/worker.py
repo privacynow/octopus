@@ -79,6 +79,9 @@ async def worker_loop(
                 try:
                     await dispatch(kind, event, item)
                     work_queue.complete_work_item(data_dir, item_id, state="done")
+                except work_queue.PendingRecovery:
+                    log.info("Item %s moved to pending_recovery; user will replay or discard",
+                             item_id)
                 except work_queue.LeaveClaimed:
                     log.info("Worker interrupted processing item %s; leaving claimed for recovery",
                              item_id)

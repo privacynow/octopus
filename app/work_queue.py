@@ -32,6 +32,24 @@ class LeaveClaimed(Exception):
     """
 
 
+class PendingRecovery(Exception):
+    """Control-flow signal: item transitioned to ``pending_recovery``.
+
+    Raised by ``worker_dispatch`` after sending a recovery notice to the user.
+    The worker loop must skip completion — the item is now owned by the user's
+    explicit replay/discard choice.
+    """
+
+
+class ReclaimBlocked(Exception):
+    """The item exists in ``pending_recovery`` but cannot be reclaimed.
+
+    Raised by ``reclaim_for_replay`` when another item for the same chat
+    is already claimed.  Distinct from returning None (item gone/handled)
+    so callers can show an appropriate message to the user.
+    """
+
+
 _CREATE_SQL = """\
 CREATE TABLE IF NOT EXISTS updates (
     update_id   INTEGER PRIMARY KEY,
@@ -379,6 +397,152 @@ def get_update_payload(data_dir: Path, update_id: int) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Pending recovery (user-intent-owned replay)
+# ---------------------------------------------------------------------------
+
+def mark_pending_recovery(data_dir: Path, item_id: str) -> None:
+    """Transition a claimed item to ``pending_recovery``.
+
+    The item is waiting for the user to explicitly replay or discard it.
+    This is a non-blocking state: fresh messages for the same chat can
+    still be claimed and processed normally.
+    """
+    conn = _transport_db(data_dir)
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "UPDATE work_items SET state = 'pending_recovery', completed_at = ? "
+        "WHERE id = ? AND state = 'claimed'",
+        (now, item_id),
+    )
+    conn.commit()
+
+
+def get_pending_recovery(
+    data_dir: Path, chat_id: int, update_id: int | None = None,
+) -> dict[str, Any] | None:
+    """Get a pending_recovery item for a chat.
+
+    When ``update_id`` is provided, returns the specific item for that
+    update (used by callback handlers where the button encodes the
+    update_id).  Otherwise returns the newest pending_recovery item.
+
+    Returns the item dict with joined update payload, or None.
+    """
+    conn = _transport_db(data_dir)
+    if update_id is not None:
+        row = conn.execute(
+            "SELECT w.*, u.kind, u.payload FROM work_items w "
+            "JOIN updates u ON w.update_id = u.update_id "
+            "WHERE w.chat_id = ? AND w.update_id = ? AND w.state = 'pending_recovery'",
+            (chat_id, update_id),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT w.*, u.kind, u.payload FROM work_items w "
+            "JOIN updates u ON w.update_id = u.update_id "
+            "WHERE w.chat_id = ? AND w.state = 'pending_recovery' "
+            "ORDER BY w.created_at DESC LIMIT 1",
+            (chat_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def supersede_pending_recovery(data_dir: Path, chat_id: int) -> int:
+    """Finalize any pending_recovery items for a chat as superseded.
+
+    Called when a fresh message arrives — the user chose to move on
+    rather than replay the interrupted request.  Returns the number
+    of items superseded.
+    """
+    conn = _transport_db(data_dir)
+    now = datetime.now(timezone.utc).isoformat()
+    cursor = conn.execute(
+        "UPDATE work_items SET state = 'done', completed_at = ?, error = 'superseded' "
+        "WHERE chat_id = ? AND state = 'pending_recovery'",
+        (now, chat_id),
+    )
+    count = cursor.rowcount
+    conn.commit()
+    if count:
+        log.info("Superseded %d pending_recovery items for chat %d", count, chat_id)
+    return count
+
+
+def finalize_recovery(
+    data_dir: Path, item_id: str, disposition: str = "replayed",
+) -> bool:
+    """Finalize a pending_recovery item with the given disposition.
+
+    Returns True if the item was in pending_recovery and was finalized,
+    False if it was already handled (idempotent).
+    """
+    conn = _transport_db(data_dir)
+    now = datetime.now(timezone.utc).isoformat()
+    cursor = conn.execute(
+        "UPDATE work_items SET state = 'done', completed_at = ?, error = ? "
+        "WHERE id = ? AND state = 'pending_recovery'",
+        (now, disposition, item_id),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def reclaim_for_replay(data_dir: Path, item_id: str, worker_id: str) -> dict[str, Any] | None:
+    """Transition a pending_recovery item back to claimed for replay.
+
+    Enforces the per-chat single-claimed invariant: if another item for
+    the same chat is already claimed, the reclaim is rejected (returns
+    None).  This mirrors the guard in ``claim_for_update`` and
+    ``claim_next_any``.
+
+    Returns the item dict if successful, None if the item is no longer
+    in pending_recovery or already handled.  Raises ``ReclaimBlocked``
+    if the item exists but another item for the same chat is claimed.
+    """
+    conn = _transport_db(data_dir)
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        # Look up the item and its chat_id.
+        row = conn.execute(
+            "SELECT id, chat_id FROM work_items WHERE id = ? AND state = 'pending_recovery'",
+            (item_id,),
+        ).fetchone()
+        if row is None:
+            conn.execute("COMMIT")
+            return None
+        chat_id = row["chat_id"]
+        # Per-chat single-claimed invariant: reject if another item is claimed.
+        has_claimed = conn.execute(
+            "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
+            (chat_id,),
+        ).fetchone()
+        if has_claimed:
+            conn.execute("COMMIT")
+            blocked = True
+        else:
+            blocked = False
+            conn.execute(
+                "UPDATE work_items SET state = 'claimed', worker_id = ?, "
+                "claimed_at = ?, completed_at = NULL "
+                "WHERE id = ?",
+                (worker_id, now, item_id),
+            )
+            conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    if blocked:
+        raise ReclaimBlocked(item_id)
+    row = conn.execute(
+        "SELECT w.*, u.kind, u.payload FROM work_items w "
+        "JOIN updates u ON w.update_id = u.update_id WHERE w.id = ?",
+        (item_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
 # Recovery and retention
 # ---------------------------------------------------------------------------
 
@@ -423,7 +587,7 @@ def purge_old(data_dir: Path, older_than_hours: int = 24) -> int:
     cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
 
     cursor = conn.execute(
-        "DELETE FROM work_items WHERE state IN ('done', 'failed') AND created_at < ?",
+        "DELETE FROM work_items WHERE state IN ('done', 'failed', 'pending_recovery') AND created_at < ?",
         (cutoff_iso,),
     )
     deleted_items = cursor.rowcount

@@ -69,6 +69,17 @@ If you cannot fill this out, you are not ready to code.
    error unless the provider contract proves that error is specific
    enough. If the signal is ambiguous, the task is still a design
    problem, not ready for a fix.
+9. **New state transitions must satisfy existing invariants.** When
+   adding a function that writes to a shared table (e.g. work_items),
+   audit it against every invariant the existing writers enforce. If
+   `claim_next_any` enforces per-chat single-claimed, then
+   `reclaim_for_replay` must enforce it too. The new path does not
+   get an exemption just because it serves a different feature.
+10. **Test through the real owner, not one layer below.** If
+    `worker_loop` owns finalization after `worker_dispatch` returns,
+    testing `worker_dispatch` alone proves nothing about what state
+    the item ends up in. The test must exercise through the boundary
+    that owns the outcome the user depends on.
 
 ### After coding: completion criteria
 

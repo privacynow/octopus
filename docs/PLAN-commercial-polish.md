@@ -904,6 +904,231 @@ Acceptance:
 - normal user progress does not expose provider names or thread/session ids
 - prompt weight is observable in `/session` and `/doctor`
 
+#### III.7 Follow-on Hardening: targeted workflow-state-machine extraction
+
+This is the next architectural hardening item after the progress/liveness work
+is stable. It is not a product feature. It is an internal reliability and
+maintainability investment.
+
+Important framing:
+
+- this is not a recommendation to rewrite the whole bot around a generic state
+  machine library
+- this is not justified by direct user-visible feature payoff
+- this is only worth doing if restart/recovery/approval/orchestration bugs keep
+  consuming review time and operator trust
+
+##### Problem statement
+
+Several parts of the bot are already acting like state machines, but they are
+currently expressed implicitly across handlers, queue helpers, worker code,
+and session mutations:
+
+- work-item lifecycle:
+  - `queued`
+  - `claimed`
+  - `pending_recovery`
+  - terminal outcomes like `done` and `failed`
+- pending request lifecycle:
+  - no pending request
+  - pending approval
+  - pending retry
+  - cleared / invalidated / executed
+- restart recovery lifecycle:
+  - interrupted
+  - captured durably
+  - awaiting user choice
+  - replayed / discarded / superseded / failed
+
+The current pain is not that the states are unknown. The pain is that:
+
+- transition rules are spread across multiple modules
+- completion ownership is easy to get wrong
+- second-order failure paths are easy to miss:
+  - recovery interrupted again
+  - recovery notice delivery failure
+  - replay blocked by another claimed item
+  - stale callback or duplicate click
+- handler code still mixes ingress adaptation, UX, and durable transition logic
+
+That is why fixes can look locally correct but still leave contract bugs at the
+durable boundary.
+
+##### Decision
+
+If this work is taken on, the approach should be narrow and contract-first:
+
+- extract only the workflows that are already behaving like explicit durable
+  state machines
+- keep SQLite durable state as the authority
+- keep Telegram/provider code as ingress/egress adapters
+- prefer plain, explicit transition code first:
+  - typed state enums or equivalent
+  - transition functions
+  - guarded transactional writes
+  - explicit owner per terminal outcome
+- evaluate a state machine library only if it clearly reduces code and review
+  risk after the workflow boundaries are already explicit
+
+Do not do this:
+
+- do not rewrite the entire bot around a state machine framework
+- do not try to model every Telegram command and callback as one giant machine
+- do not move correctness into in-memory library objects while durable state is
+  still the real authority
+- do not pay a major migration cost just for prettier diagrams or vocabulary
+
+##### Why not a library-first rewrite
+
+A battle-tested state machine library may help with modeling, but it does not
+solve the hardest part of this bot by itself:
+
+- durable transactional ownership
+- crash/restart replayability
+- multiple ingress paths touching the same durable state
+- external provider side effects and interruption
+
+Most libraries are strongest for in-memory transition modeling. This bot's
+hardest bugs live at the boundary between SQLite, async handlers, worker
+recovery, and provider execution. A library cannot replace careful ownership and
+transaction design there.
+
+So the recommended order is:
+
+1. Make the workflows explicit in plain code.
+2. Consolidate transitions behind one owner module per workflow.
+3. Reassess whether a library would actually simplify the result.
+
+##### Initial scope
+
+Candidate workflows for extraction:
+
+- work-item / recovery orchestration
+  - claim
+  - complete
+  - leave claimed
+  - move to pending recovery
+  - reclaim for replay
+  - supersede / discard / fail
+- pending approval / retry orchestration
+  - create pending
+  - validate context
+  - approve / reject / retry / clear
+  - invalidate on real context change
+
+Out of scope for the first pass:
+
+- provider progress streaming
+- compact/raw/export rendering
+- help/settings/menu UX flows
+- all session fields and command routing
+- a single global machine for the whole application
+
+##### Target architecture
+
+Each extracted workflow should have:
+
+- one authoritative transition module
+- one small typed state model
+- one place where allowed transitions are defined
+- explicit guards for adjacent failure cases
+- explicit completion ownership
+- explicit durable commit points
+
+Handler code should become thinner:
+
+- normalize ingress
+- authorize
+- call workflow transition/orchestration function
+- render the returned user-visible outcome
+
+The workflow module should own:
+
+- state validation
+- transition legality
+- durable writes
+- terminal disposition
+- returned outcome codes that explain what happened
+
+##### Expected benefits
+
+If done well, this should improve:
+
+- reviewability:
+  - fewer "was this exit path finalized?" questions
+- reliability:
+  - fewer owner-boundary bugs in restart/recovery and approval flows
+- maintainability:
+  - less logic spread across `telegram_handlers.py`, `worker.py`, and queue
+    helpers
+- testing clarity:
+  - contract tests can target explicit transitions instead of reverse-engineered
+    behavior
+
+This is mainly a defect-rate reduction and change-safety investment, not a
+speed or feature investment.
+
+##### Costs and caveats
+
+This work is expensive and should be treated as such:
+
+- large refactor surface
+- low direct product payoff
+- high migration risk if done broadly
+- can easily become architecture theater if the scope is not kept narrow
+
+It is only justified if the current pattern continues:
+
+- repeated durable-state bugs in the same workflows
+- growing review effort to verify owner/finalization semantics
+- more tests without proportional increase in confidence
+
+If those costs are not currently dominating, defer this work.
+
+##### Implementation sequence
+
+If taken on, the recommended order is:
+
+1. Write the current state tables explicitly for:
+   - work items / recovery
+   - pending approval / retry
+2. Name every transition owner and terminal owner.
+3. Extract transactional transition helpers behind one module per workflow.
+4. Update handlers/worker to call those helpers instead of open-coding
+   transitions.
+5. Add contract tests at the workflow boundary.
+6. Add one real entry-point integration test per dangerous ingress path.
+7. Only then decide whether a library would meaningfully reduce complexity.
+
+##### Tests required before calling this complete
+
+Focused contract tests:
+
+- allowed and forbidden transitions for each extracted workflow
+- terminal ownership on every exit path
+- second interruption / second recovery behavior
+- duplicate click / duplicate delivery idempotency
+- false-positive boundaries for invalidation and replay rejection
+
+Entry-point integration tests:
+
+- message ingress
+- command ingress where the same workflow applies
+- callback ingress where the same workflow applies
+- worker recovery path
+
+Adjacent regression tests:
+
+- a safe fresh request is not blocked by stale durable state
+- a blocked replay stays actionable later
+- unrelated read-only or settings actions do not accidentally finalize pending
+  recovery unless the contract explicitly says they should
+
+##### Go / no-go rule
+
+Do this only as a targeted workflow extraction. If the proposal starts to look
+like "rewrite the bot around a state machine library," stop and rescope.
+
 ### Phase IV — Update delivery and burst safety
 
 Goal: ensure every inbound update gets a visible response, even under

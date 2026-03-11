@@ -10,7 +10,16 @@ Current as of 2026-03-11. Tracks progress against [PLAN-commercial-polish.md](PL
 > items. `complete_work_item()` guards against overwriting terminal states.
 > Per-chat serialization preserved (falls back to `queued` when chat is busy).
 > 9 new integration tests covering the exact bug scenarios from production.
-> 780 pytest + 36 bash tests.
+> 784 pytest + 36 bash tests.
+>
+> Prior: Priority 3c (raw provider event regression fixtures). Checked-in
+> Codex and Claude NDJSON traces in tests/fixtures/progress/; regression
+> tests feed them through mapping/render and assert event types and
+> user-visible output. Priority 3 (test coverage gaps) complete.
+>
+> Prior: Priority 3a/3b (test coverage gaps). Heartbeat vs provider liveness
+> test and rate-limit + semantic event test in test_progress.py (real
+> TelegramProgress, burst with suppression asserted).
 >
 > Prior: Test-suite ownership refactor — Priority 1.
 > Deleted 5 overflow files (test_high_risk, test_edge_callbacks,
@@ -168,7 +177,7 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **780 pytest tests** + 36 bash tests across 29 files.
+Current suite: **784 pytest tests** + 36 bash tests across 29 files.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -188,7 +197,7 @@ Current suite: **780 pytest tests** + 36 bash tests across 29 files.
 | `test_handlers_ratelimit.py` | 6 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
 | `test_handlers_store.py` | 13 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle, callback flows (skill_add confirm/cancel, skill_update confirm/cancel/non-admin alert, unauthorized alert), markup removal verification. |
 | `test_invariants.py` | 70 | Cross-cutting invariant tests (genuinely span multiple boundaries): registry digest residue, async boundary, update-ID idempotency (4: message, decorated command, non-decorated command, callback), _chat_lock queued feedback (3), contended callback single-answer (3: approval, settings, clear-cred), same-chat overlapping update completion, shutdown-interrupted runs stay claimed for recovery, all signals (rc<0) treated as interrupted (4), provider error feedback (2), global error handler (3), decorator exceptions mark work items failed (2), summarizer subprocess killed on timeout, callback None-event completes work item, provider-neutral progress wording (5), Claude/Codex thinking capitalization (2), Codex thread ID suppression (3), Codex compaction wording, heartbeat (5: idle firing, stops on content, clean cancellation, respects recent progress, content_started signals), approval initial status neutral. Temporarily houses: doctor warnings, progress wording/heartbeat, recovery/resume, error handlers (pending future migration). |
-| `test_progress.py` | 45 | Progress event contract tests: render() output for all 9 event types, no-internals-leak checks, Codex _map_event type mapping (thinking, command start/finish, tool start/finish, draft reply, suppressed internals), end-to-end raw-event→render pipeline, tool_activity truncation, empty-text fallback, Claude _consume_stream integration (text delta, tool activity, denial, content_started signal, no-internals parity). |
+| `test_progress.py` | 49 | Progress event contract tests: render() output for all 9 event types, no-internals-leak checks, Codex _map_event type mapping (thinking, command start/finish, tool start/finish, draft reply, suppressed internals), end-to-end raw-event→render pipeline, tool_activity truncation, empty-text fallback, Claude _consume_stream integration (text delta, tool activity, denial, content_started signal, no-internals parity). Heartbeat vs provider liveness (no overwrite). Rate-limit + semantic event preservation (TelegramProgress, burst, suppression asserted). Raw fixture regression (Priority 3c): Codex and Claude NDJSON traces through mapping/render. |
 | `test_ratelimit.py` | 8 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_registry.py` | 8 | Skill registry: index parsing (valid/bad version/non-JSON), search, artifact download/extraction, store integration (digest match/mismatch). |
 | `test_request_flow.py` | 48 | Request flow contracts: public trust enforcement (7), is_public_user/is_allowed predicates (3+2), public command gating (7 commands + trusted pass-through), rate-limit defaults (2), mixed trust ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential satisfaction with resolved skills (2), model command/callback parity (4), extra_dirs_from_denials, compact+public cross-feature (6), export resolved skills, polling conflict detection (3), prompt weight in /doctor with resolved context (2). |
@@ -435,8 +444,11 @@ the full breakdown:
    items as `claimed` (handler-owned). Worker cannot steal fresh commands.
    `claim_for_update()` recognizes pre-claimed items. `complete_work_item()`
    guards terminal states. 9 integration tests. See `dont_make_false_claims.md`.
-3. **Test coverage gaps** (low effort): heartbeat/liveness interaction test,
-   rate-limit + semantic event test, raw event regression fixtures.
+3. **Test coverage gaps** (Priority 3) — DONE. 3a: heartbeat vs provider
+   liveness. 3b: rate-limit + semantic event preservation (TelegramProgress,
+   burst, suppression asserted). 3c: raw provider event regression fixtures
+   (tests/fixtures/progress/codex_trace.ndjson, claude_trace.ndjson);
+   regression tests in test_progress.py feed traces through mapping/render.
 4. **Test isolation and safe parallelization**: audit telegram_handlers
    globals, separate pure logic from global state, introduce authoritative
    reset path.

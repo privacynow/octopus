@@ -7,6 +7,7 @@ correct ProgressEvent types from raw CLI events.
 
 import asyncio
 import json
+from pathlib import Path
 
 from app.progress import (
     CommandFinish, CommandStart, ContentDelta, Denial, DraftReply,
@@ -15,7 +16,7 @@ from app.progress import (
 )
 from app.providers.codex import CodexProvider
 from tests.support.config_support import make_config as make_bot_config
-from tests.support.handler_support import FakeProgress
+from tests.support.handler_support import FakeMessage, FakeProgress
 
 
 # ---------------------------------------------------------------------------
@@ -479,3 +480,162 @@ class TestClaudeConsumeStream:
             lower = u.lower()
             assert "claude" not in lower, f"Leaked 'claude' in: {u}"
             assert "session_id" not in lower, f"Leaked 'session_id' in: {u}"
+
+
+# ---------------------------------------------------------------------------
+# Progress heartbeat and rate-limit (Priority 3a / 3b)
+# ---------------------------------------------------------------------------
+
+async def test_heartbeat_does_not_overwrite_provider_liveness():
+    """Heartbeat and provider Liveness both update progress; they must not fight.
+
+    Simulates long Codex resume: handler heartbeat is active while provider
+    emits Liveness (e.g. 'Still working — this may take a moment...').
+    Heartbeat must not overwrite a recent Liveness update (same as for
+    tool/command updates). Proves only one visible update per interval.
+    """
+    import app.telegram_handlers as th
+    from unittest.mock import patch
+
+    progress = FakeProgress()
+    content_started = progress.content_started
+
+    # Use same cadence as test_heartbeat_stops_when_content_starts so first beat fires
+    with patch.object(th, "_HEARTBEAT_FIRST", 0.05), \
+         patch.object(th, "_HEARTBEAT_SUBSEQUENT", 0.05):
+        task = asyncio.create_task(th._heartbeat(progress, content_started))
+
+        await asyncio.sleep(0.10)  # First beat at 0.05s
+        count_after_first_beat = len(progress.updates)
+        assert count_after_first_beat >= 1, (
+            f"First heartbeat should have fired; got {progress.updates}"
+        )
+
+        # Simulate provider Liveness (e.g. Codex long resume timeout path)
+        liveness_html = render(Liveness(detail="Still working — this may take a moment..."))
+        await progress.update(liveness_html)
+        count_after_liveness = len(progress.updates)
+        assert progress.last_text == liveness_html
+
+        # Wait less than HEARTBEAT_SUBSEQUENT — heartbeat must NOT overwrite Liveness
+        await asyncio.sleep(0.03)
+        heartbeat_after_liveness = [
+            u for u in progress.updates[count_after_liveness:]
+            if "Still working... (" in u and "s)" in u
+        ]
+        assert len(heartbeat_after_liveness) == 0, (
+            f"Heartbeat overwrote provider Liveness: {progress.updates}"
+        )
+
+        task.cancel()
+        await task
+
+
+async def test_rate_limit_preserves_semantic_command_events():
+    """Rate-limited progress sink must not suppress meaningful Codex semantic events.
+
+    Integration test: real rate limiter (TelegramProgress) + Codex-style
+    command/tool events. Sends a burst so that some updates are suppressed;
+    asserts CommandStart and CommandFinish still appear (plan Priority 3b).
+    """
+    import app.telegram_handlers as th
+
+    msg = FakeMessage()
+    cfg = make_bot_config(stream_update_interval_seconds=0.2)
+    progress = th.TelegramProgress(msg, cfg)
+    progress.content_started = asyncio.Event()  # do not trigger content-first bypass
+
+    # Burst: CommandStart (first update goes through), then filler within same interval
+    # so they are suppressed; then after interval, CommandFinish goes through.
+    await progress.update(render(CommandStart(command="ls -la")))
+    await progress.update(render(Thinking()))       # rate-limited out
+    await progress.update(render(ToolStart(name="read_file", detail="")))  # rate-limited out
+    await asyncio.sleep(0.25)
+    await progress.update(render(CommandFinish(command="ls -la", exit_code=0, output_preview="")))
+
+    edits = [r["edit_text"] for r in msg.replies if "edit_text" in r]
+    combined = " ".join(edits)
+    assert "Running command" in combined and "Command finished" in combined, (
+        f"Rate limiting must preserve command start/finish; got edits: {edits}"
+    )
+    # Prove suppression: in-window filler (Thinking, ToolStart) must not have leaked through
+    assert "Thinking..." not in combined, (
+        f"In-window Thinking update should have been suppressed; got edits: {edits}"
+    )
+    assert "Using tool" not in combined, (
+        f"In-window ToolStart update should have been suppressed; got edits: {edits}"
+    )
+    assert len(edits) == 2, (
+        f"Exactly two edits (command start + finish) should survive; got {len(edits)}: {edits}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Raw fixture regression (Priority 3c)
+# ---------------------------------------------------------------------------
+
+def _progress_fixture_path(name: str) -> Path:
+    """Path to a checked-in progress fixture (NDJSON)."""
+    return Path(__file__).parent / "fixtures" / "progress" / name
+
+
+def test_codex_raw_fixture_mapping_and_render():
+    """Feed checked-in Codex NDJSON through _map_event and render; exact expected sequence and output."""
+    path = _progress_fixture_path("codex_trace.ndjson")
+    assert path.exists(), f"Checked-in fixture required (Priority 3c): {path}"
+    lines = path.read_text().strip().splitlines()
+    provider = CodexProvider(make_bot_config())
+    tool_calls: dict = {}
+    events = []
+    rendered = []
+    for line in lines:
+        if not line.strip():
+            continue
+        raw = json.loads(line)
+        evt = provider._map_event(raw, is_resume=False, tool_calls=tool_calls)
+        if evt is not None:
+            events.append(evt)
+            html = render(evt)
+            if html:
+                rendered.append(html)
+    # Fixture yields this exact sequence: Thinking, CommandStart, CommandFinish, DraftReply, CommandStart, CommandFinish
+    expected_types = [Thinking, CommandStart, CommandFinish, DraftReply, CommandStart, CommandFinish]
+    assert len(events) == len(expected_types), (
+        f"Expected {len(expected_types)} mapped events; got {len(events)}: {[type(e).__name__ for e in events]}"
+    )
+    for i, (evt, expected) in enumerate(zip(events, expected_types)):
+        assert isinstance(evt, expected), (
+            f"Event {i}: expected {expected.__name__}, got {type(evt).__name__}"
+        )
+    combined = " ".join(rendered)
+    assert "Running command" in combined and "Command finished" in combined
+    assert "ls -la" in combined, "First command from fixture must appear in rendered output"
+    assert "echo done" in combined or "echo" in combined, "Second command from fixture must appear"
+    assert "Listing complete" in combined or "Draft reply" in combined, "Commentary from fixture must appear"
+    for html in rendered:
+        assert "codex" not in html.lower(), f"Rendered must not leak provider name: {html}"
+
+
+async def test_claude_raw_fixture_consume_stream():
+    """Feed checked-in Claude NDJSON through _consume_stream; exact expected update count and content."""
+    from app.providers.claude import ClaudeProvider
+
+    path = _progress_fixture_path("claude_trace.ndjson")
+    assert path.exists(), f"Checked-in fixture required (Priority 3c): {path}"
+    lines = path.read_text().strip().splitlines()
+    prov = ClaudeProvider(make_bot_config())
+    progress = FakeProgress()
+    proc = _FakeStreamProcess(lines)
+    text, result_data, tool_activity = await prov._consume_stream(proc, progress)
+    assert "result" in result_data, "Stream should terminate on result event"
+    # Fixture: tool_use Read, then two text_delta lines -> exactly 3 progress updates
+    assert len(progress.updates) == 3, (
+        f"Expected exactly 3 progress updates from fixture; got {len(progress.updates)}: {progress.updates}"
+    )
+    combined = " ".join(progress.updates)
+    assert "Read" in combined, "Tool name from fixture must appear in updates"
+    assert "File contents here" in combined, "First text delta from fixture must appear"
+    assert "Hello world" in combined, "Second text delta from fixture must appear"
+    for u in progress.updates:
+        assert "claude" not in u.lower(), f"Must not leak provider name: {u}"
+        assert "session_id" not in u.lower(), f"Must not leak internal ID: {u}"

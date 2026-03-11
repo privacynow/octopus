@@ -9,7 +9,9 @@ For end-user usage, start with [README.md](../README.md).
 After the roadmap's migration phases land, Postgres is the sole supported
 runtime backend. The current SQLite-backed session and transport stores remain
 important as the shipped baseline and as the cutover import source, but they
-are not the long-term runtime authority.
+are not the long-term runtime authority. Planned roadmap work should tighten
+workflow ownership without changing the typed session, transport-payload, and
+execution-context contracts described here.
 
 ---
 
@@ -69,6 +71,8 @@ Contract:
   normalized type exists
 - `serialize_inbound()` / `deserialize_inbound()` round-trip events to JSON
   for durable storage in the work queue
+- serialized inbound payload shapes are part of the migration contract and
+  must remain backward-compatible across SQLite import and Postgres cutover
 
 ### 2. Work-queue boundary
 
@@ -110,13 +114,17 @@ Control-flow exceptions:
 
 Contract:
 
-- duplicate `update_id` delivery is transport-idempotent (journaled, not
+- duplicate `update_id` delivery is `transport idempotency` (journaled, not
   reprocessed)
 - per-chat ordering is enforced durably via atomic claiming
 - inline handler path claims synchronously; worker loop drains anything
   left unclaimed (crash recovery, enqueue-without-claim)
 - `claim_next_any()` uses `BEGIN IMMEDIATE` for atomic claiming across
   concurrent tasks
+- `content dedup` is not part of this boundary; if added later it sits above
+  the durable queue as explicit user-visible policy
+- the queue remains application-owned through the Postgres migration; generic
+  broker adoption is intentionally out of scope for the core request path
 - multiple polling processes for the same token are detected and warned
   about, not supported
 
@@ -412,7 +420,9 @@ Rendered to Telegram HTML by the shared `render()` function in `progress.py`.
 The shipped implementation uses two SQLite databases with different
 lifecycles. After migration, equivalent runtime authority moves to Postgres
 for session state and the core request queue while preserving the same typed
-session, transport-payload, and execution-context contracts.
+session, transport-payload, and execution-context contracts. Workflow-owner
+extraction should happen before this cutover so the Postgres runtime does not
+inherit open-coded transition logic.
 
 **Current shipped `sessions.db`** — chat session state:
 
@@ -536,7 +546,7 @@ Credential setup is conversational state, not a hidden side effect.
 ### Transport delivery and recovery
 
 - one active ingress owner per bot token
-- duplicate `update_id` delivery is transport-idempotent (journaled, not
+- duplicate `update_id` delivery is `transport idempotency` (journaled, not
   reprocessed)
 - per-chat ordering is enforced by atomic claiming
 - bursty same-chat traffic gets visible acknowledgment; nothing silently
@@ -544,11 +554,28 @@ Credential setup is conversational state, not a hidden side effect.
 - crash recovery: `recover_stale_claims()` requeues items left in `claimed`
   state by a dead worker
 - pending_recovery items require explicit user action (replay or discard)
+- `content dedup` is not part of this contract; if added later it is optional
+  behavior layered above durable delivery
 
 Scaling path: single-process polling today. Future multi-worker uses webhook +
 shared Postgres queue authority + worker loop as primary processing path. The
 current shipped implementation uses `transport.db` as the single-host
 foundation.
+
+### Planned workflow-owner boundary
+
+The shipped runtime already has the right durable concepts, but some
+transition logic is still spread across handlers, worker code, and queue
+helpers. The next structural change should consolidate two authoritative
+workflow owners:
+
+- transport and recovery
+- approval and retry
+
+This extraction should be behavior-preserving. It should keep the existing
+normalized inbound payloads, typed session dataclasses, and
+`ResolvedExecutionContext` contract intact. It is not a recommendation to
+rewrite the whole bot around a generic state-machine framework.
 
 ---
 
@@ -701,6 +728,7 @@ The following are internal contracts that should only change deliberately:
 - `PreflightContext` / `RunContext`
 - `Provider` protocol and `RunResult`
 - `ProgressEvent` family and `render()` contract
+- serialized inbound payload JSON shape used by the durable work queue
 - `check_credential_satisfaction` signature (resolved active_skills)
 - `validate_pending` signature (trust_tier from stored pending)
 - work-item state machine (queued/claimed/done/failed/pending_recovery)

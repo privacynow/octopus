@@ -2,17 +2,16 @@
 
 Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-10):** Phase III coverage hardening —
-> (1) III.3 collapse path: expand shows "Collapse" button, collapse
-> restores compact with "Show full answer" (two-way toggle per plan).
-> (2) III.5 L2 compaction bypass fixed: Codex resume-compaction timeout
-> routes through `render_progress(Liveness(...))`.
-> (3) III.4 contract test: summary-first instruction verified at
-> execution context boundary.
-> (4) Claude progress parity: 5 `_consume_stream` integration tests
-> (text delta, tool activity, denial, content_started, no-internals).
-> (5) `/session` prompt weight assertion added.
-> (6) `test_setup.sh` compact-mode default assertion added.
+> **Latest change (2026-03-10):** All build phases shipped.
+> Phases A–I, IIa/b, III (all sub-items including Layer 2 progress
+> contract and expand/collapse), IV, Ext (webhook), restart recovery
+> hardening — all shipped and tested. 791 pytest + 36 bash tests.
+>
+> Remaining work is test coverage gaps and product polish — see
+> [PLAN-commercial-polish.md](PLAN-commercial-polish.md) § "What Remains."
+> III.7 (workflow state-machine extraction) deferred per conditional
+> go/no-go rule. Product extensions (multi-worker scaling, registry trust,
+> usage accounting) are future roadmap.
 >
 > Prior: Progress UX Layer 2, user-intent-owned replay, restart recovery
 > hardening, supersede_recovery guard, ReclaimBlocked exception.
@@ -408,11 +407,23 @@ Current suite: **791 pytest tests** + 36 bash tests across 33 entrypoints.
 
 ---
 
-## Planned Next Sequence
+## Remaining Work
 
-All build phases (A–IV) and the multi-worker webhook architecture extension
-are complete. Usage tracking/billing (deferred) is the only planned item not
-yet shipped.
+All build phases (A–IV) and the multi-worker webhook extension are shipped.
+Remaining items fall into five priority tiers — see
+[PLAN-commercial-polish.md](PLAN-commercial-polish.md) § "What Remains" for
+the full breakdown:
+
+1. **Test-suite ownership refactor**: consolidate overflow files, eliminate
+   duplicated assertions, establish clear suite-owns-contract mapping.
+2. **Test coverage gaps** (low effort): heartbeat/liveness interaction test,
+   rate-limit + semantic event test, raw event regression fixtures.
+3. **Small feature gaps** (low effort): `/project` inline keyboard.
+   Content-based dedup is demand-gated (only if operators report double-sends).
+4. **Architectural hardening** (high effort, conditional): III.7 workflow
+   state-machine extraction, verbose/debug progress mode.
+5. **Product extensions** (future): multi-worker webhook, usage tracking,
+   registry signing, policy/project expansion.
 
 ---
 
@@ -829,9 +840,17 @@ strings directly — including the Codex resume-compaction timeout
 path, which now emits `Liveness(...)` through the shared renderer.
 40 contract tests in `test_progress.py`.
 
-### Deferred: product extensions
+### Plan complete — remaining deferred items
 
-Per PLAN, these are legitimate but not blocking:
+All phases (A–I, IIa/b, III including all sub-items, IV, Ext) and all
+hardening work (restart recovery, resume hardening, resolved context
+enforcement) are shipped and tested.
+
+**III.7 — Workflow state-machine extraction:** Deferred per plan's
+conditional go/no-go rule. Only justified if durable-state bugs continue
+to dominate review time. See PLAN III.7 for scope, approach, and tests.
+
+**Product extensions** (per PLAN, legitimate but not blocking):
 
 - Policy and project expansion (richer scoping, granular file policies)
 - Registry trust expansion (publisher governance, organizational trust)

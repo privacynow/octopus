@@ -57,6 +57,23 @@ could still be wrong.
      on that object, assert on the returned message, not only the
      original message handle
 
+## Bug report handoff
+
+When the output is a bug report or review note rather than a test plan:
+
+- Lead with the exact false user-visible behavior or violated
+  invariant.
+- Anchor the report with the real test oracle: which object or durable
+  state proves the incident.
+- Include the nearest false-positive boundary, not just the positive
+  repro.
+- For orchestration and recovery bugs, state the execution
+  interleaving and which owner each assertion is proving.
+- If the existing test was blind, say exactly what it inspected and why
+  that oracle was insufficient.
+- Make acceptance criteria name the exact repro and the adjacent case
+  that must stay green.
+
 ## Completion Bar
 
 For each core axis touched by the change, ensure at least the dangerous

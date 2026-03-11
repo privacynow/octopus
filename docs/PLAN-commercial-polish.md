@@ -1359,15 +1359,19 @@ blurring the audience.
 
 ## Product Extensions
 
-These are legitimate product areas that sit outside the current build phases.
+These are legitimate product areas that extend beyond the core build phases.
 They are ordered by likely relevance, not urgency.
 
 ### Multi-worker webhook architecture
 
+> **Status:** The single-worker durable foundation described below has
+> shipped (transport.db, work_queue.py, worker.py, pending_recovery). What
+> remains is the multi-process deployment step: multiple workers claiming
+> from the same durable queue across process boundaries.
+
 Webhook mode already exists in the product. The next structural extension is
-not "run more pollers." It is a durable ingress and work-item architecture
-that can start single-worker and later scale to multi-worker / multi-process
-webhook deployment.
+not "run more pollers." It is multi-worker / multi-process webhook deployment
+on top of the existing durable ingress and work-item architecture.
 
 The product goal is:
 
@@ -1494,12 +1498,15 @@ This sequencing matters. It avoids repeating the earlier mistake of building
 important behavior on top of a weaker state model and retrofitting the
 foundation later.
 
-#### Next follow-on item: safe restart recovery with preserved provider context
+#### Follow-on: safe restart recovery with preserved provider context
 
-This should be the next durability item after the current provider-state /
-resume hardening lands.
+> **Status:** Shipped. The `pending_recovery` work-item state, user-intent-
+> owned replay/discard, fresh-message supersession, and `ReclaimBlocked`
+> exception are all implemented and tested. The spec below is preserved as
+> the authoritative design reference.
 
-It is linked to the current state issue, but it is not the same contract:
+This is linked to provider-state / resume hardening, but it is not the same
+contract:
 
 - state hardening decides when a provider session is valid to resume
 - replay hardening decides who is allowed to re-issue an interrupted request
@@ -1676,81 +1683,20 @@ usable before billing is layered on.
 
 ## Build Priority (Next Work)
 
-Phases A–H are complete. Phases I, IIa, IIb, III, and IV are built in
-parallel but share contracts that must freeze first.
+All build phases (A–IV), public trust (I), model profiles (IIa/b), compact/
+latency (III), transport reliability (IV), and the multi-worker webhook
+extension (Ext) have shipped. See [STATUS-commercial-polish.md](STATUS-commercial-polish.md)
+for the full build log. 791 pytest + 36 bash tests.
 
-### Step zero: shared contract freeze
+The remaining work falls into five priority tiers, ordered by
+effort-to-confidence ratio.
 
-Before any feature branch starts, agree on and lock:
+### Priority 1: Test-suite ownership refactor
 
-- `SessionState` additions (`model_profile`, `trust_tier`, any new fields)
-- `ResolvedExecutionContext` additions (effective model, trust tier if
-  context-visible)
-- trust-tier / public-mode semantics (`trusted | public` per-user
-  resolution, scope restrictions, what is overridable vs forced)
-- effective model / profile semantics (session override > config default,
-  trust-tier restrictions on available profiles)
-- file-policy precedence rules (trust tier may force inspect; session
-  override only within trust-tier ceiling)
-- user-visible surfaces: what `/session`, `/help`, and approval messages
-  show for new state
-- transport delivery semantics: `update_id` idempotency contract, queued
-  request acknowledgment rules, what state tracks in-flight vs queued
-  requests, where that state lives (durable vs in-memory)
-
-This is not optional. The parallel tracks share execution context, session
-state, rendering contract, and transport delivery semantics. If the
-contracts drift during parallel development, integration produces the same
-bugs that sequential ordering was meant to prevent — just faster.
-
-### Parallel build by ownership
-
-| Track | Phase | Scope |
-|-------|-------|-------|
-| A: execution context + session schema + transport state | Step zero | `SessionState` additions, `ResolvedExecutionContext` additions, provider context plumbing, context-hash updates, trust-tier parameter, transport delivery state schema (update_id tracking, in-flight/queued request state, durable vs in-memory decision) |
-| B: model profiles (state + plumbing) | IIa | profile mapping, session field, provider plumbing, hash/invalidation |
-| C: public trust enforcement | I | `is_public_user()` predicate, execution-scope enforcement in context resolution, command gating in handlers, `/doctor` warnings, rate-limit defaults |
-| D: model + settings UX | IIb | `/model` command, inline-keyboard UX for all session settings |
-| E: compact/latency UX + rendering | III | expandable blockquotes, expand/collapse from raw ring buffer, summary-first rendering, first-progress timing, prompt weight, setup wizard defaults |
-| F: transport reliability (behavior) | IV | polling conflict detection, idempotent update handling, busy/queued feedback, deduplication window — uses state schema defined in track A |
-
-### Merge order
-
-Even if built in parallel, merge in dependency order:
-
-1. shared state / context contract (track A)
-2. model profiles state + provider plumbing (track B)
-3. public trust enforcement (track C) — execution-scope layer then command gating
-4. model + settings UX (track D)
-5. compact / latency UX (track E)
-6. transport reliability (track F)
-
-Note: tracks B and C are independent of each other — both depend on track A.
-Model profiles do not wait on public trust. Public trust can later cap
-available profiles by constraining the input to model profile resolution.
-Track F depends on track A for transport state schema (update_id tracking,
-in-flight/queued state) but is independent of tracks B–E.
-
-### Cross-feature invariant tests
-
-Before merging all tracks, add invariant tests for the dangerous
-cross-feature combinations:
-
-- public mode + model switching (can a public user escalate to `best`?)
-- inspect policy + model profile (does changing model break inspect
-  enforcement?)
-- compact mode + long replies + public users
-- project + file policy + approval + model change
-
-The risk is not "feature A broken alone." It is the cross-feature matrix.
-
-Billing and usage accounting are explicitly deferred. They are not blocking
-any of the above.
-
-### Post-Ship Maintenance: test-suite ownership refactor
-
-This is the next item to work on after the current product-level feature
-tracks are stable.
+The test tree has accumulated overflow files, duplicated assertions across
+suites, and owner drift. This refactor is the highest-leverage next step
+because it makes every subsequent test addition land in the right place and
+prevents further duplication. See the detailed refactor sequence below.
 
 The contract is not "reduce test count." The contract is:
 
@@ -1792,6 +1738,73 @@ Completion bar:
 - `tests/test_high_risk.py` and the non-essential `tests/test_edge_*.py` overflow files are removed
 - moved tests are stronger than before or are deleted as redundant
 - owner suites pass after each step; full suite passes at the end
+
+### Priority 2: Test coverage gaps (low effort, high confidence value)
+
+These are places where the implementation exists but the contract is not
+proven by tests. Best done after or alongside Priority 1 so that each new
+test lands in the correct owning suite from the start.
+
+**a. Provider liveness vs heartbeat interaction test.** The handler heartbeat
+and the provider `Liveness` event both update the same progress message. No
+test proves they don't fight. Add a test that simulates a Codex long-running
+resume (which emits `Liveness`) while the handler heartbeat is active, and
+assert only one visible update per interval.
+
+**b. Rate-limit + semantic event preservation test.** The progress sink
+rate-limits updates. No test proves rate limiting doesn't suppress meaningful
+Codex semantic events (command start/finish, tool events). Add an integration
+test combining a real rate limiter with Codex command events and prove command
+start/finish survive rate limiting.
+
+**c. Raw event regression fixtures.** The plan called for checked-in raw
+provider event traces (Codex NDJSON, Claude stream-json) as regression
+fixtures. The current tests use synthetic events constructed in-memory, which
+is adequate for contract tests but does not prove the mapping layer handles
+real CLI output faithfully. Capture at least one representative trace per
+provider from a real long-running request and add fixture-based regression
+tests. (Higher effort than 2a/2b — requires real provider traces.)
+
+### Priority 3: Small feature gaps (low effort, product polish)
+
+**a. `/project` inline keyboard.** `/model`, `/policy`, `/approval`, and
+`/compact` all show inline keyboards when invoked with no arguments.
+`/project` still requires typing subcommands. Add buttons for configured
+projects + `[Clear]`.
+
+**b. Content-based deduplication.** The plan specified an optional
+`BOT_DEDUP_WINDOW_SECONDS` for suppressing identical consecutive messages
+within a short window (IV.4). The core contract (`update_id` idempotency)
+is sufficient. **Demand-gated:** only implement if operators report
+accidental double-sends in production.
+
+### Priority 4: Architectural hardening (high effort, conditional)
+
+**a. III.7 — Workflow state-machine extraction.** See the detailed spec in
+the Phase III section above. Only justified if durable-state bugs continue
+consuming review time.
+
+**b. Verbose/debug progress mode.** III.5b implied a toggle between summary
+progress (default) and verbose progress (full tool detail). The current
+implementation has one rendering path. A `BOT_PROGRESS_VERBOSE` mode could
+surface more intermediate detail for power users, but it is not blocking any
+real use case today.
+
+### Priority 5: Product extensions (future roadmap)
+
+**a. Multi-worker webhook deployment.** The durable work-queue foundation is
+shipped. The next step is actual multi-process webhook deployment where
+multiple worker processes claim items from `transport.db`. See the Product
+Extensions section above for the full specification.
+
+**b. Usage tracking and billing.** Deferred. Requires token-cost mapping and
+billing integration.
+
+**c. Registry trust and signing.** Currently artifacts are verified by digest
+only. A future extension could add publisher signing.
+
+**d. Policy and project expansion.** Per-project file policy defaults,
+project-scoped skill activation, richer project scoping models.
 
 ---
 

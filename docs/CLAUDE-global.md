@@ -102,6 +102,29 @@ If any answer is missing or unclear, the change is not ready.
 5. What exact object or state does each test observe?
 6. Which adjacent case proves the fix does not overfire?
 
+### When writing bug reports
+
+Write bug reports as evidence-backed contract failures, not polite
+issue summaries.
+
+- Lead with the exact user-visible false behavior or violated
+  invariant.
+- Prove the incident from primary artifacts before theorizing:
+  timestamps, IDs, durable rows, log lines, and the exact user-visible
+  message.
+- Separate these sections clearly: observed incident, violated
+  contract, root cause, scope, proposed fix, non-solutions, testing,
+  acceptance criteria.
+- For concurrency, recovery, or orchestration bugs, include the
+  execution interleaving and name the completion owner on each path.
+- Name equivalent ingress paths that may share the same contract bug;
+  do not pretend the first repro path is the only one.
+- Do not soften reproducible failures into "confusing behavior" or
+  "edge cases" when the system made a false claim or violated a
+  durable-state contract.
+- Acceptance criteria must include the exact false positive that
+  triggered the report and one adjacent regression case.
+
 ## Testing
 
 Test the contract at the real boundary, then test the nearest way it

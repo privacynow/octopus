@@ -77,6 +77,24 @@ change.
     must exercise through the real ownership boundary, not one layer
     below it.
 
+## Repo-Specific Bug Reports
+
+When writing a bug report for this repo:
+
+- Lead with the exact false user-visible behavior or violated durable
+  contract.
+- Anchor the report with `update_id`, `chat_id`, matching
+  `journalctl` lines, and the relevant `updates` / `work_items` or
+  `sessions` row state.
+- For work-item and recovery bugs, state whether the item was fresh
+  same-boot, stale claimed, `pending_recovery`, or true restart
+  recovery, and prove that classification from durable state.
+- Separate symptom, violated contract, root cause, scope,
+  non-solutions, testing strategy, and acceptance criteria.
+- If the bot told the user something false, say that explicitly.
+- Name equivalent ingress paths that may share the same ownership or
+  state-transition bug.
+
 ## Repo-Specific Process
 
 - Ingress parity checklist for this repo: message, command, callback,

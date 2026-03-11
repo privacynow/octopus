@@ -31,213 +31,292 @@ adds:
 - per-chat project and file policy
 - trust-tiered access (`trusted | public`) when open mode is enabled
 - user-facing model profiles that resolve to provider-specific model IDs
+- durable work-item queue with crash recovery
 - transport delivery guarantees for burst traffic and duplicate delivery
-- Telegram-safe rendering
-- progressive disclosure for long responses
+- normalized progress events rendered once for Telegram
+- Telegram-safe rendering and progressive disclosure for long responses
 - operator visibility and health reporting
 
 ---
 
 ## Runtime Boundaries
 
-The codebase is organized around a few hard boundaries.
+The codebase is organized around these hard boundaries.
 
 ### 1. Transport boundary
 
 Input arrives as Telegram updates and is normalized into inbound transport
 types before business logic runs.
 
-Primary module:
+Primary module: `app/transport.py`
 
-- `app/transport.py`
+Inbound types:
+
+- `InboundMessage` — text + attachments
+- `InboundCommand` — slash command with parsed args
+- `InboundCallback` — inline keyboard callback
 
 Contract:
 
-- transport normalization is responsible for extracting user, chat, command,
-  callback, message text, and attachments
-- business logic should not depend on raw Telegram payload structure when a
-  normalized type already exists
-- transport delivery is responsible for update ownership and delivery
-  semantics:
-  - polling is single-owner by design
-  - duplicate Telegram delivery (`update_id`) must be safe
-  - bursty same-chat traffic must receive visible acknowledgment
-  - no update should be silently lost because a second request arrived quickly
+- transport normalization extracts user, chat, command, callback, text,
+  and attachments into frozen dataclasses
+- business logic never depends on raw Telegram payload structure when a
+  normalized type exists
+- `serialize_inbound()` / `deserialize_inbound()` round-trip events to JSON
+  for durable storage in the work queue
 
-### 2. Session boundary
+### 2. Work-queue boundary
 
-Session state is durable and chat-scoped, but runtime logic uses typed session
-objects rather than raw storage dicts.
+All inbound updates are journaled and serialized through a durable work queue
+before processing. This replaces in-memory-only deduplication and per-chat
+locking.
 
 Primary modules:
 
-- `app/session_state.py`
-- `app/storage.py`
+- `app/work_queue.py` — SQLite journal, claiming, recovery
+- `app/worker.py` — async loop that drains unclaimed items
+
+Storage: `transport.db` (separate from `sessions.db` — different lifecycle
+and retention).
+
+Tables:
+
+- `updates` — every received `update_id`, with payload and state
+- `work_items` — processable units derived from updates
+
+Work-item states:
+
+```
+queued ──> claimed ──> done
+                  ──> failed
+                  ──> pending_recovery ──> (user replay or discard)
+           (crash) ──> recovered via recover_stale_claims() ──> queued
+```
+
+Control-flow exceptions:
+
+- `LeaveClaimed` — process shutting down; item stays claimed for recovery
+  on next boot
+- `PendingRecovery` — item needs user decision (replay/discard); worker
+  skips completion
+- `ReclaimBlocked` — replay attempted but another item for the same chat
+  is already claimed
 
 Contract:
 
-- storage persists session data
-- runtime orchestration operates on `SessionState`
-- storage may serialize as dict/JSON internally, but handler and request logic
-  should not mutate raw dict session state
-- user-selected runtime controls such as project binding, file policy,
-  compact-mode override, and model-profile override belong here
-- authorization policy does not belong here; trust tier is resolved per
-  request and only persisted if the product needs it for visibility or
-  delivery semantics
+- duplicate `update_id` delivery is idempotent (journaled, not reprocessed)
+- per-chat ordering is enforced durably via atomic claiming
+- inline handler path claims synchronously; worker loop drains anything
+  left unclaimed (crash recovery, enqueue-without-claim)
+- `claim_next_any()` uses `BEGIN IMMEDIATE` for atomic claiming across
+  concurrent tasks
+- multiple polling processes for the same token are detected and warned
+  about, not supported
 
-### 3. Execution-context boundary
+### 3. Session boundary
+
+Session state is durable and chat-scoped.
+
+Primary modules:
+
+- `app/session_state.py` — typed models (`SessionState`, `PendingApproval`,
+  `PendingRetry`, `AwaitingSkillSetup`)
+- `app/storage.py` — SQLite CRUD, session listing, upload paths
+
+Storage: `sessions.db` (WAL mode, schema-versioned).
+
+Contract:
+
+- runtime orchestration operates on typed session objects
+- handler and request logic should not mutate raw dict session state
+- user-selected runtime controls (project binding, file policy, compact mode,
+  model profile) belong here
+- authorization policy does not belong here; trust tier is resolved per request
+
+### 4. Execution-context boundary
 
 There is one authoritative resolved execution context per request.
 
-Primary module:
-
-- `app/execution_context.py`
+Primary module: `app/execution_context.py`
 
 Contract:
 
-- all context-sensitive behavior must derive from the same resolved object
+- all context-sensitive behavior derives from the same resolved object
 - context hash is computed in one place only
 - approval validity, retry validity, provider thread invalidation, and
   `/session` must all agree on the same execution identity
-- public/open execution-scope restrictions must resolve here, not only in
-  command handlers
-- effective model selection must resolve here, not inside provider-specific
-  command builders
-- downstream functions that consume execution-scope fields (credential
-  satisfaction, allowed file roots, directed artifact delivery) must receive
-  the resolved context or its specific resolved fields — never raw
-  `session.*` or `config.*` for working_dir, active_skills, file_policy,
-  extra_dirs, or project_id
+- public/open execution-scope restrictions resolve here, not in handlers
+- effective model selection resolves here, not inside providers
+- downstream functions receive resolved fields — never raw `session.*` or
+  `config.*` for working_dir, active_skills, file_policy, extra_dirs, or
+  project_id
 
-### 4. Request-flow boundary
+### 5. Request-flow boundary
 
-Request orchestration is pure business logic and should not depend on Telegram
+Request orchestration is pure business logic, independent of Telegram
 transport details.
 
-Primary module:
+Primary modules:
 
-- `app/request_flow.py`
+- `app/request_flow.py` — validation, credential satisfaction, pending
+  validation, denial handling
+- `app/approvals.py` — pure functions for preflight prompt building and
+  denial formatting
 
 Contract:
 
-- request validation, credential satisfaction, pending validation, and denial
-  handling belong here
-- handlers decide how to render outputs and buttons, not how the business
-  rules work
 - `check_credential_satisfaction` receives the resolved active_skills list,
-  not the raw session — public users pass an empty list and skip credential
-  prompts entirely
+  not the raw session
 - `validate_pending` reads trust_tier from the stored pending state so the
   context hash is recomputed with the same identity shape that created it
+- handlers decide how to render outputs and buttons, not how business rules
+  work
 
-### 5. Provider boundary
+### 6. Provider boundary
 
 Providers implement a shared protocol and receive only provider-facing
 contexts.
 
 Primary modules:
 
-- `app/providers/base.py`
+- `app/providers/base.py` — protocol, `RunResult`, `PreflightContext`,
+  `RunContext`, `ProgressSink`
 - `app/providers/claude.py`
 - `app/providers/codex.py`
 
 Contract:
 
-- provider implementations do not resolve session or project state themselves
-- provider contexts are already resolved before provider invocation
-- provider health checks are split into cheap local checks and runtime probes
+- providers do not resolve session or project state
+- provider contexts are already resolved before invocation
+- health checks are split into cheap local checks and runtime probes
+- providers emit `ProgressEvent` instances (see rendering boundary);
+  they never build display HTML directly
 
-### 6. Capability boundary
+### 7. Capability boundary
 
 Skills, credentials, provider config fragments, and the managed store are a
 capability layer on top of raw provider execution.
 
 Primary modules:
 
-- `app/skills.py`
-- `app/store.py`
-- `app/registry.py`
-- `app/skill_commands.py`
+- `app/skills.py` — skill catalog, loading, resolution
+- `app/store.py` — managed skill installation and GC
+- `app/registry.py` — remote artifact download and digest verification
+- `app/skill_commands.py` — Telegram commands for skill management
 
 Contract:
 
-- skill resolution is deterministic
-- managed skills are immutable artifacts behind refs
+- skill resolution is deterministic: custom > managed > built-in
+- managed skills are immutable content-addressed objects behind refs
 - credentials are per-user and loaded only at execution time
 
-### 7. Rendering boundary
+### 8. Rendering boundary
 
-The bot owns adaptation from model output to Telegram-safe output.
+The bot owns adaptation from model output to Telegram-safe output, including
+both final responses and in-flight progress.
 
 Primary modules:
 
-- `app/formatting.py`
-- `app/summarize.py`
+- `app/formatting.py` — Markdown-to-Telegram HTML conversion, message
+  splitting, table rendering
+- `app/summarize.py` — compact-mode summarization, raw-response ring buffer,
+  chat history export
+- `app/progress.py` — normalized progress event family and shared HTML
+  renderer
 
-Contract:
+**Progress contract (implemented):**
 
-- output shown to users must be readable in Telegram
-- formatting correctness is part of runtime correctness
+Both providers map raw CLI events to a shared `ProgressEvent` family:
+
+```
+Thinking          Model reasoning, no visible output yet
+CommandStart      Shell command execution started
+CommandFinish     Shell command completed (exit code, output preview)
+ToolStart         Non-command tool invocation started
+ToolFinish        Non-command tool invocation finished
+ContentDelta      Visible reply text arriving (with recent tool activity)
+DraftReply        Intermediate agent commentary
+Denial            Tool call or action blocked by sandbox/permissions
+Liveness          Provider heartbeat (long compaction, resume timeout)
+```
+
+The shared `render()` function owns all user-facing HTML wording. Providers
+call `render_progress(event)` — they never construct display HTML directly.
+
+- Codex maps raw events via `CodexProvider._map_event()` (classmethod)
+- Claude maps events inline in `ClaudeProvider._consume_stream()`
+- Internal events (thread IDs, session metadata) are suppressed at the
+  mapping layer — `_map_event` returns `None` and the event is never rendered
+
+**Response contract:**
+
 - compact/full response presentation is a rendering concern
-- long-response progressive disclosure (expandable blockquote, expand/collapse
-  buttons) should derive from one stored response source of truth
-- progress/liveness presentation is also a rendering concern:
-  - providers may observe different low-level events
-  - users should still see one coherent progress vocabulary
-  - provider names, thread ids, and other internal execution details should not
-    leak into normal user-facing progress by default
-
-Progress contract:
-
-- providers should not own the product wording for progress forever
-- the target shape is a shared progress model rendered once for Telegram
-- heartbeat/liveness indicators apply to idle non-content states
-- once visible reply text is streaming, heartbeat should stop rather than
-  editing the draft body with timer text
+- long responses use progressive disclosure: expandable blockquote (≤ 4000
+  chars) or expand/collapse buttons (> 4000 chars)
+- expand/collapse resolves a stable slot reference back to the raw-response
+  ring buffer before re-rendering
+- provider names, thread IDs, and internal details never leak into user-facing
+  progress or response output
 
 ---
 
 ## Component Map
 
 ```
-Telegram transport
-  transport.py
-       |
-       v
-Telegram handlers
-  telegram_handlers.py
-  skill_commands.py
-       |
-       +-------------------+
-       |                   |
-       v                   v
-request_flow.py      doctor.py / ratelimit.py
-       |
-       v
-execution_context.py
-       |
-       +-------------------+
-       |                   |
-       v                   v
-skills.py             session_state.py / storage.py
-store.py / registry.py
-       |
-       v
-providers/base.py
-providers/claude.py
-providers/codex.py
+Telegram updates
+  |
+  v
+transport.py            Normalize InboundMessage / Command / Callback
+  |
+  v
+work_queue.py           Journal update_id, create work item, claim
+  |
+  +----(inline claim)-----+----(worker drain)----+
+  |                        |                      |
+  v                        v                      v
+telegram_handlers.py    worker.py              (same dispatch)
+skill_commands.py
+  |
+  +-----------------+-------------------+
+  |                 |                   |
+  v                 v                   v
+request_flow.py   doctor.py         ratelimit.py
+approvals.py
+  |
+  v
+execution_context.py    Resolve context, hash, model, trust tier
+  |
+  +-----------------+
+  |                 |
+  v                 v
+skills.py         session_state.py / storage.py
+store.py
+registry.py
+  |
+  v
+providers/base.py       Protocol: run, run_preflight, check_health
+providers/claude.py     emit ProgressEvent --> progress.py render()
+providers/codex.py      emit ProgressEvent --> progress.py render()
+  |
+  v
+formatting.py           md_to_telegram_html, split_html, tables
+summarize.py            Ring buffer, compact mode, /raw
+progress.py             ProgressEvent family, shared render()
 ```
 
-This is the intended ownership model:
+Ownership:
 
-- handlers own routing and Telegram I/O
+- transport normalizes inbound, serializes for durability
+- work queue owns deduplication, claiming, crash recovery
+- worker drains unclaimed items; inline path claims synchronously
+- handlers own routing, Telegram I/O, button rendering
 - request flow owns business rules
 - execution context owns resolved runtime identity
-- storage owns persistence
-- providers own subprocess invocation
+- storage owns session persistence
+- providers own subprocess invocation, emit progress events
+- progress owns all user-facing progress HTML wording
+- formatting/summarize own response adaptation
 - skills/store/registry own capabilities
-- formatting/summarize own output adaptation
 
 ---
 
@@ -245,32 +324,24 @@ This is the intended ownership model:
 
 ### SessionState
 
-`SessionState` is the runtime representation of a chat session.
+Runtime representation of a chat session. Stored as JSON in `sessions.db`.
 
 It owns:
 
 - provider identity and provider-local state
 - approval mode
-- active skills
-- role
-- project binding
-- file policy
-- model-profile override
-- compact-mode override
+- active skills and role
+- project binding and file policy
+- model-profile override and compact-mode override
 - pending approval / retry state
 - awaiting credential setup state
 
-It does not own:
-
-- user credentials
-- authorization policy
-- uploads
-- skill contents
-- provider binaries or processes
+It does not own: user credentials, authorization policy, uploads, skill
+contents, provider binaries.
 
 ### PendingApproval / PendingRetry
 
-Pending state must always carry:
+Pending state must carry:
 
 - original requester identity
 - original prompt and image list
@@ -283,69 +354,43 @@ permissions.
 
 ### ResolvedExecutionContext
 
-This is the single authoritative execution identity used by runtime-sensitive
-flows.
+Single authoritative execution identity. It carries:
 
-It carries these identity fields:
+Identity fields: role, active skills, skill digests, provider config digest,
+execution config digest, base extra dirs, project id, effective working dir,
+file policy, provider name.
 
-- role
-- active skills
-- skill digests
-- provider config digest
-- execution config digest
-- base extra dirs
-- project id
-- effective working dir
-- file policy
-- provider name
+Resolved execution controls: effective model profile, effective model ID,
+trust tier, effective allowed roots / extra dirs, provider-facing working dir.
 
-It also carries resolved execution controls used by provider invocation and
-user-visible state, including:
+It is the source of: context hash, `/session` display, provider-facing
+`working_dir`, approval/retry freshness, Codex thread invalidation.
 
-- effective model profile
-- effective model ID
-- trust tier when that tier changes scope or user-visible controls
-- effective allowed roots / extra dirs
-- provider-facing working dir
-
-It is the source of:
-
-- context hash
-- `/session` execution display
-- provider-facing `working_dir`
-- approval and retry freshness checks
-- Codex thread invalidation
-
-Codex thread reuse is valid only when:
-
-- the current resolved execution identity still matches the stored context hash
-- the current process boot ID still matches the stored boot ID
-
-This means thread invalidation depends on both execution identity and process
-continuity.
+Codex thread reuse is valid only when the resolved identity matches the stored
+context hash AND the process boot ID matches the stored boot ID.
 
 ### Provider Contexts
 
 Provider-facing contexts are intentionally narrower than session state.
 
-`PreflightContext` contains:
+`PreflightContext`: extra dirs, system prompt, capability summary, working dir,
+file policy, effective model ID.
 
-- extra dirs
-- system prompt
-- capability summary
-- working dir
-- file policy
-- effective model ID when preflight needs model-aware provider behavior
+`RunContext` extends it with: provider config, credential env,
+permission-bypass flag, effective model ID.
 
-`RunContext` extends it with:
+Providers do not need pending state, session timestamps, or credential setup
+state.
 
-- provider config
-- credential env
-- permission-bypass flag
-- effective model ID
+### RunResult
 
-Providers should not need to know about pending state, session timestamps, or
-credential setup state.
+Provider execution result carrying: text, returncode, timed_out,
+resume_failed, provider_state_updates, denials.
+
+### ProgressEvent
+
+Frozen dataclasses (one per event type) emitted by providers during execution.
+Rendered to Telegram HTML by the shared `render()` function in `progress.py`.
 
 ---
 
@@ -353,52 +398,47 @@ credential setup state.
 
 ### Durable storage
 
-The bot uses SQLite for session state and filesystem storage for everything
-that is naturally file-oriented.
+Two SQLite databases with different lifecycles:
 
-SQLite stores:
+**`sessions.db`** — chat session state:
 
-- chat session rows
-- indexed session summaries (`has_pending`, `has_setup`, `project_id`,
-  `file_policy`)
-- any durable transport-delivery state the product decides to persist
-  (`update_id` tracking, in-flight/queued request markers, or equivalent)
+- session rows (chat_id PK, provider, JSON data, timestamps)
+- indexed summaries (`has_pending`, `has_setup`, `project_id`, `file_policy`)
 
-Filesystem stores:
+**`transport.db`** — update journal and work items:
 
-- uploads per chat
+- `updates` table — every received `update_id` with serialized payload
+- `work_items` table — processable units with state machine
+  (queued/claimed/done/failed/pending_recovery)
+
+**Filesystem** stores:
+
+- uploads per chat (`{data_dir}/uploads/{chat_id}/`)
 - encrypted credentials per user
-- managed skill objects and refs
-- custom skills
-- raw-response ring buffer
+- managed skill objects and refs (`objects/`, `refs/`, `custom/`)
+- raw-response ring buffer (`{data_dir}/raw/{chat_id}/`)
 - staged Codex helper scripts
 
 ### Why this split exists
 
-Session state benefits from:
+Session state benefits from atomic updates, indexed queries, schema evolution.
 
-- atomic updates
-- indexed cross-session queries
-- schema evolution
+Files and artifacts benefit from filesystem semantics, direct provider access,
+operator inspectability.
 
-Files and artifacts benefit from:
-
-- ordinary filesystem semantics
-- direct provider access
-- operator inspectability
+Transport data has a different retention policy and lifecycle than sessions —
+it tracks ephemeral update delivery, not long-lived chat state.
 
 ### Response history and progressive disclosure
 
-Long-response UX should reuse stored raw responses rather than inventing a
-second rendered-state store.
+The raw-response ring buffer (capacity 50 per chat) is the single source of
+truth for `/raw` and expand/collapse flows.
 
-Contract:
-
-- the raw-response history is the source of truth for `/raw` and expand/collapse
-  flows
+- `save_raw()` stores prompt + raw text in a numbered slot
+- `load_raw()` retrieves the latest; `load_raw_by_slot()` retrieves by slot
+- slots rotate FIFO; rotated slots return `None` (expand callback shows
+  "no longer available")
 - rendered compact/full variants are derived views, not separate durable state
-- interactive expand/collapse should resolve a stable response reference back
-  to stored raw content before rendering
 
 ---
 
@@ -412,29 +452,23 @@ Skill resolution is strictly ordered:
 2. managed installed skill
 3. built-in catalog skill
 
-Any feature that displays skill details must use the resolved tier, not infer
-it separately.
+Any feature that displays skill details must use the resolved tier.
 
 ### Managed store model
 
 Managed skills are stored as immutable content-addressed objects with logical
 refs.
 
-Properties:
-
-- install/update are ref operations, not in-place directory mutation
+- install/update are ref operations, not in-place mutation
 - GC removes unreferenced objects conservatively
 - schema guard protects incompatible managed-store versions
-- custom skills remain editable and separate from managed artifacts
 
 ### Registry model
 
-The registry is a source of managed artifacts, not a separate storage model.
+The registry is a source of managed artifacts:
 
-Contract:
-
-- registry artifact is downloaded to staging
-- digest is verified before object creation
+- artifact downloaded to staging
+- digest verified before object creation
 - only verified content becomes a managed object/ref
 
 ---
@@ -445,82 +479,65 @@ Contract:
 
 1. normalize inbound message
 2. authorize user, resolve trust tier
-3. serialize per-chat work
+3. journal update, create work item, claim
 4. load and normalize session
 5. resolve execution context (with trust tier)
 6. check credential satisfaction (using resolved active_skills)
 7. build provider context (from resolved context)
-8. invoke provider
+8. invoke provider (progress events rendered via shared renderer)
 9. persist updated session state
-10. format and send response
-11. deliver directed artifacts (using resolved allowed roots)
+10. format and send response (compact mode, tables, progressive disclosure)
+11. save raw response to ring buffer
+12. deliver directed artifacts (using resolved allowed roots)
 
 ### Approval request
 
 1. resolve execution context
 2. build preflight context
-3. run provider preflight
+3. run provider preflight (read-only, `build_preflight_prompt()`)
 4. store `PendingApproval`
-5. render plan + actions
+5. render plan + approve/reject buttons
 
-Approval succeeds only if:
-
-- pending state exists
-- it is not expired
-- its context hash still matches the current resolved context, recomputed
-  with the same trust_tier that was stored when the request was created
+Approval succeeds only if: pending exists, not expired, context hash matches
+(recomputed with stored trust_tier).
 
 ### Retry request
 
-Retry is the same validation pattern as approval, but includes retry-specific
-permission scope derived from denials.
+Same validation as approval, plus retry-specific permission scope from
+denials.
 
 ### Credential setup
 
 Credential setup is conversational state, not a hidden side effect.
 
-Contract:
-
 - only the owning user may continue setup
 - foreign setup blocks are visible and explain who is active
-- only one credential-setup flow may be active in a shared chat at a time
-- abandoned foreign setup blocks auto-expire after the timeout window
+- one credential-setup flow per shared chat at a time
+- abandoned foreign blocks auto-expire
 - captured credentials are deleted from chat after processing
-- execution loads credentials for the request user, not the clicker or current
-  chat broadly
+- execution loads credentials for the request user, not the clicker
 
-### Transport delivery
-
-Transport delivery is part of runtime correctness, not just deployment.
-
-Contract:
+### Transport delivery and recovery
 
 - one active ingress owner per bot token
-- duplicate Telegram delivery (`update_id`) is idempotent
-- per-chat ordering is preserved
-- if a second request arrives while one is in flight, the user receives a
-  visible acknowledgment and the later request is not silently dropped
-- multiple polling processes for the same token are an operator error to be
-  detected and warned about, not a supported mode
+- duplicate `update_id` delivery is idempotent (journaled, deduplicated)
+- per-chat ordering is enforced by atomic claiming
+- bursty same-chat traffic gets visible acknowledgment; nothing silently
+  dropped
+- crash recovery: `recover_stale_claims()` requeues items left in `claimed`
+  state by a dead worker
+- pending_recovery items require explicit user action (replay or discard)
 
-Scaling path:
-
-- single-process polling and single-process webhook share the same delivery
-  semantics
-- multi-process support means webhook + shared durable state +
-  cross-process serialization, not multi-poller polling
+Scaling path: single-process polling today. Future multi-worker uses webhook +
+shared `transport.db` + worker loop as primary processing path.
 
 ---
 
 ## Access and Safety Model
 
-The bot has several independent safety layers.
-
 ### User authorization
 
-Only allowed users may interact with the bot.
-
-When open mode is enabled, the product resolves users into trust tiers:
+Only allowed users may interact. When open mode is enabled, users resolve to:
 
 - `trusted`: users in the allowed-user set
 - `public`: everyone else
@@ -532,92 +549,68 @@ session state.
 
 ### Approval mode
 
-Approval controls whether execution requires a preflight plan review first.
+Controls whether execution requires preflight plan review.
 
 ### File policy
 
-File policy controls whether the session is inspect-only or may edit.
+Controls whether the session is inspect-only or may edit.
 
 ### Project binding
 
-Project binding controls which working directory is in scope for the session.
+Controls which working directory is in scope.
 
 ### Allowed roots
 
-Allowed filesystem roots derive from the resolved execution context:
+Derive from the resolved execution context:
 
 - `resolved.working_dir` (project root, public root, or default)
 - `resolved.base_extra_dirs` (empty for public users)
 - chat upload dir
 - denial-derived retry dirs
 
-These roots must be computed from `ResolvedExecutionContext`, not from raw
-`config.working_dir` or `config.extra_dirs`. This ensures project-bound chats
-use project roots, public users use public roots, and the roots match what the
-provider actually receives.
+Must be computed from `ResolvedExecutionContext`, not raw config.
 
 ### Public-trust enforcement
 
-Public-mode enforcement has two layers that must stay distinct.
+Two layers:
 
-Execution-scope enforcement (Layer 1 — in `resolve_execution_context`):
+**Execution-scope (in `resolve_execution_context`):** forced inspect policy,
+forced public working dir, stripped extra dirs, stripped skills, disabled
+project binding. These flow automatically into provider context, context hash,
+approval/retry freshness, credential satisfaction, file roots, and artifact
+delivery.
 
-- forced inspect file policy
-- forced public working dir
-- stripped operator extra dirs
-- stripped active skills (no credential prompts, no skill injection)
-- project binding disabled
-
-These resolve into `ResolvedExecutionContext` and automatically flow into
-provider context, context hash, approval/retry freshness, credential
-satisfaction, allowed file roots, and directed artifact delivery. All
-downstream functions must read from the resolved context, never raw session.
-
-Command-availability gating (Layer 2 — in handlers):
-
-- disabling skill management
-- disabling project changes
-- constraining `/send`
-- restricting available model profiles
-
-These are handler-layer concerns because they control what the user may invoke,
-not what execution resolves to.
-
-Model profile selection uses the same trust-tier filtering in both `/model`
-commands and inline keyboard callbacks — public users see only profiles in
-`public_model_profiles`.
+**Command-availability (in handlers):** disabled skill management, disabled
+project changes, constrained `/send`, restricted model profiles. Public users
+see only profiles in `public_model_profiles`.
 
 ---
 
 ## Provider Responsibilities
 
-Provider implementations are responsible for:
+Providers are responsible for:
 
-- command construction
-- subprocess execution
-- progress streaming/parsing
-- provider-local state updates
-- health probes
-- respecting `working_dir`, `extra_dirs`, `file_policy`, effective model, and
-  provider config
+- command construction and subprocess execution
+- mapping raw CLI events to `ProgressEvent` instances
+- provider-local state updates (thread_id, session state)
+- health probes (local + runtime)
+- respecting working_dir, extra_dirs, file_policy, effective model
 
-They are not responsible for:
+They are not responsible for: session persistence, approval decisions,
+credential prompting, skill discovery, progress HTML wording.
 
-- session persistence
-- approval decisions
-- credential prompting
-- skill discovery
-
-### Claude-specific notes
+### Claude-specific
 
 - session-oriented backend
 - inspect mode is best-effort via prompt/context restriction
+- maps stream-json events to progress events inline in `_consume_stream()`
 
-### Codex-specific notes
+### Codex-specific
 
 - thread-oriented backend
-- inspect mode is hard-enforced through sandbox selection
-- thread invalidation depends on the authoritative context hash
+- inspect mode hard-enforced through sandbox selection
+- thread invalidation depends on authoritative context hash + boot ID
+- maps NDJSON events via `_map_event()` classmethod
 
 ---
 
@@ -625,34 +618,17 @@ They are not responsible for:
 
 ### doctor.py
 
-`doctor.py` is the shared health-orchestration layer for both:
+Shared health-orchestration layer for Telegram `/doctor` and CLI entry point.
 
-- Telegram `/doctor`
-- CLI doctor entry point
-
-It owns:
-
-- config validation
-- provider health checks
-- managed-store health checks
-- stale session scanning
-- per-chat skill validation when session/user context is provided
-- public-mode diagnostics (rate limits, public root, trust-profile warnings)
-- transport diagnostics such as polling-conflict detection
-
-The rendering surface differs, but the health logic should not.
+Owns: config validation, provider health, managed-store health, stale session
+scanning, per-chat skill validation, public-mode diagnostics (rate limits,
+public root, trust profiles), transport diagnostics (polling-conflict
+detection).
 
 ### Admin views
 
-Admin views are reporting surfaces over current durable state.
-
-Examples:
-
-- `/admin sessions`
-- session summaries
-- stale pending and setup visibility
-
-These should read normalized current state, not stale or guessed state.
+Reporting surfaces over current durable state: `/admin sessions`, session
+summaries, stale pending and setup visibility.
 
 ---
 
@@ -662,34 +638,37 @@ The test suite is organized around contracts, not only features.
 
 ### Handler and scenario tests
 
-Exercise real user entry points through Telegram handlers.
+Exercise real user entry points through Telegram handlers. Use shared test
+support (`tests/support/handler_support.py`) with `FakeChat`, `FakeProvider`,
+`FakeProgress`, and helpers for `send_text`, `send_command`, `send_callback`.
 
 ### Invariant tests
 
-Protect cross-cutting rules such as:
+Protect cross-cutting rules: context-hash stability, approval/retry freshness,
+inspect-mode enforcement, public-trust enforcement, effective-model
+propagation, credential satisfaction, command/callback parity, registry
+integrity, async non-blocking guarantees, provider-context propagation,
+transport delivery guarantees.
 
-- context-hash stability and sensitivity
-- approval and retry freshness (including trust-tier-aware hash validation)
-- inspect-mode enforcement
-- public-trust enforcement across all runtime paths (execution, credentials,
-  file roots, approval round-trip, `/session` display)
-- effective-model propagation and invalidation
-- credential satisfaction using resolved (not raw) active_skills
-- command/callback parity (same trust-tier filtering on both surfaces)
-- registry integrity
-- async non-blocking guarantees
-- provider-context propagation
-- transport delivery guarantees (`update_id` idempotency, queued acknowledgment)
+### Progress contract tests
+
+Dedicated suite (`test_progress.py`) testing five layers: render() contract
+for all event types, no-internals leak checks, Codex `_map_event` mapping,
+end-to-end pipeline, Claude `_consume_stream` integration.
+
+### Output and compact-mode tests
+
+`test_handlers_output.py` covers compact toggle, `/raw` retrieval, table
+rendering, blockquote and expand/collapse button paths, summary-first prompt
+injection, expand→collapse→expand round-trips, rotated buffer edge case.
 
 ### Edge-case suites
 
-Cover callback races, provider failures, formatting boundaries, and session
-reset behavior.
+Callback races, provider failures, formatting boundaries, session reset.
 
 ### Setup / bootstrap tests
 
-`test_setup.sh` protects the installation and bootstrap path separately from
-the Python test suite.
+`test_setup.sh` protects the installation wizard and generated configs.
 
 ---
 
@@ -700,14 +679,16 @@ The following are internal contracts that should only change deliberately:
 - `SessionState`
 - `PendingApproval` / `PendingRetry` (including `trust_tier` field)
 - `ResolvedExecutionContext`
-- `PreflightContext`
-- `RunContext`
-- `Provider` protocol
-- `check_credential_satisfaction` signature (resolved active_skills, not session)
+- `PreflightContext` / `RunContext`
+- `Provider` protocol and `RunResult`
+- `ProgressEvent` family and `render()` contract
+- `check_credential_satisfaction` signature (resolved active_skills)
 - `validate_pending` signature (trust_tier from stored pending)
-- transport delivery semantics (`update_id` handling, in-flight/queued rules)
+- work-item state machine (queued/claimed/done/failed/pending_recovery)
+- transport delivery semantics (`update_id` handling, claiming rules)
 - managed store layout (`objects/`, `refs/`, `custom/`)
 - registry index format versioning
+- ring-buffer slot format (used by expand/collapse callback data)
 
 Changing these should trigger both code review and invariant test updates.
 
@@ -717,18 +698,20 @@ Changing these should trigger both code review and invariant test updates.
 
 If rebuilding the bot from scratch, preserve this order of responsibility:
 
-1. normalize transport
-2. apply transport-delivery rules (idempotency, queue/ack semantics)
-3. load typed session state
-4. resolve trust tier and authoritative execution context
-5. apply business rules using resolved context (`request_flow`)
+1. normalize transport (inbound types)
+2. journal and deduplicate updates (durable work queue)
+3. claim work item (atomic, per-chat serialized)
+4. load typed session state
+5. resolve trust tier and authoritative execution context
+6. apply business rules using resolved context (`request_flow`)
    - credential checks use resolved active_skills
    - pending validation uses stored trust_tier
-6. build provider-facing context from resolved context
-7. invoke provider
-8. persist session and any durable delivery state
-9. render Telegram-safe output
-10. deliver directed artifacts using resolved allowed roots
+7. build provider-facing context from resolved context
+8. invoke provider (progress events → shared renderer → Telegram)
+9. persist session and durable delivery state
+10. render Telegram-safe output (formatting, compact mode, tables)
+11. save raw response to ring buffer
+12. deliver directed artifacts using resolved allowed roots
 
 That order is more important than the exact module names.
 

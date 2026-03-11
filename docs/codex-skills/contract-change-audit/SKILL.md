@@ -69,6 +69,23 @@ contract.
    - user-visible oracle check: assert on the object the user actually
      sees
 
+## Bug report handoff
+
+When the output is a bug report rather than a fix plan:
+
+- Lead with the exact user-visible false behavior or violated
+  invariant.
+- Prove the incident from primary artifacts before theorizing:
+  timestamps, IDs, durable rows, log lines, and the exact message.
+- State the violated contract in one sentence.
+- For concurrency or recovery bugs, include the interleaving that makes
+  the bug possible and name the completion owner on each path.
+- Name equivalent ingress paths that may share the bug.
+- Call out likely non-solutions so the handoff does not drift into
+  wording-only or timing-hack patches.
+- Make acceptance criteria include the exact false positive that
+  triggered the report and one adjacent regression guard.
+
 ## Completion Bar
 
 Do not call the work complete until:

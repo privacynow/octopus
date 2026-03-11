@@ -19,7 +19,7 @@ from app.storage import (
     resolve_allowed_path,
     save_session,
 )
-from app.request_flow import extra_dirs_from_denials as _extra_dirs_from_denials
+
 from tests.support.config_support import make_config as make_test_config
 
 
@@ -316,54 +316,7 @@ def test_config_isolation():
             config_mod.env_path_for_instance = orig_env_path
 
 
-# =====================================================================
-# Finding 2: /approve must forward extra_dirs from denials
-# =====================================================================
-
-def test_extra_dirs_from_denials_empty():
-    assert _extra_dirs_from_denials([]) == []
-
-
-def test_extra_dirs_from_denials_file_path():
-    denials_file = [{"tool_name": "Write", "tool_input": {"file_path": "/home/user/project/foo.py"}}]
-    dirs = _extra_dirs_from_denials(denials_file)
-    assert "/home/user/project" in dirs
-    assert "/home/user" not in dirs
-
-
-def test_extra_dirs_from_denials_directory():
-    denials_dir = [{"tool_name": "Glob", "tool_input": {"directory": "/home/tinker/private"}}]
-    dirs_dir = _extra_dirs_from_denials(denials_dir)
-    assert "/home/tinker/private" in dirs_dir
-    assert "/home/tinker" not in dirs_dir
-
-
-def test_extra_dirs_from_denials_command():
-    denials_cmd = [{"tool_name": "Bash", "tool_input": {"command": "ls -la"}}]
-    dirs_cmd = _extra_dirs_from_denials(denials_cmd)
-    assert "/" in dirs_cmd
-
-
-def test_extra_dirs_from_denials_multiple():
-    denials_multi = [
-        {"tool_name": "Write", "tool_input": {"file_path": "/etc/hosts"}},
-        {"tool_name": "Read", "tool_input": {"path": "/var/log/syslog"}},
-    ]
-    dirs_multi = _extra_dirs_from_denials(denials_multi)
-    assert "/etc" in dirs_multi
-    assert "/var/log" in dirs_multi
-
-
-def test_extra_dirs_from_denials_mixed():
-    denials_mixed = [
-        {"tool_name": "Write", "tool_input": {"file_path": "/opt/app/config.yaml"}},
-        {"tool_name": "Glob", "tool_input": {"directory": "/opt/data"}},
-    ]
-    dirs_mixed = _extra_dirs_from_denials(denials_mixed)
-    assert "/opt/app" in dirs_mixed
-    assert "/opt/data" in dirs_mixed
-    assert "/opt" not in dirs_mixed
-
+# extra_dirs_from_denials tests migrated to tests/test_request_flow.py
 
 # =====================================================================
 # Finding 3: /new preserves approval mode

@@ -168,7 +168,7 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **780 pytest tests** + 36 bash tests across 30 files.
+Current suite: **780 pytest tests** + 36 bash tests across 29 files.
 
 | File | Tests | What it covers |
 |------|------:|----------------|

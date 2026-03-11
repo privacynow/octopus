@@ -238,13 +238,18 @@ def enqueue_work_item(
     Only used by tests that exercise low-level primitives separately.
     Production code should use ``record_and_enqueue``.
 
-    When *worker_id* is provided the item starts as ``claimed``
-    (matching production behavior for inline-handler-owned items).
+    When *worker_id* is provided, the item starts as ``claimed`` only if
+    the chat has no existing claimed item (same rule as
+    ``record_and_enqueue``); otherwise it is inserted as ``queued``.
     """
     conn = _transport_db(data_dir)
     item_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
-    if worker_id:
+    can_claim = worker_id and not conn.execute(
+        "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
+        (chat_id,),
+    ).fetchone()
+    if can_claim:
         conn.execute(
             "INSERT INTO work_items "
             "(id, chat_id, update_id, state, worker_id, claimed_at, created_at) "

@@ -1686,9 +1686,9 @@ usable before billing is layered on.
 All build phases (A–IV), public trust (I), model profiles (IIa/b), compact/
 latency (III), transport reliability (IV), and the multi-worker webhook
 extension (Ext) have shipped. See [STATUS-commercial-polish.md](STATUS-commercial-polish.md)
-for the full build log. 791 pytest + 36 bash tests.
+for the full build log. 780 pytest + 36 bash tests.
 
-The remaining work falls into six priority tiers, ordered by
+The remaining work falls into seven priority tiers, ordered by
 effort-to-confidence ratio.
 
 ### Priority 1: Test-suite ownership refactor

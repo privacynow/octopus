@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import contextvars
 import html
 import logging
 import re
@@ -166,13 +167,18 @@ async def _format_provider_error(raw_text: str, returncode: int) -> str:
 
 
 @contextlib.asynccontextmanager
-async def _chat_lock(chat_id: int, *, message=None, query=None):
+async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int | None = None):
     """Acquire the per-chat lock with visible queued feedback.
 
     If the lock is already held (another request is in-flight), send a
     visible acknowledgment before blocking.  Only handlers that actually
     serialize on the lock should use this — lightweight read-only commands
     like /session should use the lock directly or not at all.
+
+    When ``update_id`` is provided, claim the specific work item for that
+    update rather than the oldest queued item.  This prevents a stale
+    recovered item from being silently marked done when a fresh update
+    acquires the lock first.
 
     Yields ``True`` if queued feedback was sent (callback answer slot
     consumed), ``False`` otherwise.  Callback handlers should skip their
@@ -193,8 +199,13 @@ async def _chat_lock(chat_id: int, *, message=None, query=None):
         elif query is not None:
             await query.answer("Working on your previous request \u2014 yours is queued.")
     async with lock:
-        # Claim the next durable work item for this chat
-        item = work_queue.claim_next(data_dir, chat_id, _boot_id)
+        # Resolve update_id: explicit param > context var > None (fallback to claim_next).
+        effective_update_id = update_id if update_id is not None else _current_update_id.get()
+        # Claim the durable work item for this update (or oldest if no update_id).
+        if effective_update_id is not None:
+            item = work_queue.claim_for_update(data_dir, chat_id, effective_update_id, _boot_id)
+        else:
+            item = work_queue.claim_next(data_dir, chat_id, _boot_id)
         item_id = item["id"] if item else None
         claimed_update_id = item["update_id"] if item else None
         try:
@@ -217,6 +228,13 @@ async def _chat_lock(chat_id: int, *, message=None, query=None):
                 if claimed_update_id:
                     _pending_work_items.pop(claimed_update_id, None)
 
+
+# Current update_id for the active handler — set by decorators so _chat_lock
+# can claim the correct work item even in callback handlers that don't pass
+# update_id explicitly.
+_current_update_id: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+    "_current_update_id", default=None,
+)
 
 # These get set by build_application()
 _config: BotConfig | None = None
@@ -397,6 +415,7 @@ def _command_handler(fn):
         if event is None or not is_allowed(event.user):
             _complete_pending_work_item(uid)
             return
+        token = _current_update_id.set(uid)
         try:
             await fn(event, update, context)
         except Exception:
@@ -404,6 +423,8 @@ def _command_handler(fn):
             raise
         else:
             _complete_pending_work_item(uid)
+        finally:
+            _current_update_id.reset(token)
     return wrapper
 
 
@@ -429,6 +450,7 @@ def _callback_handler(fn):
             await query.answer("Not authorized.", show_alert=True)
             _complete_pending_work_item(uid)
             return
+        token = _current_update_id.set(uid)
         try:
             await fn(event, query)
         except Exception:
@@ -436,6 +458,8 @@ def _callback_handler(fn):
             raise
         else:
             _complete_pending_work_item(uid)
+        finally:
+            _current_update_id.reset(token)
     return wrapper
 
 
@@ -931,6 +955,7 @@ async def request_approval(
         resolved.role, resolved.active_skills, preflight_extra_dirs,
         provider_name=prov.name,
         working_dir=resolved.working_dir, file_policy=resolved.file_policy,
+        effective_model=resolved.effective_model,
     )
 
     # Use the single authoritative context hash
@@ -1153,7 +1178,7 @@ async def cmd_new(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chat_id = event.chat_id
     cfg = _cfg()
     prov = _prov()
-    async with _chat_lock(chat_id, message=update.effective_message):
+    async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         old_session = _load(chat_id)
         user_id = event.user.id
         if foreign_skill_setup(old_session, user_id):
@@ -1237,7 +1262,7 @@ async def cmd_approval(event, update: Update, context: ContextTypes.DEFAULT_TYPE
     if arg not in {"on", "off", "status"}:
         await update.effective_message.reply_text("Use /approval on, /approval off, or /approval status.")
         return
-    async with _chat_lock(chat_id, message=update.effective_message):
+    async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = _load(chat_id)
         if arg == "status":
             mode = session.approval_mode
@@ -1266,13 +1291,13 @@ async def cmd_approval(event, update: Update, context: ContextTypes.DEFAULT_TYPE
 
 @_command_handler
 async def cmd_approve(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    async with _chat_lock(event.chat_id, message=update.effective_message):
+    async with _chat_lock(event.chat_id, message=update.effective_message, update_id=update.update_id):
         await approve_pending(event.chat_id, update.effective_message)
 
 
 @_command_handler
 async def cmd_reject(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    async with _chat_lock(event.chat_id, message=update.effective_message):
+    async with _chat_lock(event.chat_id, message=update.effective_message, update_id=update.update_id):
         await reject_pending(event.chat_id, update.effective_message)
 
 
@@ -1348,9 +1373,11 @@ async def cmd_export(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.effective_message.reply_text("No conversation history to export.")
         return
 
-    # Add session metadata header
+    # Add session metadata header — use resolved context for user-visible data
     session = _load(chat_id)
-    skills = session.active_skills
+    trust = _trust_tier(normalize_user(update.effective_user))
+    resolved = _resolve_context(session, trust_tier=trust)
+    skills = resolved.active_skills
     header_lines = [
         f"Chat ID: {chat_id}",
         f"Provider: {session.provider}",
@@ -1509,7 +1536,7 @@ async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     chat_id = event.chat_id
     user_id = event.user.id
 
-    async with _chat_lock(chat_id, message=update.effective_message):
+    async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = _load(chat_id)
 
         setup = session.awaiting_skill_setup
@@ -1681,7 +1708,7 @@ async def cmd_compact(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.effective_message.reply_text("Usage: /compact on|off")
         return
 
-    async with _chat_lock(chat_id, message=update.effective_message):
+    async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = _load(chat_id)
         session.compact_mode = mode == "on"
         _save(chat_id, session)
@@ -1734,7 +1761,7 @@ async def cmd_role(event, update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if args[0].lower() == "clear":
         cfg = _cfg()
-        async with _chat_lock(chat_id, message=update.effective_message):
+        async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
             session = _load(chat_id)
             session.role = cfg.role
             _save(chat_id, session)
@@ -1742,7 +1769,7 @@ async def cmd_role(event, update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     role_text = " ".join(args)
-    async with _chat_lock(chat_id, message=update.effective_message):
+    async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = _load(chat_id)
         session.role = role_text
         _save(chat_id, session)
@@ -1775,7 +1802,7 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await msg.reply_text(
                 f"Unknown profile. Available: {', '.join(available)}")
             return
-        async with _chat_lock(chat_id, message=msg):
+        async with _chat_lock(chat_id, message=msg, update_id=update.update_id):
             session = _load(chat_id)
             session.model_profile = arg
             _save(chat_id, session)
@@ -1851,7 +1878,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             welcome += "\nApproval mode is on \u2014 I'll show a plan before acting."
         await message.chat.send_message(welcome)
 
-    async with _chat_lock(chat_id, message=message):
+    async with _chat_lock(chat_id, message=message, update_id=update.update_id):
         await message.chat.send_action(ChatAction.TYPING)
         session = _load(chat_id)
 
@@ -2226,15 +2253,16 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
                 parse_mode=ParseMode.HTML,
             )
             return
-        session = _load(event.chat_id)
-        old_project = session.project_id
-        if old_project == project_name:
-            await msg.reply_text(f"Already using project <code>{html.escape(project_name)}</code>.", parse_mode=ParseMode.HTML)
-            return
-        session.project_id = project_name
-        session.provider_state = _prov().new_provider_state()
-        session.clear_pending()
-        _save(event.chat_id, session)
+        async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
+            session = _load(event.chat_id)
+            old_project = session.project_id
+            if old_project == project_name:
+                await msg.reply_text(f"Already using project <code>{html.escape(project_name)}</code>.", parse_mode=ParseMode.HTML)
+                return
+            session.project_id = project_name
+            session.provider_state = _prov().new_provider_state()
+            session.clear_pending()
+            _save(event.chat_id, session)
         proj_root = next(root for name, root, _ in cfg.projects if name == project_name)
         await msg.reply_text(
             f"Switched to project <code>{html.escape(project_name)}</code>\n"
@@ -2245,14 +2273,15 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     if arg == "clear":
-        session = _load(event.chat_id)
-        if not session.project_id:
-            await msg.reply_text("No project is active.")
-            return
-        session.project_id = ""
-        session.provider_state = _prov().new_provider_state()
-        session.clear_pending()
-        _save(event.chat_id, session)
+        async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
+            session = _load(event.chat_id)
+            if not session.project_id:
+                await msg.reply_text("No project is active.")
+                return
+            session.project_id = ""
+            session.provider_state = _prov().new_provider_state()
+            session.clear_pending()
+            _save(event.chat_id, session)
         await msg.reply_text(
             f"Project cleared. Using instance default: <code>{html.escape(str(cfg.working_dir))}</code>\n"
             f"Provider session reset.",
@@ -2284,15 +2313,16 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     arg = event.args[0].lower() if event.args else ""
 
     if arg in ("inspect", "edit"):
-        session = _load(event.chat_id)
-        old_policy = session.file_policy or "edit"
-        if old_policy == arg:
-            await msg.reply_text(f"File policy is already <code>{html.escape(arg)}</code>.", parse_mode=ParseMode.HTML)
-            return
-        session.file_policy = arg
-        session.provider_state = _prov().new_provider_state()
-        session.clear_pending()
-        _save(event.chat_id, session)
+        async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
+            session = _load(event.chat_id)
+            old_policy = session.file_policy or "edit"
+            if old_policy == arg:
+                await msg.reply_text(f"File policy is already <code>{html.escape(arg)}</code>.", parse_mode=ParseMode.HTML)
+                return
+            session.file_policy = arg
+            session.provider_state = _prov().new_provider_state()
+            session.clear_pending()
+            _save(event.chat_id, session)
         await msg.reply_text(
             f"File policy set to <code>{html.escape(arg)}</code>.\nProvider session reset.",
             parse_mode=ParseMode.HTML,
@@ -2391,7 +2421,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
                 "<i>Replaying your request after restart\u2026</i>",
                 parse_mode=ParseMode.HTML,
             )
-            async with _chat_lock(chat_id, message=message):
+            async with _chat_lock(chat_id, message=message, update_id=item.get("update_id")):
                 session = _load(chat_id)
                 if session.approval_mode == "on":
                     await request_approval(

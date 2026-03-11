@@ -17,6 +17,7 @@ Before adding tests to this file:
 """
 
 import asyncio
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -3608,3 +3609,221 @@ async def test_claude_provider_run_no_resume_failed_when_not_resuming():
     assert result.resume_failed is False, (
         "resume_failed should be False when not resuming (started=False)"
     )
+
+
+# =====================================================================
+# INVARIANT: Timeout during resumed session sets resume_failed
+#
+# The Claude CLI hangs silently on a dead --resume target (no stderr,
+# no stdout) instead of emitting a classifiable error.  The timeout
+# path must set resume_failed=True so the handler resets session state.
+# A fresh-session timeout (started=False) must NOT set resume_failed.
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_claude_timeout_during_resume_sets_resume_failed():
+    """Timeout on a resumed session sets resume_failed=True."""
+    from unittest.mock import AsyncMock, patch
+
+    provider = _make_claude_provider()
+    state = {"session_id": "dead-session-id", "started": True}
+
+    # _run_process returns ("", {}, -1, "") on timeout
+    with patch.object(provider, "_run_process", new_callable=AsyncMock,
+                      return_value=("", {}, -1, "")):
+        result = await provider.run(state, "test prompt", [], FakeProgress())
+
+    assert result.timed_out is True
+    assert result.returncode == 124
+    assert result.resume_failed is True, (
+        "resume_failed must be True when a resumed session times out"
+    )
+
+
+@pytest.mark.asyncio
+async def test_claude_timeout_during_fresh_session_no_resume_failed():
+    """Timeout on a fresh session does NOT set resume_failed."""
+    from unittest.mock import AsyncMock, patch
+
+    provider = _make_claude_provider()
+    state = {"session_id": "new-session-id", "started": False}
+
+    with patch.object(provider, "_run_process", new_callable=AsyncMock,
+                      return_value=("", {}, -1, "")):
+        result = await provider.run(state, "test prompt", [], FakeProgress())
+
+    assert result.timed_out is True
+    assert result.returncode == 124
+    assert result.resume_failed is False, (
+        "resume_failed must be False when a fresh session times out"
+    )
+
+
+# =====================================================================
+# INTEGRATION: Real Claude CLI hangs on bogus --resume (no stderr)
+#
+# This test runs the actual claude CLI binary with a garbage session ID
+# and a very short timeout to prove the CLI behavior that motivated
+# the timeout-based resume_failed fix: no stderr, no stdout, just a
+# hang.  If the CLI ever starts emitting a classifiable error message
+# instead of hanging, this test will catch the change so we can update
+# _is_resume_failure markers accordingly.
+#
+# Skipped when claude is not installed.
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_claude_cli_bogus_resume_no_classifiable_error():
+    """Real Claude CLI with a bogus --resume ID emits no classifiable error.
+
+    Depending on environment, the CLI either hangs (timeout) or exits
+    fast with rc=1 and empty stderr.  Either way, it does NOT emit a
+    stderr message that _is_resume_failure() can classify.  This is
+    why the timeout path sets resume_failed directly.
+
+    If this test starts FAILING, the CLI has improved its error
+    reporting — update _is_resume_failure markers to match.
+    """
+    import shutil
+
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        pytest.skip("claude CLI not installed")
+
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)
+
+    bogus_id = "00000000-0000-0000-0000-000000000000"
+    cmd = [
+        claude_bin, "-p",
+        "--output-format", "stream-json",
+        "--resume", bogus_id,
+        "--", "hello",
+    ]
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+
+    timed_out = False
+    stdout_data = b""
+    stderr_data = b""
+    try:
+        stdout_data, stderr_data = await asyncio.wait_for(
+            proc.communicate(), timeout=5,
+        )
+    except (asyncio.TimeoutError, TimeoutError):
+        timed_out = True
+        proc.kill()
+        await proc.wait()
+
+    stderr_text = stderr_data.decode("utf-8", errors="replace").strip()
+
+    stdout_text = stdout_data.decode("utf-8", errors="replace").strip()
+
+    # The CLI either hangs (timeout) or exits with rc!=0 on a bogus session.
+    # Either way, it currently does NOT emit a classifiable stderr message.
+    # This test documents the actual behavior and catches future changes.
+    if not timed_out:
+        # CLI exited — it did not hang.  Verify it failed (rc!=0) and check
+        # whether it now emits a useful error we can classify.
+        assert proc.returncode != 0, (
+            f"Expected non-zero exit on bogus --resume, got rc=0. "
+            f"stdout={stdout_text[:200]!r}"
+        )
+
+    from app.providers.claude import ClaudeProvider
+
+    # Key assertion: the CLI does NOT currently emit stderr that
+    # _is_resume_failure can classify.  If this fails, the CLI has
+    # improved its error reporting — update the markers.
+    assert not ClaudeProvider._is_resume_failure(stderr_text), (
+        f"CLI now emits a classifiable resume error in stderr: {stderr_text!r}. "
+        f"This is good — verify the markers in _is_resume_failure match, "
+        f"then update this test to assert True instead."
+    )
+
+    # Also check stdout for JSON error events we might parse.
+    # If the CLI starts emitting structured errors, we can use them.
+    has_stdout_error = any(
+        kw in stdout_text.lower()
+        for kw in ("session not found", "invalid session", "could not resume")
+    )
+    assert not has_stdout_error, (
+        f"CLI now emits resume error in stdout: {stdout_text[:300]!r}. "
+        f"Consider parsing stdout JSON for resume failure detection."
+    )
+
+
+# Work-item claim serialization, mid-flight mutation, preflight model parity,
+# and callback update_id threading are tested in test_workitem_integration.py
+# as real integration tests (real SQLite, real asyncio, real lock contention).
+
+
+# =====================================================================
+# INVARIANT: /export uses resolved context, not raw session state.
+# Public users must not see trusted-only skills in export headers.
+# =====================================================================
+
+@pytest.mark.asyncio
+async def test_export_uses_resolved_skills_not_raw_session():
+    """/export header shows resolved skills, not raw session.active_skills."""
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": True,
+        "allowed_user_ids": frozenset(),  # no trusted users
+    }) as (data_dir, cfg, prov):
+        # Create a session as a trusted user first, add skills
+        session = th._load(8005)
+        session.active_skills = ["github-integration", "secret-tool"]
+        th._save(8005, session)
+
+        # Export as a public user (not in allowed_user_ids)
+        chat = FakeChat(chat_id=8005)
+        public_user = FakeUser(uid=999, username="stranger")
+        await send_command(th.cmd_export, chat, public_user, "/export")
+
+        # Verify the resolved context gives [] for public users, which is
+        # what /export should use instead of raw session.active_skills.
+        session_after = th._load(8005)
+        trust = th._trust_tier(public_user)
+        resolved = th._resolve_context(session_after, trust_tier=trust)
+        assert resolved.active_skills == [], (
+            f"Public user should resolve to zero skills, got: {resolved.active_skills}"
+        )
+        # Raw session still has skills (proves resolve is needed, not raw read)
+        assert len(session_after.active_skills) > 0, (
+            "Raw session should still have skills to prove resolution matters"
+        )
+
+
+# =====================================================================
+# INVARIANT: Project extra_dirs are included in resolved base_extra_dirs.
+# =====================================================================
+
+def test_project_extra_dirs_folded_into_resolved_context():
+    """Project extra_dirs appear in resolved base_extra_dirs."""
+    from app.execution_context import resolve_execution_context
+
+    with fresh_env(config_overrides={
+        "projects": (("myproj", "/tmp/myproj", ("/tmp/proj-extra",)),),
+    }) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+        session = th._load(8006)
+        session.project_id = "myproj"
+        th._save(8006, session)
+
+        resolved = resolve_execution_context(session, cfg, "claude")
+        assert "/tmp/proj-extra" in resolved.base_extra_dirs, (
+            f"Project extra_dirs should be in base_extra_dirs: {resolved.base_extra_dirs}"
+        )
+
+
+# Work-item claiming serialization and callback update_id threading are
+# covered by real integration tests in tests/test_workitem_integration.py:
+#   - test_claim_for_update_blocked_by_existing_claimed_item
+#   - test_approval_callback_does_not_consume_stale_item

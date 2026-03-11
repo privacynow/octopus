@@ -2,24 +2,30 @@
 
 Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-10):** Restart recovery, resource hardening,
-> approval wording, and engineering standards.
+> **Latest change (2026-03-10):** Claude resume timeout fix — timeout
+> during a resumed session now sets `resume_failed=True`, breaking the
+> stuck-session loop. Integration test against real Claude CLI confirmed
+> the CLI emits no classifiable stderr for dead sessions. Prior: work-item
+> claim fix, mid-flight mutation serialization, preflight model parity,
+> export trust enforcement, project extra_dirs contract.
 >
 > Restart recovery (two bugs, separately tracked):
 > - Bug 1 (fixed): worker_dispatch infinite replay loop. Recovered items
 >   that are interrupted again during replay now finalize instead of staying
 >   claimed forever. Replay failures re-raise so worker_loop marks failed.
-> - Bug 2 (narrowed, evidence gap remains): Claude resume state poisoning.
+> - Bug 2 (fixed): Claude resume state poisoning.
 >   `RunResult.resume_failed` field provides typed evidence from the provider.
 >   Claude provider parses stderr for session-not-found/invalid-session
 >   markers and sets `resume_failed=True` only when the resume target is
->   dead. Generic errors during a healthy resumed session no longer trigger
+>   dead. Generic errors during a healthy resumed session do not trigger
 >   reset. Codex retains its existing thread_id clear on any resume error.
 >   False-positive test confirms generic errors preserve session state.
->   **Evidence gap:** handler logic and classifier are tested, but there is
->   no integration test proving the real Claude CLI always surfaces
->   dead-session signals in stderr. If the CLI changes its error format,
->   `resume_failed` will silently stop firing. See open items.
+>   **Integration test confirmed:** the real Claude CLI does NOT emit
+>   classifiable stderr on a dead session — it either hangs (env-dependent)
+>   or exits rc=1 with empty stderr. The timeout path now sets
+>   `resume_failed=True` when `is_resume` is true, which is the primary
+>   recovery mechanism. The stderr classifier remains as defense in depth
+>   in case a future CLI version emits structured errors.
 >
 > Resource and correctness: subprocess leak fix in summarize.py, regex
 > backreference injection fix in skills.py, cancelled tasks now awaited in
@@ -34,6 +40,24 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 > Test improvements: mock.patch replaces module global mutation, sys.executable
 > replaces hardcoded python3. Engineering standards updated with pre-merge
 > gate checklist, bug decomposition rules, completion-owner rules.
+>
+> Correctness fixes (latest):
+> - **Work-item claim (High):** `_chat_lock` now takes `update_id` and uses
+>   `claim_for_update()` to claim the specific item for the current update.
+>   Stale recovered items are no longer silently marked done when a fresh
+>   update acquires the lock first. Worker_loop still uses `claim_next`.
+> - **Mid-flight /project /policy (High):** `/project use|clear` and
+>   `/policy inspect|edit` now serialize with `_chat_lock`, preventing
+>   provider_state mutation while a request is in-flight.
+> - **Preflight model parity (Medium):** `PreflightContext` now carries
+>   `effective_model`. Approval preflight uses the same model as execution.
+> - **Export trust enforcement (Medium):** `/export` uses resolved execution
+>   context for the header, not raw `session.active_skills`. Public users
+>   no longer see trusted-only skills in export output.
+> - **Project extra_dirs (Low):** `resolve_execution_context` now folds
+>   `project_binding.extra_dirs` into `base_extra_dirs`, honoring the
+>   allowed-roots contract.
+> 720 tests passing.
 
 ---
 
@@ -63,30 +87,24 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 
 ## Open Items
 
-### 1. Claude resume failure detection depends on unverified stderr format
+### ~~1. Claude resume failure detection depends on unverified stderr format~~ (resolved)
 
-**Contract:** `resume_failed` should be True when and only when the
-resume target is dead/invalid.
+**Resolution:** Integration test (`test_claude_cli_bogus_resume_no_classifiable_error`)
+confirmed the real Claude CLI does NOT emit classifiable stderr for a
+dead session. Depending on environment, it either hangs silently or
+exits rc=1 with empty stderr/stdout.
 
-**Current state:** `ClaudeProvider._is_resume_failure()` checks stderr
-for a hardcoded list of markers (`"session not found"`, `"invalid
-session"`, etc.). Handler logic and classifier are fully tested. But
-there is no integration test against the real Claude CLI proving it
-emits these markers for a dead session. If the CLI changes its error
-wording, `resume_failed` silently stops firing and the handler falls
-back to the safe default (no reset), which means a dead session stays
-poisoned until the user runs `/new`.
+**Fix:** `ClaudeProvider.run()` now sets `resume_failed=True` on the
+timeout path when `is_resume` is true. This is the primary recovery
+mechanism — the handler resets session state and the next request
+starts a fresh session. The stderr classifier (`_is_resume_failure`)
+remains as defense in depth for a future CLI version that emits
+structured errors.
 
-**What's needed:** A manual or CI smoke test that creates a session,
-deletes or invalidates it, then `--resume`s and verifies stderr
-contains a recognized marker. Alternatively, Claude CLI could expose a
-structured error code for session-not-found, which would replace the
-stderr parsing entirely.
-
-**Fallback behavior:** If the classifier fails to fire, the session
-stays intact (no false reset). The user can always recover with
-`/new`. This is the safe direction — it trades stale sessions for
-no false resets.
+**Tests added:**
+- `test_claude_timeout_during_resume_sets_resume_failed` — provider unit
+- `test_claude_timeout_during_fresh_session_no_resume_failed` — false-positive guard
+- `test_claude_cli_bogus_resume_no_classifiable_error` — integration against real CLI
 
 ---
 
@@ -96,7 +114,7 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **704 pytest tests** + 35 bash tests across 31 entrypoints.
+Current suite: **707 pytest tests** + 35 bash tests across 31 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -115,7 +133,7 @@ Current suite: **704 pytest tests** + 35 bash tests across 31 entrypoints.
 | `test_handlers_ratelimit.py` | 6 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
 | `test_handlers_store.py` | 13 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle, callback flows (skill_add confirm/cancel, skill_update confirm/cancel/non-admin alert, unauthorized alert), markup removal verification. |
 | `test_high_risk.py` | 29 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
-| `test_invariants.py` | 148 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2), update-ID idempotency across all entry points (4: message, decorated command, non-decorated command, callback), mixed ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential check with resolved skills (2), model command/callback parity (4), cross-feature invariants (6: public+model escalation, inspect+model, compact+public, project+policy+approval+model), polling conflict detection (3), prompt weight in /doctor with resolved context (2), _chat_lock queued feedback (3), contended callback single-answer (3: approval, settings, clear-cred), shutdown-interrupted runs stay claimed for recovery, all signals (rc<0) treated as interrupted (4), provider error feedback (2: empty output, long output), global error handler (3: stale callback, non-Update, real Update notification), decorator exceptions mark work items failed (2: command, callback), summarizer subprocess killed on timeout, callback None-event completes work item, provider-neutral progress wording (5: initial status claude/codex, resume, timeout, terminal), Claude/Codex thinking capitalization (2), Codex thread ID suppression (3), Codex compaction wording, heartbeat idle firing, heartbeat stops on content, heartbeat clean cancellation, Claude content_started signal, Codex content_started signal (final text), Codex content_started on draft text, heartbeat respects recent progress updates, approval initial status neutral. |
+| `test_invariants.py` | 151 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2), update-ID idempotency across all entry points (4: message, decorated command, non-decorated command, callback), mixed ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential check with resolved skills (2), model command/callback parity (4), cross-feature invariants (6: public+model escalation, inspect+model, compact+public, project+policy+approval+model), polling conflict detection (3), prompt weight in /doctor with resolved context (2), _chat_lock queued feedback (3), contended callback single-answer (3: approval, settings, clear-cred), shutdown-interrupted runs stay claimed for recovery, all signals (rc<0) treated as interrupted (4), provider error feedback (2: empty output, long output), global error handler (3: stale callback, non-Update, real Update notification), decorator exceptions mark work items failed (2: command, callback), summarizer subprocess killed on timeout, callback None-event completes work item, provider-neutral progress wording (5: initial status claude/codex, resume, timeout, terminal), Claude/Codex thinking capitalization (2), Codex thread ID suppression (3), Codex compaction wording, heartbeat idle firing, heartbeat stops on content, heartbeat clean cancellation, Claude content_started signal, Codex content_started signal (final text), Codex content_started on draft text, heartbeat respects recent progress updates, approval initial status neutral. |
 | `test_ratelimit.py` | 8 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_registry.py` | 8 | Skill registry: index parsing (valid/bad version/non-JSON), search, artifact download/extraction, store integration (digest match/mismatch). |
 | `test_skills.py` | 43 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |

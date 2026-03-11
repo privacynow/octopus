@@ -218,11 +218,56 @@ def update_payload(data_dir: Path, update_id: int, payload: str) -> None:
     conn.commit()
 
 
+def claim_for_update(data_dir: Path, chat_id: int, update_id: int, worker_id: str) -> dict[str, Any] | None:
+    """Atomically claim the work item for a specific update_id.
+
+    Returns None if no matching queued item exists or if another item
+    for this chat is already claimed (preserving per-chat serialization).
+    This is the preferred claim path for inline handlers — it ensures the
+    handler processes the item that corresponds to its own update, not a
+    stale recovered item.
+    """
+    conn = _transport_db(data_dir)
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT id FROM work_items "
+            "WHERE chat_id = ? AND update_id = ? AND state = 'queued' "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed'"
+            ")",
+            (chat_id, update_id, chat_id),
+        ).fetchone()
+        if row is None:
+            conn.execute("COMMIT")
+            return None
+        item_id = row["id"]
+        conn.execute(
+            "UPDATE work_items SET state = 'claimed', worker_id = ?, claimed_at = ? "
+            "WHERE id = ?",
+            (worker_id, now, item_id),
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+    item = conn.execute(
+        "SELECT * FROM work_items WHERE id = ?", (item_id,)
+    ).fetchone()
+    return dict(item) if item else None
+
+
 def claim_next(data_dir: Path, chat_id: int, worker_id: str) -> dict[str, Any] | None:
     """Atomically claim the next queued work item for a chat.
 
     Returns None if no claimable item exists (either nothing queued or
     another item for this chat is already claimed).
+
+    Prefer claim_for_update() in inline handlers; this function is for
+    the worker_loop recovery path where the worker doesn't know which
+    specific update to claim.
     """
     conn = _transport_db(data_dir)
     now = datetime.now(timezone.utc).isoformat()

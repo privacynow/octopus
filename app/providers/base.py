@@ -22,6 +22,7 @@ class PreflightContext:
     capability_summary: str  # Phase 3; empty string in Phase 1
     working_dir: str = ""  # Per-chat project override; empty = use config default
     file_policy: str = ""  # "inspect" or "edit"; empty = use config default
+    effective_model: str = ""  # resolved from model profiles; empty = use config.model
 
 
 @dataclass
@@ -30,7 +31,6 @@ class RunContext(PreflightContext):
     provider_config: dict = field(default_factory=dict)  # Phase 3
     credential_env: dict[str, str] = field(default_factory=dict)  # Phase 2
     skip_permissions: bool = False  # bypass permission checks (user already approved)
-    effective_model: str = ""  # resolved from model profiles; empty = use config.model
 
 
 class ProgressSink(Protocol):

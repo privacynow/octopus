@@ -153,11 +153,15 @@ def resolve_execution_context(
     # File policy: public users forced to inspect
     file_policy = "inspect" if trust_tier == "public" else session.file_policy
 
-    # Extra dirs: public users get none (no operator extra dirs)
-    base_extra_dirs = (
-        [] if trust_tier == "public"
-        else sorted(str(d) for d in config.extra_dirs)
-    )
+    # Extra dirs: public users get none (no operator extra dirs).
+    # Project extra_dirs are folded in alongside config extra_dirs.
+    if trust_tier == "public":
+        base_extra_dirs: list[str] = []
+    else:
+        dirs = sorted(str(d) for d in config.extra_dirs)
+        if project_binding and project_binding.extra_dirs:
+            dirs.extend(sorted(project_binding.extra_dirs))
+        base_extra_dirs = dirs
 
     # Skills: public users get no active skills
     active_skills = [] if trust_tier == "public" else session.active_skills

@@ -352,7 +352,13 @@ class ClaudeProvider:
                 pass
 
         if rc == -1:
-            return RunResult(text="", timed_out=True, returncode=124)
+            # A timeout during a resumed session is strong evidence the session
+            # is dead — the CLI hangs silently instead of emitting an error.
+            # Fresh-session timeouts are just slow API; do NOT reset those.
+            return RunResult(
+                text="", timed_out=True, returncode=124,
+                resume_failed=is_resume,
+            )
 
         if rc != 0:
             return RunResult(

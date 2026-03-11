@@ -767,6 +767,7 @@ def build_preflight_context(
     provider_name: str = "",
     working_dir: str = "",
     file_policy: str = "",
+    effective_model: str = "",
 ) -> PreflightContext:
     """Convenience builder for PreflightContext."""
     cap_summary = build_capability_summary(provider_name, active_skills) if provider_name else ""
@@ -776,6 +777,7 @@ def build_preflight_context(
         capability_summary=cap_summary,
         working_dir=working_dir,
         file_policy=file_policy,
+        effective_model=effective_model,
     )
 
 

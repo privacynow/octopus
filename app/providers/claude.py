@@ -166,6 +166,7 @@ class ClaudeProvider:
                 continue
 
             etype = event.get("type", "")
+            log.debug("claude raw event: %s", line[:500])
 
             if etype == "stream_event":
                 inner = event.get("event", {})

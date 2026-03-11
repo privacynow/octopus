@@ -166,8 +166,17 @@ async def _format_provider_error(raw_text: str, returncode: int) -> str:
     return html.escape(truncated)
 
 
+class ClaimBlocked(Exception):
+    """Raised by _chat_lock when a worker already holds a claimed item for this chat.
+
+    The handler must not run — its work item stays queued and will be
+    picked up by the worker_loop after the current item completes.
+    """
+
+
 @contextlib.asynccontextmanager
-async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int | None = None):
+async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int | None = None,
+                     worker_item: dict | None = None):
     """Acquire the per-chat lock with visible queued feedback.
 
     If the lock is already held (another request is in-flight), send a
@@ -179,6 +188,15 @@ async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int |
     update rather than the oldest queued item.  This prevents a stale
     recovered item from being silently marked done when a fresh update
     acquires the lock first.
+
+    When ``worker_item`` is provided (worker_dispatch path), the item was
+    already claimed externally by ``claim_next_any``.  The lock is acquired
+    for in-memory serialization but no claiming or completion is done —
+    worker_loop owns the item lifecycle.
+
+    Raises ``ClaimBlocked`` if ``claim_for_update`` returns None because
+    another item for this chat is already claimed (worker/live-handler
+    race).  The caller must bail out without running the handler body.
 
     Yields ``True`` if queued feedback was sent (callback answer slot
     consumed), ``False`` otherwise.  Callback handlers should skip their
@@ -199,13 +217,32 @@ async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int |
         elif query is not None:
             await query.answer("Working on your previous request \u2014 yours is queued.")
     async with lock:
-        # Resolve update_id: explicit param > context var > None (fallback to claim_next).
+        # Worker path: item already claimed externally, just provide the lock.
+        if worker_item is not None:
+            try:
+                yield sent_feedback
+            except work_queue.LeaveClaimed:
+                raise  # let worker_dispatch handle it
+            return
+
+        # Live handler path: claim the durable work item.
         effective_update_id = update_id if update_id is not None else _current_update_id.get()
-        # Claim the durable work item for this update (or oldest if no update_id).
         if effective_update_id is not None:
             item = work_queue.claim_for_update(data_dir, chat_id, effective_update_id, _boot_id)
         else:
             item = work_queue.claim_next(data_dir, chat_id, _boot_id)
+
+        # If claim failed and the reason is a concurrent claimed item (worker
+        # claimed outside the lock), the handler must not run.  The work item
+        # stays queued for worker_loop to pick up after its current item.
+        if item is None and effective_update_id is not None:
+            has_claimed = work_queue._transport_db(data_dir).execute(
+                "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
+                (chat_id,),
+            ).fetchone()
+            if has_claimed:
+                raise ClaimBlocked(chat_id)
+
         item_id = item["id"] if item else None
         claimed_update_id = item["update_id"] if item else None
         try:
@@ -418,6 +455,10 @@ def _command_handler(fn):
         token = _current_update_id.set(uid)
         try:
             await fn(event, update, context)
+        except ClaimBlocked:
+            # Worker owns this chat — item stays queued for worker_loop.
+            _pending_work_items.pop(uid, None)
+            return
         except Exception:
             _complete_pending_work_item(uid, state="failed")
             raise
@@ -453,6 +494,9 @@ def _callback_handler(fn):
         token = _current_update_id.set(uid)
         try:
             await fn(event, query)
+        except ClaimBlocked:
+            _pending_work_items.pop(uid, None)
+            return
         except Exception:
             _complete_pending_work_item(uid, state="failed")
             raise
@@ -1878,73 +1922,78 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             welcome += "\nApproval mode is on \u2014 I'll show a plan before acting."
         await message.chat.send_message(welcome)
 
-    async with _chat_lock(chat_id, message=message, update_id=update.update_id):
-        await message.chat.send_action(ChatAction.TYPING)
-        session = _load(chat_id)
+    try:
+        async with _chat_lock(chat_id, message=message, update_id=update.update_id):
+            await message.chat.send_action(ChatAction.TYPING)
+            session = _load(chat_id)
 
-        setup = session.awaiting_skill_setup
-        if setup and setup.user_id == user_id:
-            cfg = _cfg()
-            key = _encryption_key()
-            req = setup.remaining[0]
-            raw_value = (message.text or "").strip()
-            if not raw_value:
-                await message.reply_text("Please send the credential value as a text message.")
-                return
-
-            if req.get("validate"):
-                ok, detail = await validate_credential(
-                    SkillRequirement(key=req["key"], prompt=req["prompt"],
-                                     help_url=req.get("help_url"), validate=req["validate"]),
-                    raw_value,
-                )
-                if not ok:
-                    try:
-                        await message.delete()
-                    except Exception:
-                        log.warning("Could not delete credential message for user %d", user_id)
-                    await message.reply_text(
-                        f"Credential validation failed for <code>{html.escape(req['key'])}</code>: "
-                        f"{html.escape(detail)}\nPlease try again.",
-                        parse_mode=ParseMode.HTML,
-                    )
+            setup = session.awaiting_skill_setup
+            if setup and setup.user_id == user_id:
+                cfg = _cfg()
+                key = _encryption_key()
+                req = setup.remaining[0]
+                raw_value = (message.text or "").strip()
+                if not raw_value:
+                    await message.reply_text("Please send the credential value as a text message.")
                     return
 
-            save_user_credential(
-                cfg.data_dir, user_id, setup.skill, req["key"], raw_value, key,
-            )
+                if req.get("validate"):
+                    ok, detail = await validate_credential(
+                        SkillRequirement(key=req["key"], prompt=req["prompt"],
+                                         help_url=req.get("help_url"), validate=req["validate"]),
+                        raw_value,
+                    )
+                    if not ok:
+                        try:
+                            await message.delete()
+                        except Exception:
+                            log.warning("Could not delete credential message for user %d", user_id)
+                        await message.reply_text(
+                            f"Credential validation failed for <code>{html.escape(req['key'])}</code>: "
+                            f"{html.escape(detail)}\nPlease try again.",
+                            parse_mode=ParseMode.HTML,
+                        )
+                        return
 
-            try:
-                await message.delete()
-            except Exception:
-                log.warning("Could not delete credential message for user %d", user_id)
-
-            setup.remaining.pop(0)
-            if setup.remaining:
-                next_req = setup.remaining[0]
-                _save(chat_id, session)
-                await message.reply_text(
-                    format_credential_prompt(next_req),
-                    parse_mode=ParseMode.HTML,
+                save_user_credential(
+                    cfg.data_dir, user_id, setup.skill, req["key"], raw_value, key,
                 )
-            else:
-                skill_name = setup.skill
-                session.awaiting_skill_setup = None
-                if skill_name not in session.active_skills:
-                    session.active_skills.append(skill_name)
-                _save(chat_id, session)
-                await message.reply_text(
-                    f"Skill <code>{html.escape(skill_name)}</code> is ready.",
-                    parse_mode=ParseMode.HTML,
-                )
-            return
 
-        trust = _trust_tier(user)
+                try:
+                    await message.delete()
+                except Exception:
+                    log.warning("Could not delete credential message for user %d", user_id)
 
-        if session.approval_mode == "on":
-            await request_approval(chat_id, prompt, image_paths, list(msg.attachments), message, request_user_id=user_id, trust_tier=trust)
-            return
-        await execute_request(chat_id, prompt, image_paths, message, request_user_id=user_id, trust_tier=trust)
+                setup.remaining.pop(0)
+                if setup.remaining:
+                    next_req = setup.remaining[0]
+                    _save(chat_id, session)
+                    await message.reply_text(
+                        format_credential_prompt(next_req),
+                        parse_mode=ParseMode.HTML,
+                    )
+                else:
+                    skill_name = setup.skill
+                    session.awaiting_skill_setup = None
+                    if skill_name not in session.active_skills:
+                        session.active_skills.append(skill_name)
+                    _save(chat_id, session)
+                    await message.reply_text(
+                        f"Skill <code>{html.escape(skill_name)}</code> is ready.",
+                        parse_mode=ParseMode.HTML,
+                    )
+                return
+
+            trust = _trust_tier(user)
+
+            if session.approval_mode == "on":
+                await request_approval(chat_id, prompt, image_paths, list(msg.attachments), message, request_user_id=user_id, trust_tier=trust)
+                return
+            await execute_request(chat_id, prompt, image_paths, message, request_user_id=user_id, trust_tier=trust)
+    except ClaimBlocked:
+        # Worker owns this chat — our work item stays queued for worker_loop.
+        _pending_work_items.pop(uid, None)
+        return
 
 
 @_callback_handler
@@ -2421,7 +2470,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
                 "<i>Replaying your request after restart\u2026</i>",
                 parse_mode=ParseMode.HTML,
             )
-            async with _chat_lock(chat_id, message=message, update_id=item.get("update_id")):
+            async with _chat_lock(chat_id, message=message, worker_item=item):
                 session = _load(chat_id)
                 if session.approval_mode == "on":
                     await request_approval(

@@ -324,3 +324,172 @@ async def test_preflight_and_execution_use_same_model():
         assert run_ctx.effective_model == "claude-fast-model", (
             f"Execution model: {run_ctx.effective_model!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# 7. Worker-claimed item blocks live handler (decorated command)
+#
+# Scenario: worker claims item 100 via claim_next_any (outside the
+# in-memory lock).  Before the worker enters _chat_lock, a decorated
+# command (/new) arrives and acquires the lock first.  The command
+# must NOT run — ClaimBlocked prevents the handler body from executing.
+# The command's own work item stays queued for the worker to process.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_live_command_blocked_by_worker_claimed_item():
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_command
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 9007
+
+        # Simulate a recovered item the worker has claimed (durable state)
+        work_queue.record_and_enqueue(data_dir, 100, chat_id, 42, "message")
+        worker_item = work_queue.claim_next(data_dir, chat_id, "worker-1")
+        assert worker_item is not None
+        assert worker_item["update_id"] == 100
+
+        # A decorated command arrives while the worker holds the claimed item
+        chat = FakeChat(chat_id=chat_id)
+        user = FakeUser(uid=42)
+        await send_command(th.cmd_new, chat, user, "/new")
+
+        conn = work_queue._transport_db(data_dir)
+
+        # Worker's item must still be claimed — not touched by the command
+        row_100 = conn.execute(
+            "SELECT state, worker_id FROM work_items WHERE update_id = 100",
+        ).fetchone()
+        assert row_100["state"] == "claimed", (
+            f"Worker item 100 should remain claimed, got: {row_100['state']}"
+        )
+
+        # The command's own work item must still be queued (not done)
+        cmd_items = conn.execute(
+            "SELECT update_id, state FROM work_items "
+            "WHERE chat_id = ? AND update_id != 100 ORDER BY update_id",
+            (chat_id,),
+        ).fetchall()
+        assert len(cmd_items) == 1, f"Expected 1 command work item, got {len(cmd_items)}"
+        assert cmd_items[0]["state"] == "queued", (
+            f"Command item should be queued (blocked by worker), "
+            f"got: {cmd_items[0]['state']}"
+        )
+
+        # Provider was never called — the command body didn't run
+        assert len(prov.run_calls) == 0
+        assert len(prov.preflight_calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# 8. Worker-claimed item blocks live message handler
+#
+# Same race but via handle_message (not decorated — uses _chat_lock
+# directly).  The message handler must not run; its work item stays
+# queued for the worker.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_live_message_blocked_by_worker_claimed_item():
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 9008
+
+        # Worker has claimed item 100
+        work_queue.record_and_enqueue(data_dir, 100, chat_id, 42, "message")
+        worker_item = work_queue.claim_next(data_dir, chat_id, "worker-1")
+        assert worker_item is not None
+
+        # A live message arrives while the worker holds the claim
+        prov.run_results = [RunResult(text="should not run")]
+        chat = FakeChat(chat_id=chat_id)
+        user = FakeUser(uid=42)
+        msg = FakeMessage(chat=chat, text="live message")
+        upd = FakeUpdate(message=msg, user=user, chat=chat)
+        await th.handle_message(upd, FakeContext())
+
+        conn = work_queue._transport_db(data_dir)
+
+        # Worker's item stays claimed
+        row_100 = conn.execute(
+            "SELECT state FROM work_items WHERE update_id = 100",
+        ).fetchone()
+        assert row_100["state"] == "claimed"
+
+        # The message's work item stays queued (not done, not claimed)
+        msg_item = conn.execute(
+            "SELECT state FROM work_items WHERE update_id = ?",
+            (upd.update_id,),
+        ).fetchone()
+        assert msg_item is not None, "Message work item should exist"
+        assert msg_item["state"] == "queued", (
+            f"Message item should be queued (blocked by worker), "
+            f"got: {msg_item['state']}"
+        )
+
+        # Provider was never called
+        assert len(prov.run_calls) == 0
+
+
+# ---------------------------------------------------------------------------
+# 9. After worker finishes, the blocked item becomes claimable
+#
+# End-to-end: worker claimed → live message blocked → worker completes
+# → message can now be claimed and processed normally.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_blocked_item_processable_after_worker_completes():
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 9009
+
+        # Worker claims and holds item 100
+        work_queue.record_and_enqueue(data_dir, 100, chat_id, 42, "message")
+        worker_item = work_queue.claim_next(data_dir, chat_id, "worker-1")
+        assert worker_item is not None
+
+        # Live message arrives — blocked
+        prov.run_results = [RunResult(text="response after unblock")]
+        chat = FakeChat(chat_id=chat_id)
+        user = FakeUser(uid=42)
+        msg1 = FakeMessage(chat=chat, text="blocked message")
+        upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
+        await th.handle_message(upd1, FakeContext())
+
+        conn = work_queue._transport_db(data_dir)
+        item1 = conn.execute(
+            "SELECT state FROM work_items WHERE update_id = ?",
+            (upd1.update_id,),
+        ).fetchone()
+        assert item1["state"] == "queued", "Should be queued while worker holds claim"
+
+        # Worker finishes
+        work_queue.complete_work_item(data_dir, worker_item["id"], state="done")
+
+        # Now the message can be processed normally
+        prov.run_results = [RunResult(text="now it works")]
+        msg2 = FakeMessage(chat=chat, text="blocked message")
+        upd2 = FakeUpdate(message=msg2, user=user, chat=chat)
+        await th.handle_message(upd2, FakeContext())
+
+        # The new message's item should be done
+        item2 = conn.execute(
+            "SELECT state FROM work_items WHERE update_id = ?",
+            (upd2.update_id,),
+        ).fetchone()
+        assert item2["state"] == "done", (
+            f"After worker finished, new message should complete normally, "
+            f"got: {item2['state']}"
+        )
+
+        # And the original blocked item is still queued (would be picked
+        # up by worker_loop in production)
+        item1_after = conn.execute(
+            "SELECT state FROM work_items WHERE update_id = ?",
+            (upd1.update_id,),
+        ).fetchone()
+        assert item1_after["state"] == "queued"

@@ -667,6 +667,156 @@ The first implementation pass may normalize strings while keeping the current
 `ProgressSink` boundary, but the target contract is a shared progress model,
 not endless provider-specific HTML tweaks.
 
+Design guardrails before implementation:
+
+- Codex is the current reference UX for long-running interactivity. Layer 2
+  should treat Codex as the no-regression baseline and Claude as the provider
+  that primarily needs to catch up. The target is not to average both
+  providers down to a thinner common denominator
+- the normalized event model must be rich enough to preserve the current
+  Codex UX. A schema like `ToolStart(name)` / `ToolFinish(name)` is too lossy
+  if it cannot represent:
+  - command text
+  - exit code
+  - tool output preview
+  - denial / rejected-action states
+  If Layer 2 introduces typed events, the contract should distinguish command
+  execution from generic tool lifecycle rather than flattening both into the
+  same shape
+- Codex no-regression must be explicit. Before refactoring provider progress,
+  capture and preserve at least these user-visible properties on long-running
+  Codex requests:
+  - time to first visible progress is not worse
+  - command start / finish visibility is not lost
+  - output preview, denial, and draft-reply richness are not lost
+  - rate limiting and shared rendering do not coalesce meaningful Codex
+    semantic events into silence
+  Improvement is welcome, but a quieter or less informative Codex UX is a
+  regression
+- the shared renderer must NOT become the source of truth for the final model
+  reply. Provider run logic still owns final reply assembly; the renderer owns
+  only the user-visible progress/status message
+- completion and liveness ownership must be explicit:
+  - handler-owned heartbeat remains the default owner of idle liveness
+  - provider-specific liveness (for example long resume/compaction states)
+    must be typed and must not fight the heartbeat loop for the same surface
+  - if ownership changes, the plan must say who is allowed to overwrite the
+    progress message in idle, draft, timeout, and terminal states
+- invisible provider activity must not suppress user-visible liveness. Signals
+  such as Claude `input_json_delta` may be useful as activity hints, but they
+  must not count as `content_started` and must not leave the user with a
+  frozen status message and no heartbeat
+- Layer 2 must preserve provider parity across all equivalent entry points,
+  not just normal `run()`:
+  - standard execution
+  - approval preflight (`run_preflight()`)
+  - resume flows
+  - timeout and interruption paths
+  - provider error paths
+- test scope for Layer 2 must go beyond renderer unit tests:
+  - focused contract tests for the normalized event model
+  - real entry-point tests through the Telegram status message object chain
+    used by `reply_text()` / `edit_text()`
+  - adjacent regression tests for false positives, especially heartbeat
+    suppression, internal-detail leakage, and Codex detail loss
+  Output-equivalence tests alone are not enough: if Layer 2 improves Claude
+  interactivity, some user-visible output should change by design
+
+Current diagnosis (why Codex feels more interactive today):
+
+- the shared Telegram progress layer is already common across providers:
+  `TelegramProgress`, `_heartbeat()`, and the initial `Working...` /
+  `Resuming...` status message are shared
+- the main difference is provider-side event richness, not the Telegram
+  framework:
+  - Codex currently emits and renders many intermediate states: thinking,
+    command start, command finish with output, tool calls, draft/commentary
+    assistant text, and final answer
+  - Claude currently renders far less: in the current implementation, visible
+    updates come primarily from `tool_use` starts and `text_delta` content
+- practical result:
+  - Codex feels active before the final answer because it can show meaningful
+    intermediate work
+  - Claude is mostly silent until a tool starts or the first reply text delta
+    arrives, so the user mostly sees only the generic heartbeat
+- rate limiting amplifies the gap: Claude emits many small text deltas that
+  the progress sink naturally coalesces, while Codex emits chunkier semantic
+  events that survive the rate limiter better
+- Codex also has an extra provider-specific liveness message on long
+  resume/compaction paths; Claude has no comparable special-case progress path
+- open question: capture at least one real long-running Claude `stream-json`
+  trace from the shipped CLI version and prove which ignored events are
+  actually present. The plan should not assume a richer Claude event stream
+  without typed evidence
+- practical migration stance:
+  - keep today's Codex experience unless there is typed evidence that a change
+    is neutral or better
+  - use the shared progress contract primarily to let Claude surface more of
+    its real intermediate work
+  - avoid refactors whose main effect is making Codex and Claude equally quiet
+
+Revised Layer 2 architecture:
+
+1. `ProgressEvent` family in `app/progress.py`
+   The normalized contract should preserve current Codex detail rather than
+   flattening it away. A richer event family is acceptable if needed. At
+   minimum, distinguish:
+   - `Thinking`
+   - `CommandStart(command)`
+   - `CommandFinish(command, exit_code?, output_preview?)`
+   - `ToolStart(name, detail?)`
+   - `ToolFinish(name, output_preview?)`
+   - `DraftReply(text)`
+   - `ContentDelta(text)` — visible reply text, sets `content_started`
+   - `Denial(detail)` — blocked/denied action
+   - `Liveness(detail)` — visible provider-owned liveness only when the
+     handler heartbeat is not the right owner
+   Non-visible provider activity such as Claude `input_json_delta` should stay
+   adapter-local as an activity hint. It must not be rendered and must not set
+   `content_started`.
+
+2. `ProgressRenderer` in `app/progress.py`
+   - owns shared user-facing wording and formatting for the progress/status
+     message
+   - takes `ProgressEvent` plus renderer state and returns HTML (or `None`)
+   - may own accumulated preview state for the status message only
+   - must NOT become the source of truth for the final model reply; provider
+     run logic still owns final reply assembly
+
+3. Provider adapters
+   - each provider gets a `_map_event()` layer from raw CLI events to
+     `ProgressEvent | None`
+   - Claude adapter should expand coverage to real structured events that are
+     present in captured traces: thinking blocks, tool starts, tool-result /
+     denial signals, and reply deltas
+   - Codex adapter should map its current event set into the normalized family
+     without losing command text, exit codes, output previews, or draft-reply
+     semantics
+
+Suggested implementation sequence:
+
+1. Capture and check in representative raw-event fixtures for both providers,
+   especially one real Claude long-running `stream-json` trace and at least
+   one representative long-running Codex trace
+2. Capture the current Codex visible-message sequence as a regression fixture:
+   initial status, meaningful intermediate updates, and terminal state. Layer 2
+   should not proceed until the project can prove the current Codex experience
+   is preserved or improved
+3. Define `ProgressEvent` and `ProgressRenderer` with focused contract tests in
+   `app/progress.py`
+4. Add explicit Codex no-regression tests around time-to-first-visible-progress,
+   command start / finish rendering, output-preview richness, and
+   heartbeat/rate-limit interaction
+5. Migrate Codex first behind `_map_event()` and prove parity with today's
+   visible detail and liveness behavior
+6. Migrate Claude next and add the newly surfaced thinking / tool-result /
+   draft progress coverage
+7. Wire both `run()` and `run_preflight()` through the same renderer while
+   keeping the existing handler heartbeat as the default idle-liveness owner
+8. Only then add provider-owned liveness for gaps the generic heartbeat cannot
+   explain, with explicit tests proving no duplicate heartbeat, no invisible
+   heartbeat suppression, and no final-reply regressions
+
 #### III.5a Liveness heartbeat for idle states
 
 Weak liveness is a separate problem from first visible progress.
@@ -1118,6 +1268,133 @@ If this extension is taken on, the recommended order is:
 This sequencing matters. It avoids repeating the earlier mistake of building
 important behavior on top of a weaker state model and retrofitting the
 foundation later.
+
+#### Next follow-on item: safe restart recovery with preserved provider context
+
+This should be the next durability item after the current provider-state /
+resume hardening lands.
+
+It is linked to the current state issue, but it is not the same contract:
+
+- state hardening decides when a provider session is valid to resume
+- replay hardening decides who is allowed to re-issue an interrupted request
+
+The product should keep the good behavior:
+
+- provider conversation context may survive bot restart
+- a fresh post-restart user message may continue on the resumed provider session
+  when that session is still valid
+
+The unsafe behavior is different:
+
+- worker recovery must not blindly replay an interrupted user message through a
+  resumed provider session
+- conversationally-dependent confirmations such as `Yes do that` are not
+  replay-safe, because their meaning comes from prior context and may re-trigger
+  side effects like restarting the current bot instance
+- partial side effects before interruption make automatic replay unsafe even
+  when the provider session itself is healthy
+
+##### Target contract
+
+- session continuity and request replay are separate concepts
+- preserving provider session context across restart is allowed
+- automatic recovery must never blindly re-execute an interrupted request whose
+  meaning depends on prior conversation context or partial side effects
+- worker recovery owns durable capture of the interrupted request, not final
+  replay
+- user intent owns replay: a recovered request resumes only after explicit user
+  choice
+- fresh post-restart messages remain allowed; they must not be blocked forever
+  by an older interrupted request
+
+##### Durable state shape
+
+The exact names may vary, but the runtime needs an explicit durable
+`pending_recovery` concept rather than overloading `queued`, `claimed`, `done`,
+or `failed`.
+
+Required fields / equivalents:
+
+- origin `update_id`
+- request kind and normalized payload
+- `request_user_id`
+- original / interrupted boot id
+- attempt count
+- created / updated timestamps
+- terminal disposition:
+  - replayed
+  - discarded
+  - superseded by a newer request
+
+The work-item state machine should have an explicit non-terminal outcome for
+"interrupted, captured, awaiting user choice" instead of pretending the item is
+either still runnable automatically or already complete.
+
+##### Ownership and flow
+
+Recommended flow:
+
+1. A live request is interrupted by restart and its work item is recovered.
+2. On next boot, the worker records durable pending-recovery state instead of
+   auto-dispatching the original message back into provider execution.
+3. The bot sends a recovery notice with explicit choices:
+   - replay interrupted request
+   - discard interrupted request
+4. If the user chooses replay, the bot replays the original payload through the
+   current session state, which may still use resumed provider context if that
+   provider session remains valid.
+5. If the user discards recovery, the durable pending-recovery state is cleared
+   and the original interrupted request is finalized as discarded.
+6. If the user sends a fresh message instead, that fresh request is allowed to
+   proceed and the old pending recovery is finalized as superseded, not silently
+   replayed later.
+
+Explicit completion ownership:
+
+- worker owns transition from interrupted claim to durable pending recovery
+- user action (replay / discard / fresh-message supersession) owns finalization
+- a second interruption during explicit replay must return to pending-recovery
+  state with incremented attempt count; it must not re-enter an automatic boot
+  loop
+
+##### Design constraints
+
+- do not rely on prompt-text heuristics like matching `restart`, `yes`, or
+  similar phrases; the safety decision should come from the replay contract, not
+  string guesses
+- do not solve this by clearing provider session state on every restart; that
+  would throw away a useful product feature
+- do not let replay safety depend on in-memory locks alone; pending-recovery
+  ownership must survive restart
+- keep user-visible recovery wording explicit about what is being resumed:
+  session context may survive, but the interrupted request itself needs user
+  confirmation before replay
+
+##### Tests required before shipping
+
+Focused contract tests:
+
+- interrupted request becomes durable pending recovery, not automatic replay
+- explicit replay reuses current session state and original payload
+- fresh post-restart message supersedes old pending recovery without discarding
+  resumed session continuity
+- second interrupted replay returns to pending recovery, not a replay loop
+
+Entry-point integration tests:
+
+- reproduce a contextual confirmation case like `Yes do that` after a bot
+  restart and prove it is not auto-replayed
+- prove a safe fresh post-restart message still resumes provider context and
+  completes normally
+- prove discard clears pending recovery and does not resurrect later
+
+Adjacent regression tests:
+
+- no false-positive recovery prompt for ordinary resumed requests with no
+  pending recovery
+- duplicate delivery / repeated callback on replay or discard remains idempotent
+- timeout / resume-failed state hardening still works alongside pending recovery
 
 #### Not in scope for this extension
 

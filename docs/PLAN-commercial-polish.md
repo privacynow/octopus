@@ -1688,7 +1688,7 @@ latency (III), transport reliability (IV), and the multi-worker webhook
 extension (Ext) have shipped. See [STATUS-commercial-polish.md](STATUS-commercial-polish.md)
 for the full build log. 791 pytest + 36 bash tests.
 
-The remaining work falls into five priority tiers, ordered by
+The remaining work falls into six priority tiers, ordered by
 effort-to-confidence ratio.
 
 ### Priority 1: Test-suite ownership refactor
@@ -1697,6 +1697,16 @@ The test tree has accumulated overflow files, duplicated assertions across
 suites, and owner drift. This refactor is the highest-leverage next step
 because it makes every subsequent test addition land in the right place and
 prevents further duplication. See the detailed refactor sequence below.
+
+Important framing:
+
+- owner-map extraction is groundwork, not completion
+- a patch that only moves tests between files without deleting weak
+  duplicates, strengthening owner-boundary coverage, or improving suite
+  signal does not satisfy Priority 1
+- the payoff for this track must be observable in at least one of:
+  less duplicate noise, stronger owner-boundary assertions, or reduced
+  suite maintenance burden
 
 The contract is not "reduce test count." The contract is:
 
@@ -1737,6 +1747,9 @@ Completion bar:
 - no contract is asserted in both an owner suite and `tests/test_invariants.py` without a clear boundary reason
 - `tests/test_high_risk.py` and the non-essential `tests/test_edge_*.py` overflow files are removed
 - moved tests are stronger than before or are deleted as redundant
+- owner-map-only reshuffling does not count as completion
+- at least one duplicate or weak test cluster is actually deleted, not
+  merely relocated
 - owner suites pass after each step; full suite passes at the end
 
 ### Priority 2: Test coverage gaps (low effort, high confidence value)
@@ -1765,7 +1778,38 @@ real CLI output faithfully. Capture at least one representative trace per
 provider from a real long-running request and add fixture-based regression
 tests. (Higher effort than 2a/2b — requires real provider traces.)
 
-### Priority 3: Small feature gaps (low effort, product polish)
+### Priority 3: Test isolation and safe parallelization
+
+The current suite still has a structural bottleneck: many handler tests mutate
+module-level globals in `app.telegram_handlers` (`_config`, `_provider`,
+`_boot_id`, `_bot_instance`, rate-limiter state). That blocks safe xdist-style
+parallelism and makes some file splits operationally meaningless.
+
+This is not the same problem as suite ownership. It is test/runtime
+infrastructure work.
+
+Contract:
+
+- handler tests do not depend on ambient module-global state leaking across
+  cases
+- per-test setup/reset is explicit and complete
+- any parallelization claim is backed by safe isolation, not just more files
+
+Initial scope:
+
+1. Audit `telegram_handlers` globals and test helpers that mutate them.
+2. Separate pure logic from global handler state where practical.
+3. Introduce a single authoritative reset/setup path for handler-global state.
+4. Only evaluate xdist or other parallel execution after isolation is proven.
+
+Completion bar:
+
+- handler tests no longer rely on partial global reset conventions
+- at least one formerly coupled handler slice runs cleanly with explicit
+  isolated state
+- any claimed runtime improvement is measured, not assumed from file splits
+
+### Priority 4: Small feature gaps (low effort, product polish)
 
 **a. `/project` inline keyboard.** `/model`, `/policy`, `/approval`, and
 `/compact` all show inline keyboards when invoked with no arguments.
@@ -1778,7 +1822,7 @@ within a short window (IV.4). The core contract (`update_id` idempotency)
 is sufficient. **Demand-gated:** only implement if operators report
 accidental double-sends in production.
 
-### Priority 4: Architectural hardening (high effort, conditional)
+### Priority 5: Architectural hardening (high effort, conditional)
 
 **a. III.7 — Workflow state-machine extraction.** See the detailed spec in
 the Phase III section above. Only justified if durable-state bugs continue
@@ -1790,7 +1834,7 @@ implementation has one rendering path. A `BOT_PROGRESS_VERBOSE` mode could
 surface more intermediate detail for power users, but it is not blocking any
 real use case today.
 
-### Priority 5: Product extensions (future roadmap)
+### Priority 6: Product extensions (future roadmap)
 
 **a. Multi-worker webhook deployment.** The durable work-queue foundation is
 shipped. The next step is actual multi-process webhook deployment where

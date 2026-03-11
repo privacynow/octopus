@@ -7,16 +7,40 @@ from pathlib import Path
 import app.telegram_handlers as _th
 from app.providers.base import RunResult
 from app.ratelimit import RateLimiter
-from app.storage import close_db, ensure_data_dirs, load_session
+from app.storage import close_all_db, close_db, ensure_data_dirs, load_session
+from app import work_queue as _work_queue
 from tests.support.config_support import make_config as _make_config
+
+
+def reset_handler_test_runtime() -> None:
+    """Clear all handler-related module globals and DB caches for test isolation.
+
+    Call before/after tests so no state leaks between cases. Required for
+    parallel-safe handler tests (Priority 4).
+    """
+    _th._config = None
+    _th._provider = None
+    _th._boot_id = ""
+    _th._rate_limiter = None
+    _th._bot_instance = None
+    _th._pending_work_items.clear()
+    _th.CHAT_LOCKS.clear()
+    try:
+        _th._current_update_id.set(None)
+    except LookupError:
+        pass
+    global _next_update_id
+    _next_update_id = 0
+    close_all_db()
+    _work_queue.close_all_transport_db()
 
 
 @contextlib.contextmanager
 def fresh_data_dir():
-    """TemporaryDirectory + ensure_data_dirs + close_db on exit.
+    """TemporaryDirectory + ensure_data_dirs + close both DBs on exit.
 
-    Closes the SQLite connection BEFORE the temp dir is deleted,
-    preventing WAL checkpoint hangs on deleted files.
+    Closes session and transport SQLite connections BEFORE the temp dir is
+    deleted, preventing WAL checkpoint hangs on deleted files.
     """
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
@@ -25,10 +49,11 @@ def fresh_data_dir():
             yield data_dir
         finally:
             close_db(data_dir)
+            _work_queue.close_transport_db(data_dir)
 
 
 @contextlib.contextmanager
-def fresh_env(*, config_overrides=None, provider_name="claude", boot_id="test-boot"):
+def fresh_env(*, config_overrides=None, provider_name="claude", boot_id="test-boot", bot_instance=None):
     """Context manager that sets up a temp data_dir, config, provider, globals,
     and tears down the DB connection on exit.  Yields (data_dir, cfg, prov)."""
     with fresh_data_dir() as data_dir:
@@ -37,8 +62,11 @@ def fresh_env(*, config_overrides=None, provider_name="claude", boot_id="test-bo
         if config_overrides:
             overrides.update(config_overrides)
         cfg = make_config(data_dir, **overrides)
-        setup_globals(cfg, prov, boot_id=boot_id)
-        yield data_dir, cfg, prov
+        setup_globals(cfg, prov, boot_id=boot_id, bot_instance=bot_instance)
+        try:
+            yield data_dir, cfg, prov
+        finally:
+            reset_handler_test_runtime()
 
 
 class FakeProgress:
@@ -240,7 +268,14 @@ def make_config(data_dir, **overrides):
     return _make_config(**defaults)
 
 
-def setup_globals(config, provider, *, boot_id="test-boot"):
+def set_bot_instance(bot_instance) -> None:
+    """Set the handler's bot instance (for worker_dispatch etc.). Prefer over direct _th._bot_instance write."""
+    _th._bot_instance = bot_instance
+
+
+def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
+    """Set handler runtime globals for tests. Call reset_handler_test_runtime() first if reusing."""
+    reset_handler_test_runtime()
     _th._config = config
     _th._provider = provider
     _th._boot_id = boot_id
@@ -248,7 +283,7 @@ def setup_globals(config, provider, *, boot_id="test-boot"):
         per_minute=config.rate_limit_per_minute,
         per_hour=config.rate_limit_per_hour,
     )
-    _th.CHAT_LOCKS.clear()
+    _th._bot_instance = bot_instance
 
 
 def load_session_disk(data_dir, chat_id, provider):

@@ -348,14 +348,29 @@ async def test_fresh_db_no_json_artifacts():
 # 9. _db() does not leak connections on schema/corruption errors
 # ---------------------------------------------------------------------------
 
+def _count_open_fds():
+    """Portable open fd count for current process. Returns None if unsupported (e.g. Windows)."""
+    import os
+    pid = os.getpid()
+    if os.path.isdir(f"/proc/{pid}/fd"):
+        return len(os.listdir(f"/proc/{pid}/fd"))
+    if os.path.isdir("/dev/fd"):
+        # macOS/BSD: listing /dev/fd can add one fd; delta still detects leaks.
+        return len(os.listdir("/dev/fd"))
+    return None
+
+
 async def test_db_no_fd_leak_on_schema_error():
     """Regression: _db() must close the SQLite connection when it raises
     due to schema version mismatch. Previously the connection was opened
     but never cached or closed on error paths, leaking a file descriptor
     per call (fds grew from 4 to 45 after 20 calls)."""
-    import os
+    import pytest
 
     from app.storage import _db, _db_connections
+
+    if _count_open_fds() is None:
+        pytest.skip("Cannot count open fds on this platform (/proc/pid/fd, /dev/fd)")
 
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
@@ -372,7 +387,7 @@ async def test_db_no_fd_leak_on_schema_error():
         conn.commit()
         conn.close()
 
-        fd_count_before = len(os.listdir(f"/proc/{os.getpid()}/fd"))
+        fd_count_before = _count_open_fds()
 
         # Repeatedly trigger the error — should NOT accumulate open fds
         for _ in range(20):
@@ -381,7 +396,7 @@ async def test_db_no_fd_leak_on_schema_error():
             except RuntimeError:
                 pass
 
-        fd_count_after = len(os.listdir(f"/proc/{os.getpid()}/fd"))
+        fd_count_after = _count_open_fds()
 
         # The data_dir should never have been cached
         assert data_dir not in _db_connections

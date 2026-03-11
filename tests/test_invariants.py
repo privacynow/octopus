@@ -46,6 +46,7 @@ from tests.support.handler_support import (
     send_callback,
     send_command,
     send_text,
+    set_bot_instance,
     setup_globals,
 )
 
@@ -797,7 +798,7 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
         conn.commit()
 
         bot = _FakeBot()
-        th._bot_instance = bot
+        set_bot_instance(bot)
         try:
             event = InboundMessage(
                 user=InboundUser(id=42, username="alice"),
@@ -826,7 +827,7 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
             ).fetchone()
             assert row["state"] == "pending_recovery"
         finally:
-            th._bot_instance = None
+            set_bot_instance(None)
 
 
 # =====================================================================
@@ -1729,7 +1730,7 @@ async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
         "allow_open": False,
     }) as (data_dir, cfg, prov):
         bot = _FakeBot()
-        th._bot_instance = bot
+        set_bot_instance(bot)
         try:
             event = InboundMessage(
                 user=InboundUser(id=42, username="alice"),
@@ -1746,7 +1747,7 @@ async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
             assert len(bot.sent) == 0
             assert len(prov.run_calls) == 0
         finally:
-            th._bot_instance = None
+            set_bot_instance(None)
 
 
 @pytest.mark.asyncio
@@ -1760,7 +1761,7 @@ async def test_worker_dispatch_command_still_notifies():
         "allowed_user_ids": frozenset({42}),
     }) as (data_dir, cfg, prov):
         bot = _FakeBot()
-        th._bot_instance = bot
+        set_bot_instance(bot)
         try:
             event = InboundCommand(
                 user=InboundUser(id=42, username="alice"),
@@ -1778,7 +1779,7 @@ async def test_worker_dispatch_command_still_notifies():
             # No provider call
             assert len(prov.run_calls) == 0
         finally:
-            th._bot_instance = None
+            set_bot_instance(None)
 
 
 # =====================================================================

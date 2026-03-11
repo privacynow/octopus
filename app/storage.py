@@ -81,6 +81,12 @@ def close_db(data_dir: Path) -> None:
         conn.close()
 
 
+def close_all_db() -> None:
+    """Close all cached session DB connections (for test isolation)."""
+    for data_dir in list(_db_connections.keys()):
+        close_db(data_dir)
+
+
 def _reset_db(data_dir: Path) -> None:
     """Close and delete the database (for tests only)."""
     close_db(data_dir)

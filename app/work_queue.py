@@ -132,6 +132,12 @@ def close_transport_db(data_dir: Path) -> None:
         conn.close()
 
 
+def close_all_transport_db() -> None:
+    """Close all cached transport DB connections (for test isolation)."""
+    for data_dir in list(_db_connections.keys()):
+        close_transport_db(data_dir)
+
+
 def _reset_transport_db(data_dir: Path) -> None:
     """Close and delete the transport database (tests only)."""
     close_transport_db(data_dir)

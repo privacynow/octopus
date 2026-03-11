@@ -1819,34 +1819,104 @@ tests. (Higher effort than 2a/2b — requires real provider traces.)
 
 ### Priority 4: Test isolation and safe parallelization
 
-The current suite still has a structural bottleneck: many handler tests mutate
-module-level globals in `app.telegram_handlers` (`_config`, `_provider`,
-`_boot_id`, `_bot_instance`, rate-limiter state). That blocks safe xdist-style
-parallelism and makes some file splits operationally meaningless.
+**Objective:** Make handler-heavy tests independent of leaked module-global
+state in `app.telegram_handlers`, then prove at least one slice runs safely
+under parallel execution.
 
-This is not the same problem as suite ownership. It is test/runtime
-infrastructure work.
+**Contract:**
 
-Contract:
+- Handler tests must not depend on ambient global state leaking between cases.
+- Per-test setup/reset must be explicit and complete.
+- Any "parallel-safe" claim must be backed by isolated test runs, not file shuffling.
 
-- handler tests do not depend on ambient module-global state leaking across
-  cases
-- per-test setup/reset is explicit and complete
-- any parallelization claim is backed by safe isolation, not just more files
+**Current leak surface:**
 
-Initial scope:
+- Runtime globals in `app/telegram_handlers`: `CHAT_LOCKS`, `_current_update_id`,
+  `_config`, `_provider`, `_boot_id`, `_rate_limiter`, `_pending_work_items`,
+  `_bot_instance`.
+- Session DB cache in `app/storage`: `_db_connections`.
+- Transport DB cache in `app/work_queue`: `_db_connections`.
+- Test helper state in `tests/support/handler_support`: `_next_update_id`.
+- Direct global mutation exists in tests (especially `_bot_instance` in
+  `test_workitem_integration.py`, `test_invariants.py`). `setup_globals()` only
+  resets part of the surface. Include `app/skill_commands.py` in the audit
+  (uses `th.CHAT_LOCKS` directly).
 
-1. Audit `telegram_handlers` globals and test helpers that mutate them.
-2. Separate pure logic from global handler state where practical.
-3. Introduce a single authoritative reset/setup path for handler-global state.
-4. Only evaluate xdist or other parallel execution after isolation is proven.
+**Phase 1 — Audit matrix**
 
-Completion bar:
+| State surface | Defining file | Who mutates | Who reads | Reset owner | Blocks xdist |
+|---------------|---------------|-------------|-----------|-------------|--------------|
+| `CHAT_LOCKS` | telegram_handlers | handler_support (clear in reset), skill_commands (acquire) | test_invariants (lock ref), isolation test | reset_handler_test_runtime | Yes |
+| `_current_update_id` | telegram_handlers | handlers (_chat_lock) | _dedup_update | reset (set None in context) | Yes |
+| `_config` | telegram_handlers | handler_support (setup_globals, reset) | handlers, tests via _cfg() | reset_handler_test_runtime | Yes |
+| `_provider` | telegram_handlers | handler_support | handlers, tests | reset_handler_test_runtime | Yes |
+| `_boot_id` | telegram_handlers | handler_support | handlers, codex thread invalidation | reset_handler_test_runtime | Yes |
+| `_rate_limiter` | telegram_handlers | handler_support | handle_message | reset_handler_test_runtime | Yes |
+| `_pending_work_items` | telegram_handlers | handlers, handler_support (clear) | handlers | reset_handler_test_runtime | Yes |
+| `_bot_instance` | telegram_handlers | handler_support (setup_globals, set_bot_instance, reset) | worker_dispatch, send paths | reset_handler_test_runtime | Yes |
+| `_db_connections` (session) | storage | storage._db, close_db, close_all_db | storage._db | close_all_db in reset | Yes |
+| `_db_connections` (transport) | work_queue | _transport_db, close_transport_db, close_all_transport_db | work_queue functions | close_all_transport_db in reset | Yes |
+| `_next_update_id` | handler_support | FakeUpdate ctor, reset | FakeUpdate | reset_handler_test_runtime | Yes |
 
-- handler tests no longer rely on partial global reset conventions
-- at least one formerly coupled handler slice runs cleanly with explicit
-  isolated state
-- any claimed runtime improvement is measured, not assumed from file splits
+Inventory: direct writes to handler globals are only in `tests/support/handler_support.py` (reset_handler_test_runtime, setup_globals, set_bot_instance). Tests use `setup_globals(` / `fresh_env(` ~296 times; no test file other than support mutates `_config`, `_provider`, `_boot_id`, `_rate_limiter`, or `_bot_instance`. `app/skill_commands.py` reads `th.CHAT_LOCKS[chat_id]` (no mutation).
+
+**Phase 2 — One authoritative reset path:** Add `reset_handler_test_runtime()`
+in `tests/support/handler_support.py` that clears `_config`, `_provider`,
+`_boot_id`, `_rate_limiter`, `_bot_instance`, `_pending_work_items`,
+`CHAT_LOCKS`; sets `_current_update_id` to None (current context); resets
+`_next_update_id = 0`; closes session and transport DB caches. Prefer explicit
+close-all helpers in `app/storage` and `app/work_queue`.
+
+**Phase 3 — Helper stack authoritative:** `setup_globals()` calls
+`reset_handler_test_runtime()` first; accept `bot_instance=None`. `fresh_data_dir()`
+and `fresh_env()` close both DBs on exit and use the same reset/setup. Add
+`autouse=True` fixture in `tests/conftest.py` that calls
+`reset_handler_test_runtime()` before and after every test.
+
+**Phase 4 — Remove direct global mutation:** Replace direct `th._bot_instance = ...`
+in `test_workitem_integration.py` and `test_invariants.py` with helper-owned
+setup. Route all writes through the support layer.
+
+**Phase 5 — Isolation regression tests:** Create
+`tests/test_handler_runtime_isolation.py`: (1) mutate state then
+`reset_handler_test_runtime()` and assert all cleared; (2) clean runtime, assert
+no leaked `_pending_work_items`, `_bot_instance`, `CHAT_LOCKS`; (3) assert
+session and transport DB caches closed after teardown.
+
+**Phase 6 — Pilot slice:** Use `test_handlers_output.py` then
+`test_handlers_ratelimit.py` as first slices. Do not start with
+`test_handlers_approval` or `test_workitem_integration` (more stateful, later).
+
+**Phase 7 — Parallel proof:** Run pilot serially, then with `-n 2` at least
+three times. Widen only after pilot is stable. Do not claim full-suite parallel
+safety until at least one handler-heavy slice is measured and stable.
+
+**Implementation boundaries:** No broad production refactor of handler logic
+first. Extract pure logic only where it reduces coupling after reset
+centralization. Do not leave direct test writes and helper setup in parallel
+long; migrate and delete. Do not update `docs/STATUS-commercial-polish.md`
+until pilot is proven under `-n 2`.
+
+**Validation commands:**
+
+- `rg -n "_th\._|th\._bot_instance\s*=|..." tests`
+- `.venv-host/bin/python -m pytest -q tests/test_handler_runtime_isolation.py`
+- `.venv-host/bin/python -m pytest -q tests/test_handlers_output.py`
+- `.venv-host/bin/python -m pytest -q -n 2 tests/test_handlers_output.py`
+- (repeat for ratelimit; combine slices with `-n 2`)
+
+**Definition of done:** One authoritative reset path; per-test reset enforced by
+conftest; no direct writes to handler globals outside support; isolation tests
+pass; at least one handler slice passes under `-n 2` repeatedly; performance
+claims measured.
+
+**Recommended PR split:** (1) Audit note, reset helper, DB close-all, autouse
+fixture, isolation tests. (2) Migrate pilot slice, remove direct `_bot_instance`.
+(3) Parallel proof, status doc. (4) Expand to other handler suites after pilot.
+
+**Note:** Local full-suite benchmarking is noisy until
+`tests/test_sqlite_integration.py` stops assuming Linux `/proc/.../fd`. Exclude
+from local timing or fix separately.
 
 ### Priority 5: Small feature gaps (low effort, product polish)
 

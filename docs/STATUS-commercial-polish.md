@@ -2,7 +2,18 @@
 
 Current as of 2026-03-11. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-11):** Fresh command ownership race fix — Priority 2.
+> **Latest change (2026-03-11):** Test isolation, parallel default, portable fd test.
+> **Priority 4 (test isolation):** One authoritative reset path
+> (`reset_handler_test_runtime()`), close-all for session and transport DB
+> caches, conftest autouse fixture, isolation regression tests. Direct
+> `_bot_instance` writes removed (use `set_bot_instance()`). Full suite passes
+> under `-n 2`, `-n 4`, `-n 8`. **Default pytest:** `pyproject.toml` addopts
+> set to `-v -n 4` so `pytest` runs with 4 workers by default. **Portable fd
+> test:** `test_db_no_fd_leak_on_schema_error` now uses `/proc/{pid}/fd` on
+> Linux and `/dev/fd` on macOS; skips on unsupported platforms. Full suite
+> (all 787 tests) runs on macOS without exclusions.
+>
+> Prior: Fresh command ownership race fix — Priority 2.
 > `record_and_enqueue()` now creates work items as `claimed` (handler-owned)
 > instead of `queued` when the inline handler is active. The background
 > worker can no longer steal fresh commands and send false "interrupted by
@@ -10,7 +21,7 @@ Current as of 2026-03-11. Tracks progress against [PLAN-commercial-polish.md](PL
 > items. `complete_work_item()` guards against overwriting terminal states.
 > Per-chat serialization preserved (falls back to `queued` when chat is busy).
 > 9 new integration tests covering the exact bug scenarios from production.
-> 784 pytest + 36 bash tests.
+> 787 pytest + 36 bash tests.
 >
 > Prior: Priority 3c (raw provider event regression fixtures). Checked-in
 > Codex and Claude NDJSON traces in tests/fixtures/progress/; regression
@@ -176,8 +187,10 @@ structured errors.
 Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setup.sh`)
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
+Default: **4 workers** (`addopts = "-v -n 4"`). Full suite runs on Linux and
+macOS (fd leak test portable: `/proc` on Linux, `/dev/fd` on macOS).
 
-Current suite: **784 pytest tests** + 36 bash tests across 29 files.
+Current suite: **787 pytest tests** + 36 bash tests across 30 files.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -190,6 +203,7 @@ Current suite: **784 pytest tests** + 36 bash tests across 29 files.
 | `test_handlers.py` | 58 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings and resilience (admin fallback, stale sessions, prompt size, missing data_dir, corrupt DB, schema version mismatch), SEND_FILE/SEND_IMAGE directive delivery, per-chat project bindings (`/project list/use/clear`, switch invalidation, context hash), file policy (`/policy inspect/edit`, session display, provider context threading, context hash), model profiles (`/model` command, inline keyboard settings callbacks, session display), empty message ignored, codex thread display, message after /new fresh session, provider empty response. |
 | `test_handlers_admin.py` | 7 | `/admin sessions` summary and detail views, access gating, stale skill filtering. |
 | `test_handlers_approval.py` | 17 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL, callback answer verification, button structure validation, markup removal after callbacks, project-active retry, approval after session reset, retry callback without pending, role change invalidates pending. |
+| `test_handler_runtime_isolation.py` | 3 | Priority 4: reset clears all handler globals and DB caches; clean runtime has no leaked state; caches empty after teardown. |
 | `test_handlers_codex.py` | 12 | Codex-specific handler behavior: thread invalidation, boot ID, retry semantics, script staging. |
 | `test_handlers_credentials.py` | 40 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection, clear-credentials confirmation ownership, callback answer/markup verification, button structure validation, malformed validate spec resilience. |
 | `test_handlers_export.py` | 4 | `/export` command: no history, document generation, access gating. |
@@ -202,7 +216,7 @@ Current suite: **784 pytest tests** + 36 bash tests across 29 files.
 | `test_registry.py` | 8 | Skill registry: index parsing (valid/bad version/non-JSON), search, artifact download/extraction, store integration (digest match/mismatch). |
 | `test_request_flow.py` | 48 | Request flow contracts: public trust enforcement (7), is_public_user/is_allowed predicates (3+2), public command gating (7 commands + trusted pass-through), rate-limit defaults (2), mixed trust ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential satisfaction with resolved skills (2), model command/callback parity (4), extra_dirs_from_denials, compact+public cross-feature (6), export resolved skills, polling conflict detection (3), prompt weight in /doctor with resolved context (2). |
 | `test_skills.py` | 44 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
-| `test_sqlite_integration.py` | 9 | SQLite session backend integration: handler→SQLite round-trip, JSON-to-SQLite migration under handler load, `cmd_doctor` stale scan from SQLite, `delete_session`, `close_db`/reopen lifecycle, multi-chat independence, cross-chat prompt size scan, no-JSON-artifact verification, fd leak regression on schema error. |
+| `test_sqlite_integration.py` | 9 | SQLite session backend integration: handler→SQLite round-trip, JSON-to-SQLite migration under handler load, `cmd_doctor` stale scan from SQLite, `delete_session`, `close_db`/reopen lifecycle, multi-chat independence, cross-chat prompt size scan, no-JSON-artifact verification, fd leak regression on schema error (portable: Linux /proc, macOS /dev/fd). |
 | `test_storage.py` | 14 | Session CRUD (SQLite-backed), upload paths, directory creation, path resolution, `list_sessions()`, JSON-to-SQLite migration with corrupt file handling, provider mismatch state reset, upload isolation (per-chat dir enforcement, cross-chat denial, shared-root denial), upload isolation in provider commands. |
 | `test_store.py` | 21 | Store module: discovery, search, content hashing, install/uninstall via refs and objects, ref round-trip, update detection, custom override detection, diff, GC, startup recovery, schema guard, pinned refs. |
 | `test_store_e2e.py` | 26 | End-to-end user flows through handlers: install→add→message→prompt, update propagation, uninstall pruning, /skills info across all tiers, three-tier resolution, custom override shadowing, /admin sessions stale filtering, provider compatibility output, source label edge cases, normalization persistence, --doctor schema check. |
@@ -359,7 +373,7 @@ Current suite: **784 pytest tests** + 36 bash tests across 29 files.
 - All handler-side session scans (`cmd_doctor` stale scan, `_check_prompt_size_cross_chat`) converted from JSON glob to `list_sessions()` / `load_session()`.
 - DB connection cleanup via `fresh_data_dir()` context manager prevents leaked connections.
 - `_db()` closes the connection on initialization errors (schema mismatch, corruption) before re-raising, preventing fd leaks on repeated failures.
-- 9 integration tests in `test_sqlite_integration.py` exercise real handler→SQLite round-trips, including fd leak regression on schema errors.
+- 9 integration tests in `test_sqlite_integration.py` exercise real handler→SQLite round-trips, including portable fd leak regression on schema errors (Linux/macOS).
 
 **6.2 Per-chat project model** (`app/config.py`, `app/telegram_handlers.py`, `app/providers/base.py`, `app/providers/claude.py`, `app/providers/codex.py`, `app/skills.py`)
 - `BOT_PROJECTS=name1:/path1,name2:/path2` config with validation (duplicate names, non-existent dirs).
@@ -449,9 +463,14 @@ the full breakdown:
    burst, suppression asserted). 3c: raw provider event regression fixtures
    (tests/fixtures/progress/codex_trace.ndjson, claude_trace.ndjson);
    regression tests in test_progress.py feed traces through mapping/render.
-4. **Test isolation and safe parallelization**: audit telegram_handlers
-   globals, separate pure logic from global state, introduce authoritative
-   reset path.
+4. **Test isolation and safe parallelization** (Priority 4) — DONE. Audit
+   matrix in PLAN. Authoritative reset path in tests/support/handler_support
+   (`reset_handler_test_runtime()`); close_all_db / close_all_transport_db;
+   conftest autouse fixture; test_handler_runtime_isolation.py; direct
+   _bot_instance writes removed (set_bot_instance). Full suite passes under
+   `-n 2`, `-n 4`, `-n 8`. Default pytest: `-n 4` in pyproject.toml. Portable
+   fd leak test (test_sqlite_integration): Linux + macOS; full suite runs on
+   macOS without exclusions.
 5. **Small feature gaps** (low effort): `/project` inline keyboard.
    Content-based dedup is demand-gated (only if operators report double-sends).
 6. **Architectural hardening** (high effort, conditional): III.7 workflow
@@ -554,7 +573,7 @@ the full breakdown:
 | `/doctor` and `--doctor` crash on corrupt session database | Medium | `scan_stale_sessions()` calls `list_sessions()` → `_db()` → SQLite open, which throws `DatabaseError` on junk/corrupt `sessions.db`. The health command — the one tool meant to diagnose problems — crashed instead of reporting them. | Wrapped stale session scan in `collect_doctor_report` with `sqlite3.DatabaseError`/`OperationalError` handler. Reports corruption as an error in the health report. |
 | Telegram `/doctor` crashes on corrupt DB before reaching health checks | Medium | `cmd_doctor` calls `_load()` which hits SQLite before `collect_doctor_report`. Corrupt DB raised unhandled `DatabaseError`, user saw nothing. | `cmd_doctor` wraps `_load()` in `DatabaseError`/`OperationalError` handler; on failure, passes `session=None` to `collect_doctor_report` which still runs all non-session checks. |
 | `/doctor` crashes on newer session DB schema version | Medium | `storage._db()` raises `RuntimeError` when `schema_version > supported`, but both `collect_doctor_report` and `cmd_doctor` only caught `sqlite3` exceptions. Downgrading the bot with an existing DB crashed the health command. | Added `RuntimeError` to exception handlers in both `collect_doctor_report` (stale session scan) and `cmd_doctor` (`_load()` wrapper). Regression tests for both CLI and Telegram paths. |
-| `_db()` leaks file descriptors on schema/corruption errors | Medium | `sqlite3.connect()` opens a connection, but if schema version check or `executescript` raises, the connection is never cached in `_db_connections` or closed. Repeated calls (e.g. `/doctor` retries) accumulate open fds (4→45 after 20 calls). | Wrapped `_db()` initialization in `try/except` that calls `conn.close()` before re-raising. Connection only cached after successful init. Regression test measures fd count via `/proc/{pid}/fd`. |
+| `_db()` leaks file descriptors on schema/corruption errors | Medium | `sqlite3.connect()` opens a connection, but if schema version check or `executescript` raises, the connection is never cached in `_db_connections` or closed. Repeated calls (e.g. `/doctor` retries) accumulate open fds (4→45 after 20 calls). | Wrapped `_db()` initialization in `try/except` that calls `conn.close()` before re-raising. Connection only cached after successful init. Regression test uses portable fd count (Linux `/proc/{pid}/fd`, macOS `/dev/fd`; skips elsewhere). |
 | `bootstrap.sh` installs dev deps in production setup | Low-medium | `scripts/bootstrap.sh` unconditionally installed `requirements-dev.txt` (pytest, xdist). `setup.sh` calls bootstrap, so operator installs got test tooling. | Dev deps only installed when `BOT_SETUP_RUNNING` is unset (standalone bootstrap, not setup.sh). |
 | `test_all.sh` runs bash tests even with pytest filters | Low-medium | `test_all.sh` forwarded args to pytest then always ran `tests/test_setup.sh`. So `-k doctor` or `-x` only filtered pytest; bash suite ran in full regardless. | Bash tests only run when no arguments are passed (full suite run). |
 

@@ -25,6 +25,7 @@ from tests.support.handler_support import (
     FakeUser,
     fresh_env,
     send_command,
+    set_bot_instance,
 )
 
 
@@ -613,7 +614,7 @@ async def test_worker_dispatch_sends_recovery_notice():
         conn.commit()
 
         bot = _FakeBot()
-        th._bot_instance = bot
+        set_bot_instance(bot)
         try:
             event = InboundMessage(
                 user=InboundUser(id=42, username="alice"),
@@ -640,7 +641,7 @@ async def test_worker_dispatch_sends_recovery_notice():
             ).fetchone()
             assert row["state"] == "pending_recovery"
         finally:
-            th._bot_instance = None
+            set_bot_instance(None)
 
 
 # ---------------------------------------------------------------------------
@@ -669,7 +670,7 @@ async def test_recovery_discard_callback_finalizes_item():
         conn.commit()
 
         bot = _FakeBot()
-        th._bot_instance = bot
+        set_bot_instance(bot)
         try:
             query = FakeCallbackQuery(
                 data=f"recovery_discard:{600}",
@@ -699,7 +700,7 @@ async def test_recovery_discard_callback_finalizes_item():
             assert edits
             assert "discarded" in edits[0]["edit_text"].lower()
         finally:
-            th._bot_instance = None
+            set_bot_instance(None)
 
 
 # ---------------------------------------------------------------------------
@@ -736,7 +737,7 @@ async def test_recovery_replay_callback_executes_original():
 
         prov.run_results = [RunResult(text="quantum explanation")]
         bot = _FakeBot()
-        th._bot_instance = bot
+        set_bot_instance(bot)
         try:
             query = FakeCallbackQuery(
                 data=f"recovery_replay:{700}",
@@ -765,7 +766,7 @@ async def test_recovery_replay_callback_executes_original():
             # Query was answered
             assert query.answered
         finally:
-            th._bot_instance = None
+            set_bot_instance(None)
 
 
 # ---------------------------------------------------------------------------
@@ -846,7 +847,7 @@ async def test_recovery_double_click_is_idempotent():
         conn.commit()
 
         bot = _FakeBot()
-        th._bot_instance = bot
+        set_bot_instance(bot)
         try:
             # First click — discard
             query1 = FakeCallbackQuery(
@@ -884,7 +885,7 @@ async def test_recovery_double_click_is_idempotent():
             assert query2.answered
             assert "already been handled" in (query2.answer_text or "")
         finally:
-            th._bot_instance = None
+            set_bot_instance(None)
 
 
 # ---------------------------------------------------------------------------
@@ -928,7 +929,7 @@ async def test_failed_notice_delivery_marks_item_failed_via_worker_loop():
         )
 
         bot = _ExplodingBot()
-        th._bot_instance = bot
+        set_bot_instance(bot)
         try:
             # Wrap worker_dispatch to stop the loop after one dispatch.
             stop = asyncio.Event()
@@ -953,7 +954,7 @@ async def test_failed_notice_delivery_marks_item_failed_via_worker_loop():
                 f"Item should be failed after notice delivery failure, got: {row['state']}"
             )
         finally:
-            th._bot_instance = None
+            set_bot_instance(None)
 
 
 # ---------------------------------------------------------------------------
@@ -989,7 +990,7 @@ async def test_multiple_pending_recovery_items_each_addressable():
         conn.commit()
 
         bot = _FakeBot()
-        th._bot_instance = bot
+        set_bot_instance(bot)
         try:
             # Discard the OLDER item (update_id 1700).
             query1 = FakeCallbackQuery(
@@ -1038,7 +1039,7 @@ async def test_multiple_pending_recovery_items_each_addressable():
             assert row2["state"] == "done"
             assert row2["error"] == "discarded"
         finally:
-            th._bot_instance = None
+            set_bot_instance(None)
 
 
 # ---------------------------------------------------------------------------
@@ -1069,7 +1070,7 @@ async def test_discard_race_after_replay_answers_already_handled():
         conn.commit()
 
         bot = _FakeBot()
-        th._bot_instance = bot
+        set_bot_instance(bot)
         try:
             # Simulate replay winning the race: reclaim moves to 'claimed'.
             work_queue.reclaim_for_replay(data_dir, item_id, "test-boot")
@@ -1101,7 +1102,7 @@ async def test_discard_race_after_replay_answers_already_handled():
                 f"Item should still be claimed (replay owns it), got: {row['state']}"
             )
         finally:
-            th._bot_instance = None
+            set_bot_instance(None)
 
 
 # ---------------------------------------------------------------------------
@@ -1197,7 +1198,7 @@ async def test_replay_callback_blocked_by_claimed_item_answers_user():
         conn.commit()
 
         bot = _FakeBot()
-        th._bot_instance = bot
+        set_bot_instance(bot)
         try:
             query = FakeCallbackQuery(
                 data="recovery_replay:1910",
@@ -1226,7 +1227,7 @@ async def test_replay_callback_blocked_by_claimed_item_answers_user():
             assert edits, "Expected message edit informing user"
             assert "in progress" in edits[0]["edit_text"]
         finally:
-            th._bot_instance = None
+            set_bot_instance(None)
 
 
 # ---------------------------------------------------------------------------

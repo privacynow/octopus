@@ -1752,10 +1752,49 @@ Completion bar:
   merely relocated
 - owner suites pass after each step; full suite passes at the end
 
-### Priority 2: Test coverage gaps (low effort, high confidence value)
+### Priority 2: Fresh command ownership race (production bug, High)
+
+**Bug report:** `dont_make_false_claims.md`
+
+Fresh live commands are left in `state='queued'` by `_dedup_update()` while the
+inline handler is still executing.  The background worker's `claim_next_any()`
+steals them, then `worker_dispatch()` unconditionally sends false "interrupted
+by a restart" recovery notices.  Confirmed 3× on two commands (`/compact`,
+`/doctor`) with a 100% hit rate on lock-free command paths.  Regular messages
+are immune because `_chat_lock` claims ownership before handler body execution.
+
+**Root cause:** `record_and_enqueue()` creates items as `'queued'`.  Lock-free
+commands never enter `_chat_lock`, so the item sits claimable for the entire
+handler duration.
+
+**Fix (6 items, execute in order):**
+
+1. `work_queue.record_and_enqueue()` — add `worker_id` parameter, create items
+   as `state='claimed'` with `worker_id` and `claimed_at` set.  The inline
+   handler owns the item from birth.
+2. `work_queue.enqueue_work_item()` — same change for test helper parity.
+3. `work_queue.claim_for_update()` — recognize items already claimed by the
+   same `worker_id` (the inline handler's `_boot_id`) and return them directly
+   instead of returning None.
+4. `_dedup_update()` — pass `_boot_id` as `worker_id` to `record_and_enqueue()`.
+5. `_chat_lock` — when the item is already in `_pending_work_items` (pre-claimed
+   by the decorator), skip re-claiming via `claim_for_update()`.
+6. `complete_work_item()` — add state guard (`WHERE state IN ('queued','claimed')`)
+   to prevent overwriting terminal states.
+
+**Acceptance criteria:**
+
+- Fresh `/compact`, `/doctor`, and at least one other lock-free command never
+  produce recovery messaging.
+- `claim_next_any()` cannot steal items created by the inline handler.
+- Handler crash → item stays claimed → stale recovery picks it up.
+- No duplicate processing — item processed exactly once.
+- All existing tests pass.
+
+### Priority 3: Test coverage gaps (low effort, high confidence value)
 
 These are places where the implementation exists but the contract is not
-proven by tests. Best done after or alongside Priority 1 so that each new
+proven by tests. Best done after or alongside Priority 2 so that each new
 test lands in the correct owning suite from the start.
 
 **a. Provider liveness vs heartbeat interaction test.** The handler heartbeat
@@ -1778,7 +1817,7 @@ real CLI output faithfully. Capture at least one representative trace per
 provider from a real long-running request and add fixture-based regression
 tests. (Higher effort than 2a/2b — requires real provider traces.)
 
-### Priority 3: Test isolation and safe parallelization
+### Priority 4: Test isolation and safe parallelization
 
 The current suite still has a structural bottleneck: many handler tests mutate
 module-level globals in `app.telegram_handlers` (`_config`, `_provider`,
@@ -1809,7 +1848,7 @@ Completion bar:
   isolated state
 - any claimed runtime improvement is measured, not assumed from file splits
 
-### Priority 4: Small feature gaps (low effort, product polish)
+### Priority 5: Small feature gaps (low effort, product polish)
 
 **a. `/project` inline keyboard.** `/model`, `/policy`, `/approval`, and
 `/compact` all show inline keyboards when invoked with no arguments.
@@ -1822,7 +1861,7 @@ within a short window (IV.4). The core contract (`update_id` idempotency)
 is sufficient. **Demand-gated:** only implement if operators report
 accidental double-sends in production.
 
-### Priority 5: Architectural hardening (high effort, conditional)
+### Priority 6: Architectural hardening (high effort, conditional)
 
 **a. III.7 — Workflow state-machine extraction.** See the detailed spec in
 the Phase III section above. Only justified if durable-state bugs continue
@@ -1834,7 +1873,7 @@ implementation has one rendering path. A `BOT_PROGRESS_VERBOSE` mode could
 surface more intermediate detail for power users, but it is not blocking any
 real use case today.
 
-### Priority 6: Product extensions (future roadmap)
+### Priority 7: Product extensions (future roadmap)
 
 **a. Multi-worker webhook deployment.** The durable work-queue foundation is
 shipped. The next step is actual multi-process webhook deployment where

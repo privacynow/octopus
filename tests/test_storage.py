@@ -215,3 +215,85 @@ def test_json_file_migration():
         assert len(result) == 2
 
         _reset_db(data_dir)
+
+
+# -- Session/upload isolation (from test_high_risk.py) --
+
+
+def test_session_provider_mismatch():
+    """Switching providers must reset provider_state; same provider preserves it."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir)
+        chat_id = 1001
+
+        claude_state_factory = lambda: {"session_id": "new-id", "started": False}
+        codex_state_factory = lambda: {"thread_id": None}
+
+        # Save a Claude session with explicit approval_mode override
+        session = default_session("claude", claude_state_factory(), "on")
+        session["provider_state"]["started"] = True
+        session["provider_state"]["session_id"] = "abc-123"
+        session["approval_mode"] = "off"
+        session["approval_mode_explicit"] = True
+        save_session(data_dir, chat_id, session)
+
+        # Reload as Codex — provider_state must be reset
+        loaded_codex = load_session(data_dir, chat_id, "codex", codex_state_factory, "on")
+        assert loaded_codex["provider_state"].get("started") is None
+        assert loaded_codex["provider_state"].get("session_id") is None
+        # Approval mode from saved session should persist
+        assert loaded_codex["approval_mode"] == "off"
+
+        # Same provider reload should preserve state
+        loaded_same = load_session(data_dir, chat_id, "claude", claude_state_factory, "on")
+        assert loaded_same["provider_state"]["started"] is True
+        assert loaded_same["provider_state"]["session_id"] == "abc-123"
+        assert loaded_same["approval_mode"] == "off"
+
+
+def test_upload_isolation():
+    """Per-chat upload dirs are isolated; cross-chat access is denied."""
+    from app.storage import chat_upload_dir, resolve_allowed_path
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = Path(tmpdir)
+
+        chat_a_dir = chat_upload_dir(data_dir, 111)
+        chat_b_dir = chat_upload_dir(data_dir, 222)
+        file_a = chat_a_dir / "secret.txt"
+        file_a.write_text("chat A secret")
+        file_b = chat_b_dir / "secret.txt"
+        file_b.write_text("chat B secret")
+
+        roots_a = [Path("/home/test"), chat_a_dir]
+        roots_b = [Path("/home/test"), chat_b_dir]
+
+        assert resolve_allowed_path(str(file_a), roots_a) is not None
+        assert resolve_allowed_path(str(file_b), roots_a) is None
+        assert resolve_allowed_path(str(file_b), roots_b) is not None
+        assert resolve_allowed_path(str(file_a), roots_b) is None
+
+        # Neither chat can access the shared uploads root
+        shared_uploads = data_dir / "uploads"
+        rogue_file = shared_uploads / "rogue.txt"
+        rogue_file.write_text("should be inaccessible")
+        assert resolve_allowed_path(str(rogue_file), roots_a) is None
+
+
+def test_upload_isolation_provider_commands():
+    """Provider commands must not contain shared uploads path."""
+    from app.providers.claude import ClaudeProvider
+    from tests.support.config_support import make_config
+
+    p = ClaudeProvider(make_config(provider_name="claude"))
+    cmd = p._build_run_cmd({"session_id": "x", "started": False}, "test")
+    assert not any("uploads" in a for a in cmd)
+
+    # When caller passes chat-specific dir, only that dir appears
+    cmd_with = p._build_run_cmd(
+        {"session_id": "x", "started": False}, "test",
+        extra_dirs=["/tmp/data/uploads/111"]
+    )
+    assert "/tmp/data/uploads/111" in cmd_with

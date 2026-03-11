@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 
+from app.providers.base import RunResult
 from app.providers.claude import ClaudeProvider
 from tests.support.config_support import make_config
 
@@ -141,3 +142,52 @@ def test_file_policy_inspect_appends_system_prompt():
     assert "INSPECT" in combined
     assert "read-only" in combined
     assert "You are a reviewer." in combined
+
+
+# -- Claude command safety (from test_high_risk.py) --
+
+
+def test_claude_retry_no_extra_dirs():
+    """Normal run has zero --add-dir when no extra_dirs provided."""
+    p = ClaudeProvider(make_config(provider_name="claude"))
+    state = {"session_id": "abc-123", "started": True}
+    cmd = p._build_run_cmd(state, "test")
+    assert cmd.count("--add-dir") == 0
+
+
+def test_claude_retry_with_extra_dirs():
+    """Retry forwards extra_dirs and uses --resume for started session."""
+    p = ClaudeProvider(make_config(provider_name="claude"))
+    state = {"session_id": "abc-123", "started": True}
+    cmd = p._build_run_cmd(state, "test", extra_dirs=["/tmp/uploads/123", "/etc", "/var/log"])
+    assert "/tmp/uploads/123" in cmd
+    assert "/etc" in cmd
+    assert "/var/log" in cmd
+    assert cmd.count("--add-dir") == 3
+    assert "--resume" in cmd
+    assert "abc-123" in cmd
+
+
+def test_claude_preflight_hardening():
+    """Preflight includes config extra_dirs, excludes uploads, uses plan mode."""
+    p = ClaudeProvider(make_config(provider_name="claude", extra_dirs=(Path("/opt/myrepo"),)))
+    pf_cmd = p._build_preflight_cmd("test prompt")
+    assert "--add-dir" in pf_cmd
+    assert "/opt/myrepo" in pf_cmd
+    assert not any("uploads" in a for a in pf_cmd)
+    assert "--permission-mode" in pf_cmd
+    perm_idx = pf_cmd.index("--permission-mode")
+    assert pf_cmd[perm_idx + 1] == "plan"
+
+
+def test_claude_error_state():
+    """RunResult distinguishes success (started=True) from error (empty updates)."""
+    p = ClaudeProvider(make_config(provider_name="claude"))
+    fresh = p.new_provider_state()
+    assert fresh["started"] is False
+
+    success_result = RunResult(text="ok", provider_state_updates={"started": True})
+    assert success_result.provider_state_updates.get("started") is True
+
+    error_result = RunResult(text="error", returncode=1)
+    assert error_result.provider_state_updates == {}

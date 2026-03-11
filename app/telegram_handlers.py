@@ -292,8 +292,9 @@ def _dedup_update(update: Update, kind: str = "unknown", payload: str = "{}") ->
     """Return True if this update_id was already processed (duplicate).
 
     Atomically records the update AND enqueues a work item in a single
-    SQLite transaction.  A crash cannot leave an update row without its
-    corresponding work item.
+    SQLite transaction.  The item is created as ``claimed`` (owned by
+    the inline handler via ``_boot_id``) so the background worker cannot
+    steal it before the handler finishes.
     """
     uid = update.update_id
     chat_id = update.effective_chat.id if update.effective_chat else 0
@@ -301,6 +302,7 @@ def _dedup_update(update: Update, kind: str = "unknown", payload: str = "{}") ->
     data_dir = _cfg().data_dir
     is_new, item_id = work_queue.record_and_enqueue(
         data_dir, uid, chat_id, user_id, kind, payload=payload,
+        worker_id=_boot_id,
     )
     if not is_new:
         log.debug("Skipping duplicate update_id %d", uid)

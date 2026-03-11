@@ -151,6 +151,8 @@ def record_and_enqueue(
     user_id: int,
     kind: str,
     payload: str = "{}",
+    *,
+    worker_id: str | None = None,
 ) -> tuple[bool, str | None]:
     """Atomically record an update AND enqueue its work item in one transaction.
 
@@ -158,6 +160,11 @@ def record_and_enqueue(
     returns ``(False, None)`` — neither row is inserted.  A crash
     between the two INSERTs is impossible because they share a single
     ``BEGIN IMMEDIATE`` transaction.
+
+    When *worker_id* is provided the item is created as ``claimed``
+    (owned by the inline handler).  This prevents the background worker
+    from stealing fresh items before the handler finishes — see
+    ``dont_make_false_claims.md`` for the full race analysis.
     """
     conn = _transport_db(data_dir)
     now = datetime.now(timezone.utc).isoformat()
@@ -169,11 +176,26 @@ def record_and_enqueue(
             "VALUES (?, ?, ?, ?, ?, ?)",
             (update_id, chat_id, user_id, kind, payload, now),
         )
-        conn.execute(
-            "INSERT INTO work_items (id, chat_id, update_id, state, created_at) "
-            "VALUES (?, ?, ?, 'queued', ?)",
-            (item_id, chat_id, update_id, now),
-        )
+        # Create as 'claimed' (handler-owned) when possible.  Fall back to
+        # 'queued' when the chat already has a claimed item — preserving
+        # the per-chat single-claimed invariant.
+        can_claim = worker_id and not conn.execute(
+            "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
+            (chat_id,),
+        ).fetchone()
+        if can_claim:
+            conn.execute(
+                "INSERT INTO work_items "
+                "(id, chat_id, update_id, state, worker_id, claimed_at, created_at) "
+                "VALUES (?, ?, ?, 'claimed', ?, ?, ?)",
+                (item_id, chat_id, update_id, worker_id, now, now),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO work_items (id, chat_id, update_id, state, created_at) "
+                "VALUES (?, ?, ?, 'queued', ?)",
+                (item_id, chat_id, update_id, now),
+            )
         conn.execute("COMMIT")
         return True, item_id
     except sqlite3.IntegrityError:
@@ -208,20 +230,33 @@ def record_update(
         return False
 
 
-def enqueue_work_item(data_dir: Path, chat_id: int, update_id: int) -> str:
-    """Create a queued work item for an already-recorded update.
+def enqueue_work_item(
+    data_dir: Path, chat_id: int, update_id: int, *, worker_id: str | None = None,
+) -> str:
+    """Create a work item for an already-recorded update.
 
     Only used by tests that exercise low-level primitives separately.
     Production code should use ``record_and_enqueue``.
+
+    When *worker_id* is provided the item starts as ``claimed``
+    (matching production behavior for inline-handler-owned items).
     """
     conn = _transport_db(data_dir)
     item_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
-    conn.execute(
-        "INSERT INTO work_items (id, chat_id, update_id, state, created_at) "
-        "VALUES (?, ?, ?, 'queued', ?)",
-        (item_id, chat_id, update_id, now),
-    )
+    if worker_id:
+        conn.execute(
+            "INSERT INTO work_items "
+            "(id, chat_id, update_id, state, worker_id, claimed_at, created_at) "
+            "VALUES (?, ?, ?, 'claimed', ?, ?, ?)",
+            (item_id, chat_id, update_id, worker_id, now, now),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO work_items (id, chat_id, update_id, state, created_at) "
+            "VALUES (?, ?, ?, 'queued', ?)",
+            (item_id, chat_id, update_id, now),
+        )
     conn.commit()
     return item_id
 
@@ -240,15 +275,36 @@ def claim_for_update(data_dir: Path, chat_id: int, update_id: int, worker_id: st
     """Atomically claim the work item for a specific update_id.
 
     Returns None if no matching queued item exists or if another item
-    for this chat is already claimed (preserving per-chat serialization).
-    This is the preferred claim path for inline handlers — it ensures the
-    handler processes the item that corresponds to its own update, not a
-    stale recovered item.
+    for this chat is already claimed *by someone else* (preserving
+    per-chat serialization).  This is the preferred claim path for
+    inline handlers — it ensures the handler processes the item that
+    corresponds to its own update, not a stale recovered item.
+
+    If the item is already ``claimed`` by the same *worker_id* (i.e.
+    pre-claimed at creation by the inline handler), it is returned
+    directly without a state change.  This allows ``_chat_lock`` to
+    work with items that ``record_and_enqueue`` already created as
+    claimed.
     """
     conn = _transport_db(data_dir)
     now = datetime.now(timezone.utc).isoformat()
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # First: check if this item is already claimed by us (pre-claimed).
+        pre = conn.execute(
+            "SELECT id FROM work_items "
+            "WHERE chat_id = ? AND update_id = ? AND state = 'claimed' "
+            "AND worker_id = ?",
+            (chat_id, update_id, worker_id),
+        ).fetchone()
+        if pre:
+            conn.execute("COMMIT")
+            item = conn.execute(
+                "SELECT * FROM work_items WHERE id = ?", (pre["id"],)
+            ).fetchone()
+            return dict(item) if item else None
+
+        # Standard path: claim a queued item if no other claimed item exists.
         row = conn.execute(
             "SELECT id FROM work_items "
             "WHERE chat_id = ? AND update_id = ? AND state = 'queued' "
@@ -363,11 +419,16 @@ def claim_next_any(data_dir: Path, worker_id: str) -> dict[str, Any] | None:
 def complete_work_item(
     data_dir: Path, item_id: str, state: str = "done", error: str | None = None,
 ) -> None:
-    """Mark a work item as done or failed."""
+    """Mark a work item as done or failed.
+
+    Only transitions items in ``queued`` or ``claimed`` state to prevent
+    overwriting terminal states (``done``, ``failed``, ``pending_recovery``).
+    """
     conn = _transport_db(data_dir)
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
-        "UPDATE work_items SET state = ?, completed_at = ?, error = ? WHERE id = ?",
+        "UPDATE work_items SET state = ?, completed_at = ?, error = ? "
+        "WHERE id = ? AND state IN ('queued', 'claimed')",
         (state, now, error, item_id),
     )
     conn.commit()

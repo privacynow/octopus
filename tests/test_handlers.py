@@ -1138,3 +1138,68 @@ async def test_session_shows_prompt_weight():
         msg = await send_command(th.cmd_session, chat, user, "/session")
         reply = last_reply(msg)
         assert "Prompt weight" in reply
+
+
+# -- Handler edge cases (from test_edge_sessions.py, test_edge_providers.py) --
+
+
+async def test_empty_message_ignored():
+    """Empty text message should not trigger provider."""
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+
+        await send_text(chat, user, "")
+        assert len(prov.run_calls) == 0
+
+
+async def test_session_codex_shows_thread():
+    """/session with codex provider shows thread info."""
+    import app.telegram_handlers as th
+    with fresh_env(provider_name="codex") as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+        reply = last_reply(msg)
+        assert "Thread" in reply
+
+
+async def test_message_after_new_gets_fresh_session():
+    """/new then message should use fresh provider_state, not stale."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+
+        prov.run_results = [
+            RunResult(text="first response", provider_state_updates={"started": True}),
+        ]
+        await send_text(chat, user, "first message")
+        session1 = load_session_disk(data_dir, 1001, prov)
+        assert session1["provider_state"]["started"] is True
+
+        # Reset
+        await send_command(th.cmd_new, chat, user, "/new")
+        session2 = load_session_disk(data_dir, 1001, prov)
+        assert session2["provider_state"]["started"] is False
+
+        # Send another message
+        prov.run_results = [
+            RunResult(text="second response", provider_state_updates={"started": True}),
+        ]
+        await send_text(chat, user, "second message")
+        assert len(prov.run_calls) == 2
+        second_call = prov.run_calls[1]
+        assert second_call["provider_state"]["started"] is False
+
+
+async def test_provider_empty_response():
+    """Provider returning empty text should not crash."""
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        prov.run_results = [RunResult(text="")]
+
+        await send_text(chat, user, "hello")
+        assert len(prov.run_calls) == 1

@@ -275,3 +275,126 @@ def test_load_config_reads_webhook_env_vars():
         assert cfg.webhook_secret == "s3cret"
     finally:
         os.unlink(env_path)
+
+
+# -- Config validation edge cases (from test_high_risk.py) --
+
+
+def test_config_bad_timeout():
+    """Non-integer BOT_TIMEOUT_SECONDS must produce a friendly SystemExit."""
+    old_env = os.environ.get("BOT_TIMEOUT_SECONDS")
+    old_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    old_provider = os.environ.get("BOT_PROVIDER")
+    old_working_dir = os.environ.get("BOT_WORKING_DIR")
+    old_data_dir = os.environ.get("BOT_DATA_DIR")
+    old_allow_open = os.environ.get("BOT_ALLOW_OPEN")
+    os.environ["TELEGRAM_BOT_TOKEN"] = "x"
+    os.environ["BOT_PROVIDER"] = "claude"
+    os.environ["BOT_WORKING_DIR"] = tempfile.gettempdir()
+    os.environ["BOT_DATA_DIR"] = tempfile.gettempdir()
+    os.environ["BOT_ALLOW_OPEN"] = "1"
+    os.environ["BOT_TIMEOUT_SECONDS"] = "not_a_number"
+    try:
+        load_config("test")
+        assert False, "bad timeout should raise SystemExit"
+    except SystemExit as exc:
+        assert "BOT_TIMEOUT_SECONDS must be an integer" in str(exc)
+    finally:
+        if old_env is not None:
+            os.environ["BOT_TIMEOUT_SECONDS"] = old_env
+        else:
+            os.environ.pop("BOT_TIMEOUT_SECONDS", None)
+        for key, value in (
+            ("TELEGRAM_BOT_TOKEN", old_token),
+            ("BOT_PROVIDER", old_provider),
+            ("BOT_WORKING_DIR", old_working_dir),
+            ("BOT_DATA_DIR", old_data_dir),
+            ("BOT_ALLOW_OPEN", old_allow_open),
+        ):
+            if value is not None:
+                os.environ[key] = value
+            else:
+                os.environ.pop(key, None)
+
+
+def test_data_dir_writable():
+    cfg_writable = make_config(data_dir=Path("/tmp"))
+    errors_writable = [e for e in validate_config(cfg_writable) if "DATA_DIR" in e]
+    assert errors_writable == []
+
+
+def test_data_dir_unwritable():
+    cfg_bad = make_config(data_dir=Path("/root/impossible/path"))
+    errors_bad = [e for e in validate_config(cfg_bad) if "DATA_DIR" in e]
+    assert len(errors_bad) > 0
+
+
+def test_data_dir_is_file():
+    with tempfile.NamedTemporaryFile() as f:
+        cfg_file = make_config(data_dir=Path(f.name))
+        errors_file = [e for e in validate_config(cfg_file) if "DATA_DIR" in e]
+        assert len(errors_file) > 0
+
+
+def test_extra_dirs_valid():
+    cfg_good_dirs = make_config(extra_dirs=(Path("/tmp"),))
+    errors_good = [e for e in validate_config(cfg_good_dirs) if "EXTRA_DIRS" in e]
+    assert errors_good == []
+
+
+def test_extra_dirs_nonexistent():
+    cfg_bad_dirs = make_config(extra_dirs=(Path("/nonexistent/fake/dir"),))
+    errors_bad = [e for e in validate_config(cfg_bad_dirs) if "EXTRA_DIRS" in e]
+    assert len(errors_bad) > 0
+
+
+def test_extra_dirs_mixed():
+    cfg_mixed = make_config(extra_dirs=(Path("/tmp"), Path("/no/such/path")))
+    errors_mixed = [e for e in validate_config(cfg_mixed) if "EXTRA_DIRS" in e]
+    assert len(errors_mixed) == 1
+
+
+def test_config_isolation():
+    """load_config() must not leak state across instances."""
+    import app.config as config_mod
+
+    env_a = {
+        "TELEGRAM_BOT_TOKEN": "token-a",
+        "BOT_PROVIDER": "claude",
+        "BOT_WORKING_DIR": tempfile.gettempdir(),
+        "BOT_DATA_DIR": tempfile.gettempdir(),
+        "BOT_ALLOW_OPEN": "1",
+        "BOT_MODEL": "model-a",
+    }
+    env_b = {
+        "TELEGRAM_BOT_TOKEN": "token-b",
+        "BOT_PROVIDER": "codex",
+        "BOT_WORKING_DIR": tempfile.gettempdir(),
+        "BOT_DATA_DIR": tempfile.gettempdir(),
+        "BOT_ALLOW_OPEN": "1",
+        "BOT_MODEL": "model-b",
+    }
+
+    orig_env_path = config_mod.env_path_for_instance
+    try:
+        # Instance A
+        config_mod.env_path_for_instance = lambda name: Path("/dev/null")
+        saved = {k: os.environ.get(k) for k in env_a}
+        os.environ.update(env_a)
+        cfg_a = load_config("inst-a")
+
+        # Instance B — different env
+        os.environ.update(env_b)
+        cfg_b = load_config("inst-b")
+
+        assert cfg_a.model == "model-a"
+        assert cfg_b.model == "model-b"
+        assert cfg_a.provider_name == "claude"
+        assert cfg_b.provider_name == "codex"
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
+            else:
+                os.environ.pop(k, None)
+        config_mod.env_path_for_instance = orig_env_path

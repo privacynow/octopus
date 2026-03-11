@@ -299,3 +299,40 @@ def test_split_html_plaintext_fallback():
     # Either properly balanced OR stripped — both are acceptable outcomes
     all_balanced = all(c.count("<b>") == c.count("</b>") for c in chunks_broken)
     assert has_tags is False or all_balanced
+
+
+# -- Stress / edge cases (from test_edge_formatting.py) --
+
+
+def test_deeply_nested_markdown():
+    """Deeply nested lists and emphasis should not crash or hang."""
+    nested = "- " * 20 + "deep item"
+    result = md_to_telegram_html(nested)
+    assert "deep item" in result
+
+
+def test_extremely_long_single_line():
+    """Very long single line should be trimmed without crash."""
+    long_line = "x" * 50000
+    result = trim_text(long_line, 4000)
+    assert len(result) <= 4100
+
+
+def test_empty_code_block():
+    """Empty code block should render without error."""
+    md = "```\n```"
+    result = md_to_telegram_html(md)
+    assert "<pre>" in result or "<code>" in result or result.strip() == ""
+
+
+def test_unicode_emoji_mix():
+    """Mixed unicode/emoji content should render cleanly."""
+    md = "Status: done — test — launched"
+    result = md_to_telegram_html(md)
+    assert "done" in result
+    assert "test" in result
+
+
+def test_trim_text_empty():
+    """trim_text on empty string should return empty."""
+    assert trim_text("", 100) == ""

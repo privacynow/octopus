@@ -24,7 +24,7 @@ Which suite owns which runtime contract. One owner per contract;
 | `test_codex_provider.py` | Codex command construction, event parsing |
 | `test_transport.py` | Inbound type normalization, serialize/deserialize |
 | `test_work_queue.py` | Durable queue primitives, work-item state transitions |
-| `test_workitem_integration.py` | Worker/Telegram recovery boundaries, claim serialization |
+| `test_workitem_integration.py` | Worker/Telegram recovery boundaries, claim serialization, fresh command ownership (no false recovery notices), pre-claimed item handling, complete_work_item state guard |
 | `test_storage.py` | SQLite session CRUD, path resolution, upload isolation |
 | `test_sqlite_integration.py` | SQLite WAL mode, concurrent access |
 | `test_config.py` | Config parsing, validation, env loading |
@@ -56,12 +56,13 @@ These tests have clear owners but haven't been moved yet:
 - **Recovery and resume** → `test_workitem_integration.py` / provider suites
 - **Error handlers** → `test_handlers.py`
 
-## Overflow Files (pending deletion)
+## Deleted Overflow Files
 
-These files will be folded into owner suites and deleted:
+These files were folded into owner suites and deleted (20 weak duplicates
+removed, unique tests strengthened and moved):
 
-- `test_high_risk.py` → provider suites, `test_config.py`, `test_storage.py`
-- `test_edge_callbacks.py` → `test_handlers_approval.py`
-- `test_edge_sessions.py` → `test_handlers.py`, `test_transport.py`
-- `test_edge_providers.py` → `test_handlers.py`, `test_handlers_codex.py`
-- `test_edge_formatting.py` → `test_formatting.py`
+- `test_high_risk.py` → `test_codex_provider.py`, `test_claude_provider.py`, `test_config.py`, `test_storage.py`, `test_request_flow.py`
+- `test_edge_callbacks.py` → `test_handlers_approval.py` (2 unique kept, 2 dups deleted)
+- `test_edge_sessions.py` → `test_handlers.py`, `test_handlers_approval.py` (4 unique kept, 3 dups deleted)
+- `test_edge_providers.py` → `test_handlers.py` (1 unique kept, 6 dups deleted)
+- `test_edge_formatting.py` → `test_formatting.py` (5 unique kept, 7 dups deleted)

@@ -24,6 +24,7 @@ from tests.support.handler_support import (
     FakeUpdate,
     FakeUser,
     fresh_env,
+    send_command,
 )
 
 
@@ -1325,3 +1326,306 @@ async def test_reclaim_distinguishes_gone_from_blocked():
         # Gone case: item no longer in pending_recovery → returns None.
         result = work_queue.reclaim_for_replay(data_dir, item_id_recovery, "w2")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# 23. Fresh command items are handler-owned from creation
+#
+# The bug: _dedup_update() created items as 'queued', letting the worker
+# steal fresh commands via claim_next_any().  The worker then sent false
+# "interrupted by a restart" notices.  Fix: items start as 'claimed'
+# by the inline handler's _boot_id.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_fresh_command_item_created_as_claimed():
+    """_dedup_update creates work items as 'claimed' (handler-owned),
+    not 'queued'.  The worker's claim_next_any must not be able to
+    steal them."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 12001
+        chat = FakeChat(chat_id=chat_id)
+        user = FakeUser(uid=42)
+
+        # Send a lock-free command through the real decorator
+        await send_command(th.cmd_session, chat, user, "/session")
+
+        conn = work_queue._transport_db(data_dir)
+
+        # The work item must be 'done' (handler completed it), and its
+        # worker_id must be the inline handler's _boot_id, not a worker.
+        items = conn.execute(
+            "SELECT state, worker_id FROM work_items WHERE chat_id = ?",
+            (chat_id,),
+        ).fetchall()
+        assert len(items) == 1
+        assert items[0]["state"] == "done"
+        assert items[0]["worker_id"] == th._boot_id
+
+
+@pytest.mark.asyncio
+async def test_worker_cannot_steal_handler_owned_item():
+    """claim_next_any must skip items already claimed by the inline handler.
+
+    This is the exact race: decorator creates the item, then the worker
+    polls before the handler finishes.  With the fix, the item starts as
+    'claimed' so claim_next_any returns None."""
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 12002
+
+        # Simulate what _dedup_update does: create a claimed item
+        _, item_id = work_queue.record_and_enqueue(
+            data_dir, 700, chat_id, 42, "command",
+            worker_id="handler-boot-id",
+        )
+
+        # Worker polls — must NOT find anything claimable
+        stolen = work_queue.claim_next_any(data_dir, "background-worker")
+        assert stolen is None, (
+            "Worker stole a handler-owned item — the race condition is back"
+        )
+
+        # The item is still claimed by the handler
+        conn = work_queue._transport_db(data_dir)
+        row = conn.execute(
+            "SELECT state, worker_id FROM work_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        assert row["state"] == "claimed"
+        assert row["worker_id"] == "handler-boot-id"
+
+
+# ---------------------------------------------------------------------------
+# 24. No false recovery notice for lock-free commands
+#
+# Exact reproduction of the bug from dont_make_false_claims.md:
+# /compact (no args) and /doctor sent through real handlers with a
+# worker actively polling.  Must produce exactly one response per
+# command, zero recovery notices.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_no_false_recovery_for_compact():
+    """Fresh /compact must never trigger a recovery notice, even with
+    an active worker.  Reproduces incident 1 from dont_make_false_claims.md."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 12003
+        chat = FakeChat(chat_id=chat_id)
+        user = FakeUser(uid=42)
+
+        # Send /compact (no args) — lock-free path
+        msg = await send_command(th.cmd_compact, chat, user, "/compact")
+
+        # Exactly one reply (the compact status), zero recovery notices
+        assert len(msg.replies) == 1
+        reply_text = msg.replies[0].get("text", "")
+        assert "Compact mode" in reply_text
+        assert "interrupted" not in reply_text
+        assert "restart" not in reply_text
+
+        # Worker polls — nothing to steal
+        stolen = work_queue.claim_next_any(data_dir, "worker-1")
+        assert stolen is None
+
+        # Work item completed by handler
+        conn = work_queue._transport_db(data_dir)
+        row = conn.execute(
+            "SELECT state FROM work_items WHERE chat_id = ?", (chat_id,),
+        ).fetchone()
+        assert row["state"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_no_false_recovery_for_doctor():
+    """Fresh /doctor must never trigger a recovery notice, even with
+    an active worker.  Reproduces incident 2 from dont_make_false_claims.md."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 12004
+        chat = FakeChat(chat_id=chat_id)
+        user = FakeUser(uid=42)
+
+        msg = await send_command(th.cmd_doctor, chat, user, "/doctor")
+
+        # Doctor sends at least one reply; none should be recovery
+        assert len(msg.replies) >= 1
+        for reply in msg.replies:
+            text = reply.get("text", "")
+            assert "interrupted" not in text, f"False recovery notice: {text}"
+            assert "restart" not in text, f"False restart claim: {text}"
+
+        # Worker finds nothing
+        stolen = work_queue.claim_next_any(data_dir, "worker-1")
+        assert stolen is None
+
+
+@pytest.mark.asyncio
+async def test_no_false_recovery_for_session():
+    """Adjacent lock-free command: /session must also be immune."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 12005
+        chat = FakeChat(chat_id=chat_id)
+        user = FakeUser(uid=42)
+
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+
+        assert len(msg.replies) >= 1
+        for reply in msg.replies:
+            text = reply.get("text", "")
+            assert "interrupted" not in text
+            assert "restart" not in text
+
+        stolen = work_queue.claim_next_any(data_dir, "worker-1")
+        assert stolen is None
+
+
+# ---------------------------------------------------------------------------
+# 25. Handler crash leaves item recoverable
+#
+# If the handler crashes before completing, the item must stay claimed
+# (not done/queued).  Stale claim recovery picks it up later.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_handler_crash_leaves_item_claimed_for_recovery():
+    """If a handler raises before completing its work item, the item
+    stays 'claimed' — recoverable by stale claim detection."""
+    import app.telegram_handlers as th
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 12006
+
+        # Directly test the low-level contract: create a claimed item
+        # (as _dedup_update does), then DON'T complete it.
+        _, item_id = work_queue.record_and_enqueue(
+            data_dir, 800, chat_id, 42, "command",
+            worker_id=th._boot_id,
+        )
+
+        # Item is claimed — worker can't steal it
+        stolen = work_queue.claim_next_any(data_dir, "worker-1")
+        assert stolen is None
+
+        # Stale claim detection: a new boot sees a claimed item from the
+        # old boot and requeues it (different worker_id = stale).
+        requeued = work_queue.recover_stale_claims(data_dir, "new-boot-id")
+        assert requeued == 1
+
+        # After recovery the item is queued again — worker can claim it
+        worker_item = work_queue.claim_next_any(data_dir, "worker-1")
+        assert worker_item is not None
+        assert worker_item["update_id"] == 800
+
+
+# ---------------------------------------------------------------------------
+# 26. claim_for_update recognizes pre-claimed items
+#
+# When _chat_lock calls claim_for_update for an item already claimed
+# by the same worker_id (pre-claimed by _dedup_update), it must return
+# the item instead of None.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_claim_for_update_recognizes_pre_claimed():
+    """claim_for_update returns a pre-claimed item when the worker_id matches."""
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 12007
+        boot_id = "my-boot-id"
+
+        _, item_id = work_queue.record_and_enqueue(
+            data_dir, 900, chat_id, 42, "command",
+            worker_id=boot_id,
+        )
+
+        # claim_for_update with same worker_id finds the pre-claimed item
+        item = work_queue.claim_for_update(data_dir, chat_id, 900, boot_id)
+        assert item is not None
+        assert item["id"] == item_id
+        assert item["state"] == "claimed"
+        assert item["worker_id"] == boot_id
+
+        # claim_for_update with different worker_id returns None
+        # (another claimed item exists for this chat)
+        item2 = work_queue.claim_for_update(data_dir, chat_id, 900, "different-id")
+        assert item2 is None
+
+
+# ---------------------------------------------------------------------------
+# 27. complete_work_item state guard
+#
+# complete_work_item must not overwrite terminal states (done, failed,
+# pending_recovery).  Defense in depth against the race.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_complete_work_item_does_not_overwrite_terminal_state():
+    """complete_work_item only transitions from queued/claimed, not from
+    done/failed/pending_recovery."""
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 12008
+
+        _, item_id = work_queue.record_and_enqueue(
+            data_dir, 950, chat_id, 42, "command",
+        )
+        # Complete it
+        work_queue.complete_work_item(data_dir, item_id, state="done")
+
+        conn = work_queue._transport_db(data_dir)
+        row = conn.execute(
+            "SELECT state, completed_at FROM work_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        assert row["state"] == "done"
+        original_completed_at = row["completed_at"]
+
+        # Try to overwrite done → failed — must be a no-op
+        work_queue.complete_work_item(data_dir, item_id, state="failed", error="too late")
+
+        row2 = conn.execute(
+            "SELECT state, error, completed_at FROM work_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        assert row2["state"] == "done", "Terminal state must not be overwritten"
+        assert row2["error"] is None
+        assert row2["completed_at"] == original_completed_at
+
+
+# ---------------------------------------------------------------------------
+# 28. Per-chat serialization preserved with pre-claimed items
+#
+# When the worker holds a claimed item for a chat, a new command for
+# the same chat must fall back to 'queued' (not 'claimed'), preserving
+# the per-chat single-claimed invariant.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_preclaim_falls_back_to_queued_when_chat_busy():
+    """If another item is already claimed for the chat, new items are
+    created as 'queued' to preserve per-chat serialization."""
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 12009
+
+        # Worker claims item 1000
+        work_queue.record_and_enqueue(data_dir, 1000, chat_id, 42, "message")
+        worker_item = work_queue.claim_next(data_dir, chat_id, "worker-1")
+        assert worker_item is not None
+
+        # New command arrives while worker holds the claim
+        _, item_id = work_queue.record_and_enqueue(
+            data_dir, 1001, chat_id, 42, "command",
+            worker_id="handler-boot",
+        )
+
+        # New item must be 'queued' (not 'claimed') because the chat
+        # already has a claimed item
+        conn = work_queue._transport_db(data_dir)
+        row = conn.execute(
+            "SELECT state FROM work_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        assert row["state"] == "queued", (
+            "Should fall back to queued when chat has existing claimed item"
+        )

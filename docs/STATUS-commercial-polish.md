@@ -1,11 +1,28 @@
 # Commercial Polish — Implementation Status
 
-Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
+Current as of 2026-03-11. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-10):** All build phases shipped.
+> **Latest change (2026-03-11):** Fresh command ownership race fix — Priority 2.
+> `record_and_enqueue()` now creates work items as `claimed` (handler-owned)
+> instead of `queued` when the inline handler is active. The background
+> worker can no longer steal fresh commands and send false "interrupted by
+> a restart" recovery notices. `claim_for_update()` recognizes pre-claimed
+> items. `complete_work_item()` guards against overwriting terminal states.
+> Per-chat serialization preserved (falls back to `queued` when chat is busy).
+> 9 new integration tests covering the exact bug scenarios from production.
+> 780 pytest + 36 bash tests.
+>
+> Prior: Test-suite ownership refactor — Priority 1.
+> Deleted 5 overflow files (test_high_risk, test_edge_callbacks,
+> test_edge_sessions, test_edge_providers, test_edge_formatting).
+> 20 weak duplicate tests removed, unique tests strengthened and moved
+> to owner suites. Created test_execution_context.py and
+> test_request_flow.py as missing owner suites.
+>
+> Prior: All build phases shipped.
 > Phases A–I, IIa/b, III (all sub-items including Layer 2 progress
 > contract and expand/collapse), IV, Ext (webhook), restart recovery
-> hardening — all shipped and tested. 791 pytest + 36 bash tests.
+> hardening — all shipped and tested.
 >
 > Remaining work is test coverage gaps and product polish — see
 > [PLAN-commercial-polish.md](PLAN-commercial-polish.md) § "What Remains."
@@ -151,42 +168,39 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **791 pytest tests** + 36 bash tests across 33 entrypoints.
+Current suite: **780 pytest tests** + 36 bash tests across 30 files.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
 | `test_approvals.py` | 6 | Preflight prompt building, denial formatting. |
-| `test_claude_provider.py` | 13 | Claude CLI command construction, API ping health check, file_policy inspect system prompt injection, effective_model override, fallback, and run/preflight command threading. |
-| `test_codex_provider.py` | 37 | Codex CLI command construction, thread invalidation, progress event mapping, health check with real flags, file_policy sandbox override (inspect→read-only, edit→default), effective_model override, fallback, and resume command threading. |
-| `test_config.py` | 23 | Config loading, validation, `.env` parsing, rate limit and admin config, BOT_SKILLS validation, webhook mode validation, `main()` mode selection (poll/webhook), `load_config` webhook env var parsing. |
-| `test_formatting.py` | 42 | Markdown-to-Telegram HTML conversion, balanced HTML splitting, table rendering, directive extraction. |
-| `test_handlers.py` | 54 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings and resilience (admin fallback, stale sessions, prompt size, missing data_dir, corrupt DB, schema version mismatch), SEND_FILE/SEND_IMAGE directive delivery, per-chat project bindings (`/project list/use/clear`, switch invalidation, context hash), file policy (`/policy inspect/edit`, session display, provider context threading, context hash), model profiles (`/model` command, inline keyboard settings callbacks, session display). |
+| `test_claude_provider.py` | 17 | Claude CLI command construction, API ping health check, file_policy inspect system prompt injection, effective_model override, fallback, run/preflight command threading, retry extra_dirs forwarding, preflight hardening, error state contract. |
+| `test_codex_provider.py` | 42 | Codex CLI command construction, thread invalidation, progress event mapping, health check with real flags, file_policy sandbox override (inspect→read-only, edit→default), effective_model override, fallback, resume command threading, preflight safety (no full-auto/dangerous in safe_mode), extra_dirs/uploads isolation, runtime extra_dirs merge. |
+| `test_config.py` | 31 | Config loading, validation, `.env` parsing, rate limit and admin config, BOT_SKILLS validation, webhook mode validation, `main()` mode selection (poll/webhook), `load_config` webhook env var parsing, data_dir writability, extra_dirs validation, bad timeout error, config isolation across instances. |
+| `test_execution_context.py` | 53 | Execution context contracts: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), ResolvedContext path parity, hash field sensitivity (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, execution config digest, extra_dirs forwarding, model profile resolution (4), project+model cross-invalidation. |
+| `test_formatting.py` | 47 | Markdown-to-Telegram HTML conversion, balanced HTML splitting, table rendering, directive extraction, deeply nested markdown, extremely long single-line, empty code blocks, unicode/emoji mix, trim_text empty/boundary. |
+| `test_handlers.py` | 58 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings and resilience (admin fallback, stale sessions, prompt size, missing data_dir, corrupt DB, schema version mismatch), SEND_FILE/SEND_IMAGE directive delivery, per-chat project bindings (`/project list/use/clear`, switch invalidation, context hash), file policy (`/policy inspect/edit`, session display, provider context threading, context hash), model profiles (`/model` command, inline keyboard settings callbacks, session display), empty message ignored, codex thread display, message after /new fresh session, provider empty response. |
 | `test_handlers_admin.py` | 7 | `/admin sessions` summary and detail views, access gating, stale skill filtering. |
-| `test_handlers_approval.py` | 14 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL, callback answer verification, button structure validation, markup removal after callbacks, project-active retry. |
+| `test_handlers_approval.py` | 17 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL, callback answer verification, button structure validation, markup removal after callbacks, project-active retry, approval after session reset, retry callback without pending, role change invalidates pending. |
 | `test_handlers_codex.py` | 12 | Codex-specific handler behavior: thread invalidation, boot ID, retry semantics, script staging. |
 | `test_handlers_credentials.py` | 40 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection, clear-credentials confirmation ownership, callback answer/markup verification, button structure validation, malformed validate spec resilience. |
 | `test_handlers_export.py` | 4 | `/export` command: no history, document generation, access gating. |
 | `test_handlers_output.py` | 15 | Output presentation: `/compact`, `/raw`, table rendering, blockquote compact mode, button-path threshold (long response forces expand button), expand callback (full response via new messages for long text, in-place edit with Collapse button for short text), collapse callback (restores compact with Show full button), expand→collapse round trip, rotated-buffer expand fallback, summary-first prompt injection at execution context boundary (compact on/off), summary extraction. |
 | `test_handlers_ratelimit.py` | 6 | Rate limiting integration: blocking, admin exemption (explicit vs implicit), per-user isolation. |
 | `test_handlers_store.py` | 13 | Store handler flows: admin install/uninstall, update propagation, prompt-size warnings, ref lifecycle, callback flows (skill_add confirm/cancel, skill_update confirm/cancel/non-admin alert, unauthorized alert), markup removal verification. |
-| `test_high_risk.py` | 29 | Cross-cutting invariants: requester identity, context hash staleness, credential injection, system prompt injection. |
-| `test_invariants.py` | 165 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2), update-ID idempotency across all entry points (4: message, decorated command, non-decorated command, callback), mixed ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential check with resolved skills (2), model command/callback parity (4), cross-feature invariants (6: public+model escalation, inspect+model, compact+public, project+policy+approval+model), polling conflict detection (3), prompt weight in /doctor with resolved context (2), _chat_lock queued feedback (3), contended callback single-answer (3: approval, settings, clear-cred), shutdown-interrupted runs stay claimed for recovery, all signals (rc<0) treated as interrupted (4), provider error feedback (2: empty output, long output), global error handler (3: stale callback, non-Update, real Update notification), decorator exceptions mark work items failed (2: command, callback), summarizer subprocess killed on timeout, callback None-event completes work item, provider-neutral progress wording (5: initial status claude/codex, resume, timeout, terminal), Claude/Codex thinking capitalization (2), Codex thread ID suppression (3), Codex compaction wording, heartbeat idle firing, heartbeat stops on content, heartbeat clean cancellation, Claude content_started signal, Codex content_started signal (final text), Codex content_started on draft text, heartbeat respects recent progress updates, approval initial status neutral. |
+| `test_invariants.py` | 70 | Cross-cutting invariant tests (genuinely span multiple boundaries): registry digest residue, async boundary, update-ID idempotency (4: message, decorated command, non-decorated command, callback), _chat_lock queued feedback (3), contended callback single-answer (3: approval, settings, clear-cred), same-chat overlapping update completion, shutdown-interrupted runs stay claimed for recovery, all signals (rc<0) treated as interrupted (4), provider error feedback (2), global error handler (3), decorator exceptions mark work items failed (2), summarizer subprocess killed on timeout, callback None-event completes work item, provider-neutral progress wording (5), Claude/Codex thinking capitalization (2), Codex thread ID suppression (3), Codex compaction wording, heartbeat (5: idle firing, stops on content, clean cancellation, respects recent progress, content_started signals), approval initial status neutral. Temporarily houses: doctor warnings, progress wording/heartbeat, recovery/resume, error handlers (pending future migration). |
 | `test_progress.py` | 45 | Progress event contract tests: render() output for all 9 event types, no-internals-leak checks, Codex _map_event type mapping (thinking, command start/finish, tool start/finish, draft reply, suppressed internals), end-to-end raw-event→render pipeline, tool_activity truncation, empty-text fallback, Claude _consume_stream integration (text delta, tool activity, denial, content_started signal, no-internals parity). |
 | `test_ratelimit.py` | 8 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_registry.py` | 8 | Skill registry: index parsing (valid/bad version/non-JSON), search, artifact download/extraction, store integration (digest match/mismatch). |
+| `test_request_flow.py` | 48 | Request flow contracts: public trust enforcement (7), is_public_user/is_allowed predicates (3+2), public command gating (7 commands + trusted pass-through), rate-limit defaults (2), mixed trust ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential satisfaction with resolved skills (2), model command/callback parity (4), extra_dirs_from_denials, compact+public cross-feature (6), export resolved skills, polling conflict detection (3), prompt weight in /doctor with resolved context (2). |
 | `test_skills.py` | 44 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
 | `test_sqlite_integration.py` | 9 | SQLite session backend integration: handler→SQLite round-trip, JSON-to-SQLite migration under handler load, `cmd_doctor` stale scan from SQLite, `delete_session`, `close_db`/reopen lifecycle, multi-chat independence, cross-chat prompt size scan, no-JSON-artifact verification, fd leak regression on schema error. |
-| `test_storage.py` | 11 | Session CRUD (SQLite-backed), upload paths, directory creation, path resolution, `list_sessions()`, JSON-to-SQLite migration with corrupt file handling. |
+| `test_storage.py` | 14 | Session CRUD (SQLite-backed), upload paths, directory creation, path resolution, `list_sessions()`, JSON-to-SQLite migration with corrupt file handling, provider mismatch state reset, upload isolation (per-chat dir enforcement, cross-chat denial, shared-root denial), upload isolation in provider commands. |
 | `test_store.py` | 21 | Store module: discovery, search, content hashing, install/uninstall via refs and objects, ref round-trip, update detection, custom override detection, diff, GC, startup recovery, schema guard, pinned refs. |
 | `test_store_e2e.py` | 26 | End-to-end user flows through handlers: install→add→message→prompt, update propagation, uninstall pruning, /skills info across all tiers, three-tier resolution, custom override shadowing, /admin sessions stale filtering, provider compatibility output, source label edge cases, normalization persistence, --doctor schema check. |
 | `test_summarize.py` | 21 | Ring buffer (full prompt, kind field, rotation at 50, slot-based retrieval), export formatting, summarization. |
-| `test_edge_callbacks.py` | 4 | Edge cases: approval double-click, approve after session reset, cross-user approval in shared chat, retry without pending. |
-| `test_edge_formatting.py` | 11 | Edge cases: deeply nested markdown, long lines, empty code blocks, unicode/emoji, HTML entities, split_html boundaries, inconsistent table columns, trim_text edge cases. |
-| `test_edge_providers.py` | 7 | Edge cases: provider timeout, empty response, error returncode, state persistence, codex thread_id persistence/resume, full approval flow. |
-| `test_edge_sessions.py` | 7 | Edge cases: message after /new reset, role change with pending, /compact toggle, /session info, codex thread display, /cancel clears pending, empty message ignored. |
 | `test_transport.py` | 30 | Inbound transport normalization: user/command/callback/message normalization, frozen dataclasses (tuples not lists), bot-mention stripping, None-user safety for all handler types, behavioral integration (empty-content skip, caption-to-provider), handler integration proving normalized types flow through. |
 | `test_work_queue.py` | 37 | Durable transport layer: update journal idempotency, payload storage/update, enqueue/claim lifecycle, per-chat serialization, cross-chat concurrency, completion states, has_queued_or_claimed lifecycle, stale claim recovery (different worker, expired, fresh), purge old/recent/active, serialization round-trip (message/command/callback), one-work-item-per-update constraint, claim_next_any (empty/single/busy-chat/cross-chat/payload join), worker loop (process/failure/bad-payload/per-chat-ordering), handler payload storage, crash recovery with payload integrity, interrupted worker items left claimed for recovery. |
-| `test_workitem_integration.py` | 22 | Real integration tests for work-item claim serialization and recovery: fresh message does not consume stale recovered item, concurrent messages each claim own item, claim_for_update blocked by existing claimed item, approval callback does not consume stale item, /project switch serializes with in-flight request, preflight and execution use same model, live command blocked by worker-claimed item, live message blocked by worker-claimed item, blocked item processable after worker completes, live callback blocked by worker and query answered, worker_dispatch sends recovery notice (not auto-replay), recovery discard callback finalizes item, recovery replay callback executes original, fresh message supersedes pending_recovery, double-click on recovery buttons is idempotent, failed notice delivery marks item failed via worker_loop, multiple pending_recovery items each addressable by update_id, discard race after replay answers already-handled, replay reclaim blocked by existing claimed item (ReclaimBlocked), blocked replay informs user "in progress", command does not supersede pending_recovery, reclaim distinguishes gone from blocked. Real SQLite, real asyncio locks, real handler code — only fakes are Telegram transport and provider subprocess. |
+| `test_workitem_integration.py` | 31 | Real integration tests for work-item claim serialization and recovery: fresh message does not consume stale recovered item, concurrent messages each claim own item, claim_for_update blocked by existing claimed item, approval callback does not consume stale item, /project switch serializes with in-flight request, preflight and execution use same model, live command blocked by worker-claimed item, live message blocked by worker-claimed item, blocked item processable after worker completes, live callback blocked by worker and query answered, worker_dispatch sends recovery notice (not auto-replay), recovery discard callback finalizes item, recovery replay callback executes original, fresh message supersedes pending_recovery, double-click on recovery buttons is idempotent, failed notice delivery marks item failed via worker_loop, multiple pending_recovery items each addressable by update_id, discard race after replay answers already-handled, replay reclaim blocked by existing claimed item (ReclaimBlocked), blocked replay informs user "in progress", command does not supersede pending_recovery, reclaim distinguishes gone from blocked, fresh command item created as claimed (handler-owned), worker cannot steal handler-owned item, no false recovery for /compact, no false recovery for /doctor, no false recovery for /session, handler crash leaves item recoverable, claim_for_update recognizes pre-claimed items, complete_work_item state guard (no terminal overwrite), per-chat serialization preserved with pre-claimed items. Real SQLite, real asyncio locks, real handler code — only fakes are Telegram transport and provider subprocess. |
 | `test_setup.sh` | 36 | Installer/setup wizard flows, provider-pruned config generation. |
 
 ---
@@ -394,35 +408,43 @@ Current suite: **791 pytest tests** + 36 bash tests across 33 entrypoints.
 
 ### What shipped
 
-**8.1 Edge case testing** (`tests/test_edge_callbacks.py`, `tests/test_edge_sessions.py`, `tests/test_edge_providers.py`, `tests/test_edge_formatting.py`)
-- 29 new tests across 4 domains exercising boundary conditions and error paths.
-- **Callbacks (4)**: approval double-click idempotency, approve after session reset (stale pending), cross-user approval in shared chat, retry callback without pending request.
-- **Sessions (7)**: message after `/new` uses fresh state, role change with pending approval, `/compact` toggle persistence, `/session` displays provider info, codex thread display, `/cancel` clears pending, empty message ignored.
-- **Providers (7)**: timeout handling, empty response, error returncode, provider state persistence, codex thread_id persistence and resume, full approval-to-execution flow.
-- **Formatting (11)**: deeply nested markdown, extremely long single-line, empty code blocks, code block with language tag, unicode/emoji mix, HTML entity escaping, split_html single chunk, split_html content preservation, inconsistent table columns, trim_text empty/boundary.
+**8.1 Edge case testing** (originally `test_edge_callbacks.py`, `test_edge_sessions.py`, `test_edge_providers.py`, `test_edge_formatting.py` — all deleted in ownership refactor)
+- 29 original tests across 4 domains. 20 weak duplicates deleted, unique tests strengthened and moved to owner suites:
+  - **Callbacks (2 unique → `test_handlers_approval.py`)**: approve after session reset, retry without pending. 2 duplicates deleted.
+  - **Sessions (4 unique → `test_handlers.py`, `test_handlers_approval.py`)**: empty message ignored, codex thread display, message after /new, role change invalidates pending (strengthened). 3 duplicates deleted.
+  - **Providers (1 unique → `test_handlers.py`)**: provider empty response. 6 duplicates deleted.
+  - **Formatting (5 unique → `test_formatting.py`)**: deeply nested markdown, long single-line, empty code blocks, unicode/emoji mix, trim_text empty. 7 duplicates deleted.
 
 | Item | Status | Notes |
 |------|--------|-------|
-| 8.1 Edge case testing | Done | 29 tests across callbacks, sessions, providers, formatting. |
+| 8.1 Edge case testing | Done | Tests folded into owner suites; overflow files deleted. |
 
 ---
 
 ## Remaining Work
 
 All build phases (A–IV) and the multi-worker webhook extension are shipped.
-Remaining items fall into five priority tiers — see
+Remaining items fall into seven priority tiers — see
 [PLAN-commercial-polish.md](PLAN-commercial-polish.md) § "What Remains" for
 the full breakdown:
 
-1. **Test-suite ownership refactor**: consolidate overflow files, eliminate
-   duplicated assertions, establish clear suite-owns-contract mapping.
-2. **Test coverage gaps** (low effort): heartbeat/liveness interaction test,
+1. **Test-suite ownership refactor** — DONE. Overflow files deleted (20 weak
+   duplicates removed), owner suites created (test_execution_context,
+   test_request_flow). See `docs/testing-ownership.md` for ownership map.
+2. **Fresh command ownership race** — DONE. `record_and_enqueue()` creates
+   items as `claimed` (handler-owned). Worker cannot steal fresh commands.
+   `claim_for_update()` recognizes pre-claimed items. `complete_work_item()`
+   guards terminal states. 9 integration tests. See `dont_make_false_claims.md`.
+3. **Test coverage gaps** (low effort): heartbeat/liveness interaction test,
    rate-limit + semantic event test, raw event regression fixtures.
-3. **Small feature gaps** (low effort): `/project` inline keyboard.
+4. **Test isolation and safe parallelization**: audit telegram_handlers
+   globals, separate pure logic from global state, introduce authoritative
+   reset path.
+5. **Small feature gaps** (low effort): `/project` inline keyboard.
    Content-based dedup is demand-gated (only if operators report double-sends).
-4. **Architectural hardening** (high effort, conditional): III.7 workflow
+6. **Architectural hardening** (high effort, conditional): III.7 workflow
    state-machine extraction, verbose/debug progress mode.
-5. **Product extensions** (future): multi-worker webhook, usage tracking,
+7. **Product extensions** (future): multi-worker webhook, usage tracking,
    registry signing, policy/project expansion.
 
 ---

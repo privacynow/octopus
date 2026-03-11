@@ -565,3 +565,63 @@ async def test_retry_with_project_active():
             r.get("edit_text", r.get("text", "")) for r in cb_msg.replies
         )
         assert "Context changed" not in reply_texts
+
+
+# -- Approval edge cases (from test_edge_callbacks.py, test_edge_sessions.py) --
+
+
+async def test_approval_after_session_reset():
+    """Approve callback after /new should not execute stale request."""
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        prov.preflight_results = [RunResult(text="plan: read stuff")]
+
+        await send_text(chat, user, "hello")
+        assert len(prov.preflight_calls) == 1
+
+        # Reset session
+        await send_command(th.cmd_new, chat, user, "/new")
+
+        # Try to approve the old pending — should be gone
+        query, _ = await send_callback(th.handle_callback, chat, user, "approval_approve")
+        assert len(prov.run_calls) == 0
+        assert query.answered
+
+
+async def test_retry_callback_without_pending():
+    """Retry callback when no pending request should be harmless."""
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+
+        import app.telegram_handlers as th
+        query, _ = await send_callback(th.handle_callback, chat, user, "retry_approve:/tmp/dir")
+        assert query.answered
+        assert len(prov.run_calls) == 0
+
+
+async def test_role_change_invalidates_pending_approval():
+    """Changing role while approval is pending must invalidate it."""
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        prov.preflight_results = [RunResult(text="plan: do something")]
+        prov.run_results = [RunResult(text="done")]
+
+        await send_text(chat, user, "hello")
+        session = load_session_disk(data_dir, 1001, prov)
+        assert session.get("pending_approval") is not None
+
+        # Change role -- must invalidate pending
+        await send_command(th.cmd_role, chat, user, "/role", args=["Python", "expert"])
+        session = load_session_disk(data_dir, 1001, prov)
+        assert session.get("role") == "Python expert"
+
+        # Approve should fail -- context changed
+        query, _ = await send_callback(th.handle_callback, chat, user, "approval_approve")
+        assert len(prov.run_calls) == 0, "Stale approval must not execute"

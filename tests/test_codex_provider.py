@@ -592,3 +592,67 @@ async def test_modern_schema_resume():
     assert not any("Codex thread" in u for u in progress2.updates)
     assert not any("resume-modern" in u for u in progress2.updates)
     assert any("resume final reply" in u for u in progress2.updates)
+
+
+# -- Codex preflight safety (from test_high_risk.py) --
+
+
+def test_codex_preflight_no_full_auto():
+    """Preflight mode (safe_mode=True) must strip --full-auto."""
+    p = CodexProvider(make_config(
+        provider_name="codex", model="test-model", codex_profile="myprofile",
+        codex_full_auto=True,
+    ))
+    normal_cmd = p._build_new_cmd("test", [])
+    assert "--full-auto" in normal_cmd
+
+    preflight_cmd = p._build_new_cmd("test", [], sandbox="read-only", ephemeral=True, safe_mode=True)
+    assert "--full-auto" not in preflight_cmd
+    assert "read-only" in preflight_cmd
+    assert "--ephemeral" in preflight_cmd
+    assert "--model" in preflight_cmd
+    assert "test-model" in preflight_cmd
+
+
+def test_codex_preflight_no_dangerous():
+    """Preflight mode must strip --dangerously-bypass-approvals-and-sandbox."""
+    p = CodexProvider(make_config(
+        provider_name="codex", model="test-model", codex_profile="myprofile",
+        codex_dangerous=True,
+    ))
+    normal_cmd = p._build_new_cmd("test", [])
+    assert "--dangerously-bypass-approvals-and-sandbox" in normal_cmd
+
+    preflight_cmd = p._build_new_cmd("test", [], sandbox="read-only", ephemeral=True, safe_mode=True)
+    assert "--dangerously-bypass-approvals-and-sandbox" not in preflight_cmd
+
+
+def test_codex_extra_dirs_no_uploads():
+    """Provider new-command includes extra_dirs but not a shared uploads dir."""
+    p = CodexProvider(make_config(
+        provider_name="codex", model="test-model", codex_profile="myprofile",
+        extra_dirs=(Path("/opt/myrepo"),),
+    ))
+    cmd = p._build_new_cmd("test", [])
+    assert "--add-dir" in cmd
+    assert "/opt/myrepo" in cmd
+    assert not any("uploads" in a for a in cmd)
+
+
+def test_codex_resume_no_add_dir():
+    """Resume command must not include --add-dir (codex exec resume doesn't support it)."""
+    p = CodexProvider(make_config(
+        provider_name="codex", model="test-model", codex_profile="myprofile",
+        extra_dirs=(Path("/opt/myrepo"),),
+    ))
+    resume_cmd = p._build_resume_cmd("thread-123", "test", [])
+    assert resume_cmd.count("--add-dir") == 0
+
+
+def test_codex_new_with_runtime_extra_dirs():
+    """Runtime extra_dirs parameter must be merged into new command."""
+    p = CodexProvider(make_config(
+        provider_name="codex", model="test-model", codex_profile="myprofile",
+    ))
+    cmd = p._build_new_cmd("test", [], extra_dirs=["/tmp/uploads/123"])
+    assert "/tmp/uploads/123" in cmd

@@ -18,9 +18,15 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 > - Item 3 (fixed): User-intent-owned replay. New `pending_recovery`
 >   work-item state. worker_dispatch sends recovery notice with inline
 >   keyboard instead of auto-replaying. Fresh messages supersede pending
->   recovery. Double-click on buttons is idempotent. Replay goes through
->   `_chat_lock` with `worker_item`; interruption during replay leaves
->   item claimed for next-boot re-recovery.
+>   recovery (only `handle_message`, not commands or callbacks — guarded
+>   by `supersede_recovery` parameter on `_chat_lock`). Double-click on
+>   buttons is idempotent. Replay goes through `_chat_lock` with
+>   `worker_item`; interruption during replay leaves item claimed for
+>   next-boot re-recovery. `reclaim_for_replay` enforces per-chat
+>   single-claimed invariant; raises `ReclaimBlocked` when blocked by
+>   another claim (distinct from returning None when item is gone).
+>   Failed recovery-notice delivery re-raises so `worker_loop` marks
+>   item failed, not done.
 >   `RunResult.resume_failed` field provides typed evidence from the provider.
 >   Claude provider parses stderr for session-not-found/invalid-session
 >   markers and sets `resume_failed=True` only when the resume target is
@@ -77,7 +83,7 @@ Current as of 2026-03-10. Tracks progress against [PLAN-commercial-polish.md](PL
 > integration tests (`test_workitem_integration.py`) exercising real SQLite,
 > real asyncio locks, and real handler code — only faking Telegram transport
 > and provider subprocess. Redundant fake-based unit tests removed from
-> `test_invariants.py`. 724 tests passing.
+> `test_invariants.py`. 736 tests passing.
 
 ---
 
@@ -134,7 +140,7 @@ Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setu
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 
-Current suite: **729 pytest tests** + 35 bash tests across 32 entrypoints.
+Current suite: **736 pytest tests** + 35 bash tests across 32 entrypoints.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -146,7 +152,7 @@ Current suite: **729 pytest tests** + 35 bash tests across 32 entrypoints.
 | `test_handlers.py` | 51 | Core handler integration: happy-path routing, session lifecycle, `/role`, `/new`, `/help`, `/start`, `/doctor` warnings and resilience (admin fallback, stale sessions, prompt size, missing data_dir, corrupt DB, schema version mismatch), SEND_FILE/SEND_IMAGE directive delivery, per-chat project bindings (`/project list/use/clear`, switch invalidation, context hash), file policy (`/policy inspect/edit`, session display, provider context threading, context hash), model profiles (`/model` command, inline keyboard settings callbacks, session display). |
 | `test_handlers_admin.py` | 7 | `/admin sessions` summary and detail views, access gating, stale skill filtering. |
 | `test_handlers_approval.py` | 14 | Approval and pending-request flows: preflight, approve/retry/skip, stale pending TTL, callback answer verification, button structure validation, markup removal after callbacks, project-active retry. |
-| `test_handlers_codex.py` | 11 | Codex-specific handler behavior: thread invalidation, boot ID, retry semantics, script staging. |
+| `test_handlers_codex.py` | 12 | Codex-specific handler behavior: thread invalidation, boot ID, retry semantics, script staging. |
 | `test_handlers_credentials.py` | 40 | Credential and setup flows: capture, validation, isolation, clear/cancel, group-setup protection, clear-credentials confirmation ownership, callback answer/markup verification, button structure validation, malformed validate spec resilience. |
 | `test_handlers_export.py` | 4 | `/export` command: no history, document generation, access gating. |
 | `test_handlers_output.py` | 8 | Output presentation: `/compact`, `/raw`, table rendering, blockquote compact mode, expand/collapse, summary extraction. |
@@ -156,7 +162,7 @@ Current suite: **729 pytest tests** + 35 bash tests across 32 entrypoints.
 | `test_invariants.py` | 165 | Contract-shaped invariant tests: context hash round-trip (7 combos × approval + retry), stale detection (3 change types), inspect sandbox integrity (5 provider_config combos), registry digest residue, execution context consistency, async boundary, hash completeness (8 fields), typed session round-trip (approval/retry/no-pending), handler-vs-direct builder equivalence, model profile resolution (4), public trust enforcement (7), is_public_user predicate (3), public command gating (7 commands + trusted pass-through), doctor public mode warnings (3), rate-limit defaults (2), update-ID idempotency across all entry points (4: message, decorated command, non-decorated command, callback), mixed ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential check with resolved skills (2), model command/callback parity (4), cross-feature invariants (6: public+model escalation, inspect+model, compact+public, project+policy+approval+model), polling conflict detection (3), prompt weight in /doctor with resolved context (2), _chat_lock queued feedback (3), contended callback single-answer (3: approval, settings, clear-cred), shutdown-interrupted runs stay claimed for recovery, all signals (rc<0) treated as interrupted (4), provider error feedback (2: empty output, long output), global error handler (3: stale callback, non-Update, real Update notification), decorator exceptions mark work items failed (2: command, callback), summarizer subprocess killed on timeout, callback None-event completes work item, provider-neutral progress wording (5: initial status claude/codex, resume, timeout, terminal), Claude/Codex thinking capitalization (2), Codex thread ID suppression (3), Codex compaction wording, heartbeat idle firing, heartbeat stops on content, heartbeat clean cancellation, Claude content_started signal, Codex content_started signal (final text), Codex content_started on draft text, heartbeat respects recent progress updates, approval initial status neutral. |
 | `test_ratelimit.py` | 8 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_registry.py` | 8 | Skill registry: index parsing (valid/bad version/non-JSON), search, artifact download/extraction, store integration (digest match/mismatch). |
-| `test_skills.py` | 43 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
+| `test_skills.py` | 44 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
 | `test_sqlite_integration.py` | 9 | SQLite session backend integration: handler→SQLite round-trip, JSON-to-SQLite migration under handler load, `cmd_doctor` stale scan from SQLite, `delete_session`, `close_db`/reopen lifecycle, multi-chat independence, cross-chat prompt size scan, no-JSON-artifact verification, fd leak regression on schema error. |
 | `test_storage.py` | 11 | Session CRUD (SQLite-backed), upload paths, directory creation, path resolution, `list_sessions()`, JSON-to-SQLite migration with corrupt file handling. |
 | `test_store.py` | 21 | Store module: discovery, search, content hashing, install/uninstall via refs and objects, ref round-trip, update detection, custom override detection, diff, GC, startup recovery, schema guard, pinned refs. |
@@ -168,7 +174,7 @@ Current suite: **729 pytest tests** + 35 bash tests across 32 entrypoints.
 | `test_edge_sessions.py` | 7 | Edge cases: message after /new reset, role change with pending, /compact toggle, /session info, codex thread display, /cancel clears pending, empty message ignored. |
 | `test_transport.py` | 30 | Inbound transport normalization: user/command/callback/message normalization, frozen dataclasses (tuples not lists), bot-mention stripping, None-user safety for all handler types, behavioral integration (empty-content skip, caption-to-provider), handler integration proving normalized types flow through. |
 | `test_work_queue.py` | 37 | Durable transport layer: update journal idempotency, payload storage/update, enqueue/claim lifecycle, per-chat serialization, cross-chat concurrency, completion states, has_queued_or_claimed lifecycle, stale claim recovery (different worker, expired, fresh), purge old/recent/active, serialization round-trip (message/command/callback), one-work-item-per-update constraint, claim_next_any (empty/single/busy-chat/cross-chat/payload join), worker loop (process/failure/bad-payload/per-chat-ordering), handler payload storage, crash recovery with payload integrity, interrupted worker items left claimed for recovery. |
-| `test_workitem_integration.py` | 15 | Real integration tests for work-item claim serialization and recovery: fresh message does not consume stale recovered item, concurrent messages each claim own item, claim_for_update blocked by existing claimed item, approval callback does not consume stale item, /project switch serializes with in-flight request, preflight and execution use same model, live command blocked by worker-claimed item, live message blocked by worker-claimed item, blocked item processable after worker completes, live callback blocked by worker and query answered, worker_dispatch sends recovery notice (not auto-replay), recovery discard callback finalizes item, recovery replay callback executes original, fresh message supersedes pending_recovery, double-click on recovery buttons is idempotent. Real SQLite, real asyncio locks, real handler code — only fakes are Telegram transport and provider subprocess. |
+| `test_workitem_integration.py` | 22 | Real integration tests for work-item claim serialization and recovery: fresh message does not consume stale recovered item, concurrent messages each claim own item, claim_for_update blocked by existing claimed item, approval callback does not consume stale item, /project switch serializes with in-flight request, preflight and execution use same model, live command blocked by worker-claimed item, live message blocked by worker-claimed item, blocked item processable after worker completes, live callback blocked by worker and query answered, worker_dispatch sends recovery notice (not auto-replay), recovery discard callback finalizes item, recovery replay callback executes original, fresh message supersedes pending_recovery, double-click on recovery buttons is idempotent, failed notice delivery marks item failed via worker_loop, multiple pending_recovery items each addressable by update_id, discard race after replay answers already-handled, replay reclaim blocked by existing claimed item (ReclaimBlocked), blocked replay informs user "in progress", command does not supersede pending_recovery, reclaim distinguishes gone from blocked. Real SQLite, real asyncio locks, real handler code — only fakes are Telegram transport and provider subprocess. |
 | `test_setup.sh` | 35 | Installer/setup wizard flows, provider-pruned config generation. |
 
 ---
@@ -761,6 +767,37 @@ for idle states, internal detail suppression.
 - **Heartbeat/typing tasks awaited on cancel**: `finally` blocks now
   `await asyncio.gather(heartbeat_task, typing_task, return_exceptions=True)`
   so background tasks are fully cleaned up before execution continues.
+
+---
+
+## Restart Recovery and Resume Hardening
+
+### What shipped
+
+**User-intent-owned replay** (`app/work_queue.py`, `app/telegram_handlers.py`, `app/worker.py`)
+- `PendingRecovery` exception and `pending_recovery` work-item state.
+- `mark_pending_recovery()` transitions claimed → pending_recovery.
+- `get_pending_recovery()` finds items by update_id (multi-item safe) or newest.
+- `supersede_pending_recovery()` finalizes all pending_recovery as superseded.
+- `finalize_recovery()` returns bool for race-safe discard.
+- `reclaim_for_replay()` with per-chat single-claimed invariant; raises `ReclaimBlocked` when blocked (distinct from returning None when item is gone).
+- `worker_dispatch` sends recovery notice with inline keyboard instead of auto-replaying.
+- `handle_recovery_callback` processes Replay/Discard buttons, bypasses `_callback_handler`.
+- `_chat_lock` supersession gated by `supersede_recovery` parameter — only `handle_message` passes True.
+- `worker_loop` catches `PendingRecovery` and skips completion.
+- `purge_old` includes `pending_recovery` in deletion.
+
+### Bugs found and fixed
+
+| Bug | Severity | Root cause | Fix |
+|-----|----------|-----------|-----|
+| Failed recovery-notice delivery moves item to pending_recovery | High | `mark_pending_recovery` ran before `send_message` could fail; exception skipped by `PendingRecovery` catch | Moved `mark_pending_recovery` after send; failed send re-raises so `worker_loop` marks failed |
+| Multiple pending_recovery items only newest found | High | `get_pending_recovery` used `LIMIT 1` ignoring update_id from button | Added `update_id` parameter; callback passes specific update_id from button data |
+| Discard ignores finalize_recovery return value | Medium | Handler discarded without checking race; two concurrent discards could both succeed | Check `finalize_recovery` bool; false → "already handled" |
+| reclaim_for_replay bypasses per-chat claimed invariant | High | New state-transition helper didn't audit existing invariants on work_items table | Added `BEGIN IMMEDIATE` transaction with claimed check; mirrors `claim_for_update` guard |
+| Failed notice delivery marks item done (not failed) | High | Returning normally from worker_dispatch caused worker_loop to mark done | Changed to re-raise; worker_loop's except branch marks failed |
+| `_chat_lock` supersedes pending_recovery for all handlers | High | Supersession code ran for every claimed item, not just fresh messages | Added `supersede_recovery` parameter; only `handle_message` passes True |
+| Blocked replay path says "already handled" | Medium | `reclaim_for_replay` returned None for both gone and blocked | Added `ReclaimBlocked` exception; handler shows "in progress — try again" for blocked, "already handled" for gone |
 
 ---
 

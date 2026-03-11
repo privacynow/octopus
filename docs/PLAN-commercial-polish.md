@@ -1747,6 +1747,52 @@ The risk is not "feature A broken alone." It is the cross-feature matrix.
 Billing and usage accounting are explicitly deferred. They are not blocking
 any of the above.
 
+### Post-Ship Maintenance: test-suite ownership refactor
+
+This is the next item to work on after the current product-level feature
+tracks are stable.
+
+The contract is not "reduce test count." The contract is:
+
+- each runtime contract has one clear owning test suite
+- helper tests do not duplicate real-boundary coverage
+- `test_invariants.py` only keeps truly cross-cutting invariants
+- review-history or edge-taxonomy files do not become second owners
+
+Use the current tree as authority before moving anything. In particular,
+recovery/work-item behavior already has a healthy primitive-vs-boundary split:
+
+- `tests/test_work_queue.py` owns durable queue/work-item primitives
+- `tests/test_workitem_integration.py` owns worker/Telegram recovery boundaries
+
+Refactor sequence:
+
+1. Rebaseline current coverage against HEAD and write a short owner map.
+   - identify stale review notes, duplicated assertions, and ownerless tests
+   - do not move tests based on outdated bug reports or historical suite shape
+2. Stabilize the recovery/work-item slice first.
+   - keep durable primitive checks in `tests/test_work_queue.py`
+   - keep real recovery/worker/callback boundaries in `tests/test_workitem_integration.py`
+   - move duplicate recovery assertions out of `tests/test_invariants.py`
+3. Dismantle the overflow files.
+   - move any unique test from `tests/test_high_risk.py` to its owner suite, then delete the file
+   - fold `tests/test_edge_callbacks.py`, `tests/test_edge_sessions.py`, and `tests/test_edge_providers.py` into owner suites, then delete them
+4. Parameterize helper-heavy suites.
+   - turn `tests/test_transport.py` into a normalization matrix plus the real handler-boundary tests
+   - turn `tests/test_formatting.py` into table-driven groups for `trim_text`, markdown conversion, and `split_html`
+   - fold any surviving formatting stress cases from `tests/test_edge_formatting.py` into those groups
+5. Shrink `tests/test_invariants.py` to true cross-cutting ownership only.
+   - keep resolved-context parity, public/trust enforcement, context-hash invalidation, and cross-ingress idempotency
+   - move provider progress, recovery, export, and other owner-specific checks back to their domain suites
+6. Add a short testing-ownership note documenting which suite owns which contract.
+
+Completion bar:
+
+- no contract is asserted in both an owner suite and `tests/test_invariants.py` without a clear boundary reason
+- `tests/test_high_risk.py` and the non-essential `tests/test_edge_*.py` overflow files are removed
+- moved tests are stronger than before or are deleted as redundant
+- owner suites pass after each step; full suite passes at the end
+
 ---
 
 ## Completion Standard

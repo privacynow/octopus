@@ -491,9 +491,9 @@ def reclaim_for_replay(data_dir: Path, item_id: str, worker_id: str) -> dict[str
     """Transition a pending_recovery item back to claimed for replay.
 
     Enforces the per-chat single-claimed invariant: if another item for
-    the same chat is already claimed, the reclaim is rejected (returns
-    None).  This mirrors the guard in ``claim_for_update`` and
-    ``claim_next_any``.
+    the same chat is already claimed, the reclaim is rejected (raises
+    ``ReclaimBlocked``).  This mirrors the guard in ``claim_for_update``
+    and ``claim_next_any``.
 
     Returns the item dict if successful, None if the item is no longer
     in pending_recovery or already handled.  Raises ``ReclaimBlocked``

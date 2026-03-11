@@ -12,12 +12,17 @@ from tests.support.handler_support import (
     FakeProvider,
     FakeUpdate,
     FakeUser,
+    fresh_data_dir,
+    fresh_env,
     get_callback_data_values,
     has_markup_removal,
+    last_reply,
     load_session_disk,
     make_config,
+    send_callback,
+    send_command,
+    send_text,
     setup_globals,
-    fresh_data_dir,
 )
 
 

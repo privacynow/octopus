@@ -2,7 +2,18 @@
 
 Current as of 2026-03-11. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-11):** Test isolation, parallel default, portable fd test.
+> **Latest change (2026-03-11):** Phase 11 second workflow — pending approval/retry machine and invalidation in machine.
+> **Pending request machine:** `app/workflows/pending_request.py` — `PendingRequestMachine` (python-statemachine), states `none` / `pending_approval` / `pending_retry`; transitions `create_approval`, `create_retry`, `approve_execute`, `reject`, `expire`, `invalidate_stale`, `cancel`, `clear_after_execution`. `run_pending_request_event(model, event_name, **kwargs)` returns `PendingRequestTransitionResult` (allowed, new_state, disposition, reason). Dispositions: executed, rejected, expired, invalidated, cancelled, ok, invalid_transition, guard_failed.
+> **Invalidation in machine:** `request_flow.classify_pending_validation()` returns `"ok"` | `"expired"` | `"context_changed"`; handlers choose event (`approve_execute` / `expire` / `invalidate_stale`) from that and call the machine; they act on disposition (executed → execute and clear; expired/invalidated → clear and show message). `approve_pending` and retry_allow callback use machine; `reject_pending` uses `run_pending_request_event(..., "reject")`. `validate_pending()` kept; implemented via `classify_pending_validation` for message text.
+> **Tests:** `tests/test_pending_request_workflow_machine.py` — 39 tests (allowed/forbidden transitions, guards, dispositions, handler-path classification → disposition). `test_classify_pending_validation_returns_ok_expired_context_changed` in test_request_flow. All approval/retry handler tests pass (test_handlers_approval).
+>
+> **Prior:** Phase 11 transport regression tests (stale claim/complete, dispatch corruption, meta no schema_version).
+>
+> **Prior:** Enqueue/preclaim derived from machine; preclaim test.
+>
+> **Prior:** Claim paths exact CAS in `claim_next`/`claim_next_any`; regression test for stale complete vs later claim.
+>
+> **Prior:** Test isolation, parallel default, portable fd test.
 > **Priority 4 (test isolation):** One authoritative reset path
 > (`reset_handler_test_runtime()`), close-all for session and transport DB
 > caches, conftest autouse fixture, isolation regression tests. Direct
@@ -136,7 +147,7 @@ Current as of 2026-03-11. Tracks progress against [PLAN-commercial-polish.md](PL
 ## Current Snapshot
 
 - Phases 1-10 are sealed as shipped.
-- The next planned roadmap item is Phase 11, Workflow Ownership Extraction.
+- The next planned roadmap item is Phase 12, Postgres runtime cutover.
 - The shipped runtime still uses SQLite-backed session and transport stores
   today; the roadmap shifts runtime authority to Postgres in Phases 12-14.
 - `transport idempotency` is shipped in Phase 9.
@@ -159,7 +170,7 @@ Current as of 2026-03-11. Tracks progress against [PLAN-commercial-polish.md](PL
 | 8 | Public trust, model profiles, and settings UX | Done | Mixed trust, model profiles, and inline settings UX shipped. |
 | 9 | Durable transport, transport idempotency, webhook mode, and restart recovery | Done | Durable queue, webhook path, replay/discard recovery, and polling conflict detection shipped. |
 | 10 | Structural hardening, invariants, and test ownership | Done | Invariant coverage, test ownership refactor, and runtime isolation hardening shipped. |
-| 11 | Workflow ownership extraction | Planned | Behavior-preserving extraction of transport/recovery and approval/retry owners. |
+| 11 | Workflow ownership extraction | Done | Transport/recovery and pending approval/retry machines extracted; claim/enqueue and approval/retry invalidation flow through machines; regression and machine tests in place. |
 | 12 | Postgres runtime cutover | Planned | Postgres becomes the sole supported runtime backend after migration. |
 | 13 | Postgres queue authority in webhook mode | Planned | Core request transport stays app-owned in Postgres. |
 | 14 | Multi-process / multi-worker deployment | Planned | Shared Postgres queue authority expands to cross-process ingress and workers. |
@@ -205,7 +216,7 @@ Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml
 Default: **4 workers** (`addopts = "-v -n 4"`). Full suite runs on Linux and
 macOS (fd leak test portable: `/proc` on Linux, `/dev/fd` on macOS).
 
-Current suite: **787 pytest tests** + 36 bash tests across 30 files.
+Current suite: **827 pytest tests** + 36 bash tests across 31 files.
 
 | File | Tests | What it covers |
 |------|------:|----------------|
@@ -229,7 +240,8 @@ Current suite: **787 pytest tests** + 36 bash tests across 30 files.
 | `test_progress.py` | 49 | Progress event contract tests: render() output for all 9 event types, no-internals-leak checks, Codex _map_event type mapping (thinking, command start/finish, tool start/finish, draft reply, suppressed internals), end-to-end raw-event→render pipeline, tool_activity truncation, empty-text fallback, Claude _consume_stream integration (text delta, tool activity, denial, content_started signal, no-internals parity). Heartbeat vs provider liveness (no overwrite). Rate-limit + semantic event preservation (TelegramProgress, burst, suppression asserted). Raw fixture regression (Priority 3c): Codex and Claude NDJSON traces through mapping/render. |
 | `test_ratelimit.py` | 8 | RateLimiter unit tests: sliding window, per-minute/per-hour, user isolation, clear, expiry. |
 | `test_registry.py` | 8 | Skill registry: index parsing (valid/bad version/non-JSON), search, artifact download/extraction, store integration (digest match/mismatch). |
-| `test_request_flow.py` | 48 | Request flow contracts: public trust enforcement (7), is_public_user/is_allowed predicates (3+2), public command gating (7 commands + trusted pass-through), rate-limit defaults (2), mixed trust ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), credential satisfaction with resolved skills (2), model command/callback parity (4), extra_dirs_from_denials, compact+public cross-feature (6), export resolved skills, polling conflict detection (3), prompt weight in /doctor with resolved context (2). |
+| `test_request_flow.py` | 49 | Request flow contracts: public trust enforcement (7), is_public_user/is_allowed predicates (3+2), public command gating (7 commands + trusted pass-through), rate-limit defaults (2), mixed trust ingress (2), execution-path trust enforcement (5), trust-tier-aware pending validation (2), classify_pending_validation (ok/expired/context_changed), credential satisfaction with resolved skills (2), model command/callback parity (4), extra_dirs_from_denials, compact+public cross-feature (6), export resolved skills, polling conflict detection (3), prompt weight in /doctor with resolved context (2). |
+| `test_pending_request_workflow_machine.py` | 39 | Pending approval/retry workflow: allowed/forbidden transitions, guards (validation_ok, is_expired, is_context_stale), dispositions (executed, rejected, expired, invalidated, cancelled), handler-path classification→disposition, unknown event/state. |
 | `test_skills.py` | 44 | Skill engine: catalog, instruction loading, prompt composition, credential encryption, context hashing, role shaping, provider config digest, YAML parsing resilience. |
 | `test_sqlite_integration.py` | 9 | SQLite session backend integration: handler→SQLite round-trip, JSON-to-SQLite migration under handler load, `cmd_doctor` stale scan from SQLite, `delete_session`, `close_db`/reopen lifecycle, multi-chat independence, cross-chat prompt size scan, no-JSON-artifact verification, fd leak regression on schema error (portable: Linux /proc, macOS /dev/fd). |
 | `test_storage.py` | 14 | Session CRUD (SQLite-backed), upload paths, directory creation, path resolution, `list_sessions()`, JSON-to-SQLite migration with corrupt file handling, provider mismatch state reset, upload isolation (per-chat dir enforcement, cross-chat denial, shared-root denial), upload isolation in provider commands. |
@@ -874,9 +886,9 @@ for idle states, internal detail suppression.
 **User-intent-owned replay** (`app/work_queue.py`, `app/telegram_handlers.py`, `app/worker.py`)
 - `PendingRecovery` exception and `pending_recovery` work-item state.
 - `mark_pending_recovery()` transitions claimed → pending_recovery.
-- `get_pending_recovery()` finds items by update_id (multi-item safe) or newest.
+- `get_pending_recovery_for_update()` and `get_latest_pending_recovery()` find pending_recovery items (by update or latest in chat).
 - `supersede_pending_recovery()` finalizes all pending_recovery as superseded.
-- `finalize_recovery()` returns bool for race-safe discard.
+- `discard_recovery()` returns bool for race-safe discard.
 - `reclaim_for_replay()` with per-chat single-claimed invariant; raises `ReclaimBlocked` when blocked (distinct from returning None when item is gone).
 - `worker_dispatch` sends recovery notice with inline keyboard instead of auto-replaying.
 - `handle_recovery_callback` processes Replay/Discard buttons, bypasses `_callback_handler`.
@@ -890,7 +902,7 @@ for idle states, internal detail suppression.
 |-----|----------|-----------|-----|
 | Failed recovery-notice delivery moves item to pending_recovery | High | `mark_pending_recovery` ran before `send_message` could fail; exception skipped by `PendingRecovery` catch | Moved `mark_pending_recovery` after send; failed send re-raises so `worker_loop` marks failed |
 | Multiple pending_recovery items only newest found | High | `get_pending_recovery` used `LIMIT 1` ignoring update_id from button | Added `update_id` parameter; callback passes specific update_id from button data |
-| Discard ignores finalize_recovery return value | Medium | Handler discarded without checking race; two concurrent discards could both succeed | Check `finalize_recovery` bool; false → "already handled" |
+| Discard ignores discard_recovery return value | Medium | Handler discarded without checking race; two concurrent discards could both succeed | Check `discard_recovery` bool; false → "already handled" |
 | reclaim_for_replay bypasses per-chat claimed invariant | High | New state-transition helper didn't audit existing invariants on work_items table | Added `BEGIN IMMEDIATE` transaction with claimed check; mirrors `claim_for_update` guard |
 | Failed notice delivery marks item done (not failed) | High | Returning normally from worker_dispatch caused worker_loop to mark done | Changed to re-raise; worker_loop's except branch marks failed |
 | `_chat_lock` supersedes pending_recovery for all handlers | High | Supersession code ran for every claimed item, not just fresh messages | Added `supersede_recovery` parameter; only `handle_message` passes True |

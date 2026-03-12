@@ -15,6 +15,47 @@ execution-context contracts described here.
 
 ---
 
+## System context (high-level)
+
+```
+  +--------+                    +------------------------------------------+
+  | User   |  Telegram API     | Bot process                              |
+  |(client)|<=================>|                                          |
+  +--------+  updates / send    |  +-------------+  +-------------------+  |
+                               |  | transport   |  | work_queue        |  |
+                               |  | (normalize) |->| (journal, claim)  |  |
+                               |  +-------------+  +-------------------+  |
+                               |         |                  |           |
+                               |         v                  v           |
+                               |  +-------------+  +-------------------+  |
+                               |  | handlers    |  | worker_loop       |  |
+                               |  | (routing,    |  | (drain unclaimed) |  |
+                               |  |  Telegram   |  +-------------------+  |
+                               |  |  I/O)       |           |              |
+                               |  +------+------+           |              |
+                               |         |     +------------+              |
+                               |         v     v                           |
+                               |  request_flow, execution_context,         |
+                               |  session_state, skills                    |
+                               |         |                                 |
+                               |         v                                 |
+                               |  +-------------+  +-------------------+     |
+                               |  | providers   |  | progress /       |     |
+                               |  | (Claude,    |->| formatting /      |     |
+                               |  |  Codex)     |  | summarize         |     |
+                               |  +------+------+  +-------------------+     |
+                               +--------|-----------------------------------+
+                                        |
+                                        v
+                               +-------------------+
+                               | Execution backend |
+                               | (Claude Code /   |
+                               |  Codex process)  |
+                               +-------------------+
+```
+
+---
+
 ## System Contract
 
 Telegram Agent Bot provides a Telegram-native control surface for a local
@@ -48,7 +89,24 @@ adds:
 
 ## Runtime Boundaries
 
-The codebase is organized around these hard boundaries.
+The codebase is organized around these hard boundaries. Data and control
+flow respect these layers; business logic does not skip across them.
+
+```
+  +----------------+  +----------------+  +----------------+  +----------------+
+  | 1. Transport    |  | 2. Work queue  |  | 3. Session     |  | 4. Execution   |
+  |    boundary     |  |    boundary    |  |    boundary    |  |    context     |
+  | Normalize       |->| Journal, claim,|  | Durable        |  | One resolved   |
+  | inbound types   |  | workflow       |  | chat-scoped    |  | context/request|
+  +----------------+  +----------------+  +----------------+  +----------------+
+  +----------------+  +----------------+  +----------------+  +----------------+
+  | 5. Request flow |  | 6. Provider    |  | 7. Capability  |  | 8. Rendering   |
+  |    boundary     |  |    boundary    |  |    boundary    |  |    boundary    |
+  | Validation,     |  | Protocol,      |  | Skills, store,|  | Progress,      |
+  | credentials,    |  | run/preflight  |  | registry       |  | format, raw    |
+  | pending         |  | ProgressEvent  |  |                |  |                |
+  +----------------+  +----------------+  +----------------+  +----------------+
+```
 
 ### 1. Transport boundary
 
@@ -82,8 +140,10 @@ and per-chat locking as the primary transport authority.
 
 Primary modules:
 
-- `app/work_queue.py` — current journal, claiming, recovery adapter
+- `app/work_queue.py` — journal, claiming, compare-and-update, recovery adapter
 - `app/worker.py` — async loop that drains unclaimed items
+- `app/workflows/transport_recovery.py` — workflow graph and transition legality (library)
+- `app/workflows/results.py` — `TransitionResult`, `TransportDisposition`, domain exceptions
 
 Current implementation storage: `transport.db` (separate from `sessions.db`
 — different lifecycle and retention). After migration, equivalent runtime
@@ -92,16 +152,49 @@ authority moves to Postgres.
 Tables:
 
 - `updates` — every received `update_id`, with payload and state
-- `work_items` — processable units derived from updates
+- `work_items` — processable units derived from updates (state column matches workflow states)
 
-Work-item states:
+**Transport workflow (library-backed)**
+
+Transition legality is owned by `TransportRecoveryMachine` (python-statemachine).
+The repository owns: SQL, idempotency, compare-and-update, and the
+repository-level outcome `already_handled` (row missing or no longer in
+source state after a failed update). The machine is pure: no SQL or I/O
+inside validators or actions. The adapter `run_transport_event(model, event_name, **kwargs)`
+runs the machine, catches `TransitionNotAllowed` and domain exceptions
+(`OtherClaimedForChat`, `BlockedReplay`, `NotStaleClaim`), and returns
+`TransitionResult`. Narrow APIs: `discard_recovery(item_id)` for user
+discard; replay and supersede are separate operations.
+
+Work-item state machine (ASCII):
 
 ```
-queued ──> claimed ──> done
-                  ──> failed
-                  ──> pending_recovery ──> (user replay or discard)
-           (crash) ──> recovered via recover_stale_claims() ──> queued
+                    +------------------+
+                    |                  |
+                    v                  |
+  +------+  claim_inline/claim_worker  +--------+  complete   +------+
+  |queued| -------------------------->|claimed | ----------> | done |
+  +------+                             +--------+     fail    +------+
+       ^                                    |    ----------> +------+
+       |                                    |                 |failed|
+       | recover_stale_claim                 | move_to_       +------+
+       | (guard: is_stale)                   | pending_recovery
+       |                                    v
+       |                             +------------------+
+       |                             | pending_recovery |
+       |                             +------------------+
+       |                                    |
+       |         reclaim_for_replay          |  discard_recovery
+       |         (guard: !other_claimed)     |  supersede_recovery
+       +------------------------------------+  ----------> done
 ```
+
+Events (machine methods): `claim_inline`, `claim_worker`, `complete`, `fail`,
+`move_to_pending_recovery`, `recover_stale_claim`, `reclaim_for_replay`,
+`discard_recovery`, `supersede_recovery`. Guards: per-chat single-claimed
+(no claim/reclaim if another item for same chat is claimed); same-worker
+re-claim is allowed (disposition `already_claimed_by_worker`); recover only
+when repository sets `is_stale=True`.
 
 Control-flow exceptions:
 
@@ -127,6 +220,25 @@ Contract:
   broker adoption is intentionally out of scope for the core request path
 - multiple polling processes for the same token are detected and warned
   about, not supported
+
+**Transport invariants (runtime contract)**
+
+These are the authoritative runtime invariants. They are enforced by DB
+checks in the fresh schema and by a single shared row validator in the
+repository. Invalid state is never normalized into a benign outcome.
+
+- `work_items.state` must be one of: `queued`, `claimed`, `pending_recovery`, `done`, `failed`.
+- If `state == "claimed"`, then `worker_id` must be present.
+- If `state == "claimed"`, then `claimed_at` must be present.
+- At most one `claimed` row may exist per chat.
+- Corruption is surfaced (e.g. `TransportStateCorruption`), not normalized to `already_handled`.
+- Replay/discard must never lie about ownership or terminal outcome.
+- The machine owns legal transitions; the repository owns races, idempotency, and `already_handled`.
+- `completed_at` is set only when a work item reaches a terminal state (`done` or `failed`); it is not set on `move_to_pending_recovery`.
+
+**Fresh-schema-only (development)**
+
+- No in-place SQLite migrations. If `transport.db` has an unsupported schema version, fail fast with a clear "delete DB and restart" error.
 
 ### 3. Session boundary
 
@@ -283,15 +395,18 @@ call `render_progress(event)` — they never construct display HTML directly.
 Telegram updates
   |
   v
-transport.py            Normalize InboundMessage / Command / Callback
+transport.py            Normalize InboundMessage / Command / Callback; serialize_inbound for queue
   |
   v
-work_queue.py           Journal update_id, create work item, claim
+work_queue.py           Journal update_id, create work item; claim (uses workflow for transition)
+  |
+  +---> workflows/transport_recovery.py   TransportRecoveryMachine, run_transport_event (pure)
+  |     workflows/results.py              TransitionResult, TransportDisposition, domain exceptions
   |
   +----(inline claim)-----+----(worker drain)----+
   |                        |                      |
   v                        v                      v
-telegram_handlers.py    worker.py              (same dispatch)
+telegram_handlers.py    worker.py              worker_dispatch (same as inline)
 skill_commands.py
   |
   +-----------------+-------------------+
@@ -334,6 +449,152 @@ Ownership:
 - progress owns all user-facing progress HTML wording
 - formatting/summarize own response adaptation
 - skills/store/registry own capabilities
+
+---
+
+## Sequence and Data Flow Diagrams
+
+### End-to-end: normal message (inline path)
+
+```
+  User          Telegram        transport    work_queue      handlers         request_flow    execution_context   provider
+    |               |               |             |               |                   |                |              |
+    |-- message --->|               |             |               |                   |                |              |
+    |               |-- update ----->|             |               |                   |                |              |
+    |               |               | normalize  |               |                   |                |              |
+    |               |               | InboundMsg  |               |                   |                |              |
+    |               |               |------------>| record_and_   |                   |                |              |
+    |               |               |             | enqueue()     |                   |                |              |
+    |               |               |             | (INSERT       |                   |                |              |
+    |               |               |             |  updates +    |                   |                |              |
+    |               |               |             |  work_items)  |                   |                |              |
+    |               |               |             |<-------------|                   |                |              |
+    |               |               |             |               | _chat_lock()      |                |              |
+    |               |               |             |<-------------- claim_for_update()|                |              |
+    |               |               |             | (run_transport_event + UPDATE)      |                |              |
+    |               |               |             |-------------->|                   |                |              |
+    |               |               |             |               | load session      |                |              |
+    |               |               |             |               | resolve_execution_context()        |              |
+    |               |               |             |               |----------------------------------->|              |
+    |               |               |             |               |                   | check_credential|              |
+    |               |               |             |               |                   | validate_pending|              |
+    |               |               |             |               |                   |<---------------|              |
+    |               |               |             |               | execute_request() |                |              |
+    |               |               |             |               |----------------------------------->| run()        |
+    |               |               |             |               |                   |                |------------->|
+    |               |               |             |               |                   |                | ProgressEvent|
+    |               |               |             |               |<-----------------------------------| render()     |
+    |               |               |             | complete_work_item()              |                |              |
+    |               |<-------------- reply_text (and/or progress edits) --------------|                |              |
+```
+
+### Inline vs worker: two claiming paths
+
+```
+  INLINE PATH (handler holds lock, claims this update)
+  -----------------
+  handle_message / handle_command
+       |
+       v
+  record_and_enqueue(worker_id=boot_id)  -->  item created as 'claimed' when allowed
+       |
+       v
+  _chat_lock() --> claim_for_update(chat_id, update_id, worker_id)
+       |
+       v
+  execute_request / worker_dispatch(kind, event, item)
+
+  WORKER PATH (drains queue; no update_id yet)
+  -----------------
+  worker_loop()
+       |
+       v
+  claim_next_any(worker_id)  -->  SELECT queued + NOT EXISTS claimed for chat, then
+                                  run_transport_event(claim_worker) + UPDATE
+       |
+       v
+  worker_dispatch(kind, event, item)  -->  same dispatch as inline (request_flow, provider)
+       |
+       v
+  complete_work_item() or LeaveClaimed / PendingRecovery
+```
+
+### Recovery: pending_recovery and replay/discard/supersede
+
+```
+  Item in 'claimed'  -->  (interrupt / crash notice)  -->  mark_pending_recovery()
+       |
+       v
+  pending_recovery  -->  User sees [Replay] [Discard]
+       |
+       +-- reclaim_for_replay(item_id, worker_id)  -->  run_transport_event(reclaim_for_replay)
+       |        (guard: no other item for chat claimed)       |
+       |        success: state=claimed; dispatch again        v
+       |        blocked: ReclaimBlocked                        claimed
+       |
+       +-- discard_recovery(item_id)  -->  run_transport_event(discard_recovery)  -->  done
+       |
+       +-- supersede_pending_recovery(chat_id)  -->  (fresh message path)
+                run_transport_event(supersede_recovery) per item  -->  done
+```
+
+### Crash recovery: stale claims
+
+```
+  Startup
+     |
+     v
+  recover_stale_claims(current_worker_id, max_age_seconds)
+     |
+     v
+  For each work_items WHERE state='claimed':
+     compute is_stale (worker_id != current_worker OR claimed_at too old)
+     if is_stale:
+        run_transport_event(model, "recover_stale_claim")  -->  allowed
+        UPDATE work_items SET state='queued', worker_id=NULL, claimed_at=NULL
+     |
+     v
+  Worker loop (and inline path) can claim requeued items again.
+```
+
+### Data flow: where data lives
+
+```
+  +------------------+     +------------------+     +------------------+
+  |   transport.db   |     |   sessions.db    |     |   Filesystem     |
+  +------------------+     +------------------+     +------------------+
+  | updates          |     | session rows     |     | uploads/{chat_id}|
+  |  update_id PK    |     |  chat_id PK      |     | raw/{chat_id}    |
+  |  chat_id,payload |     |  provider, JSON  |     | credentials (enc)|
+  | work_items       |     |  has_pending,    |     | store: objects/  |
+  |  id, state,      |     |  project_id, etc |     |   refs/, custom/  |
+  |  worker_id,      |     +------------------+     +------------------+
+  |  claimed_at,     |
+  |  completed_at   |
+  +------------------+
+
+  Normalized inbound (JSON) is stored in updates.payload and work_items
+  (kind/payload or equivalent). Session state is typed in memory
+  (SessionState) and persisted as JSON in sessions.db. Execution
+  context is resolved per request from session + config and never
+  stored raw.
+```
+
+### Storage layout (shipped implementation)
+
+```
+  data_dir/
+  ├── transport.db          # WAL; updates + work_items; separate lifecycle
+  ├── sessions.db           # WAL; chat session state, schema version
+  ├── uploads/
+  │   └── {chat_id}/        # Inbound files per chat
+  ├── raw/
+  │   └── {chat_id}/        # Ring buffer for /raw and expand/collapse
+  └── (store root)/
+      ├── objects/         # Content-addressed skill objects
+      ├── refs/            # Refs pointing to objects
+      └── custom/          # User-override skills
+```
 
 ---
 
@@ -410,6 +671,26 @@ resume_failed, provider_state_updates, denials.
 
 Frozen dataclasses (one per event type) emitted by providers during execution.
 Rendered to Telegram HTML by the shared `render()` function in `progress.py`.
+
+### Transport workflow types
+
+**TransportWorkflowModel** (mutable): Built from a work_items row plus guard
+inputs (worker_id, requesting_worker_id, has_other_claimed_for_chat, is_stale).
+The machine reads/writes `state`; validators/conditions use the guard fields;
+actions set `disposition`. No SQL or I/O in model methods.
+
+**TransitionResult**: `allowed`, `new_state`, `disposition`, `reason`. Returned
+by `run_transport_event()`. Repository uses it to decide whether to commit
+and what to return.
+
+**TransportDisposition**: Outcome classification (ok, already_claimed_by_worker,
+other_claimed_for_chat, blocked_replay, discarded, replayed, superseded,
+stale_recovered, done, failed, invalid_transition, guard_failed, already_handled).
+`already_handled` is repository-only (row missing or state changed by another
+actor); the machine never returns it.
+
+**Domain exceptions** (raised by machine validators, mapped by adapter to
+TransitionResult): `OtherClaimedForChat`, `BlockedReplay`, `NotStaleClaim`.
 
 ---
 
@@ -503,6 +784,14 @@ The registry is a source of managed artifacts:
 
 ### Normal request
 
+```
+  normalize → authorize → journal+claim → session → resolve context → credentials
+       → provider context → invoke provider → persist session → format/send
+       → save raw → deliver artifacts
+```
+
+Steps in order:
+
 1. normalize inbound message
 2. authorize user, resolve trust tier
 3. journal update, create work item, claim
@@ -518,11 +807,24 @@ The registry is a source of managed artifacts:
 
 ### Approval request
 
-1. resolve execution context
-2. build preflight context
-3. run provider preflight (read-only, `build_preflight_prompt()`)
-4. store `PendingApproval`
-5. render plan + approve/reject buttons
+```
+  User sends message (approval_mode=on)
+       |
+       v
+  resolve_execution_context → build preflight context
+       |
+       v
+  provider.run_preflight() (read-only) → build_preflight_prompt()
+       |
+       v
+  store PendingApproval (trust_tier, context_hash, prompt, etc.)
+       |
+       v
+  render plan + [Approve] [Reject] buttons
+       |
+  User clicks Approve → validate_pending (context hash + trust_tier) → execute_request
+  User clicks Reject  → clear pending, reply
+```
 
 Approval succeeds only if: pending exists, not expired, context hash matches
 (recomputed with stored trust_tier).
@@ -562,20 +864,16 @@ shared Postgres queue authority + worker loop as primary processing path. The
 current shipped implementation uses `transport.db` as the single-host
 foundation.
 
-### Planned workflow-owner boundary
+### Workflow ownership (transport)
 
-The shipped runtime already has the right durable concepts, but some
-transition logic is still spread across handlers, worker code, and queue
-helpers. The next structural change should consolidate two authoritative
-workflow owners:
-
-- transport and recovery
-- approval and retry
-
-This extraction should be behavior-preserving. It should keep the existing
-normalized inbound payloads, typed session dataclasses, and
-`ResolvedExecutionContext` contract intact. It is not a recommendation to
-rewrite the whole bot around a generic state-machine framework.
+The transport and recovery workflow is owned by a single source of truth:
+`TransportRecoveryMachine` (python-statemachine) in `app/workflows/transport_recovery.py`.
+Transition legality, guards, and dispositions are defined there; the
+repository (`work_queue.py`) performs SQL, compare-and-update, and
+`already_handled` classification. Approval and retry workflows remain
+in request_flow and session state; future extraction of a dedicated
+approval/retry state machine would follow the same pattern (one owner
+for transition rules, repository for persistence).
 
 ---
 
@@ -731,7 +1029,8 @@ The following are internal contracts that should only change deliberately:
 - serialized inbound payload JSON shape used by the durable work queue
 - `check_credential_satisfaction` signature (resolved active_skills)
 - `validate_pending` signature (trust_tier from stored pending)
-- work-item state machine (queued/claimed/done/failed/pending_recovery)
+- work-item state machine (queued/claimed/done/failed/pending_recovery) and
+  `TransportRecoveryMachine` events/guards; `run_transport_event()` adapter
 - transport delivery semantics (`update_id` handling, claiming rules)
 - managed store layout (`objects/`, `refs/`, `custom/`)
 - registry index format versioning

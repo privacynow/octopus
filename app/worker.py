@@ -23,6 +23,7 @@ from pathlib import Path
 
 from app import work_queue
 from app.transport import deserialize_inbound, InboundMessage, InboundCommand, InboundCallback
+from app.workflows.results import TransportStateCorruption
 
 log = logging.getLogger(__name__)
 
@@ -71,26 +72,33 @@ async def worker_loop(
                 except Exception:
                     log.warning("Failed to deserialize work item %s (kind=%s), marking failed",
                                 item_id, kind)
-                    work_queue.complete_work_item(data_dir, item_id, state="failed",
-                                                  error="deserialize_error")
+                    work_queue.fail_work_item(data_dir, item_id, error="deserialize_error")
                     processed += 1
                     continue
 
                 try:
                     await dispatch(kind, event, item)
-                    work_queue.complete_work_item(data_dir, item_id, state="done")
+                    work_queue.complete_work_item(data_dir, item_id)
                 except work_queue.PendingRecovery:
                     log.info("Item %s moved to pending_recovery; user will replay or discard",
                              item_id)
                 except work_queue.LeaveClaimed:
                     log.info("Worker interrupted processing item %s; leaving claimed for recovery",
                              item_id)
+                except TransportStateCorruption as e:
+                    log.exception(
+                        "Transport state corruption for item %s (dispatch path): %s",
+                        item_id, e,
+                    )
+                    raise
                 except Exception as exc:
                     log.exception("Worker failed processing item %s", item_id)
-                    work_queue.complete_work_item(data_dir, item_id, state="failed",
-                                                  error=str(exc)[:500])
+                    work_queue.fail_work_item(data_dir, item_id, error=str(exc)[:500])
                 processed += 1
 
+        except TransportStateCorruption as e:
+            log.exception("Transport state corruption in worker loop (claim path): %s", e)
+            raise
         except Exception:
             log.exception("Worker loop error")
 

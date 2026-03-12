@@ -167,7 +167,7 @@ async def test_claim_for_update_blocked_by_existing_claimed_item():
         assert claimed_count["n"] == 1
 
         # After completing the first, the second becomes claimable
-        work_queue.complete_work_item(data_dir, first["id"], state="done")
+        work_queue.complete_work_item(data_dir, first["id"])
         third = work_queue.claim_for_update(data_dir, chat_id, 301, "handler-1")
         assert third is not None and third["update_id"] == 301
 
@@ -470,7 +470,7 @@ async def test_blocked_item_processable_after_worker_completes():
         assert item1["state"] == "queued", "Should be queued while worker holds claim"
 
         # Worker finishes
-        work_queue.complete_work_item(data_dir, worker_item["id"], state="done")
+        work_queue.complete_work_item(data_dir, worker_item["id"])
 
         # Now the message can be processed normally
         prov.run_results = [RunResult(text="now it works")]
@@ -608,8 +608,8 @@ async def test_worker_dispatch_sends_recovery_notice():
         )
         conn = work_queue._transport_db(data_dir)
         conn.execute(
-            "UPDATE work_items SET state = 'claimed', worker_id = 'test' WHERE id = ?",
-            (item_id,),
+            "UPDATE work_items SET state = 'claimed', worker_id = 'test', claimed_at = ? WHERE id = ?",
+            ("2025-01-01T00:00:00", item_id),
         )
         conn.commit()
 
@@ -1138,8 +1138,8 @@ async def test_replay_reclaim_blocked_by_existing_claimed_item():
             (item_id_recovery,),
         )
         conn.execute(
-            "UPDATE work_items SET state = 'claimed', worker_id = 'worker-2' WHERE id = ?",
-            (item_id_worker,),
+            "UPDATE work_items SET state = 'claimed', worker_id = 'worker-2', claimed_at = ? WHERE id = ?",
+            ("2025-01-01T00:00:00", item_id_worker),
         )
         conn.commit()
 
@@ -1192,8 +1192,8 @@ async def test_replay_callback_blocked_by_claimed_item_answers_user():
             (item_id_recovery,),
         )
         conn.execute(
-            "UPDATE work_items SET state = 'claimed', worker_id = 'worker' WHERE id = ?",
-            (item_id_worker,),
+            "UPDATE work_items SET state = 'claimed', worker_id = 'worker', claimed_at = ? WHERE id = ?",
+            ("2025-01-01T00:00:00", item_id_worker),
         )
         conn.commit()
 
@@ -1305,8 +1305,8 @@ async def test_reclaim_distinguishes_gone_from_blocked():
             (item_id_recovery,),
         )
         conn.execute(
-            "UPDATE work_items SET state = 'claimed', worker_id = 'w' WHERE id = ?",
-            (item_id_claimed,),
+            "UPDATE work_items SET state = 'claimed', worker_id = 'w', claimed_at = ? WHERE id = ?",
+            ("2025-01-01T00:00:00", item_id_claimed),
         )
         conn.commit()
 
@@ -1321,8 +1321,8 @@ async def test_reclaim_distinguishes_gone_from_blocked():
         assert row["state"] == "pending_recovery"
 
         # Now finalize the claimed item and also the recovery item.
-        work_queue.complete_work_item(data_dir, item_id_claimed, state="done")
-        work_queue.finalize_recovery(data_dir, item_id_recovery, "discarded")
+        work_queue.complete_work_item(data_dir, item_id_claimed)
+        work_queue.discard_recovery(data_dir, item_id_recovery)
 
         # Gone case: item no longer in pending_recovery → returns None.
         result = work_queue.reclaim_for_replay(data_dir, item_id_recovery, "w2")
@@ -1575,7 +1575,7 @@ async def test_complete_work_item_does_not_overwrite_terminal_state():
             data_dir, 950, chat_id, 42, "command",
         )
         # Complete it
-        work_queue.complete_work_item(data_dir, item_id, state="done")
+        work_queue.complete_work_item(data_dir, item_id)
 
         conn = work_queue._transport_db(data_dir)
         row = conn.execute(
@@ -1585,7 +1585,7 @@ async def test_complete_work_item_does_not_overwrite_terminal_state():
         original_completed_at = row["completed_at"]
 
         # Try to overwrite done → failed — must be a no-op
-        work_queue.complete_work_item(data_dir, item_id, state="failed", error="too late")
+        work_queue.fail_work_item(data_dir, item_id, error="too late")
 
         row2 = conn.execute(
             "SELECT state, error, completed_at FROM work_items WHERE id = ?", (item_id,)

@@ -632,6 +632,51 @@ def test_validate_pending_detects_real_context_change():
     assert "Context changed" in error
 
 
+def test_classify_pending_validation_returns_ok_expired_context_changed():
+    """classify_pending_validation returns ok/expired/context_changed for machine guards."""
+    from app.request_flow import classify_pending_validation
+
+    cfg = _make_config(timeout_seconds=3600)
+    session = SessionState(provider="claude", provider_state={}, approval_mode="on")
+    current_hash = resolve_execution_context(session, cfg, "claude", trust_tier="trusted").context_hash
+
+    # ok: fresh, matching context
+    pending_ok = PendingApproval(
+        request_user_id=42,
+        prompt="test",
+        image_paths=[],
+        attachment_dicts=[],
+        context_hash=current_hash,
+        trust_tier="trusted",
+        created_at=time.time(),
+    )
+    assert classify_pending_validation(pending_ok, session, cfg, "claude") == "ok"
+
+    # expired: old created_at
+    pending_expired = PendingApproval(
+        request_user_id=42,
+        prompt="test",
+        image_paths=[],
+        attachment_dicts=[],
+        context_hash=current_hash,
+        trust_tier="trusted",
+        created_at=time.time() - 7200,
+    )
+    assert classify_pending_validation(pending_expired, session, cfg, "claude") == "expired"
+
+    # context_changed: hash mismatch
+    pending_stale = PendingApproval(
+        request_user_id=42,
+        prompt="test",
+        image_paths=[],
+        attachment_dicts=[],
+        context_hash="stale-hash",
+        trust_tier="trusted",
+        created_at=time.time(),
+    )
+    assert classify_pending_validation(pending_stale, session, cfg, "claude") == "context_changed"
+
+
 # =====================================================================
 # Credential checks use resolved active_skills
 # =====================================================================

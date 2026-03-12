@@ -35,12 +35,18 @@ from app.providers.base import Provider, RunContext, PreflightContext
 from app.request_flow import (
     build_setup_state,
     check_credential_satisfaction,
+    classify_pending_validation,
     extra_dirs_from_denials,
     foreign_setup_message,
     foreign_skill_setup,
     format_credential_prompt,
     pending_expired,
     validate_pending,
+)
+from app.workflows.pending_request import (
+    PendingRequestDisposition,
+    PendingRequestWorkflowModel,
+    run_pending_request_event,
 )
 from app.session_state import (
     AwaitingSkillSetup,
@@ -74,6 +80,7 @@ from app.storage import (
 from app.ratelimit import RateLimiter
 from app.summarize import export_chat_history, load_raw, save_raw, summarize
 from app import work_queue
+from app.workflows.results import TransportStateCorruption
 from app.transport import (
     InboundAttachment,
     InboundUser,
@@ -226,11 +233,22 @@ async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int |
             return
 
         # Live handler path: claim the durable work item.
-        effective_update_id = update_id if update_id is not None else _current_update_id.get()
-        if effective_update_id is not None:
-            item = work_queue.claim_for_update(data_dir, chat_id, effective_update_id, _boot_id)
-        else:
-            item = work_queue.claim_next(data_dir, chat_id, _boot_id)
+        try:
+            effective_update_id = update_id if update_id is not None else _current_update_id.get()
+            if effective_update_id is not None:
+                item = work_queue.claim_for_update(data_dir, chat_id, effective_update_id, _boot_id)
+            else:
+                item = work_queue.claim_next(data_dir, chat_id, _boot_id)
+        except TransportStateCorruption as e:
+            log.exception("Transport state corruption in claim path for chat %s: %s", chat_id, e)
+            if message is not None:
+                await message.reply_text(
+                    "<i>Something went wrong with the request queue. Please try again or contact support.</i>",
+                    parse_mode=ParseMode.HTML,
+                )
+            elif query is not None:
+                await query.answer("Something went wrong. Please try again or contact support.", show_alert=True)
+            return
 
         # If claim failed and the reason is a concurrent claimed item (worker
         # claimed outside the lock), the handler must not run.  The work item
@@ -260,13 +278,13 @@ async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int |
         except Exception:
             # Mark as failed on unhandled exception
             if item_id:
-                work_queue.complete_work_item(data_dir, item_id, state="failed")
+                work_queue.fail_work_item(data_dir, item_id, error="handler_exception")
                 if claimed_update_id:
                     _pending_work_items.pop(claimed_update_id, None)
             raise
         else:
             if item_id:
-                work_queue.complete_work_item(data_dir, item_id, state="done")
+                work_queue.complete_work_item(data_dir, item_id)
                 if claimed_update_id:
                     _pending_work_items.pop(claimed_update_id, None)
 
@@ -311,12 +329,15 @@ def _dedup_update(update: Update, kind: str = "unknown", payload: str = "{}") ->
     return False
 
 
-def _complete_pending_work_item(update_id: int, state: str = "done") -> None:
+def _complete_pending_work_item(update_id: int, state: str = "done", error: str | None = None) -> None:
     """Complete the pending work item for an update if _chat_lock hasn't already."""
     item_id = _pending_work_items.pop(update_id, None)
     if item_id:
         try:
-            work_queue.complete_work_item(_cfg().data_dir, item_id, state=state)
+            if state == "done":
+                work_queue.complete_work_item(_cfg().data_dir, item_id)
+            else:
+                work_queue.fail_work_item(_cfg().data_dir, item_id, error=error or "failed")
         except Exception:
             log.debug("Work item %s already completed", item_id)
 
@@ -1083,17 +1104,34 @@ async def approve_pending(chat_id: int, message) -> None:
         await message.reply_text("No pending request to approve.")
         return
 
-    error = validate_pending(pending, session, _cfg(), _prov().name)
-    if error:
+    state = "pending_approval" if session.pending_approval else "pending_retry"
+    classification = classify_pending_validation(pending, session, _cfg(), _prov().name)
+    event = (
+        "approve_execute" if classification == "ok"
+        else "expire" if classification == "expired"
+        else "invalidate_stale"
+    )
+    model = PendingRequestWorkflowModel(state=state, validation_result=classification)
+    result = run_pending_request_event(model, event, validation_result=classification)
+
+    if not result.allowed:
         session.clear_pending()
         _save(chat_id, session)
-        await message.reply_text(error)
+        error = validate_pending(pending, session, _cfg(), _prov().name)
+        await message.reply_text(error or "Request is no longer valid.")
         return
 
-    denials = getattr(pending, 'denials', None) or []
+    if result.disposition != PendingRequestDisposition.executed:
+        session.clear_pending()
+        _save(chat_id, session)
+        error = validate_pending(pending, session, _cfg(), _prov().name)
+        await message.reply_text(error or "Request is no longer valid.")
+        return
+
+    denials = getattr(pending, "denials", None) or []
     denial_dirs = extra_dirs_from_denials(denials) if denials else None
     request_user_id = pending.request_user_id
-    trust_tier = getattr(pending, 'trust_tier', 'trusted')
+    trust_tier = getattr(pending, "trust_tier", "trusted")
     session.clear_pending()
     _save(chat_id, session)
     await execute_request(
@@ -1110,6 +1148,9 @@ async def reject_pending(chat_id: int, message) -> None:
     if not session.has_pending:
         await message.reply_text("No pending request to reject.")
         return
+    state = "pending_approval" if session.pending_approval else "pending_retry"
+    model = PendingRequestWorkflowModel(state=state)
+    run_pending_request_event(model, "reject")
     session.clear_pending()
     _save(chat_id, session)
     await message.reply_text("Pending request rejected.")
@@ -2043,18 +2084,27 @@ async def handle_callback(event, query) -> None:
                 await query.message.edit_text("Nothing to retry.")
                 return
 
-            error = validate_pending(pending, session, _cfg(), _prov().name)
-            if error:
+            classification = classify_pending_validation(pending, session, _cfg(), _prov().name)
+            event_name = (
+                "approve_execute" if classification == "ok"
+                else "expire" if classification == "expired"
+                else "invalidate_stale"
+            )
+            model = PendingRequestWorkflowModel(state="pending_retry", validation_result=classification)
+            result = run_pending_request_event(model, event_name, validation_result=classification)
+
+            if not result.allowed or result.disposition != PendingRequestDisposition.executed:
                 session.clear_pending()
                 _save(chat_id, session)
                 await query.edit_message_reply_markup(reply_markup=None)
-                await query.message.edit_text(error)
+                error = validate_pending(pending, session, _cfg(), _prov().name)
+                await query.message.edit_text(error or "Request is no longer valid.")
                 return
 
             prompt = pending.prompt
             denials = pending.denials or []
             request_user_id = pending.request_user_id
-            trust_tier = getattr(pending, 'trust_tier', 'trusted')
+            trust_tier = getattr(pending, "trust_tier", "trusted")
             session.clear_pending()
 
             denial_dirs = extra_dirs_from_denials(denials)
@@ -2106,8 +2156,13 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
     chat_id = update.effective_chat.id
     data_dir = _cfg().data_dir
 
-    # Find the pending_recovery item for this chat + update_id.
-    recovery_item = work_queue.get_pending_recovery(data_dir, chat_id, update_id=update_id)
+    try:
+        recovery_item = work_queue.get_pending_recovery_for_update(data_dir, chat_id, update_id)
+    except TransportStateCorruption as e:
+        log.exception("Transport state corruption in recovery callback for chat %s: %s", chat_id, e)
+        await query.answer("Something went wrong. Please try again or contact support.", show_alert=True)
+        return
+
     if recovery_item is None:
         # Already handled (double-click, superseded, etc.) — idempotent.
         await query.answer("This recovery has already been handled.")
@@ -2115,9 +2170,17 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
 
     # -- Discard path --
     if action == "recovery_discard":
-        if not work_queue.finalize_recovery(data_dir, recovery_item["id"], disposition="discarded"):
-            # Lost race to replay/supersede/another discard.
+        try:
+            discard_outcome = work_queue.discard_recovery(data_dir, recovery_item["id"])
+        except TransportStateCorruption as e:
+            log.exception("Transport state corruption on discard for item %s: %s", recovery_item["id"], e)
+            await query.answer("Something went wrong. Please try again or contact support.", show_alert=True)
+            return
+        if discard_outcome == work_queue.DiscardResult.already_handled:
             await query.answer("This recovery has already been handled.")
+            return
+        if discard_outcome == work_queue.DiscardResult.corruption:
+            await query.answer("Something went wrong; please try again or contact support.")
             return
         await query.answer("Discarded.")
         try:
@@ -2139,6 +2202,10 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
     # Reclaim the item for replay execution.
     try:
         item = work_queue.reclaim_for_replay(data_dir, recovery_item["id"], _boot_id)
+    except TransportStateCorruption as e:
+        log.exception("Transport state corruption on reclaim for item %s: %s", recovery_item["id"], e)
+        await query.answer("Something went wrong. Please try again or contact support.", show_alert=True)
+        return
     except work_queue.ReclaimBlocked:
         # Another request is in progress — item is still pending_recovery.
         try:
@@ -2164,7 +2231,7 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
     from app.transport import deserialize_inbound, InboundMessage
     payload_str = item.get("payload") or work_queue.get_update_payload(data_dir, update_id)
     if not payload_str:
-        work_queue.complete_work_item(data_dir, item["id"], state="failed", error="payload_missing")
+        work_queue.fail_work_item(data_dir, item["id"], error="payload_missing")
         try:
             await query.edit_message_text(
                 "<i>Could not retrieve the original request.</i>",
@@ -2177,7 +2244,7 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
     try:
         event = deserialize_inbound("message", payload_str)
     except Exception:
-        work_queue.complete_work_item(data_dir, item["id"], state="failed", error="deserialize_error")
+        work_queue.fail_work_item(data_dir, item["id"], error="deserialize_error")
         try:
             await query.edit_message_text(
                 "<i>Could not replay this request.</i>",
@@ -2188,7 +2255,7 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
         return
 
     if not isinstance(event, InboundMessage):
-        work_queue.complete_work_item(data_dir, item["id"], state="failed", error="not_message")
+        work_queue.fail_work_item(data_dir, item["id"], error="not_message")
         try:
             await query.edit_message_text(
                 "<i>Could not replay this request type.</i>",
@@ -2224,15 +2291,14 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
                     chat_id, prompt, image_paths, message,
                     request_user_id=event.user.id, trust_tier=trust,
                 )
-        work_queue.complete_work_item(data_dir, item["id"], state="done")
+        work_queue.complete_work_item(data_dir, item["id"])
     except work_queue.LeaveClaimed:
         # Replay interrupted by another restart — item stays claimed.
         # Next boot will recover it and send a new notice.
         log.warning("Replay interrupted for chat %d; item stays claimed for re-recovery", chat_id)
     except Exception:
         log.exception("Replay failed for chat %d", chat_id)
-        work_queue.complete_work_item(data_dir, item["id"], state="failed",
-                                       error="replay_failed")
+        work_queue.fail_work_item(data_dir, item["id"], error="replay_failed")
         try:
             await _bot_instance.send_message(
                 chat_id,

@@ -254,6 +254,11 @@ it survived, and which failure pattern taught it.
   provider context across restart does not justify automatic request replay.
 - `pending_recovery` needs explicit ownership and durable terminal outcomes
   such as `replayed`, `discarded`, and `superseded`.
+- Replay and discard actions should target a stable durable recovery reference,
+  not merely "the latest interrupted item."
+- Blocked replay, already-handled recovery, and discarded or superseded
+  recovery should classify differently rather than collapsing into one generic
+  failure outcome.
 - Polling remains single-owner. The scale path is webhook plus durable queue
   plus workers.
 - The core request queue remains application-owned. Generic broker or
@@ -262,6 +267,31 @@ it survived, and which failure pattern taught it.
   workers. That is where fresh-command races, replay confusion, and bad
   terminal-state handling came from.
 
+**Transport invariants (runtime contract)**
+
+These are the authoritative runtime invariants for the durable work queue.
+They are enforced by DB checks in the fresh schema and by a single shared
+row validator in the repository. Invalid state is never normalized into a
+benign outcome.
+
+- `work_items.state` must be one of: `queued`, `claimed`, `pending_recovery`, `done`, `failed`.
+- If `state == "claimed"`, then `worker_id` must be present.
+- If `state == "claimed"`, then `claimed_at` must be present.
+- At most one `claimed` row may exist per chat.
+- Corruption is surfaced (e.g. `TransportStateCorruption`), not normalized to `already_handled`.
+- Replay/discard must never lie about ownership or terminal outcome.
+- The machine owns legal transitions; the repository owns races, idempotency, and `already_handled`.
+- `completed_at` is terminal-only (`done` or `failed`); it is not an
+  interruption or recovery timestamp.
+
+**Fresh-schema-only policy (development)**
+
+- This is a development-stage product: optimize for correctness, clarity, and
+  fast iteration, not backward compatibility for old SQLite files.
+- No in-place SQLite migrations. Current `CREATE TABLE` with all checks is the only schema.
+- If `transport.db` exists with an unsupported schema version, fail fast with a clear error (e.g. "Unsupported transport.db schema version X. Delete the DB and restart.").
+- Optional: version the filename (e.g. `transport-v2.db`) and skip migration logic entirely.
+
 ### 5. Workflow ownership and engineering discipline
 
 - Workflow extraction is only justified when repeated durable-state bugs and
@@ -269,6 +299,8 @@ it survived, and which failure pattern taught it.
 - If extraction happens, it should be narrow and contract-first: start with
   transport/recovery and approval/retry, not with a whole-app state-machine
   rewrite.
+- Define workflow state machines before choosing any framework or library.
+  States, transitions, owners, and durable commit points come first.
 - Typed session models, explicit outcome ownership, and contract-shaped tests
   reduce a large class of silent stale-context and ownership bugs.
 - Test ownership matters. Overflow suites and duplicated invariants reduce
@@ -339,7 +371,48 @@ Codex thread invalidation has a second trigger independent of context hash:
 bot restart (`boot_id` change) also clears stale threads, because the provider
 process that owned the thread no longer exists.
 
+### Workflow state-machine contract
+
+The bot should define two authoritative workflow families:
+
+- transport / claim / recovery
+- approval / retry / replay
+
+Both families should be contract-first, not framework-first.
+
+Required properties:
+
+- explicit states and allowed transitions
+- one completion owner per terminal or recovery-needed outcome
+- durable commit points for every state-changing transition
+- stable recovery references for user-owned replay/discard flows
+- outcome codes that distinguish:
+  - blocked replay
+  - already-handled recovery
+  - discarded recovery
+  - superseded interrupted work
+
+Transport workflow state should be explicit:
+
+- `queued`
+- `claimed`
+- `pending_recovery`
+- `done`
+- `failed`
+
+Pending-request workflow state should be explicit:
+
+- idle
+- `pending_approval`
+- `pending_retry`
+- terminal outcomes such as executed, rejected, expired, stale, or cancelled
+
+The plan commits to the workflow contracts first; implementation uses
+python-statemachine narrowly (see Phase 11). Persistence remains in-app.
+
 ### Pending request contract
+
+Pending approval and retry are one workflow family, not ad hoc records.
 
 Pending approval and retry state must always carry:
 
@@ -353,6 +426,8 @@ Validation must check:
 - expiry
 - context freshness
 - ownership or authorization
+
+Every terminal pending outcome must have a named owner.
 
 ### Skill resolution contract
 
@@ -385,6 +460,16 @@ to prevent wedging a shared chat if the setup owner disappears.
 The formatting layer is responsible for adapting model output to Telegram. If
 raw model output is unreadable in Telegram, the bot still owns the problem.
 
+The raw-response ring buffer remains the source of truth for `/raw` and
+expand/collapse regeneration.
+
+Normal user progress should:
+
+- use provider-neutral wording
+- preserve meaningful provider semantics rather than flattening them away
+- hide provider names, thread ids, and session ids in normal user mode
+- keep heartbeat/liveness ownership explicit
+
 ### Health contract
 
 `/doctor` and CLI doctor should be two renderers over the same health
@@ -395,7 +480,11 @@ orchestration, not separate implementations.
 - one active ingress owner per bot token (polling is single-owner)
 - every inbound update receives a visible response or acknowledgment
 - per-chat ordering is preserved; no concurrent writes out of order
-- duplicate update delivery (same `update_id`) is transport-idempotent
+- duplicate update delivery (same `update_id`) is `transport idempotency`
+- the core request queue remains application-owned rather than delegated to a
+  generic broker
+- `content dedup` is not part of this contract; if it is ever added, it is
+  optional product policy above durable delivery
 - polling conflict is detected and warned, not silently tolerated
 
 ---
@@ -429,6 +518,10 @@ Examples:
 - public mode plus model switching does not allow profile escalation
 - project plus file policy plus approval plus model change invalidates
   correctly
+- shared progress preserves semantic-rich provider events while keeping one
+  coherent user-facing vocabulary
+- inline-claim vs worker-claim races preserve correct ownership
+- failed recovery-notice delivery never becomes false `done`
 
 ### 3. Edge-case suites
 
@@ -444,12 +537,15 @@ Examples:
 ### 4. Remaining-phase coverage
 
 - Workflow extraction tests: allowed and forbidden transitions, terminal
-  ownership, duplicate delivery idempotency, replay/discard races, and second
-  interruption handling.
+  ownership, duplicate delivery idempotency, replay/discard races,
+  blocked-replay vs already-handled classification, stable recovery
+  references, and second interruption handling.
 - Postgres cutover tests: schema bootstrap, one-way SQLite import, rollback
   safety, and backward-compatible payload deserialization.
-- Queue and worker tests: row-lock claiming, lease expiry, cross-process
-  ordering, webhook enqueue-plus-worker dispatch, and recovery after crash.
+- Queue and worker tests: row-lock claiming, inline-claim vs worker-claim
+  races, lease expiry, cross-process ordering, webhook enqueue-plus-worker
+  dispatch, failed recovery-notice delivery classification, and recovery after
+  crash.
 - Product tests: `/project` inline keyboard, public-trust interactions,
   `content dedup` acknowledgment, and richer project or policy scope.
 - Usage tests: authoritative metering, quota enforcement, replay-safe
@@ -488,13 +584,126 @@ Behavior-preserving refactor only.
 
 - Extract two authoritative workflow owners first: transport/recovery and
   approval/retry.
+- Define the workflow contracts explicitly before changing persistence:
+  - transport state: `queued`, `claimed`, `pending_recovery`, `done`,
+    `failed`
+  - pending state: no pending work, `pending_approval`, `pending_retry`, and
+    terminal outcomes such as executed, rejected, expired, stale, or cancelled
 - Reuse existing normalized inbound payloads, typed session dataclasses, and
   resolved execution context.
 - Introduce store interfaces around the current persistence seams so handlers
   and workers stop open-coding durable transitions.
+- Add stable recovery references, explicit terminal-disposition ownership, and
+  outcome codes that distinguish blocked replay, already-handled recovery,
+  discard, and supersede.
 - Keep the extraction narrow and contract-first.
-- Prefer explicit transition code before any library evaluation.
 - Do not turn the whole application into one giant state machine.
+
+**Phase 11 workflow — corrected policy (hard gate for Phase 11 and pending_request extraction).**
+
+- **Ownership:** The **library** owns the workflow graph, guards, validators, internal self-transitions, and final states. No second transition table, validator function, or event-name dispatch layer anywhere else. The **repository** owns SQL, idempotency, compare-and-update, and the repository-level outcome `already_handled`. Adapter types (`TransportWorkflowModel`, `TransportDisposition`, `TransitionResult`) are allowed only as machine input/callback host and repository-to-caller result types; they must not encode transition legality.
+- **Library usage (2.x):** `strict_states=True` on the machine **class**. `rtc=True` and `allow_event_without_transition=False` are **instance** settings in 2.x — pass them when **instantiating** the machine, not as class attributes. Prefer direct machine methods (e.g. `sm.claim_inline()`) where possible. Any `run_transport_event(model, event_name)` must be a thin adapter around a real machine call; if it switches on event names or encodes outcomes itself, it is a second FSM and is not allowed.
+- **Machine callbacks must stay pure/in-memory.** No SQL, Telegram, provider calls, or durable side effects inside machine actions or validators.
+- **already_handled:** Stays repository-level only. After a compare-and-update returns `rowcount == 0`, **re-read the row** before classifying. Map to `already_handled` only when the row is **missing** or **no longer in the source state because another actor won**. Any other situation is an invariant/corruption problem and must be surfaced.
+- **Initial row creation:** A direct insert into the true initial state (`queued`) is fine. Creating a row already in `claimed` is semantically a **transition**, not pure creation. That path must either run the machine from `queued` → `claimed` before persisting, or be wrapped in a very narrow helper explicitly defined as “create + immediate claim” that still derives the target state from the real machine contract.
+- **Unknown DB state:** Must not collapse to a silent no-op. Treat as corruption/invariant failure and surface.
+- **Tests follow the same ownership split:** Use the real `StateMachine` for workflow tests (allowed/forbidden transitions, guards). Repository tests own `already_handled`, compare-and-update races, and row-missing/rowcount-zero behavior. No test should mirror a dict-based transition table or a second FSM.
+
+**Policy in one sentence:** Library owns graph, guards, validators, internal self-transitions, and final states; repository owns SQL, idempotency, compare-and-update, and `already_handled`; adapter types are allowed; any second transition table, validator function, or event-name dispatch layer is not allowed.
+
+**Phase 11 simplification target.**
+
+- `transport_recovery.py` owns states, events, guards, validators, and
+  machine dispositions.
+- `work_queue.py` owns row loading, full row validation, compare-and-update,
+  reread-on-race, and repository-level outcomes.
+- `telegram_handlers.py` and `worker.py` only orchestrate and surface
+  user-safe or developer-safe failures.
+- No helper should infer workflow truth from raw SQL state filters alone.
+- No public helper should accept ambiguous target-state strings when an
+  explicit operation exists.
+
+**Core simplification rule:** every transport operation should follow one
+path: load without pre-filtering away bad states, validate the full row
+invariant set, run the real machine event if a transition is involved,
+persist with compare-and-update, reread on `rowcount == 0`, then classify
+race vs `already_handled` vs corruption.
+
+**Phase 11 repository shape and cleanup work.**
+
+- Public transport operations should converge on explicit verbs:
+  `complete_work_item(item_id)`, `fail_work_item(item_id, error)`,
+  `mark_pending_recovery(item_id)`, `discard_recovery(item_id)`,
+  `reclaim_for_replay(item_id, worker_id)`,
+  `claim_for_update(chat_id, update_id, worker_id)`,
+  `claim_next(chat_id, worker_id)`, and `claim_next_any(worker_id)`.
+- `get_pending_recovery_for_update(data_dir, chat_id, update_id)` and
+  `get_latest_pending_recovery(data_dir, chat_id)` are the lookup APIs; call
+  sites use the appropriate one by name (no wrapper).
+- Use one shared row validator in the repository. It must enforce the full
+  invariant set, not just the state enum: valid `state`, and for `claimed`
+  rows, non-null `worker_id` and `claimed_at`.
+- Keep shared private primitives for row loading, chat integrity checks,
+  compare-and-update application, and CAS-miss classification. No business
+  helper should open-code its own load-check-update flow.
+- Direct scanners such as stale-claim recovery and pending-recovery
+  supersession must validate every loaded row through the shared row
+  validator or shared repository primitives before using it.
+- Enqueue without claimant identity inserts `queued` directly. Creating a row
+  already in `claimed` is only allowed for a narrow create-plus-immediate-
+  claim path that still derives its target state from the real machine
+  contract.
+- In development, corruption in `claim_next_any()` is fail-fast. Do not
+  silently skip, normalize, or spin forever on a corrupt chat.
+- Boundary behavior stays asymmetric: handlers and recovery callbacks catch
+  corruption, log loudly, and show a generic user-safe error; the worker
+  treats corruption as a developer-visible invariant failure and stops.
+- `completed_at` stays terminal-only. If interruption timing matters later,
+  add a separate recovery or interruption timestamp rather than overloading
+  `completed_at`.
+
+**Phase 11 implementation: python-statemachine (narrow use).**
+
+Library choice: [python-statemachine](https://pypi.org/project/python-statemachine/) (PyPI 2.6.0 as of 2026-03). Add to requirements as `python-statemachine>=2.6,<3`. Use for both this bot and multiagent bot, only for the two workflow families below.
+
+**Constraint:** The library must not own persistence, queueing, or recovery truth. Postgres (or SQLite during cutover) row state remains authoritative. The machine defines and validates only: allowed states, allowed transitions, guards/validators, transition outcome classification. It must not own: persistence, transactions, queue polling, locks, provider execution, or Telegram I/O.
+
+**Pattern:** Load row from DB → build small domain model → run machine to validate transition → commit new state and side effects in our own transaction. Side effects stay outside the library.
+
+**Why this library:** Async support; guards and validators; external/domain-model state storage (no ORM); diagrams for docs/review; run-to-completion processing model. Fits the need for explicit durable state inspection, admin/status surfaces, and recovery provenance.
+
+**Why not others:** `transitions` is more dynamic/magic-heavy and async/event-loop handling is on you. `Automat` is input-driven and less natural for explicit state inspection and recovery. Temporal/Celery/PGMQ are the wrong layer for the core request path; queue stays app-owned.
+
+**Package layout:** `app/workflows/` with `transport_recovery.py`, `pending_request.py`, `results.py` (explicit transition outcomes). Extract transport workflow first from `work_queue.py` and `telegram_handlers.py`; then pending-request workflow from `session_state.py`, `telegram_handlers.py`, `request_flow.py`.
+
+**TransportRecoveryMachine:** States `queued`, `claimed`, `pending_recovery`, `done`, `failed`. Transitions: `claim_inline`, `claim_worker`, `complete`, `fail`, `move_to_pending_recovery`, `reclaim_for_replay`, `discard_recovery`, `supersede_recovery`, `recover_stale_claim`. Guards/outcomes: per-chat single-claimed invariant; pre-claimed inline item reusable by same worker; blocked replay vs already-handled recovery distinct; failed recovery-notice delivery never maps to `done`; fresh live work never classified as recovered.
+
+**PendingRequestMachine:** States `none`, `pending_approval`, `pending_retry`, plus terminal outcomes via result classification. Transitions: `create_approval`, `create_retry`, `approve_execute`, `reject`, `expire`, `invalidate_stale`, `cancel`, `clear_after_execution`.
+
+**Code shape:** Thin domain models (e.g. `TransportWorkflowModel`, `PendingRequestWorkflowModel`). Machine methods stay pure: take model, return `TransitionResult` (allowed, new_state, disposition, reason, optional user_message_key). DB writes stay in repository/service code around the machine call; no side effects inside state-machine callbacks. `work_queue.py` becomes repository + transaction code; handlers stop open-coding state decisions; `request_flow.py` orchestrates over resolved context plus pending-request workflow.
+
+**Tests:** Add machine contract tests (allowed/forbidden transitions, replay/discard/already-handled/blocked classification, inline vs worker claim, stale vs fresh) before refactoring call sites. New suites: `tests/test_transport_workflow_machine.py`, `tests/test_pending_request_workflow_machine.py`. Keep integration coverage in existing `test_work_queue.py`, `test_workitem_integration.py`, `test_request_flow.py`.
+
+**Defaults:** The library is the sole owner of transition legality; no hand-rolled transition table or validator as fallback. Machine callbacks stay pure (no SQL, Telegram, or provider calls). No generic workflow framework or broker as part of this refactor.
+
+**Phase 11 execution order.**
+
+1. Lock the transport invariants in docs and keep the fresh-schema-only,
+   fail-fast development policy explicit.
+2. Add or tighten the shared row validator so every load and reread path
+   enforces the full row invariant set.
+3. Narrow the public repository API around explicit operations rather than
+   stringly-typed target states.
+4. Move every remaining transport mutation onto the shared repository
+   primitives and compare-and-update classification path.
+5. Route direct scanners such as `recover_stale_claims()` through the shared
+   validator or shared primitives.
+6. Keep enqueue and preclaim behavior narrow: `queued` without claimant,
+   explicit create-plus-immediate-claim only when a real claimant exists.
+7. Keep corruption handling asymmetric: generic user-safe failures at handler
+   boundaries, fail-fast worker behavior in development.
+8. Remove temporary compatibility wrappers once all call sites use the
+   explicit repository API.
 
 ### Phase 12 - Postgres Runtime Cutover
 
@@ -507,7 +716,8 @@ Make Postgres the only supported runtime backend after migration.
   runner.
 - Provide one-way import from SQLite session and transport data into
   Postgres.
-- Preserve current payload JSON shapes and current dataclass contracts.
+- Preserve current payload JSON shapes, current dataclass contracts, and the
+  workflow outcome taxonomy defined in Phase 11.
 
 ### Phase 13 - Postgres Queue Authority In Webhook Mode
 
@@ -517,6 +727,7 @@ generic task broker.
 - Retain explicit `updates` and `work_items` tables.
 - Retain row-lock claiming, leases, recovery metadata, and replay/discard
   ownership.
+- Retain stable recovery references and explicit terminal-disposition fields.
 - In webhook mode, ingress should normalize, persist, and acknowledge
   quickly.
 - Workers become the primary execution path.
@@ -556,6 +767,8 @@ semantics stabilize.
   keyboard pattern and callback handling.
 - Add optional verbose progress mode only after queue and worker semantics are
   stable.
+- Any richer progress mode should layer on top of the shared semantic-rich
+  progress model rather than invent provider-specific output paths.
 - Keep this phase intentionally small and UI-focused.
 
 ### Phase 17 - Behavior Extensions
@@ -596,6 +809,9 @@ Build this last.
   only during cutover.
 - Extract workflow ownership before any database migration so the new backend
   does not inherit open-coded transition logic.
+- Use contract-first workflow state machines; implementation is
+  python-statemachine (narrow use; persistence and queue authority remain
+  in-app). See Phase 11 implementation.
 - Keep the core request queue app-owned in Postgres. Do not adopt Celery,
   Temporal, PGMQ, or a dedicated broker for Phases 11-14.
 - Reuse existing `SessionState`, `PendingApproval`, `PendingRetry`,
@@ -614,6 +830,8 @@ Build this last.
   buckets.
 - Confidence work remains in the roadmap even though it is not user-facing,
   because the infrastructure phases materially change failure modes.
+- Workflow contracts are defined first; library choice (python-statemachine)
+  is narrow and subordinate to the explicit state/ownership model.
 - Payments and billing stay last because they depend on stable transport,
   worker ownership, and trustworthy execution accounting.
 - Queue or library evaluation basis:
@@ -639,6 +857,10 @@ The product is commercially ready when:
 - public deployments have a concrete trust profile, not optimistic defaults
 - long responses use native Telegram primitives for progressive disclosure
 - first visible progress is sent before provider invocation
+- recovery wording is truthful: fresh live work is not mislabeled as recovered
+  work
+- shared progress preserves semantic richness while keeping one coherent user
+  vocabulary
 - every inbound update receives a visible response, even under burst traffic
 - polling conflicts are detected and warned, not silently tolerated
 

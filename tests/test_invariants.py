@@ -788,12 +788,12 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
     with fresh_env(config_overrides={
         "allowed_user_ids": frozenset({42}),
     }) as (data_dir, cfg, prov):
-        # Create a real claimed work item in the DB.
+        # Create a real claimed work item in the DB (must set claimed_at for CHECK and validator).
         _, item_id = record_and_enqueue(data_dir, 9999, 12345, 42, "message")
         conn = _transport_db(data_dir)
         conn.execute(
-            "UPDATE work_items SET state = 'claimed', worker_id = 'test' WHERE id = ?",
-            (item_id,),
+            "UPDATE work_items SET state = 'claimed', worker_id = ?, claimed_at = ? WHERE id = ?",
+            ("test", "2025-01-01T00:00:00+00:00", item_id),
         )
         conn.commit()
 

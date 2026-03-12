@@ -208,6 +208,29 @@ def current_context_hash(
     return resolve_execution_context(session, config, provider_name, trust_tier=trust_tier).context_hash
 
 
+def classify_pending_validation(
+    pending: PendingApproval | PendingRetry,
+    session: SessionState,
+    config: "BotConfig",
+    provider_name: str,
+) -> str:
+    """Classify pending request for the workflow machine.
+
+    Returns "ok" | "expired" | "context_changed". Used by handlers to choose
+    the transition (approve_execute / expire / invalidate_stale) and by the
+    machine for guards.
+    """
+    expiry_msg = pending_expired(pending, config.timeout_seconds)
+    if expiry_msg:
+        return "expired"
+    trust_tier = getattr(pending, "trust_tier", "trusted")
+    if pending.context_hash and pending.context_hash != current_context_hash(
+        session, config, provider_name, trust_tier=trust_tier,
+    ):
+        return "context_changed"
+    return "ok"
+
+
 def validate_pending(
     pending: PendingApproval | PendingRetry,
     session: SessionState,
@@ -219,13 +242,10 @@ def validate_pending(
     Reads trust_tier from the pending object so the hash is recomputed
     with the same identity shape that created it.
     """
-    expiry_msg = pending_expired(pending, config.timeout_seconds)
-    if expiry_msg:
-        return expiry_msg
-    trust_tier = getattr(pending, 'trust_tier', 'trusted')
-    if pending.context_hash and pending.context_hash != current_context_hash(
-        session, config, provider_name, trust_tier=trust_tier,
-    ):
+    kind = classify_pending_validation(pending, session, config, provider_name)
+    if kind == "expired":
+        return pending_expired(pending, config.timeout_seconds) or "This request has expired."
+    if kind == "context_changed":
         return "Context changed since this request was made. Please resend."
     return None
 

@@ -1,6 +1,7 @@
 """Tests for the durable transport layer (app/work_queue.py)."""
 
 import asyncio
+import sqlite3
 import tempfile
 import time
 from datetime import datetime, timedelta, timezone
@@ -8,17 +9,25 @@ from pathlib import Path
 
 import pytest
 
+from app.workflows.results import TransportStateCorruption
 from app.work_queue import (
+    _assert_no_invalid_rows_for_chat,
+    _load_work_item_by_id,
     _reset_transport_db,
     _transport_db,
+    _validate_work_item_row,
+    DiscardResult,
     LeaveClaimed,
     claim_next,
     claim_next_any,
     close_transport_db,
     complete_work_item,
+    discard_recovery,
     enqueue_work_item,
+    fail_work_item,
     has_queued_or_claimed,
     get_update_payload,
+    mark_pending_recovery,
     purge_old,
     record_and_enqueue,
     record_update,
@@ -92,10 +101,40 @@ def test_claim_blocks_second_claim_same_chat(data_dir):
     assert second is None
 
     # Complete the first, second becomes claimable
-    complete_work_item(data_dir, first["id"], state="done")
+    complete_work_item(data_dir, first["id"])
     second = claim_next(data_dir, chat_id=1, worker_id="w1")
     assert second is not None
     assert second["update_id"] == 201
+
+
+def test_record_and_enqueue_preclaim_derived_from_machine(data_dir):
+    """Preclaim (create as claimed) only when machine allows claim_inline; else queued."""
+    from unittest.mock import patch
+    from app.workflows.results import TransitionResult, TransportDisposition
+
+    # When machine rejects claim_inline, item must be created as queued.
+    with patch("app.work_queue.run_transport_event") as mock_run:
+        mock_run.return_value = TransitionResult(
+            allowed=False,
+            new_state="queued",
+            disposition=TransportDisposition.invalid_transition,
+            reason="test",
+        )
+        is_new, item_id = record_and_enqueue(
+            data_dir, 8888, chat_id=1, user_id=42, kind="message", worker_id="handler-1"
+        )
+    assert is_new is True
+    assert item_id is not None
+    conn = _transport_db(data_dir)
+    row = conn.execute("SELECT state FROM work_items WHERE id = ?", (item_id,)).fetchone()
+    assert row["state"] == "queued"
+
+    # When machine allows, item is created as claimed (normal path).
+    record_update(data_dir, 8889, chat_id=1, user_id=42, kind="message")
+    item_id2 = enqueue_work_item(data_dir, chat_id=1, update_id=8889, worker_id="handler-1")
+    row2 = conn.execute("SELECT state, worker_id FROM work_items WHERE id = ?", (item_id2,)).fetchone()
+    assert row2["state"] == "claimed"
+    assert row2["worker_id"] == "handler-1"
 
 
 def test_claim_allows_different_chat(data_dir):
@@ -121,7 +160,7 @@ def test_complete_work_item_done(data_dir):
     record_update(data_dir, 400, chat_id=1, user_id=42, kind="message")
     item_id = enqueue_work_item(data_dir, chat_id=1, update_id=400)
     item = claim_next(data_dir, chat_id=1, worker_id="w1")
-    complete_work_item(data_dir, item_id, state="done")
+    complete_work_item(data_dir, item_id)
 
     conn = _transport_db(data_dir)
     row = conn.execute("SELECT state, completed_at FROM work_items WHERE id = ?", (item_id,)).fetchone()
@@ -134,12 +173,90 @@ def test_complete_work_item_failed(data_dir):
     record_update(data_dir, 401, chat_id=1, user_id=42, kind="message")
     item_id = enqueue_work_item(data_dir, chat_id=1, update_id=401)
     claim_next(data_dir, chat_id=1, worker_id="w1")
-    complete_work_item(data_dir, item_id, state="failed", error="timeout")
+    fail_work_item(data_dir, item_id, error="timeout")
 
     conn = _transport_db(data_dir)
     row = conn.execute("SELECT state, error FROM work_items WHERE id = ?", (item_id,)).fetchone()
     assert row["state"] == "failed"
     assert row["error"] == "timeout"
+
+
+def test_discard_recovery_result(data_dir):
+    """discard_recovery returns DiscardResult.success or already_handled."""
+    record_update(data_dir, 403, chat_id=1, user_id=42, kind="message")
+    item_id = enqueue_work_item(data_dir, chat_id=1, update_id=403)
+    claim_next(data_dir, chat_id=1, worker_id="w1")
+    mark_pending_recovery(data_dir, item_id)
+
+    result = discard_recovery(data_dir, item_id)
+    assert result == DiscardResult.success
+
+    # Second call: row no longer pending_recovery -> already_handled
+    result2 = discard_recovery(data_dir, item_id)
+    assert result2 == DiscardResult.already_handled
+
+
+def test_load_work_item_by_id_raises_on_invalid_state():
+    """_load_work_item_by_id raises TransportStateCorruption when row state is invalid."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO work_items (id, chat_id, update_id, state, created_at) VALUES (?, ?, ?, ?, ?)",
+        ("item-bogus", 1, 406, "bogus", "2025-01-01T00:00:00"),
+    )
+    conn.commit()
+
+    with pytest.raises(TransportStateCorruption) as exc_info:
+        _load_work_item_by_id(conn, "item-bogus")
+    assert "unknown state" in str(exc_info.value) and "bogus" in str(exc_info.value)
+    conn.close()
+
+
+def test_assert_no_invalid_rows_for_chat_raises():
+    """assert_no_invalid_rows_for_chat raises TransportStateCorruption when any row has invalid state."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO work_items (id, chat_id, update_id, state, created_at) VALUES (?, ?, ?, ?, ?)",
+        ("item-1", 1, 407, "queued", "2025-01-01T00:00:00"),
+    )
+    conn.execute(
+        "INSERT INTO work_items (id, chat_id, update_id, state, created_at) VALUES (?, ?, ?, ?, ?)",
+        ("item-2", 1, 408, "bogus", "2025-01-01T00:00:01"),
+    )
+    conn.commit()
+
+    with pytest.raises(TransportStateCorruption) as exc_info:
+        _assert_no_invalid_rows_for_chat(conn, 1)
+    assert "unknown state" in str(exc_info.value) and "bogus" in str(exc_info.value)
+    conn.close()
+
+
+def test_complete_work_item_and_fail_work_item(data_dir):
+    """complete_work_item marks done; fail_work_item marks failed."""
+    record_update(data_dir, 409, chat_id=1, user_id=42, kind="message")
+    item_id = enqueue_work_item(data_dir, chat_id=1, update_id=409)
+    claim_next(data_dir, chat_id=1, worker_id="w1")
+    complete_work_item(data_dir, item_id)
+    conn = _transport_db(data_dir)
+    row = conn.execute("SELECT state FROM work_items WHERE id = ?", (item_id,)).fetchone()
+    assert row["state"] == "done"
+
+    record_update(data_dir, 410, chat_id=1, user_id=42, kind="message")
+    item_id2 = enqueue_work_item(data_dir, chat_id=1, update_id=410)
+    claim_next(data_dir, chat_id=1, worker_id="w1")
+    fail_work_item(data_dir, item_id2, error="test_error")
+    row2 = conn.execute("SELECT state, error FROM work_items WHERE id = ?", (item_id2,)).fetchone()
+    assert row2["state"] == "failed"
+    assert row2["error"] == "test_error"
 
 
 # -- Queries ---------------------------------------------------------------
@@ -155,7 +272,7 @@ def test_has_queued_or_claimed(data_dir):
     item = claim_next(data_dir, chat_id=1, worker_id="w1")
     assert has_queued_or_claimed(data_dir, chat_id=1) is True
 
-    complete_work_item(data_dir, item["id"], state="done")
+    complete_work_item(data_dir, item["id"])
     assert has_queued_or_claimed(data_dir, chat_id=1) is False
 
 
@@ -206,7 +323,7 @@ def test_purge_old(data_dir):
     record_update(data_dir, 700, chat_id=1, user_id=42, kind="message")
     item_id = enqueue_work_item(data_dir, chat_id=1, update_id=700)
     claim_next(data_dir, chat_id=1, worker_id="w1")
-    complete_work_item(data_dir, item_id, state="done")
+    complete_work_item(data_dir, item_id)
 
     # Backdate
     conn = _transport_db(data_dir)
@@ -228,7 +345,7 @@ def test_purge_keeps_recent(data_dir):
     record_update(data_dir, 701, chat_id=1, user_id=42, kind="message")
     item_id = enqueue_work_item(data_dir, chat_id=1, update_id=701)
     claim_next(data_dir, chat_id=1, worker_id="w1")
-    complete_work_item(data_dir, item_id, state="done")
+    complete_work_item(data_dir, item_id)
 
     deleted = purge_old(data_dir, older_than_hours=24)
     assert deleted == 0
@@ -697,3 +814,217 @@ async def test_worker_loop_leaves_interrupted_item_claimed(data_dir):
     ).fetchone()
     assert row["state"] == "claimed"
     assert row["worker_id"] == "worker-a"
+
+
+# -- Row validation and fail-fast (development-time policy) ----------------
+
+def test_validate_work_item_row_ownerless_claimed():
+    """Validator raises TransportStateCorruption for claimed row with worker_id None."""
+    with pytest.raises(TransportStateCorruption) as exc_info:
+        _validate_work_item_row(
+            {"state": "claimed", "worker_id": None, "claimed_at": "2025-01-01T00:00:00Z"},
+            "item-1",
+        )
+    assert "worker_id" in str(exc_info.value).lower()
+
+
+def test_validate_work_item_row_claimed_without_claimed_at():
+    """Validator raises TransportStateCorruption for claimed row with claimed_at None."""
+    with pytest.raises(TransportStateCorruption) as exc_info:
+        _validate_work_item_row(
+            {"state": "claimed", "worker_id": "w1", "claimed_at": None},
+            "item-2",
+        )
+    assert "claimed_at" in str(exc_info.value).lower()
+
+
+def test_load_work_item_by_id_raises_on_ownerless_claimed():
+    """load_work_item_by_id raises when row is claimed but worker_id is NULL (e.g. tampered DB)."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO work_items (id, chat_id, update_id, state, worker_id, claimed_at, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("item-claimed", 1, 500, "claimed", None, None, "2025-01-01T00:00:00"),
+    )
+    conn.commit()
+
+    with pytest.raises(TransportStateCorruption) as exc_info:
+        _load_work_item_by_id(conn, "item-claimed")
+    assert "worker_id" in str(exc_info.value).lower()
+    conn.close()
+
+
+def test_load_work_item_by_id_raises_on_claimed_without_claimed_at():
+    """load_work_item_by_id raises when row is claimed but claimed_at is NULL."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO work_items (id, chat_id, update_id, state, worker_id, claimed_at, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("item-claimed", 1, 501, "claimed", "w1", None, "2025-01-01T00:00:00"),
+    )
+    conn.commit()
+
+    with pytest.raises(TransportStateCorruption) as exc_info:
+        _load_work_item_by_id(conn, "item-claimed")
+    assert "claimed_at" in str(exc_info.value).lower()
+    conn.close()
+
+
+@pytest.mark.asyncio
+async def test_worker_loop_stops_on_transport_state_corruption(data_dir):
+    """Worker loop must fail fast on TransportStateCorruption (claim path), not spin forever."""
+    from app.worker import worker_loop
+    from unittest.mock import patch
+
+    record_update(data_dir, 9000, chat_id=1, user_id=42, kind="message")
+    enqueue_work_item(data_dir, chat_id=1, update_id=9000)
+
+    with patch("app.worker.work_queue.claim_next_any") as mock_claim:
+        mock_claim.side_effect = TransportStateCorruption("corrupt row in DB")
+
+        with pytest.raises(TransportStateCorruption, match="corrupt row"):
+            await worker_loop(
+                data_dir, "w1", lambda k, e, i: None,
+                poll_interval=0.05, stop_event=asyncio.Event(),
+            )
+
+
+@pytest.mark.asyncio
+async def test_worker_loop_stops_on_dispatch_path_corruption(data_dir):
+    """Worker loop must fail fast when TransportStateCorruption is raised during dispatch."""
+    from app.worker import worker_loop
+
+    payload = serialize_inbound(
+        InboundMessage(
+            user=InboundUser(id=42, username="u"),
+            chat_id=1,
+            text="hi",
+            attachments=(),
+        )
+    )
+    record_update(data_dir, 9001, chat_id=1, user_id=42, kind="message", payload=payload)
+    enqueue_work_item(data_dir, chat_id=1, update_id=9001)
+
+    async def dispatch_raises_corruption(kind, event, item):
+        raise TransportStateCorruption("boom during dispatch")
+
+    with pytest.raises(TransportStateCorruption, match="boom during dispatch"):
+        await asyncio.wait_for(
+            worker_loop(
+                data_dir, "w1", dispatch_raises_corruption,
+                poll_interval=0.05, stop_event=asyncio.Event(),
+            ),
+            timeout=3.0,
+        )
+
+    # Item must still be claimed (worker did not complete it; loop exited).
+    conn = _transport_db(data_dir)
+    row = conn.execute(
+        "SELECT state FROM work_items WHERE update_id = 9001"
+    ).fetchone()
+    assert row is not None
+    assert row["state"] == "claimed"
+
+
+def test_complete_work_item_exact_cas_does_not_overwrite_later_claim(data_dir):
+    """Exact compare-and-update: a stale complete (loaded queued) must not overwrite a later claim.
+
+    Simulates: A claims item; B had stale read of queued and runs complete_work_item.
+    B's UPDATE WHERE state='queued' matches 0 rows; B rereads, sees claimed, returns already_handled.
+    Item must remain claimed.
+    """
+    from unittest.mock import patch
+
+    record_update(data_dir, 9100, chat_id=1, user_id=42, kind="message")
+    item_id = enqueue_work_item(data_dir, chat_id=1, update_id=9100)
+    claimed_item = claim_next(data_dir, chat_id=1, worker_id="worker-a")
+    assert claimed_item is not None
+    assert claimed_item["id"] == item_id
+    assert claimed_item["state"] == "claimed"
+
+    # Stale load: pretend the first load in complete_work_item sees queued (race).
+    stale_row = {
+        "id": item_id,
+        "chat_id": 1,
+        "update_id": 9100,
+        "state": "queued",
+        "worker_id": None,
+        "claimed_at": None,
+        "completed_at": None,
+        "error": None,
+        "created_at": "2025-01-01T00:00:00+00:00",
+    }
+
+    with patch("app.work_queue._load_work_item_by_id", return_value=stale_row):
+        complete_work_item(data_dir, item_id)
+
+    conn = _transport_db(data_dir)
+    row = conn.execute("SELECT state, worker_id FROM work_items WHERE id = ?", (item_id,)).fetchone()
+    assert row["state"] == "claimed"
+    assert row["worker_id"] == "worker-a"
+
+
+def test_meta_without_schema_version_fails_fast(data_dir):
+    """When meta table exists but has no schema_version key, open fails with clear error."""
+    db_path = data_dir / "transport.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('other_key', 'x')"
+    )
+    conn.execute(
+        "CREATE TABLE updates (update_id INTEGER PRIMARY KEY, chat_id INT, user_id INT, kind TEXT, "
+        "payload TEXT DEFAULT '{}', received_at TEXT, state TEXT DEFAULT 'received')"
+    )
+    conn.execute(
+        "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _transport_db(data_dir)
+    msg = str(exc_info.value)
+    assert "schema_version" in msg or "Unsupported" in msg
+    assert "delete" in msg.lower() or "restart" in msg.lower()
+
+
+def test_schema_version_mismatch_raises_delete_db(data_dir):
+    """Opening transport.db with wrong schema version raises RuntimeError telling user to delete DB."""
+    db_path = data_dir / "transport.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('schema_version', '1')"
+    )
+    conn.execute(
+        "CREATE TABLE updates (update_id INTEGER PRIMARY KEY, chat_id INT, user_id INT, kind TEXT, "
+        "payload TEXT DEFAULT '{}', received_at TEXT, state TEXT DEFAULT 'received')"
+    )
+    conn.execute(
+        "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _transport_db(data_dir)
+    msg = str(exc_info.value)
+    assert "Unsupported" in msg or "delete" in msg.lower()
+    assert "transport.db" in msg or "restart" in msg.lower()

@@ -86,6 +86,8 @@ directly instead:
 ./scripts/run.sh m1
 ```
 
+**Only one process per bot:** Telegram allows a single `getUpdates` (polling) connection per bot token. If you see "Conflict: terminated by other getUpdates request" or the bot exits at startup with "Polling conflict detected", another process is already using this token. Stop it first (e.g. `systemctl --user stop telegram-agent-bot@m1.service` or close the other terminal), then start again.
+
 ## Using the Bot
 
 ### Ask for work

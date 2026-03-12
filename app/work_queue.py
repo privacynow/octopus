@@ -13,8 +13,10 @@ data has a different lifecycle and retention policy than session state.
 """
 
 import logging
+import re
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from enum import Enum
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -118,9 +120,109 @@ CREATE TABLE IF NOT EXISTS meta (
 
 _db_connections: dict[Path, sqlite3.Connection] = {}
 
+_UNSUPPORTED_SCHEMA_MSG = "Unsupported transport.db schema/layout for this build"
+
+# Expected schema for validation (do not mutate existing DBs before validating).
+_EXPECTED_TABLES = ("updates", "work_items", "meta")
+_EXPECTED_COLUMNS: dict[str, set[str]] = {
+    "updates": {"update_id", "chat_id", "user_id", "kind", "payload", "received_at", "state"},
+    "work_items": {"id", "chat_id", "update_id", "state", "worker_id", "claimed_at", "completed_at", "error", "created_at"},
+    "meta": {"key", "value"},
+}
+_REQUIRED_INDEX = "idx_one_claimed_per_chat"
+
+
+def _create_new_transport_db(conn: sqlite3.Connection) -> None:
+    """Initialize a brand-new transport DB. Call only when the file has no tables."""
+    conn.executescript(_CREATE_SQL)
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+        (str(_SCHEMA_VERSION),),
+    )
+    conn.commit()
+
+
+def _validate_existing_transport_db(conn: sqlite3.Connection) -> None:
+    """Verify an existing transport DB has the supported schema/layout. Does not mutate."""
+    tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+    if _EXPECTED_TABLES[0] not in tables or _EXPECTED_TABLES[1] not in tables or _EXPECTED_TABLES[2] not in tables:
+        raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
+    for table in _EXPECTED_TABLES:
+        cursor = conn.execute("PRAGMA table_info(" + table + ")")
+        infos = cursor.fetchall()
+        # PRAGMA table_info returns (cid, name, type, ...); Row or tuple may use index 1 or key "name"
+        cols = set()
+        for r in infos:
+            if hasattr(r, "keys") and "name" in r.keys():
+                cols.add(r["name"])
+            else:
+                cols.add(r[1])
+        if _EXPECTED_COLUMNS[table] - cols:
+            raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
+    # Require idx_one_claimed_per_chat to be UNIQUE, on chat_id, partial WHERE state = 'claimed'
+    index_list = conn.execute(
+        "PRAGMA index_list(work_items)"
+    ).fetchall()
+    idx_row = None
+    for r in index_list:
+        name = r["name"] if hasattr(r, "keys") and "name" in r.keys() else r[1]
+        if name == _REQUIRED_INDEX:
+            idx_row = r
+            break
+    if idx_row is None:
+        raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
+    unique = idx_row["unique"] if hasattr(idx_row, "keys") and "unique" in idx_row.keys() else idx_row[2]
+    if unique != 1:
+        raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
+    partial = idx_row["partial"] if hasattr(idx_row, "keys") and "partial" in idx_row.keys() else (idx_row[4] if len(idx_row) > 4 else 0)
+    if partial != 1:
+        raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
+    info_rows = conn.execute(
+        "PRAGMA index_info(" + _REQUIRED_INDEX + ")"
+    ).fetchall()
+    index_cols = []
+    for r in info_rows:
+        col = r["name"] if hasattr(r, "keys") and "name" in r.keys() else r[2]
+        index_cols.append(col)
+    if index_cols != ["chat_id"]:
+        raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
+    sql_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
+        (_REQUIRED_INDEX,),
+    ).fetchone()
+    if sql_row is None:
+        raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
+    index_sql = (sql_row["sql"] if hasattr(sql_row, "keys") and "sql" in sql_row.keys() else sql_row[0]) or ""
+    # Require partial predicate to be exactly: WHERE state = 'claimed' (whitespace/case/quote style flexible)
+    where_i = index_sql.lower().find(" where ")
+    if where_i == -1:
+        raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
+    predicate = index_sql[where_i + 7 :].strip()
+    normalized = re.sub(r"\s+", " ", predicate.lower()).strip()
+    if not re.fullmatch(r"state\s*=\s*['\"]claimed['\"]", normalized):
+        raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
+    row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+    if row is None:
+        raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
+    try:
+        stored = int(row[0])
+    except (TypeError, ValueError):
+        raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
+    if stored != _SCHEMA_VERSION:
+        raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
+
 
 def _transport_db(data_dir: Path) -> sqlite3.Connection:
-    """Return (or create) a WAL-mode SQLite connection for transport.db."""
+    """Return (or create) a WAL-mode SQLite connection for transport.db.
+
+    For a brand-new DB (no tables), creates schema and inserts schema_version.
+    For an existing DB, validates schema/layout only; does not mutate.
+    Raises RuntimeError with a neutral message if schema/layout is unsupported.
+    """
     if data_dir in _db_connections:
         return _db_connections[data_dir]
     db_path = data_dir / "transport.db"
@@ -130,31 +232,16 @@ def _transport_db(data_dir: Path) -> sqlite3.Connection:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=5000")
-        conn.executescript(_CREATE_SQL)
-        row = conn.execute(
-            "SELECT value FROM meta WHERE key='schema_version'"
-        ).fetchone()
-        if row is None:
-            # Distinguish fresh DB (empty meta) from old DB missing schema_version.
-            if conn.execute("SELECT 1 FROM meta LIMIT 1").fetchone() is not None:
-                conn.close()
-                raise RuntimeError(
-                    f"Unsupported transport.db schema (no schema_version key). "
-                    f"Delete {db_path} and restart the bot."
-                )
-            conn.execute(
-                "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
-                (str(_SCHEMA_VERSION),),
-            )
-            conn.commit()
+        has_tables = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1"
+        ).fetchone() is not None
+        if has_tables:
+            _validate_existing_transport_db(conn)
         else:
-            stored = int(row["value"])
-            if stored != _SCHEMA_VERSION:
-                conn.close()
-                raise RuntimeError(
-                    f"Unsupported transport.db schema (version {stored}). "
-                    f"Delete {db_path} and restart the bot."
-                )
+            _create_new_transport_db(conn)
+    except RuntimeError:
+        conn.close()
+        raise
     except Exception:
         conn.close()
         raise
@@ -173,6 +260,29 @@ def close_all_transport_db() -> None:
     """Close all cached transport DB connections (for test isolation)."""
     for data_dir in list(_db_connections.keys()):
         close_transport_db(data_dir)
+
+
+@contextmanager
+def _write_tx(conn: sqlite3.Connection, immediate: bool = True):
+    """Single transaction wrapper for all mutating repository entry points.
+
+    On entry: BEGIN IMMEDIATE (or BEGIN). On exit: COMMIT on success;
+    ROLLBACK on any exception, then re-raise. Callers must not call
+    conn.commit() or conn.rollback() themselves. Nested use raises RuntimeError.
+    """
+    if conn.in_transaction:
+        raise RuntimeError("nested transport transaction")
+    if immediate:
+        conn.execute("BEGIN IMMEDIATE")
+    else:
+        conn.execute("BEGIN")
+    try:
+        yield
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    else:
+        conn.execute("COMMIT")
 
 
 def _reset_transport_db(data_dir: Path) -> None:
@@ -285,7 +395,12 @@ def _claim_queued_item(
     else:
         result = run_transport_event(model, "claim_worker")
     if not result.allowed:
-        return None
+        if result.disposition == TransportDisposition.other_claimed_for_chat:
+            return None
+        raise TransportStateCorruption(
+            f"_claim_queued_item: workflow rejected for item {item_id}: "
+            f"{result.disposition} — {result.reason}"
+        )
     now = datetime.now(timezone.utc).isoformat()
     cursor = conn.execute(
         "UPDATE work_items SET state = ?, worker_id = ?, claimed_at = ? "
@@ -339,7 +454,10 @@ def _apply_transport_event(
     model = build_model(row)
     result = run_transport_event(model, event_name, **event_kwargs)
     if not result.allowed:
-        return ApplyResult.workflow_rejected
+        raise TransportStateCorruption(
+            f"_apply_transport_event: workflow rejected for item {item_id} event {event_name!r}: "
+            f"{result.disposition} — {result.reason}"
+        )
     now = datetime.now(timezone.utc).isoformat()
     if update_extras:
         placeholders = (result.new_state,) + update_extra_args + (item_id, expected_source_state)
@@ -367,6 +485,66 @@ def _apply_transport_event(
         item_id, expected_source_state,
     )
     return ApplyResult.corruption
+
+
+def _apply_claim_event(
+    conn: sqlite3.Connection,
+    item_id: str,
+    event_name: str,
+    expected_source_state: str,
+    worker_id: str,
+    build_model: Callable[[dict], TransportWorkflowModel],
+    **event_kwargs: Any,
+) -> dict[str, Any] | None:
+    """Claim-style transition: load, validate, run machine, UPDATE with worker_id/claimed_at, reread on 0.
+
+    Returns updated work_items row dict on success. Returns None if row missing, state changed,
+    or disposition is other_claimed_for_chat. Raises ReclaimBlocked(item_id) when disposition
+    is blocked_replay. Raises TransportStateCorruption on any other rejection or on reread corruption.
+    Caller holds transaction.
+    """
+    row = _load_work_item_by_id(conn, item_id)
+    if row is None or row["state"] != expected_source_state:
+        return None
+    model = build_model(row)
+    result = run_transport_event(model, event_name, **event_kwargs)
+    if not result.allowed:
+        if result.disposition == TransportDisposition.other_claimed_for_chat:
+            return None
+        if result.disposition == TransportDisposition.blocked_replay:
+            raise ReclaimBlocked(item_id)
+        raise TransportStateCorruption(
+            f"_apply_claim_event: workflow rejected for item {item_id} event {event_name!r}: "
+            f"{result.disposition} — {result.reason}"
+        )
+    now = datetime.now(timezone.utc).isoformat()
+    cursor = conn.execute(
+        "UPDATE work_items SET state = ?, worker_id = ?, claimed_at = ?, completed_at = NULL "
+        "WHERE id = ? AND state = ?",
+        (result.new_state, worker_id, now, item_id, expected_source_state),
+    )
+    if cursor.rowcount > 0:
+        out = conn.execute("SELECT * FROM work_items WHERE id = ?", (item_id,)).fetchone()
+        if out is None:
+            return None
+        r = dict(out)
+        _validate_work_item_row(r, item_id)
+        return r
+    re_read = conn.execute(
+        "SELECT state, worker_id, claimed_at FROM work_items WHERE id = ?", (item_id,)
+    ).fetchone()
+    if re_read is None:
+        return None
+    _validate_work_item_row(dict(re_read), item_id)
+    if re_read["state"] != expected_source_state:
+        return None
+    log.error(
+        "_apply_claim_event: invariant violation item %s (still %s)",
+        item_id, expected_source_state,
+    )
+    raise TransportStateCorruption(
+        f"claim update matched 0 rows but item {item_id} still in {re_read['state']!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +588,10 @@ def _insert_initial_work_item(
                 (item_id, chat_id, update_id, result.new_state, worker_id, created_at, created_at),
             )
             return item_id
+        raise TransportStateCorruption(
+            f"_insert_initial_work_item: claim_inline rejected for item {item_id}: "
+            f"{result.disposition} — {result.reason}"
+        )
     conn.execute(
         "INSERT INTO work_items (id, chat_id, update_id, state, created_at) "
         "VALUES (?, ?, ?, 'queued', ?)",
@@ -448,29 +630,24 @@ def record_and_enqueue(
     conn = _transport_db(data_dir)
     now = datetime.now(timezone.utc).isoformat()
     item_id = uuid.uuid4().hex
-    conn.execute("BEGIN IMMEDIATE")
     try:
-        conn.execute(
-            "INSERT INTO updates (update_id, chat_id, user_id, kind, payload, received_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (update_id, chat_id, user_id, kind, payload, now),
-        )
-        _insert_initial_work_item(
-            conn,
-            item_id=item_id,
-            chat_id=chat_id,
-            update_id=update_id,
-            worker_id=worker_id,
-            created_at=now,
-        )
-        conn.execute("COMMIT")
+        with _write_tx(conn):
+            conn.execute(
+                "INSERT INTO updates (update_id, chat_id, user_id, kind, payload, received_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (update_id, chat_id, user_id, kind, payload, now),
+            )
+            _insert_initial_work_item(
+                conn,
+                item_id=item_id,
+                chat_id=chat_id,
+                update_id=update_id,
+                worker_id=worker_id,
+                created_at=now,
+            )
         return True, item_id
     except sqlite3.IntegrityError:
-        conn.execute("ROLLBACK")
         return False, None
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
 
 
 def record_update(
@@ -489,12 +666,12 @@ def record_update(
     conn = _transport_db(data_dir)
     now = datetime.now(timezone.utc).isoformat()
     try:
-        conn.execute(
-            "INSERT INTO updates (update_id, chat_id, user_id, kind, payload, received_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (update_id, chat_id, user_id, kind, payload, now),
-        )
-        conn.commit()
+        with _write_tx(conn):
+            conn.execute(
+                "INSERT INTO updates (update_id, chat_id, user_id, kind, payload, received_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (update_id, chat_id, user_id, kind, payload, now),
+            )
         return True
     except sqlite3.IntegrityError:
         return False
@@ -510,30 +687,31 @@ def enqueue_work_item(
 
     Uses shared _insert_initial_work_item (same initial-state semantics as
     record_and_enqueue). Raises TransportStateCorruption if the chat has any invalid row.
+    Uses _write_tx so the connection is never left in an open transaction on error.
     """
     conn = _transport_db(data_dir)
     item_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
-    _insert_initial_work_item(
-        conn,
-        item_id=item_id,
-        chat_id=chat_id,
-        update_id=update_id,
-        worker_id=worker_id,
-        created_at=now,
-    )
-    conn.commit()
+    with _write_tx(conn):
+        _insert_initial_work_item(
+            conn,
+            item_id=item_id,
+            chat_id=chat_id,
+            update_id=update_id,
+            worker_id=worker_id,
+            created_at=now,
+        )
     return item_id
 
 
 def update_payload(data_dir: Path, update_id: int, payload: str) -> None:
     """Update the stored payload for an already-recorded update."""
     conn = _transport_db(data_dir)
-    conn.execute(
-        "UPDATE updates SET payload = ? WHERE update_id = ?",
-        (payload, update_id),
-    )
-    conn.commit()
+    with _write_tx(conn):
+        conn.execute(
+            "UPDATE updates SET payload = ? WHERE update_id = ?",
+            (payload, update_id),
+        )
 
 
 def claim_for_update(data_dir: Path, chat_id: int, update_id: int, worker_id: str) -> dict[str, Any] | None:
@@ -544,18 +722,14 @@ def claim_for_update(data_dir: Path, chat_id: int, update_id: int, worker_id: st
     Uses shared _claim_queued_item for exact CAS + reread classification.
     """
     conn = _transport_db(data_dir)
-    conn.execute("BEGIN IMMEDIATE")
-    try:
+    with _write_tx(conn):
         _assert_no_invalid_rows_for_chat(conn, chat_id)
         row = _load_work_item_by_chat_update(conn, chat_id, update_id)
         if row is None:
-            conn.execute("COMMIT")
             return None
         if row["state"] == "claimed" and row.get("worker_id") == worker_id:
-            conn.execute("COMMIT")
             return dict(row)
         if row["state"] != "queued":
-            conn.execute("COMMIT")
             return None
         has_other_claimed = conn.execute(
             "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
@@ -569,7 +743,6 @@ def claim_for_update(data_dir: Path, chat_id: int, update_id: int, worker_id: st
             event_name="claim_inline",
         )
         if out is None:
-            conn.execute("COMMIT")
             return None
         u = conn.execute(
             "SELECT kind, payload FROM updates WHERE update_id = ?",
@@ -578,14 +751,7 @@ def claim_for_update(data_dir: Path, chat_id: int, update_id: int, worker_id: st
         if u:
             out["kind"] = u["kind"]
             out["payload"] = u["payload"]
-        conn.execute("COMMIT")
         return out
-    except TransportStateCorruption:
-        conn.execute("ROLLBACK")
-        raise
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
 
 
 def claim_next(data_dir: Path, chat_id: int, worker_id: str) -> dict[str, Any] | None:
@@ -596,8 +762,7 @@ def claim_next(data_dir: Path, chat_id: int, worker_id: str) -> dict[str, Any] |
     TransportStateCorruption if chat has invalid state or reread finds still queued.
     """
     conn = _transport_db(data_dir)
-    conn.execute("BEGIN IMMEDIATE")
-    try:
+    with _write_tx(conn):
         _assert_no_invalid_rows_for_chat(conn, chat_id)
         row = conn.execute(
             "SELECT id FROM work_items "
@@ -609,7 +774,6 @@ def claim_next(data_dir: Path, chat_id: int, worker_id: str) -> dict[str, Any] |
             (chat_id, chat_id),
         ).fetchone()
         if row is None:
-            conn.execute("COMMIT")
             return None
         out = _claim_queued_item(
             conn,
@@ -619,16 +783,8 @@ def claim_next(data_dir: Path, chat_id: int, worker_id: str) -> dict[str, Any] |
             event_name="claim_worker",
         )
         if out is None:
-            conn.execute("COMMIT")
             return None
-        conn.execute("COMMIT")
         return out
-    except TransportStateCorruption:
-        conn.execute("ROLLBACK")
-        raise
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
 
 
 def claim_next_any(data_dir: Path, worker_id: str) -> dict[str, Any] | None:
@@ -639,8 +795,7 @@ def claim_next_any(data_dir: Path, worker_id: str) -> dict[str, Any] | None:
     Raises TransportStateCorruption if chosen chat has invalid state or reread finds still queued.
     """
     conn = _transport_db(data_dir)
-    conn.execute("BEGIN IMMEDIATE")
-    try:
+    with _write_tx(conn):
         row = conn.execute(
             "SELECT id, chat_id FROM work_items "
             "WHERE state = 'queued' "
@@ -650,7 +805,6 @@ def claim_next_any(data_dir: Path, worker_id: str) -> dict[str, Any] | None:
             "ORDER BY created_at LIMIT 1",
         ).fetchone()
         if row is None:
-            conn.execute("COMMIT")
             return None
         _assert_no_invalid_rows_for_chat(conn, row["chat_id"])
         out = _claim_queued_item(
@@ -661,7 +815,6 @@ def claim_next_any(data_dir: Path, worker_id: str) -> dict[str, Any] | None:
             event_name="claim_worker",
         )
         if out is None:
-            conn.execute("COMMIT")
             return None
         item = conn.execute(
             "SELECT w.*, u.kind, u.payload FROM work_items w "
@@ -669,18 +822,10 @@ def claim_next_any(data_dir: Path, worker_id: str) -> dict[str, Any] | None:
             (out["id"],),
         ).fetchone()
         if item is None:
-            conn.execute("COMMIT")
             return None
         out = dict(item)
         _validate_work_item_row(out, out["id"])
-        conn.execute("COMMIT")
         return out
-    except TransportStateCorruption:
-        conn.execute("ROLLBACK")
-        raise
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
 
 
 def complete_work_item(data_dir: Path, item_id: str) -> None:
@@ -689,46 +834,42 @@ def complete_work_item(data_dir: Path, item_id: str) -> None:
     Uses load primitive and re-read on rowcount zero; invalid re-read raises TransportStateCorruption.
     """
     conn = _transport_db(data_dir)
-    row = _load_work_item_by_id(conn, item_id)
-    if row is None:
-        return
-    loaded_state = row["state"]
-    if loaded_state not in ("queued", "claimed"):
-        return
-    model = TransportWorkflowModel(state=loaded_state)
-    result = run_transport_event(model, "complete")
-    if not result.allowed:
-        if result.disposition == TransportDisposition.invalid_transition:
-            log.error(
-                "complete_work_item: workflow rejected for item %s: %s",
-                item_id, result.reason,
+    with _write_tx(conn):
+        row = _load_work_item_by_id(conn, item_id)
+        if row is None:
+            return
+        loaded_state = row["state"]
+        if loaded_state not in ("queued", "claimed"):
+            return
+        model = TransportWorkflowModel(state=loaded_state)
+        result = run_transport_event(model, "complete")
+        if not result.allowed:
+            raise TransportStateCorruption(
+                f"complete_work_item: workflow rejected for item {item_id}: "
+                f"{result.disposition} — {result.reason}"
             )
-        return
-    now = datetime.now(timezone.utc).isoformat()
-    cursor = conn.execute(
-        "UPDATE work_items SET state = ?, completed_at = ?, error = ? "
-        "WHERE id = ? AND state = ?",
-        (result.new_state, now, None, item_id, loaded_state),
-    )
-    if cursor.rowcount > 0:
-        conn.commit()
-        return
-    re_read = conn.execute(
-        "SELECT state, worker_id, claimed_at FROM work_items WHERE id = ?", (item_id,)
-    ).fetchone()
-    if re_read is None:
-        conn.commit()
-        return
-    _validate_work_item_row(dict(re_read), item_id)
-    if re_read["state"] == loaded_state:
-        log.error(
-            "complete_work_item: invariant violation item %s (still %s)",
-            item_id, re_read["state"],
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = conn.execute(
+            "UPDATE work_items SET state = ?, completed_at = ?, error = ? "
+            "WHERE id = ? AND state = ?",
+            (result.new_state, now, None, item_id, loaded_state),
         )
-        raise TransportStateCorruption(
-            f"update matched 0 rows but item {item_id} still in {re_read['state']!r}"
-        )
-    conn.commit()
+        if cursor.rowcount > 0:
+            return
+        re_read = conn.execute(
+            "SELECT state, worker_id, claimed_at FROM work_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        if re_read is None:
+            return
+        _validate_work_item_row(dict(re_read), item_id)
+        if re_read["state"] == loaded_state:
+            log.error(
+                "complete_work_item: invariant violation item %s (still %s)",
+                item_id, re_read["state"],
+            )
+            raise TransportStateCorruption(
+                f"update matched 0 rows but item {item_id} still in {re_read['state']!r}"
+            )
 
 
 def fail_work_item(data_dir: Path, item_id: str, error: str) -> None:
@@ -737,47 +878,43 @@ def fail_work_item(data_dir: Path, item_id: str, error: str) -> None:
     Uses load primitive and re-read on rowcount zero; invalid re-read raises TransportStateCorruption.
     """
     conn = _transport_db(data_dir)
-    row = _load_work_item_by_id(conn, item_id)
-    if row is None:
-        return
-    loaded_state = row["state"]
-    if loaded_state not in ("queued", "claimed"):
-        return
-    model = TransportWorkflowModel(state=loaded_state)
-    result = run_transport_event(model, "fail")
-    if not result.allowed:
-        if result.disposition == TransportDisposition.invalid_transition:
-            log.error(
-                "fail_work_item: workflow rejected for item %s: %s",
-                item_id, result.reason,
+    with _write_tx(conn):
+        row = _load_work_item_by_id(conn, item_id)
+        if row is None:
+            return
+        loaded_state = row["state"]
+        if loaded_state not in ("queued", "claimed"):
+            return
+        model = TransportWorkflowModel(state=loaded_state)
+        result = run_transport_event(model, "fail")
+        if not result.allowed:
+            raise TransportStateCorruption(
+                f"fail_work_item: workflow rejected for item {item_id}: "
+                f"{result.disposition} — {result.reason}"
             )
-        return
-    now = datetime.now(timezone.utc).isoformat()
-    err = (error or "")[:500]
-    cursor = conn.execute(
-        "UPDATE work_items SET state = ?, completed_at = ?, error = ? "
-        "WHERE id = ? AND state = ?",
-        (result.new_state, now, err, item_id, loaded_state),
-    )
-    if cursor.rowcount > 0:
-        conn.commit()
-        return
-    re_read = conn.execute(
-        "SELECT state, worker_id, claimed_at FROM work_items WHERE id = ?", (item_id,)
-    ).fetchone()
-    if re_read is None:
-        conn.commit()
-        return
-    _validate_work_item_row(dict(re_read), item_id)
-    if re_read["state"] == loaded_state:
-        log.error(
-            "fail_work_item: invariant violation item %s (still %s)",
-            item_id, re_read["state"],
+        now = datetime.now(timezone.utc).isoformat()
+        err = (error or "")[:500]
+        cursor = conn.execute(
+            "UPDATE work_items SET state = ?, completed_at = ?, error = ? "
+            "WHERE id = ? AND state = ?",
+            (result.new_state, now, err, item_id, loaded_state),
         )
-        raise TransportStateCorruption(
-            f"update matched 0 rows but item {item_id} still in {re_read['state']!r}"
-        )
-    conn.commit()
+        if cursor.rowcount > 0:
+            return
+        re_read = conn.execute(
+            "SELECT state, worker_id, claimed_at FROM work_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        if re_read is None:
+            return
+        _validate_work_item_row(dict(re_read), item_id)
+        if re_read["state"] == loaded_state:
+            log.error(
+                "fail_work_item: invariant violation item %s (still %s)",
+                item_id, re_read["state"],
+            )
+            raise TransportStateCorruption(
+                f"update matched 0 rows but item {item_id} still in {re_read['state']!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -785,8 +922,12 @@ def fail_work_item(data_dir: Path, item_id: str, error: str) -> None:
 # ---------------------------------------------------------------------------
 
 def has_queued_or_claimed(data_dir: Path, chat_id: int) -> bool:
-    """Check if a chat has any in-flight or queued work items."""
+    """Check if a chat has any in-flight or queued work items.
+
+    Asserts chat integrity (at most one claimed, valid row state) before answering.
+    """
     conn = _transport_db(data_dir)
+    _assert_no_invalid_rows_for_chat(conn, chat_id)
     row = conn.execute(
         "SELECT 1 FROM work_items WHERE chat_id = ? AND state IN ('queued', 'claimed') LIMIT 1",
         (chat_id,),
@@ -814,22 +955,23 @@ def mark_pending_recovery(data_dir: Path, item_id: str) -> None:
     completed_at is terminal-only; not set here.
     """
     conn = _transport_db(data_dir)
-    res = _apply_transport_event(
-        conn,
-        item_id,
-        "move_to_pending_recovery",
-        "claimed",
-        lambda r: TransportWorkflowModel(state=r["state"]),
-        "",
-        (),
-    )
-    if res == ApplyResult.success:
-        conn.commit()
-    elif res == ApplyResult.corruption:
-        raise TransportStateCorruption(
-            f"mark_pending_recovery: invariant violation item {item_id}"
+    with _write_tx(conn):
+        res = _apply_transport_event(
+            conn,
+            item_id,
+            "move_to_pending_recovery",
+            "claimed",
+            lambda r: TransportWorkflowModel(state=r["state"]),
+            "",
+            (),
         )
-    # already_handled or workflow_rejected: no-op
+        if res == ApplyResult.success:
+            pass  # commit at exit
+        elif res == ApplyResult.corruption:
+            raise TransportStateCorruption(
+                f"mark_pending_recovery: invariant violation item {item_id}"
+            )
+        # already_handled: no-op (row missing or state changed by another actor)
 
 
 def get_pending_recovery_for_update(
@@ -850,9 +992,10 @@ def get_pending_recovery_for_update(
 def get_latest_pending_recovery(data_dir: Path, chat_id: int) -> dict[str, Any] | None:
     """Get the newest pending_recovery item for a chat by created_at.
 
-    Validates every work item through shared row validator; invalid state raises.
+    Asserts chat integrity before scanning; validates every work item through shared row validator.
     """
     conn = _transport_db(data_dir)
+    _assert_no_invalid_rows_for_chat(conn, chat_id)
     rows = conn.execute(
         "SELECT w.*, u.kind, u.payload FROM work_items w "
         "JOIN updates u ON w.update_id = u.update_id "
@@ -875,36 +1018,34 @@ def supersede_pending_recovery(data_dir: Path, chat_id: int) -> int:
     of items superseded.
     """
     conn = _transport_db(data_dir)
-    rows = conn.execute(
-        "SELECT id FROM work_items WHERE chat_id = ? AND state = 'pending_recovery'",
-        (chat_id,),
-    ).fetchall()
-    if not rows:
-        return 0
-    for row in rows:
-        full = _load_work_item_by_id(conn, row["id"])
-        if full is None or full["state"] != "pending_recovery":
-            continue
-        model = TransportWorkflowModel(state=full["state"])
-        result = run_transport_event(model, "supersede_recovery")
-        if not result.allowed:
-            if result.disposition == TransportDisposition.invalid_transition:
-                log.error(
-                    "supersede_pending_recovery: workflow rejected for chat %s item %s: %s",
-                    chat_id, full["id"], result.reason,
-                )
-            return 0
     now = datetime.now(timezone.utc).isoformat()
-    cursor = conn.execute(
-        "UPDATE work_items SET state = 'done', completed_at = ?, error = 'superseded' "
-        "WHERE chat_id = ? AND state = 'pending_recovery'",
-        (now, chat_id),
-    )
-    count = cursor.rowcount
-    conn.commit()
-    if count:
-        log.info("Superseded %d pending_recovery items for chat %d", count, chat_id)
-    return count
+    with _write_tx(conn):
+        _assert_no_invalid_rows_for_chat(conn, chat_id)
+        rows = conn.execute(
+            "SELECT id FROM work_items WHERE chat_id = ? AND state = 'pending_recovery'",
+            (chat_id,),
+        ).fetchall()
+        if not rows:
+            return 0
+        count = 0
+        for row in rows:
+            full = _load_work_item_by_id(conn, row["id"])
+            if full is None or full["state"] != "pending_recovery":
+                continue
+            res = _apply_transport_event(
+                conn,
+                full["id"],
+                "supersede_recovery",
+                "pending_recovery",
+                lambda r: TransportWorkflowModel(state=r["state"]),
+                "completed_at = ?, error = ?",
+                (now, "superseded"),
+            )
+            if res == ApplyResult.success:
+                count += 1
+        if count:
+            log.info("Superseded %d pending_recovery items for chat %d", count, chat_id)
+        return count
 
 
 def discard_recovery(data_dir: Path, item_id: str) -> DiscardResult:
@@ -914,26 +1055,21 @@ def discard_recovery(data_dir: Path, item_id: str) -> DiscardResult:
     """
     conn = _transport_db(data_dir)
     now = datetime.now(timezone.utc).isoformat()
-    res = _apply_transport_event(
-        conn,
-        item_id,
-        "discard_recovery",
-        "pending_recovery",
-        lambda r: TransportWorkflowModel(state=r["state"]),
-        "completed_at = ?, error = ?",
-        (now, "discarded"),
-    )
-    if res == ApplyResult.success:
-        conn.commit()
-        return DiscardResult.success
-    if res == ApplyResult.already_handled:
-        conn.commit()
-        return DiscardResult.already_handled
-    if res == ApplyResult.workflow_rejected:
-        conn.commit()
-        return DiscardResult.already_handled
-    conn.commit()
-    return DiscardResult.corruption
+    with _write_tx(conn):
+        res = _apply_transport_event(
+            conn,
+            item_id,
+            "discard_recovery",
+            "pending_recovery",
+            lambda r: TransportWorkflowModel(state=r["state"]),
+            "completed_at = ?, error = ?",
+            (now, "discarded"),
+        )
+        if res == ApplyResult.success:
+            return DiscardResult.success
+        if res == ApplyResult.already_handled:
+            return DiscardResult.already_handled
+        return DiscardResult.corruption
 
 
 def reclaim_for_replay(data_dir: Path, item_id: str, worker_id: str) -> dict[str, Any] | None:
@@ -941,59 +1077,45 @@ def reclaim_for_replay(data_dir: Path, item_id: str, worker_id: str) -> dict[str
 
     Enforces the per-chat single-claimed invariant: if another item for
     the same chat is already claimed, the reclaim is rejected (raises
-    ``ReclaimBlocked``).  This mirrors the guard in ``claim_for_update``
-    and ``claim_next_any``.
+    ``ReclaimBlocked``).  Uses _apply_claim_event for exact CAS and reread classification.
 
-    Returns the item dict if successful, None if the item is no longer
+    Returns the item dict (with kind/payload) if successful, None if the item is no longer
     in pending_recovery or already handled.  Raises ``ReclaimBlocked``
     if the item exists but another item for the same chat is claimed.
     """
     conn = _transport_db(data_dir)
-    now = datetime.now(timezone.utc).isoformat()
-    conn.execute("BEGIN IMMEDIATE")
-    try:
+    with _write_tx(conn):
         row = _load_work_item_by_id(conn, item_id)
         if row is None or row["state"] != "pending_recovery":
-            conn.execute("COMMIT")
             return None
         chat_id = row["chat_id"]
-        # Per-chat single-claimed invariant: reject if another item is claimed.
+        _assert_no_invalid_rows_for_chat(conn, chat_id)
         has_claimed = conn.execute(
             "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
             (chat_id,),
         ).fetchone()
-        model = TransportWorkflowModel(
-            state="pending_recovery", has_other_claimed_for_chat=bool(has_claimed)
+        out = _apply_claim_event(
+            conn,
+            item_id,
+            "reclaim_for_replay",
+            "pending_recovery",
+            worker_id,
+            lambda r: TransportWorkflowModel(
+                state=r["state"], has_other_claimed_for_chat=bool(has_claimed)
+            ),
         )
-        result = run_transport_event(model, "reclaim_for_replay")
-        if not result.allowed:
-            conn.execute("COMMIT")
-            if result.disposition == TransportDisposition.blocked_replay:
-                raise ReclaimBlocked(item_id)
+        if out is None:
             return None
-        new_state = result.new_state  # machine is source of truth
-        conn.execute(
-            "UPDATE work_items SET state = ?, worker_id = ?, "
-            "claimed_at = ?, completed_at = NULL "
-            "WHERE id = ?",
-            (new_state, worker_id, now, item_id),
-        )
-        conn.execute("COMMIT")
-    except ReclaimBlocked:
-        raise
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
-    row = conn.execute(
-        "SELECT w.*, u.kind, u.payload FROM work_items w "
-        "JOIN updates u ON w.update_id = u.update_id WHERE w.id = ?",
-        (item_id,),
-    ).fetchone()
-    if row is None:
-        return None
-    r = dict(row)
-    _validate_work_item_row(r, item_id)
-    return r
+        full = conn.execute(
+            "SELECT w.*, u.kind, u.payload FROM work_items w "
+            "JOIN updates u ON w.update_id = u.update_id WHERE w.id = ?",
+            (item_id,),
+        ).fetchone()
+        if full is None:
+            return None
+        r = dict(full)
+        _validate_work_item_row(r, item_id)
+        return r
 
 
 # ---------------------------------------------------------------------------
@@ -1010,63 +1132,75 @@ def recover_stale_claims(
     """
     conn = _transport_db(data_dir)
     now = datetime.now(timezone.utc)
-    rows = conn.execute(
-        "SELECT id, state, worker_id, claimed_at FROM work_items WHERE state = 'claimed'"
-    ).fetchall()
-    requeued = 0
-    for row in rows:
-        r = dict(row)
-        _validate_work_item_row(r, r["id"])
-        stale = False
-        if row["worker_id"] != current_worker_id:
-            stale = True
-        elif row["claimed_at"]:
-            claimed = datetime.fromisoformat(row["claimed_at"])
-            if (now - claimed).total_seconds() > max_age_seconds:
+    with _write_tx(conn):
+        rows = conn.execute(
+            "SELECT id, state, worker_id, claimed_at FROM work_items WHERE state = 'claimed'"
+        ).fetchall()
+        requeued = 0
+        for row in rows:
+            r = dict(row)
+            _validate_work_item_row(r, r["id"])
+            stale = False
+            if row["worker_id"] != current_worker_id:
                 stale = True
-        if stale:
-            model = TransportWorkflowModel(
-                state="claimed", worker_id=row["worker_id"], is_stale=True
-            )
-            result = run_transport_event(model, "recover_stale_claim")
-            if not result.allowed:
-                if result.disposition == TransportDisposition.invalid_transition:
-                    log.error(
-                        "recover_stale_claims: workflow rejected for item %s: %s",
-                        row["id"], result.reason,
+            elif row["claimed_at"]:
+                claimed = datetime.fromisoformat(row["claimed_at"])
+                if (now - claimed).total_seconds() > max_age_seconds:
+                    stale = True
+            if stale:
+                model = TransportWorkflowModel(
+                    state="claimed", worker_id=row["worker_id"], is_stale=True
+                )
+                result = run_transport_event(model, "recover_stale_claim")
+                if not result.allowed:
+                    if result.disposition == TransportDisposition.guard_failed:
+                        continue  # not stale (same worker, not expired), skip
+                    raise TransportStateCorruption(
+                        f"recover_stale_claims: workflow rejected for item {row['id']}: "
+                        f"{result.disposition} — {result.reason}"
                     )
-                continue
-            new_state = result.new_state  # machine is source of truth
-            conn.execute(
-                "UPDATE work_items SET state = ?, worker_id = NULL, claimed_at = NULL "
-                "WHERE id = ?",
-                (new_state, row["id"]),
-            )
-            requeued += 1
-    if requeued:
-        conn.commit()
-        log.info("Recovered %d stale work items", requeued)
-    return requeued
+                new_state = result.new_state
+                cursor = conn.execute(
+                    "UPDATE work_items SET state = ?, worker_id = NULL, claimed_at = NULL "
+                    "WHERE id = ? AND state = 'claimed' AND worker_id = ? AND claimed_at = ?",
+                    (new_state, row["id"], row["worker_id"], row["claimed_at"]),
+                )
+                if cursor.rowcount > 0:
+                    requeued += 1
+                    continue
+                re_read = conn.execute(
+                    "SELECT state, worker_id, claimed_at FROM work_items WHERE id = ?",
+                    (row["id"],),
+                ).fetchone()
+                if re_read is None:
+                    continue
+                _validate_work_item_row(dict(re_read), row["id"])
+                if re_read["state"] == "claimed" and re_read["worker_id"] == row["worker_id"] and re_read["claimed_at"] == row["claimed_at"]:
+                    raise TransportStateCorruption(
+                        f"recover_stale_claims: update matched 0 rows but item {row['id']} still claimed"
+                    )
+        if requeued:
+            log.info("Recovered %d stale work items", requeued)
+        return requeued
 
 
 def purge_old(data_dir: Path, older_than_hours: int = 24) -> int:
     """Delete completed/failed work items and their updates older than the threshold."""
     conn = _transport_db(data_dir)
     cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
+    with _write_tx(conn):
+        cursor = conn.execute(
+            "DELETE FROM work_items WHERE state IN ('done', 'failed', 'pending_recovery') AND created_at < ?",
+            (cutoff_iso,),
+        )
+        deleted_items = cursor.rowcount
 
-    cursor = conn.execute(
-        "DELETE FROM work_items WHERE state IN ('done', 'failed', 'pending_recovery') AND created_at < ?",
-        (cutoff_iso,),
-    )
-    deleted_items = cursor.rowcount
-
-    cursor = conn.execute(
-        "DELETE FROM updates WHERE update_id NOT IN (SELECT update_id FROM work_items) "
-        "AND received_at < ?",
-        (cutoff_iso,),
-    )
-    deleted_updates = cursor.rowcount
-    conn.commit()
-    if deleted_items or deleted_updates:
-        log.info("Purged %d work items and %d updates", deleted_items, deleted_updates)
-    return deleted_items
+        cursor = conn.execute(
+            "DELETE FROM updates WHERE update_id NOT IN (SELECT update_id FROM work_items) "
+            "AND received_at < ?",
+            (cutoff_iso,),
+        )
+        deleted_updates = cursor.rowcount
+        if deleted_items or deleted_updates:
+            log.info("Purged %d work items and %d updates", deleted_items, deleted_updates)
+        return deleted_items

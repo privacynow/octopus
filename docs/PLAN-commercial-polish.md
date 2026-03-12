@@ -270,7 +270,7 @@ it survived, and which failure pattern taught it.
 **Transport invariants (runtime contract)**
 
 These are the authoritative runtime invariants for the durable work queue.
-They are enforced by DB checks in the fresh schema and by a single shared
+They are enforced by DB checks in the current schema and by a single shared
 row validator in the repository. Invalid state is never normalized into a
 benign outcome.
 
@@ -284,13 +284,12 @@ benign outcome.
 - `completed_at` is terminal-only (`done` or `failed`); it is not an
   interruption or recovery timestamp.
 
-**Fresh-schema-only policy (development)**
+**Transport schema (versioned, migration deferred)**
 
-- This is a development-stage product: optimize for correctness, clarity, and
-  fast iteration, not backward compatibility for old SQLite files.
-- No in-place SQLite migrations. Current `CREATE TABLE` with all checks is the only schema.
-- If `transport.db` exists with an unsupported schema version, fail fast with a clear error (e.g. "Unsupported transport.db schema version X. Delete the DB and restart.").
-- Optional: version the filename (e.g. `transport-v2.db`) and skip migration logic entirely.
+- `transport.db` has a versioned schema. The current build expects the current schema/layout.
+- No migration system is implemented yet; upgrade/cutover strategy is deferred to the Postgres/runtime phases.
+- If an existing DB has an unsupported schema version or layout, the app fails fast with a neutral error (e.g. "Unsupported transport.db schema/layout for this build"). The app does not mutate existing DBs before validating them.
+- Review priority: correctness and repository invariants first; full upgrade-path engineering is not a release criterion yet. The codebase leaves a clean seam for future migrations.
 
 ### 5. Workflow ownership and engineering discipline
 
@@ -688,8 +687,8 @@ Library choice: [python-statemachine](https://pypi.org/project/python-statemachi
 
 **Phase 11 execution order.**
 
-1. Lock the transport invariants in docs and keep the fresh-schema-only,
-   fail-fast development policy explicit.
+1. Lock the transport invariants in docs; keep schema versioning and
+   validate-before-use explicit (no mutate-before-validate; migration deferred).
 2. Add or tighten the shared row validator so every load and reread path
    enforces the full row invariant set.
 3. Narrow the public repository API around explicit operations rather than

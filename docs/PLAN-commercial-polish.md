@@ -134,13 +134,14 @@ The product is complete when these capability areas are in place.
 
 - The roadmap is one strict execution order, not priority buckets.
 - Phases 1-10 are sealed as shipped history.
-- New roadmap work begins at Phase 11.
+- New roadmap work begins at Phase 12.
 - `transport idempotency` means the durable `update_id` journal and work-item
   uniqueness.
 - `content dedup` means optional suppression of identical consecutive
   messages. It is not part of the core transport contract.
-- Postgres is the sole runtime backend after migration. SQLite is import-source
-  only during cutover.
+- Postgres is the sole runtime backend after Phase 12 lands. SQLite is the
+  current shipped backend until then; any SQLite-to-Postgres import bridge is
+  optional follow-on work, not a required part of the cutover.
 
 ---
 
@@ -160,7 +161,7 @@ This is the authoritative phase sequence.
 | 8 | Public trust, model profiles, and settings UX | Sealed / shipped |
 | 9 | Durable transport, transport idempotency, webhook mode, and restart recovery | Sealed / shipped |
 | 10 | Structural hardening, invariants, and test ownership | Sealed / shipped |
-| 11 | Workflow ownership extraction | Remaining |
+| 11 | Workflow ownership extraction | Sealed / shipped |
 | 12 | Postgres runtime cutover | Remaining |
 | 13 | Postgres queue authority in webhook mode | Remaining |
 | 14 | Multi-process / multi-worker deployment | Remaining |
@@ -172,10 +173,10 @@ This is the authoritative phase sequence.
 
 ---
 
-## Sealed Phases 1-10
+## Sealed Phases 1-11
 
-Phases 1-10 are shipped and sealed. They stay here as historical reference,
-but the active roadmap begins at Phase 11.
+Phases 1-11 are shipped and sealed. They stay here as historical reference,
+but the active roadmap begins at Phase 12.
 
 | Phase | Historical source | What shipped | Lasting lesson |
 |------:|-------------------|--------------|----------------|
@@ -189,6 +190,7 @@ but the active roadmap begins at Phase 11.
 | 8 | Former Phase I plus former Phases IIa and IIb | Mixed trust, model profiles, and inline settings UX. | Public safety comes from resolved execution scope, not from approval mode or hidden handler checks alone. |
 | 9 | Former Phase IV plus later recovery hardening | Durable transport, transport idempotency, webhook foundation, queued feedback, and explicit replay/discard recovery. | `transport idempotency` is core. Automatic replay is unsafe. `content dedup` is optional policy, not the transport contract. |
 | 10 | Former Phase H plus later hardening/testing work | Invariants, owner suites, execution-context hardening, and test isolation. | Confidence comes from explicit ownership and invariant tests, not from ever-growing overflow suites. |
+| 11 | Phase 11 (this plan) | Workflow ownership extraction: transport and pending_request state machines (python-statemachine), single claim and single insert paths, repository-owned CAS and idempotency, versioned transport schema (validate-only for existing DBs), impossible rejections fatal, chat integrity, strict replay/supersede/recover helpers. | Extract workflow ownership before database migration so the new backend does not inherit open-coded transition logic. Library owns graph and guards; repository owns SQL and already_handled. |
 
 For the detailed capability-system lineage behind Phases 3-5, keep using
 [PLAN-agent-roles-and-skills.md](PLAN-agent-roles-and-skills.md) and
@@ -539,8 +541,10 @@ Examples:
   ownership, duplicate delivery idempotency, replay/discard races,
   blocked-replay vs already-handled classification, stable recovery
   references, and second interruption handling.
-- Postgres cutover tests: schema bootstrap, one-way SQLite import, rollback
-  safety, and backward-compatible payload deserialization.
+- Postgres cutover tests: schema bootstrap, DB bootstrap/update/doctor,
+  startup validation, rollback safety, and backward-compatible payload
+  deserialization. SQLite-to-Postgres import tests are optional follow-on work
+  if an import tool is later added.
 - Queue and worker tests: row-lock claiming, inline-claim vs worker-claim
   races, lease expiry, cross-process ordering, webhook enqueue-plus-worker
   dispatch, failed recovery-notice delivery classification, and recovery after
@@ -575,9 +579,13 @@ blurring the audience.
 ## Remaining Phases
 
 These phases are the active roadmap. Every still-relevant deferred or future
-item belongs somewhere in this ordered sequence.
+item belongs somewhere in this ordered sequence. Phase 11 is sealed; active
+work begins at Phase 12.
 
-### Phase 11 - Workflow Ownership Extraction
+### Phase 11 - Workflow Ownership Extraction (Sealed)
+
+Phase 11 is sealed. The seal checklist is met; the following text remains as
+historical reference for the workflow/repository contract that Phase 12 builds on.
 
 Behavior-preserving refactor only.
 
@@ -709,25 +717,227 @@ Library choice: [python-statemachine](https://pypi.org/project/python-statemachi
 ### Phase 12 - Postgres Runtime Cutover
 
 Make Postgres the only supported runtime backend after cutover. Phase 12 is a
-contract-preserving backend replacement phase, not a queue redesign phase.
+contract-preserving backend replacement and environment/bootstrap phase, not a
+queue redesign phase and not a CI/CD phase.
+
+**What Phase 12 is solving.**
+
+- Phase 11 stabilized the workflow and repository contracts.
+- Phase 12 replaces the SQLite runtime authority under those contracts.
+- Phase 12 must also define the missing operational contract that SQLite hid:
+  where the database comes from, who initializes it, how schema SQL is applied,
+  and what must happen before the bot starts in a fresh environment.
+- The app must not depend on a "magical Postgres" that already exists.
 
 **Development-first scope.**
 
-- Build the Postgres runtime for current development use.
+- Build the Postgres runtime for current development use first.
+- Keep webhook-primary queue authority, leases, and multi-worker behavior in
+  Phase 13-14. Phase 12 only replaces the storage backend under the current
+  single-process contract.
 - Do not spend Phase 12 effort on in-place SQLite schema migrations.
 - Do not make SQLite-to-Postgres import a gating requirement during
   development. If preserving dev/test data becomes worthwhile later, that can
   be added as an optional follow-up tool rather than as the core Phase 12
   deliverable.
-- Keep webhook-primary queue authority, leases, and multi-worker behavior in
-  Phase 13-14. Phase 12 only replaces the storage backend under the current
-  single-process contract.
+- Do not make CI/CD, cloud-provider automation, or hosted control-plane design
+  part of the Phase 12 critical path. Those come after the manual environment
+  lifecycle is explicit and working.
 
-**Phase 12 hard requirement.**
+**Phase 12 hard requirements.**
 
 - Preserve current payload JSON shapes, current dataclass contracts, and the
-  workflow outcome taxonomy defined in Phase 11. Postgres should be a storage
-  cutover under stable contracts, not a semantic rewrite.
+  workflow outcome taxonomy defined in Phase 11. Postgres is a storage cutover
+  under stable contracts, not a semantic rewrite.
+- Preserve the current "fresh machine can be made runnable from repo-owned
+  instructions" experience. The steps may become more explicit than SQLite, but
+  they must still be repo-owned, documented, and repeatable.
+- Keep application runtime responsibility separate from infrastructure and
+  schema bootstrap responsibility.
+
+**Operational contract (new explicit requirement).**
+
+Phase 12 should be built around three separate responsibilities:
+
+1. Infrastructure provisioning
+   - A Postgres service exists and is reachable.
+   - This may be Docker-managed in development, Docker-managed or external in
+     staging, and external/managed in production.
+2. Database bootstrap and update
+   - The database, runtime role, schema namespace, tables, indexes, and schema
+     version records are created and updated by explicit repo-owned commands.
+   - This is not implicit application startup behavior.
+3. Application runtime
+   - The bot reads runtime config, connects, validates schema compatibility, and
+     runs.
+   - The bot does not create the Postgres server, create the runtime database,
+     create the role, or apply schema changes on startup.
+
+**Startup rule.**
+
+- App startup is validate-only:
+  - read `BOT_DATABASE_URL`
+  - connect
+  - validate schema/version/layout
+  - fail clearly if not ready
+- App startup is not allowed to auto-migrate, auto-create roles, or "repair"
+  missing schema.
+
+**Environment model.**
+
+Treat each running bot environment as an explicit unit, not as an implicit
+machine-global default.
+
+- One environment should have:
+  - environment name (`dev-alice`, `staging-main`, `prod`, etc.)
+  - bot instance name
+  - Telegram bot token
+  - runtime config/env file
+  - database host + database name + schema namespace + runtime role
+  - working directory / branch or release source
+- Use one database per environment. Do not mix multiple branch/staging/dev
+  environments inside one shared runtime database.
+- Inside each database, keep one runtime schema namespace such as
+  `bot_runtime`.
+
+This is especially important because multiple dev and staging environments are
+likely. Side-by-side branch testing should mean separate app instances and
+separate Postgres databases, not one shared database with mixed state.
+
+**Recommended environment shapes.**
+
+| Environment | Recommended app shape | Recommended Postgres shape | Reason |
+|-------------|-----------------------|----------------------------|--------|
+| Development | Docker container | Docker Compose Postgres | Preserves "fresh machine works" with an explicit, reproducible local stack. |
+| Staging | Docker container | Start with Docker Compose Postgres; allow external Postgres later | Matches dev initially, then can move closer to production once the contract is stable. |
+| Production | Docker container or current host-run model | External / managed or separately managed Postgres | Keeps runtime contracts the same while avoiding single-host Postgres fragility by default. |
+
+Production is intentionally left open at the infrastructure layer. Phase 12
+should not hard-code AWS, SSH-only deploys, or a specific hosting platform. The
+important contract is that the app runtime and database lifecycle stay
+separate.
+
+**Canonical Phase 12 recommendation.**
+
+- Development:
+  - Dockerize both app and Postgres.
+  - Use Docker Compose as the canonical local bring-up path.
+- Staging:
+  - Start with the same Compose-driven shape as development if that reduces
+    unknowns.
+  - Later, move Postgres external while keeping the same bootstrap/update
+    contract.
+- Production:
+  - Keep the app containerizable.
+  - Prefer external or managed Postgres over a same-host Postgres container
+    unless this is an intentionally low-ops deployment.
+
+**Repo-owned workflows (the things operators and developers actually run).**
+
+Phase 12 should introduce four explicit workflows and document them as the only
+supported lifecycle:
+
+1. App bootstrap
+   - Python dependencies, image build, or equivalent app/runtime preparation.
+   - Current `scripts/bootstrap.sh` remains the anchor for non-container
+     bootstrap and local test environments.
+2. DB bootstrap
+   - First-time environment creation:
+     - ensure Postgres is reachable
+     - create database and runtime role if needed
+     - create schema namespace
+     - apply full repo-owned SQL from scratch
+3. DB update
+   - Apply pending schema versions to an existing environment before app
+     restart when the repo adds new SQL files
+4. DB doctor
+   - Validate connectivity, schema version, required tables, required indexes,
+     and compatibility with the current build
+
+The app itself should not absorb these workflows.
+
+**Suggested command surface.**
+
+The exact filenames can change, but the plan should assume a command set like:
+
+- `scripts/bootstrap.sh`
+- `scripts/db_bootstrap.sh`
+- `scripts/db_update.sh`
+- `scripts/db_doctor.sh`
+- optional convenience wrapper for local development such as:
+  - `scripts/dev_up.sh`
+  - or `make dev-first`
+  - or Compose profiles plus one-shot services
+
+These commands are the missing DevOps seam. CI/CD can automate them later, but
+Phase 12 should make them usable manually first.
+
+**Docker-first development shape.**
+
+For development, Phase 12 should define one canonical Compose stack instead of
+leaving every developer to improvise.
+
+- Expected services:
+  - `postgres`
+  - `bot`
+  - one-shot repo-owned helpers such as:
+    - `db-bootstrap`
+    - `db-update`
+    - `db-doctor`
+- The helper services should run from the repo/app image (or a closely related
+  tooling image), so the SQL runner and validation logic are versioned with the
+  code.
+- The app container should not run `systemd`; the container runtime owns the
+  process lifecycle.
+- Current host-run scripts can remain for tests and non-container operation,
+  but Compose becomes the canonical development environment shape.
+
+**First-time sequence for a brand-new development environment.**
+
+The first-time path should be explicit and repeatable:
+
+1. Build or bootstrap the app runtime.
+2. Start the Compose Postgres service.
+3. Wait for Postgres readiness.
+4. Run DB bootstrap against that Postgres:
+   - create DB + runtime role if needed
+   - create schema namespace
+   - apply all repo SQL
+5. Write the environment config for the bot:
+   - Telegram token
+   - provider/model settings
+   - `BOT_DATABASE_URL`
+   - working-dir and policy settings
+6. Run DB doctor.
+7. Start the app container.
+
+The long-term UX can be wrapped in a single convenience command, but Phase 12
+must document the underlying steps clearly first.
+
+**Update sequence for an existing environment.**
+
+- Code-only change:
+  - rebuild app image or refresh Python deps
+  - restart app
+- Schema change:
+  - run DB update first
+  - then restart app
+- App startup should fail if schema is behind the current build
+- Do not hide schema updates inside bot startup "just this once"
+
+**Runtime config and credentials.**
+
+- Add `BOT_DATABASE_URL` as the app runtime connection string.
+- Add pool settings such as:
+  - min/max connections
+  - connect timeout
+  - statement timeout if needed
+- Keep bootstrap/admin credentials separate from app runtime credentials.
+  Phase 12 may use a separate bootstrap URL or bootstrap-only command inputs for
+  first-time DB/role creation.
+- Do not make the bot app itself depend on cloud-provider admin credentials.
+  Cloud or host provisioning belongs to environment/bootstrap tooling, not to
+  the runtime process.
 
 **Contract boundary (the abstraction layer).**
 
@@ -853,6 +1063,7 @@ contract-preserving backend replacement phase, not a queue redesign phase.
 - Recommended structure:
   - `app/db/postgres.py` for pool/bootstrap lifecycle
   - `app/db/postgres_migrate.py` for the lightweight SQL runner
+  - `app/db/postgres_doctor.py` for connectivity/schema validation
   - `app/storage_pg.py` for session-store implementation
   - `app/work_queue_pg.py` for transport-store implementation
 - Keep the existing SQLite modules as the behavioral reference during bring-up.
@@ -875,41 +1086,194 @@ contract-preserving backend replacement phase, not a queue redesign phase.
 - Keep queue redesign out of Phase 12. Row-lock worker claiming as the primary
   queue authority belongs to Phase 13.
 
+**Testing strategy for Phase 12 and beyond.**
+
+Phase 12 should extend the current contract-owner suite structure, not replace
+it with container-heavy black-box testing.
+
+- Keep the current owner-suite model from `docs/testing-ownership.md`.
+- Keep pure contract and workflow suites fast and backend-independent.
+- Migrate persistence and integration coverage from SQLite to real Postgres.
+- Add a small explicit bootstrap/startup/update E2E layer on top of that.
+- Do not make app-container E2E the main confidence layer.
+
+**Four-layer test model.**
+
+1. Pure or owner suites
+   - Workflow machines, execution context, request-flow logic, provider event
+     mapping, formatting, progress, and other backend-independent contracts.
+   - No Postgres required.
+   - No app container required.
+2. In-process integration
+   - Real handlers, real request flow, real repository or store, fake Telegram,
+     fake provider, real Postgres.
+   - This becomes the main confidence layer for Phase 12 storage cutover work.
+   - The app runs under normal pytest or venv execution here, not inside the
+     app container.
+3. Postgres bootstrap and schema integration
+   - Real Postgres, repo-owned DB bootstrap, DB update, DB doctor, and startup
+     validation checks.
+   - Focused on operational contract, not normal handler behavior.
+4. E2E
+   - Full stack: app container + Postgres container + explicit
+     bootstrap/update/doctor flows.
+   - Small smoke set only: first boot, schema update, startup validation,
+     minimal happy-path request flow.
+
+**Isolation model (required).**
+
+- Use one Postgres service per test run, not one container per test.
+- Use one database per pytest worker (for example `test_bot_gw0` through
+  `test_bot_gw3` for `-n 4`).
+- Each worker:
+  - creates its database once
+  - applies schema once
+  - truncates or resets runtime tables between tests
+- Do not use transaction rollback as the global isolation strategy.
+
+**Why truncate or reset, not rollback.**
+
+- Rollback isolates only work performed on the same connection.
+- This codebase uses real commits, multiple connections, async coordination, and
+  later a connection pool.
+- Rollback cannot reliably isolate:
+  - committed writes from app code
+  - multiple connections in one test
+  - handler vs worker concurrency
+- Rollback remains acceptable only inside narrow single-connection repository
+  tests, not as the default suite-wide cleanup model.
+
+**Behavioral parity vs mechanical parity.**
+
+- "Tests pass against Postgres" means the same scenarios and contracts still
+  hold.
+- It does not mean every SQLite-era test file can switch backends without edits.
+- Expect real test migration work in places that currently touch SQLite
+  directly, especially:
+  - `test_work_queue.py`
+  - `test_sqlite_integration.py`
+  - handler or doctor tests that assert SQLite-specific schema or corruption
+    behavior
+- The goal is behavioral equivalence under Postgres, not zero test edits.
+
+**What should stay backend-independent.**
+
+- Workflow-machine suites
+- execution-context suites
+- request-flow business-rule suites
+- progress and formatting suites
+- most provider tests
+
+These should remain fast and should not depend on Docker or Postgres.
+
+**What must migrate from SQLite to Postgres.**
+
+- Session-store persistence coverage
+- transport and work-queue repository coverage
+- storage-backed handler integration coverage
+- work-item serialization, replay, discard, and stale-recovery integration
+  coverage
+
+This is a test migration, not a second long-term backend matrix. After Phase 12
+lands, there should not be a permanent parallel SQLite-vs-Postgres runtime test
+split for the core request path.
+
+**SQLite test cleanup rule.**
+
+- `test_sqlite_integration.py` does not survive as-is.
+- Replace or split it into:
+  - backend-neutral integration coverage moved into shared owner suites
+  - a Postgres integration suite for the new runtime backend
+  - optionally, a short-lived SQLite-only suite during bring-up if needed for
+    cutover confidence
+- Remove long-term SQLite runtime tests once Postgres becomes the supported
+  backend.
+
+**App container rule.**
+
+- Integration tests run under pytest on host or venv, talking to real Postgres.
+- The app container is used only in the small E2E layer.
+- Do not make normal integration confidence depend on building or starting the
+  app container for every test run.
+
 **Suggested implementation sequence.**
 
 1. Freeze the Phase 11 repository contract with the current tests so the
    backend swap is measured against behavior, not assumptions.
-2. Add config and bootstrap:
+2. Add the Phase 12 operational contract to the repo:
+   - environment identity model
+   - documented bootstrap/update/doctor workflows
+   - canonical development Compose stack
+3. Add runtime config:
    - `BOT_DATABASE_URL`
    - pool size / timeout settings
-   - Postgres bootstrap and versioned SQL runner
-3. Add Postgres session schema and `SessionStore` implementation.
-4. Run the existing session-focused tests against the Postgres store.
-5. Add Postgres transport schema and `TransportStore` implementation.
-6. Port the exact Phase 11 repository rules:
+   - optional bootstrap/admin connection inputs for DB bootstrap
+4. Add Postgres bootstrap/update/doctor tooling:
+   - versioned SQL runner
+   - schema/version validation
+   - explicit DB bootstrap command
+5. Add the test harness for Phase 12:
+   - one Postgres service per run
+   - one database per pytest worker
+   - truncate/reset cleanup between tests
+   - clear split between backend-independent suites, Postgres integration
+     suites, and E2E
+6. Add canonical development Docker services:
+   - `postgres`
+   - `bot`
+   - one-shot helpers for bootstrap/update/doctor
+7. Add Postgres session schema and `SessionStore` implementation.
+8. Migrate session persistence and integration coverage from SQLite to
+   Postgres-backed fixtures and assertions.
+9. Add Postgres transport schema and `TransportStore` implementation.
+10. Port the exact Phase 11 repository rules:
    - claim path
    - replay/discard path
    - stale-recovery path
    - exact CAS + reread classification
-7. Add backend-selection wiring behind the existing public storage/work-queue
-   boundary.
-8. Run the transport and pending-request suites against Postgres.
-9. Flip the runtime to Postgres as the supported backend for current
-   development.
-10. Only then move to Phase 13 queue-authority work.
+11. Migrate work-queue and storage-backed integration suites from SQLite to
+    Postgres-backed fixtures and assertions.
+12. Add backend-selection wiring behind the existing public storage/work-queue
+    boundary.
+13. Run the owner suites and in-process integration suites against Postgres.
+14. Add the small Compose-based E2E layer for bootstrap/startup/update flows.
+15. Prove a brand-new development environment can go from zero to running using
+    only repo-owned instructions and commands.
+16. Flip the runtime to Postgres as the supported backend for current
+    development.
+17. Remove the long-term SQLite runtime test path once Postgres is the
+    supported backend.
+18. Only then move to Phase 13 queue-authority work.
 
 **Acceptance and test plan for Phase 12.**
 
 - Contract tests:
-  - existing transport repository tests pass unchanged against Postgres
+  - existing owner suites keep their ownership boundaries and continue to cover
+    the same contracts
   - existing transport workflow-machine tests still pass (backend-independent)
   - existing pending-request machine tests still pass
-  - existing session/request-flow tests still pass against the Postgres-backed
-    session store
+  - existing session/request-flow contracts still pass against the
+    Postgres-backed session store
 - Schema tests:
   - brand-new Postgres DB boots from repo-owned SQL
-  - unsupported/mismatched schema version fails clearly
+  - DB bootstrap creates the expected schema namespace, tables, indexes, and
+    schema-migrations records
+  - DB update applies only pending versions
+  - unsupported/mismatched schema version fails clearly at app startup
   - required indexes and constraints exist
+- Environment/bootstrap tests:
+  - canonical dev Compose stack can boot from zero on a fresh machine
+  - app startup fails clearly if Postgres is unreachable
+  - app startup fails clearly if schema is missing or behind
+  - DB doctor reports connectivity/schema problems without starting the app
+  - two development environments can run side-by-side with separate databases
+    and separate app config
+- Test-harness requirements:
+  - one Postgres service per run
+  - one database per pytest worker
+  - truncate/reset cleanup between tests is the default isolation strategy
+  - rollback is used only in narrow single-connection tests, not as suite-wide
+    isolation
 - Session tests:
   - `SessionState` round-trips through JSONB without shape changes
   - `PendingApproval` / `PendingRetry` persistence behavior is unchanged
@@ -923,19 +1287,34 @@ contract-preserving backend replacement phase, not a queue redesign phase.
   - replay/discard ownership semantics match SQLite behavior
   - stale recovery preserves the same classification semantics
 - Non-goals for Phase 12 tests:
+  - no permanent dual SQLite and Postgres runtime suite
+  - no requirement that SQLite-coupled tests migrate without edits
   - no SQLite-to-Postgres import tests required yet
   - no multi-worker queue/lease tests yet
   - no webhook-primary queue semantics yet
+  - no CI/CD automation required yet
 
 **Completion standard for Phase 12.**
 
 - Postgres can run the current bot end-to-end for development use.
 - The repository/workflow contract remains behaviorally identical to the
   stabilized Phase 11 contract.
+- The environment/bootstrap lifecycle is explicit:
+  - who provides Postgres
+  - who runs DB bootstrap
+  - who runs DB update
+  - what startup validates
+- The testing lifecycle is explicit:
+  - owner suites remain the main contract layer
+  - persistence and integration coverage runs against real Postgres
+  - per-worker databases plus truncate/reset provide isolation
+  - a small Compose-based E2E layer covers bootstrap/startup/update flows
+- A fresh development environment can be brought from zero to a working bot
+  using repo-owned commands without tribal knowledge.
 - No application layer outside the storage/work-queue boundary depends on
   SQLite-specific behavior.
-- The codebase is ready for Phase 13 without re-litigating state ownership or
-  repository semantics.
+- The codebase is ready for Phase 13 without re-litigating state ownership,
+  repository semantics, or basic environment bootstrap.
 
 ### Phase 13 - Postgres Queue Authority In Webhook Mode
 

@@ -1,12 +1,12 @@
 # Commercial Polish — Implementation Status
 
-Current as of 2026-03-11. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
+Current as of 2026-03-12. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-11):** Phase 11 sealed — impossible rejections fatal, chat integrity everywhere, `_apply_claim_event`, reclaim/supersede/recover on strict helpers.
+> **Latest change (2026-03-12):** Docs aligned to the shipped Phase 11 code and the current Phase 12 direction. Architecture now reflects both workflow families (`TransportRecoveryMachine`, `PendingRequestMachine`) as shipped Phase 11 ownership. Phase 12 now explicitly includes the environment/bootstrap contract: Dockerized app + Postgres as the canonical dev shape, explicit DB bootstrap/update/doctor workflows, and validate-only app startup.
 > **Schema policy (corrected):** Transport schema is versioned; migration/upgrade path is deferred, not rejected as product direction. No "fresh-schema-only" or "delete DB and restart" product policy. Current build expects current schema/layout; unsupported schema/layout fails fast with a neutral error (`Unsupported transport.db schema/layout for this build`). Bootstrap: brand-new DB (no tables) gets `_CREATE_SQL` + schema_version; existing DB is validated only (tables, columns, `idx_one_claimed_per_chat`, meta schema_version) and is not mutated before validation.
 > **Transport repository shape:** Single claim path `_claim_queued_item`; single insert path `_insert_initial_work_item`. All mutators use `_write_tx(conn)`; nested use raises `RuntimeError("nested transport transaction")`. Impossible machine rejections are fatal: `_apply_transport_event` and `_insert_initial_work_item` raise `TransportStateCorruption` on workflow rejection; `_claim_queued_item` returns None only for `other_claimed_for_chat`, else raises; `mark_pending_recovery`, `discard_recovery`, `supersede_pending_recovery`, `reclaim_for_replay` raise on invalid_transition (recover_stale_claims allows guard_failed as “not stale, skip”). Chat integrity: `_assert_no_invalid_rows_for_chat(conn, chat_id)` is called in `has_queued_or_claimed`, `get_latest_pending_recovery`, `reclaim_for_replay`, `supersede_pending_recovery`. Strict helpers: `_apply_claim_event` for claim-style transitions (exact CAS, reread); reclaim_for_replay uses it; supersede_pending_recovery applies _apply_transport_event per item in one transaction; recover_stale_claims uses exact source predicate (id, state, worker_id, claimed_at) and reread classification.
 > **Transaction and invariant fixes:** One transaction wrapper for all mutating entry points; rollback on any exception. `_assert_no_invalid_rows_for_chat()` enforces at most one claimed per chat. Current schema includes `idx_one_claimed_per_chat`. Tests: rollback on non-IntegrityError, two-claimed raises, fresh schema index, meta/schema_version validation (unsupported layout/mismatch raise neutral error).
-> **Phase 11 sealed.** Next: Phase 12 (Postgres).
+> **Phase 11 sealed.** Next: Phase 12 (Postgres runtime cutover plus explicit environment/bootstrap contract).
 >
 > **Prior:** Phase 11 second workflow (pending approval/retry machine, invalidation in machine, 39 machine tests).
 >
@@ -153,6 +153,10 @@ Current as of 2026-03-11. Tracks progress against [PLAN-commercial-polish.md](PL
 - The next planned roadmap item is Phase 12, Postgres runtime cutover.
 - The shipped runtime still uses SQLite-backed session and transport stores
   today; the roadmap shifts runtime authority to Postgres in Phases 12-14.
+- Current shipped bootstrap remains `setup.sh` + `scripts/bootstrap.sh` +
+  `scripts/run.sh` / systemd, with app-owned SQLite first-use bootstrap.
+- Planned Phase 12 development shape is Dockerized app + Postgres, explicit DB
+  bootstrap/update/doctor commands, and validate-only app startup.
 - `transport idempotency` is shipped in Phase 9.
 - `content dedup` is intentionally unshipped and remains future work in
   Phase 17.
@@ -173,8 +177,8 @@ Current as of 2026-03-11. Tracks progress against [PLAN-commercial-polish.md](PL
 | 8 | Public trust, model profiles, and settings UX | Done | Mixed trust, model profiles, and inline settings UX shipped. |
 | 9 | Durable transport, transport idempotency, webhook mode, and restart recovery | Done | Durable queue, webhook path, replay/discard recovery, and polling conflict detection shipped. |
 | 10 | Structural hardening, invariants, and test ownership | Done | Invariant coverage, test ownership refactor, and runtime isolation hardening shipped. |
-| 11 | Workflow ownership extraction | Done | Transport: one claim path (`_claim_queued_item`), one insert path (`_insert_initial_work_item`), one claim-style helper (`_apply_claim_event`); one transaction wrapper; impossible rejections fatal; chat integrity on all chat-scoped paths; supersede/recover_stale per-item strict. Phase 11 sealed. |
-| 12 | Postgres runtime cutover | Planned | Postgres becomes the sole supported runtime backend after migration. |
+| 11 | Workflow ownership extraction | Done | Transport/recovery and pending approval/retry are now library-owned workflow families. Transport uses one claim path, one insert path, `_apply_claim_event`, one transaction wrapper, fatal impossible rejections, and chat-integrity checks; pending invalidation flows through `PendingRequestMachine`. Phase 11 sealed. |
+| 12 | Postgres runtime cutover | Planned | Postgres replaces SQLite under the Phase 11 contracts and adds the missing environment/bootstrap contract: explicit DB bootstrap/update/doctor workflows, validate-only app startup, and Dockerized app + Postgres as the canonical dev shape. |
 | 13 | Postgres queue authority in webhook mode | Planned | Core request transport stays app-owned in Postgres. |
 | 14 | Multi-process / multi-worker deployment | Planned | Shared Postgres queue authority expands to cross-process ingress and workers. |
 | 15 | Durability confidence phase | Planned | Add crash, lease, webhook, and cross-process confidence coverage. |

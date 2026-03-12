@@ -38,7 +38,6 @@ class PendingRequestTransitionResult:
     new_state: str | None
     disposition: PendingRequestDisposition
     reason: str = ""
-    user_message_key: str | None = None
 
 
 # ---------------------------------------------------------------------------

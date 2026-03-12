@@ -1016,6 +1016,28 @@ Callback races, provider failures, formatting boundaries, session reset.
 
 ---
 
+## Deployment and dependencies
+
+All runtime dependencies are declared in **`requirements.txt`** (including
+`python-telegram-bot`, `python-statemachine`, `cryptography`, etc.). The bot
+must run with a Python environment that has those packages installed.
+
+- **New installs:** `./setup.sh` calls `./scripts/bootstrap.sh`, which creates
+  `.venv` and runs `pip install -r requirements.txt`. The app is then run as
+  `.venv/bin/python -m app.main <instance>` (via `scripts/run.sh` or the
+  systemd service).
+- **After git pull (resumed / updated deployments):** Run
+  `./scripts/bootstrap.sh` to refresh the venv from `requirements.txt`, then
+  restart the bot. If this is skipped and the repo added a new dependency, the
+  bot can fail at startup with `ModuleNotFoundError`.
+- **Bootstrap script:** `scripts/bootstrap.sh` installs from `requirements.txt`
+  every time it runs (creating or updating the venv), then runs a quick import
+  check so missing dependencies fail immediately instead of at runtime.
+
+See [README.md](../README.md) for Get Started and "After updating (git pull)".
+
+---
+
 ## Interfaces That Must Stay Stable
 
 The following are internal contracts that should only change deliberately:

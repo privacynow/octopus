@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS work_items (
 );
 CREATE INDEX IF NOT EXISTS idx_work_items_state ON work_items (state, chat_id);
 CREATE INDEX IF NOT EXISTS idx_work_items_chat  ON work_items (chat_id, state);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_claimed_per_chat ON work_items(chat_id) WHERE state = 'claimed';
 
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -241,13 +242,78 @@ def _load_work_item_by_chat_update(
 
 
 def _assert_no_invalid_rows_for_chat(conn: sqlite3.Connection, chat_id: int) -> None:
-    """Raise TransportStateCorruption if any work item for this chat has invalid state or row invariants."""
+    """Raise TransportStateCorruption if any work item for this chat has invalid state, row invariants, or more than one claimed row."""
     rows = conn.execute(
         "SELECT id, state, worker_id, claimed_at FROM work_items WHERE chat_id = ?", (chat_id,)
     ).fetchall()
+    claimed = 0
     for row in rows:
         r = dict(row)
         _validate_work_item_row(r, r["id"])
+        if r["state"] == "claimed":
+            claimed += 1
+    if claimed > 1:
+        raise TransportStateCorruption(
+            f"chat {chat_id} has {claimed} claimed work items (at most one allowed)"
+        )
+
+
+def _claim_queued_item(
+    conn: sqlite3.Connection,
+    *,
+    item_id: str,
+    worker_id: str,
+    has_other_claimed_for_chat: bool,
+    event_name: str,
+) -> dict[str, Any] | None:
+    """Single repository path for claiming a queued item. Caller holds transaction.
+
+    Loads and validates row (must be queued), runs machine (claim_inline or claim_worker),
+    does exact CAS UPDATE; on rowcount 0 rereads and classifies already_handled vs
+    corruption. Returns validated claimed row dict on success, None if already_handled.
+    Raises TransportStateCorruption when reread still shows queued.
+    """
+    row = _load_work_item_by_id(conn, item_id)
+    if row is None or row["state"] != "queued":
+        return None
+    model = TransportWorkflowModel(
+        state="queued",
+        has_other_claimed_for_chat=has_other_claimed_for_chat,
+    )
+    if event_name == "claim_inline":
+        result = run_transport_event(model, "claim_inline", requesting_worker_id=worker_id)
+    else:
+        result = run_transport_event(model, "claim_worker")
+    if not result.allowed:
+        return None
+    now = datetime.now(timezone.utc).isoformat()
+    cursor = conn.execute(
+        "UPDATE work_items SET state = ?, worker_id = ?, claimed_at = ? "
+        "WHERE id = ? AND state = 'queued'",
+        (result.new_state, worker_id, now, item_id),
+    )
+    if cursor.rowcount > 0:
+        item = conn.execute("SELECT * FROM work_items WHERE id = ?", (item_id,)).fetchone()
+        if item is None:
+            return None
+        out = dict(item)
+        _validate_work_item_row(out, item_id)
+        return out
+    re_read = conn.execute(
+        "SELECT state, worker_id, claimed_at FROM work_items WHERE id = ?", (item_id,)
+    ).fetchone()
+    if re_read is None:
+        return None
+    _validate_work_item_row(dict(re_read), item_id)
+    if re_read["state"] != "queued":
+        return None
+    log.error(
+        "_claim_queued_item: invariant violation item %s (still queued after UPDATE 0 rows)",
+        item_id,
+    )
+    raise TransportStateCorruption(
+        f"claim update matched 0 rows but item {item_id} still queued"
+    )
 
 
 def _apply_transport_event(
@@ -304,6 +370,55 @@ def _apply_transport_event(
 
 
 # ---------------------------------------------------------------------------
+# Initial work item insert (single path for create + optional immediate claim)
+# ---------------------------------------------------------------------------
+
+
+def _insert_initial_work_item(
+    conn: sqlite3.Connection,
+    *,
+    item_id: str,
+    chat_id: int,
+    update_id: int,
+    worker_id: str | None,
+    created_at: str,
+) -> str:
+    """Single repository path for creating a work item. Caller holds transaction (or commits after).
+
+    Inserts queued by default. If worker_id is set and chat has no other claimed item,
+    runs claim_inline on a synthetic queued model and inserts machine-derived state
+    (claimed with worker_id, claimed_at). Otherwise inserts queued. Asserts chat
+    has no invalid rows. Returns item_id.
+    """
+    _assert_no_invalid_rows_for_chat(conn, chat_id)
+    has_other_claimed = conn.execute(
+        "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
+        (chat_id,),
+    ).fetchone()
+    if bool(worker_id) and not has_other_claimed:
+        model = TransportWorkflowModel(
+            state="queued", has_other_claimed_for_chat=False
+        )
+        result = run_transport_event(
+            model, "claim_inline", requesting_worker_id=worker_id
+        )
+        if result.allowed:
+            conn.execute(
+                "INSERT INTO work_items "
+                "(id, chat_id, update_id, state, worker_id, claimed_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (item_id, chat_id, update_id, result.new_state, worker_id, created_at, created_at),
+            )
+            return item_id
+    conn.execute(
+        "INSERT INTO work_items (id, chat_id, update_id, state, created_at) "
+        "VALUES (?, ?, ?, 'queued', ?)",
+        (item_id, chat_id, update_id, created_at),
+    )
+    return item_id
+
+
+# ---------------------------------------------------------------------------
 # Update journal
 # ---------------------------------------------------------------------------
 
@@ -328,54 +443,34 @@ def record_and_enqueue(
     (owned by the inline handler).  This prevents the background worker
     from stealing fresh items before the handler finishes — see
     ``dont_make_false_claims.md`` for the full race analysis.
+    Uses shared _insert_initial_work_item for the narrow create-plus-claim path.
     """
     conn = _transport_db(data_dir)
     now = datetime.now(timezone.utc).isoformat()
     item_id = uuid.uuid4().hex
     conn.execute("BEGIN IMMEDIATE")
     try:
-        _assert_no_invalid_rows_for_chat(conn, chat_id)
         conn.execute(
             "INSERT INTO updates (update_id, chat_id, user_id, kind, payload, received_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (update_id, chat_id, user_id, kind, payload, now),
         )
-        # Create as queued by default. Only create as claimed via machine contract (narrow path).
-        has_other_claimed = conn.execute(
-            "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
-            (chat_id,),
-        ).fetchone()
-        if bool(worker_id) and not has_other_claimed:
-            model = TransportWorkflowModel(
-                state="queued", has_other_claimed_for_chat=False
-            )
-            result = run_transport_event(
-                model, "claim_inline", requesting_worker_id=worker_id
-            )
-            if result.allowed:
-                conn.execute(
-                    "INSERT INTO work_items "
-                    "(id, chat_id, update_id, state, worker_id, claimed_at, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (item_id, chat_id, update_id, result.new_state, worker_id, now, now),
-                )
-            else:
-                conn.execute(
-                    "INSERT INTO work_items (id, chat_id, update_id, state, created_at) "
-                    "VALUES (?, ?, ?, 'queued', ?)",
-                    (item_id, chat_id, update_id, now),
-                )
-        else:
-            conn.execute(
-                "INSERT INTO work_items (id, chat_id, update_id, state, created_at) "
-                "VALUES (?, ?, ?, 'queued', ?)",
-                (item_id, chat_id, update_id, now),
-            )
+        _insert_initial_work_item(
+            conn,
+            item_id=item_id,
+            chat_id=chat_id,
+            update_id=update_id,
+            worker_id=worker_id,
+            created_at=now,
+        )
         conn.execute("COMMIT")
         return True, item_id
     except sqlite3.IntegrityError:
         conn.execute("ROLLBACK")
         return False, None
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
 
 
 def record_update(
@@ -413,44 +508,20 @@ def enqueue_work_item(
     Only used by tests that exercise low-level primitives separately.
     Production code should use ``record_and_enqueue``.
 
-    When *worker_id* is provided, the item starts as ``claimed`` only if
-    the chat has no existing claimed item; otherwise ``queued``.
-    Raises TransportStateCorruption if the chat has any invalid row.
+    Uses shared _insert_initial_work_item (same initial-state semantics as
+    record_and_enqueue). Raises TransportStateCorruption if the chat has any invalid row.
     """
     conn = _transport_db(data_dir)
-    _assert_no_invalid_rows_for_chat(conn, chat_id)
     item_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
-    has_other_claimed = conn.execute(
-        "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
-        (chat_id,),
-    ).fetchone()
-    if bool(worker_id) and not has_other_claimed:
-        model = TransportWorkflowModel(
-            state="queued", has_other_claimed_for_chat=False
-        )
-        result = run_transport_event(
-            model, "claim_inline", requesting_worker_id=worker_id
-        )
-        if result.allowed:
-            conn.execute(
-                "INSERT INTO work_items "
-                "(id, chat_id, update_id, state, worker_id, claimed_at, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (item_id, chat_id, update_id, result.new_state, worker_id, now, now),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO work_items (id, chat_id, update_id, state, created_at) "
-                "VALUES (?, ?, ?, 'queued', ?)",
-                (item_id, chat_id, update_id, now),
-            )
-    else:
-        conn.execute(
-            "INSERT INTO work_items (id, chat_id, update_id, state, created_at) "
-            "VALUES (?, ?, ?, 'queued', ?)",
-            (item_id, chat_id, update_id, now),
-        )
+    _insert_initial_work_item(
+        conn,
+        item_id=item_id,
+        chat_id=chat_id,
+        update_id=update_id,
+        worker_id=worker_id,
+        created_at=now,
+    )
     conn.commit()
     return item_id
 
@@ -470,9 +541,9 @@ def claim_for_update(data_dir: Path, chat_id: int, update_id: int, worker_id: st
 
     Loads by (chat_id, update_id) regardless of state; invalid state raises.
     Returns None if no row or not claimable. Pre-claimed by same worker returns item.
+    Uses shared _claim_queued_item for exact CAS + reread classification.
     """
     conn = _transport_db(data_dir)
-    now = datetime.now(timezone.utc).isoformat()
     conn.execute("BEGIN IMMEDIATE")
     try:
         _assert_no_invalid_rows_for_chat(conn, chat_id)
@@ -490,22 +561,25 @@ def claim_for_update(data_dir: Path, chat_id: int, update_id: int, worker_id: st
             "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
             (chat_id,),
         ).fetchone()
-        model = TransportWorkflowModel(
-            state="queued", has_other_claimed_for_chat=bool(has_other_claimed)
+        out = _claim_queued_item(
+            conn,
+            item_id=row["id"],
+            worker_id=worker_id,
+            has_other_claimed_for_chat=bool(has_other_claimed),
+            event_name="claim_inline",
         )
-        result = run_transport_event(
-            model, "claim_inline", requesting_worker_id=worker_id
-        )
-        if not result.allowed:
+        if out is None:
             conn.execute("COMMIT")
             return None
-        item_id = row["id"]
-        conn.execute(
-            "UPDATE work_items SET state = 'claimed', worker_id = ?, claimed_at = ? "
-            "WHERE id = ? AND state = 'queued'",
-            (worker_id, now, item_id),
-        )
+        u = conn.execute(
+            "SELECT kind, payload FROM updates WHERE update_id = ?",
+            (out["update_id"],),
+        ).fetchone()
+        if u:
+            out["kind"] = u["kind"]
+            out["payload"] = u["payload"]
         conn.execute("COMMIT")
+        return out
     except TransportStateCorruption:
         conn.execute("ROLLBACK")
         raise
@@ -513,26 +587,15 @@ def claim_for_update(data_dir: Path, chat_id: int, update_id: int, worker_id: st
         conn.execute("ROLLBACK")
         raise
 
-    item = conn.execute(
-        "SELECT * FROM work_items WHERE id = ?", (item_id,)
-    ).fetchone()
-    if item is None:
-        return None
-    row = dict(item)
-    _validate_work_item_row(row, item_id)
-    return row
-
 
 def claim_next(data_dir: Path, chat_id: int, worker_id: str) -> dict[str, Any] | None:
     """Atomically claim the next queued work item for a chat.
 
-    Uses exact compare-and-update (WHERE id = ? AND state = 'queued'); on rowcount
-    zero rereads and classifies already_handled vs corruption. Returns None if no
-    claimable item or another actor won. Raises TransportStateCorruption if the
-    chat has invalid state or reread finds still queued.
+    Selects candidate id then uses shared _claim_queued_item (exact CAS + reread).
+    Returns None if no claimable item or another actor won. Raises
+    TransportStateCorruption if chat has invalid state or reread finds still queued.
     """
     conn = _transport_db(data_dir)
-    now = datetime.now(timezone.utc).isoformat()
     conn.execute("BEGIN IMMEDIATE")
     try:
         _assert_no_invalid_rows_for_chat(conn, chat_id)
@@ -548,49 +611,18 @@ def claim_next(data_dir: Path, chat_id: int, worker_id: str) -> dict[str, Any] |
         if row is None:
             conn.execute("COMMIT")
             return None
-        item_id = row["id"]
-        full = _load_work_item_by_id(conn, item_id)
-        if full is None or full["state"] != "queued":
-            conn.execute("COMMIT")
-            return None
-        model = TransportWorkflowModel(state="queued", has_other_claimed_for_chat=False)
-        result = run_transport_event(model, "claim_worker")
-        if not result.allowed:
-            conn.execute("COMMIT")
-            return None
-        cursor = conn.execute(
-            "UPDATE work_items SET state = ?, worker_id = ?, claimed_at = ? "
-            "WHERE id = ? AND state = ?",
-            (result.new_state, worker_id, now, item_id, "queued"),
+        out = _claim_queued_item(
+            conn,
+            item_id=row["id"],
+            worker_id=worker_id,
+            has_other_claimed_for_chat=False,
+            event_name="claim_worker",
         )
-        if cursor.rowcount > 0:
-            conn.execute("COMMIT")
-            item = conn.execute(
-                "SELECT * FROM work_items WHERE id = ?", (item_id,)
-            ).fetchone()
-            if item is None:
-                return None
-            out = dict(item)
-            _validate_work_item_row(out, item_id)
-            return out
-        re_read = conn.execute(
-            "SELECT state, worker_id, claimed_at FROM work_items WHERE id = ?", (item_id,)
-        ).fetchone()
-        if re_read is None:
+        if out is None:
             conn.execute("COMMIT")
             return None
-        _validate_work_item_row(dict(re_read), item_id)
-        if re_read["state"] != "queued":
-            conn.execute("COMMIT")
-            return None
-        log.error(
-            "claim_next: invariant violation item %s (still queued after UPDATE 0 rows)",
-            item_id,
-        )
-        conn.execute("ROLLBACK")
-        raise TransportStateCorruption(
-            f"claim_next: update matched 0 rows but item {item_id} still queued"
-        )
+        conn.execute("COMMIT")
+        return out
     except TransportStateCorruption:
         conn.execute("ROLLBACK")
         raise
@@ -602,13 +634,11 @@ def claim_next(data_dir: Path, chat_id: int, worker_id: str) -> dict[str, Any] |
 def claim_next_any(data_dir: Path, worker_id: str) -> dict[str, Any] | None:
     """Atomically claim the next queued work item across all chats.
 
-    Uses exact compare-and-update (WHERE id = ? AND state = 'queued'); on rowcount
-    zero rereads and classifies already_handled vs corruption. Only claims in chats
-    with no other claimed item. Raises TransportStateCorruption if the chosen chat
-    has invalid state or reread finds still queued.
+    Selects candidate id then uses shared _claim_queued_item (exact CAS + reread).
+    Only claims in chats with no other claimed item. Returns row with kind/payload.
+    Raises TransportStateCorruption if chosen chat has invalid state or reread finds still queued.
     """
     conn = _transport_db(data_dir)
-    now = datetime.now(timezone.utc).isoformat()
     conn.execute("BEGIN IMMEDIATE")
     try:
         row = conn.execute(
@@ -623,51 +653,28 @@ def claim_next_any(data_dir: Path, worker_id: str) -> dict[str, Any] | None:
             conn.execute("COMMIT")
             return None
         _assert_no_invalid_rows_for_chat(conn, row["chat_id"])
-        item_id = row["id"]
-        full = _load_work_item_by_id(conn, item_id)
-        if full is None or full["state"] != "queued":
-            conn.execute("COMMIT")
-            return None
-        model = TransportWorkflowModel(state="queued", has_other_claimed_for_chat=False)
-        result = run_transport_event(model, "claim_worker")
-        if not result.allowed:
-            conn.execute("COMMIT")
-            return None
-        cursor = conn.execute(
-            "UPDATE work_items SET state = ?, worker_id = ?, claimed_at = ? "
-            "WHERE id = ? AND state = ?",
-            (result.new_state, worker_id, now, item_id, "queued"),
+        out = _claim_queued_item(
+            conn,
+            item_id=row["id"],
+            worker_id=worker_id,
+            has_other_claimed_for_chat=False,
+            event_name="claim_worker",
         )
-        if cursor.rowcount > 0:
+        if out is None:
             conn.execute("COMMIT")
-            item = conn.execute(
-                "SELECT w.*, u.kind, u.payload FROM work_items w "
-                "JOIN updates u ON w.update_id = u.update_id WHERE w.id = ?",
-                (item_id,),
-            ).fetchone()
-            if item is None:
-                return None
-            out = dict(item)
-            _validate_work_item_row(out, item_id)
-            return out
-        re_read = conn.execute(
-            "SELECT state, worker_id, claimed_at FROM work_items WHERE id = ?", (item_id,)
+            return None
+        item = conn.execute(
+            "SELECT w.*, u.kind, u.payload FROM work_items w "
+            "JOIN updates u ON w.update_id = u.update_id WHERE w.id = ?",
+            (out["id"],),
         ).fetchone()
-        if re_read is None:
+        if item is None:
             conn.execute("COMMIT")
             return None
-        _validate_work_item_row(dict(re_read), item_id)
-        if re_read["state"] != "queued":
-            conn.execute("COMMIT")
-            return None
-        log.error(
-            "claim_next_any: invariant violation item %s (still queued after UPDATE 0 rows)",
-            item_id,
-        )
-        conn.execute("ROLLBACK")
-        raise TransportStateCorruption(
-            f"claim_next_any: update matched 0 rows but item {item_id} still queued"
-        )
+        out = dict(item)
+        _validate_work_item_row(out, out["id"])
+        conn.execute("COMMIT")
+        return out
     except TransportStateCorruption:
         conn.execute("ROLLBACK")
         raise

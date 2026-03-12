@@ -120,6 +120,40 @@ CREATE TABLE IF NOT EXISTS meta (
 
 _db_connections: dict[Path, sqlite3.Connection] = {}
 
+# Phase 12: when set, transport delegates to work_queue_pg
+_pg_url: str = ""
+_pg_pool_min: int = 1
+_pg_pool_max: int = 10
+_pg_connect_timeout: int = 10
+
+
+def set_postgres_backend(
+    database_url: str,
+    *,
+    pool_min: int = 1,
+    pool_max: int = 10,
+    connect_timeout: int = 10,
+) -> None:
+    """Use Postgres for transport store. Call at startup when BOT_DATABASE_URL is set."""
+    global _pg_url, _pg_pool_min, _pg_pool_max, _pg_connect_timeout
+    _pg_url = database_url
+    _pg_pool_min = pool_min
+    _pg_pool_max = pool_max
+    _pg_connect_timeout = connect_timeout
+
+
+def _pg_conn():
+    """Context manager yielding a Postgres connection when backend is Postgres."""
+    if not _pg_url:
+        return None
+    from app.db.postgres import get_connection
+    return get_connection(
+        _pg_url,
+        min_size=_pg_pool_min,
+        max_size=_pg_pool_max,
+        connect_timeout=_pg_connect_timeout,
+    )
+
 _UNSUPPORTED_SCHEMA_MSG = "Unsupported transport.db schema/layout for this build"
 
 # Expected schema for validation (do not mutate existing DBs before validating).
@@ -627,6 +661,12 @@ def record_and_enqueue(
     ``dont_make_false_claims.md`` for the full race analysis.
     Uses shared _insert_initial_work_item for the narrow create-plus-claim path.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.record_and_enqueue(
+                conn, update_id, chat_id, user_id, kind, payload, worker_id=worker_id,
+            )
     conn = _transport_db(data_dir)
     now = datetime.now(timezone.utc).isoformat()
     item_id = uuid.uuid4().hex
@@ -663,6 +703,10 @@ def record_update(
     Only used by tests that exercise low-level primitives separately.
     Production code should use ``record_and_enqueue``.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.record_update(conn, update_id, chat_id, user_id, kind, payload)
     conn = _transport_db(data_dir)
     now = datetime.now(timezone.utc).isoformat()
     try:
@@ -689,6 +733,10 @@ def enqueue_work_item(
     record_and_enqueue). Raises TransportStateCorruption if the chat has any invalid row.
     Uses _write_tx so the connection is never left in an open transaction on error.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.enqueue_work_item(conn, chat_id, update_id, worker_id=worker_id)
     conn = _transport_db(data_dir)
     item_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
@@ -706,6 +754,11 @@ def enqueue_work_item(
 
 def update_payload(data_dir: Path, update_id: int, payload: str) -> None:
     """Update the stored payload for an already-recorded update."""
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            work_queue_pg.update_payload(conn, update_id, payload)
+        return
     conn = _transport_db(data_dir)
     with _write_tx(conn):
         conn.execute(
@@ -721,6 +774,10 @@ def claim_for_update(data_dir: Path, chat_id: int, update_id: int, worker_id: st
     Returns None if no row or not claimable. Pre-claimed by same worker returns item.
     Uses shared _claim_queued_item for exact CAS + reread classification.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.claim_for_update(conn, chat_id, update_id, worker_id)
     conn = _transport_db(data_dir)
     with _write_tx(conn):
         _assert_no_invalid_rows_for_chat(conn, chat_id)
@@ -761,6 +818,10 @@ def claim_next(data_dir: Path, chat_id: int, worker_id: str) -> dict[str, Any] |
     Returns None if no claimable item or another actor won. Raises
     TransportStateCorruption if chat has invalid state or reread finds still queued.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.claim_next(conn, chat_id, worker_id)
     conn = _transport_db(data_dir)
     with _write_tx(conn):
         _assert_no_invalid_rows_for_chat(conn, chat_id)
@@ -794,6 +855,10 @@ def claim_next_any(data_dir: Path, worker_id: str) -> dict[str, Any] | None:
     Only claims in chats with no other claimed item. Returns row with kind/payload.
     Raises TransportStateCorruption if chosen chat has invalid state or reread finds still queued.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.claim_next_any(conn, worker_id)
     conn = _transport_db(data_dir)
     with _write_tx(conn):
         row = conn.execute(
@@ -833,6 +898,11 @@ def complete_work_item(data_dir: Path, item_id: str) -> None:
 
     Uses load primitive and re-read on rowcount zero; invalid re-read raises TransportStateCorruption.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            work_queue_pg.complete_work_item(conn, item_id)
+        return
     conn = _transport_db(data_dir)
     with _write_tx(conn):
         row = _load_work_item_by_id(conn, item_id)
@@ -877,6 +947,11 @@ def fail_work_item(data_dir: Path, item_id: str, error: str) -> None:
 
     Uses load primitive and re-read on rowcount zero; invalid re-read raises TransportStateCorruption.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            work_queue_pg.fail_work_item(conn, item_id, error)
+        return
     conn = _transport_db(data_dir)
     with _write_tx(conn):
         row = _load_work_item_by_id(conn, item_id)
@@ -921,11 +996,29 @@ def fail_work_item(data_dir: Path, item_id: str, error: str) -> None:
 # Queries
 # ---------------------------------------------------------------------------
 
+def has_claimed_for_chat(data_dir: Path, chat_id: int) -> bool:
+    """True if the chat has any work item in claimed state."""
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.has_claimed_for_chat(conn, chat_id)
+    conn = _transport_db(data_dir)
+    row = conn.execute(
+        "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
+        (chat_id,),
+    ).fetchone()
+    return row is not None
+
+
 def has_queued_or_claimed(data_dir: Path, chat_id: int) -> bool:
     """Check if a chat has any in-flight or queued work items.
 
     Asserts chat integrity (at most one claimed, valid row state) before answering.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.has_queued_or_claimed(conn, chat_id)
     conn = _transport_db(data_dir)
     _assert_no_invalid_rows_for_chat(conn, chat_id)
     row = conn.execute(
@@ -937,6 +1030,10 @@ def has_queued_or_claimed(data_dir: Path, chat_id: int) -> bool:
 
 def get_update_payload(data_dir: Path, update_id: int) -> str | None:
     """Retrieve the stored payload for an update."""
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.get_update_payload(conn, update_id)
     conn = _transport_db(data_dir)
     row = conn.execute(
         "SELECT payload FROM updates WHERE update_id = ?", (update_id,)
@@ -954,6 +1051,11 @@ def mark_pending_recovery(data_dir: Path, item_id: str) -> None:
     Uses load and _apply_transport_event; re-read on rowcount zero validates state.
     completed_at is terminal-only; not set here.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            work_queue_pg.mark_pending_recovery(conn, item_id)
+        return
     conn = _transport_db(data_dir)
     with _write_tx(conn):
         res = _apply_transport_event(
@@ -982,6 +1084,10 @@ def get_pending_recovery_for_update(
     Loads by chat and update regardless of state; invalid state raises.
     Returns None only if no row or state is not pending_recovery.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.get_pending_recovery_for_update(conn, chat_id, update_id)
     conn = _transport_db(data_dir)
     row = _load_work_item_by_chat_update(conn, chat_id, update_id)
     if row is None or row["state"] != "pending_recovery":
@@ -994,6 +1100,10 @@ def get_latest_pending_recovery(data_dir: Path, chat_id: int) -> dict[str, Any] 
 
     Asserts chat integrity before scanning; validates every work item through shared row validator.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.get_latest_pending_recovery(conn, chat_id)
     conn = _transport_db(data_dir)
     _assert_no_invalid_rows_for_chat(conn, chat_id)
     rows = conn.execute(
@@ -1017,6 +1127,10 @@ def supersede_pending_recovery(data_dir: Path, chat_id: int) -> int:
     rather than replay the interrupted request.  Returns the number
     of items superseded.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.supersede_pending_recovery(conn, chat_id)
     conn = _transport_db(data_dir)
     now = datetime.now(timezone.utc).isoformat()
     with _write_tx(conn):
@@ -1053,6 +1167,10 @@ def discard_recovery(data_dir: Path, item_id: str) -> DiscardResult:
 
     Uses _load_work_item_by_id and _apply_transport_event; re-read validates state.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.discard_recovery(conn, item_id)
     conn = _transport_db(data_dir)
     now = datetime.now(timezone.utc).isoformat()
     with _write_tx(conn):
@@ -1083,6 +1201,10 @@ def reclaim_for_replay(data_dir: Path, item_id: str, worker_id: str) -> dict[str
     in pending_recovery or already handled.  Raises ``ReclaimBlocked``
     if the item exists but another item for the same chat is claimed.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.reclaim_for_replay(conn, item_id, worker_id)
     conn = _transport_db(data_dir)
     with _write_tx(conn):
         row = _load_work_item_by_id(conn, item_id)
@@ -1130,6 +1252,10 @@ def recover_stale_claims(
     Called at startup to recover from crashes.  Returns the number of
     items requeued.
     """
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.recover_stale_claims(conn, current_worker_id, max_age_seconds)
     conn = _transport_db(data_dir)
     now = datetime.now(timezone.utc)
     with _write_tx(conn):
@@ -1186,6 +1312,10 @@ def recover_stale_claims(
 
 def purge_old(data_dir: Path, older_than_hours: int = 24) -> int:
     """Delete completed/failed work items and their updates older than the threshold."""
+    if _pg_url:
+        from app import work_queue_pg
+        with _pg_conn() as conn:
+            return work_queue_pg.purge_old(conn, older_than_hours)
     conn = _transport_db(data_dir)
     cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
     with _write_tx(conn):

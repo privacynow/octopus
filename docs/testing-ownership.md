@@ -35,6 +35,7 @@ Which suite owns which runtime contract. One owner per contract;
 | `test_store.py` | Skill store primitives, install, ref/object management |
 | `test_store_e2e.py` | End-to-end skill store flows |
 | `test_registry.py` | Registry fetch, digest verification |
+| `tests/e2e/test_compose_flows.py` | Phase 12 Compose E2E: bootstrap, doctor, bot startup schema validation (run with `E2E_COMPOSE=1`) |
 
 ## Cross-Cutting (test_invariants.py)
 

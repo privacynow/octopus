@@ -95,6 +95,11 @@ class BotConfig:
     public_model_profiles: frozenset[str]  # allowed profiles for public users (empty = all)
     # Skill registry
     registry_url: str  # URL to a JSON skill registry index (empty = disabled)
+    # Postgres (Phase 12). Empty = use SQLite; set = use Postgres as runtime backend.
+    database_url: str  # BOT_DATABASE_URL (postgresql://...)
+    db_pool_min_size: int
+    db_pool_max_size: int
+    db_connect_timeout_seconds: int
 
 
 def _parse_model_profiles(raw: str) -> dict[str, str]:
@@ -255,6 +260,10 @@ def load_config(instance: str | None = None) -> BotConfig:
             s.strip() for s in get("BOT_PUBLIC_MODEL_PROFILES").split(",") if s.strip()
         ),
         registry_url=get("BOT_REGISTRY_URL"),
+        database_url=get("BOT_DATABASE_URL").strip(),
+        db_pool_min_size=max(0, get_int("BOT_DB_POOL_MIN_SIZE", "1")),
+        db_pool_max_size=max(1, get_int("BOT_DB_POOL_MAX_SIZE", "10")),
+        db_connect_timeout_seconds=max(1, get_int("BOT_DB_CONNECT_TIMEOUT", "10")),
     )
 
 
@@ -303,6 +312,14 @@ def validate_config(config: BotConfig) -> list[str]:
     if config.bot_mode == "webhook":
         if not config.webhook_url:
             errors.append("BOT_WEBHOOK_URL is required when BOT_MODE=webhook")
+
+    if config.database_url and not (
+        config.database_url.startswith("postgresql://")
+        or config.database_url.startswith("postgresql+")
+    ):
+        errors.append(
+            "BOT_DATABASE_URL must be a postgresql:// connection string when set"
+        )
 
     seen_project_names: set[str] = set()
     for name, root_dir, _ in config.projects:

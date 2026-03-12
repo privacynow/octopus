@@ -67,7 +67,42 @@ def main() -> None:
         run_doctor(config, provider)
 
     fail_fast(config)
-    ensure_data_dirs(config.data_dir)
+
+    # Phase 12: Postgres is the only supported runtime backend.
+    if not config.database_url:
+        print("BOT_DATABASE_URL is required. See docs/PHASE12-OPERATIONAL-CONTRACT.md.", file=sys.stderr)
+        sys.exit(1)
+
+    if config.database_url:
+        from app.storage import set_postgres_backend as set_storage_pg
+        from app.work_queue import set_postgres_backend as set_transport_pg
+        set_storage_pg(
+            config.database_url,
+            pool_min=config.db_pool_min_size,
+            pool_max=config.db_pool_max_size,
+            connect_timeout=config.db_connect_timeout_seconds,
+        )
+        set_transport_pg(
+            config.database_url,
+            pool_min=config.db_pool_min_size,
+            pool_max=config.db_pool_max_size,
+            connect_timeout=config.db_connect_timeout_seconds,
+        )
+        from app.db.postgres import get_connection
+        from app.db.postgres_doctor import run_doctor
+        with get_connection(
+            config.database_url,
+            min_size=config.db_pool_min_size,
+            max_size=config.db_pool_max_size,
+            connect_timeout=config.db_connect_timeout_seconds,
+        ) as conn:
+            errors = run_doctor(conn)
+        if errors:
+            for e in errors:
+                print(f"  FAIL: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    ensure_data_dirs(config.data_dir, database_url=config.database_url or "")
     startup_recovery()
 
     log.info("Instance: %s", config.instance)
@@ -126,8 +161,12 @@ def main() -> None:
                 url_path="/webhook",
             )
         finally:
-            close_transport_db(config.data_dir)
-            close_db(config.data_dir)
+            if config.database_url:
+                from app.db.postgres import close_pools
+                close_pools()
+            else:
+                close_transport_db(config.data_dir)
+                close_db(config.data_dir)
     else:
         # Fail fast if another process is already polling (Telegram allows only one getUpdates per token).
         from app.doctor import check_polling_conflict
@@ -148,8 +187,12 @@ def main() -> None:
         try:
             app.run_polling()
         finally:
-            close_transport_db(config.data_dir)
-            close_db(config.data_dir)
+            if config.database_url:
+                from app.db.postgres import close_pools
+                close_pools()
+            else:
+                close_transport_db(config.data_dir)
+                close_db(config.data_dir)
 
 
 if __name__ == "__main__":

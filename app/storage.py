@@ -38,6 +38,40 @@ CREATE TABLE IF NOT EXISTS meta (
 
 _db_connections: dict[Path, sqlite3.Connection] = {}
 
+# Phase 12: when set, session CRUD delegates to storage_pg
+_pg_url: str = ""
+_pg_pool_min: int = 1
+_pg_pool_max: int = 10
+_pg_connect_timeout: int = 10
+
+
+def set_postgres_backend(
+    database_url: str,
+    *,
+    pool_min: int = 1,
+    pool_max: int = 10,
+    connect_timeout: int = 10,
+) -> None:
+    """Use Postgres for session store. Call at startup when BOT_DATABASE_URL is set."""
+    global _pg_url, _pg_pool_min, _pg_pool_max, _pg_connect_timeout
+    _pg_url = database_url
+    _pg_pool_min = pool_min
+    _pg_pool_max = pool_max
+    _pg_connect_timeout = connect_timeout
+
+
+def _pg_conn():
+    """Yield a Postgres connection when backend is Postgres. Otherwise None."""
+    if not _pg_url:
+        return None
+    from app.db.postgres import get_connection
+    return get_connection(
+        _pg_url,
+        min_size=_pg_pool_min,
+        max_size=_pg_pool_max,
+        connect_timeout=_pg_connect_timeout,
+    )
+
 
 def _db(data_dir: Path) -> sqlite3.Connection:
     """Return (or create) a WAL-mode SQLite connection for this data_dir."""
@@ -162,11 +196,13 @@ def _upsert(conn: sqlite3.Connection, chat_id: int, session: dict[str, Any]) -> 
 # Public directory / path helpers (unchanged)
 # ---------------------------------------------------------------------------
 
-def ensure_data_dirs(data_dir: Path) -> None:
+def ensure_data_dirs(data_dir: Path, *, database_url: str = "") -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "uploads").mkdir(parents=True, exist_ok=True)
     (data_dir / "credentials").mkdir(parents=True, exist_ok=True)
-    # Initialize SQLite databases
+    # When database_url is set, session/transport use Postgres; skip SQLite init
+    if database_url:
+        return
     _db(data_dir)
     from app.work_queue import _transport_db
     _transport_db(data_dir)
@@ -220,6 +256,10 @@ def resolve_allowed_path(raw_path: str, allowed_roots: list[Path]) -> Path | Non
 
 def session_exists(data_dir: Path, chat_id: int) -> bool:
     """Check whether a session exists for the given chat_id."""
+    if _pg_url:
+        from app import storage_pg
+        with _pg_conn() as conn:
+            return storage_pg.session_exists(conn, chat_id)
     conn = _db(data_dir)
     row = conn.execute(
         "SELECT 1 FROM sessions WHERE chat_id = ?", (chat_id,)
@@ -259,6 +299,13 @@ def load_session(
     role: str = "",
     default_skills: tuple[str, ...] = (),
 ) -> dict[str, Any]:
+    if _pg_url:
+        from app import storage_pg
+        with _pg_conn() as conn:
+            return storage_pg.load_session(
+                conn, chat_id, provider_name, provider_state_factory,
+                approval_mode, role, default_skills,
+            )
     session = default_session(provider_name, provider_state_factory(), approval_mode, role, default_skills)
     conn = _db(data_dir)
     row = conn.execute(
@@ -283,6 +330,11 @@ def load_session(
 
 
 def save_session(data_dir: Path, chat_id: int, session: dict[str, Any]) -> None:
+    if _pg_url:
+        from app import storage_pg
+        with _pg_conn() as conn:
+            storage_pg.save_session(conn, chat_id, session)
+        return
     session["updated_at"] = datetime.now(timezone.utc).isoformat()
     conn = _db(data_dir)
     _upsert(conn, chat_id, session)
@@ -291,6 +343,11 @@ def save_session(data_dir: Path, chat_id: int, session: dict[str, Any]) -> None:
 
 def delete_session(data_dir: Path, chat_id: int) -> None:
     """Delete a session (for tests or admin cleanup)."""
+    if _pg_url:
+        from app import storage_pg
+        with _pg_conn() as conn:
+            storage_pg.delete_session(conn, chat_id)
+        return
     conn = _db(data_dir)
     conn.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
     conn.commit()
@@ -298,6 +355,10 @@ def delete_session(data_dir: Path, chat_id: int) -> None:
 
 def list_sessions(data_dir: Path) -> list[dict[str, Any]]:
     """Return summary info for all stored sessions, ordered by updated_at desc."""
+    if _pg_url:
+        from app import storage_pg
+        with _pg_conn() as conn:
+            return storage_pg.list_sessions(conn)
     conn = _db(data_dir)
     rows = conn.execute(
         """SELECT chat_id, provider, data, has_pending, has_setup,

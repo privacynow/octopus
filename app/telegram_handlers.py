@@ -254,11 +254,7 @@ async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int |
         # claimed outside the lock), the handler must not run.  The work item
         # stays queued for worker_loop to pick up after its current item.
         if item is None and effective_update_id is not None:
-            has_claimed = work_queue._transport_db(data_dir).execute(
-                "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
-                (chat_id,),
-            ).fetchone()
-            if has_claimed:
+            if work_queue.has_claimed_for_chat(data_dir, chat_id):
                 raise ClaimBlocked(chat_id)
 
         item_id = item["id"] if item else None

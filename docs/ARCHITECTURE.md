@@ -6,12 +6,12 @@ lives in [STATUS-commercial-polish.md](STATUS-commercial-polish.md).
 
 For end-user usage, start with [README.md](../README.md).
 
-After Phase 12 lands, Postgres is the sole supported runtime backend. The
-current SQLite-backed session and transport stores remain the shipped baseline
-and the current runtime authority until that cutover happens. Any
-SQLite-to-Postgres import bridge is optional follow-on work, not a required
-part of the Phase 12 contract. Planned roadmap work should preserve and build
-on the Phase 11 workflow and repository ownership without changing the typed
+Phase 12 is complete: Postgres is the sole supported runtime backend. The app
+requires `BOT_DATABASE_URL` at startup and validates schema via DB doctor before
+running. SQLite remains in the codebase only for in-process tests (handler and
+unit tests that use `fresh_data_dir` and do not set the Postgres backend). Any
+SQLite-to-Postgres import bridge is optional follow-on work. Roadmap work
+preserves the Phase 11 workflow and repository ownership and the typed
 session, transport-payload, and execution-context contracts described here.
 
 ---
@@ -1134,24 +1134,20 @@ must run with a Python environment that has those packages installed.
 - **Bootstrap script:** `scripts/bootstrap.sh` installs from `requirements.txt`
   every time it runs (creating or updating the venv), then runs a quick import
   check so missing dependencies fail immediately instead of at runtime.
-- **Current shipped runtime bootstrap:** SQLite session and transport stores are
-  created or validated by the app on first use. That is why a fresh host can
-  currently go from `./setup.sh` to a working bot without separate database
-  provisioning.
-- **Planned Phase 12 operational contract:** Postgres introduces an external
-  runtime dependency, so the lifecycle splits into three responsibilities:
-  infrastructure provisioning, DB bootstrap/update, and app runtime. The app
-  remains validate-only at startup; explicit repo-owned DB workflows
-  (`bootstrap`, `update`, `doctor`) prepare and verify the database before the
-  bot starts.
-- **Environment identity:** Each running bot environment should have its own
-  database, config, Telegram token, and app instance identity. Side-by-side
-  dev/staging environments should mean separate databases, not one shared
-  runtime database with mixed state.
-- **Planned Phase 12 environment shape:** Dockerized app + Postgres is the
-  canonical development shape; staging may start with the same shape; later
-  environments may move Postgres external while preserving the same explicit DB
-  bootstrap/update contract.
+- **Phase 12 runtime (shipped):** Postgres is the only supported runtime
+  backend. The app requires `BOT_DATABASE_URL` and validates schema at startup.
+  Lifecycle splits into: infrastructure provisioning, DB bootstrap/update, and
+  app runtime. Explicit repo-owned DB workflows (`scripts/db_bootstrap.sh`,
+  `scripts/db_update.sh`, `scripts/db_doctor.sh`) prepare and verify the
+  database before the bot starts. See
+  [PHASE12-OPERATIONAL-CONTRACT.md](PHASE12-OPERATIONAL-CONTRACT.md).
+- **Environment identity:** Each running bot environment has its own database,
+  config, Telegram token, and app instance identity. Side-by-side dev/staging
+  environments use separate databases.
+- **Canonical development shape:** Dockerized app + Postgres; `scripts/dev_up.sh`
+  brings Postgres up and runs bootstrap + doctor; then set `BOT_DATABASE_URL` and
+  start the bot. Later environments may move Postgres external while keeping
+  the same explicit DB bootstrap/update contract.
 
 See [README.md](../README.md) for Get Started and "After updating (git pull)".
 

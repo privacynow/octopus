@@ -708,17 +708,234 @@ Library choice: [python-statemachine](https://pypi.org/project/python-statemachi
 
 ### Phase 12 - Postgres Runtime Cutover
 
-Make Postgres the only supported runtime backend after migration.
+Make Postgres the only supported runtime backend after cutover. Phase 12 is a
+contract-preserving backend replacement phase, not a queue redesign phase.
+
+**Development-first scope.**
+
+- Build the Postgres runtime for current development use.
+- Do not spend Phase 12 effort on in-place SQLite schema migrations.
+- Do not make SQLite-to-Postgres import a gating requirement during
+  development. If preserving dev/test data becomes worthwhile later, that can
+  be added as an optional follow-up tool rather than as the core Phase 12
+  deliverable.
+- Keep webhook-primary queue authority, leases, and multi-worker behavior in
+  Phase 13-14. Phase 12 only replaces the storage backend under the current
+  single-process contract.
+
+**Phase 12 hard requirement.**
+
+- Preserve current payload JSON shapes, current dataclass contracts, and the
+  workflow outcome taxonomy defined in Phase 11. Postgres should be a storage
+  cutover under stable contracts, not a semantic rewrite.
+
+**Contract boundary (the abstraction layer).**
+
+- Keep the current repository boundary as the abstraction:
+  - session storage contract from `storage.py`
+  - transport/work-queue contract from `work_queue.py`
+- The backend swap should happen behind these contracts. Callers in handlers,
+  worker orchestration, request flow, and execution-context code should not
+  grow backend-specific branches.
+- Temporary backend selection during bring-up is acceptable, but permanent dual
+  runtime support is not the goal. The target end state is one Postgres-backed
+  runtime path.
+
+**Suggested backend interfaces.**
+
+- `SessionStore`
+  - `session_exists`
+  - `load_session`
+  - `save_session`
+  - `delete_session`
+  - `ensure_data_dirs` or equivalent bootstrap seam
+- `TransportStore`
+  - `record_and_enqueue`
+  - `record_update`
+  - `enqueue_work_item`
+  - `update_payload`
+  - `claim_for_update`
+  - `claim_next`
+  - `claim_next_any`
+  - `complete_work_item`
+  - `fail_work_item`
+  - `mark_pending_recovery`
+  - `get_pending_recovery_for_update`
+  - `get_latest_pending_recovery`
+  - `discard_recovery`
+  - `reclaim_for_replay`
+  - `recover_stale_claims`
+  - `purge_old`
+  - `has_queued_or_claimed`
+- Keep these as narrow repository contracts, not generic ORM-style models.
+
+**Runtime architecture.**
 
 - Add `BOT_DATABASE_URL` and pool settings.
-- Use `psycopg` v3 async pooling.
+- Use `psycopg` v3 with pooled Postgres connections.
 - Avoid an ORM.
 - Keep schema management repo-owned with versioned SQL plus a small migration
   runner.
-- Provide one-way import from SQLite session and transport data into
-  Postgres.
-- Preserve current payload JSON shapes, current dataclass contracts, and the
-  workflow outcome taxonomy defined in Phase 11.
+- Keep machine/state logic in Python and persistence authority in the database.
+- Keep provider execution and Telegram I/O outside repository transactions.
+- Keep `storage.py` and `work_queue.py` as the public runtime boundary if that
+  is the least disruptive path; delegate internally to configured store
+  implementations instead of scattering `if postgres` branches across the app.
+
+**Postgres schema shape.**
+
+- Use one Postgres schema namespace for bot runtime data (for example
+  `bot_runtime`) so the runtime tables are clearly separated from any future
+  analytics, billing, or registry tables.
+- Keep repo-owned SQL files such as:
+  - `sql/postgres/0001_runtime.sql`
+  - `sql/postgres/0002_...sql` for later additive changes
+- Track applied versions in a dedicated schema-migrations table instead of a
+  generic `meta` row.
+
+**Sessions schema (preserve current session contract).**
+
+- `sessions`
+  - `chat_id BIGINT PRIMARY KEY`
+  - `provider TEXT NOT NULL DEFAULT ''`
+  - `data JSONB NOT NULL DEFAULT '{}'::jsonb`
+  - `has_pending BOOLEAN NOT NULL DEFAULT FALSE`
+  - `has_setup BOOLEAN NOT NULL DEFAULT FALSE`
+  - `project_id TEXT NULL`
+  - `file_policy TEXT NULL`
+  - `created_at TIMESTAMPTZ NOT NULL`
+  - `updated_at TIMESTAMPTZ NOT NULL`
+- Indexes:
+  - `sessions(updated_at)`
+  - add `has_pending` or `(has_pending, updated_at)` only if query patterns
+    justify it during implementation
+- Preserve the current typed `SessionState`, `PendingApproval`, and
+  `PendingRetry` boundary by keeping `data` as authoritative JSONB for now.
+  Phase 12 is not the time to normalize session internals into many tables.
+
+**Transport schema (preserve current transport contract).**
+
+- `updates`
+  - `update_id BIGINT PRIMARY KEY`
+  - `chat_id BIGINT NOT NULL`
+  - `user_id BIGINT NOT NULL`
+  - `kind TEXT NOT NULL`
+  - `payload JSONB NOT NULL DEFAULT '{}'::jsonb`
+  - `received_at TIMESTAMPTZ NOT NULL`
+  - `state TEXT NOT NULL DEFAULT 'received'`
+- Indexes:
+  - `(chat_id, received_at)`
+- `work_items`
+  - `id TEXT PRIMARY KEY`
+  - `chat_id BIGINT NOT NULL`
+  - `update_id BIGINT NOT NULL UNIQUE REFERENCES updates(update_id) ON DELETE CASCADE`
+  - `state TEXT NOT NULL`
+  - `worker_id TEXT NULL`
+  - `claimed_at TIMESTAMPTZ NULL`
+  - `completed_at TIMESTAMPTZ NULL`
+  - `error TEXT NULL`
+  - `created_at TIMESTAMPTZ NOT NULL`
+- Constraints:
+  - `CHECK (state IN ('queued','claimed','pending_recovery','done','failed'))`
+  - `CHECK (state != 'claimed' OR worker_id IS NOT NULL)`
+  - `CHECK (state != 'claimed' OR claimed_at IS NOT NULL)`
+- Indexes:
+  - `(state, chat_id)`
+  - `(chat_id, state)`
+  - unique partial index on `(chat_id)` where `state = 'claimed'`
+- Keep the current work-item id shape (`TEXT`/hex id) unless there is a strong
+  reason to change it; Phase 12 should preserve current contracts and payloads.
+
+**Repository implementation approach.**
+
+- Implement Postgres-specific repository modules rather than sprinkling SQL
+  conditionals into the SQLite modules.
+- Recommended structure:
+  - `app/db/postgres.py` for pool/bootstrap lifecycle
+  - `app/db/postgres_migrate.py` for the lightweight SQL runner
+  - `app/storage_pg.py` for session-store implementation
+  - `app/work_queue_pg.py` for transport-store implementation
+- Keep the existing SQLite modules as the behavioral reference during bring-up.
+  Once Postgres passes the same contract tests, switch the runtime path instead
+  of maintaining long-term dual behavior.
+
+**Transaction and concurrency model.**
+
+- Preserve the exact repository semantics established in Phase 11:
+  - explicit transactions
+  - exact compare-and-update
+  - reread classification on zero-row updates
+  - corruption surfaced, not normalized
+- In Postgres, implement these using:
+  - `INSERT ... ON CONFLICT DO NOTHING` for idempotent update journal writes
+  - `UPDATE ... WHERE ... RETURNING ...` for exact compare-and-update
+  - `SELECT ... FOR UPDATE` only where row locking is needed for correctness
+- Keep claim transactions short. Do not hold database transactions open across
+  provider execution or Telegram I/O.
+- Keep queue redesign out of Phase 12. Row-lock worker claiming as the primary
+  queue authority belongs to Phase 13.
+
+**Suggested implementation sequence.**
+
+1. Freeze the Phase 11 repository contract with the current tests so the
+   backend swap is measured against behavior, not assumptions.
+2. Add config and bootstrap:
+   - `BOT_DATABASE_URL`
+   - pool size / timeout settings
+   - Postgres bootstrap and versioned SQL runner
+3. Add Postgres session schema and `SessionStore` implementation.
+4. Run the existing session-focused tests against the Postgres store.
+5. Add Postgres transport schema and `TransportStore` implementation.
+6. Port the exact Phase 11 repository rules:
+   - claim path
+   - replay/discard path
+   - stale-recovery path
+   - exact CAS + reread classification
+7. Add backend-selection wiring behind the existing public storage/work-queue
+   boundary.
+8. Run the transport and pending-request suites against Postgres.
+9. Flip the runtime to Postgres as the supported backend for current
+   development.
+10. Only then move to Phase 13 queue-authority work.
+
+**Acceptance and test plan for Phase 12.**
+
+- Contract tests:
+  - existing transport repository tests pass unchanged against Postgres
+  - existing transport workflow-machine tests still pass (backend-independent)
+  - existing pending-request machine tests still pass
+  - existing session/request-flow tests still pass against the Postgres-backed
+    session store
+- Schema tests:
+  - brand-new Postgres DB boots from repo-owned SQL
+  - unsupported/mismatched schema version fails clearly
+  - required indexes and constraints exist
+- Session tests:
+  - `SessionState` round-trips through JSONB without shape changes
+  - `PendingApproval` / `PendingRetry` persistence behavior is unchanged
+  - project binding / file policy / model profile fields preserve current
+    semantics
+- Transport tests:
+  - `record_and_enqueue` remains idempotent on duplicate `update_id`
+  - exact CAS on claim / complete / fail / replay / discard remains unchanged
+  - one-claimed-per-chat invariant is enforced by both repository logic and the
+    partial unique index
+  - replay/discard ownership semantics match SQLite behavior
+  - stale recovery preserves the same classification semantics
+- Non-goals for Phase 12 tests:
+  - no SQLite-to-Postgres import tests required yet
+  - no multi-worker queue/lease tests yet
+  - no webhook-primary queue semantics yet
+
+**Completion standard for Phase 12.**
+
+- Postgres can run the current bot end-to-end for development use.
+- The repository/workflow contract remains behaviorally identical to the
+  stabilized Phase 11 contract.
+- No application layer outside the storage/work-queue boundary depends on
+  SQLite-specific behavior.
+- The codebase is ready for Phase 13 without re-litigating state ownership or
+  repository semantics.
 
 ### Phase 13 - Postgres Queue Authority In Webhook Mode
 
@@ -806,8 +1023,9 @@ Build this last.
 
 ## Architecture Decisions
 
-- Postgres is the sole runtime backend after migration. SQLite is import-source
-  only during cutover.
+- Postgres is the sole runtime backend after cutover. SQLite is the current
+  development backend until Phase 12 lands; SQLite-to-Postgres import is
+  optional and deferred unless preserving dev/test data becomes worthwhile.
 - Extract workflow ownership before any database migration so the new backend
   does not inherit open-coded transition logic.
 - Use contract-first workflow state machines; implementation is
@@ -827,6 +1045,9 @@ Build this last.
 
 - The roadmap should be optimized for a Postgres-first deployment model, not
   for dual backend support.
+- Phase 12 should be executable without building an in-place SQLite upgrade
+  path or SQLite-to-Postgres import tool. Those are optional follow-on tasks,
+  not development-time gating requirements.
 - The master roadmap should present a strict execution order, not priority
   buckets.
 - Confidence work remains in the roadmap even though it is not user-facing,

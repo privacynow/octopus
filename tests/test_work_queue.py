@@ -12,10 +12,12 @@ import pytest
 from app.workflows.results import TransportStateCorruption
 from app.work_queue import (
     _assert_no_invalid_rows_for_chat,
+    _claim_queued_item,
     _load_work_item_by_id,
     _reset_transport_db,
     _transport_db,
     _validate_work_item_row,
+    _write_tx,
     DiscardResult,
     LeaveClaimed,
     claim_for_update,
@@ -26,13 +28,16 @@ from app.work_queue import (
     discard_recovery,
     enqueue_work_item,
     fail_work_item,
-    has_queued_or_claimed,
+    get_latest_pending_recovery,
     get_update_payload,
+    has_queued_or_claimed,
     mark_pending_recovery,
     purge_old,
     record_and_enqueue,
     record_update,
+    reclaim_for_replay,
     recover_stale_claims,
+    supersede_pending_recovery,
     update_payload,
 )
 from app.transport import (
@@ -109,11 +114,12 @@ def test_claim_blocks_second_claim_same_chat(data_dir):
 
 
 def test_record_and_enqueue_preclaim_derived_from_machine(data_dir):
-    """Preclaim (create as claimed) only when machine allows claim_inline; else queued."""
+    """Preclaim (create as claimed) only when machine allows claim_inline; impossible rejection raises."""
     from unittest.mock import patch
     from app.workflows.results import TransitionResult, TransportDisposition
 
-    # When machine rejects claim_inline, item must be created as queued.
+    # When machine rejects claim_inline in preclaim path, repository raises (no silent fallback to queued).
+    record_update(data_dir, 8888, chat_id=1, user_id=42, kind="message")
     with patch("app.work_queue.run_transport_event") as mock_run:
         mock_run.return_value = TransitionResult(
             allowed=False,
@@ -121,14 +127,13 @@ def test_record_and_enqueue_preclaim_derived_from_machine(data_dir):
             disposition=TransportDisposition.invalid_transition,
             reason="test",
         )
-        is_new, item_id = record_and_enqueue(
-            data_dir, 8888, chat_id=1, user_id=42, kind="message", worker_id="handler-1"
-        )
-    assert is_new is True
-    assert item_id is not None
+        with pytest.raises(TransportStateCorruption) as exc_info:
+            enqueue_work_item(data_dir, chat_id=1, update_id=8888, worker_id="handler-1")
+    assert "claim_inline" in str(exc_info.value) or "rejected" in str(exc_info.value).lower()
     conn = _transport_db(data_dir)
-    row = conn.execute("SELECT state FROM work_items WHERE id = ?", (item_id,)).fetchone()
-    assert row["state"] == "queued"
+    assert conn.in_transaction is False
+    row = conn.execute("SELECT id FROM work_items WHERE update_id = ?", (8888,)).fetchone()
+    assert row is None  # _write_tx rolled back; no work item committed
 
     # When machine allows, item is created as claimed (normal path).
     record_update(data_dir, 8889, chat_id=1, user_id=42, kind="message")
@@ -909,6 +914,225 @@ def test_fresh_schema_has_one_claimed_per_chat_index(data_dir):
     assert len(rows) == 1
 
 
+def test_write_tx_rejects_nested_use(data_dir):
+    """_write_tx raises RuntimeError when called while already in a transaction."""
+    conn = _transport_db(data_dir)
+    with pytest.raises(RuntimeError, match="nested transport transaction"):
+        with _write_tx(conn):
+            with _write_tx(conn):
+                pass
+
+
+# -- Impossible machine rejections surface as corruption (no silent normalization)
+# ---------------------------------------------------------------------------
+
+
+def test_mark_pending_recovery_raises_on_invalid_transition(data_dir):
+    """When machine returns invalid_transition for move_to_pending_recovery, repository raises and rolls back."""
+    from unittest.mock import patch
+    from app.workflows.results import TransitionResult, TransportDisposition
+
+    record_update(data_dir, 3001, chat_id=1, user_id=42, kind="message")
+    item_id = enqueue_work_item(data_dir, chat_id=1, update_id=3001, worker_id="w1")
+    conn = _transport_db(data_dir)
+    with patch("app.work_queue.run_transport_event") as mock_run:
+        mock_run.return_value = TransitionResult(
+            allowed=False,
+            new_state=None,
+            disposition=TransportDisposition.invalid_transition,
+            reason="test",
+        )
+        with pytest.raises(TransportStateCorruption) as exc_info:
+            mark_pending_recovery(data_dir, item_id)
+    assert "move_to_pending_recovery" in str(exc_info.value) or "workflow rejected" in str(exc_info.value).lower()
+    assert conn.in_transaction is False
+    row = conn.execute("SELECT state FROM work_items WHERE id = ?", (item_id,)).fetchone()
+    assert row is not None and row["state"] == "claimed"  # unchanged, tx rolled back
+
+
+def test_discard_recovery_raises_on_invalid_transition(data_dir):
+    """When machine returns invalid_transition for discard_recovery, repository raises (not already_handled)."""
+    from unittest.mock import patch
+    from app.workflows.results import TransitionResult, TransportDisposition
+
+    record_update(data_dir, 3002, chat_id=1, user_id=42, kind="message")
+    item_id = enqueue_work_item(data_dir, chat_id=1, update_id=3002, worker_id="w1")
+    mark_pending_recovery(data_dir, item_id)
+    conn = _transport_db(data_dir)
+    with patch("app.work_queue.run_transport_event") as mock_run:
+        mock_run.return_value = TransitionResult(
+            allowed=False,
+            new_state=None,
+            disposition=TransportDisposition.invalid_transition,
+            reason="test",
+        )
+        with pytest.raises(TransportStateCorruption) as exc_info:
+            discard_recovery(data_dir, item_id)
+    assert "discard_recovery" in str(exc_info.value) or "workflow rejected" in str(exc_info.value).lower()
+    assert conn.in_transaction is False
+    row = conn.execute("SELECT state FROM work_items WHERE id = ?", (item_id,)).fetchone()
+    assert row is not None and row["state"] == "pending_recovery"  # unchanged
+
+
+def test_supersede_pending_recovery_raises_on_invalid_transition(data_dir):
+    """When machine returns invalid_transition for supersede_recovery, repository raises (not return 0)."""
+    from unittest.mock import patch
+    from app.workflows.results import TransitionResult, TransportDisposition
+
+    record_update(data_dir, 3003, chat_id=1, user_id=42, kind="message")
+    item_id = enqueue_work_item(data_dir, chat_id=1, update_id=3003, worker_id="w1")
+    mark_pending_recovery(data_dir, item_id)
+    conn = _transport_db(data_dir)
+    with patch("app.work_queue.run_transport_event") as mock_run:
+        mock_run.return_value = TransitionResult(
+            allowed=False,
+            new_state=None,
+            disposition=TransportDisposition.invalid_transition,
+            reason="test",
+        )
+        with pytest.raises(TransportStateCorruption) as exc_info:
+            supersede_pending_recovery(data_dir, 1)
+    assert "supersede" in str(exc_info.value).lower() or "workflow rejected" in str(exc_info.value).lower()
+    assert conn.in_transaction is False
+    row = conn.execute("SELECT state FROM work_items WHERE id = ?", (item_id,)).fetchone()
+    assert row is not None and row["state"] == "pending_recovery"
+
+
+def test_reclaim_for_replay_raises_on_invalid_transition(data_dir):
+    """When machine returns invalid_transition (not blocked_replay) for reclaim_for_replay, repository raises."""
+    from unittest.mock import patch
+    from app.workflows.results import TransitionResult, TransportDisposition
+
+    record_update(data_dir, 3004, chat_id=1, user_id=42, kind="message")
+    item_id = enqueue_work_item(data_dir, chat_id=1, update_id=3004, worker_id="w1")
+    mark_pending_recovery(data_dir, item_id)
+    conn = _transport_db(data_dir)
+    with patch("app.work_queue.run_transport_event") as mock_run:
+        mock_run.return_value = TransitionResult(
+            allowed=False,
+            new_state=None,
+            disposition=TransportDisposition.invalid_transition,
+            reason="test",
+        )
+        with pytest.raises(TransportStateCorruption) as exc_info:
+            reclaim_for_replay(data_dir, item_id, worker_id="w2")
+    assert "reclaim" in str(exc_info.value).lower() or "workflow rejected" in str(exc_info.value).lower()
+    assert conn.in_transaction is False
+    row = conn.execute("SELECT state FROM work_items WHERE id = ?", (item_id,)).fetchone()
+    assert row is not None and row["state"] == "pending_recovery"
+
+
+def test_get_latest_pending_recovery_raises_when_chat_invalid(data_dir):
+    """get_latest_pending_recovery asserts chat integrity; structural corruption surfaces as TransportStateCorruption."""
+    from unittest.mock import patch
+    record_update(data_dir, 3020, chat_id=7, user_id=42, kind="message")
+    item_id = enqueue_work_item(data_dir, chat_id=7, update_id=3020, worker_id="w1")
+    mark_pending_recovery(data_dir, item_id)
+    with patch("app.work_queue._assert_no_invalid_rows_for_chat", side_effect=TransportStateCorruption("test two claimed")):
+        with pytest.raises(TransportStateCorruption) as exc_info:
+            get_latest_pending_recovery(data_dir, 7)
+    assert "test two claimed" in str(exc_info.value) or "two claimed" in str(exc_info.value).lower()
+
+
+def test_has_queued_or_claimed_raises_when_chat_invalid(data_dir):
+    """has_queued_or_claimed asserts chat integrity before returning."""
+    from unittest.mock import patch
+    with patch("app.work_queue._assert_no_invalid_rows_for_chat", side_effect=TransportStateCorruption("chat corrupt")):
+        with pytest.raises(TransportStateCorruption) as exc_info:
+            has_queued_or_claimed(data_dir, 8)
+    assert "chat corrupt" in str(exc_info.value)
+
+
+def test_reclaim_for_replay_raises_corruption_when_chat_already_invalid(data_dir):
+    """reclaim_for_replay asserts chat integrity; if chat is already invalid we get TransportStateCorruption, not ReclaimBlocked."""
+    from unittest.mock import patch
+    record_update(data_dir, 3021, chat_id=9, user_id=42, kind="message")
+    item_id = enqueue_work_item(data_dir, chat_id=9, update_id=3021, worker_id="w1")
+    mark_pending_recovery(data_dir, item_id)
+    with patch("app.work_queue._assert_no_invalid_rows_for_chat", side_effect=TransportStateCorruption("chat has two claimed")):
+        with pytest.raises(TransportStateCorruption) as exc_info:
+            reclaim_for_replay(data_dir, item_id, worker_id="w2")
+    assert "chat has two claimed" in str(exc_info.value) or "two claimed" in str(exc_info.value).lower()
+
+
+def test_supersede_pending_recovery_raises_when_chat_invalid(data_dir):
+    """supersede_pending_recovery asserts chat integrity before acting."""
+    from unittest.mock import patch
+    with patch("app.work_queue._assert_no_invalid_rows_for_chat", side_effect=TransportStateCorruption("invalid chat")):
+        with pytest.raises(TransportStateCorruption) as exc_info:
+            supersede_pending_recovery(data_dir, 10)
+    assert "invalid chat" in str(exc_info.value)
+
+
+def test_claim_queued_item_returns_none_only_for_other_claimed_for_chat(data_dir):
+    """_claim_queued_item returns None only when disposition is other_claimed_for_chat; invalid_transition raises."""
+    from unittest.mock import patch
+    from app.workflows.results import TransitionResult, TransportDisposition
+
+    record_update(data_dir, 3005, chat_id=1, user_id=42, kind="message")
+    item_id = enqueue_work_item(data_dir, chat_id=1, update_id=3005)  # queued
+    conn = _transport_db(data_dir)
+    with _write_tx(conn):
+        with patch("app.work_queue.run_transport_event") as mock_run:
+            mock_run.return_value = TransitionResult(
+                allowed=False,
+                new_state=None,
+                disposition=TransportDisposition.invalid_transition,
+                reason="test",
+            )
+            with pytest.raises(TransportStateCorruption):
+                _claim_queued_item(
+                    conn, item_id=item_id, worker_id="w1",
+                    has_other_claimed_for_chat=False, event_name="claim_worker",
+                )
+
+
+def test_complete_work_item_raises_on_invalid_transition(data_dir):
+    """When machine returns invalid_transition for complete, repository raises and rolls back."""
+    from unittest.mock import patch
+    from app.workflows.results import TransitionResult, TransportDisposition
+
+    record_update(data_dir, 3010, chat_id=1, user_id=42, kind="message")
+    item_id = enqueue_work_item(data_dir, chat_id=1, update_id=3010, worker_id="w1")
+    conn = _transport_db(data_dir)
+    with patch("app.work_queue.run_transport_event") as mock_run:
+        mock_run.return_value = TransitionResult(
+            allowed=False,
+            new_state=None,
+            disposition=TransportDisposition.invalid_transition,
+            reason="test",
+        )
+        with pytest.raises(TransportStateCorruption) as exc_info:
+            complete_work_item(data_dir, item_id)
+    assert "complete" in str(exc_info.value).lower() or "workflow rejected" in str(exc_info.value).lower()
+    assert conn.in_transaction is False
+    row = conn.execute("SELECT state FROM work_items WHERE id = ?", (item_id,)).fetchone()
+    assert row is not None and row["state"] == "claimed"
+
+
+def test_fail_work_item_raises_on_invalid_transition(data_dir):
+    """When machine returns invalid_transition for fail, repository raises and rolls back."""
+    from unittest.mock import patch
+    from app.workflows.results import TransitionResult, TransportDisposition
+
+    record_update(data_dir, 3011, chat_id=1, user_id=42, kind="message")
+    item_id = enqueue_work_item(data_dir, chat_id=1, update_id=3011, worker_id="w1")
+    conn = _transport_db(data_dir)
+    with patch("app.work_queue.run_transport_event") as mock_run:
+        mock_run.return_value = TransitionResult(
+            allowed=False,
+            new_state=None,
+            disposition=TransportDisposition.invalid_transition,
+            reason="test",
+        )
+        with pytest.raises(TransportStateCorruption) as exc_info:
+            fail_work_item(data_dir, item_id, "timeout")
+    assert "fail" in str(exc_info.value).lower() or "workflow rejected" in str(exc_info.value).lower()
+    assert conn.in_transaction is False
+    row = conn.execute("SELECT state FROM work_items WHERE id = ?", (item_id,)).fetchone()
+    assert row is not None and row["state"] == "claimed"
+
+
 # -- REGRESSION: worker replay with real dispatch -------------------------
 
 async def test_worker_replay_calls_dispatch_for_message(data_dir):
@@ -1163,12 +1387,11 @@ def test_meta_without_schema_version_fails_fast(data_dir):
     with pytest.raises(RuntimeError) as exc_info:
         _transport_db(data_dir)
     msg = str(exc_info.value)
-    assert "schema_version" in msg or "Unsupported" in msg
-    assert "delete" in msg.lower() or "restart" in msg.lower()
+    assert "Unsupported" in msg or "schema" in msg.lower()
 
 
-def test_schema_version_mismatch_raises_delete_db(data_dir):
-    """Opening transport.db with wrong schema version raises RuntimeError telling user to delete DB."""
+def test_schema_version_mismatch_raises_unsupported(data_dir):
+    """Opening transport.db with wrong schema version raises RuntimeError (unsupported schema/layout)."""
     db_path = data_dir / "transport.db"
     conn = sqlite3.connect(str(db_path))
     conn.execute(
@@ -1191,5 +1414,69 @@ def test_schema_version_mismatch_raises_delete_db(data_dir):
     with pytest.raises(RuntimeError) as exc_info:
         _transport_db(data_dir)
     msg = str(exc_info.value)
-    assert "Unsupported" in msg or "delete" in msg.lower()
-    assert "transport.db" in msg or "restart" in msg.lower()
+    assert "Unsupported" in msg or "schema" in msg.lower()
+
+
+def test_forged_v2_db_with_wrong_index_rejected(data_dir):
+    """Existing DB with schema_version=2 but idx_one_claimed_per_chat wrong (non-unique, wrong column) is rejected."""
+    from app.work_queue import _SCHEMA_VERSION
+    db_path = data_dir / "transport.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+        (str(_SCHEMA_VERSION),),
+    )
+    conn.execute(
+        "CREATE TABLE updates (update_id INTEGER PRIMARY KEY, chat_id INT, user_id INT, kind TEXT, "
+        "payload TEXT DEFAULT '{}', received_at TEXT, state TEXT DEFAULT 'received')"
+    )
+    conn.execute(
+        "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+    )
+    # Forged: same index name but non-unique and on update_id, no partial predicate
+    conn.execute(
+        "CREATE INDEX idx_one_claimed_per_chat ON work_items(update_id)"
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _transport_db(data_dir)
+    msg = str(exc_info.value)
+    assert "Unsupported" in msg or "schema" in msg.lower()
+
+
+def test_forged_v2_db_wrong_partial_predicate_rejected(data_dir):
+    """Existing DB with idx_one_claimed_per_chat with wrong WHERE (e.g. state != 'claimed') is rejected."""
+    from app.work_queue import _SCHEMA_VERSION
+    db_path = data_dir / "transport.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
+        (str(_SCHEMA_VERSION),),
+    )
+    conn.execute(
+        "CREATE TABLE updates (update_id INTEGER PRIMARY KEY, chat_id INT, user_id INT, kind TEXT, "
+        "payload TEXT DEFAULT '{}', received_at TEXT, state TEXT DEFAULT 'received')"
+    )
+    conn.execute(
+        "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX idx_one_claimed_per_chat ON work_items(chat_id) WHERE state != 'claimed'"
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _transport_db(data_dir)
+    msg = str(exc_info.value)
+    assert "Unsupported" in msg or "schema" in msg.lower()

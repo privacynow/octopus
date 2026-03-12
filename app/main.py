@@ -129,6 +129,21 @@ def main() -> None:
             close_transport_db(config.data_dir)
             close_db(config.data_dir)
     else:
+        # Fail fast if another process is already polling (Telegram allows only one getUpdates per token).
+        from app.doctor import check_polling_conflict
+        try:
+            conflict_msg = asyncio.run(check_polling_conflict(config.telegram_token))
+        except Exception as e:
+            log.debug("Startup conflict check failed: %s", e)
+            conflict_msg = None
+        if conflict_msg:
+            log.error(
+                "%s Stop the other instance (e.g. systemctl --user stop telegram-agent-bot@%s.service) or wait a minute, then try again.",
+                conflict_msg,
+                config.instance,
+            )
+            sys.exit(1)
+
         log.info("Bot starting (long-poll)...")
         try:
             app.run_polling()

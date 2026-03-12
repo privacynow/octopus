@@ -224,7 +224,7 @@ Contract:
 **Transport invariants (runtime contract)**
 
 These are the authoritative runtime invariants. They are enforced by DB
-checks in the fresh schema and by a single shared row validator in the
+checks in the current schema and by a single shared row validator in the
 repository. Invalid state is never normalized into a benign outcome.
 
 - `work_items.state` must be one of: `queued`, `claimed`, `pending_recovery`, `done`, `failed`.
@@ -236,9 +236,9 @@ repository. Invalid state is never normalized into a benign outcome.
 - The machine owns legal transitions; the repository owns races, idempotency, and `already_handled`.
 - `completed_at` is set only when a work item reaches a terminal state (`done` or `failed`); it is not set on `move_to_pending_recovery`.
 
-**Fresh-schema-only (development)**
+**Transport schema (versioned, migration deferred)**
 
-- No in-place SQLite migrations. If `transport.db` has an unsupported schema version, fail fast with a clear "delete DB and restart" error.
+- `transport.db` has a versioned schema; the current build expects the current schema/layout. Unsupported schema/layout fails fast with a neutral error. Migration/upgrade path is deferred to the Postgres/runtime phases.
 
 ### 3. Session boundary
 

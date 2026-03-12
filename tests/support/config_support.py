@@ -47,6 +47,10 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         public_working_dir="",
         public_model_profiles=frozenset(),
         registry_url="",
+        database_url="",
+        db_pool_min_size=1,
+        db_pool_max_size=10,
+        db_connect_timeout_seconds=10,
     )
     defaults.update(overrides)
     return BotConfig(**defaults)

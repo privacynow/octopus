@@ -1,0 +1,63 @@
+# Phase 12: canonical development stack. See docs/PHASE12-OPERATIONAL-CONTRACT.md.
+# First-time: docker compose up -d postgres && sleep 3 && docker compose run --rm db-bootstrap
+# Then: set BOT_DATABASE_URL in .env and docker compose up bot
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bot
+      POSTGRES_PASSWORD: bot
+      POSTGRES_DB: bot
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot -d bot"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  db-bootstrap:
+    build: .
+    command: ["python", "-m", "app.db.cli", "bootstrap"]
+    environment:
+      BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - tools
+
+  db-update:
+    build: .
+    command: ["python", "-m", "app.db.cli", "update"]
+    environment:
+      BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - tools
+
+  db-doctor:
+    build: .
+    command: ["python", "-m", "app.db.cli", "doctor"]
+    environment:
+      BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - tools
+
+  bot:
+    build: .
+    environment:
+      BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Override CMD so bot runs after DB is ready; app validates schema at startup
+    command: ["python", "-m", "app.main"]

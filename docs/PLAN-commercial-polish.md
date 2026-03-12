@@ -714,11 +714,12 @@ Library choice: [python-statemachine](https://pypi.org/project/python-statemachi
 
 **Phase 11 seal checklist (done when moving to Phase 12):** All three claim entry points use one shared claim helper; both initial-insert paths use one shared insert helper; no transport mutation helper open-codes its own CAS/reread classification; repository-shape tests pin the single-claim and single-insert behavior; docs/status truthfully reflect that state.
 
-### Phase 12 - Postgres Runtime Cutover
+### Phase 12 - Postgres Runtime Cutover *(complete)*
 
 Make Postgres the only supported runtime backend after cutover. Phase 12 is a
 contract-preserving backend replacement and environment/bootstrap phase, not a
-queue redesign phase and not a CI/CD phase.
+queue redesign phase and not a CI/CD phase. Implementation complete; see
+[STATUS-commercial-polish.md](STATUS-commercial-polish.md).
 
 **What Phase 12 is solving.**
 

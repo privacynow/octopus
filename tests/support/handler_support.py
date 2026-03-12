@@ -33,6 +33,11 @@ def reset_handler_test_runtime() -> None:
     _next_update_id = 0
     close_all_db()
     _work_queue.close_all_transport_db()
+    # Phase 12: clear Postgres backend so tests use SQLite unless they set it
+    import app.storage as _storage_mod
+    import app.work_queue as _wq_mod
+    _storage_mod.set_postgres_backend("")
+    _wq_mod.set_postgres_backend("")
 
 
 @contextlib.contextmanager

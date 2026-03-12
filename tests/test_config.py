@@ -153,6 +153,16 @@ def test_validate_config_webhook_mode_requires_url():
     errors = validate_config(make_config(bot_mode="webhook", webhook_url=""))
     assert any("BOT_WEBHOOK_URL" in e for e in errors)
 
+def test_validate_config_database_url_must_be_postgres():
+    """BOT_DATABASE_URL when set must be a postgresql:// URL."""
+    errors = validate_config(make_config(database_url="mysql://localhost/db"))
+    assert any("BOT_DATABASE_URL" in e and "postgresql" in e for e in errors)
+    errors_empty = validate_config(make_config(database_url=""))
+    assert not any("BOT_DATABASE_URL" in e for e in errors_empty)
+    errors_ok = validate_config(make_config(database_url="postgresql://localhost/bot"))
+    assert not any("BOT_DATABASE_URL" in e for e in errors_ok)
+
+
 def test_validate_config_webhook_mode_with_url():
     errors = validate_config(make_config(
         bot_mode="webhook",
@@ -176,8 +186,12 @@ def test_config_defaults_to_poll():
 
 def test_main_calls_run_polling_in_poll_mode():
     """When BOT_MODE=poll, main() calls app.run_polling()."""
-    cfg = make_config(bot_mode="poll")
+    cfg = make_config(bot_mode="poll", database_url="postgresql://bot:bot@localhost:5432/bot")
     mock_app = MagicMock()
+    from contextlib import contextmanager
+    @contextmanager
+    def _fake_conn():
+        yield MagicMock()
     with patch("app.main.load_config", return_value=cfg), \
          patch("app.main.make_provider"), \
          patch("app.main.fail_fast"), \
@@ -188,6 +202,9 @@ def test_main_calls_run_polling_in_poll_mode():
          patch("app.main.close_transport_db"), \
          patch("app.main.recover_stale_claims"), \
          patch("app.main.purge_old"), \
+         patch("app.db.postgres.get_connection", side_effect=lambda *a, **k: _fake_conn()), \
+         patch("app.db.postgres_doctor.run_doctor", return_value=[]), \
+         patch("app.db.postgres.close_pools"), \
          patch("sys.argv", ["bot"]):
         from app.main import main
         main()
@@ -203,8 +220,13 @@ def test_main_calls_run_webhook_in_webhook_mode():
         webhook_listen="0.0.0.0",
         webhook_port=8443,
         webhook_secret="my-secret",
+        database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
+    from contextlib import contextmanager
+    @contextmanager
+    def _fake_conn():
+        yield MagicMock()
     with patch("app.main.load_config", return_value=cfg), \
          patch("app.main.make_provider"), \
          patch("app.main.fail_fast"), \
@@ -215,6 +237,9 @@ def test_main_calls_run_webhook_in_webhook_mode():
          patch("app.main.close_transport_db"), \
          patch("app.main.recover_stale_claims"), \
          patch("app.main.purge_old"), \
+         patch("app.db.postgres.get_connection", side_effect=lambda *a, **k: _fake_conn()), \
+         patch("app.db.postgres_doctor.run_doctor", return_value=[]), \
+         patch("app.db.postgres.close_pools"), \
          patch("sys.argv", ["bot"]):
         from app.main import main
         main()
@@ -234,8 +259,13 @@ def test_main_webhook_empty_secret_passes_none():
         bot_mode="webhook",
         webhook_url="https://bot.example.com/webhook",
         webhook_secret="",
+        database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
+    from contextlib import contextmanager
+    @contextmanager
+    def _fake_conn():
+        yield MagicMock()
     with patch("app.main.load_config", return_value=cfg), \
          patch("app.main.make_provider"), \
          patch("app.main.fail_fast"), \
@@ -246,6 +276,9 @@ def test_main_webhook_empty_secret_passes_none():
          patch("app.main.close_transport_db"), \
          patch("app.main.recover_stale_claims"), \
          patch("app.main.purge_old"), \
+         patch("app.db.postgres.get_connection", side_effect=lambda *a, **k: _fake_conn()), \
+         patch("app.db.postgres_doctor.run_doctor", return_value=[]), \
+         patch("app.db.postgres.close_pools"), \
          patch("sys.argv", ["bot"]):
         from app.main import main
         main()
@@ -273,6 +306,28 @@ def test_load_config_reads_webhook_env_vars():
         assert cfg.webhook_listen == "0.0.0.0"
         assert cfg.webhook_port == 9443
         assert cfg.webhook_secret == "s3cret"
+    finally:
+        os.unlink(env_path)
+
+
+def test_load_config_reads_database_url_and_pool_settings():
+    """load_config picks up BOT_DATABASE_URL and pool settings from .env."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write("TELEGRAM_BOT_TOKEN=tok\n")
+        f.write("BOT_PROVIDER=claude\n")
+        f.write("BOT_ALLOW_OPEN=1\n")
+        f.write("BOT_DATABASE_URL=postgresql://localhost:5432/botdb\n")
+        f.write("BOT_DB_POOL_MIN_SIZE=2\n")
+        f.write("BOT_DB_POOL_MAX_SIZE=20\n")
+        f.write("BOT_DB_CONNECT_TIMEOUT=15\n")
+        env_path = f.name
+    try:
+        with patch("app.config.env_path_for_instance", return_value=Path(env_path)):
+            cfg = load_config("test-db")
+        assert cfg.database_url == "postgresql://localhost:5432/botdb"
+        assert cfg.db_pool_min_size == 2
+        assert cfg.db_pool_max_size == 20
+        assert cfg.db_connect_timeout_seconds == 15
     finally:
         os.unlink(env_path)
 

@@ -6,12 +6,13 @@ lives in [STATUS-commercial-polish.md](STATUS-commercial-polish.md).
 
 For end-user usage, start with [README.md](../README.md).
 
-After the roadmap's migration phases land, Postgres is the sole supported
-runtime backend. The current SQLite-backed session and transport stores remain
-important as the shipped baseline and as the cutover import source, but they
-are not the long-term runtime authority. Planned roadmap work should tighten
-workflow ownership without changing the typed session, transport-payload, and
-execution-context contracts described here.
+After Phase 12 lands, Postgres is the sole supported runtime backend. The
+current SQLite-backed session and transport stores remain the shipped baseline
+and the current runtime authority until that cutover happens. Any
+SQLite-to-Postgres import bridge is optional follow-on work, not a required
+part of the Phase 12 contract. Planned roadmap work should preserve and build
+on the Phase 11 workflow and repository ownership without changing the typed
+session, transport-payload, and execution-context contracts described here.
 
 ---
 
@@ -129,8 +130,10 @@ Contract:
   normalized type exists
 - `serialize_inbound()` / `deserialize_inbound()` round-trip events to JSON
   for durable storage in the work queue
-- serialized inbound payload shapes are part of the migration contract and
-  must remain backward-compatible across SQLite import and Postgres cutover
+- serialized inbound payload shapes are part of the runtime cutover contract
+  and must remain stable across the current SQLite runtime and the later
+  Postgres cutover; any optional import tool added later will depend on the
+  same shape stability
 
 ### 2. Work-queue boundary
 
@@ -291,12 +294,22 @@ Primary modules:
   validation, denial handling
 - `app/approvals.py` — pure functions for preflight prompt building and
   denial formatting
+- `app/workflows/pending_request.py` — pending approval/retry workflow graph
+  and transition legality (library)
 
 Contract:
 
 - `check_credential_satisfaction` receives the resolved active_skills list,
   not the raw session
-- `validate_pending` reads trust_tier from the stored pending state so the
+- `classify_pending_validation()` is the authoritative classifier for pending
+  freshness (`ok`, `expired`, `context_changed`)
+- pending approval/retry transition legality is owned by
+  `PendingRequestMachine`; handlers choose the event (`approve_execute`,
+  `expire`, `invalidate_stale`, `reject`, `cancel`) and then persist or clear
+  session state
+- `validate_pending` remains the user-facing message layer built on the same
+  classification rules, not a second source of truth
+- pending validation reads trust_tier from the stored pending state so the
   context hash is recomputed with the same identity shape that created it
 - handlers decide how to render outputs and buttons, not how business rules
   work
@@ -414,6 +427,7 @@ skill_commands.py
   v                 v                   v
 request_flow.py   doctor.py         ratelimit.py
 approvals.py
+workflows/pending_request.py    PendingRequestMachine, run_pending_request_event (pure)
   |
   v
 execution_context.py    Resolve context, hash, model, trust tier
@@ -692,6 +706,21 @@ actor); the machine never returns it.
 **Domain exceptions** (raised by machine validators, mapped by adapter to
 TransitionResult): `OtherClaimedForChat`, `BlockedReplay`, `NotStaleClaim`.
 
+### Pending-request workflow types
+
+**PendingRequestWorkflowModel** (mutable): Built from stored pending state and a
+validation classification result (`ok`, `expired`, `context_changed`). The
+machine reads and writes `state`; actions set the resulting disposition. No SQL
+or I/O in model methods.
+
+**PendingRequestTransitionResult**: `allowed`, `new_state`, `disposition`,
+`reason`. Returned by `run_pending_request_event()`. Handlers and request flow
+use it to decide whether to execute, clear pending state, or surface a user
+message.
+
+**PendingRequestDisposition**: `ok`, `executed`, `rejected`, `expired`,
+`invalidated`, `cancelled`, `invalid_transition`, `guard_failed`.
+
 ---
 
 ## State and Storage Model
@@ -701,8 +730,8 @@ TransitionResult): `OtherClaimedForChat`, `BlockedReplay`, `NotStaleClaim`.
 The shipped implementation uses two SQLite databases with different
 lifecycles. After migration, equivalent runtime authority moves to Postgres
 for session state and the core request queue while preserving the same typed
-session, transport-payload, and execution-context contracts. Workflow-owner
-extraction should happen before this cutover so the Postgres runtime does not
+session, transport-payload, and execution-context contracts. Phase 11 already
+completed the workflow-owner extraction so the Postgres runtime does not
 inherit open-coded transition logic.
 
 **Current shipped `sessions.db`** — chat session state:
@@ -822,8 +851,13 @@ Steps in order:
        v
   render plan + [Approve] [Reject] buttons
        |
-  User clicks Approve → validate_pending (context hash + trust_tier) → execute_request
-  User clicks Reject  → clear pending, reply
+  User clicks Approve → classify_pending_validation() → PendingRequestMachine
+       |                  |
+       |                  +-- executed    → execute_request
+       |                  +-- expired     → clear pending, show expiry message
+       |                  +-- invalidated → clear pending, show stale-context message
+       |
+  User clicks Reject  → PendingRequestMachine.reject → clear pending, reply
 ```
 
 Approval succeeds only if: pending exists, not expired, context hash matches
@@ -864,16 +898,21 @@ shared Postgres queue authority + worker loop as primary processing path. The
 current shipped implementation uses `transport.db` as the single-host
 foundation.
 
-### Workflow ownership (transport)
+### Workflow ownership (Phase 11 shipped shape)
 
-The transport and recovery workflow is owned by a single source of truth:
-`TransportRecoveryMachine` (python-statemachine) in `app/workflows/transport_recovery.py`.
-Transition legality, guards, and dispositions are defined there; the
-repository (`work_queue.py`) performs SQL, compare-and-update, and
-`already_handled` classification. Approval and retry workflows remain
-in request_flow and session state; future extraction of a dedicated
-approval/retry state machine would follow the same pattern (one owner
-for transition rules, repository for persistence).
+The Phase 11 workflow extraction is now in place for both workflow families:
+
+- `TransportRecoveryMachine` in `app/workflows/transport_recovery.py`
+- `PendingRequestMachine` in `app/workflows/pending_request.py`
+
+Ownership split:
+
+- library-backed workflow modules own transition legality, guards, and
+  disposition classification
+- repository/session code owns persistence, compare-and-update, and
+  repository-only outcomes such as `already_handled`
+- handlers and request flow orchestrate user-visible outcomes but do not define
+  transition legality
 
 ---
 
@@ -1033,6 +1072,20 @@ must run with a Python environment that has those packages installed.
 - **Bootstrap script:** `scripts/bootstrap.sh` installs from `requirements.txt`
   every time it runs (creating or updating the venv), then runs a quick import
   check so missing dependencies fail immediately instead of at runtime.
+- **Current shipped runtime bootstrap:** SQLite session and transport stores are
+  created or validated by the app on first use. That is why a fresh host can
+  currently go from `./setup.sh` to a working bot without separate database
+  provisioning.
+- **Planned Phase 12 operational contract:** Postgres introduces an external
+  runtime dependency, so the lifecycle splits into three responsibilities:
+  infrastructure provisioning, DB bootstrap/update, and app runtime. The app
+  remains validate-only at startup; explicit repo-owned DB workflows
+  (`bootstrap`, `update`, `doctor`) prepare and verify the database before the
+  bot starts.
+- **Planned Phase 12 environment shape:** Dockerized app + Postgres is the
+  canonical development shape; staging may start with the same shape; later
+  environments may move Postgres external while preserving the same explicit DB
+  bootstrap/update contract.
 
 See [README.md](../README.md) for Get Started and "After updating (git pull)".
 

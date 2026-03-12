@@ -40,7 +40,7 @@ cd ~/telegram-agent-bot
 ./setup.sh
 ```
 
-The setup wizard walks you through:
+`setup.sh` creates a virtualenv (`.venv`) and installs dependencies from `requirements.txt`. The wizard then walks you through:
 
 1. choosing a bot instance name
 2. creating or pasting a Telegram bot token from `@BotFather`
@@ -50,6 +50,17 @@ The setup wizard walks you through:
 6. optionally launching it as a `systemd --user` service
 
 When it finishes, message your bot in Telegram and start using it.
+
+### After updating (git pull)
+
+If you pull new code, refresh dependencies so the running bot has all required packages (e.g. after new features or dependency changes):
+
+```bash
+cd ~/telegram-agent-bot
+./scripts/bootstrap.sh
+```
+
+Then restart the bot (e.g. `systemctl --user restart telegram-agent-bot@m1.service` or `./scripts/run.sh m1`). If you skip this step and the repo added a new dependency, the bot may fail at startup with a `ModuleNotFoundError`.
 
 ## Running the Bot
 
@@ -218,11 +229,11 @@ If you run the bot yourself, these resources cover setup, administration, and in
 ### Development
 
 ```bash
-./scripts/bootstrap.sh          # create venv, install deps + dev deps
+./scripts/bootstrap.sh          # create venv, install from requirements.txt (+ dev deps when run standalone)
 .venv/bin/python -m pytest      # run tests (sequential)
 .venv/bin/python -m pytest -n auto  # run tests (parallel)
 ./scripts/test_all.sh           # pytest + bash setup wizard tests
 ./scripts/doctor.sh <instance>  # health check a running instance
 ```
 
-Full test suite covers setup, handlers, providers, skills, and transport.
+Always run `./scripts/bootstrap.sh` after a `git pull` so the venv has the latest dependencies. Full test suite covers setup, handlers, providers, skills, and transport.

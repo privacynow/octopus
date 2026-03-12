@@ -18,6 +18,7 @@ from app.work_queue import (
     _validate_work_item_row,
     DiscardResult,
     LeaveClaimed,
+    claim_for_update,
     claim_next,
     claim_next_any,
     close_transport_db,
@@ -135,6 +136,121 @@ def test_record_and_enqueue_preclaim_derived_from_machine(data_dir):
     row2 = conn.execute("SELECT state, worker_id FROM work_items WHERE id = ?", (item_id2,)).fetchone()
     assert row2["state"] == "claimed"
     assert row2["worker_id"] == "handler-1"
+
+
+def test_record_and_enqueue_worker_id_none_inserts_queued(data_dir):
+    """Repository shape: record_and_enqueue(worker_id=None) always inserts queued."""
+    is_new, item_id = record_and_enqueue(
+        data_dir, 5001, chat_id=1, user_id=42, kind="message", worker_id=None
+    )
+    assert is_new is True
+    assert item_id is not None
+    conn = _transport_db(data_dir)
+    row = conn.execute("SELECT state FROM work_items WHERE id = ?", (item_id,)).fetchone()
+    assert row["state"] == "queued"
+
+
+def test_record_and_enqueue_worker_id_claimed_only_when_no_other_claimed(data_dir):
+    """Repository shape: record_and_enqueue(worker_id=...) inserts claimed only when chat has no claimed item."""
+    # No other claimed -> created as claimed
+    is_new, item_id = record_and_enqueue(
+        data_dir, 5010, chat_id=1, user_id=42, kind="message", worker_id="handler-1"
+    )
+    assert is_new is True
+    conn = _transport_db(data_dir)
+    row = conn.execute("SELECT state, worker_id FROM work_items WHERE id = ?", (item_id,)).fetchone()
+    assert row["state"] == "claimed"
+    assert row["worker_id"] == "handler-1"
+    # Same chat already has claimed -> next item must be queued
+    is_new2, item_id2 = record_and_enqueue(
+        data_dir, 5011, chat_id=1, user_id=42, kind="message", worker_id="handler-1"
+    )
+    assert is_new2 is True
+    row2 = conn.execute("SELECT state FROM work_items WHERE id = ?", (item_id2,)).fetchone()
+    assert row2["state"] == "queued"
+
+
+def test_enqueue_work_item_matches_record_and_enqueue_initial_state(data_dir):
+    """Repository shape: enqueue_work_item and record_and_enqueue use same initial-state semantics."""
+    # record_and_enqueue(worker_id=None) -> queued
+    _, id1 = record_and_enqueue(data_dir, 5020, chat_id=1, user_id=42, kind="message", worker_id=None)
+    # enqueue_work_item(worker_id=None) -> queued
+    record_update(data_dir, 5021, chat_id=2, user_id=42, kind="message")
+    id2 = enqueue_work_item(data_dir, chat_id=2, update_id=5021, worker_id=None)
+    conn = _transport_db(data_dir)
+    for iid in (id1, id2):
+        row = conn.execute("SELECT state FROM work_items WHERE id = ?", (iid,)).fetchone()
+        assert row["state"] == "queued"
+    # record_and_enqueue(worker_id=X) with no other claimed -> claimed
+    _, id3 = record_and_enqueue(
+        data_dir, 5022, chat_id=3, user_id=42, kind="message", worker_id="h1"
+    )
+    # enqueue_work_item(worker_id=X) with no other claimed -> claimed
+    record_update(data_dir, 5023, chat_id=4, user_id=42, kind="message")
+    id4 = enqueue_work_item(data_dir, chat_id=4, update_id=5023, worker_id="h1")
+    for iid in (id3, id4):
+        row = conn.execute("SELECT state, worker_id FROM work_items WHERE id = ?", (iid,)).fetchone()
+        assert row["state"] == "claimed"
+        assert row["worker_id"] == "h1"
+
+
+def test_claim_for_update_exact_row_path_already_handled_when_state_changed(data_dir):
+    """Repository shape: claim_for_update returns None (already_handled) when item was already claimed by another worker."""
+    record_and_enqueue(
+        data_dir, 5030, chat_id=1, user_id=42, kind="message", worker_id="handler-1"
+    )
+    # Same update: handler-1 can claim; different worker cannot
+    item1 = claim_for_update(data_dir, chat_id=1, update_id=5030, worker_id="handler-1")
+    assert item1 is not None
+    assert item1["state"] == "claimed"
+    assert item1["worker_id"] == "handler-1"
+    item2 = claim_for_update(data_dir, chat_id=1, update_id=5030, worker_id="other-worker")
+    assert item2 is None
+    conn = _transport_db(data_dir)
+    row = conn.execute(
+        "SELECT state, worker_id FROM work_items WHERE update_id = 5030"
+    ).fetchone()
+    assert row["state"] == "claimed"
+    assert row["worker_id"] == "handler-1"
+
+
+def test_claim_next_returns_none_when_another_worker_claimed(data_dir):
+    """Repository shape: shared claim helper returns already_handled (None) when reread shows state changed."""
+    record_update(data_dir, 5040, chat_id=1, user_id=42, kind="message")
+    enqueue_work_item(data_dir, chat_id=1, update_id=5040)
+    first = claim_next(data_dir, chat_id=1, worker_id="worker-a")
+    assert first is not None
+    assert first["state"] == "claimed"
+    second = claim_next(data_dir, chat_id=1, worker_id="worker-b")
+    assert second is None
+
+
+def test_shared_claim_helper_raises_corruption_when_reread_still_queued(data_dir):
+    """Repository shape: when UPDATE matches 0 rows but reread still shows queued, raise TransportStateCorruption."""
+    from unittest.mock import MagicMock, patch
+
+    record_update(data_dir, 5050, chat_id=1, user_id=42, kind="message")
+    enqueue_work_item(data_dir, chat_id=1, update_id=5050)
+    real_conn = _transport_db(data_dir)
+    update_seen = [False]
+
+    class ConnWrapper:
+        def __init__(self, conn):
+            self._conn = conn
+        def execute(self, sql, params=()):
+            if "UPDATE work_items" in sql and "SET state = ?" in sql and not update_seen[0]:
+                update_seen[0] = True
+                mock_cur = MagicMock()
+                mock_cur.rowcount = 0
+                return mock_cur
+            return self._conn.execute(sql, params)
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    with patch("app.work_queue._transport_db", return_value=ConnWrapper(real_conn)):
+        with pytest.raises(TransportStateCorruption) as exc_info:
+            claim_next(data_dir, chat_id=1, worker_id="w1")
+    assert "queued" in str(exc_info.value).lower()
 
 
 def test_claim_allows_different_chat(data_dir):
@@ -742,6 +858,55 @@ def test_record_and_enqueue_no_orphan_update(data_dir):
         "SELECT count(*) FROM work_items WHERE update_id = 2002"
     ).fetchone()
     assert row[0] == 1
+
+
+def test_record_and_enqueue_rollback_on_non_integrity_error(data_dir):
+    """On non-IntegrityError (e.g. TransportStateCorruption from _insert_initial_work_item), transaction is rolled back and no rows remain."""
+    from unittest.mock import patch
+
+    update_id = 21000
+    with patch("app.work_queue._insert_initial_work_item", side_effect=TransportStateCorruption("test")):
+        with pytest.raises(TransportStateCorruption):
+            record_and_enqueue(
+                data_dir, update_id=update_id, chat_id=1, user_id=42, kind="message",
+            )
+    conn = _transport_db(data_dir)
+    assert conn.in_transaction is False
+    assert conn.execute("SELECT 1 FROM updates WHERE update_id = ?", (update_id,)).fetchone() is None
+    assert conn.execute("SELECT 1 FROM work_items WHERE update_id = ?", (update_id,)).fetchone() is None
+
+
+def test_assert_no_invalid_rows_raises_when_two_claimed_in_chat(data_dir):
+    """_assert_no_invalid_rows_for_chat raises TransportStateCorruption when more than one claimed row exists for the chat."""
+    # Use a separate in-memory DB so we can have two claimed rows (production schema has unique index preventing that).
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO work_items (id, chat_id, update_id, state, worker_id, claimed_at, created_at) VALUES (?, 1, 22001, 'claimed', 'w1', ?, ?)",
+        ("id-1", now, now),
+    )
+    conn.execute(
+        "INSERT INTO work_items (id, chat_id, update_id, state, worker_id, claimed_at, created_at) VALUES (?, 1, 22002, 'claimed', 'w2', ?, ?)",
+        ("id-2", now, now),
+    )
+    conn.commit()
+    with pytest.raises(TransportStateCorruption) as exc_info:
+        _assert_no_invalid_rows_for_chat(conn, 1)
+    assert "2 claimed" in str(exc_info.value) or "claimed work items" in str(exc_info.value)
+    conn.close()
+
+
+def test_fresh_schema_has_one_claimed_per_chat_index(data_dir):
+    """Fresh transport DB schema includes partial unique index enforcing at most one claimed row per chat."""
+    conn = _transport_db(data_dir)
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_one_claimed_per_chat'"
+    ).fetchall()
+    assert len(rows) == 1
 
 
 # -- REGRESSION: worker replay with real dispatch -------------------------

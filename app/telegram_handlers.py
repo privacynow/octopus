@@ -1149,29 +1149,55 @@ async def reject_pending(chat_id: int, message) -> None:
 
 # -- Command handlers ------------------------------------------------------
 
-HELP_TEMPLATE = (
-    "<b>Agent Bot</b> (instance: <code>{instance}</code>, provider: {provider})\n\n"
-    "Send a message, photo, or document and the AI will respond.\n\n"
-    "<b>Commands:</b>\n"
-    "/new — start a fresh conversation\n"
-    "/skills — browse and activate skills (e.g. <code>/skills list</code>)\n"
-    "/role &lt;text&gt; — set the AI's persona (e.g. <code>/role Python expert</code>)\n"
-    "/approval on|off — show a plan before executing, or run immediately\n"
-    "/approve / /reject — act on a pending plan\n"
-    "/cancel — cancel credential setup or a pending request\n"
-    "/clear_credentials — remove your stored credentials\n"
-    "/send &lt;path&gt; — retrieve a file from the server\n"
-    "/model — switch model profile (fast/balanced/best)\n"
-    "/compact on|off — toggle short/full answers\n"
-    "/policy inspect|edit — set file access policy\n"
-    "/settings — view and change chat settings\n"
-    "/session — show current session info\n"
-    "/id — show your Telegram user ID\n"
-    "/doctor — run health checks\n"
-    "/export — download recent conversation history\n"
-    "/admin sessions — session overview (admin only)\n\n"
-    "Type /help skills, /help approval, or /help credentials for details."
-)
+def _help_command_lines(user) -> list[str]:
+    """Build the main help command list for the given user (trust- and admin-aware).
+
+    Public users do not see /project or /policy (blocked by _public_guard in handlers).
+    Non-admin users do not see /admin sessions.
+    """
+    lines = [
+        "/new — start a fresh conversation",
+        "/skills — browse and activate skills (e.g. <code>/skills list</code>)",
+        "/role &lt;text&gt; — set the AI's persona (e.g. <code>/role Python expert</code>)",
+        "/approval on|off — show a plan before executing, or run immediately",
+        "/approve / /reject — act on a pending plan",
+        "/cancel — cancel credential setup or a pending request",
+        "/clear_credentials — remove your stored credentials",
+        "/send &lt;path&gt; — retrieve a file from the server",
+        "/model — switch model profile (fast/balanced/best)",
+        "/compact on|off — toggle short/full answers",
+    ]
+    if not is_public_user(user):
+        lines.append("/policy inspect|edit — set file access policy")
+    lines.extend([
+        "/settings — view and change chat settings",
+    ])
+    if not is_public_user(user):
+        lines.append("/project — show or change project binding")
+    lines.extend([
+        "/session — show current session info",
+        "/id — show your Telegram user ID",
+        "/doctor — run health checks",
+        "/export — download recent conversation history",
+    ])
+    if is_admin(user):
+        lines.append("/admin sessions — session overview (admin only)")
+    return lines
+
+
+def _build_main_help(user) -> str:
+    """Build the full main help text for the given user (trust- and admin-aware)."""
+    cfg = _cfg()
+    provider = _prov().name.capitalize()
+    instance = cfg.instance
+    header = (
+        "<b>Agent Bot</b> (instance: <code>{instance}</code>, provider: {provider})\n\n"
+        "Send a message, photo, or document and the AI will respond.\n\n"
+        "<b>Commands:</b>\n"
+    ).format(instance=instance, provider=provider)
+    command_block = "\n".join(_help_command_lines(user)) + "\n\n"
+    footer = "Type /help skills, /help approval, or /help credentials for details."
+    return header + command_block + footer
 
 HELP_SKILLS = (
     "<b>Skills</b>\n\n"
@@ -1225,8 +1251,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(_msg.trust_not_authorized())
         _complete_pending_work_item(uid)
         return
-    cfg = _cfg()
-    text = HELP_TEMPLATE.format(provider=_prov().name.capitalize(), instance=cfg.instance)
+    text = _build_main_help(event.user)
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
     _complete_pending_work_item(uid)
 
@@ -1242,7 +1267,6 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(_msg.trust_not_authorized())
         _complete_pending_work_item(uid)
         return
-    cfg = _cfg()
     args = event.args
 
     if args:
@@ -1258,7 +1282,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _complete_pending_work_item(uid)
         return
 
-    text = HELP_TEMPLATE.format(provider=_prov().name.capitalize(), instance=cfg.instance)
+    text = _build_main_help(event.user)
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
     _complete_pending_work_item(uid)
 

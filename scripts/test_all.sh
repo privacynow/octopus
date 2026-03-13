@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the full test suite: pytest (Python) + test_setup.sh + test_docker_ops.sh (bash).
+# Run the full test suite: pytest (Python) + test_setup.sh + test_docker_ops.sh + test_dev_up_contract.sh (bash).
 #
 # Usage:
 #   ./scripts/test_all.sh              # run everything
@@ -20,4 +20,5 @@ cd "$REPO_DIR"
 if [ $# -eq 0 ]; then
     bash tests/test_setup.sh
     bash tests/test_docker_ops.sh
+    bash tests/test_dev_up_contract.sh
 fi

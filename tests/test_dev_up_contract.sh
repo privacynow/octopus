@@ -146,6 +146,7 @@ invocations=$(cat "$RECORD_DOCKER_INVOCATIONS")
 check_contains "db-doctor was run" "$invocations" "db-doctor"
 check_not_contains "db-bootstrap was not run" "$invocations" "db-bootstrap"
 check_contains "Running DB update (existing schema)" "$(cat "$TEST_DIR/dev_up_stdout")" "Running DB update (existing schema)"
+check_contains "dev_up mentions guided_start for full path" "$(cat "$TEST_DIR/dev_up_stdout")" "guided_start"
 
 # --- 2. Update fails with missing-schema message -> bootstrap and doctor ---
 echo ""

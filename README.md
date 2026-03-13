@@ -186,8 +186,7 @@ to see the full output whenever you need it.
 | `/approval on\|off` | Toggle approval mode |
 | `/approve` | Approve the current pending plan |
 | `/reject` | Reject the current pending plan |
-| `/retry` | Retry the last failed run when available |
-| `/cancel` | Cancel the current run |
+| `/cancel` | Cancel credential setup or a pending request |
 | `/doctor` | Show a health report |
 
 ### Output and session
@@ -198,7 +197,6 @@ to see the full output whenever you need it.
 | `/compact on\|off` | Toggle compact mode |
 | `/export` | Export session output |
 | `/session` | Show current session details |
-| `/clear` | Clear current session state |
 
 ### Skills and settings
 

@@ -67,8 +67,8 @@ That’s the main path. Manual steps and reference are below.
 If you prefer to run steps yourself instead of `guided_start.sh`:
 
 - **Postgres and DB (no `.env.bot` required):**  
-  `./scripts/dev_up.sh`  
-  Or: `docker compose up -d postgres` then `docker compose --profile tools run --rm db-bootstrap` and `docker compose --profile tools run --rm db-doctor`.
+  `./scripts/dev_up.sh` — starts Postgres, then runs db-doctor; if the DB already has schema it runs db-update, otherwise db-bootstrap, then db-doctor.  
+  One-off: `docker compose up -d postgres`, then `docker compose --profile tools run --rm db-bootstrap` (fresh DB) or `db-update` (existing schema), then `docker compose --profile tools run --rm db-doctor`.
 
 - **Build bot image:**  
   `./scripts/build_bot_image.sh` (uses `BOT_PROVIDER` from `.env.bot`) or `./scripts/build_bot_image.sh claude` / `./scripts/build_bot_image.sh codex`.  
@@ -101,7 +101,7 @@ Run `db-update` when the repo adds new SQL. Rebuild the image so the new code is
 | Command | Purpose |
 |---|---|
 | `./scripts/guided_start.sh` | **One path:** Postgres → build → provider login (if needed) → start bot |
-| `./scripts/dev_up.sh` | Start Postgres, run DB bootstrap, run DB doctor (no `.env.bot` needed) |
+| `./scripts/dev_up.sh` | Start Postgres, run DB bootstrap or update (then doctor); no `.env.bot` needed |
 | `./scripts/build_bot_image.sh` | Build `telegram-agent-bot:claude` or `:codex` (from `.env.bot` or arg) |
 | `./scripts/provider_login.sh` | One-time interactive provider auth |
 | `./scripts/provider_status.sh` | **Provider auth and runtime only** (not DB/Telegram) |
@@ -245,16 +245,13 @@ Ensure you have built the image for your chosen provider before running the bot.
 
 ### DB doctor says bootstrap or update is required
 
-Run:
+Use **db-bootstrap** for a fresh DB (no schema yet). Use **db-update** when the DB already has schema (e.g. after a git pull with new migrations). Then run db-doctor to confirm.
 
 ```bash
-docker compose --profile tools run --rm db-bootstrap
-```
-
-or:
-
-```bash
-docker compose --profile tools run --rm db-update
+docker compose --profile tools run --rm db-bootstrap   # fresh DB
+# or
+docker compose --profile tools run --rm db-update      # existing schema
+docker compose --profile tools run --rm db-doctor
 ```
 
 ### Polling conflict

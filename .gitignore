@@ -11,6 +11,9 @@ __pycache__/
 # Runtime data
 *.log
 
+# Build marker (guided_start uses this to detect repo rev change)
+.bot-image-build-rev
+
 # Test artifacts
 .setup-test-patched.sh
 tests/.postgres_run_id*

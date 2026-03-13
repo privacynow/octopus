@@ -1,0 +1,8 @@
+# E2E-only override: do not publish Postgres to the host at all.
+# The Compose E2E harness talks to Postgres only over the internal Compose network, so
+# publishing 5432 is unnecessary and creates conflicts with local dev stacks and parallel runs.
+
+services:
+  postgres:
+    ports: !override
+      []

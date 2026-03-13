@@ -1,12 +1,22 @@
-"""Compose-based E2E tests for Phase 12: bootstrap, doctor, optional bot startup.
+"""Compose-based E2E tests for the Docker-first operator path.
 
 Run only when E2E_COMPOSE=1 and Docker is available. Skipped in normal pytest runs.
 See README.md for the operator path and docs/ARCHITECTURE.md for the runtime/testing contract.
+
+The harness isolates each worker/run with:
+- a unique COMPOSE_PROJECT_NAME
+- a generated override file for worker-local bot env and image tags
+- no host Postgres port publication
+
+That lets these tests run safely alongside a local dev stack and across concurrent test runs.
 """
 
 import os
+import shutil
 import subprocess
 import time
+import uuid
+from pathlib import Path
 
 import pytest
 
@@ -15,30 +25,112 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 def _docker_available() -> bool:
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["docker", "info"],
             capture_output=True,
             timeout=5,
             check=False,
         )
-        return True
+        return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
 
 
-def _compose(*args: str) -> subprocess.CompletedProcess:
+def _worker_id() -> str:
+    return os.environ.get("PYTEST_XDIST_WORKER", "master")
+
+
+def _compose(ctx: dict[str, object], *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["docker", "compose", "-f", os.path.join(REPO_ROOT, "docker-compose.yml"), *args],
+        ["docker", "compose", *ctx["compose_files"], *args],
         cwd=REPO_ROOT,
+        env=ctx["env"],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=timeout,
     )
+
+
+def _compose_logs(ctx: dict[str, object], name: str, *services: str) -> tuple[Path, str]:
+    result = _compose(ctx, "logs", "--no-color", *services, timeout=120)
+    body = []
+    if result.stdout:
+        body.append(result.stdout)
+    if result.stderr:
+        body.append(result.stderr)
+    log_text = "\n".join(body).strip()
+    log_path = Path(ctx["artifacts_dir"]) / f"{name}.compose.log"
+    log_path.write_text(log_text + ("\n" if log_text else ""), encoding="utf-8")
+    return log_path, log_text
+
+
+def _fail_with_logs(ctx: dict[str, object], name: str, message: str, *services: str) -> None:
+    log_path, log_text = _compose_logs(ctx, name, *services)
+    details = f"{message}\n\nCompose logs saved to: {log_path}"
+    if log_text:
+        details += f"\n\n{log_text}"
+    pytest.fail(details)
+
+
+@pytest.fixture(scope="module")
+def compose_ctx(e2e_skip, tmp_path_factory):
+    worker = _worker_id()
+    run_id = uuid.uuid4().hex[:10]
+    project = f"telegram-agent-bot-e2e-{worker}-{run_id}"
+    artifacts_dir = tmp_path_factory.mktemp(f"compose-e2e-{worker}")
+    env_file = Path(artifacts_dir) / ".env.bot"
+    env_file.write_text(
+        "\n".join(
+            [
+                "BOT_PROVIDER=claude",
+                "TELEGRAM_BOT_TOKEN=123456:ABC-DEFghijklmnopqrstuvwxyz",
+                "BOT_ALLOW_OPEN=1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    bot_image = f"telegram-agent-bot-e2e:{worker}-{run_id}-claude"
+    generated_override = Path(artifacts_dir) / "docker-compose.e2e.generated.yml"
+    generated_override.write_text(
+        "\n".join(
+            [
+                "services:",
+                "  bot-provider:",
+                f"    image: {bot_image}",
+                "    env_file: !override",
+                f"      - {env_file}",
+                "  bot:",
+                f"    image: {bot_image}",
+                "    env_file: !override",
+                f"      - {env_file}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    ctx = {
+        "project": project,
+        "compose_files": [
+            "-f", os.path.join(REPO_ROOT, "docker-compose.yml"),
+            "-f", os.path.join(REPO_ROOT, "docker-compose.e2e.yml"),
+            "-f", str(generated_override),
+        ],
+        "env": {**os.environ, "COMPOSE_PROJECT_NAME": project},
+        "env_file": env_file,
+        "artifacts_dir": artifacts_dir,
+        "bot_image": bot_image,
+    }
+    yield ctx
+    try:
+        _compose_logs(ctx, "final")
+    finally:
+        _compose(ctx, "down", "-v", "--remove-orphans", "-t", "2", timeout=120)
 
 
 @pytest.fixture(scope="module")
 def e2e_skip():
-    """Skip entire module unless E2E_COMPOSE=1 and Docker available."""
+    """Skip entire module unless E2E_COMPOSE=1 and Docker is available."""
     if os.environ.get("E2E_COMPOSE") != "1":
         pytest.skip("E2E_COMPOSE=1 not set")
     if not _docker_available():
@@ -46,77 +138,111 @@ def e2e_skip():
 
 
 @pytest.fixture(scope="module")
-def postgres_up(e2e_skip):
-    """Bring up Postgres and wait for healthy. Tear down at module end."""
-    _compose("down", "-t", "2")
-    r = _compose("up", "-d", "postgres")
+def postgres_up(compose_ctx):
+    """Bring up Postgres and wait for healthy. Module teardown is handled by compose_ctx."""
+    r = _compose(compose_ctx, "up", "-d", "postgres")
     assert r.returncode == 0, (r.stdout, r.stderr)
     for _ in range(30):
-        r = _compose("exec", "postgres", "pg_isready", "-U", "bot", "-d", "bot")
+        r = _compose(compose_ctx, "exec", "postgres", "pg_isready", "-U", "bot", "-d", "bot")
         if r.returncode == 0:
             break
         time.sleep(1)
     else:
-        _compose("down", "-t", "2")
-        pytest.fail("Postgres did not become ready")
-    yield
-    _compose("down", "-t", "2")
+        _fail_with_logs(compose_ctx, "postgres-not-ready", "Postgres did not become ready", "postgres")
+    return compose_ctx
 
 
-def test_compose_postgres_up_without_env_bot(e2e_skip):
+def test_compose_postgres_up_without_env_bot(e2e_skip, tmp_path):
     """Clean-repo tooling path: postgres comes up without .env.bot.
 
-    Bot service is under profile 'bot', so compose up postgres does not require
-    .env.bot. This test runs without the postgres_up fixture so we can assert
-    the minimal case.
+    This uses a temp copied Compose stack with no .env.bot at all, proving that
+    postgres-only tooling does not depend on bot runtime config.
     """
-    env_bot = os.path.join(REPO_ROOT, ".env.bot")
-    had_env_bot = os.path.isfile(env_bot)
-    if had_env_bot:
-        os.rename(env_bot, env_bot + ".e2e_backup")
+    compose_base = tmp_path / "docker-compose.yml"
+    compose_e2e = tmp_path / "docker-compose.e2e.yml"
+    shutil.copy2(os.path.join(REPO_ROOT, "docker-compose.yml"), compose_base)
+    shutil.copy2(os.path.join(REPO_ROOT, "docker-compose.e2e.yml"), compose_e2e)
+    env = {
+        **os.environ,
+        "COMPOSE_PROJECT_NAME": f"telegram-agent-bot-e2e-clean-{_worker_id()}-{uuid.uuid4().hex[:8]}",
+    }
     try:
-        _compose("down", "-t", "2")
-        r = _compose("up", "-d", "postgres")
+        r = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                str(compose_base),
+                "-f",
+                str(compose_e2e),
+                "up",
+                "-d",
+                "postgres",
+            ],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
         assert r.returncode == 0, (r.stdout, r.stderr)
     finally:
-        _compose("down", "-t", "2")
-        if had_env_bot:
-            os.rename(env_bot + ".e2e_backup", env_bot)
+        subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                str(compose_base),
+                "-f",
+                str(compose_e2e),
+                "down",
+                "-v",
+                "--remove-orphans",
+                "-t",
+                "2",
+            ],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
 
 
 def test_compose_bootstrap_doctor(postgres_up):
     """DB bootstrap and doctor succeed against Compose Postgres."""
-    r = _compose("--profile", "tools", "run", "--rm", "db-bootstrap")
+    r = _compose(postgres_up, "--profile", "tools", "run", "--rm", "db-bootstrap")
     assert r.returncode == 0, (r.stdout, r.stderr)
 
-    r = _compose("--profile", "tools", "run", "--rm", "db-doctor")
+    r = _compose(postgres_up, "--profile", "tools", "run", "--rm", "db-doctor")
     assert r.returncode == 0, (r.stdout, r.stderr)
 
 
 def test_compose_db_update_smoke(postgres_up):
     """DB update runs cleanly on an already bootstrapped environment."""
-    r = _compose("--profile", "tools", "run", "--rm", "db-bootstrap")
+    r = _compose(postgres_up, "--profile", "tools", "run", "--rm", "db-bootstrap")
     assert r.returncode == 0, (r.stdout, r.stderr)
-    r = _compose("--profile", "tools", "run", "--rm", "db-update")
+    r = _compose(postgres_up, "--profile", "tools", "run", "--rm", "db-update")
     assert r.returncode == 0, (r.stdout, r.stderr)
 
 
 def test_compose_bot_image_has_provider(postgres_up):
     """Supported bot image (Dockerfile.bot) contains the selected provider binary.
 
-    Builds the real provider-enabled image with docker build and tag
-    telegram-agent-bot:claude, then runs it via compose --profile bot.
+    Builds the real provider-enabled image with a worker-local tag, then runs it
+    via compose --profile bot. This is safe alongside parallel E2E runs.
     """
     r = subprocess.run(
         ["docker", "build", "-f", "Dockerfile.bot", "--build-arg", "BOT_PROVIDER=claude",
-         "-t", "telegram-agent-bot:claude", "."],
+         "-t", str(postgres_up["bot_image"]), "."],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         timeout=300,
     )
     assert r.returncode == 0, (r.stdout, r.stderr)
-    r = _compose("--profile", "bot", "run", "--rm",
+    r = _compose(postgres_up, "--profile", "bot", "run", "--rm",
                  "-e", "BOT_PROVIDER=claude", "-e", "TELEGRAM_BOT_TOKEN=fake", "-e", "BOT_ALLOW_OPEN=1",
                  "bot", "sh", "-c", "claude --version")
     assert r.returncode == 0, (r.stdout, r.stderr)
@@ -124,49 +250,40 @@ def test_compose_bot_image_has_provider(postgres_up):
 
 
 def test_compose_bot_startup_validates_schema(postgres_up):
-    """Bot container (supported real provider-enabled image) starts and validates schema.
+    """Supported bot image validates DB/schema, then fails clearly without provider auth.
 
-    Builds telegram-agent-bot:claude then runs with --profile bot. Asserts
-    config/doctor/schema pass and the app reaches 'Bot starting (long-poll)'.
+    In CI/local E2E we do not perform an interactive provider login, so the real
+    provider-enabled image should reach DB/schema validation and then emit the
+    operator-facing provider-auth failure message rather than hanging or failing
+    obscurely.
     """
     r = subprocess.run(
         ["docker", "build", "-f", "Dockerfile.bot", "--build-arg", "BOT_PROVIDER=claude",
-         "-t", "telegram-agent-bot:claude", "."],
+         "-t", str(postgres_up["bot_image"]), "."],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         timeout=300,
     )
     assert r.returncode == 0, (r.stdout, r.stderr)
-    r = _compose("--profile", "tools", "run", "--rm", "db-bootstrap")
+    r = _compose(postgres_up, "--profile", "tools", "run", "--rm", "db-bootstrap")
     assert r.returncode == 0, (r.stdout, r.stderr)
-
-    proc = subprocess.Popen(
-        ["docker", "compose", "-f", os.path.join(REPO_ROOT, "docker-compose.yml"),
-         "--profile", "bot", "run", "--rm",
-         "-e", "TELEGRAM_BOT_TOKEN=123456:ABC-DEFghijklmnopqrstuvwxyz",
-         "-e", "BOT_PROVIDER=claude",
-         "-e", "BOT_ALLOW_OPEN=1",
-         "bot"],
-        cwd=REPO_ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    r = _compose(postgres_up, "--profile", "bot", "up", "-d", "bot")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    for _ in range(15):
+        _, logs = _compose_logs(postgres_up, "bot-startup", "bot", "postgres")
+        if "Bot starting (long-poll)" in logs or "Bot starting (webhook)" in logs:
+            return
+        if "Provider not authenticated or unavailable." in logs and "Run ./scripts/provider_login.sh" in logs:
+            return
+        time.sleep(1)
+    _fail_with_logs(
+        postgres_up,
+        "bot-startup-timeout",
+        "Bot did not reach startup or emit the expected provider-auth failure within 15 seconds.",
+        "bot",
+        "postgres",
     )
-    try:
-        out, err = proc.communicate(timeout=15)
-    except subprocess.TimeoutExpired:
-        proc.terminate()
-        try:
-            out, err = proc.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            out, err = proc.communicate(timeout=2)
-    if b"Bot starting (long-poll)" in (err or b"") or b"Bot starting (webhook)" in (err or b""):
-        return
-    if proc.returncode != 0:
-        pytest.fail(
-            f"Bot exited {proc.returncode} before reaching run_polling/run_webhook: stdout={out!r} stderr={err!r}"
-        )
 
 
 def test_compose_bot_stub_smoke(postgres_up):
@@ -177,15 +294,15 @@ def test_compose_bot_stub_smoke(postgres_up):
     """
     if os.environ.get("E2E_USE_STUB_IMAGE") != "1":
         pytest.skip("Stub image smoke is test/dev-only; set E2E_USE_STUB_IMAGE=1 to run")
-    r = _compose("--profile", "tools", "run", "--rm", "db-bootstrap")
+    r = _compose(postgres_up, "--profile", "tools", "run", "--rm", "db-bootstrap")
     assert r.returncode == 0, (r.stdout, r.stderr)
     proc = subprocess.Popen(
-        ["docker", "compose", "-f", os.path.join(REPO_ROOT, "docker-compose.yml"),
-         "--profile", "stub", "run", "--rm",
+        ["docker", "compose", *postgres_up["compose_files"], "--profile", "stub", "run", "--rm",
          "-e", "TELEGRAM_BOT_TOKEN=123456:ABC-DEFghijklmnopqrstuvwxyz",
          "-e", "BOT_PROVIDER=claude", "-e", "BOT_ALLOW_OPEN=1",
          "bot-stub"],
         cwd=REPO_ROOT,
+        env=postgres_up["env"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )

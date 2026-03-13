@@ -238,9 +238,52 @@ start there yet. The required gate is the pre-Phase-13 program defined in
 | B. Config and onboarding simplification (Docker scope) | Done (track) | One primary `.env.bot` path; config/startup/DB CLI messages reference `.env.bot` and build script. |
 | C. User-facing settings and `/project` polish | Done | `/settings` discoverability surface; `/project` default with inline keyboard; `setting_project:*` callbacks in `handle_settings_callback`; project/policy/compact/model/approval parity; tests for settings view, project callbacks, public denial, compact-no-reset. Follow-up: `/settings` uses resolved context only (public-safe display), no project/policy buttons for public users; `/settings` in `HELP_TEMPLATE`; tests for public trust-boundary, keyboard restriction, help/start discoverability. |
 | D. Progress, recovery, and trust clarity | Done | Centralized user-facing copy in `app/user_messages.py`. Progress: provider-neutral wording. Recovery: interruption notice, Run again/Skip, already-handled/blocked/discarded messages. Approval/retry: plan review, approve/reject, expired/context-changed, permission/retry prompt. Trust: not authorized, public-mode restrictions, settings managed. Tests: test_user_messages.py; handler/approval/request_flow/progress tests updated; existing behavior tests intact. |
-| E. Usability hardening before Phase 13 | Planned | Short stabilization pass over Docker path, docs, onboarding, and main user journey before backend-abstraction and Local Runtime work. |
+| E. Usability hardening before Phase 13 | In progress | Full scope per PLAN: Docker/operator path, command/help/discoverability, no-op and restriction clarity, config/doctor/startup tests, Compose E2E, handler flows. **Landed so far:** README command-table correctness (no /retry, /clear), dev_up discoverability (guided_start hint); tests: test_readme_commands.py, test_dev_up_contract.sh. Milestone remains **open** until the full usability-hardening scope and required test envelope in the plan are satisfied. |
+
+**Milestone E note:** Do not mark E complete until the broad end-to-end hardening pass (Docker path, onboarding, `/doctor`, startup, main Telegram journey) and the plan’s required verification (config/doctor/startup tests, Compose E2E, persistence/integration suites, user-visible handler flows) are done. The two fixes already in tree are useful but do not by themselves satisfy the gate.
 
 Phase 13 should not start until the full gate in the plan is satisfied (including C, D, E as applicable). Shared-runtime queue authority is no longer the immediate next step; it is deferred to Phase 18.
+
+### Milestone E — Usability audit (Step 1)
+
+Bounded audit of Docker/operator and Telegram surfaces. Classifications: **discoverability**, **misleading wording**, **wrong/no-op state**, **path drift**, **stale docs**, **operator trap**.
+
+**Docker/operator path**
+
+| Surface | Finding | Classification |
+|--------|---------|-----------------|
+| First run | guided_start 4-step flow and README Quick Start align. dev_up ends with “To run the bot” + guided_start hint. | — |
+| Provider login | provider_login.sh requires .env.bot, checks image, clear “build first” message. | — |
+| Provider status | Script prints “Provider auth and runtime only (no DB/Telegram checks)”; comment says “For full app health use … app.main --doctor”. Operator may still treat provider_status success as “all good”. | **operator trap** |
+| Provider logout | Clear; “Done. Run ./scripts/provider_login.sh to authenticate again.” | — |
+| Update after pull | README: db-update, build, up -d bot; guided_start rebuilds when rev/files changed. | — |
+| Doctor | Three distinct things: (1) db_doctor = Postgres/schema only, (2) provider_status = provider auth only, (3) app --doctor / in-chat /doctor = full. README and provider_status mention full doctor but distinction could be clearer. | **discoverability** / **operator trap** |
+| Stale image / rebuild | guided_start rev + mtime; build_bot_image suggests guided_start. | — |
+| Missing image / provider auth / DB | Scripts and startup fail with clear messages (build image, provider_login, rerun dev_up). | — |
+
+**Telegram path**
+
+| Surface | Finding | Classification |
+|--------|---------|-----------------|
+| /start, /help | HELP_TEMPLATE includes /settings, /session, /approve, /reject, /cancel, /doctor. Command table (README) fixed (no /retry, /clear). | — |
+| /settings, /session | In HELP_TEMPLATE. /project only reachable via “view and change chat settings” (no separate /project line in main command list). | **discoverability** |
+| Approval / retry / recovery | Centralized copy in user_messages; buttons in-context. No explicit “retry” or “Run again/Skip” in main help text. | **discoverability** (minor) |
+| Already-handled / no-op / busy / wrong-user | recovery_already_handled, retry_nothing_pending, queue_busy, callback_wrong_user centralized; handlers use them. | — |
+| Public restriction | trust_* and settings_managed_public centralized. | — |
+
+**Step 2 — Execution plan (Bucket A → E)**
+
+| Bucket | Scope | Owner seam | Tests required |
+|--------|--------|------------|----------------|
+| **A** | guided_start, dev_up, provider_login/status/logout, README, doctor vs provider-health | Scripts + README operator section; provider_status vs app --doctor wording | Shell/operator contract; config/doctor/startup; Compose E2E for touched flows |
+| **B** | /start, /help, /settings, /project, /session | HELP_TEMPLATE + cmd_start/cmd_help; README command table | Handler tests start/help; discoverability parity; README command checks if touched |
+| **C** | retry, recovery, queue busy, wrong user, nothing pending, already-handled, skip/discard/replay no-op | user_messages + callback/handler paths | Handler/callback tests on user-visible text; adjacent regression |
+| **D** | public restrictions, unavailable profile/settings, trust wording | user_messages + _public_guard / resolve paths | request_flow/handler tests; public-mode regression; trusted parity |
+| **E** | Final pass: Docker path + Telegram journey, docs/status alignment | All touched seams | config/doctor/startup; Compose E2E; persistence/integration touched; handler flows; then mark E done |
+
+**Current:** Bucket A done. Next: Bucket B (command/help/discoverability).
+
+**Bucket A completed:** Provider vs full-doctor distinction hardened. **Seams:** (1) `scripts/provider_status.sh` — on success now prints one line: "For full app health (DB, config, Telegram) run: docker compose … bot python -m app.main --doctor". (2) README Building section — explicit "provider_status checks only provider auth and runtime (no DB or Telegram); it is **not** full app health." **Tests:** `tests/test_operator_scripts.py` (provider_status reminds full doctor, requires .env.bot); test_dev_up_contract.sh, test_readme_commands.py, doctor handler tests, test_db_postgres doctor — all pass. Compose E2E (test_compose_flows) exists; run with E2E_COMPOSE=1 when Docker available.
 
 ---
 

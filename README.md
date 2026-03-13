@@ -115,7 +115,7 @@ Run `db-update` when the repo adds new SQL. Rebuild the image so the new code is
 
 ### Building the bot image and provider auth
 
-The bot uses **provider-tagged images** (`telegram-agent-bot:claude`, `telegram-agent-bot:codex`) and **persistent provider login** in the `bot-home` volume. Build with **`./scripts/build_bot_image.sh`**; run **`./scripts/provider_login.sh`** once to authenticate. **`./scripts/provider_status.sh`**, **`./scripts/provider_login.sh`**, and **`./scripts/provider_logout.sh`** use a Compose service that has no Postgres dependency, so they check or change only provider auth/runtime (no DB). For full app health (DB, Telegram) run `docker compose --profile bot run --rm --env-file .env.bot bot python -m app.main --doctor`. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+The bot uses **provider-tagged images** (`telegram-agent-bot:claude`, `telegram-agent-bot:codex`) and **persistent provider login** in the `bot-home` volume. Build with **`./scripts/build_bot_image.sh`**; run **`./scripts/provider_login.sh`** once to authenticate. **`./scripts/provider_status.sh`** checks only provider auth and runtime (no DB or Telegram); it is **not** full app health. For full app health (DB, config, Telegram) run `docker compose --profile bot run --rm --env-file .env.bot bot python -m app.main --doctor`. **`./scripts/provider_login.sh`** and **`./scripts/provider_logout.sh`** use the same Compose service (no Postgres). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ## Using the Bot
 

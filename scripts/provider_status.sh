@@ -21,4 +21,7 @@ if ! docker image inspect "telegram-agent-bot:$provider" >/dev/null 2>&1; then
 fi
 
 echo "Provider auth and runtime only (no DB/Telegram checks):"
-docker compose --profile bot run --rm --env-file .env.bot bot-provider
+if ! docker compose --profile bot run --rm --env-file .env.bot bot-provider; then
+  exit 1
+fi
+echo "For full app health (DB, config, Telegram) run: docker compose --profile bot run --rm --env-file .env.bot bot python -m app.main --doctor"

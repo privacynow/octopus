@@ -63,6 +63,27 @@ def postgres_up(e2e_skip):
     _compose("down", "-t", "2")
 
 
+def test_compose_postgres_up_without_env_bot(e2e_skip):
+    """Clean-repo tooling path: postgres comes up without .env.bot.
+
+    Bot service is under profile 'bot', so compose up postgres does not require
+    .env.bot. This test runs without the postgres_up fixture so we can assert
+    the minimal case.
+    """
+    env_bot = os.path.join(REPO_ROOT, ".env.bot")
+    had_env_bot = os.path.isfile(env_bot)
+    if had_env_bot:
+        os.rename(env_bot, env_bot + ".e2e_backup")
+    try:
+        _compose("down", "-t", "2")
+        r = _compose("up", "-d", "postgres")
+        assert r.returncode == 0, (r.stdout, r.stderr)
+    finally:
+        _compose("down", "-t", "2")
+        if had_env_bot:
+            os.rename(env_bot + ".e2e_backup", env_bot)
+
+
 def test_compose_bootstrap_doctor(postgres_up):
     """DB bootstrap and doctor succeed against Compose Postgres."""
     r = _compose("--profile", "tools", "run", "--rm", "db-bootstrap")
@@ -83,13 +104,21 @@ def test_compose_db_update_smoke(postgres_up):
 def test_compose_bot_image_has_provider(postgres_up):
     """Supported bot image (Dockerfile.bot) contains the selected provider binary.
 
-    Builds the real provider-enabled image for claude and asserts the provider
-    binary is in PATH and runs (claude --version). Proves the image is not
-    stub-only and can reach provider execution path.
+    Builds the real provider-enabled image with docker build and tag
+    telegram-agent-bot:claude, then runs it via compose --profile bot.
     """
-    r = _compose("build", "--build-arg", "BOT_PROVIDER=claude", "bot")
+    r = subprocess.run(
+        ["docker", "build", "-f", "Dockerfile.bot", "--build-arg", "BOT_PROVIDER=claude",
+         "-t", "telegram-agent-bot:claude", "."],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
     assert r.returncode == 0, (r.stdout, r.stderr)
-    r = _compose("run", "--rm", "bot", "sh", "-c", "claude --version")
+    r = _compose("--profile", "bot", "run", "--rm",
+                 "-e", "BOT_PROVIDER=claude", "-e", "TELEGRAM_BOT_TOKEN=fake", "-e", "BOT_ALLOW_OPEN=1",
+                 "bot", "sh", "-c", "claude --version")
     assert r.returncode == 0, (r.stdout, r.stderr)
     assert "claude" in (r.stdout or "").lower() or "claude" in (r.stderr or "").lower()
 
@@ -97,15 +126,24 @@ def test_compose_bot_image_has_provider(postgres_up):
 def test_compose_bot_startup_validates_schema(postgres_up):
     """Bot container (supported real provider-enabled image) starts and validates schema.
 
-    Uses the default Compose bot image (Dockerfile.bot, real Claude CLI). Asserts
+    Builds telegram-agent-bot:claude then runs with --profile bot. Asserts
     config/doctor/schema pass and the app reaches 'Bot starting (long-poll)'.
     """
+    r = subprocess.run(
+        ["docker", "build", "-f", "Dockerfile.bot", "--build-arg", "BOT_PROVIDER=claude",
+         "-t", "telegram-agent-bot:claude", "."],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert r.returncode == 0, (r.stdout, r.stderr)
     r = _compose("--profile", "tools", "run", "--rm", "db-bootstrap")
     assert r.returncode == 0, (r.stdout, r.stderr)
 
     proc = subprocess.Popen(
         ["docker", "compose", "-f", os.path.join(REPO_ROOT, "docker-compose.yml"),
-         "run", "--rm",
+         "--profile", "bot", "run", "--rm",
          "-e", "TELEGRAM_BOT_TOKEN=123456:ABC-DEFghijklmnopqrstuvwxyz",
          "-e", "BOT_PROVIDER=claude",
          "-e", "BOT_ALLOW_OPEN=1",

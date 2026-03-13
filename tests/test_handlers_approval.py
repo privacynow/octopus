@@ -208,6 +208,37 @@ async def test_retry_skip():
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
         assert len(prov.run_calls) == 0
 
+        edit_texts = [r.get("edit_text", "") for r in cb_msg.replies if r.get("edit_text")]
+        from app.user_messages import retry_skip_confirmation
+        assert any(retry_skip_confirmation() in t for t in edit_texts)
+
+
+async def test_retry_allow_no_pending():
+    """retry_allow when no pending_retry shows centralized no-retry wording."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        session = default_session("claude", prov.new_provider_state(), "off")
+        assert session.get("pending_retry") is None
+        save_session(data_dir, 12345, session)
+
+        chat = FakeChat(12345)
+        cb_msg = FakeMessage(chat=chat)
+        query = FakeCallbackQuery("retry_allow", message=cb_msg)
+        user = FakeUser(42)
+        cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
+        cb_update.effective_message = cb_msg
+
+        import app.telegram_handlers as th
+
+        await th.handle_callback(cb_update, FakeContext())
+
+        edit_texts = [r.get("edit_text", "") for r in cb_msg.replies if r.get("edit_text")]
+        from app.user_messages import retry_nothing_pending
+        assert any(retry_nothing_pending() in t for t in edit_texts)
+
 
 async def test_stale_context_hash():
     with fresh_data_dir() as data_dir:
@@ -244,6 +275,7 @@ async def test_stale_context_hash():
 
         reply_texts = " ".join(r.get("edit_text", r.get("text", "")) for r in cb_msg.replies)
         assert "changed" in reply_texts and "request" in reply_texts
+        assert "context" in reply_texts
 
 
 async def test_cross_user_approval():

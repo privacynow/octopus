@@ -682,7 +682,7 @@ def test_validate_pending_detects_real_context_change():
 
     error = validate_pending(pending, session, cfg, "claude")
     assert error is not None
-    assert "changed" in error and "request" in error
+    assert "context" in error and "changed" in error
 
 
 def test_classify_pending_validation_returns_ok_expired_context_changed():

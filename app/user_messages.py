@@ -184,8 +184,19 @@ def approval_expired_fallback() -> str:
 
 
 def approval_context_changed() -> str:
-    """When context (project/settings/etc.) changed since request was made."""
-    return "Your settings or project changed since this request. Please send your message again."
+    """When execution context (role, skills, project, settings, etc.) changed since request was made.
+    Must match the real invalidation rule (context hash), not only settings/project."""
+    return "This request can't continue because the chat context changed. Please send your message again."
+
+
+def retry_skip_confirmation() -> str:
+    """Edit text when user chooses skip retry (clear retry without running again)."""
+    return "Retry skipped."
+
+
+def retry_nothing_pending() -> str:
+    """When user triggers retry but no retry is waiting."""
+    return "No retry is waiting."
 
 
 def retry_permission_prompt() -> str:

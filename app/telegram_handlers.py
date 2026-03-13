@@ -2066,14 +2066,14 @@ async def handle_callback(event, query) -> None:
             session.clear_pending()
             _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
-            await query.message.edit_text("Skipped.")
+            await query.message.edit_text(_msg.retry_skip_confirmation())
             return
 
         if event.data == "retry_allow":
             session = _load(chat_id)
             pending = session.pending_retry
             if not pending:
-                await query.message.edit_text("Nothing to retry.")
+                await query.message.edit_text(_msg.retry_nothing_pending())
                 return
 
             classification = classify_pending_validation(pending, session, _cfg(), _prov().name)

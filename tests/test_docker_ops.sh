@@ -48,6 +48,7 @@ trap cleanup EXIT
 
 TEST_DIR="$(mktemp -d)"
 RECORD_DOCKER_ARGS="$TEST_DIR/docker_args"
+RECORD_DOCKER_ENV="$TEST_DIR/docker_env"
 RECORD_CODEX_ARGS="$TEST_DIR/codex_args"
 RECORD_CLAUDE_ARGS="$TEST_DIR/claude_args"
 
@@ -55,7 +56,7 @@ RECORD_CLAUDE_ARGS="$TEST_DIR/claude_args"
 MOCK_BIN="$TEST_DIR/bin"
 mkdir -p "$MOCK_BIN"
 
-# docker: "image inspect telegram-agent-bot:*" exits with DOCKER_IMAGE_INSPECT_EXIT (default 0); else record argv and exit 0
+# docker: "image inspect ..." exits with DOCKER_IMAGE_INSPECT_EXIT; else record argv and env (BOT_PROVIDER for image-selection test)
 cat > "$MOCK_BIN/docker" << 'MOCK_DOCKER'
 #!/bin/sh
 case "$1" in
@@ -66,6 +67,7 @@ case "$1" in
     ;;
 esac
 echo "$*" > "${RECORD_DOCKER_ARGS:?}"
+printf 'BOT_PROVIDER=%s\n' "${BOT_PROVIDER:-}" >> "${RECORD_DOCKER_ENV:-/dev/null}"
 exit 0
 MOCK_DOCKER
 chmod +x "$MOCK_BIN/docker"
@@ -100,7 +102,7 @@ MOCK_PYTHON
 }
 
 # Ensure RECORD_* and MOCK_* are exported for the mock scripts (they run in subshells)
-export RECORD_DOCKER_ARGS RECORD_CODEX_ARGS RECORD_CLAUDE_ARGS
+export RECORD_DOCKER_ARGS RECORD_DOCKER_ENV RECORD_CODEX_ARGS RECORD_CLAUDE_ARGS
 export MOCK_PYTHON_STDERR MOCK_PYTHON_EXIT
 export DOCKER_IMAGE_INSPECT_EXIT
 
@@ -123,12 +125,14 @@ echo "=== provider_login.sh: override arg is passed to Docker (image exists) ===
 setup_env_bot "claude"
 DOCKER_IMAGE_INSPECT_EXIT=0
 export DOCKER_IMAGE_INSPECT_EXIT
-rm -f "$RECORD_DOCKER_ARGS"
+rm -f "$RECORD_DOCKER_ARGS" "$RECORD_DOCKER_ENV"
 export PATH="$MOCK_BIN:$PATH"
 "$REPO_DIR/scripts/provider_login.sh" codex >/dev/null 2>&1
 docker_args="$(cat "$RECORD_DOCKER_ARGS" 2>/dev/null || true)"
+docker_env="$(cat "$RECORD_DOCKER_ENV" 2>/dev/null || true)"
 check_contains "compose run with profile and env-file" "$docker_args" "compose --profile bot run --rm --env-file .env.bot"
-check_contains "override BOT_PROVIDER=codex" "$docker_args" "BOT_PROVIDER=codex"
+check_contains "override BOT_PROVIDER=codex in argv" "$docker_args" "BOT_PROVIDER=codex"
+check_contains "shell env BOT_PROVIDER=codex for image selection" "$docker_env" "BOT_PROVIDER=codex"
 check_contains "service and command" "$docker_args" "bot-provider sh /app/scripts/container_provider_login.sh"
 
 echo
@@ -191,20 +195,48 @@ check_contains "claude invoked" "$claude_args" "claude"
 echo
 echo "=== provider_status.sh: compose run with --provider-health ==="
 setup_env_bot "codex"
+DOCKER_IMAGE_INSPECT_EXIT=0
+export DOCKER_IMAGE_INSPECT_EXIT
 rm -f "$RECORD_DOCKER_ARGS"
 "$REPO_DIR/scripts/provider_status.sh" >/dev/null 2>&1
 docker_args="$(cat "$RECORD_DOCKER_ARGS" 2>/dev/null || true)"
 check_contains "compose run with profile and env-file" "$docker_args" "compose --profile bot run --rm --env-file .env.bot"
 check_contains "bot-provider service (provider-only)" "$docker_args" "bot-provider"
 
+echo "=== provider_status.sh: fails with rebuild message when image missing ==="
+setup_env_bot "codex"
+DOCKER_IMAGE_INSPECT_EXIT=1
+export DOCKER_IMAGE_INSPECT_EXIT
+set +e
+stderr="$("$REPO_DIR/scripts/provider_status.sh" 2>&1)"
+exit_code=$?
+set -e
+check_exit "exit non-zero when image missing" "$exit_code" "1"
+check_contains "stderr says image not found" "$stderr" "telegram-agent-bot:codex not found"
+check_contains "stderr tells user to rebuild" "$stderr" "build_bot_image.sh"
+
 echo
 echo "=== provider_logout.sh: compose run with bot and sh -c ==="
+DOCKER_IMAGE_INSPECT_EXIT=0
+export DOCKER_IMAGE_INSPECT_EXIT
+setup_env_bot "codex"
 rm -f "$RECORD_DOCKER_ARGS"
 "$REPO_DIR/scripts/provider_logout.sh" >/dev/null 2>&1
 docker_args="$(cat "$RECORD_DOCKER_ARGS" 2>/dev/null || true)"
 check_contains "compose run with profile bot" "$docker_args" "compose --profile bot run --rm"
 check_contains "sh -c" "$docker_args" "sh -c"
 check_contains "home/bot" "$docker_args" "/home/bot"
+
+echo "=== provider_logout.sh: fails with rebuild message when image missing ==="
+DOCKER_IMAGE_INSPECT_EXIT=1
+export DOCKER_IMAGE_INSPECT_EXIT
+set +e
+stderr="$("$REPO_DIR/scripts/provider_logout.sh" 2>&1)"
+exit_code=$?
+set -e
+check_exit "exit non-zero when image missing" "$exit_code" "1"
+check_contains "stderr says image not found" "$stderr" "telegram-agent-bot:codex not found"
+check_contains "stderr tells user to rebuild" "$stderr" "build_bot_image.sh"
 
 # --- Summary ---
 echo

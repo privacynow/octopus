@@ -33,13 +33,34 @@ need_build=0
 if ! docker image inspect "telegram-agent-bot:$env_provider" >/dev/null 2>&1; then
   need_build=1
 else
+  # Repo rev changed (e.g. git pull, or file deletions) -> rebuild
+  if [ -f .bot-image-build-rev ]; then
+    current_rev=$(git rev-parse HEAD 2>/dev/null)
+    built_rev=$(cat .bot-image-build-rev 2>/dev/null)
+    if [ -n "$current_rev" ] && [ -n "$built_rev" ] && [ "$current_rev" != "$built_rev" ]; then
+      need_build=1
+      echo "Repo revision changed since image was built; rebuilding."
+    fi
+  fi
+  if [ "$need_build" -eq 0 ]; then
   image_created=$(docker image inspect "telegram-agent-bot:$env_provider" --format '{{.Created}}' 2>/dev/null)
   if [ -n "$image_created" ]; then
-    image_ts=
-    case "$(uname -s)" in
-      Darwin) image_ts=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${image_created%.*}" +%s 2>/dev/null) ;;
-      *) image_ts=$(date -d "${image_created%.*}" +%s 2>/dev/null) ;;
-    esac
+    # Parse RFC3339 image timestamp as UTC to avoid timezone skew on non-UTC hosts.
+    image_ts=$(python3 -c "
+import datetime
+s = '''${image_created}'''.strip()
+s = s.split('.')[0]
+if s.endswith('Z'):
+    s = s[:-1] + '+00:00'
+elif s[-6] in '+-' and ':' in s[-5:]:
+    pass
+else:
+    s = s + '+00:00'
+dt = datetime.datetime.fromisoformat(s)
+if dt.tzinfo is None:
+    dt = dt.replace(tzinfo=datetime.timezone.utc)
+print(int(dt.timestamp()))
+" 2>/dev/null)
     get_mtime() { case "$(uname -s)" in Darwin) stat -f %m "$1" 2>/dev/null ;; *) stat -c %Y "$1" 2>/dev/null ;; esac; }
     file_ts=0
     for f in Dockerfile.bot requirements.txt; do
@@ -54,6 +75,7 @@ else
       echo "Repo code or Dockerfile changed since image was built; rebuilding."
       need_build=1
     fi
+  fi
   fi
 fi
 if [ "$need_build" -eq 1 ]; then
@@ -71,8 +93,8 @@ else
   echo "Provider not authenticated. Running one-time interactive login..."
   ./scripts/provider_login.sh "$env_provider"
   echo "Verifying provider auth..."
-  if ! ./scripts/provider_status.sh >/dev/null 2>&1; then
-    echo "Provider health check still failed after login. Check the errors above and your subscription." >&2
+  if ! ./scripts/provider_status.sh; then
+    echo "Provider health check still failed after login (see above). Check your subscription or re-run provider_login.sh." >&2
     exit 1
   fi
 fi

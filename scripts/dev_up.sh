@@ -20,13 +20,19 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
-echo "Running DB bootstrap..."
-docker compose --profile tools run --rm db-bootstrap
+# Existing DB -> db-update (pending migrations). Fresh DB -> db-bootstrap.
+if docker compose --profile tools run --rm db-doctor >/dev/null 2>&1; then
+  echo "Running DB update (existing schema)..."
+  docker compose --profile tools run --rm db-update
+else
+  echo "Running DB bootstrap (fresh schema)..."
+  docker compose --profile tools run --rm db-bootstrap
+fi
 
 echo "Running DB doctor..."
 docker compose --profile tools run --rm db-doctor
 
-echo "Tooling stack ready (Postgres + bootstrap + doctor). No bot runtime config was required."
+echo "Tooling stack ready (Postgres + schema). No bot runtime config was required."
 echo "To run the bot:"
 echo "  1. Create .env.bot (TELEGRAM_BOT_TOKEN, BOT_PROVIDER, BOT_ALLOWED_USERS or BOT_ALLOW_OPEN=1)"
 echo "  2. Build the bot image: ./scripts/build_bot_image.sh"

@@ -28,4 +28,6 @@ esac
 
 echo "Building bot image for provider: $provider"
 docker build -f Dockerfile.bot --build-arg BOT_PROVIDER="$provider" -t "telegram-agent-bot:$provider" "$REPO_DIR"
+# Record repo rev so guided_start can detect pulls/deletions and force rebuild
+git rev-parse HEAD 2>/dev/null > "$REPO_DIR/.bot-image-build-rev" || true
 echo "Done. Start the bot with: docker compose --profile bot --env-file .env.bot up -d bot  (or ./scripts/guided_start.sh)"

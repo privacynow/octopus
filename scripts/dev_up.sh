@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Convenience: start Postgres, run DB bootstrap and doctor. See docs/PHASE12-OPERATIONAL-CONTRACT.md.
+# Convenience: start Postgres, run DB bootstrap and doctor. See README.md.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -26,4 +26,8 @@ docker compose --profile tools run --rm db-bootstrap
 echo "Running DB doctor..."
 docker compose --profile tools run --rm db-doctor
 
-echo "Done. Set BOT_DATABASE_URL=postgresql://bot:bot@localhost:5432/bot in your .env, then: docker compose up bot"
+echo "Tooling stack ready (Postgres + bootstrap + doctor). No bot runtime config was required."
+echo "To run the bot:"
+echo "  - Container (primary path): create an env file (e.g. .env.bot) with TELEGRAM_BOT_TOKEN, BOT_PROVIDER, BOT_ALLOWED_USERS (BOT_DATABASE_URL for container is set by Compose to postgres:5432). Run: docker compose run --rm --env-file .env.bot bot"
+echo "  - Use a runnable image that includes the chosen provider CLI; see README.md."
+echo "  - Host-run remains available as an advanced fallback/debug path; see docs/ARCHITECTURE.md."

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Validate Postgres connectivity and schema compatibility. Does not start the app.
-# Requires BOT_DATABASE_URL. See docs/PHASE12-OPERATIONAL-CONTRACT.md.
+# Requires BOT_DATABASE_URL. See README.md.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"

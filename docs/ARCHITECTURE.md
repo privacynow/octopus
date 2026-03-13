@@ -1019,101 +1019,83 @@ summaries, stale pending and setup visibility.
 
 The test suite is organized around contracts, not only features.
 
-### Current shipped persistence test shape
-
-Storage-backed tests currently use real SQLite files in per-test temp dirs.
-That gives the repo a lightweight, realistic persistence layer today without
-containers in the normal test loop.
-
-- handler and integration tests use real `sessions.db` / `transport.db`
-- shared test reset helpers clear handler globals and close cached DB
-  connections between tests
-- "e2e" in the current repo means full handler-stack coverage with fake
-  Telegram/provider edges, not real Telegram API traffic
-
-### Handler and scenario tests
-
-Exercise real user entry points through Telegram handlers. Use shared test
-support (`tests/support/handler_support.py`) with `FakeChat`, `FakeProvider`,
-`FakeProgress`, and helpers for `send_text`, `send_command`, `send_callback`.
-
-### Invariant tests
-
-Protect cross-cutting rules: context-hash stability, approval/retry freshness,
-inspect-mode enforcement, public-trust enforcement, effective-model
-propagation, credential satisfaction, command/callback parity, registry
-integrity, async non-blocking guarantees, provider-context propagation,
-transport delivery guarantees.
-
-### Progress contract tests
-
-Dedicated suite (`test_progress.py`) testing five layers: render() contract
-for all event types, no-internals leak checks, Codex `_map_event` mapping,
-end-to-end pipeline, Claude `_consume_stream` integration.
-
-### Output and compact-mode tests
-
-`test_handlers_output.py` covers compact toggle, `/raw` retrieval, table
-rendering, blockquote and expand/collapse button paths, summary-first prompt
-injection, expand→collapse→expand round-trips, rotated buffer edge case.
-
-### Edge-case suites
-
-Callback races, provider failures, formatting boundaries, session reset.
-
-### Setup / bootstrap tests
-
-`test_setup.sh` protects the installation wizard and generated configs.
-
-### Planned Phase 12 testing contract
-
-Phase 12 keeps this contract-owner suite structure and moves the persistence
-backend under it from SQLite to Postgres. The goal is behavioral parity under
-the new backend, not a permanent SQLite/Postgres matrix.
-
-**Four-layer model**
+### Four-layer model (current)
 
 1. Pure or owner suites
-   - workflow machines, execution context, request-flow business rules,
-     provider-event mapping, formatting, progress, and other backend-neutral
-     contracts
+   - workflow machines, execution context, request-flow rules, providers,
+     progress, formatting, and other backend-neutral contracts
    - no Postgres required
    - no app container required
 2. In-process integration
-   - real handlers, real request flow, real session/work-queue repositories,
-     fake Telegram, fake providers, real Postgres
-   - this becomes the main confidence layer for the Phase 12 cutover
-   - pytest runs on host/venv here, not inside the app container
-3. Postgres bootstrap and schema integration
-   - DB bootstrap, DB update, DB doctor, and startup validation against real
-     Postgres
-   - focused on the operational contract, not normal handler behavior
+   - real handlers, real request flow, real repositories or stores, fake
+     Telegram, fake providers, and real local persistence
+   - SQLite still appears here for fast owner and handler coverage that uses
+     `fresh_data_dir`
+   - Postgres-backed persistence and queue integration now has its own suites
+3. Postgres bootstrap and repository integration
+   - `test_db_postgres.py`, `test_storage_pg.py`, and `test_work_queue_pg.py`
+   - real Postgres, real schema bootstrap/update/doctor, real connection pool
+   - focused on runtime storage, bootstrap/update rules, and schema validation
 4. E2E
-   - small full-stack smoke layer: app container + Postgres container +
-     explicit bootstrap/update/doctor flows
-   - covers first boot, startup validation, schema update, and a minimal
-     happy-path request flow
+   - Compose-based smoke layer in `tests/e2e/test_compose_flows.py`
+   - bootstrap, doctor, and startup validation of the tooling/runtime contract
+   - bot-container startup coverage is only enabled when a runnable customized
+     image is available
 
-**Isolation model**
+### Current Postgres test harness
 
-- one Postgres service per test run
-- one database per pytest worker
-- schema applied once per worker DB
-- truncate/reset runtime tables between tests
-- rollback is allowed only in narrow single-connection repository tests; it is
-  not the suite-wide isolation strategy because runtime behavior spans real
-  commits, multiple connections, async coordination, and later a pool
+The Postgres integration harness is intentionally separate from app runtime
+configuration.
 
-**Migration rule for SQLite-era tests**
+- Docker is required for Postgres integration suites.
+- The harness starts a dedicated **test-only** Postgres container per
+  pytest-xdist worker.
+- Each worker gets its own database inside that container.
+- Schema is applied once per worker DB.
+- Runtime tables are truncated between tests.
+- The harness never uses `BOT_DATABASE_URL`, dev, staging, or production
+  databases for truncation or schema mutation.
+- The current implementation uses one dedicated container per worker, not one
+  shared Postgres service for all workers.
 
-- backend-independent owner suites stay fast and should not gain a Docker or
-  Postgres dependency
-- persistence and integration coverage must migrate from SQLite to Postgres
-- `test_sqlite_integration.py` does not survive long-term as a runtime suite;
-  its backend-neutral coverage moves into shared suites and its runtime
-  coverage moves to Postgres-backed integration/E2E
-- app-container testing belongs only in the small E2E layer, not in the
-  normal integration loop
+### Owner suites and cross-cutting tests
+
+The owner-suite model from Phase 10 still stands:
+
+- one primary owner suite per contract
+- `test_invariants.py` only for genuinely cross-cutting rules
+- overflow and edge-case suites should be folded back into owner suites rather
+  than kept as permanent parallel test taxonomies
+
+Current owner families:
+
+- request and approval contracts:
+  `test_request_flow.py`, `test_pending_request_workflow_machine.py`,
+  `test_handlers_approval.py`
+- handler surfaces:
+  `test_handlers.py`, `test_handlers_*`
+- transport and recovery:
+  `test_transport.py`, `test_work_queue.py`, `test_work_queue_pg.py`,
+  `test_workitem_integration.py`, `test_transport_workflow_machine.py`
+- storage and store:
+  `test_storage.py`, `test_storage_pg.py`, `test_store.py`,
+  `test_store_e2e.py`, `test_registry.py`
+- provider and rendering contracts:
+  `test_claude_provider.py`, `test_codex_provider.py`, `test_progress.py`,
+  `test_formatting.py`, `test_summarize.py`
+- configuration and setup:
+  `test_config.py`, `tests/test_setup.sh`
+
+### SQLite-era tests during and after Phase 12
+
+- SQLite remains in the codebase for fast in-process tests and some legacy
+  session/store coverage.
+- The shipped runtime backend is Postgres; persistence and integration
+  confidence now comes from the Postgres-backed suites.
+- `test_sqlite_integration.py` is now historical compatibility/coverage, not
+  the source of truth for runtime-storage correctness.
+- App-container testing belongs only in the small E2E layer, not in the normal
+  integration loop.
 
 ---
 
@@ -1139,15 +1121,30 @@ must run with a Python environment that has those packages installed.
   Lifecycle splits into: infrastructure provisioning, DB bootstrap/update, and
   app runtime. Explicit repo-owned DB workflows (`scripts/db_bootstrap.sh`,
   `scripts/db_update.sh`, `scripts/db_doctor.sh`) prepare and verify the
-  database before the bot starts. See
-  [PHASE12-OPERATIONAL-CONTRACT.md](PHASE12-OPERATIONAL-CONTRACT.md).
+  database before the bot starts.
 - **Environment identity:** Each running bot environment has its own database,
   config, Telegram token, and app instance identity. Side-by-side dev/staging
   environments use separate databases.
-- **Canonical development shape:** Dockerized app + Postgres; `scripts/dev_up.sh`
-  brings Postgres up and runs bootstrap + doctor; then set `BOT_DATABASE_URL` and
-  start the bot. Later environments may move Postgres external while keeping
-  the same explicit DB bootstrap/update contract.
+- **Responsibilities are explicit:**
+  1. infrastructure provides the Postgres service and runtime role
+  2. repo-owned DB commands apply schema and validate compatibility
+  3. the app validates and runs; it does not create the DB, role, or schema at startup
+- **Primary operational model:** Dockerized bot plus Postgres. Docker Compose is
+  the canonical shape for local Postgres, DB tooling, and the intended app
+  runtime model for staging and production.
+- **Current Compose/tooling shape:** `scripts/dev_up.sh` brings Postgres up and
+  runs bootstrap + doctor with no bot runtime config. The bot container reads
+  explicit runtime env and uses the Compose hostname `postgres` for
+  `BOT_DATABASE_URL`.
+- **Current image caveat:** The default image installs only Python dependencies.
+  A runnable bot image must also include the chosen provider CLI (`claude` or
+  `codex`), so production/container environments should treat the repo Dockerfile
+  as the base image and add the provider runtime there.
+- **Host-run bot:** Still supported as a secondary fallback/debug path. It reads
+  `~/.config/telegram-agent-bot/<instance>.env` plus `os.environ` overrides and
+  uses `localhost` in `BOT_DATABASE_URL`.
+- **Later environments:** staging and production may move Postgres external
+  while keeping the same explicit DB bootstrap/update/doctor contract.
 
 See [README.md](../README.md) for Get Started and "After updating (git pull)".
 

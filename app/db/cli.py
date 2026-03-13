@@ -20,8 +20,12 @@ def _get_url() -> str:
 
 def _cmd_bootstrap() -> None:
     url = _get_url()
-    with get_connection(url) as conn:
-        errors = run_bootstrap(conn)
+    try:
+        with get_connection(url) as conn:
+            errors = run_bootstrap(conn)
+    except Exception as e:
+        print(f"Database error: {e}", file=sys.stderr)
+        sys.exit(1)
     if errors:
         for e in errors:
             print(f"  FAIL: {e}", file=sys.stderr)
@@ -31,8 +35,12 @@ def _cmd_bootstrap() -> None:
 
 def _cmd_update() -> None:
     url = _get_url()
-    with get_connection(url) as conn:
-        errors = run_update(conn)
+    try:
+        with get_connection(url) as conn:
+            errors = run_update(conn)
+    except Exception as e:
+        print(f"Database error: {e}", file=sys.stderr)
+        sys.exit(1)
     if errors:
         for e in errors:
             print(f"  FAIL: {e}", file=sys.stderr)
@@ -42,8 +50,12 @@ def _cmd_update() -> None:
 
 def _cmd_doctor() -> None:
     url = _get_url()
-    with get_connection(url) as conn:
-        errors = run_doctor(conn)
+    try:
+        with get_connection(url) as conn:
+            errors = run_doctor(conn)
+    except Exception as e:
+        print(f"Database error: {e}", file=sys.stderr)
+        sys.exit(1)
     if errors:
         for e in errors:
             print(f"  FAIL: {e}", file=sys.stderr)

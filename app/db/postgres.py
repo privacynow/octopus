@@ -22,9 +22,9 @@ def get_pool(
     if database_url not in _pools:
         _pools[database_url] = ConnectionPool(
             conninfo=database_url,
+            kwargs={"connect_timeout": connect_timeout},
             min_size=min_size,
             max_size=max_size,
-            connect_timeout=connect_timeout,
             open=True,
         )
     return _pools[database_url]

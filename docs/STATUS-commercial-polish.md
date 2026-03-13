@@ -2,11 +2,11 @@
 
 Current as of 2026-03-12. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-12):** Post-Phase 12 fixes: (P1) Postgres `complete_work_item` and `fail_work_item` now use exact source-state CAS and reread classification (Phase 11 contract), matching SQLite in `work_queue.py`. (P2) Operational contract corrected: DB bootstrap applies schema to an *existing* database only (CLI does not create DB or role); zero-to-running and E2E use `TELEGRAM_BOT_TOKEN` (config reads this, not `BOT_TOKEN`). (P3) `record_update()` in `work_queue_pg.py` no longer swallows exceptions—only duplicate (ON CONFLICT DO NOTHING, rowcount 0) returns False; schema/connection errors propagate. Full suite 906 passed, 12 skipped.
+> **Latest change (2026-03-12):** Docker-first doc simplification: `README.md` now presents one opinionated Docker path instead of multiple run modes. The deeper docs were aligned so Dockerized app + Postgres is the primary operational model, while host-run remains only as a secondary fallback/debug path. The docs now reflect explicit DB bootstrap/update/doctor workflows, the current Postgres test harness, and the current Compose/E2E posture.
 > **Schema policy (corrected):** Transport schema is versioned; migration/upgrade path is deferred, not rejected as product direction. No "fresh-schema-only" or "delete DB and restart" product policy. Current build expects current schema/layout; unsupported schema/layout fails fast with a neutral error (`Unsupported transport.db schema/layout for this build`). Bootstrap: brand-new DB (no tables) gets `_CREATE_SQL` + schema_version; existing DB is validated only (tables, columns, `idx_one_claimed_per_chat`, meta schema_version) and is not mutated before validation.
 > **Transport repository shape:** Single claim path `_claim_queued_item`; single insert path `_insert_initial_work_item`. All mutators use `_write_tx(conn)`; nested use raises `RuntimeError("nested transport transaction")`. Impossible machine rejections are fatal: `_apply_transport_event` and `_insert_initial_work_item` raise `TransportStateCorruption` on workflow rejection; `_claim_queued_item` returns None only for `other_claimed_for_chat`, else raises; `mark_pending_recovery`, `discard_recovery`, `supersede_pending_recovery`, `reclaim_for_replay` raise on invalid_transition (recover_stale_claims allows guard_failed as “not stale, skip”). Chat integrity: `_assert_no_invalid_rows_for_chat(conn, chat_id)` is called in `has_queued_or_claimed`, `get_latest_pending_recovery`, `reclaim_for_replay`, `supersede_pending_recovery`. Strict helpers: `_apply_claim_event` for claim-style transitions (exact CAS, reread); reclaim_for_replay uses it; supersede_pending_recovery applies _apply_transport_event per item in one transaction; recover_stale_claims uses exact source predicate (id, state, worker_id, claimed_at) and reread classification.
 > **Transaction and invariant fixes:** One transaction wrapper for all mutating entry points; rollback on any exception. `_assert_no_invalid_rows_for_chat()` enforces at most one claimed per chat. Current schema includes `idx_one_claimed_per_chat`. Tests: rollback on non-IntegrityError, two-claimed raises, fresh schema index, meta/schema_version validation (unsupported layout/mismatch raise neutral error).
-> **Phase 11 sealed.** Next: Phase 12 (Postgres runtime cutover plus explicit environment/bootstrap contract).
+> **Phase 11 sealed.** Phase 12 complete (Postgres runtime cutover). Next: Phase 13 (Postgres queue authority in webhook mode).
 >
 > **Prior:** Phase 11 second workflow (pending approval/retry machine, invalidation in machine, 39 machine tests).
 >
@@ -152,12 +152,18 @@ Current as of 2026-03-12. Tracks progress against [PLAN-commercial-polish.md](PL
 - Phases 1-10 are sealed as shipped.
 - The next planned roadmap item is Phase 13, Postgres queue authority in webhook mode.
 - Phase 12 is complete: shipped runtime uses Postgres; `BOT_DATABASE_URL` required at startup.
-- Current shipped bootstrap remains `setup.sh` + `scripts/bootstrap.sh` +
-  `scripts/run.sh` / systemd, with app-owned SQLite first-use bootstrap.
-- Phase 12 development shape is Dockerized app + Postgres, explicit DB
-  bootstrap/update/doctor commands, and validate-only app startup.
-- Phase 12 operational contract is documented in
-  [PHASE12-OPERATIONAL-CONTRACT.md](PHASE12-OPERATIONAL-CONTRACT.md).
+- Dockerized app + Postgres is the primary supported operational model.
+- Compose is the canonical shape for Postgres, DB tooling, and the app runtime.
+- The default bot image is a base image; a runnable bot image must also include
+  the chosen provider CLI.
+- Host-run remains available as a secondary fallback/debug path.
+- DB bootstrap, DB update, and DB doctor are explicit repo-owned workflows; app
+  startup is validate-only.
+- Postgres integration suites use a harness-started test-only Docker container
+  per pytest-xdist worker and never touch `BOT_DATABASE_URL`, dev, staging, or
+  production databases.
+- The primary docs are now `README.md`, `ARCHITECTURE.md`,
+  `PLAN-commercial-polish.md`, and `STATUS-commercial-polish.md`.
 - `transport idempotency` is shipped in Phase 9.
 - `content dedup` is intentionally unshipped and remains future work in
   Phase 17.
@@ -488,7 +494,8 @@ retained only as historical execution record:
 
 1. **Test-suite ownership refactor** — DONE. Overflow files deleted (20 weak
    duplicates removed), owner suites created (test_execution_context,
-   test_request_flow). See `docs/testing-ownership.md` for ownership map.
+   test_request_flow). Ownership and layering now live in
+   `docs/ARCHITECTURE.md`.
 2. **Fresh command ownership race** — DONE. `record_and_enqueue()` creates
    items as `claimed` (handler-owned). Worker cannot steal fresh commands.
    `claim_for_update()` recognizes pre-claimed items. `complete_work_item()`

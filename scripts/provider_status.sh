@@ -13,4 +13,4 @@ if [ ! -f .env.bot ]; then
 fi
 
 echo "Provider auth and runtime only (no DB/Telegram checks):"
-docker compose run --rm --env-file .env.bot bot python -m app.main --provider-health
+docker compose --profile bot run --rm --env-file .env.bot bot-provider

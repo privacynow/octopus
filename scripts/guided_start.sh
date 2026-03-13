@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Single guided path: Postgres, .env.bot, build, provider login, then start the bot.
-# For non-technical users who want one flow instead of several manual steps.
+# Single guided path: Postgres, build, provider login (if needed), then start the bot.
+# For non-technical users: one script from .env.bot to running bot.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -15,49 +15,81 @@ if [ ! -f .env.bot ]; then
   echo "  TELEGRAM_BOT_TOKEN=<from @BotFather>"
   echo "  BOT_PROVIDER=claude"
   echo "  BOT_ALLOWED_USERS=123456789"
-  echo "See README.md Quick Start step 3."
+  echo "See README.md Quick Start step 2."
   exit 1
 fi
 
 env_provider=$(grep -E '^\s*BOT_PROVIDER=' .env.bot 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)
 env_provider="${env_provider:-claude}"
 
-# 2. Provider drift: did they change BOT_PROVIDER since last build?
-if [ -f .bot-provider-built ]; then
-  built_provider=$(cat .bot-provider-built 2>/dev/null || true)
-  if [ -n "$built_provider" ] && [ "$built_provider" != "$env_provider" ]; then
-    echo "BOT_PROVIDER in .env.bot ($env_provider) differs from last build ($built_provider)."
-    echo "Rebuilding image for $env_provider; you will need to run provider login after."
-    echo ""
-  fi
-fi
-
-# 3. Postgres + bootstrap + doctor
+# 2. Postgres + bootstrap + doctor (no bot config required)
 echo "Step 1/4: Postgres and database..."
 ./scripts/dev_up.sh
 
-# 4. Build bot image
+# 3. Ensure provider image exists and is not stale (repo/Dockerfile changed since build)
 echo ""
-echo "Step 2/4: Building bot image for $env_provider..."
-./scripts/build_bot_image.sh "$env_provider"
+echo "Step 2/4: Bot image for $env_provider..."
+need_build=0
+if ! docker image inspect "telegram-agent-bot:$env_provider" >/dev/null 2>&1; then
+  need_build=1
+else
+  image_created=$(docker image inspect "telegram-agent-bot:$env_provider" --format '{{.Created}}' 2>/dev/null)
+  if [ -n "$image_created" ]; then
+    image_ts=
+    case "$(uname -s)" in
+      Darwin) image_ts=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${image_created%.*}" +%s 2>/dev/null) ;;
+      *) image_ts=$(date -d "${image_created%.*}" +%s 2>/dev/null) ;;
+    esac
+    get_mtime() { case "$(uname -s)" in Darwin) stat -f %m "$1" 2>/dev/null ;; *) stat -c %Y "$1" 2>/dev/null ;; esac; }
+    file_ts=0
+    for f in Dockerfile.bot requirements.txt; do
+      [ -f "$f" ] && t=$(get_mtime "$f") && [ -n "$t" ] && [ "$t" -gt "$file_ts" ] && file_ts=$t
+    done
+    for dir in app scripts sql skills; do
+      [ -d "$dir" ] && while IFS= read -r f; do
+        t=$(get_mtime "$f") && [ -n "$t" ] && [ "$t" -gt "$file_ts" ] && file_ts=$t
+      done < <(find "$dir" -type f 2>/dev/null)
+    done
+    if [ -n "$image_ts" ] && [ "$file_ts" -gt 0 ] && [ "$file_ts" -gt "$image_ts" ]; then
+      echo "Repo code or Dockerfile changed since image was built; rebuilding."
+      need_build=1
+    fi
+  fi
+fi
+if [ "$need_build" -eq 1 ]; then
+  ./scripts/build_bot_image.sh "$env_provider"
+else
+  echo "Image telegram-agent-bot:$env_provider already present and up to date."
+fi
 
-# 5. Provider login (prompt to run if not already OK)
+# 4. Provider auth: check, run login if needed, then re-check
 echo ""
 echo "Step 3/4: Provider auth..."
 if ./scripts/provider_status.sh >/dev/null 2>&1; then
   echo "Provider already authenticated."
 else
-  echo "Run provider login (one-time, interactive):"
-  echo "  ./scripts/provider_login.sh"
-  echo "Then run this script again to start the bot, or run: docker compose up -d bot"
-  exit 0
+  echo "Provider not authenticated. Running one-time interactive login..."
+  ./scripts/provider_login.sh "$env_provider"
+  echo "Verifying provider auth..."
+  if ! ./scripts/provider_status.sh >/dev/null 2>&1; then
+    echo "Provider health check still failed after login. Check the errors above and your subscription." >&2
+    exit 1
+  fi
 fi
 
-# 6. Start bot
+# 5. Start bot and verify it stayed up
 echo ""
 echo "Step 4/4: Starting bot (background service)..."
-docker compose up -d bot
+docker compose --profile bot --env-file .env.bot up -d bot
+
+echo "Waiting a few seconds to confirm the bot stayed up..."
+sleep 5
+if docker compose --profile bot ps -a --format '{{.Status}}' bot 2>/dev/null | grep -q Exited; then
+  echo "Bot failed to start (container exited). Last logs:" >&2
+  docker compose --profile bot logs --tail=40 bot >&2
+  exit 1
+fi
 
 echo ""
 echo "Bot started. Message it in Telegram to use it."
-echo "Logs: docker compose logs -f bot   Stop: docker compose stop bot"
+echo "Logs: docker compose --profile bot logs -f bot   Stop: docker compose --profile bot stop bot"

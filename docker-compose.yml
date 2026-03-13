@@ -52,14 +52,25 @@ services:
     profiles:
       - tools
 
+  # Provider-only checks (no Postgres): used by provider_status.sh and provider_login.sh.
+  # Same image and bot-home as bot; no depends_on so Compose does not start postgres.
+  bot-provider:
+    image: telegram-agent-bot:${BOT_PROVIDER:-claude}
+    profiles:
+      - bot
+    env_file: .env.bot
+    environment:
+      BOT_DATA_DIR: /home/bot/data
+    volumes:
+      - bot-home:/home/bot
+    command: ["python", "-m", "app.main", "--provider-health"]
+
+  # Bot service: only loaded with --profile bot so tooling (postgres, db-*) works without .env.bot.
+  # Build image: ./scripts/build_bot_image.sh [claude|codex]. Start: docker compose --profile bot --env-file .env.bot up -d bot
   bot:
-    build:
-      context: .
-      dockerfile: Dockerfile.bot
-      args:
-        BOT_PROVIDER: claude
-    # Create .env.bot first. Build: ./scripts/build_bot_image.sh. Login: ./scripts/provider_login.sh.
-    # Start (service): docker compose up -d bot   Foreground: docker compose run --rm --env-file .env.bot bot
+    image: telegram-agent-bot:${BOT_PROVIDER:-claude}
+    profiles:
+      - bot
     env_file: .env.bot
     environment:
       BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot

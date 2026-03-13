@@ -8,8 +8,12 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
 
-echo "Clearing provider auth state from bot-home volume..."
-docker compose run --rm bot sh -c '
+if [ ! -f .env.bot ]; then
+  echo "Create .env.bot first (so we know which image to use)." >&2
+  exit 1
+fi
+echo "Clearing provider auth state from bot-home volume (no Postgres required)..."
+docker compose --profile bot run --rm --env-file .env.bot bot-provider sh -c '
   removed=
   for d in /home/bot/.config/Claude /home/bot/.config/claude /home/bot/.config/Codex /home/bot/.config/codex /home/bot/.config/openai /home/bot/.local/share/Claude /home/bot/.local/share/codex; do
     if [ -d "$d" ] || [ -f "$d" ]; then

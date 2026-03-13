@@ -33,120 +33,89 @@ CLI. See [Building the bot image](#building-the-bot-image) below.
 
 ## Quick Start
 
-### 1. Clone the repo
+1. **Clone the repo**
 
-```bash
-git clone git@github.com:privacynow/octopus.git ~/telegram-agent-bot
-cd ~/telegram-agent-bot
-```
+   ```bash
+   git clone git@github.com:privacynow/octopus.git ~/telegram-agent-bot
+   cd ~/telegram-agent-bot
+   ```
 
-### 2. Start Postgres and initialize the database
+2. **Create `.env.bot`** with your token, provider, and access (example):
 
-```bash
-./scripts/dev_up.sh
-```
+   ```bash
+   TELEGRAM_BOT_TOKEN=<from @BotFather>
+   BOT_PROVIDER=claude
+   BOT_ALLOWED_USERS=123456789
+   ```
 
-That command:
+   Use `BOT_ALLOW_OPEN=1` instead of `BOT_ALLOWED_USERS` only if you want an open bot. Do **not** set `BOT_DATABASE_URL` in `.env.bot` (Compose sets it for the container).
 
-- starts Postgres
-- runs DB bootstrap
-- runs DB doctor
+3. **Run the guided setup and start**
 
-You can also do it manually:
+   ```bash
+   ./scripts/guided_start.sh
+   ```
 
-```bash
-docker compose up -d postgres
-docker compose --profile tools run --rm db-bootstrap
-docker compose --profile tools run --rm db-doctor
-```
+   That script: starts Postgres and the database, builds (or reuses) the bot image for your provider, runs interactive provider login if needed, then starts the bot. When it finishes, message the bot in Telegram.
 
-### 3. Create bot runtime config
+That’s the main path. Manual steps and reference are below.
 
-Create an env file for the bot container, for example `.env.bot`:
+---
 
-```bash
-TELEGRAM_BOT_TOKEN=<your bot token>
-BOT_PROVIDER=claude
-BOT_ALLOWED_USERS=123456789
-```
+## Manual steps (reference)
 
-You can use `BOT_ALLOW_OPEN=1` instead of `BOT_ALLOWED_USERS`, but that is only
-appropriate if you intentionally want an open bot.
+If you prefer to run steps yourself instead of `guided_start.sh`:
 
-The container DB URL is already set by Compose to use the `postgres` service, so
-you normally do **not** put `BOT_DATABASE_URL` in `.env.bot`.
+- **Postgres and DB (no `.env.bot` required):**  
+  `./scripts/dev_up.sh`  
+  Or: `docker compose up -d postgres` then `docker compose --profile tools run --rm db-bootstrap` and `docker compose --profile tools run --rm db-doctor`.
 
-### 4. Build the bot image
+- **Build bot image:**  
+  `./scripts/build_bot_image.sh` (uses `BOT_PROVIDER` from `.env.bot`) or `./scripts/build_bot_image.sh claude` / `./scripts/build_bot_image.sh codex`.  
+  Images are tagged `telegram-agent-bot:claude` and `telegram-agent-bot:codex`.
 
-Build the bot image for your provider (the script reads `BOT_PROVIDER` from `.env.bot` if present):
+- **Provider login (one-time):**  
+  `./scripts/provider_login.sh`  
+  Codex: complete sign-in in the browser. Claude: in the Claude window run `/login` and complete auth. Login state is stored in the `bot-home` volume.
 
-```bash
-./scripts/build_bot_image.sh
-```
+- **Start the bot:**  
+  `docker compose --profile bot --env-file .env.bot up -d bot`  
+  Foreground (e.g. for logs): `docker compose --profile bot run --rm --env-file .env.bot bot`
 
-Or pass the provider explicitly: `./scripts/build_bot_image.sh claude` or `./scripts/build_bot_image.sh codex`.
-
-### 5. Provider login (one-time)
-
-Authenticate the provider CLI so the bot can talk to Claude or Codex. Login state is stored in a Docker volume and reused by the bot.
-
-```bash
-./scripts/provider_login.sh
-```
-
-- **Codex:** completes ChatGPT sign-in in the browser.
-- **Claude:** in the Claude window, run `/login` and complete auth in the browser.
-
-The script runs a **provider-only** health check after login (no DB or Telegram); if it fails, fix the reported issue and run login again.
-
-### 6. Start the bot
-
-**Recommended (runs as a background service):**
-
-```bash
-docker compose up -d bot
-```
-
-To run in the foreground instead (e.g. to see logs in the terminal):
-
-```bash
-docker compose run --rm --env-file .env.bot bot
-```
-
-When the bot is running, message it in Telegram and begin using it.
-
-**Alternative: one guided script** — If you prefer a single flow that does Postgres, build, provider login check, and start: run **`./scripts/guided_start.sh`** after creating `.env.bot`. It will prompt you to run `./scripts/provider_login.sh` once if not already authenticated, then start the bot.
+The bot service is under the **`bot`** profile so that `docker compose up -d postgres` and the DB tooling work in a clean repo without `.env.bot`.
 
 ## After Updating
 
-After a `git pull`:
+After a `git pull`, the bot runs from a **prebuilt image** (`telegram-agent-bot:claude` or `:codex`). To run the updated code you must **rebuild that image**, then restart:
 
 ```bash
 docker compose --profile tools run --rm db-update
-docker compose up -d bot
+./scripts/build_bot_image.sh
+docker compose --profile bot --env-file .env.bot up -d bot
 ```
 
-Use `db-update` before restarting the bot whenever the repo adds new SQL files. If the bot is already running, `docker compose up -d bot` will recreate the container with the new image.
+Run `db-update` when the repo adds new SQL. Rebuild the image so the new code is in the image; then `up -d bot` recreates the container with the new image. If you omit the build step, the existing (possibly stale) image keeps running. If you use **`./scripts/guided_start.sh`** after a pull, it will rebuild the image when any code or config that goes into the image changed (e.g. `Dockerfile.bot`, `requirements.txt`, or files under `app/`, `scripts/`, `sql/`, `skills/`) since the image was built.
 
 ## Common Commands
 
 | Command | Purpose |
 |---|---|
-| `./scripts/dev_up.sh` | Start Postgres, run DB bootstrap, run DB doctor |
-| `./scripts/guided_start.sh` | Single guided flow: Postgres → build → provider login (if needed) → start bot |
-| `./scripts/build_bot_image.sh` | Build the bot image for the provider in `.env.bot` (or pass `claude` / `codex`) |
-| `./scripts/provider_login.sh` | One-time interactive provider auth (state stored in bot-home volume) |
-| `./scripts/provider_status.sh` | Check **provider auth and runtime only** (no DB/Telegram) |
-| `./scripts/provider_logout.sh` | Clear provider auth state (best-effort; switch accounts or re-login) |
-| `docker compose --profile tools run --rm db-bootstrap` | Apply full schema to an existing Postgres database |
+| `./scripts/guided_start.sh` | **One path:** Postgres → build → provider login (if needed) → start bot |
+| `./scripts/dev_up.sh` | Start Postgres, run DB bootstrap, run DB doctor (no `.env.bot` needed) |
+| `./scripts/build_bot_image.sh` | Build `telegram-agent-bot:claude` or `:codex` (from `.env.bot` or arg) |
+| `./scripts/provider_login.sh` | One-time interactive provider auth |
+| `./scripts/provider_status.sh` | **Provider auth and runtime only** (not DB/Telegram) |
+| `./scripts/provider_logout.sh` | Clear provider auth (best-effort) |
+| `docker compose up -d postgres` | Start Postgres only (tooling independent of bot config) |
+| `docker compose --profile tools run --rm db-bootstrap` | Apply full schema |
 | `docker compose --profile tools run --rm db-update` | Apply pending schema versions |
-| `docker compose --profile tools run --rm db-doctor` | Validate Postgres connectivity and schema compatibility |
-| `docker compose up -d bot` | Start the bot as a background service (uses `.env.bot`) |
-| `docker compose run --rm --env-file .env.bot bot` | Start the bot in the foreground |
+| `docker compose --profile tools run --rm db-doctor` | Validate Postgres and schema |
+| `docker compose --profile bot --env-file .env.bot up -d bot` | Start the bot (background) |
+| `docker compose --profile bot run --rm --env-file .env.bot bot` | Start the bot (foreground) |
 
 ### Building the bot image and provider auth
 
-The supported path uses a **real** provider-enabled image and **persistent provider login** in a Docker volume (`bot-home`). Build the image with **`./scripts/build_bot_image.sh`**, then run **`./scripts/provider_login.sh`** once to authenticate (Codex: `codex --login`; Claude: run `/login` in the Claude window). Login state is reused by the bot. Use **`./scripts/provider_status.sh`** to verify **provider auth and runtime only** (no DB or Telegram). Use **`./scripts/provider_logout.sh`** to clear auth (best-effort; see script comment). If you **change BOT_PROVIDER** in `.env.bot`, run `./scripts/build_bot_image.sh` again and run `./scripts/provider_login.sh` for the new provider; **`./scripts/guided_start.sh`** will warn if the provider changed since the last build. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+The bot uses **provider-tagged images** (`telegram-agent-bot:claude`, `telegram-agent-bot:codex`) and **persistent provider login** in the `bot-home` volume. Build with **`./scripts/build_bot_image.sh`**; run **`./scripts/provider_login.sh`** once to authenticate. **`./scripts/provider_status.sh`**, **`./scripts/provider_login.sh`**, and **`./scripts/provider_logout.sh`** use a Compose service that has no Postgres dependency, so they check or change only provider auth/runtime (no DB). For full app health (DB, Telegram) run `docker compose --profile bot run --rm --env-file .env.bot bot python -m app.main --doctor`. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ## Using the Bot
 
@@ -261,7 +230,7 @@ to see the full output whenever you need it.
 
 ### Provider not authenticated or unavailable
 
-The bot validates provider auth at startup. If you see “Provider not authenticated or unavailable” and a suggestion to run `./scripts/provider_login.sh`, run that script once to sign in (Codex: browser sign-in; Claude: run `/login` in the Claude window). Login state is stored in the `bot-home` volume and reused. Use `./scripts/provider_status.sh` to verify provider auth and runtime only; for full app health (DB, Telegram) run `docker compose run --rm --env-file .env.bot bot python -m app.main --doctor`. Use `./scripts/provider_logout.sh` to clear auth (best-effort) and re-login.
+The bot validates provider auth at startup. If you see “Provider not authenticated or unavailable” and a suggestion to run `./scripts/provider_login.sh`, run that script once to sign in (Codex: browser sign-in; Claude: run `/login` in the Claude window). Login state is stored in the `bot-home` volume and reused. Use `./scripts/provider_status.sh` to verify provider auth and runtime only; for full app health (DB, Telegram) run `docker compose --profile bot run --rm --env-file .env.bot bot python -m app.main --doctor`. Use `./scripts/provider_logout.sh` to clear auth (best-effort) and re-login.
 
 ### `BOT_DATABASE_URL is required`
 

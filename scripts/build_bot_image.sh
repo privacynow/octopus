@@ -27,6 +27,5 @@ case "$provider" in
 esac
 
 echo "Building bot image for provider: $provider"
-docker compose build --build-arg BOT_PROVIDER="$provider" bot
-echo "$provider" > "$REPO_DIR/.bot-provider-built"
-echo "Done. Start the bot with: docker compose up -d bot  (or ./scripts/guided_start.sh)"
+docker build -f Dockerfile.bot --build-arg BOT_PROVIDER="$provider" -t "telegram-agent-bot:$provider" "$REPO_DIR"
+echo "Done. Start the bot with: docker compose --profile bot --env-file .env.bot up -d bot  (or ./scripts/guided_start.sh)"

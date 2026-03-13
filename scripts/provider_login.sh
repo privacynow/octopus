@@ -29,22 +29,14 @@ case "$provider" in
     ;;
 esac
 
-# Ensure the bot image was built for this provider; otherwise we may run the wrong image and get "codex: not found" etc.
-if [ -f .bot-provider-built ]; then
-  built_provider=$(cat .bot-provider-built 2>/dev/null || true)
-  if [ -n "$built_provider" ] && [ "$built_provider" != "$provider" ]; then
-    echo "Bot image was built for '$built_provider' but login is for '$provider'." >&2
-    echo "Run: ./scripts/build_bot_image.sh $provider" >&2
-    echo "Then run this script again." >&2
-    exit 1
-  fi
-else
-  echo "No bot image build recorded. Build the image for your provider first:" >&2
-  echo "  ./scripts/build_bot_image.sh $provider" >&2
+# Ensure the provider image exists; otherwise we may run the wrong image and get "codex: not found" etc.
+if ! docker image inspect "telegram-agent-bot:$provider" >/dev/null 2>&1; then
+  echo "Image telegram-agent-bot:$provider not found." >&2
+  echo "Run: ./scripts/build_bot_image.sh $provider" >&2
   echo "Then run this script again." >&2
   exit 1
 fi
 
-echo "Provider login (BOT_PROVIDER=$provider). Uses same image and bot-home volume as the bot."
-echo "Postgres must be up (e.g. ./scripts/dev_up.sh)."
-docker compose run --rm --env-file .env.bot -e "BOT_PROVIDER=$provider" bot sh /app/scripts/container_provider_login.sh
+# Image selection uses BOT_PROVIDER at Compose parse time (--env-file and shell). Pass it so we run the correct image.
+echo "Provider login (BOT_PROVIDER=$provider). Uses same image and bot-home volume as the bot (no Postgres required)."
+BOT_PROVIDER="$provider" docker compose --profile bot run --rm --env-file .env.bot -e "BOT_PROVIDER=$provider" bot-provider sh /app/scripts/container_provider_login.sh

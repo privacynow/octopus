@@ -1,5 +1,6 @@
 """Core handler integration tests: happy-path routing, session lifecycle, /help, /start, /doctor, /project."""
 
+import re
 import tempfile
 from pathlib import Path
 
@@ -230,7 +231,7 @@ async def test_help_topics():
 
 
 async def test_help_and_start_include_settings():
-    """/help and /start must expose /settings for discoverability."""
+    """/help and /start must expose /settings, /project, /session for discoverability (Bucket B)."""
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
@@ -240,10 +241,113 @@ async def test_help_and_start_include_settings():
         user = FakeUser(42)
         help_msg = FakeMessage(chat=chat, text="/help")
         await th.cmd_help(FakeUpdate(message=help_msg, user=user, chat=chat), FakeContext(args=[]))
-        assert "/settings" in help_msg.replies[0]["text"]
+        help_text = help_msg.replies[0]["text"]
+        assert "/settings" in help_text
+        assert "/project" in help_text
+        assert "/session" in help_text
+        assert "/retry" not in help_text
+        assert not re.search(r"(?:^|\n)/clear\s", help_text), "must not advertise /clear (use /new); /clear_credentials is fine"
         start_msg = FakeMessage(chat=chat, text="/start")
         await th.cmd_start(FakeUpdate(message=start_msg, user=user, chat=chat), FakeContext(args=[]))
-        assert "/settings" in start_msg.replies[0]["text"]
+        start_text = start_msg.replies[0]["text"]
+        assert "/settings" in start_text
+        assert "/project" in start_text
+        assert "/session" in start_text
+        assert "/retry" not in start_text
+        assert not re.search(r"(?:^|\n)/clear\s", start_text), "must not advertise /clear (use /new)"
+
+
+async def test_help_and_start_public_user_excludes_project_and_policy():
+    """Bucket B follow-up: public users must not see /project or /policy in /start or /help."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            allow_open=True,
+            allowed_user_ids=frozenset({1, 2, 3}),
+        )
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        import app.telegram_handlers as th
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        help_msg = FakeMessage(chat=chat, text="/help")
+        await th.cmd_help(FakeUpdate(message=help_msg, user=user, chat=chat), FakeContext(args=[]))
+        help_text = help_msg.replies[0]["text"]
+        assert "/project" not in help_text
+        assert "/policy" not in help_text
+        assert "/settings" in help_text
+        assert "/session" in help_text
+        start_msg = FakeMessage(chat=chat, text="/start")
+        await th.cmd_start(FakeUpdate(message=start_msg, user=user, chat=chat), FakeContext(args=[]))
+        start_text = start_msg.replies[0]["text"]
+        assert "/project" not in start_text
+        assert "/policy" not in start_text
+        assert "/settings" in start_text
+        assert "/session" in start_text
+
+
+async def test_help_and_start_non_admin_excludes_admin_sessions():
+    """Bucket B follow-up: non-admin trusted users must not see /admin sessions in /start or /help."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, admin_user_ids=frozenset(), admin_usernames=frozenset())
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        import app.telegram_handlers as th
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        help_msg = FakeMessage(chat=chat, text="/help")
+        await th.cmd_help(FakeUpdate(message=help_msg, user=user, chat=chat), FakeContext(args=[]))
+        help_text = help_msg.replies[0]["text"]
+        assert "/admin sessions" not in help_text
+        start_msg = FakeMessage(chat=chat, text="/start")
+        await th.cmd_start(FakeUpdate(message=start_msg, user=user, chat=chat), FakeContext(args=[]))
+        start_text = start_msg.replies[0]["text"]
+        assert "/admin sessions" not in start_text
+
+
+async def test_help_and_start_admin_sees_admin_sessions_and_trusted_commands():
+    """Bucket B follow-up: admin users see /admin sessions and full trusted command set."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, admin_user_ids=frozenset({42}), admin_usernames=frozenset())
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        import app.telegram_handlers as th
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        help_msg = FakeMessage(chat=chat, text="/help")
+        await th.cmd_help(FakeUpdate(message=help_msg, user=user, chat=chat), FakeContext(args=[]))
+        help_text = help_msg.replies[0]["text"]
+        assert "/admin sessions" in help_text
+        assert "/project" in help_text
+        assert "/settings" in help_text
+        assert "/session" in help_text
+        start_msg = FakeMessage(chat=chat, text="/start")
+        await th.cmd_start(FakeUpdate(message=start_msg, user=user, chat=chat), FakeContext(args=[]))
+        start_text = start_msg.replies[0]["text"]
+        assert "/admin sessions" in start_text
+        assert "/project" in start_text
+
+
+def test_bucket_b_command_registration_parity():
+    """Bucket B: key user-facing commands (start, help, settings, project, session) must be registered."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        import app.telegram_handlers as th
+        from telegram.ext import CommandHandler
+
+        app = th.build_application(cfg, prov)
+        registered = set()
+        for group_handlers in app.handlers.values():
+            for h in group_handlers:
+                if isinstance(h, CommandHandler):
+                    commands = getattr(h, "commands", None) or (
+                        (getattr(h, "command", None),) if getattr(h, "command", None) else ()
+                    )
+                    registered.update(commands)
+        required = {"start", "help", "settings", "project", "session"}
+        missing = required - registered
+        assert not missing, f"Bucket B main commands must be registered; missing: {missing}"
 
 
 async def test_first_run_welcome():

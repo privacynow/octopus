@@ -30,7 +30,7 @@ def test_readme_commands_section_does_not_list_retry_or_clear():
 
 
 def test_readme_commands_section_includes_settings():
-    """README Commands section must include /settings for discoverability."""
+    """README Commands section must include /settings for discoverability (Bucket B)."""
     repo = Path(__file__).resolve().parent.parent
     readme = repo / "README.md"
     text = readme.read_text()
@@ -39,4 +39,30 @@ def test_readme_commands_section_includes_settings():
     commands_section = match.group(1)
     assert "| `/settings`" in commands_section or "/settings" in commands_section, (
         "README Commands section must include /settings"
+    )
+
+
+def test_readme_commands_section_includes_project():
+    """README Commands section must include /project for discoverability (Bucket B)."""
+    repo = Path(__file__).resolve().parent.parent
+    readme = repo / "README.md"
+    text = readme.read_text()
+    match = re.search(r"## Commands\s+(.*?)(?=\n## |\Z)", text, re.DOTALL)
+    assert match
+    commands_section = match.group(1)
+    assert "| `/project`" in commands_section or "/project" in commands_section, (
+        "README Commands section must include /project"
+    )
+
+
+def test_readme_commands_section_includes_session():
+    """README Commands section must include /session for discoverability (Bucket B)."""
+    repo = Path(__file__).resolve().parent.parent
+    readme = repo / "README.md"
+    text = readme.read_text()
+    match = re.search(r"## Commands\s+(.*?)(?=\n## |\Z)", text, re.DOTALL)
+    assert match
+    commands_section = match.group(1)
+    assert "| `/session`" in commands_section or "/session" in commands_section, (
+        "README Commands section must include /session"
     )

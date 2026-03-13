@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the full test suite: pytest (Python) + test_setup.sh (bash).
+# Run the full test suite: pytest (Python) + test_setup.sh + test_docker_ops.sh (bash).
 #
 # Usage:
 #   ./scripts/test_all.sh              # run everything
@@ -19,4 +19,5 @@ cd "$REPO_DIR"
 # Only run bash tests when no arguments were passed (full suite run).
 if [ $# -eq 0 ]; then
     bash tests/test_setup.sh
+    bash tests/test_docker_ops.sh
 fi

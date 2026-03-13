@@ -1039,8 +1039,9 @@ The test suite is organized around contracts, not only features.
 4. E2E
    - Compose-based smoke layer in `tests/e2e/test_compose_flows.py`
    - bootstrap, doctor, and startup validation of the tooling/runtime contract
-   - bot-container startup coverage is only enabled when a runnable customized
-     image is available
+   - bot-container tests use the real provider-enabled image when built (and
+     prove provider + execution path where possible), or the stub image for
+     test/dev-only smoke
 
 ### Current Postgres test harness
 
@@ -1085,6 +1086,11 @@ Current owner families:
   `test_formatting.py`, `test_summarize.py`
 - configuration and setup:
   `test_config.py`, `tests/test_setup.sh`
+- **operator shell scripts** (provider_login, provider_status, provider_logout,
+  container_provider_login): `tests/test_docker_ops.sh` — fast shell contract
+  tests with mocked `docker`, `python`, `claude`, and `codex`; pins argv, env
+  propagation, and doctor failure output. Compose/E2E covers the heavier
+  runtime and bootstrap path.
 
 ### SQLite-era tests during and after Phase 12
 
@@ -1136,10 +1142,36 @@ must run with a Python environment that has those packages installed.
   runs bootstrap + doctor with no bot runtime config. The bot container reads
   explicit runtime env and uses the Compose hostname `postgres` for
   `BOT_DATABASE_URL`.
-- **Current image caveat:** The default image installs only Python dependencies.
-  A runnable bot image must also include the chosen provider CLI (`claude` or
-  `codex`), so production/container environments should treat the repo Dockerfile
-  as the base image and add the provider runtime there.
+- **Supported bot image:** The supported Docker path uses a **real provider-enabled
+  image** (includes the chosen Claude or Codex CLI). Build it with
+  `./scripts/build_bot_image.sh`; the script selects the image target from
+  `BOT_PROVIDER` so operators don’t choose Docker targets manually. Built from
+  `Dockerfile.bot` (shared base + provider-specific stage). A **stub-provider
+  image** (`Dockerfile.runnable`) exists only for **test/dev smoke** (e.g. E2E
+  when the real CLI is unavailable) and is not the supported runtime.
+- **Provider authentication contract (current direction):** Docker-first
+  operation keeps the real provider CLI inside the image, but **auth state is
+  not baked into the image**. The product direction is:
+  1. a guided repo-owned provider-login step runs **inside the same bot image**
+  2. login state is persisted in a dedicated **bot-home Docker volume**
+  3. the runtime bot service mounts that same volume
+  4. startup and `/doctor` validate not only binary presence but provider
+     runtime/auth health before the bot is treated as ready
+  This keeps the product Docker-first while preserving the subscription-style
+  CLI login model for Claude Code and Codex. Advanced non-interactive modes
+  such as API-key, Bedrock, or Vertex auth remain possible, but they are not
+  the primary product-facing contract.
+- **Provider-login ownership:** The intended supported onboarding flow is one
+  uniform repo-owned command (for example `scripts/provider_login.sh`) that
+  reads `BOT_PROVIDER`, launches the provider-specific login flow in-container,
+  then verifies provider health using the same image + volume pair that the
+  runtime bot will use. Operators should not need to know provider-specific
+  credential file paths or Docker internals.
+- **Bot-home volume and entrypoint:** The bot container uses a persistent
+  `bot-home` volume mounted at `/home/bot`. The image runs an entrypoint that
+  chowns `/home/bot` to the bot user (uid 1000) then execs as that user, so
+  provider auth and data persist across runs regardless of volume creation
+  order. Login/setup and runtime use the same image and volume.
 - **Host-run bot:** Still supported as a secondary fallback/debug path. It reads
   `~/.config/telegram-agent-bot/<instance>.env` plus `os.environ` overrides and
   uses `localhost` in `BOT_DATABASE_URL`.

@@ -28,6 +28,8 @@ docker compose --profile tools run --rm db-doctor
 
 echo "Tooling stack ready (Postgres + bootstrap + doctor). No bot runtime config was required."
 echo "To run the bot:"
-echo "  - Container (primary path): create an env file (e.g. .env.bot) with TELEGRAM_BOT_TOKEN, BOT_PROVIDER, BOT_ALLOWED_USERS (BOT_DATABASE_URL for container is set by Compose to postgres:5432). Run: docker compose run --rm --env-file .env.bot bot"
-echo "  - Use a runnable image that includes the chosen provider CLI; see README.md."
-echo "  - Host-run remains available as an advanced fallback/debug path; see docs/ARCHITECTURE.md."
+echo "  1. Create .env.bot (TELEGRAM_BOT_TOKEN, BOT_PROVIDER, BOT_ALLOWED_USERS or BOT_ALLOW_OPEN=1)"
+echo "  2. Build the bot image: ./scripts/build_bot_image.sh"
+echo "  3. Provider login (one-time): ./scripts/provider_login.sh"
+echo "  4. Start the bot: docker compose up -d bot   (or ./scripts/guided_start.sh for a single guided flow)"
+echo "  See README.md. Host-run is an advanced fallback; see docs/ARCHITECTURE.md."

@@ -1,6 +1,8 @@
 # Phase 12: tooling stack (postgres + db-bootstrap/update/doctor) is independent of bot runtime config.
-# From a clean repo (no .env): docker compose up -d postgres && docker compose --profile tools run --rm db-bootstrap
-# Bot runtime (token, provider, access) is environment-specific; pass via --env-file or -e. See docs.
+# Bot uses persistent bot-home volume for provider CLI auth (Claude/Codex); login via ./scripts/provider_login.sh
+
+volumes:
+  bot-home:
 
 services:
   postgres:
@@ -51,13 +53,34 @@ services:
       - tools
 
   bot:
-    build: .
-    # DB URL for container: use service hostname (postgres). Bot runtime (token, provider, access)
-    # must be supplied via: docker compose run --rm --env-file <your-env-file> bot
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+      args:
+        BOT_PROVIDER: claude
+    # Create .env.bot first. Build: ./scripts/build_bot_image.sh. Login: ./scripts/provider_login.sh.
+    # Start (service): docker compose up -d bot   Foreground: docker compose run --rm --env-file .env.bot bot
+    env_file: .env.bot
+    environment:
+      BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+      BOT_DATA_DIR: /home/bot/data
+    volumes:
+      - bot-home:/home/bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "-m", "app.main"]
+
+  # TEST/DEV ONLY: stub-provider image for E2E when real provider unavailable (E2E_USE_STUB_IMAGE=1).
+  bot-stub:
+    build:
+      context: .
+      dockerfile: Dockerfile.runnable
+    profiles:
+      - stub
     environment:
       BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
     depends_on:
       postgres:
         condition: service_healthy
-    # Override CMD so bot runs after DB is ready; app validates schema at startup
     command: ["python", "-m", "app.main"]

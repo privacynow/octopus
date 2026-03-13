@@ -13,7 +13,11 @@ from app.db.postgres_doctor import run_doctor
 def _get_url() -> str:
     url = os.environ.get("BOT_DATABASE_URL", "").strip()
     if not url:
-        print("BOT_DATABASE_URL is not set.", file=sys.stderr)
+        print(
+            "BOT_DATABASE_URL is not set. For Docker: Compose sets it for the container. "
+            "For host-run: set it in .env.bot (e.g. postgresql://bot:bot@localhost:5432/bot).",
+            file=sys.stderr,
+        )
         sys.exit(1)
     return url
 

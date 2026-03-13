@@ -1,8 +1,12 @@
 # Commercial Polish — Implementation Status
 
-Current as of 2026-03-12. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
+Current as of 2026-03-13. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-12):** Docker-first doc simplification: `README.md` now presents one opinionated Docker path instead of multiple run modes. The deeper docs were aligned so Dockerized app + Postgres is the primary operational model, while host-run remains only as a secondary fallback/debug path. The docs now reflect explicit DB bootstrap/update/doctor workflows, the current Postgres test harness, and the current Compose/E2E posture.
+> **Latest change (2026-03-13):** Provider-only health: **--provider-health** (provider binary + runtime auth only); used by **provider_login.sh** post-login and **provider_status.sh**. Full **--doctor** unchanged. Service start: **docker compose up -d bot** (env_file: .env.bot); **guided_start.sh**; **.bot-provider-built** for provider-drift; **provider_logout.sh** best-effort.
+>
+> **Prior (2026-03-13):** Provider login as first-class Docker workflow: **bot-home** volume at `/home/bot` persists provider auth; **entrypoint** chowns bot-home to uid 1000 then runs as bot (gosu). **provider_login.sh** runs in-container login (codex `--login` / claude `/login`) using same image and volume, then verifies provider health; **provider_status.sh** runs `--doctor`; **provider_logout.sh** clears provider auth in bot-home. Startup validates provider auth (runtime health) and fails with “Run ./scripts/provider_login.sh” when missing. README Quick Start includes provider login; Troubleshooting and scripts table updated. ARCHITECTURE documents bot-home and provider-login ownership. Prior: supported path = real provider image; stub test-only.
+>
+> **Prior (2026-03-12):** Post-Phase-12 execution program is now explicit in the roadmap. Before any Phase 13 queue-authority work, execution is gated on five ordered milestones: turnkey Docker runtime, config/onboarding simplification, user-facing settings and `/project` polish, progress/recovery/trust clarity, and a short usability-hardening pass. The plan now states the required tests and the hard gate before Phase 13.
 > **Schema policy (corrected):** Transport schema is versioned; migration/upgrade path is deferred, not rejected as product direction. No "fresh-schema-only" or "delete DB and restart" product policy. Current build expects current schema/layout; unsupported schema/layout fails fast with a neutral error (`Unsupported transport.db schema/layout for this build`). Bootstrap: brand-new DB (no tables) gets `_CREATE_SQL` + schema_version; existing DB is validated only (tables, columns, `idx_one_claimed_per_chat`, meta schema_version) and is not mutated before validation.
 > **Transport repository shape:** Single claim path `_claim_queued_item`; single insert path `_insert_initial_work_item`. All mutators use `_write_tx(conn)`; nested use raises `RuntimeError("nested transport transaction")`. Impossible machine rejections are fatal: `_apply_transport_event` and `_insert_initial_work_item` raise `TransportStateCorruption` on workflow rejection; `_claim_queued_item` returns None only for `other_claimed_for_chat`, else raises; `mark_pending_recovery`, `discard_recovery`, `supersede_pending_recovery`, `reclaim_for_replay` raise on invalid_transition (recover_stale_claims allows guard_failed as “not stale, skip”). Chat integrity: `_assert_no_invalid_rows_for_chat(conn, chat_id)` is called in `has_queued_or_claimed`, `get_latest_pending_recovery`, `reclaim_for_replay`, `supersede_pending_recovery`. Strict helpers: `_apply_claim_event` for claim-style transitions (exact CAS, reread); reclaim_for_replay uses it; supersede_pending_recovery applies _apply_transport_event per item in one transaction; recover_stale_claims uses exact source predicate (id, state, worker_id, claimed_at) and reread classification.
 > **Transaction and invariant fixes:** One transaction wrapper for all mutating entry points; rollback on any exception. `_assert_no_invalid_rows_for_chat()` enforces at most one claimed per chat. Current schema includes `idx_one_claimed_per_chat`. Tests: rollback on non-IntegrityError, two-claimed raises, fresh schema index, meta/schema_version validation (unsupported layout/mismatch raise neutral error).
@@ -150,12 +154,18 @@ Current as of 2026-03-12. Tracks progress against [PLAN-commercial-polish.md](PL
 ## Current Snapshot
 
 - Phases 1-10 are sealed as shipped.
-- The next planned roadmap item is Phase 13, Postgres queue authority in webhook mode.
+- The next numbered roadmap phase is Phase 13, Postgres queue authority in webhook mode.
+- Immediate execution focus is the pre-Phase-13 gate:
+  - turnkey Docker runtime
+  - config/onboarding simplification
+  - user-facing settings and `/project` polish
+  - progress/recovery/trust clarity
+  - usability hardening
 - Phase 12 is complete: shipped runtime uses Postgres; `BOT_DATABASE_URL` required at startup.
 - Dockerized app + Postgres is the primary supported operational model.
 - Compose is the canonical shape for Postgres, DB tooling, and the app runtime.
-- The default bot image is a base image; a runnable bot image must also include
-  the chosen provider CLI.
+- The **supported bot image** is a **real provider-enabled image** (includes the chosen Claude or Codex CLI). Built via repo-owned script from `BOT_PROVIDER` (e.g. `./scripts/build_bot_image.sh`); operators do not choose Docker targets manually. The stub-provider image (`Dockerfile.runnable`) exists only for **test/dev smoke** (e.g. E2E when real provider is not available) and is not the supported runtime.
+- Zero-to-running: clone → start Postgres → DB bootstrap → DB doctor → create `.env.bot` → build bot image for your provider → `docker compose run --rm --env-file .env.bot bot`. README presents one Docker-first path; build complexity lives in the build script and deeper docs.
 - Host-run remains available as a secondary fallback/debug path.
 - DB bootstrap, DB update, and DB doctor are explicit repo-owned workflows; app
   startup is validate-only.
@@ -186,16 +196,50 @@ Current as of 2026-03-12. Tracks progress against [PLAN-commercial-polish.md](PL
 | 10 | Structural hardening, invariants, and test ownership | Done | Invariant coverage, test ownership refactor, and runtime isolation hardening shipped. |
 | 11 | Workflow ownership extraction | Done | Transport/recovery and pending approval/retry are now library-owned workflow families. Transport uses one claim path, one insert path, `_apply_claim_event`, one transaction wrapper, fatal impossible rejections, and chat-integrity checks; pending invalidation flows through `PendingRequestMachine`. Phase 11 sealed. |
 | 12 | Postgres runtime cutover | Done | M1–M9 complete. Postgres sole runtime; BOT_DATABASE_URL required; E2E layer and zero-to-running docs in place. |
-| 13 | Postgres queue authority in webhook mode | Planned | Core request transport stays app-owned in Postgres. |
+| 13 | Postgres queue authority in webhook mode | Planned | Next numbered phase, but gated on the pre-Phase-13 Docker/productization program in the plan. |
 | 14 | Multi-process / multi-worker deployment | Planned | Shared Postgres queue authority expands to cross-process ingress and workers. |
 | 15 | Durability confidence phase | Planned | Add crash, lease, webhook, and cross-process confidence coverage. |
-| 16 | Product polish on stable foundations | Planned | `/project` inline keyboard and optional verbose progress. |
+| 16 | Product polish on stable foundations | Planned | Queue-dependent polish stays here; only low-risk discoverability polish is pulled forward into the pre-Phase-13 gate. |
 | 17 | Behavior extensions | Planned | Demand-gated `content dedup` and richer project/policy scope. |
 | 18 | Registry trust and governance | Planned | Publisher signing and organizational trust policy on top of digest verification. |
 | 19 | Usage accounting, quotas, and billing | Planned | Usage recording, quota enforcement, and billing built last. |
 
 Detailed workstream sections below are preserved as historical implementation
 record. The authoritative roadmap ordering is the Phase 1-19 table above.
+
+---
+
+## Current Execution Focus
+
+The next numbered roadmap phase is still Phase 13, but execution should not
+start there yet. The required gate is the pre-Phase-13 program defined in
+[PLAN-commercial-polish.md](PLAN-commercial-polish.md).
+
+| Milestone | Status | Scope |
+|---|---|---|
+| **Docker-first productization track (A1–A4)** | **Done** | Clean zero-to-running path, one `.env.bot` path, config/doctor/startup messages. **Supported** path uses **real** provider-enabled image (build script from BOT_PROVIDER); stub image is test/dev-only. |
+| A. Turnkey Docker runtime | Done (track) | Real provider-enabled image build (Dockerfile.bot + build script); Compose E2E for bootstrap/doctor/update; tests prove provider in image and execution path where possible. |
+| B. Config and onboarding simplification (Docker scope) | Done (track) | One primary `.env.bot` path; config/startup/DB CLI messages reference `.env.bot` and build script. |
+| C. User-facing settings and `/project` polish | Planned | Improve project binding, settings/profile discovery, and inline keyboard UX through existing production paths. |
+| D. Progress, recovery, and trust clarity | Planned | Simplify user-visible wording and flows around long runs, interruption, approval, retry, and trust/profile state. |
+| E. Usability hardening before Phase 13 | Planned | Short stabilization pass over Docker path, docs, onboarding, and main user journey before queue-authority work. |
+
+Phase 13 should not start until the full gate in the plan is satisfied (including C, D, E as applicable).
+
+---
+
+## Docker-first productization track (complete)
+
+Executed 2026-03-13. Scope: Docker/runtime only; no user-facing polish, no Phase 13 work.
+
+| Milestone | Delivered |
+|-----------|-----------|
+| **A1. Supported runnable image** | **Real** provider-enabled image: `Dockerfile.bot` (base + provider install via `scripts/install_provider_claude.sh`, `scripts/install_provider_codex.sh`). `./scripts/build_bot_image.sh` selects target from `BOT_PROVIDER`. Stub image (`Dockerfile.runnable`) and `bot-stub` Compose service (profile `stub`) for **test/dev-only** (E2E_USE_STUB_IMAGE=1). |
+| **A2. Clean zero-to-running path** | Flow: clone → Postgres → bootstrap → doctor → `.env.bot` → **./scripts/build_bot_image.sh** → start bot container. One README path; build complexity in script and deeper docs. E2E: bootstrap/doctor/update; `test_compose_bot_image_has_provider` (real image has provider binary); `test_compose_bot_startup_validates_schema` (real image); `test_compose_bot_stub_smoke` (test-only). |
+| **A3. Docker config and onboarding simplification** | One `.env.bot` path. Config errors mention `.env.bot` and `./scripts/build_bot_image.sh`. DB CLI message for missing `BOT_DATABASE_URL` points to Docker vs host-run. |
+| **A4. Docker usability hardening** | Stabilization; docs truthful (supported = real provider image; stub = test-only). |
+
+Artifacts: `Dockerfile.bot`, `scripts/build_bot_image.sh`, `scripts/install_provider_claude.sh`, `scripts/install_provider_codex.sh`; `Dockerfile.runnable` and `bot-stub` (profile stub) for test/dev-only; E2E and config tests.
 
 ---
 

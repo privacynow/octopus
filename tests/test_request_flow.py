@@ -573,6 +573,59 @@ async def test_session_command_shows_public_context():
         assert "inspect" in reply.lower()
 
 
+@pytest.mark.asyncio
+async def test_settings_command_public_user_no_trusted_leak():
+    """/settings for public user must not leak trusted project/path; use resolved context."""
+    import app.telegram_handlers as th
+    import tempfile
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "allow_open": True,
+            "allowed_user_ids": frozenset({42}),
+            "public_working_dir": "/tmp/public-sandbox",
+            "projects": (("secret", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(12345)
+            trusted_user = FakeUser(uid=42, username="owner")
+            stranger = FakeUser(uid=999, username="nobody")
+            # Trusted user binds to project so session has project_id
+            await send_command(th.cmd_project, chat, trusted_user, "/project", args=["use", "secret"])
+            # Public user runs /settings — must see public dir and inspect, not trusted project/path
+            msg = await send_command(th.cmd_settings, chat, stranger, "/settings")
+            reply = last_reply(msg)
+            assert "/tmp/public-sandbox" in reply
+            assert "inspect" in reply.lower()
+            assert proj_dir not in reply
+            assert "secret" not in reply
+            assert "No project" in reply
+
+
+@pytest.mark.asyncio
+async def test_settings_command_public_user_keyboard_no_project_or_policy():
+    """/settings keyboard for public user must not include setting_project:* or setting_policy:*."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import get_callback_data_values
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "allow_open": True,
+            "allowed_user_ids": frozenset({42}),
+            "public_working_dir": "/tmp/pub",
+            "projects": (("myproj", proj_dir, ()),),
+            "model_profiles": {"fast": "claude-haiku", "best": "claude-opus"},
+            "public_model_profiles": frozenset({"fast"}),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(12345)
+            stranger = FakeUser(uid=999, username="nobody")
+            msg = await send_command(th.cmd_settings, chat, stranger, "/settings")
+            reply = msg.replies[-1]
+            cbs = get_callback_data_values(reply)
+            assert not any(cb.startswith("setting_project:") for cb in cbs)
+            assert not any(cb.startswith("setting_policy:") for cb in cbs)
+            assert any(cb.startswith("setting_model:") for cb in cbs)
+            assert "setting_compact:on" in cbs or "setting_compact:off" in cbs
+            assert "setting_approval:on" in cbs or "setting_approval:off" in cbs
+
+
 # =====================================================================
 # Pending validation uses stored trust tier
 # =====================================================================
@@ -629,7 +682,7 @@ def test_validate_pending_detects_real_context_change():
 
     error = validate_pending(pending, session, cfg, "claude")
     assert error is not None
-    assert "Context changed" in error
+    assert "changed" in error and "request" in error
 
 
 def test_classify_pending_validation_returns_ok_expired_context_changed():
@@ -805,6 +858,29 @@ async def test_model_callback_public_user_allowed_for_available_profile():
         replies = cb_msg.replies
         assert any("fast" in str(r).lower() for r in replies)
         assert not any("restricted" in str(r).lower() for r in replies)
+
+
+@pytest.mark.asyncio
+async def test_project_callback_public_user_denied():
+    """setting_project:<name> callback is denied for public user."""
+    import app.telegram_handlers as th
+    import tempfile
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "allow_open": True,
+            "allowed_user_ids": frozenset({42}),
+            "projects": (("myproj", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(12345)
+            stranger = FakeUser(uid=999, username="nobody")
+            query, cb_msg = await send_callback(
+                th.handle_settings_callback, chat, stranger, "setting_project:myproj")
+            replies = cb_msg.replies
+            edit_texts = [r.get("edit_text", "") for r in replies if r.get("edit_text")]
+            assert any(
+                "public" in t.lower() and ("managed" in t.lower() or "not available" in t.lower())
+                for t in edit_texts
+            )
 
 
 # =====================================================================

@@ -144,7 +144,7 @@ async def test_denial_retry_flow():
         assert "partial" in reply_texts
         chat_msgs = " ".join(m.get("text", "") for m in chat.sent_messages)
         assert "Permission needed" in chat_msgs
-        assert "Grant access and retry from the beginning" in chat_msgs
+        assert "Grant access" in chat_msgs and ("retry" in chat_msgs or "again" in chat_msgs)
 
         # Verify retry buttons have correct callback_data
         retry_msg = chat.sent_messages[-1]
@@ -243,7 +243,7 @@ async def test_stale_context_hash():
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
         reply_texts = " ".join(r.get("edit_text", r.get("text", "")) for r in cb_msg.replies)
-        assert "Context changed" in reply_texts
+        assert "changed" in reply_texts and "request" in reply_texts
 
 
 async def test_cross_user_approval():

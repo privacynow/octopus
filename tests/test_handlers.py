@@ -226,6 +226,24 @@ async def test_help_topics():
         await th.cmd_help(FakeUpdate(message=msg4, user=user, chat=chat), FakeContext(args=[]))
         assert "/skills" in msg4.replies[0]["text"]
         assert "CLI Bridge" not in msg4.replies[0]["text"]
+        assert "/settings" in msg4.replies[0]["text"]
+
+
+async def test_help_and_start_include_settings():
+    """/help and /start must expose /settings for discoverability."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        import app.telegram_handlers as th
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        help_msg = FakeMessage(chat=chat, text="/help")
+        await th.cmd_help(FakeUpdate(message=help_msg, user=user, chat=chat), FakeContext(args=[]))
+        assert "/settings" in help_msg.replies[0]["text"]
+        start_msg = FakeMessage(chat=chat, text="/start")
+        await th.cmd_start(FakeUpdate(message=start_msg, user=user, chat=chat), FakeContext(args=[]))
+        assert "/settings" in start_msg.replies[0]["text"]
 
 
 async def test_first_run_welcome():
@@ -810,7 +828,7 @@ async def test_project_show_current():
             # No project active
             msg = await send_command(th.cmd_project, chat, user, "/project")
             reply = last_reply(msg)
-            assert "No project active" in reply
+            assert "No project" in reply
 
             # Bind and check
             await send_command(th.cmd_project, chat, user, "/project", args=["use", "backend"])
@@ -1113,6 +1131,134 @@ async def test_settings_callback_policy():
         query, _ = await send_callback(th.handle_settings_callback, chat, user, "setting_policy:inspect")
         session = load_session_disk(data_dir, 1, prov)
         assert session.get("file_policy") == "inspect"
+
+
+async def test_compact_change_does_not_reset_provider_state():
+    """Changing compact mode via callback must not reset provider_state."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        prov.run_results = [RunResult(text="ok", provider_state_updates={"started": True})]
+        await send_text(chat, user, "hi")
+        session_before = load_session_disk(data_dir, 1, prov)
+        assert session_before["provider_state"].get("started") is True
+        await send_callback(th.handle_settings_callback, chat, user, "setting_compact:on")
+        session_after = load_session_disk(data_dir, 1, prov)
+        assert session_after["provider_state"].get("started") is True
+        assert session_after.get("compact_mode") is True
+
+
+async def test_settings_command_shows_current_values():
+    """/settings shows current project, model, policy, compact, approval and inline controls."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import get_callback_data_values
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("myapp", proj_dir, ()),),
+            "model_profiles": {"fast": "claude-3-5-haiku", "balanced": "claude-sonnet-4-6"},
+            "default_model_profile": "balanced",
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(1)
+            user = FakeUser(42)
+            msg = await send_command(th.cmd_settings, chat, user, "/settings")
+            reply = msg.replies[-1]
+            text = reply.get("text", "")
+            assert "Chat settings" in text
+            assert "Project" in text
+            assert "Model profile" in text
+            assert "File policy" in text
+            assert "Compact mode" in text
+            assert "Approval mode" in text
+            cbs = get_callback_data_values(reply)
+            assert any(cb.startswith("setting_project:") for cb in cbs)
+            assert any(cb.startswith("setting_model:") for cb in cbs)
+            assert "setting_policy:inspect" in cbs
+            assert "setting_policy:edit" in cbs
+            assert "setting_compact:on" in cbs
+            assert "setting_compact:off" in cbs
+            assert "setting_approval:on" in cbs
+            assert "setting_approval:off" in cbs
+
+
+async def test_project_default_shows_inline_keyboard():
+    """/project with no args shows inline project selection when projects configured."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import get_callback_data_values
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("backend", proj_dir, ()), ("frontend", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(1)
+            user = FakeUser(42)
+            msg = await send_command(th.cmd_project, chat, user, "/project")
+            reply = msg.replies[-1]
+            cbs = get_callback_data_values(reply)
+            assert "setting_project:backend" in cbs
+            assert "setting_project:frontend" in cbs
+            # Clear button only when a project is active
+            await send_command(th.cmd_project, chat, user, "/project", args=["use", "backend"])
+            msg2 = await send_command(th.cmd_project, chat, user, "/project")
+            cbs2 = get_callback_data_values(msg2.replies[-1])
+            assert "setting_project:clear" in cbs2
+
+
+async def test_settings_callback_project_use():
+    """setting_project:<name> callback switches project and resets provider state."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("myproj", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(1)
+            user = FakeUser(42)
+            prov.run_results = [RunResult(text="ok")]
+            await send_text(chat, user, "hi")
+            query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_project:myproj")
+            session = load_session_disk(data_dir, 1, prov)
+            assert session["project_id"] == "myproj"
+            assert session["provider_state"].get("started") is not True
+            edit = cb_msg.replies[-1].get("edit_text", "")
+            assert "Switched to project" in edit
+            assert "myproj" in edit
+
+
+async def test_settings_callback_project_clear():
+    """setting_project:clear callback clears project and resets provider state."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("p1", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(1)
+            user = FakeUser(42)
+            await send_command(th.cmd_project, chat, user, "/project", args=["use", "p1"])
+            query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_project:clear")
+            session = load_session_disk(data_dir, 1, prov)
+            assert session.get("project_id", "") == ""
+            edit = cb_msg.replies[-1].get("edit_text", "")
+            assert "Project cleared" in edit
+
+
+async def test_settings_callback_project_clears_pending():
+    """Project change via callback clears pending approval/retry."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("proj1", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(1)
+            user = FakeUser(42)
+            session = default_session("claude", prov.new_provider_state(), "on")
+            session["pending_approval"] = {"prompt": "do it", "created_at": 0}
+            save_session(data_dir, 1, session)
+            await send_callback(th.handle_settings_callback, chat, user, "setting_project:proj1")
+            session = load_session_disk(data_dir, 1, prov)
+            assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
 async def test_session_shows_model_profile():

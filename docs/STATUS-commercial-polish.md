@@ -2,7 +2,11 @@
 
 Current as of 2026-03-13. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-13):** **Milestone D complete.** Progress, recovery, approval, and trust clarity. User-facing copy centralized in `app/user_messages.py` (one small authoritative home). Progress wording: provider-neutral labels (Thinking…, Running a command…, Command finished., Blocked:, etc.). Recovery: plain-language interruption notice, "Run again" / "Skip" buttons, already-handled/blocked/discarded/replay-failed messages. Approval/retry: "Review the plan…", approve/reject labels, expired/context-changed messages, "Permission needed" / "Grant access & retry". Trust: "Not authorized.", public-mode restrictions, project/policy/settings managed copy. No new FSM or second progress/recovery system. Handlers and `progress.render()` import from `user_messages`; `request_flow.validate_pending` uses centralized approval messages. Tests: test_user_messages.py pins recovery/approval/progress/trust wording; existing handler/approval/request_flow/progress tests updated for new copy; all pass.
+> **Latest change (2026-03-13):** **Roadmap correction after Phase 12.** The future roadmap is no longer “Postgres queue next for everyone.” The next numbered phase is now **Phase 13 — Storage backend abstraction and Local Runtime mode**, with SQLite as the planned default backend for both Docker and host deployments. Shared-runtime Postgres queue work has been moved to the end of the roadmap as a later capability tier. Docs updated to distinguish: (1) **shipped today** = Postgres-only runtime from Phase 12, and (2) **planned next** = backend-neutral product/core plus Local Runtime first, Shared Runtime later.
+>
+> **Prior:** **Milestone D follow-up.** Stale/invalidated pending message fixed: `approval_context_changed()` now describes execution-context change truthfully ("This request can't continue because the chat context changed…"), not only settings/project. Retry callback wording fully centralized: `retry_skip_confirmation()` ("Retry skipped.") and `retry_nothing_pending()` ("No retry is waiting.") in `user_messages.py`; handlers use them. Tests: user_messages pins context-changed wording (no "settings or project" only); test_retry_skip asserts retry-skip edit text; test_retry_allow_no_pending asserts no-retry wording; test_stale_context_hash and test_validate_pending_detects_real_context_change assert "context" in reply. 200 passed.
+>
+> **Prior:** **Milestone D complete.** Progress, recovery, approval, and trust clarity. User-facing copy centralized in `app/user_messages.py`. Progress: provider-neutral labels. Recovery: interruption notice, Run again/Skip, already-handled/blocked/discarded. Approval/retry: plan review, approve/reject, expired/context-changed, permission/retry prompt. Trust: not authorized, public-mode restrictions, settings managed. Tests: test_user_messages.py; handler/approval/request_flow/progress updated; all pass.
 >
 > **Prior:** **Milestone C follow-up.** `/settings` now respects public-user execution-context: display built from `_resolve_context` only (no trusted project/path leak); project and file-policy controls omitted for public users; optional line "Project selection and file policy are managed by the operator in public mode." `/settings` added to `HELP_TEMPLATE` so `/help` and `/start` expose it. Tests: public `/settings` trust-boundary (no leak), public keyboard restriction (no `setting_project:*`/`setting_policy:*`), trusted regression (project/policy/model/compact/approval), help/start discoverability; existing Milestone C tests unchanged.
 >
@@ -14,11 +18,11 @@ Current as of 2026-03-13. Tracks progress against [PLAN-commercial-polish.md](PL
 >
 > **Prior (2026-03-13):** Provider login as first-class Docker workflow: **bot-home** volume at `/home/bot` persists provider auth; **entrypoint** chowns bot-home to uid 1000 then runs as bot (gosu). **provider_login.sh** runs in-container login (codex `--login` / claude `/login`) using same image and volume, then verifies provider health; **provider_status.sh** runs `--doctor`; **provider_logout.sh** clears provider auth in bot-home. Startup validates provider auth (runtime health) and fails with “Run ./scripts/provider_login.sh” when missing. README Quick Start includes provider login; Troubleshooting and scripts table updated. ARCHITECTURE documents bot-home and provider-login ownership. Prior: supported path = real provider image; stub test-only.
 >
-> **Prior (2026-03-12):** Post-Phase-12 execution program is now explicit in the roadmap. Before any Phase 13 queue-authority work, execution is gated on five ordered milestones: turnkey Docker runtime, config/onboarding simplification, user-facing settings and `/project` polish, progress/recovery/trust clarity, and a short usability-hardening pass. The plan now states the required tests and the hard gate before Phase 13.
+> **Prior (2026-03-12):** Post-Phase-12 execution program was made explicit in the roadmap. This historical note predates the later roadmap correction that moved shared-runtime queue authority to the end of the plan; the gate itself remains, but now leads into Milestone E and then **Phase 13 — storage backend abstraction and Local Runtime mode** rather than immediate queue-authority work.
 > **Schema policy (corrected):** Transport schema is versioned; migration/upgrade path is deferred, not rejected as product direction. No "fresh-schema-only" or "delete DB and restart" product policy. Current build expects current schema/layout; unsupported schema/layout fails fast with a neutral error (`Unsupported transport.db schema/layout for this build`). Bootstrap: brand-new DB (no tables) gets `_CREATE_SQL` + schema_version; existing DB is validated only (tables, columns, `idx_one_claimed_per_chat`, meta schema_version) and is not mutated before validation.
 > **Transport repository shape:** Single claim path `_claim_queued_item`; single insert path `_insert_initial_work_item`. All mutators use `_write_tx(conn)`; nested use raises `RuntimeError("nested transport transaction")`. Impossible machine rejections are fatal: `_apply_transport_event` and `_insert_initial_work_item` raise `TransportStateCorruption` on workflow rejection; `_claim_queued_item` returns None only for `other_claimed_for_chat`, else raises; `mark_pending_recovery`, `discard_recovery`, `supersede_pending_recovery`, `reclaim_for_replay` raise on invalid_transition (recover_stale_claims allows guard_failed as “not stale, skip”). Chat integrity: `_assert_no_invalid_rows_for_chat(conn, chat_id)` is called in `has_queued_or_claimed`, `get_latest_pending_recovery`, `reclaim_for_replay`, `supersede_pending_recovery`. Strict helpers: `_apply_claim_event` for claim-style transitions (exact CAS, reread); reclaim_for_replay uses it; supersede_pending_recovery applies _apply_transport_event per item in one transaction; recover_stale_claims uses exact source predicate (id, state, worker_id, claimed_at) and reread classification.
 > **Transaction and invariant fixes:** One transaction wrapper for all mutating entry points; rollback on any exception. `_assert_no_invalid_rows_for_chat()` enforces at most one claimed per chat. Current schema includes `idx_one_claimed_per_chat`. Tests: rollback on non-IntegrityError, two-claimed raises, fresh schema index, meta/schema_version validation (unsupported layout/mismatch raise neutral error).
-> **Phase 11 sealed.** Phase 12 complete (Postgres runtime cutover). Next: Phase 13 (Postgres queue authority in webhook mode).
+> **Phase 11 sealed.** Phase 12 complete (Postgres runtime cutover). Next after Milestone E: **Phase 13 (storage backend abstraction and Local Runtime mode).**
 >
 > **Prior:** Phase 11 second workflow (pending approval/retry machine, invalidation in machine, 39 machine tests).
 >
@@ -70,12 +74,11 @@ Current as of 2026-03-13. Tracks progress against [PLAN-commercial-polish.md](PL
 > contract and expand/collapse), IV, Ext (webhook), restart recovery
 > hardening — all shipped and tested.
 >
-> Remaining work now follows the linear Phase 11-19 roadmap in
-> [PLAN-commercial-polish.md](PLAN-commercial-polish.md). Phases 1-10 are
-> sealed as shipped. Current planned order is workflow ownership extraction,
-> Postgres cutover, Postgres queue authority, multi-process workers,
-> durability confidence, product polish, behavior extensions, registry trust,
-> and usage accounting.
+> Historical note (superseded by the roadmap correction above): remaining work
+> previously followed the older linear Phase 11-19 sequence in
+> [PLAN-commercial-polish.md](PLAN-commercial-polish.md), with Postgres queue
+> authority immediately after the Postgres cutover. The current roadmap no
+> longer uses that ordering.
 >
 > Prior: Progress UX Layer 2, user-intent-owned replay, restart recovery
 > hardening, supersede_recovery guard, ReclaimBlocked exception.
@@ -162,14 +165,19 @@ Current as of 2026-03-13. Tracks progress against [PLAN-commercial-polish.md](PL
 ## Current Snapshot
 
 - Phases 1-10 are sealed as shipped.
-- The next numbered roadmap phase is Phase 13, Postgres queue authority in webhook mode.
+- The next numbered roadmap phase is **Phase 13 — storage backend abstraction and Local Runtime mode**.
 - Immediate execution focus is the pre-Phase-13 gate:
   - turnkey Docker runtime
   - config/onboarding simplification
   - user-facing settings and `/project` polish
   - progress/recovery/trust clarity
   - usability hardening
-- Phase 12 is complete: shipped runtime uses Postgres; `BOT_DATABASE_URL` required at startup.
+- Phase 12 is complete: the **shipped runtime today** uses Postgres and
+  requires `BOT_DATABASE_URL` at startup.
+- The roadmap direction after Phase 12 is now:
+  - **Local Runtime first**: backend-neutral product/core plus SQLite as the
+    planned default backend for both Docker and host deployments
+  - **Shared Runtime last**: Postgres queue authority and multi-process scale
 - Dockerized app + Postgres is the primary supported operational model.
 - Compose is the canonical shape for Postgres, DB tooling, and the app runtime.
 - The **supported bot image** is a **real provider-enabled image** (includes the chosen Claude or Codex CLI). Built via repo-owned script from `BOT_PROVIDER` (e.g. `./scripts/build_bot_image.sh`); operators do not choose Docker targets manually. The stub-provider image (`Dockerfile.runnable`) exists only for **test/dev smoke** (e.g. E2E when real provider is not available) and is not the supported runtime.
@@ -184,7 +192,7 @@ Current as of 2026-03-13. Tracks progress against [PLAN-commercial-polish.md](PL
   `PLAN-commercial-polish.md`, and `STATUS-commercial-polish.md`.
 - `transport idempotency` is shipped in Phase 9.
 - `content dedup` is intentionally unshipped and remains future work in
-  Phase 17.
+  Phase 15.
 
 ---
 
@@ -203,14 +211,14 @@ Current as of 2026-03-13. Tracks progress against [PLAN-commercial-polish.md](PL
 | 9 | Durable transport, transport idempotency, webhook mode, and restart recovery | Done | Durable queue, webhook path, replay/discard recovery, and polling conflict detection shipped. |
 | 10 | Structural hardening, invariants, and test ownership | Done | Invariant coverage, test ownership refactor, and runtime isolation hardening shipped. |
 | 11 | Workflow ownership extraction | Done | Transport/recovery and pending approval/retry are now library-owned workflow families. Transport uses one claim path, one insert path, `_apply_claim_event`, one transaction wrapper, fatal impossible rejections, and chat-integrity checks; pending invalidation flows through `PendingRequestMachine`. Phase 11 sealed. |
-| 12 | Postgres runtime cutover | Done | M1–M9 complete. Postgres sole runtime; BOT_DATABASE_URL required; E2E layer and zero-to-running docs in place. |
-| 13 | Postgres queue authority in webhook mode | Planned | Next numbered phase, but gated on the pre-Phase-13 Docker/productization program in the plan. |
-| 14 | Multi-process / multi-worker deployment | Planned | Shared Postgres queue authority expands to cross-process ingress and workers. |
-| 15 | Durability confidence phase | Planned | Add crash, lease, webhook, and cross-process confidence coverage. |
-| 16 | Product polish on stable foundations | Planned | Queue-dependent polish stays here; only low-risk discoverability polish is pulled forward into the pre-Phase-13 gate. |
-| 17 | Behavior extensions | Planned | Demand-gated `content dedup` and richer project/policy scope. |
-| 18 | Registry trust and governance | Planned | Publisher signing and organizational trust policy on top of digest verification. |
-| 19 | Usage accounting, quotas, and billing | Planned | Usage recording, quota enforcement, and billing built last. |
+| 12 | Postgres runtime cutover | Done | M1–M9 complete. Current shipped runtime is Postgres-only; BOT_DATABASE_URL required; E2E layer and zero-to-running docs in place. |
+| 13 | Storage backend abstraction and Local Runtime mode | Planned | Next numbered phase after Milestone E. Restore a first-class Local Runtime mode with SQLite as the default backend for Docker and host, behind backend-neutral storage/runtime contracts. |
+| 14 | Product polish on local foundations | Planned | Continue product polish on top of Local Runtime and backend-neutral contracts. |
+| 15 | Behavior extensions | Planned | Demand-gated `content dedup` and richer project/policy scope without coupling product work to Shared Runtime queue authority. |
+| 16 | Registry trust and governance | Planned | Publisher signing and organizational trust policy on top of digest verification. |
+| 17 | Usage accounting, quotas, and billing | Planned | Usage recording, quota enforcement, and billing before Shared Runtime queue work. |
+| 18 | Shared Runtime: Postgres queue authority in webhook mode | Planned | Advanced deployment capability: persist-first webhook ingress and app-owned Postgres queue authority. |
+| 19 | Shared Runtime: multi-process scale and durability confidence | Planned | Multi-process workers, leases, recovery metrics, crash confidence, and shared-runtime durability. |
 
 Detailed workstream sections below are preserved as historical implementation
 record. The authoritative roadmap ordering is the Phase 1-19 table above.
@@ -230,9 +238,9 @@ start there yet. The required gate is the pre-Phase-13 program defined in
 | B. Config and onboarding simplification (Docker scope) | Done (track) | One primary `.env.bot` path; config/startup/DB CLI messages reference `.env.bot` and build script. |
 | C. User-facing settings and `/project` polish | Done | `/settings` discoverability surface; `/project` default with inline keyboard; `setting_project:*` callbacks in `handle_settings_callback`; project/policy/compact/model/approval parity; tests for settings view, project callbacks, public denial, compact-no-reset. Follow-up: `/settings` uses resolved context only (public-safe display), no project/policy buttons for public users; `/settings` in `HELP_TEMPLATE`; tests for public trust-boundary, keyboard restriction, help/start discoverability. |
 | D. Progress, recovery, and trust clarity | Done | Centralized user-facing copy in `app/user_messages.py`. Progress: provider-neutral wording. Recovery: interruption notice, Run again/Skip, already-handled/blocked/discarded messages. Approval/retry: plan review, approve/reject, expired/context-changed, permission/retry prompt. Trust: not authorized, public-mode restrictions, settings managed. Tests: test_user_messages.py; handler/approval/request_flow/progress tests updated; existing behavior tests intact. |
-| E. Usability hardening before Phase 13 | Planned | Short stabilization pass over Docker path, docs, onboarding, and main user journey before queue-authority work. |
+| E. Usability hardening before Phase 13 | Planned | Short stabilization pass over Docker path, docs, onboarding, and main user journey before backend-abstraction and Local Runtime work. |
 
-Phase 13 should not start until the full gate in the plan is satisfied (including C, D, E as applicable).
+Phase 13 should not start until the full gate in the plan is satisfied (including C, D, E as applicable). Shared-runtime queue authority is no longer the immediate next step; it is deferred to Phase 18.
 
 ---
 

@@ -27,7 +27,7 @@ def test_save_and_load_session_roundtrip(postgres_truncated):
     with get_connection(postgres_truncated) as conn:
         storage_pg.save_session(conn, chat_id, session)
         loaded = storage_pg.load_session(
-            conn, chat_id, "claude", _provider_state_factory(), "on", "", ()
+            conn, chat_id, "claude", _provider_state_factory, "on", "", ()
         )
     assert loaded["active_skills"] == ["debugging", "testing"]
     assert loaded["project_id"] == "myproj"

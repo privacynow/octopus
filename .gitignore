@@ -13,3 +13,4 @@ __pycache__/
 
 # Test artifacts
 .setup-test-patched.sh
+tests/.postgres_run_id*

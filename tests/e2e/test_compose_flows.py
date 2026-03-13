@@ -1,7 +1,7 @@
 """Compose-based E2E tests for Phase 12: bootstrap, doctor, optional bot startup.
 
 Run only when E2E_COMPOSE=1 and Docker is available. Skipped in normal pytest runs.
-See docs/PHASE12-OPERATIONAL-CONTRACT.md and docs/PLAN-commercial-polish.md.
+See README.md for the operator path and docs/ARCHITECTURE.md for the runtime/testing contract.
 """
 
 import os
@@ -74,17 +74,25 @@ def test_compose_bootstrap_doctor(postgres_up):
 def test_compose_bot_startup_validates_schema(postgres_up):
     """Bot container starts and validates Postgres schema (runs 5s without exit 1).
 
-    Uses a dummy token so the app gets past config load and schema validation
-    then enters polling (or fails at Telegram connect). We only assert that
-    the app did not exit with 1 within 5s (schema validation passed).
+    Skipped unless E2E_BOT_IMAGE_RUNNABLE=1: the default image does not include
+    the provider CLI (claude/codex), so the bot would exit 1 on config/startup.
+    Run this only when using a customized image that includes the provider.
     """
+    if os.environ.get("E2E_BOT_IMAGE_RUNNABLE") != "1":
+        pytest.skip(
+            "Default image has no provider CLI; set E2E_BOT_IMAGE_RUNNABLE=1 "
+            "when using a customized image to run this test."
+        )
     r = _compose("--profile", "tools", "run", "--rm", "db-bootstrap")
     assert r.returncode == 0, (r.stdout, r.stderr)
 
+    # Minimal env required by config: token, provider, and allow-open or allowed-users
     proc = subprocess.Popen(
         ["docker", "compose", "-f", os.path.join(REPO_ROOT, "docker-compose.yml"),
          "run", "--rm",
          "-e", "TELEGRAM_BOT_TOKEN=123456:ABC-DEFghijklmnopqrstuvwxyz",
+         "-e", "BOT_PROVIDER=claude",
+         "-e", "BOT_ALLOW_OPEN=1",
          "bot"],
         cwd=REPO_ROOT,
         stdout=subprocess.PIPE,

@@ -62,18 +62,14 @@ def main() -> None:
 
     config = load_config(args.instance)
     provider = make_provider(config)
-
-    if args.doctor:
-        run_doctor(config, provider)
-
     fail_fast(config)
 
-    # Phase 12: Postgres is the only supported runtime backend.
+    # Phase 12: Postgres is the only supported runtime backend (required for both run and --doctor).
     if not config.database_url:
-        print("BOT_DATABASE_URL is required. See docs/PHASE12-OPERATIONAL-CONTRACT.md.", file=sys.stderr)
+        print("BOT_DATABASE_URL is required. See README.md for bootstrap and run modes.", file=sys.stderr)
         sys.exit(1)
 
-    if config.database_url:
+    try:
         from app.storage import set_postgres_backend as set_storage_pg
         from app.work_queue import set_postgres_backend as set_transport_pg
         set_storage_pg(
@@ -89,18 +85,24 @@ def main() -> None:
             connect_timeout=config.db_connect_timeout_seconds,
         )
         from app.db.postgres import get_connection
-        from app.db.postgres_doctor import run_doctor
+        from app.db.postgres_doctor import run_doctor as run_postgres_doctor
         with get_connection(
             config.database_url,
             min_size=config.db_pool_min_size,
             max_size=config.db_pool_max_size,
             connect_timeout=config.db_connect_timeout_seconds,
         ) as conn:
-            errors = run_doctor(conn)
-        if errors:
-            for e in errors:
-                print(f"  FAIL: {e}", file=sys.stderr)
-            sys.exit(1)
+            errors = run_postgres_doctor(conn)
+    except Exception as e:
+        print(f"Database error: {e}", file=sys.stderr)
+        sys.exit(1)
+    if errors:
+        for e in errors:
+            print(f"  FAIL: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.doctor:
+        run_doctor(config, provider)
 
     ensure_data_dirs(config.data_dir, database_url=config.database_url or "")
     startup_recovery()

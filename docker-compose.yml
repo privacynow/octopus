@@ -1,6 +1,6 @@
-# Phase 12: canonical development stack. See docs/PHASE12-OPERATIONAL-CONTRACT.md.
-# First-time: docker compose up -d postgres && sleep 3 && docker compose run --rm db-bootstrap
-# Then: set BOT_DATABASE_URL in .env and docker compose up bot
+# Phase 12: tooling stack (postgres + db-bootstrap/update/doctor) is independent of bot runtime config.
+# From a clean repo (no .env): docker compose up -d postgres && docker compose --profile tools run --rm db-bootstrap
+# Bot runtime (token, provider, access) is environment-specific; pass via --env-file or -e. See docs.
 
 services:
   postgres:
@@ -52,10 +52,10 @@ services:
 
   bot:
     build: .
+    # DB URL for container: use service hostname (postgres). Bot runtime (token, provider, access)
+    # must be supplied via: docker compose run --rm --env-file <your-env-file> bot
     environment:
       BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
-    env_file:
-      - .env
     depends_on:
       postgres:
         condition: service_healthy

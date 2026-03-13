@@ -26,10 +26,10 @@ Use this document for four different questions:
 - `ARCHITECTURE.md`
   Source of truth for runtime boundaries, queue/storage authority, and
   contracts that code must preserve.
-- `PLAN-agent-roles-and-skills.md`
-  Archived implementation reference for the detailed roles/skills build.
-- `STATUS-agent-roles-and-skills.md`
-  Archived shipped-status reference for the detailed roles/skills build.
+- Archived roles/skills docs
+  Historical appendices only; the current product definition, shipped outcome,
+  and roadmap are fully captured in this plan, the status mirror, the
+  architecture doc, and the README.
 
 The detailed historical steps inside the separate roles/skills design doc stay
 as they are. This document summarizes that shipped work under Phases 3-5 and
@@ -133,15 +133,15 @@ The product is complete when these capability areas are in place.
 ## Roadmap Rules
 
 - The roadmap is one strict execution order, not priority buckets.
-- Phases 1-10 are sealed as shipped history.
-- New roadmap work begins at Phase 12.
+- Phases 1-12 are sealed as shipped history.
+- New roadmap work begins at Phase 13.
 - `transport idempotency` means the durable `update_id` journal and work-item
   uniqueness.
 - `content dedup` means optional suppression of identical consecutive
   messages. It is not part of the core transport contract.
-- Postgres is the sole runtime backend after Phase 12 lands. SQLite is the
-  current shipped backend until then; any SQLite-to-Postgres import bridge is
-  optional follow-on work, not a required part of the cutover.
+- Postgres is the sole runtime backend after Phase 12. SQLite remains in the
+  codebase only for test-only and historical paths; any SQLite-to-Postgres
+  import bridge is optional follow-on work, not a required part of the cutover.
 
 ---
 
@@ -162,7 +162,7 @@ This is the authoritative phase sequence.
 | 9 | Durable transport, transport idempotency, webhook mode, and restart recovery | Sealed / shipped |
 | 10 | Structural hardening, invariants, and test ownership | Sealed / shipped |
 | 11 | Workflow ownership extraction | Sealed / shipped |
-| 12 | Postgres runtime cutover | Remaining |
+| 12 | Postgres runtime cutover | Sealed / shipped |
 | 13 | Postgres queue authority in webhook mode | Remaining |
 | 14 | Multi-process / multi-worker deployment | Remaining |
 | 15 | Durability confidence phase | Remaining |
@@ -173,10 +173,10 @@ This is the authoritative phase sequence.
 
 ---
 
-## Sealed Phases 1-11
+## Sealed Phases 1-12
 
-Phases 1-11 are shipped and sealed. They stay here as historical reference,
-but the active roadmap begins at Phase 12.
+Phases 1-12 are shipped and sealed. They stay here as historical reference,
+but the active roadmap begins at Phase 13.
 
 | Phase | Historical source | What shipped | Lasting lesson |
 |------:|-------------------|--------------|----------------|
@@ -191,10 +191,10 @@ but the active roadmap begins at Phase 12.
 | 9 | Former Phase IV plus later recovery hardening | Durable transport, transport idempotency, webhook foundation, queued feedback, and explicit replay/discard recovery. | `transport idempotency` is core. Automatic replay is unsafe. `content dedup` is optional policy, not the transport contract. |
 | 10 | Former Phase H plus later hardening/testing work | Invariants, owner suites, execution-context hardening, and test isolation. | Confidence comes from explicit ownership and invariant tests, not from ever-growing overflow suites. |
 | 11 | Phase 11 (this plan) | Workflow ownership extraction: transport and pending_request state machines (python-statemachine), single claim and single insert paths, repository-owned CAS and idempotency, versioned transport schema (validate-only for existing DBs), impossible rejections fatal, chat integrity, strict replay/supersede/recover helpers. | Extract workflow ownership before database migration so the new backend does not inherit open-coded transition logic. Library owns graph and guards; repository owns SQL and already_handled. |
+| 12 | Phase 12 (this plan) | Postgres runtime cutover: Postgres-backed session and transport stores shipped, `BOT_DATABASE_URL` required at startup, validate-only runtime startup, explicit DB bootstrap/update/doctor commands, Postgres integration suites, and Compose-based tooling/E2E layer. | Split runtime ownership cleanly: infrastructure provides the database, repo-owned commands bootstrap/update/doctor it, and the app validates then runs. |
 
-For the detailed capability-system lineage behind Phases 3-5, keep using
-[PLAN-agent-roles-and-skills.md](PLAN-agent-roles-and-skills.md) and
-[STATUS-agent-roles-and-skills.md](STATUS-agent-roles-and-skills.md).
+The archived roles/skills docs remain as historical appendices for now, but
+their product-level content is already absorbed here under Phases 3-5.
 
 ---
 
@@ -568,8 +568,6 @@ The docs should have distinct jobs:
   Product vision, roadmap, and durable lessons and decisions.
 - `ARCHITECTURE.md`
   Contracts, components, and runtime model.
-- `OPS-*`
-  Operator playbooks.
 
 If a document starts turning into another document, split it rather than
 blurring the audience.
@@ -579,8 +577,8 @@ blurring the audience.
 ## Remaining Phases
 
 These phases are the active roadmap. Every still-relevant deferred or future
-item belongs somewhere in this ordered sequence. Phase 11 is sealed; active
-work begins at Phase 12.
+item belongs somewhere in this ordered sequence. Phase 12 is sealed; active
+work begins at Phase 13.
 
 ### Phase 11 - Workflow Ownership Extraction (Sealed)
 
@@ -810,28 +808,28 @@ separate Postgres databases, not one shared database with mixed state.
 | Environment | Recommended app shape | Recommended Postgres shape | Reason |
 |-------------|-----------------------|----------------------------|--------|
 | Development | Docker container | Docker Compose Postgres | Preserves "fresh machine works" with an explicit, reproducible local stack. |
-| Staging | Docker container | Start with Docker Compose Postgres; allow external Postgres later | Matches dev initially, then can move closer to production once the contract is stable. |
-| Production | Docker container or current host-run model | External / managed or separately managed Postgres | Keeps runtime contracts the same while avoiding single-host Postgres fragility by default. |
+| Staging | Docker container | Start with Docker Compose Postgres; allow external Postgres later | Matches development initially, then can move closer to production once the contract is stable. |
+| Production | Docker container | External / managed or separately managed Postgres | Keeps runtime contracts the same while avoiding single-host Postgres fragility by default. |
 
 Production is intentionally left open at the infrastructure layer. Phase 12
 should not hard-code AWS, SSH-only deploys, or a specific hosting platform. The
 important contract is that the app runtime and database lifecycle stay
 separate.
 
-**Canonical Phase 12 recommendation.**
+**Shipped Phase 12 operating shape.**
 
 - Development:
-  - Dockerize both app and Postgres.
-  - Use Docker Compose as the canonical local bring-up path.
+  - Docker Compose is the canonical shape for Postgres, DB tooling, and the app runtime.
+  - The default app image is a base image; a runnable bot image must also
+    include the chosen provider CLI.
 - Staging:
-  - Start with the same Compose-driven shape as development if that reduces
-    unknowns.
-  - Later, move Postgres external while keeping the same bootstrap/update
-    contract.
+  - Follows the same Docker-first bootstrap/update/doctor contract as development.
+  - Postgres may remain Compose-managed or move external without changing the
+    ownership model.
 - Production:
-  - Keep the app containerizable.
+  - Keep the app containerized.
   - Prefer external or managed Postgres over a same-host Postgres container
-    unless this is an intentionally low-ops deployment.
+    unless this is intentionally low-ops.
 
 **Repo-owned workflows (the things operators and developers actually run).**
 
@@ -839,15 +837,14 @@ Phase 12 should introduce four explicit workflows and document them as the only
 supported lifecycle:
 
 1. App bootstrap
-   - Python dependencies, image build, or equivalent app/runtime preparation.
-   - Current `scripts/bootstrap.sh` remains the anchor for non-container
-     bootstrap and local test environments.
+   - Build or refresh the app image and related runtime assets.
+   - `scripts/bootstrap.sh` remains useful for local development and tests, but
+     Docker is the primary product-facing operational path.
 2. DB bootstrap
-   - First-time environment creation:
-     - ensure Postgres is reachable
-     - create database and runtime role if needed
-     - create schema namespace
-     - apply full repo-owned SQL from scratch
+   - Apply repo-owned schema to an *existing* database (database and runtime role
+     must already exist, e.g. via Compose postgres image or out-of-band provisioning).
+   - CLI reads `BOT_DATABASE_URL` and runs schema SQL only; create schema namespace
+     and apply full repo-owned SQL from scratch.
 3. DB update
    - Apply pending schema versions to an existing environment before app
      restart when the repo adds new SQL files
@@ -873,44 +870,45 @@ The exact filenames can change, but the plan should assume a command set like:
 These commands are the missing DevOps seam. CI/CD can automate them later, but
 Phase 12 should make them usable manually first.
 
-**Docker-first development shape.**
+**Docker-first operating shape.**
 
-For development, Phase 12 should define one canonical Compose stack instead of
-leaving every developer to improvise.
+Phase 12 establishes one canonical Compose shape for the tooling layer instead
+of leaving every developer to improvise:
 
-- Expected services:
+- expected services:
   - `postgres`
-  - `bot`
-  - one-shot repo-owned helpers such as:
+  - one-shot repo-owned helpers:
     - `db-bootstrap`
     - `db-update`
     - `db-doctor`
-- The helper services should run from the repo/app image (or a closely related
-  tooling image), so the SQL runner and validation logic are versioned with the
-  code.
-- The app container should not run `systemd`; the container runtime owns the
-  process lifecycle.
-- Current host-run scripts can remain for tests and non-container operation,
-  but Compose becomes the canonical development environment shape.
+  - `bot`
+- helper services run from the repo/app image (or a closely related tooling
+  image), so SQL and validation logic are versioned with the code
+- the app container does not run `systemd`; the container runtime owns the
+  process lifecycle
+- the tooling stack must be runnable from a clean repo with no bot runtime env
+- the bot runtime is environment-specific and container-first:
+  - the container receives explicit runtime env
+  - it uses the Compose hostname `postgres`
+  - the image must include the chosen provider runtime
 
 **First-time sequence for a brand-new development environment.**
 
-The first-time path should be explicit and repeatable:
+The first-time path is explicit and repeatable:
 
 1. Build or bootstrap the app runtime.
 2. Start the Compose Postgres service.
 3. Wait for Postgres readiness.
-4. Run DB bootstrap against that Postgres:
-   - create DB + runtime role if needed
+4. Run DB bootstrap against that Postgres (DB and role already exist; Compose
+   postgres image creates them from env):
    - create schema namespace
    - apply all repo SQL
-5. Write the environment config for the bot:
+5. Run DB doctor.
+6. Provide runtime env for the bot container:
    - Telegram token
-   - provider/model settings
-   - `BOT_DATABASE_URL`
-   - working-dir and policy settings
-6. Run DB doctor.
-7. Start the app container.
+   - provider selection
+   - access policy (`BOT_ALLOWED_USERS` or `BOT_ALLOW_OPEN`)
+7. Start the bot container against the bootstrapped Postgres service.
 
 The long-term UX can be wrapped in a single convenience command, but Phase 12
 must document the underlying steps clearly first.
@@ -1089,12 +1087,11 @@ must document the underlying steps clearly first.
 
 **Testing strategy for Phase 12 and beyond.**
 
-Phase 12 should extend the current contract-owner suite structure, not replace
-it with container-heavy black-box testing.
+Phase 12 extends the contract-owner suite structure; it does not replace it
+with container-heavy black-box testing.
 
-- Keep the current owner-suite model from `docs/testing-ownership.md`.
 - Keep pure contract and workflow suites fast and backend-independent.
-- Migrate persistence and integration coverage from SQLite to real Postgres.
+- Keep persistence and integration confidence in real Postgres.
 - Add a small explicit bootstrap/startup/update E2E layer on top of that.
 - Do not make app-container E2E the main confidence layer.
 
@@ -1121,15 +1118,17 @@ it with container-heavy black-box testing.
    - Small smoke set only: first boot, schema update, startup validation,
      minimal happy-path request flow.
 
-**Isolation model (required).**
+**Isolation model (current shipped harness).**
 
-- Use one Postgres service per test run, not one container per test.
-- Use one database per pytest worker (for example `test_bot_gw0` through
-  `test_bot_gw3` for `-n 4`).
+- Postgres integration suites require Docker.
+- The harness starts a dedicated test-only Postgres container per pytest-xdist
+  worker.
 - Each worker:
-  - creates its database once
+  - gets one database inside that container
   - applies schema once
   - truncates or resets runtime tables between tests
+- The harness never uses `BOT_DATABASE_URL` or any dev/staging/production DB
+  for truncation or schema mutation.
 - Do not use transaction rollback as the global isolation strategy.
 
 **Why truncate or reset, not rollback.**
@@ -1201,10 +1200,10 @@ split for the core request path.
 
 1. Freeze the Phase 11 repository contract with the current tests so the
    backend swap is measured against behavior, not assumptions.
-2. Add the Phase 12 operational contract to the repo:
-   - environment identity model
-   - documented bootstrap/update/doctor workflows
-   - canonical development Compose stack
+2. Absorb the Phase 12 operational and testing contract into the core docs:
+   - README for operator-facing bootstrap/run/update guidance
+   - ARCHITECTURE for runtime and testing contracts
+   - STATUS for current shipped posture
 3. Add runtime config:
    - `BOT_DATABASE_URL`
    - pool size / timeout settings
@@ -1213,9 +1212,9 @@ split for the core request path.
    - versioned SQL runner
    - schema/version validation
    - explicit DB bootstrap command
-5. Add the test harness for Phase 12:
-   - one Postgres service per run
-   - one database per pytest worker
+5. Add the Phase 12 Postgres harness:
+   - dedicated test-only Postgres container per pytest worker
+   - one database per worker
    - truncate/reset cleanup between tests
    - clear split between backend-independent suites, Postgres integration
      suites, and E2E

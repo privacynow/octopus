@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from app.db.postgres_migrate import current_schema_version
+from app.db.postgres_migrate import current_schema_version, run_update
 from app.db.postgres_doctor import run_doctor
 
 
@@ -34,6 +34,28 @@ def test_cli_doctor_exits_when_no_database_url(monkeypatch):
         assert exc_info.value.code == 1
     finally:
         sys.argv = old_argv
+
+
+def test_run_update_fails_with_bootstrap_first_message_on_empty_db(postgres_base_url, request):
+    """run_update() on empty/missing schema returns 'run DB bootstrap first' instead of bootstrapping.
+
+    Pins the bootstrap/update split: update must not silently bootstrap a fresh DB.
+    """
+    from app.db.postgres import get_connection
+    from tests.support.postgres_support import (
+        _replace_db_in_url,
+        create_test_database,
+        get_worker_id,
+    )
+
+    worker_id = get_worker_id(request.config)
+    db_name = f"test_bot_empty_{worker_id}".replace("-", "_")
+    empty_url = _replace_db_in_url(postgres_base_url, db_name)
+    create_test_database(postgres_base_url, db_name)
+    with get_connection(empty_url) as conn:
+        errors = run_update(conn)
+    assert len(errors) >= 1
+    assert any("Run DB bootstrap first" in e or "run DB bootstrap first" in e for e in errors)
 
 
 def test_cli_doctor_requires_url(monkeypatch):

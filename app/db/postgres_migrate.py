@@ -26,8 +26,13 @@ def _sql_files_sorted() -> list[tuple[int, Path]]:
     return out
 
 
+# PostgreSQL sqlstate: only these "missing object" cases map to None; others surface.
+_MISSING_OBJECT_SQLSTATES = ("42P01", "3F000")  # undefined_table, invalid_schema_name
+
+
 def _get_max_applied_version(conn: Any) -> int | None:
-    """Return max version from schema_migrations, or None if table/schema missing."""
+    """Return max version from schema_migrations, or None only if schema/table is missing.
+    Permission errors, connection failures, and other catalog problems are not swallowed."""
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -35,20 +40,22 @@ def _get_max_applied_version(conn: Any) -> int | None:
             )
             row = cur.fetchone()
             return int(row[0]) if row and row[0] is not None else None
-    except Exception:
-        return None
+    except Exception as e:
+        sqlstate = getattr(e, "sqlstate", None)
+        if sqlstate in _MISSING_OBJECT_SQLSTATES:
+            return None
+        raise
 
 
 def run_bootstrap(conn: Any) -> list[str]:
-    """Apply all SQL files in order and record versions. Returns list of errors (empty if ok)."""
+    """Apply all SQL files in order and record versions in the same transaction per file.
+    One transaction per migration: SQL + version insert commit together. Stop at first error."""
     errors: list[str] = []
     for version, path in _sql_files_sorted():
         try:
             sql = path.read_text()
             with conn.cursor() as cur:
                 cur.execute(sql)
-            conn.commit()
-            with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO bot_runtime.schema_migrations (version, applied_at)
@@ -64,16 +71,21 @@ def run_bootstrap(conn: Any) -> list[str]:
                 conn.rollback()
             except Exception:
                 pass
+            return errors  # Stop at first failed migration
     return errors
 
 
 def run_update(conn: Any) -> list[str]:
-    """Apply only pending SQL files (version > max applied). Returns list of errors."""
+    """Apply only pending SQL files (version > max applied). One transaction per migration.
+    Stop at first error. Does not bootstrap; when schema/table is missing, fail and tell
+    operator to run DB bootstrap first."""
     errors: list[str] = []
     max_applied = _get_max_applied_version(conn)
     if max_applied is None:
-        # Schema or table missing: run full bootstrap
-        return run_bootstrap(conn)
+        return [
+            "Schema or schema_migrations table missing. Run DB bootstrap first "
+            "(scripts/db_bootstrap.sh or python -m app.db.cli bootstrap)."
+        ]
     for version, path in _sql_files_sorted():
         if version <= max_applied:
             continue
@@ -81,8 +93,6 @@ def run_update(conn: Any) -> list[str]:
             sql = path.read_text()
             with conn.cursor() as cur:
                 cur.execute(sql)
-            conn.commit()
-            with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO bot_runtime.schema_migrations (version, applied_at)
@@ -97,6 +107,7 @@ def run_update(conn: Any) -> list[str]:
                 conn.rollback()
             except Exception:
                 pass
+            return errors  # Stop at first failed migration
     return errors
 
 

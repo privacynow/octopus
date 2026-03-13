@@ -5,7 +5,7 @@ import asyncio
 import logging
 import sys
 
-from app.config import BotConfig, fail_fast, load_config
+from app.config import BotConfig, fail_fast, load_config, load_config_provider_health
 from app.providers.base import Provider
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
@@ -54,11 +54,32 @@ def run_doctor(config: BotConfig, provider: Provider) -> None:
     asyncio.run(_run_doctor(config, provider))
 
 
+async def _run_provider_health(provider: Provider) -> None:
+    """Run only provider binary + runtime auth checks. No DB, no Telegram."""
+    errors: list[str] = []
+    errors.extend(provider.check_health())
+    if not errors:
+        errors.extend(await provider.check_runtime_health())
+    if errors:
+        for e in errors:
+            print(f"  FAIL: {e}", file=sys.stderr)
+        raise SystemExit(1)
+    print("Provider auth and runtime OK.")
+    raise SystemExit(0)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Telegram Agent Bot")
     parser.add_argument("instance", nargs="?", default=None, help="Instance name (default: from BOT_INSTANCE env)")
-    parser.add_argument("--doctor", action="store_true", help="Run health checks and exit")
+    parser.add_argument("--doctor", action="store_true", help="Run full health checks (config, DB, provider, Telegram) and exit")
+    parser.add_argument("--provider-health", action="store_true", help="Run only provider auth/runtime checks and exit (no DB or Telegram)")
     args = parser.parse_args()
+
+    if args.provider_health:
+        config = load_config_provider_health()
+        provider = make_provider(config)
+        asyncio.run(_run_provider_health(provider))
+        return
 
     config = load_config(args.instance)
     provider = make_provider(config)
@@ -66,7 +87,8 @@ def main() -> None:
 
     # Phase 12: Postgres is the only supported runtime backend (required for both run and --doctor).
     if not config.database_url:
-        print("BOT_DATABASE_URL is required. See README.md for bootstrap and run modes.", file=sys.stderr)
+        print("BOT_DATABASE_URL is required.", file=sys.stderr)
+        print("Run: ./scripts/dev_up.sh (or docker compose up -d postgres && docker compose --profile tools run --rm db-bootstrap).", file=sys.stderr)
         sys.exit(1)
 
     try:
@@ -99,10 +121,20 @@ def main() -> None:
     if errors:
         for e in errors:
             print(f"  FAIL: {e}", file=sys.stderr)
+        print("Run: docker compose --profile tools run --rm db-bootstrap (or db-update). See README.", file=sys.stderr)
         sys.exit(1)
 
     if args.doctor:
         run_doctor(config, provider)
+
+    # Validate provider auth before starting (same check as doctor; clear message if missing)
+    runtime_errors = asyncio.run(provider.check_runtime_health())
+    if runtime_errors:
+        print("Provider not authenticated or unavailable.", file=sys.stderr)
+        for e in runtime_errors:
+            print(f"  {e}", file=sys.stderr)
+        print("Run ./scripts/provider_login.sh to authenticate, or check your subscription.", file=sys.stderr)
+        sys.exit(1)
 
     ensure_data_dirs(config.data_dir, database_url=config.database_url or "")
     startup_recovery()

@@ -1,0 +1,39 @@
+# Supported bot image: real provider-enabled (Claude or Codex CLI in image).
+# Build with: docker compose build --build-arg BOT_PROVIDER=claude bot
+# Or use ./scripts/build_bot_image.sh (reads BOT_PROVIDER from .env.bot or arg).
+# One shared base; provider-specific install in final stage.
+
+FROM python:3.12-slim AS base
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app ./app
+COPY skills ./skills
+COPY sql ./sql
+COPY scripts ./scripts
+
+ARG BOT_PROVIDER=claude
+RUN if [ "$BOT_PROVIDER" = "claude" ]; then \
+      bash /app/scripts/install_provider_claude.sh; \
+    elif [ "$BOT_PROVIDER" = "codex" ]; then \
+      bash /app/scripts/install_provider_codex.sh; \
+    else \
+      echo "BOT_PROVIDER must be claude or codex" && exit 1; \
+    fi
+
+# Put provider binaries in /usr/local/bin so they work for bot user (auth lives in /home/bot)
+RUN cp /root/.local/bin/claude /usr/local/bin/ 2>/dev/null || true; \
+    cp /root/.local/bin/codex /usr/local/bin/ 2>/dev/null || true; \
+    which "${BOT_PROVIDER}" || (echo "Provider binary ${BOT_PROVIDER} not in PATH after install" && exit 1)
+
+# bot user: persistent home for provider auth (Claude/Codex store state in home)
+RUN useradd -m -d /home/bot -u 1000 bot
+ENV HOME=/home/bot
+WORKDIR /home/bot
+ENV PYTHONPATH=/app
+
+# entrypoint: chown bot-home to bot (uid 1000) then run as bot (gosu)
+RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
+RUN chmod +x /app/scripts/docker-entrypoint.sh
+ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]
+CMD ["python", "-m", "app.main"]

@@ -267,22 +267,106 @@ def load_config(instance: str | None = None) -> BotConfig:
     )
 
 
+def load_config_provider_health() -> BotConfig:
+    """Load minimal config from environment for provider-only health checks.
+
+    Used by --provider-health. Does not require BOT_DATABASE_URL or Telegram
+    config. Reads BOT_PROVIDER, BOT_MODEL, BOT_DATA_DIR, BOT_WORKING_DIR, and
+    provider-specific vars so check_health/check_runtime_health work correctly.
+    """
+    def get(key: str, default: str = "") -> str:
+        return os.environ.get(key, default)
+
+    def get_bool(key: str, default: str = "0") -> bool:
+        return get(key, default).lower() in {"1", "true", "yes", "on"}
+
+    def get_int(key: str, default: str) -> int:
+        raw = get(key, default)
+        try:
+            return int(raw)
+        except ValueError:
+            return int(default)
+
+    def get_float(key: str, default: str) -> float:
+        raw = get(key, default)
+        try:
+            return float(raw)
+        except ValueError:
+            return float(default)
+
+    instance = get("BOT_INSTANCE", "default")
+    default_data = Path.home() / ".telegram-agent-bot" / instance
+    extra_dirs_raw = get("BOT_EXTRA_DIRS")
+    extra_dirs = tuple(
+        Path(d.strip()) for d in extra_dirs_raw.split(",") if d.strip()
+    )
+    return BotConfig(
+        instance=instance,
+        telegram_token="",
+        allow_open=False,
+        allowed_user_ids=frozenset(),
+        allowed_usernames=frozenset(),
+        provider_name=get("BOT_PROVIDER", "claude").strip() or "claude",
+        model=get("BOT_MODEL"),
+        working_dir=Path(get("BOT_WORKING_DIR", str(Path.home()))),
+        extra_dirs=extra_dirs,
+        data_dir=Path(get("BOT_DATA_DIR", str(default_data))),
+        timeout_seconds=get_int("BOT_TIMEOUT_SECONDS", "300"),
+        approval_mode="on",
+        role="",
+        role_from_file=False,
+        default_skills=(),
+        stream_update_interval_seconds=get_float("BOT_STREAM_UPDATE_INTERVAL", "1.0"),
+        typing_interval_seconds=get_float("BOT_TYPING_INTERVAL", "4.0"),
+        codex_sandbox=get("CODEX_SANDBOX", "workspace-write"),
+        codex_skip_git_repo_check=get_bool("CODEX_SKIP_GIT_REPO_CHECK", "1"),
+        codex_full_auto=get_bool("CODEX_FULL_AUTO"),
+        codex_dangerous=get_bool("CODEX_DANGEROUS"),
+        codex_profile=get("CODEX_PROFILE"),
+        admin_user_ids=frozenset(),
+        admin_usernames=frozenset(),
+        admin_users_explicit=False,
+        compact_mode=True,
+        summary_model=get("BOT_SUMMARY_MODEL", "claude-haiku-4-5-20251001"),
+        rate_limit_per_minute=0,
+        rate_limit_per_hour=0,
+        bot_mode="poll",
+        webhook_url="",
+        webhook_listen="127.0.0.1",
+        webhook_port=8443,
+        webhook_secret="",
+        projects=(),
+        model_profiles={},
+        default_model_profile="",
+        public_working_dir="",
+        public_model_profiles=frozenset(),
+        registry_url="",
+        database_url="",
+        db_pool_min_size=1,
+        db_pool_max_size=10,
+        db_connect_timeout_seconds=10,
+    )
+
+
 def validate_config(config: BotConfig) -> list[str]:
     """Return list of errors. Empty means healthy."""
     errors: list[str] = []
 
     if not config.telegram_token:
-        errors.append("TELEGRAM_BOT_TOKEN is not set")
+        errors.append(
+            "TELEGRAM_BOT_TOKEN is not set. Get a token from @BotFather and set it in .env.bot (or your env file)."
+        )
 
     if config.provider_name not in {"claude", "codex"}:
         errors.append(
-            f"BOT_PROVIDER must be 'claude' or 'codex', got '{config.provider_name}'"
+            f"BOT_PROVIDER must be 'claude' or 'codex', got '{config.provider_name}'. "
+            "Set BOT_PROVIDER=claude or BOT_PROVIDER=codex in .env.bot."
         )
 
     if not config.allowed_user_ids and not config.allowed_usernames and not config.allow_open:
         errors.append(
-            "BOT_ALLOWED_USERS is empty and BOT_ALLOW_OPEN is not set. "
-            "Set BOT_ALLOW_OPEN=1 to explicitly allow open access."
+            "Access not configured: BOT_ALLOWED_USERS is empty and BOT_ALLOW_OPEN is not set. "
+            "Set BOT_ALLOWED_USERS=<your-telegram-user-id> or BOT_ALLOW_OPEN=1 in .env.bot."
         )
 
     if not config.working_dir.is_dir():
@@ -290,7 +374,10 @@ def validate_config(config: BotConfig) -> list[str]:
 
     binary = "claude" if config.provider_name == "claude" else "codex"
     if config.provider_name in {"claude", "codex"} and not shutil.which(binary):
-        errors.append(f"Provider binary '{binary}' not found in PATH")
+        errors.append(
+            f"Provider binary '{binary}' not found in PATH. "
+            f"Install the {binary} CLI, or build the bot image with ./scripts/build_bot_image.sh {config.provider_name}."
+        )
 
     for d in config.extra_dirs:
         if not d.is_dir():

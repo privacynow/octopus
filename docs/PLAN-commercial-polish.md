@@ -577,8 +577,10 @@ blurring the audience.
 ## Remaining Phases
 
 These phases are the active roadmap. Every still-relevant deferred or future
-item belongs somewhere in this ordered sequence. Phase 12 is sealed; active
-work begins at Phase 13.
+item belongs somewhere in this ordered sequence. Phase 12 is sealed. The next
+numbered infrastructure phase is Phase 13, but work should not start there
+immediately: the required pre-Phase-13 execution program below must be
+completed first.
 
 ### Phase 11 - Workflow Ownership Extraction (Sealed)
 
@@ -820,8 +822,9 @@ separate.
 
 - Development:
   - Docker Compose is the canonical shape for Postgres, DB tooling, and the app runtime.
-  - The default app image is a base image; a runnable bot image must also
-    include the chosen provider CLI.
+  - The supported bot image is real provider-enabled (includes the chosen
+    Claude or Codex CLI), built via repo-owned script from `BOT_PROVIDER`;
+    stub-provider image is test/dev-only.
 - Staging:
   - Follows the same Docker-first bootstrap/update/doctor contract as development.
   - Postgres may remain Compose-managed or move external without changing the
@@ -891,6 +894,8 @@ of leaving every developer to improvise:
   - the container receives explicit runtime env
   - it uses the Compose hostname `postgres`
   - the image must include the chosen provider runtime
+  - provider login state is expected to persist in a dedicated bot-home volume,
+    not in the image layers
 
 **First-time sequence for a brand-new development environment.**
 
@@ -908,7 +913,10 @@ The first-time path is explicit and repeatable:
    - Telegram token
    - provider selection
    - access policy (`BOT_ALLOWED_USERS` or `BOT_ALLOW_OPEN`)
-7. Start the bot container against the bootstrapped Postgres service.
+7. Run the guided provider-login step in the bot container so the selected CLI
+   stores its login state in the bot-home volume.
+8. Verify provider health.
+9. Start the bot container against the bootstrapped Postgres service.
 
 The long-term UX can be wrapped in a single convenience command, but Phase 12
 must document the underlying steps clearly first.
@@ -922,6 +930,8 @@ must document the underlying steps clearly first.
   - run DB update first
   - then restart app
 - App startup should fail if schema is behind the current build
+- App startup should fail if the chosen provider CLI is missing or its runtime
+  auth/health check is not usable
 - Do not hide schema updates inside bot startup "just this once"
 
 **Runtime config and credentials.**
@@ -1315,6 +1325,263 @@ split for the core request path.
   SQLite-specific behavior.
 - The codebase is ready for Phase 13 without re-litigating state ownership,
   repository semantics, or basic environment bootstrap.
+
+### Pre-Phase-13 Execution Program (Required Gate)
+
+This is not a new numbered phase. It is the required execution program between
+sealed Phase 12 and any Phase 13 queue-authority work.
+
+Reason:
+
+- Phase 12 established the Postgres runtime, Docker-first operating shape, and
+  explicit DB lifecycle.
+- That foundation should now be turned into a genuinely low-friction product
+  path before more infrastructure is added.
+- Starting Phase 13 too early would create another infra-heavy cycle before the
+  current product path is simple and trustworthy for operators and users.
+
+Execution rule:
+
+- Complete these milestones in order.
+- Do not start the next milestone until the current one has:
+  - code implemented through existing contracts
+  - realistic tests added or migrated
+  - relevant targeted suites passing
+  - `STATUS-commercial-polish.md` updated accurately
+- Do not mark the pre-Phase-13 gate complete until the gate checklist at the
+  end of this section is satisfied.
+
+#### Milestone A - Turnkey Docker Runtime
+
+Objective:
+
+- Make the Docker path the real happy path, not just the documented one.
+
+Required outcomes:
+
+- The supported bot image includes the selected provider runtime.
+- The supported Docker path includes a guided provider-auth step that persists
+  CLI login state in a bot-home volume and reuses that same volume at runtime.
+- A fresh machine can go from clone to working bot with:
+  - Docker
+  - Postgres
+  - DB bootstrap
+  - DB doctor
+  - provider login
+  - provider health verification
+  - bot startup
+- The Docker path should not require operator improvisation beyond token and
+  access configuration and one guided provider login.
+
+Implementation rules:
+
+- Reuse the current Compose and DB tooling shape; do not invent a second
+  bootstrap path.
+- Keep app startup validate-only.
+- Keep DB bootstrap/update/doctor explicit and separate from app startup.
+- Keep provider auth out of the image build itself; use runtime login state in
+  a persistent bot-home volume instead.
+- Keep one uniform operator command for provider login even if the underlying
+  provider-specific flows differ (`codex --login` vs `claude` + `/login`).
+- Provider-login setup must use the same image and the same persistent bot-home
+  volume as the runtime bot service.
+- Do not reintroduce multiple equally-promoted runtime modes in the user-facing
+  docs.
+
+Tests required:
+
+- Clean-repo Compose tooling E2E:
+  - Postgres starts
+  - DB bootstrap succeeds
+  - DB doctor succeeds
+- Bot image and runtime: the supported image is real provider-enabled (built
+  from `Dockerfile.bot` via build script). Tests should prove the image
+  contains the selected provider and can reach a real request execution path,
+  not only startup.
+- Provider auth and persistence:
+  - guided provider-login step writes auth state into the bot-home volume
+  - runtime bot service reuses that same volume
+  - startup fails clearly when provider auth is missing
+  - `/doctor` and any provider-status tooling report unauthenticated state with
+    the exact next step
+- Tooling/bootstrap/doctor Compose E2E remain. Stub-provider image may be used
+  for test/dev-only smoke when real provider is unavailable, but it is not the
+  supported product-runtime proof.
+- Update smoke:
+  - DB update runs cleanly on an already bootstrapped environment
+
+Done when:
+
+- `README.md` can honestly present Docker as the primary path without caveats
+  that force users into host-run.
+- The supported image, provider-login flow, and Compose runtime are enough for
+  a fresh operator to reach a working bot.
+
+#### Milestone B - Config and Onboarding Simplification
+
+Objective:
+
+- Reduce the number of operator choices and the amount of setup knowledge
+  needed before first success.
+
+Required outcomes:
+
+- One primary bot runtime config shape:
+  - container env file for Docker path
+- One primary provider-auth shape for the Docker product path:
+  - guided in-container CLI login persisted in the bot-home volume
+- Error messages for missing token/provider/access settings point directly to
+  the correct fix.
+- `/doctor`, startup validation, provider-status checks, and DB tooling tell
+  operators what is wrong in product language, not only implementation
+  language.
+
+Implementation rules:
+
+- Keep one primary `.env.bot` path in Docker docs and examples.
+- Do not expand the front-door docs with multiple equivalent modes.
+- Keep advanced/fallback modes documented only in deeper docs.
+
+Tests required:
+
+- Config validation tests for missing/invalid token, provider, and access
+  policy
+- Provider-auth validation tests for:
+  - missing login/auth state
+  - missing provider binary
+  - login state persisted and reused across setup/runtime containers
+- Doctor output tests for missing config and runtime misconfiguration
+- Startup integration tests for common failure paths
+- Compose smoke that proves the documented minimal env actually works
+
+Done when:
+
+- A new operator can follow one short path without choosing between run modes.
+- The top setup failures produce clear next steps.
+
+#### Milestone C - User-Facing Settings And `/project` Polish
+
+Objective:
+
+- Use the stable backend and workflow contracts to improve the product surface
+  people actually touch.
+
+Required outcomes:
+
+- `/project` is low-friction and discoverable.
+- Settings/profile changes are discoverable without memorizing many commands.
+- Inline keyboard flows reuse the existing settings callback patterns instead of
+  creating one-off UI paths.
+
+Implementation rules:
+
+- Reuse the existing settings-inline-keyboard and callback handling patterns.
+- Reuse existing dataclasses, session fields, and execution-context semantics.
+- Do not create a second project or profile scoping system.
+- This milestone intentionally pulls forward low-risk discoverability and UX
+  polish that was previously deferred to later roadmap work. Do not widen it
+  into queue-dependent or multi-worker-dependent UX.
+
+Tests required:
+
+- Real handler/integration tests through production code paths for:
+  - `/project` list/use/clear
+  - inline settings/profile changes
+  - callback flows and markup cleanup
+- Regression tests that prove context hashes and pending invalidation still
+  behave correctly when project/profile changes occur
+
+Done when:
+
+- Project binding, model/profile selection, and key settings are discoverable
+  and low-friction.
+
+#### Milestone D - Progress, Recovery, And Trust Clarity
+
+Objective:
+
+- Make long-running work, interruptions, and trust/profile state feel simpler
+  and more understandable to non-technical users.
+
+Required outcomes:
+
+- Progress wording stays provider-neutral and truthful.
+- Recovery/replay/discard wording is clear and avoids “system-like” jargon.
+- Approval/retry prompts and trust/profile visibility are easier to interpret.
+
+Implementation rules:
+
+- Keep provider semantics rich internally, but simplify user-visible wording.
+- Do not flatten away meaningful semantic distinctions in the shared progress
+  model.
+- Reuse the existing recovery and approval contracts; improve wording and
+  presentation around them.
+
+Tests required:
+
+- Handler/output/recovery suites for user-visible strings and flows
+- Scenario tests for:
+  - interrupted run
+  - approval required
+  - retry invalidated by stale context
+  - compact/progress wording under long runs
+
+Done when:
+
+- Interrupted runs, approval flows, and long-running tasks feel understandable
+  rather than “system-like.”
+
+#### Milestone E - Usability Hardening Before Phase 13
+
+Objective:
+
+- Stabilize the Docker-first path and the polished user journey before taking
+  on webhook queue authority.
+
+Required outcomes:
+
+- Rough edges in bootstrap, update, doctor, startup, onboarding, and main
+  Telegram flows are resolved.
+- The docs present one clear user path and one clear operator path.
+- The current product can be evaluated on its user experience rather than on
+  unresolved runtime friction.
+
+Implementation rules:
+
+- Keep this milestone short and integrative.
+- Fix friction discovered from the earlier milestones rather than expanding
+  scope into Phase 13 or Phase 14 behavior.
+- Prefer tightening and simplifying existing code paths over adding new ones.
+
+Tests required:
+
+- Final targeted pass over:
+  - config/doctor/startup tests
+  - Compose E2E
+  - persistence/integration suites touched by the polish work
+  - user-visible handler flows touched by Milestones B-D
+
+Done when:
+
+- The Docker path is boring.
+- `/doctor` is useful.
+- Onboarding is clear.
+- The top user-facing flows feel complete enough that more infrastructure work
+  would unlock the next need rather than compensate for current roughness.
+
+#### Gate Before Phase 13
+
+Do not start Phase 13 until all of the following are true:
+
+- The Docker path is the actual supported happy path, not just the documented
+  one.
+- New users can get from zero to running without advanced choices.
+- The main Telegram workflows feel polished enough that more infrastructure work
+  would clearly unlock the next need.
+- The current product is stable enough that webhook/multi-process work solves a
+  real problem rather than an architectural desire.
+- `STATUS-commercial-polish.md` truthfully reports the pre-Phase-13 execution
+  program as complete.
 
 ### Phase 13 - Postgres Queue Authority In Webhook Mode
 

@@ -1,6 +1,8 @@
 """Tests for config.py — env parsing, validation, webhook mode."""
 
 import os
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -75,6 +77,7 @@ def test_validate_config_missing_token():
         )
     )
     assert any("TOKEN" in e for e in errors2)
+    assert any(".env.bot" in e or "env file" in e for e in errors2)
 
 def test_validate_config_bad_provider():
     errors3 = validate_config(
@@ -100,6 +103,28 @@ def test_validate_config_no_users_no_open():
         )
     )
     assert any("BOT_ALLOWED_USERS" in e for e in errors4)
+    assert any("BOT_ALLOW_OPEN" in e or ".env.bot" in e for e in errors4)
+
+
+def test_startup_fails_with_clear_config_error():
+    """Startup exits with CONFIG ERROR and points to the missing setting (Docker/onboarding)."""
+    env = os.environ.copy()
+    env["TELEGRAM_BOT_TOKEN"] = ""
+    env["BOT_PROVIDER"] = "claude"
+    env["BOT_ALLOW_OPEN"] = "1"
+    env.pop("BOT_DATABASE_URL", None)
+    result = subprocess.run(
+        [sys.executable, "-m", "app.main"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+    )
+    assert result.returncode == 1
+    assert "CONFIG ERROR" in result.stderr
+    assert "TELEGRAM_BOT_TOKEN" in result.stderr
+    assert ".env.bot" in result.stderr or "env file" in result.stderr
 
 def test_validate_config_open_access():
     errors5 = validate_config(

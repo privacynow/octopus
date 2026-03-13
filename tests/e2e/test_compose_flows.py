@@ -48,6 +48,7 @@ def e2e_skip():
 @pytest.fixture(scope="module")
 def postgres_up(e2e_skip):
     """Bring up Postgres and wait for healthy. Tear down at module end."""
+    _compose("down", "-t", "2")
     r = _compose("up", "-d", "postgres")
     assert r.returncode == 0, (r.stdout, r.stderr)
     for _ in range(30):
@@ -71,22 +72,37 @@ def test_compose_bootstrap_doctor(postgres_up):
     assert r.returncode == 0, (r.stdout, r.stderr)
 
 
-def test_compose_bot_startup_validates_schema(postgres_up):
-    """Bot container starts and validates Postgres schema (runs 5s without exit 1).
+def test_compose_db_update_smoke(postgres_up):
+    """DB update runs cleanly on an already bootstrapped environment."""
+    r = _compose("--profile", "tools", "run", "--rm", "db-bootstrap")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    r = _compose("--profile", "tools", "run", "--rm", "db-update")
+    assert r.returncode == 0, (r.stdout, r.stderr)
 
-    Skipped unless E2E_BOT_IMAGE_RUNNABLE=1: the default image does not include
-    the provider CLI (claude/codex), so the bot would exit 1 on config/startup.
-    Run this only when using a customized image that includes the provider.
+
+def test_compose_bot_image_has_provider(postgres_up):
+    """Supported bot image (Dockerfile.bot) contains the selected provider binary.
+
+    Builds the real provider-enabled image for claude and asserts the provider
+    binary is in PATH and runs (claude --version). Proves the image is not
+    stub-only and can reach provider execution path.
     """
-    if os.environ.get("E2E_BOT_IMAGE_RUNNABLE") != "1":
-        pytest.skip(
-            "Default image has no provider CLI; set E2E_BOT_IMAGE_RUNNABLE=1 "
-            "when using a customized image to run this test."
-        )
+    r = _compose("build", "--build-arg", "BOT_PROVIDER=claude", "bot")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    r = _compose("run", "--rm", "bot", "sh", "-c", "claude --version")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "claude" in (r.stdout or "").lower() or "claude" in (r.stderr or "").lower()
+
+
+def test_compose_bot_startup_validates_schema(postgres_up):
+    """Bot container (supported real provider-enabled image) starts and validates schema.
+
+    Uses the default Compose bot image (Dockerfile.bot, real Claude CLI). Asserts
+    config/doctor/schema pass and the app reaches 'Bot starting (long-poll)'.
+    """
     r = _compose("--profile", "tools", "run", "--rm", "db-bootstrap")
     assert r.returncode == 0, (r.stdout, r.stderr)
 
-    # Minimal env required by config: token, provider, and allow-open or allowed-users
     proc = subprocess.Popen(
         ["docker", "compose", "-f", os.path.join(REPO_ROOT, "docker-compose.yml"),
          "run", "--rm",
@@ -99,16 +115,50 @@ def test_compose_bot_startup_validates_schema(postgres_up):
         stderr=subprocess.PIPE,
     )
     try:
-        for _ in range(5):
-            time.sleep(1)
-            if proc.poll() is not None and proc.returncode == 1:
-                out, err = proc.communicate(timeout=2)
-                pytest.fail(f"Bot exited 1 (schema validation?): stdout={out!r} stderr={err!r}")
-        # Still running after 5s => schema validated and app entered main loop or polling
-    finally:
+        out, err = proc.communicate(timeout=15)
+    except subprocess.TimeoutExpired:
         proc.terminate()
         try:
-            proc.wait(timeout=5)
+            out, err = proc.communicate(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.wait()
+            out, err = proc.communicate(timeout=2)
+    if b"Bot starting (long-poll)" in (err or b"") or b"Bot starting (webhook)" in (err or b""):
+        return
+    if proc.returncode != 0:
+        pytest.fail(
+            f"Bot exited {proc.returncode} before reaching run_polling/run_webhook: stdout={out!r} stderr={err!r}"
+        )
+
+
+def test_compose_bot_stub_smoke(postgres_up):
+    """TEST/DEV ONLY: stub-provider image (Dockerfile.runnable) starts and reaches run_polling.
+
+    Run with E2E_USE_STUB_IMAGE=1 when the real provider cannot be installed (e.g. CI
+    without network for Claude install). Not the supported runtime path.
+    """
+    if os.environ.get("E2E_USE_STUB_IMAGE") != "1":
+        pytest.skip("Stub image smoke is test/dev-only; set E2E_USE_STUB_IMAGE=1 to run")
+    r = _compose("--profile", "tools", "run", "--rm", "db-bootstrap")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    proc = subprocess.Popen(
+        ["docker", "compose", "-f", os.path.join(REPO_ROOT, "docker-compose.yml"),
+         "--profile", "stub", "run", "--rm",
+         "-e", "TELEGRAM_BOT_TOKEN=123456:ABC-DEFghijklmnopqrstuvwxyz",
+         "-e", "BOT_PROVIDER=claude", "-e", "BOT_ALLOW_OPEN=1",
+         "bot-stub"],
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        out, err = proc.communicate(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        try:
+            proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate(timeout=2)
+    if b"Bot starting (long-poll)" not in (err or b"") and b"Bot starting (webhook)" not in (err or b""):
+        pytest.fail(f"Stub image did not reach run_polling: stderr={err!r}")

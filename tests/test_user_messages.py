@@ -58,7 +58,12 @@ def test_approval_buttons_approve_reject():
 
 def test_approval_expired_and_context_changed():
     assert "expired" in msg.approval_expired(5).lower() or "request" in msg.approval_expired(5).lower()
-    assert "changed" in msg.approval_context_changed().lower() or "settings" in msg.approval_context_changed().lower()
+    # Stale/invalidated message must describe execution-context change, not only settings/project
+    ctx_msg = msg.approval_context_changed()
+    assert "context" in ctx_msg.lower()
+    assert "changed" in ctx_msg.lower()
+    assert "request" in ctx_msg.lower() or "can't continue" in ctx_msg.lower()
+    assert "settings or project" not in ctx_msg.lower()
 
 
 def test_retry_permission_prompt_and_grant():

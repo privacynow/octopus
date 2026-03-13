@@ -20,13 +20,19 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
-# Existing DB -> db-update (pending migrations). Fresh DB -> db-bootstrap.
-if docker compose --profile tools run --rm db-doctor >/dev/null 2>&1; then
-  echo "Running DB update (existing schema)..."
-  docker compose --profile tools run --rm db-update
-else
+# Try update first. Only bootstrap when update reports schema/table missing; any other
+# failure (connectivity, drift, newer-than-supported schema, etc.) is surfaced, not hidden by bootstrap.
+update_out=$(docker compose --profile tools run --rm db-update 2>&1) || true
+update_rc=$?
+if [ "$update_rc" -eq 0 ]; then
+  echo "$update_out"
+elif echo "$update_out" | grep -q "Schema or schema_migrations table missing"; then
   echo "Running DB bootstrap (fresh schema)..."
   docker compose --profile tools run --rm db-bootstrap
+else
+  echo "DB update failed. Fix the error before re-running (do not run bootstrap for connectivity/drift issues)." >&2
+  echo "$update_out" >&2
+  exit 1
 fi
 
 echo "Running DB doctor..."

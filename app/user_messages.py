@@ -436,24 +436,11 @@ def project_use_buttons_or_list_hint() -> str:
     return "Use the buttons below or /project list to switch project."
 
 
-def project_list_discover_hint() -> str:
-    """Hint on /project when projects exist but no inline choices (e.g. list only)."""
-    return "Use /project list to see available projects."
-
 
 def model_choose_profile_hint() -> str:
     """Hint on /model: choose profile via inline buttons."""
     return "Choose a profile below for this chat."
 
-
-def session_control_surface_hint_public() -> str:
-    """Footer on /session for public users: point to /settings and /model only (no /project)."""
-    return "Use /settings or /model to change chat settings."
-
-
-def session_control_surface_hint_trusted() -> str:
-    """Footer on /session for trusted users: point to /settings, /project, /model."""
-    return "Use /settings, /project, or /model to change chat settings."
 
 
 def approval_usage() -> str:

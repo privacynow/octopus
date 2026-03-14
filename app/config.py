@@ -3,7 +3,9 @@
 import os
 import shutil
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+
+from app.session_state import ProjectBinding, field
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -86,7 +88,7 @@ class BotConfig:
     webhook_port: int
     webhook_secret: str
     # Projects — optional named working directories
-    projects: tuple[tuple[str, str, tuple[str, ...]], ...]  # ((name, root_dir, extra_dirs), ...)
+    projects: tuple[ProjectBinding, ...]  # parsed from BOT_PROJECTS
     # Model profiles — stable user-facing tier names mapped to provider model IDs
     model_profiles: dict[str, str]  # e.g. {"fast": "claude-haiku-4-5-20251001", ...}
     default_model_profile: str  # "fast", "balanced", "best", or "" (use raw BOT_MODEL)
@@ -123,23 +125,42 @@ def _parse_model_profiles(raw: str) -> dict[str, str]:
     return profiles
 
 
-def _parse_projects(raw: str) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
-    """Parse BOT_PROJECTS into a tuple of (name, root_dir, extra_dirs).
+def _parse_projects(raw: str) -> tuple[ProjectBinding, ...]:
+    """Parse BOT_PROJECTS into a tuple of ProjectBinding.
 
-    Format: "name1:/path/to/dir1,name2:/path/to/dir2"
-    Each entry is "name:path" where path is the project root directory.
+    Format: "name:/path[|policy[|model_profile]], ..."
+    Separator between root_dir and optional fields is "|" to avoid
+    ambiguity with path "/" separators.
+
+    Examples:
+      "frontend:/home/app/frontend"
+      "frontend:/home/app/frontend|inspect"
+      "frontend:/home/app/frontend|inspect|fast"
+      "frontend:/home/app/frontend||fast"   (skip policy, set profile)
     """
     if not raw.strip():
         return ()
-    projects: list[tuple[str, str, tuple[str, ...]]] = []
+    projects: list[ProjectBinding] = []
     for entry in raw.split(","):
         entry = entry.strip()
         if not entry or ":" not in entry:
             continue
-        name, path = entry.split(":", 1)
-        name, path = name.strip(), path.strip()
-        if name and path:
-            projects.append((name, path, ()))
+        name, rest = entry.split(":", 1)
+        name = name.strip()
+        rest = rest.strip()
+        if not name or not rest:
+            continue
+        parts = rest.split("|")
+        root_dir = parts[0].strip()
+        file_policy = parts[1].strip() if len(parts) > 1 else ""
+        model_profile = parts[2].strip() if len(parts) > 2 else ""
+        if root_dir:
+            projects.append(ProjectBinding(
+                name=name,
+                root_dir=root_dir,
+                file_policy=file_policy,
+                model_profile=model_profile,
+            ))
     return tuple(projects)
 
 
@@ -424,12 +445,22 @@ def validate_config(config: BotConfig) -> list[str]:
         )
 
     seen_project_names: set[str] = set()
-    for name, root_dir, _ in config.projects:
-        if name in seen_project_names:
-            errors.append(f"Duplicate project name: '{name}'")
-        seen_project_names.add(name)
-        if not Path(root_dir).is_dir():
-            errors.append(f"Project '{name}' root dir does not exist: {root_dir}")
+    for proj in config.projects:
+        if proj.name in seen_project_names:
+            errors.append(f"Duplicate project name: '{proj.name}'")
+        seen_project_names.add(proj.name)
+        if not Path(proj.root_dir).is_dir():
+            errors.append(f"Project '{proj.name}' root dir does not exist: {proj.root_dir}")
+        if proj.file_policy and proj.file_policy not in ("inspect", "edit"):
+            errors.append(f"Project '{proj.name}' has invalid file_policy: '{proj.file_policy}'")
+        if proj.model_profile:
+            if not config.model_profiles:
+                errors.append(
+                    f"Project '{proj.name}' sets model_profile='{proj.model_profile}' "
+                    "but no BOT_MODEL_PROFILES are configured"
+                )
+            elif proj.model_profile not in config.model_profiles:
+                errors.append(f"Project '{proj.name}' has unknown model_profile: '{proj.model_profile}'")
 
     # Validate default_skills against catalog
     if config.default_skills:

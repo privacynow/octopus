@@ -368,13 +368,21 @@ def trust_already_using_project(name: str) -> str:
     return f"Already using project <code>{_html.escape(name)}</code>."
 
 
-def trust_switched_project(name: str, root: str) -> str:
-    """When project is switched (HTML)."""
-    return (
-        f"Switched to project <code>{_html.escape(name)}</code>\n"
-        f"Working dir: <code>{_html.escape(root)}</code>\n"
-        "Provider session reset."
-    )
+def trust_switched_project(
+    name: str, root: str,
+    file_policy: str = "", model_profile: str = "",
+) -> str:
+    """When project is switched (HTML). Shows inherited defaults if any."""
+    lines = [
+        f"Switched to project <code>{_html.escape(name)}</code>",
+        f"Working dir: <code>{_html.escape(root)}</code>",
+    ]
+    if file_policy:
+        lines.append(f"Project default policy: <code>{_html.escape(file_policy)}</code>")
+    if model_profile:
+        lines.append(f"Project default model: <code>{_html.escape(model_profile)}</code>")
+    lines.append("Provider session reset.")
+    return "\n".join(lines)
 
 
 def trust_file_policy_set(value: str) -> str:
@@ -450,7 +458,7 @@ def approval_usage() -> str:
 
 def policy_usage() -> str:
     """Usage hint for /policy."""
-    return "Use /policy inspect, /policy edit, or /policy status."
+    return "Use /policy inspect, /policy edit, /policy inherit, or /policy status."
 
 
 # ---------------------------------------------------------------------------

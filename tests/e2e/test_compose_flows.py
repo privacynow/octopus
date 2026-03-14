@@ -22,18 +22,50 @@ import pytest
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
+_DOCKER_PROBE_DETAIL_MAX = 200
 
-def _docker_available() -> bool:
+
+def _docker_probe() -> tuple[bool, str, str]:
+    """Probe Docker from this process. Returns (ok, reason, detail).
+
+    reason is one of: ok, missing_cli, timeout, daemon_permission_denied,
+    daemon_unreachable, unknown_failure.
+    detail is a short excerpt (stderr preferred) for skip messages, trimmed.
+    """
     try:
         result = subprocess.run(
             ["docker", "info"],
             capture_output=True,
             timeout=5,
             check=False,
+            text=True,
         )
-        return result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
+    except FileNotFoundError:
+        return (False, "missing_cli", "docker CLI not found in PATH")
+    except subprocess.TimeoutExpired:
+        return (False, "timeout", "docker info timed out")
+
+    if result.returncode == 0:
+        return (True, "ok", "")
+
+    err = (result.stderr or "").strip()
+    out = (result.stdout or "").strip()
+    excerpt = err or out
+    if len(excerpt) > _DOCKER_PROBE_DETAIL_MAX:
+        excerpt = excerpt[: _DOCKER_PROBE_DETAIL_MAX].rsplit(maxsplit=1)[0] or excerpt[:_DOCKER_PROBE_DETAIL_MAX]
+
+    err_lower = err.lower()
+    if "permission denied" in err_lower or "operation not permitted" in err_lower:
+        return (False, "daemon_permission_denied", excerpt or "permission denied")
+    if (
+        "cannot connect to the docker daemon" in err_lower
+        or "is the docker daemon running" in err_lower
+        or "dial unix" in err_lower
+        or "connection refused" in err_lower
+    ):
+        return (False, "daemon_unreachable", excerpt or "daemon not reachable")
+
+    return (False, "unknown_failure", excerpt or f"docker info exited {result.returncode}")
 
 
 def _worker_id() -> str:
@@ -70,6 +102,23 @@ def _fail_with_logs(ctx: dict[str, object], name: str, message: str, *services: 
     if log_text:
         details += f"\n\n{log_text}"
     pytest.fail(details)
+
+
+def _remove_image(tag: str, artifacts_dir: Path | None = None) -> None:
+    """Best-effort remove a single image tag. Never raises. Optionally records failure to artifacts_dir."""
+    r = subprocess.run(
+        ["docker", "image", "rm", tag],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if r.returncode != 0 and artifacts_dir is not None:
+        cleanup_log = artifacts_dir / "teardown-image-rm.log"
+        cleanup_log.write_text(
+            f"tag={tag} returncode={r.returncode}\nstdout={r.stdout or ''}\nstderr={r.stderr or ''}",
+            encoding="utf-8",
+        )
 
 
 @pytest.fixture(scope="module")
@@ -126,15 +175,30 @@ def compose_ctx(e2e_skip, tmp_path_factory):
         _compose_logs(ctx, "final")
     finally:
         _compose(ctx, "down", "-v", "--remove-orphans", "-t", "2", timeout=120)
+        _remove_image(ctx["bot_image"], ctx.get("artifacts_dir"))
+
+
+def _docker_skip_message(reason: str, detail: str) -> str:
+    """Build a truthful, bounded skip message from probe result."""
+    if reason == "missing_cli":
+        return "Docker CLI not found"
+    if reason == "timeout":
+        return "docker info timed out"
+    if reason == "daemon_permission_denied":
+        return "Docker daemon not accessible from this test process: " + (detail or "permission denied")
+    if reason == "daemon_unreachable":
+        return "Docker daemon not reachable: " + (detail or "daemon not running or not reachable")
+    return "Docker not available: " + (detail or reason)
 
 
 @pytest.fixture(scope="module")
 def e2e_skip():
-    """Skip entire module unless E2E_COMPOSE=1 and Docker is available."""
+    """Skip entire module unless E2E_COMPOSE=1 and Docker is usable from this process."""
     if os.environ.get("E2E_COMPOSE") != "1":
         pytest.skip("E2E_COMPOSE=1 not set")
-    if not _docker_available():
-        pytest.skip("Docker not available")
+    ok, reason, detail = _docker_probe()
+    if not ok:
+        pytest.skip(_docker_skip_message(reason, detail))
 
 
 @pytest.fixture(scope="module")

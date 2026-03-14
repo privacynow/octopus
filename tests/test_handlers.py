@@ -1392,14 +1392,14 @@ async def test_project_includes_next_step_hint():
 async def test_project_no_projects_shows_no_projects_configured():
     """Phase 14 follow-up: /project when no projects configured shows truthful message, not /project list hint."""
     import app.telegram_handlers as th
-    from app.user_messages import no_projects_configured, project_list_discover_hint
+    from app.user_messages import no_projects_configured
     with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
         chat = FakeChat(1)
         user = FakeUser(42)
         msg = await send_command(th.cmd_project, chat, user, "/project")
         reply = last_reply(msg)
         assert no_projects_configured() in reply
-        assert project_list_discover_hint() not in reply
+        assert "/project list" not in reply, "Must not point to /project list when no projects configured"
 
 
 async def test_project_use_no_projects_shows_no_projects_configured():
@@ -1467,6 +1467,35 @@ async def test_settings_callback_project_clear():
             assert session.get("project_id", "") == ""
             edit = cb_msg.replies[-1].get("edit_text", "")
             assert "Project cleared" in edit
+
+
+async def test_settings_command_minimal_config_shows_compact_approval_only():
+    """Phase 14: /settings with no projects and no model profiles shows only compact/approval buttons."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_settings, chat, user, "/settings")
+        reply = last_reply(msg)
+        assert "Chat settings" in reply
+        # Should still show compact and approval
+        assert "Compact mode" in reply
+        assert "Approval mode" in reply
+        # Keyboard should have compact and approval buttons but no model/project
+        markup = msg.replies[-1].get("reply_markup")
+        assert markup is not None, "/settings must always have inline keyboard"
+        all_data = []
+        for row in markup.inline_keyboard:
+            for btn in row:
+                all_data.append(btn.callback_data)
+        assert any("setting_compact:" in d for d in all_data), "Must have compact buttons"
+        assert any("setting_approval:" in d for d in all_data), "Must have approval buttons"
+        assert not any("setting_model:" in d for d in all_data), (
+            "Must not have model buttons when no profiles configured"
+        )
+        assert not any("setting_project:" in d for d in all_data), (
+            "Must not have project buttons when no projects configured"
+        )
 
 
 async def test_settings_callback_model_no_profiles_configured():
@@ -1709,7 +1738,6 @@ async def test_session_shows_prompt_weight():
 async def test_session_includes_control_surface_hint_trusted():
     """Phase 14: /session for trusted user includes pointer to /settings, /project, /model (chat settings)."""
     import app.telegram_handlers as th
-    from app.user_messages import session_control_surface_hint_trusted
     with fresh_env(config_overrides={
         "model_profiles": {"fast": "m1", "balanced": "m2"},
         "default_model_profile": "balanced",
@@ -1719,13 +1747,14 @@ async def test_session_includes_control_surface_hint_trusted():
         user = FakeUser(42)
         msg = await send_command(th.cmd_session, chat, user, "/session")
         reply = last_reply(msg)
-        assert session_control_surface_hint_trusted() in reply
         assert "change chat settings" in reply
+        assert "/settings" in reply
         assert "/project" in reply
+        assert "/model" in reply
 
 
-async def test_session_hint_omits_model_when_no_profiles():
-    """Phase 14: /session hint must not mention /model when no model profiles configured."""
+async def test_session_hint_minimal_config_shows_settings_only():
+    """Phase 14: /session with no projects and no model profiles shows only /settings."""
     import app.telegram_handlers as th
     with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
         chat = FakeChat(1)
@@ -1733,15 +1762,18 @@ async def test_session_hint_omits_model_when_no_profiles():
         msg = await send_command(th.cmd_session, chat, user, "/session")
         reply = last_reply(msg)
         assert "change chat settings" in reply
+        assert "/settings" in reply
         assert "/model" not in reply, (
             "/session hint must not advertise /model when no model profiles configured"
+        )
+        assert "/project" not in reply, (
+            "/session hint must not advertise /project when no projects configured"
         )
 
 
 async def test_session_control_surface_hint_trusted_no_projects_omits_project():
     """Phase 14: /session for trusted user with no projects omits /project from hint."""
     import app.telegram_handlers as th
-    from app.user_messages import session_control_surface_hint_public
     with fresh_env(config_overrides={
         "model_profiles": {"fast": "m1"},
         "default_model_profile": "fast",
@@ -1750,16 +1782,17 @@ async def test_session_control_surface_hint_trusted_no_projects_omits_project():
         user = FakeUser(42)
         msg = await send_command(th.cmd_session, chat, user, "/session")
         reply = last_reply(msg)
-        assert session_control_surface_hint_public() in reply, (
-            "Trusted user with no projects must get public-style hint (no /project)"
+        assert "change chat settings" in reply
+        assert "/settings" in reply
+        assert "/model" in reply
+        assert "/project" not in reply, (
+            "Trusted user with no projects must not see /project in hint"
         )
-        assert "/project" not in reply
 
 
 async def test_session_control_surface_hint_public_no_project():
     """Phase 14: /session for public user must not advertise /project; hint says change chat settings."""
     import app.telegram_handlers as th
-    from app.user_messages import session_control_surface_hint_public
     with fresh_env(config_overrides=public_user_config_overrides(
         model_profiles={"fast": "m1"},
         public_model_profiles=frozenset({"fast"}),
@@ -1769,9 +1802,12 @@ async def test_session_control_surface_hint_public_no_project():
         user = FakeUser(999)
         msg = await send_command(th.cmd_session, chat, user, "/session")
         reply = last_reply(msg)
-        assert session_control_surface_hint_public() in reply
         assert "change chat settings" in reply
-        assert "Use /settings, /project, or /model" not in reply
+        assert "/settings" in reply
+        assert "/model" in reply
+        assert "/project" not in reply, (
+            "Public user must not see /project in session hint"
+        )
 
 
 # -- Re-homed from test_request_flow: handler-surface /session, /settings, /model, callbacks ---

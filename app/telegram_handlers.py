@@ -1342,7 +1342,7 @@ def _help_command_lines(user) -> list[str]:
     lines.extend([
         "/session — show current session info",
         "/id — show your Telegram user ID",
-        "/doctor — run health checks",
+        "/doctor — run full app health check (DB, config, Telegram)",
         "/export — download recent conversation history",
     ])
     if is_admin(user):
@@ -1380,6 +1380,8 @@ HELP_APPROVAL = (
     "<b>Approval Mode</b>\n\n"
     "When approval mode is on, the AI shows a plan before executing. "
     "You review and approve or reject it.\n\n"
+    "If a request needs approval, retry, or recovery (e.g. interrupted or blocked), "
+    "use the in-chat buttons on the status message — Run again or Skip — no separate command needed.\n\n"
     "/approval on — require approval before execution\n"
     "/approval off — execute immediately\n"
     "/approval status — check current setting\n"

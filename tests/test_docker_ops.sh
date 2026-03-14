@@ -130,7 +130,7 @@ export PATH="$MOCK_BIN:$PATH"
 "$REPO_DIR/scripts/provider_login.sh" codex >/dev/null 2>&1
 docker_args="$(cat "$RECORD_DOCKER_ARGS" 2>/dev/null || true)"
 docker_env="$(cat "$RECORD_DOCKER_ENV" 2>/dev/null || true)"
-check_contains "compose run with profile and env-file" "$docker_args" "compose --profile bot run --rm --env-file .env.bot"
+check_contains "compose run with profile and env-file" "$docker_args" "compose --profile bot --env-file .env.bot run --rm"
 check_contains "override BOT_PROVIDER=codex in argv" "$docker_args" "BOT_PROVIDER=codex"
 check_contains "shell env BOT_PROVIDER=codex for image selection" "$docker_env" "BOT_PROVIDER=codex"
 check_contains "service and command" "$docker_args" "bot-provider sh /app/scripts/container_provider_login.sh"
@@ -200,7 +200,7 @@ export DOCKER_IMAGE_INSPECT_EXIT
 rm -f "$RECORD_DOCKER_ARGS"
 "$REPO_DIR/scripts/provider_status.sh" >/dev/null 2>&1
 docker_args="$(cat "$RECORD_DOCKER_ARGS" 2>/dev/null || true)"
-check_contains "compose run with profile and env-file" "$docker_args" "compose --profile bot run --rm --env-file .env.bot"
+check_contains "compose run with profile and env-file" "$docker_args" "compose --profile bot --env-file .env.bot run --rm"
 check_contains "bot-provider service (provider-only)" "$docker_args" "bot-provider"
 
 echo "=== provider_status.sh: fails with rebuild message when image missing ==="
@@ -223,7 +223,7 @@ setup_env_bot "codex"
 rm -f "$RECORD_DOCKER_ARGS"
 "$REPO_DIR/scripts/provider_logout.sh" >/dev/null 2>&1
 docker_args="$(cat "$RECORD_DOCKER_ARGS" 2>/dev/null || true)"
-check_contains "compose run with profile bot" "$docker_args" "compose --profile bot run --rm"
+check_contains "compose run with profile and env-file" "$docker_args" "compose --profile bot --env-file .env.bot run --rm"
 check_contains "sh -c" "$docker_args" "sh -c"
 check_contains "home/bot" "$docker_args" "/home/bot"
 

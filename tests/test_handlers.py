@@ -221,7 +221,11 @@ async def test_help_topics():
 
         msg2 = FakeMessage(chat=chat, text="/help approval")
         await th.cmd_help(FakeUpdate(message=msg2, user=user, chat=chat), FakeContext(args=["approval"]))
-        assert "Approval Mode" in msg2.replies[0]["text"]
+        approval_text = msg2.replies[0]["text"]
+        assert "Approval Mode" in approval_text
+        assert ("retry" in approval_text.lower() or "recovery" in approval_text.lower()) and (
+            "button" in approval_text.lower() or "in-chat" in approval_text.lower()
+        ), "/help approval must mention retry/recovery via in-chat buttons (Phase 14)"
 
         msg3 = FakeMessage(chat=chat, text="/help credentials")
         await th.cmd_help(FakeUpdate(message=msg3, user=user, chat=chat), FakeContext(args=["credentials"]))
@@ -259,6 +263,12 @@ async def test_help_and_start_include_settings():
         assert "/session" in start_text
         assert "/retry" not in start_text
         assert not re.search(r"(?:^|\n)/clear\s", start_text), "must not advertise /clear (use /new)"
+        assert "/doctor" in help_text and "full" in help_text and "health" in help_text, (
+            "/help must show /doctor as full app health check (Phase 14)"
+        )
+        assert "/doctor" in start_text and "full" in start_text and "health" in start_text, (
+            "/start must show /doctor as full app health check (Phase 14)"
+        )
 
 
 async def test_help_and_start_public_user_excludes_project_and_policy():

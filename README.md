@@ -77,7 +77,7 @@ If you prefer to run steps yourself instead of `guided_start.sh`:
 
 - **Start the bot:**  
   `docker compose --profile bot --env-file .env.bot up -d bot`  
-  Foreground (e.g. for logs): `docker compose --profile bot run --rm --env-file .env.bot bot`
+  Foreground (e.g. for logs): `docker compose --profile bot --env-file .env.bot run --rm bot`
 
 The bot service is under the **`bot`** profile. By default it uses SQLite (no Postgres). For Postgres, start postgres and set `BOT_DATABASE_URL` in `.env.bot`.
 
@@ -108,11 +108,15 @@ If you use **`./scripts/guided_start.sh`** after a pull, it will rebuild the ima
 | `docker compose --profile tools run --rm db-update` | Apply pending schema versions |
 | `docker compose --profile tools run --rm db-doctor` | Validate Postgres and schema |
 | `docker compose --profile bot --env-file .env.bot up -d bot` | Start the bot (background) |
-| `docker compose --profile bot run --rm --env-file .env.bot bot` | Start the bot (foreground) |
+| `docker compose --profile bot --env-file .env.bot run --rm bot` | Start the bot (foreground) |
 
 ### Building the bot image and provider auth
 
-The bot uses **provider-tagged images** (`telegram-agent-bot:claude`, `telegram-agent-bot:codex`) and **persistent provider login** in the `bot-home` volume. Build with **`./scripts/build_bot_image.sh`**; run **`./scripts/provider_login.sh`** once to authenticate. **“Doctor” in this repo means two things:** **db-doctor** (schema/Postgres validation via `docker compose --profile tools run --rm db-doctor`) and **full app health** (DB, config, Telegram via `python -m app.main --doctor`). **`./scripts/provider_status.sh`** checks only provider auth and runtime (no DB or Telegram). For full app health run `docker compose --profile bot run --rm --env-file .env.bot bot python -m app.main --doctor`. **`./scripts/provider_login.sh`** and **`./scripts/provider_logout.sh`** use the same Compose service (no Postgres). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+The bot uses **provider-tagged images** (`telegram-agent-bot:claude`, `telegram-agent-bot:codex`) and **persistent provider login** in the `bot-home` volume. Build with **`./scripts/build_bot_image.sh`**; run **`./scripts/provider_login.sh`** once to authenticate.
+
+**Health surfaces (operator):** Use the right check for the right scope. **(1) Provider only** — `./scripts/provider_status.sh` checks provider auth and runtime; success there does **not** prove the bot can start (no DB or Telegram). **(2) Postgres/schema only** — `docker compose --profile tools run --rm db-doctor` validates Postgres and schema. **(3) Full app health** — `docker compose --profile bot --env-file .env.bot run --rm bot python -m app.main --doctor` (or in-chat `/doctor`) checks DB, config, and Telegram. For “can the bot start?” use (3).
+
+**`./scripts/provider_login.sh`** and **`./scripts/provider_logout.sh`** use the same Compose service (no Postgres). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ## Using the Bot
 
@@ -225,7 +229,7 @@ to see the full output whenever you need it.
 
 ### Provider not authenticated or unavailable
 
-The bot validates provider auth at startup. If you see “Provider not authenticated or unavailable” and a suggestion to run `./scripts/provider_login.sh`, run that script once to sign in (Codex: browser sign-in; Claude: run `/login` in the Claude window). Login state is stored in the `bot-home` volume and reused. Use `./scripts/provider_status.sh` to verify provider auth and runtime only; for full app health (DB, Telegram) run `docker compose --profile bot run --rm --env-file .env.bot bot python -m app.main --doctor`. Use `./scripts/provider_logout.sh` to clear auth (best-effort) and re-login.
+The bot validates provider auth at startup. If you see “Provider not authenticated or unavailable” and a suggestion to run `./scripts/provider_login.sh`, run that script once to sign in (Codex: browser sign-in; Claude: run `/login` in the Claude window). Login state is stored in the `bot-home` volume and reused. Use `./scripts/provider_status.sh` to verify provider auth and runtime only; for full app health (DB, Telegram) run `docker compose --profile bot --env-file .env.bot run --rm bot python -m app.main --doctor`. Use `./scripts/provider_logout.sh` to clear auth (best-effort) and re-login.
 
 ### Database (SQLite default, Postgres optional)
 

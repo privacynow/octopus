@@ -26,4 +26,4 @@ fi
 
 # Image selection uses BOT_PROVIDER at Compose parse time (--env-file and shell). Pass it so we run the correct image.
 echo "Provider login (BOT_PROVIDER=$provider). Uses same image and bot-home volume as the bot (no Postgres required)."
-BOT_PROVIDER="$provider" docker compose --profile bot run --rm --env-file .env.bot -e "BOT_PROVIDER=$provider" bot-provider sh /app/scripts/container_provider_login.sh
+BOT_PROVIDER="$provider" docker compose --profile bot --env-file .env.bot run --rm -e "BOT_PROVIDER=$provider" bot-provider sh /app/scripts/container_provider_login.sh

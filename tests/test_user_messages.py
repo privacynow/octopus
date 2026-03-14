@@ -56,6 +56,22 @@ def test_approval_buttons_approve_reject():
     assert "reject" in msg.approval_button_reject().lower()
 
 
+def test_approval_no_pending_gives_next_step():
+    """No-pending approve/reject: truthful next step regardless of approval-mode state.
+
+    Must not say 'turn on approval' (wrong when approval is already on).
+    Must tell user to send a message / get a plan.
+    """
+    approve_msg = msg.approval_no_pending_approve()
+    reject_msg = msg.approval_no_pending_reject()
+    for text in (approve_msg, reject_msg):
+        assert "turn on approval" not in text.lower(), "Message must be true when approval is already on"
+        assert "send a message" in text.lower(), "Must give next step: send a message"
+        assert "plan" in text.lower(), "Must reference getting a plan"
+    assert "approve" in approve_msg.lower()
+    assert "reject" in reject_msg.lower()
+
+
 def test_approval_expired_and_context_changed():
     assert "expired" in msg.approval_expired(5).lower() or "request" in msg.approval_expired(5).lower()
     # Stale/invalidated message must describe execution-context change, not only settings/project
@@ -98,7 +114,9 @@ def test_progress_completed_and_still_working():
 
 def test_trust_not_authorized_and_public_mode():
     assert "authorized" in msg.trust_not_authorized().lower() or "not" in msg.trust_not_authorized().lower()
-    assert "public" in msg.trust_command_not_available_public().lower()
+    text = msg.trust_command_not_available_public()
+    assert "public" in text.lower()
+    assert "/help" in text, "Public denial must point to /help as next step (Phase 14)"
 
 
 def test_trust_file_policy_and_project_public():
@@ -148,11 +166,12 @@ def test_callback_wrong_user_specific_to_button_owner():
 
 
 def test_nothing_to_cancel_and_cancel_pending_request():
-    """No-op cancel paths: clear and distinct."""
+    """No-op cancel paths: clear and distinct; nothing_to_cancel includes no-action-needed (Phase 14)."""
     nothing = msg.nothing_to_cancel()
     cancelled = msg.cancel_pending_request()
     assert "cancel" in nothing.lower()
     assert "nothing" in nothing.lower() or "cancel" in nothing.lower()
+    assert "no action needed" in nothing.lower()
     assert "pending" in cancelled.lower() or "cancelled" in cancelled.lower() or "request" in cancelled.lower()
 
 

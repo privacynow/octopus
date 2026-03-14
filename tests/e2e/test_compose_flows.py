@@ -253,13 +253,21 @@ def e2e_skip():
         pytest.skip(_docker_skip_message(reason, detail))
 
 
+# Short timeout for readiness probes so loops are bounded (was 120s default → 30*120s = 1h).
+_PG_ISREADY_TIMEOUT = 15
+
+
 @pytest.fixture(scope="module")
 def postgres_up(compose_ctx):
     """Bring up Postgres and wait for healthy. Module teardown is handled by compose_ctx."""
     r = _compose(compose_ctx, "up", "-d", "postgres")
     assert r.returncode == 0, (r.stdout, r.stderr)
     for _ in range(30):
-        r = _compose(compose_ctx, "exec", "postgres", "pg_isready", "-U", "bot", "-d", "bot")
+        r = _compose(
+            compose_ctx,
+            "exec", "postgres", "pg_isready", "-U", "bot", "-d", "bot",
+            timeout=_PG_ISREADY_TIMEOUT,
+        )
         if r.returncode == 0:
             break
         time.sleep(1)

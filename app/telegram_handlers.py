@@ -1361,7 +1361,13 @@ def _build_main_help(user) -> str:
         "<b>Commands:</b>\n"
     ).format(instance=instance, provider=provider)
     command_block = "\n".join(_help_command_lines(user)) + "\n\n"
-    footer = "Type /help skills, /help approval, or /help credentials for details."
+    # Intentional set of controls (trust-aware: no /project for public).
+    control_parts = ["/settings", "/session", "/model"]
+    if not is_public_user(user):
+        control_parts.append("/project")
+    controls_line = "Chat options: " + " · ".join(control_parts) + "."
+    recovery_line = "Interrupted? Use Run again or Skip on the status message."
+    footer = controls_line + "\n" + recovery_line + "\n\nType /help skills, /help approval, or /help credentials for details."
     return header + command_block + footer
 
 HELP_SKILLS = (

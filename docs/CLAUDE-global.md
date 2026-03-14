@@ -8,6 +8,10 @@ Use resolved context as the only authority.
 
 - **Build once, reuse everywhere.** Search for existing modules,
   dataclasses, builders, and workflows before writing new code.
+- **Choose the right fix, not the easiest patch.** Recommend and
+  implement the option that most improves functional and non-functional
+  quality, even when it is harder or more work. Do not present a weaker
+  shortcut as equivalent just because it is cheaper.
 - **Prefer battle-tested libraries** over hand-rolling equivalent
   functionality unless the dependency cost clearly outweighs the
   benefit.
@@ -45,41 +49,56 @@ If you cannot fill this out, you are not ready to code.
 
 1. **Enumerate all call sites with `rg` before editing.** Do not assume
    there are only one or two.
-2. **Check equivalent ingress paths for parity.** Most bugs were
+2. **Pick the best option by default.** When multiple fixes are
+   possible, default to the one that leaves the system better in
+   correctness, reliability, maintainability, performance, safety, or
+   operator usability. Offer a weaker shortcut only if the user asks
+   for tradeoffs or the task is explicitly bounded to wording/docs.
+3. **Check equivalent ingress paths for parity.** Most bugs were
    "fixed in one path, broken in another."
-3. **Audit raw vs resolved reads.** If resolved context exists, replace
+4. **Audit raw vs resolved reads.** If resolved context exists, replace
    raw reads unless they are intentionally persistence-only.
-4. **Ban ad-hoc recomputation.** Update the authoritative builder
+5. **Ban ad-hoc recomputation.** Update the authoritative builder
    instead of reconstructing equivalent logic inline.
-5. **Separate interacting bugs into separate contracts.** If analysis
+6. **Separate interacting bugs into separate contracts.** If analysis
    identifies N distinct failure modes, the plan must name N contracts,
    N fixes, and N independent verifications. "Interacting" is not
    permission to merge them into one test bucket.
-6. **Trace the fix through a second failure.** For orchestration or
+7. **Trace the fix through a second failure.** For orchestration or
    durable-state changes, answer: "what if the new recovery path is
    also interrupted or fails?" If the answer creates a loop or leaves
    state poisoned, the fix is incomplete.
-7. **Name the completion owner explicitly.** Any workflow with retries,
+8. **Name the completion owner explicitly.** Any workflow with retries,
    replay, claims, or background workers must state: who marks success,
    who marks failure, who may swallow exceptions, and who must never
    finalize. If ownership changes, test the new owner's interruption
    path.
-8. **Destructive resets require typed evidence.** Session reset, state
+9. **Destructive resets require typed evidence.** Session reset, state
    invalidation, or fallback-to-fresh logic cannot key off a generic
    error unless the provider contract proves that error is specific
    enough. If the signal is ambiguous, the task is still a design
    problem, not ready for a fix.
-9. **New state transitions must satisfy existing invariants.** When
+10. **New state transitions must satisfy existing invariants.** When
    adding a function that writes to a shared table (e.g. work_items),
    audit it against every invariant the existing writers enforce. If
    `claim_next_any` enforces per-chat single-claimed, then
    `reclaim_for_replay` must enforce it too. The new path does not
    get an exemption just because it serves a different feature.
-10. **Test through the real owner, not one layer below.** If
+11. **Test through the real owner, not one layer below.** If
     `worker_loop` owns finalization after `worker_dispatch` returns,
     testing `worker_dispatch` alone proves nothing about what state
     the item ends up in. The test must exercise through the boundary
     that owns the outcome the user depends on.
+
+### Guidance quality
+
+- **Recommend one default path.** In plans and developer guidance,
+  present the right option as the default recommendation instead of
+  listing a stronger and weaker path as if they were equivalent.
+- **Use nuance on small wording-only changes.** If the task is
+  genuinely bounded to copy, docs, or another cosmetic edit, do not
+  inflate it into architecture work just to satisfy this rule. State
+  the bounded scope plainly and keep the fix proportionate.
 
 ### After coding: completion criteria
 

@@ -97,6 +97,12 @@ When writing a bug report for this repo:
 
 ## Repo-Specific Process
 
+- Recommend the strongest justified fix as the default path. Prefer the
+  option that improves correctness, reliability, maintainability,
+  performance, safety, or operator usability, even when it is harder.
+  Do not present a weaker shortcut as equally valid unless the user
+  explicitly asks for tradeoffs or the task is truly bounded to copy or
+  docs.
 - Ingress parity checklist for this repo: message, command, callback,
   admin, CLI, approval, retry.
 - Provider-neutral language in all user-facing text: no provider names,

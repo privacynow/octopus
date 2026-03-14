@@ -6,10 +6,11 @@ lives in [STATUS-commercial-polish.md](STATUS-commercial-polish.md).
 
 For end-user usage, start with [README.md](../README.md).
 
-Phase 13 is complete: **Local Runtime** is the only supported mode. The default
-path is **SQLite** (no `BOT_DATABASE_URL`); **Postgres** is a supported alternate
-backend when `BOT_DATABASE_URL` is set. **Shared Runtime** is out of scope until
-a later phase.
+Current shipped baseline (through Phase 15 Slice 1): **Local Runtime** is the
+supported mode. The default path is **SQLite** (leave `BOT_DATABASE_URL`
+unset); **Postgres** is a supported alternate backend for the same local
+runtime when `BOT_DATABASE_URL` is set. **Shared Runtime** remains deferred to
+later roadmap phases.
 
 - **Runtime matrix:** local + sqlite = default; local + postgres = supported; shared = rejected.
 - **Backend seam:** `app/runtime_backend.py` is the only backend selector; `storage.py` and `work_queue.py` are backend-neutral facades. Implementations: `storage_sqlite`, `storage_postgres`, `work_queue_sqlite`, `work_queue_postgres`.
@@ -803,12 +804,12 @@ message.
 
 ### Durable storage
 
-The shipped implementation uses two SQLite databases with different
-lifecycles. After migration, equivalent runtime authority moves to Postgres
-for session state and the core request queue while preserving the same typed
-session, transport-payload, and execution-context contracts. Phase 11 already
-completed the workflow-owner extraction so the Postgres runtime does not
-inherit open-coded transition logic.
+The shipped implementation uses backend-neutral facades with two concrete local
+runtime backends. By default, authority lives in the SQLite-backed
+`sessions.db` and `transport.db`. When `BOT_DATABASE_URL` is set, the same
+session, transport-payload, and execution-context contracts are backed by
+Postgres. Phase 11 already extracted workflow ownership, so both backends share
+the same transition legality and orchestration rules.
 
 **Current shipped `sessions.db`** — chat session state:
 
@@ -971,15 +972,11 @@ Credential setup is conversational state, not a hidden side effect.
 
 Scaling path now has two explicit tiers:
 
-- **Local Runtime**: single-machine authority, simpler deployment, SQLite as
-  the planned default backend, and no shared queue-authority requirement.
+- **Local Runtime**: the shipped mode today; single-machine authority, simpler
+  deployment, SQLite by default, Postgres optional, and no shared
+  queue-authority requirement.
 - **Shared Runtime**: later webhook ingress plus shared Postgres queue
   authority plus worker loop as primary processing path.
-
-The current shipped implementation sits between those tiers historically:
-Postgres-only runtime from Phase 12, with future roadmap work restoring Local
-Runtime as the primary deployment mode while keeping Shared Runtime as the
-advanced scale path.
 
 ### Workflow ownership (Phase 11 shipped shape)
 
@@ -1175,18 +1172,14 @@ Current owner families:
   propagation, and doctor failure output. Compose/E2E covers the heavier
   runtime and bootstrap path.
 
-### SQLite-era tests and the Local Runtime direction
+### Backend coverage and Local Runtime testing
 
-- Today, SQLite remains in the codebase for fast in-process tests and some
-  legacy session/store coverage.
-- The shipped runtime backend today is Postgres; persistence and integration
-  confidence currently comes from the Postgres-backed suites.
-- The roadmap direction after Phase 12 is to make SQLite relevant again as the
-  default backend for **Local Runtime** under backend-neutral storage/runtime
-  contracts.
-- `test_sqlite_integration.py` is historical in the current shipped state, but
-  Local Runtime work is expected to replace historical/legacy SQLite coverage
-  with deliberate Local Runtime contract coverage.
+- SQLite is the default shipped backend and remains the fast path for
+  in-process integration coverage.
+- Postgres-backed suites validate the supported alternate backend under the
+  same storage and transport contracts.
+- Compose E2E keeps the SQLite local-runtime path as the primary gate, with
+  bounded Postgres startup/bootstrap coverage.
 - App-container testing still belongs only in the small E2E layer, not in the
   normal integration loop.
 
@@ -1209,19 +1202,17 @@ must run with a Python environment that has those packages installed.
 - **Bootstrap script:** `scripts/bootstrap.sh` installs from `requirements.txt`
   every time it runs (creating or updating the venv), then runs a quick import
   check so missing dependencies fail immediately instead of at runtime.
-- **Phase 12 runtime (shipped today):** Postgres is the only supported runtime
-  backend in the current code. The app requires `BOT_DATABASE_URL` and
-  validates schema at startup. Lifecycle splits into: infrastructure
-  provisioning, DB bootstrap/update, and app runtime. Explicit repo-owned DB
-  workflows (`scripts/db_bootstrap.sh`, `scripts/db_update.sh`,
-  `scripts/db_doctor.sh`) prepare and verify the database before the bot
-  starts.
-- **Roadmap direction after Phase 12:** introduce two explicit deployment
-  capability tiers:
-  1. **Local Runtime** — default host and Docker deployment mode, SQLite-backed
-     by default, single-machine authority, product-first
-  2. **Shared Runtime** — later advanced mode with Postgres queue authority,
-     webhook persist-first ingress, and multi-process workers
+- **Current runtime contract:** Local Runtime is the supported deployment mode.
+  Leave `BOT_DATABASE_URL` unset for SQLite (default), or set it to a
+  Postgres DSN to use Postgres as the backend for the same product/runtime
+  contract. The app validates backend compatibility at startup.
+- **Optional Postgres workflows:** explicit repo-owned DB commands
+  (`scripts/db_bootstrap.sh`, `scripts/db_update.sh`, `scripts/db_doctor.sh`)
+  prepare and verify Postgres before the bot starts when `BOT_DATABASE_URL` is
+  set.
+- **Roadmap direction after the current local-runtime baseline:** keep Local
+  Runtime as the primary operator path and add Shared Runtime later for
+  persist-first ingress and multi-process workers.
 - **Environment identity:** Each running bot environment has its own database,
   config, Telegram token, and app instance identity. Side-by-side dev/staging
   environments use separate databases, regardless of whether the environment is
@@ -1230,13 +1221,10 @@ must run with a Python environment that has those packages installed.
   1. infrastructure provides the runtime substrate for the selected mode
   2. repo-owned DB/runtime commands apply schema and validate compatibility
   3. the app validates and runs; it does not create the DB, role, or schema at startup
-- **Primary operational model (roadmap direction):** Dockerized bot is still
-  the primary operator path, but the backend/runtime contract now splits into:
-  - Local Runtime as the default path
-  - Shared Runtime as the later advanced path
-- **Current Compose/tooling shape:** `scripts/dev_up.sh` brings Postgres up and
-  runs bootstrap/update + doctor with no bot runtime config. That is current
-  shipped behavior, not the final Local Runtime target state.
+- **Primary operational model:** Dockerized bot is the primary operator path.
+  `./scripts/guided_start.sh` is the main zero-to-running path for SQLite Local
+  Runtime; `./scripts/dev_up_postgres.sh` is the optional Postgres bootstrap
+  path.
 - **Supported bot image:** The supported Docker path uses a **real provider-enabled
   image** (includes the chosen Claude or Codex CLI). Build it with
   `./scripts/build_bot_image.sh`; the script selects the image target from
@@ -1267,10 +1255,8 @@ must run with a Python environment that has those packages installed.
   chowns `/home/bot` to the bot user (uid 1000) then execs as that user, so
   provider auth and data persist across runs regardless of volume creation
   order. Login/setup and runtime use the same image and volume.
-- **Host-run bot:** Still supported as a secondary fallback/debug path in the
-  shipped code. The roadmap direction is for both Docker and host to support
-  Local Runtime directly, with the same product behavior above the storage
-  boundary.
+- **Host-run bot:** Still supported as a secondary fallback/debug path with the
+  same Local Runtime contract above the storage boundary.
 - **Later environments:** staging and production may choose:
   - Local Runtime for simpler single-machine deployments
   - Shared Runtime for more operationally demanding deployments

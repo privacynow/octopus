@@ -1679,39 +1679,454 @@ Done when:
 
 Objective:
 
-- Stabilize the current Docker-first path and the polished user journey before
-  taking on backend-abstraction and local-mode work.
+- Finish the pre-Phase-13 gate by making the current product boring,
+  self-consistent, and easier to maintain.
+- This milestone is **not only wording cleanup**. It is the final
+  end-to-end hardening pass over the current Docker/operator path, the main
+  Telegram user journey, and the recently grown code/test structure that now
+  owns those behaviors.
+- The default path is the strongest justified fix: if a full simplification,
+  dead-code removal, duplicate-concept consolidation, or owner-suite cleanup
+  will leave the product more correct, reliable, maintainable, or easier to
+  operate, it belongs here.
+
+Why this milestone is broader than a “polish pass”:
+
+- Earlier phases already proved that the repo gets riskier when:
+  - duplicated invariants and overflow suites create the illusion of coverage
+    instead of clear ownership
+  - dead code and stale helpers survive after the authoritative seam moved
+  - message/callback/operator parity drifts while each path individually looks
+    acceptable
+- The repo history already contains successful examples of the right cleanup
+  model:
+  - weak duplicate tests removed and unique tests moved into owner suites
+  - dead code removed after review
+  - duplicate helper/test infrastructure consolidated
+- Milestone E should apply the same standard again where the current codebase
+  review shows it is warranted.
+
+Current codebase review that drives this milestone:
+
+- Handler ownership is still concentrated in a very large
+  `app/telegram_handlers.py` (~3000 lines). This is not automatically wrong,
+  but it increases the cost of duplicated helpers, stale inline copy, and
+  drift between command/callback/admin paths.
+- Test ownership has grown again in a few large suites:
+  - `tests/test_handlers.py` (~1600 lines)
+  - `tests/test_workitem_integration.py` (~1600 lines)
+  - `tests/test_request_flow.py` (~1000 lines)
+  - `tests/test_handlers_approval.py` (~680 lines)
+- Shared test helpers already live in `tests/support/handler_support.py`
+  (`fresh_data_dir`, `FakeProgress`, `send_command`, `get_callback_data_values`)
+  and prior refactors already consolidated some duplication there. Bucket E
+  should continue that model instead of tolerating new drift.
+- The current milestone work has improved user-facing seams (`/settings`,
+  `/project`, recovery/retry copy, trust/profile display, operator scripts),
+  which means Bucket E must now:
+  - finish the remaining friction in those primary paths
+  - remove stale duplicate logic introduced or exposed during the polish work
+  - re-home or merge tests that no longer belong in catch-all suites
+
+Concrete cleanup items already identified by review and therefore in scope:
+
+- **Settings / project / model owner collapse in `app/telegram_handlers.py`.**
+  The same setting families still have too many owners:
+  - model mutation and display:
+    - `cmd_model`
+    - `handle_settings_callback(setting == "model")`
+    - `cmd_settings`
+    - `_settings_model_profile_state(...)`
+  - project mutation and display:
+    - `cmd_project`
+    - `handle_settings_callback(setting == "project")`
+    - `cmd_settings`
+    - `_resolve_project(...)`
+  - approval / compact / policy row rendering:
+    - dedicated commands (`/approval`, `/compact`, `/policy`)
+    - `/settings`
+  This is an explicit Bucket E contract. The target shape is:
+  - one small authoritative mutator per setting family where command and
+    callback paths share the same durable mutation and reset behavior
+  - one small authoritative row/builder per setting family where the dedicated
+    command and `/settings` share the same visible control state
+  - fewer open-coded button rows and fewer repeated inline state transitions
+    in command/callback bodies
+
+- **Public command/callback surface tests must be re-homed out of
+  `tests/test_request_flow.py`.**
+  The current review found handler-surface tests regrowing in the request-flow
+  suite:
+  - public `/session` display checks
+  - public `/settings` display and keyboard checks
+  - public `/model` command and `setting_model:*` callback surface checks
+  - public `setting_project:*` denial surface checks
+  Those belong with handler command/callback ownership, not with execution
+  context / pending validation / trust-hash logic. The target shape is:
+  - `tests/test_handlers.py` owns user-visible command/callback surfaces
+  - `tests/test_request_flow.py` owns execution context, trust shaping,
+    invalidation, stale detection, and request-lifecycle contracts
+  - where overlap remains intentional, the plan must name the distinct
+    contract each suite owns
+
+- **Handler-suite setup reuse must improve.**
+  The review found repeated open-coded:
+  - `fresh_data_dir()`
+  - `make_config(...)`
+  - `setup_globals(...)`
+  blocks inside `tests/test_handlers.py`, including recent Bucket D cases,
+  despite `tests/support/handler_support.py` already providing:
+  - `fresh_env(...)`
+  - `send_command(...)`
+  - `send_callback(...)`
+  - `get_callback_data_values(...)`
+  This is an explicit Bucket E rationalization target. The target shape is:
+  - new handler-surface tests default to `fresh_env(config_overrides=...)`
+  - repeated public-user setup is factored into one small shared test helper if
+    that reduces drift
+  - no new hand-rolled setup clones are added while shared fixtures already
+    exist
+
+- **“No moves” or “no refactor needed” is not an acceptable conclusion unless
+  the candidate audit is written down.**
+  For each large owner seam or suite above, Bucket E must record:
+  - what candidates were considered
+  - which ones were merged / moved / extracted / deleted
+  - which ones stayed and why
+  Silent “looked fine” is not enough for this milestone.
+
+Mandatory guidance inputs before coding:
+
+- Repo-local guidance:
+  - `AGENTS.md`
+  - `CLAUDE.md`
+- Global guidance:
+  - `docs/AGENTS-global.md`
+  - `docs/CLAUDE-global.md`
+- Local skills that must be used where they apply:
+  - `docs/codex-skills/contract-change-audit/SKILL.md`
+    - for any cross-cutting user-visible or operator-visible contract change
+    - explicitly:
+      - state the contract being changed
+      - identify the authoritative source
+      - enumerate equivalent ingress paths with `rg`
+      - audit raw vs resolved reads
+      - list failure paths, including restart-in-the-middle and
+        recovery-interrupted-again
+      - define invariants before touching code
+  - `docs/codex-skills/invariant-test-builder/SKILL.md`
+    - for every multi-axis test cleanup or owner-suite rationalization
+    - explicitly:
+      - identify the contract axes first
+      - add focused contract, real entry-point, and adjacent regression tests
+      - prefer negative-capability checks
+      - assert both visible output and state
+      - name the oracle explicitly
+  - `docs/codex-skills/progress-ux-audit/SKILL.md`
+    - for any remaining progress/liveness/output/rendering cleanup
+    - explicitly:
+      - keep wording provider-neutral
+      - keep compact/full/raw/export derived from one stable source
+      - verify the message object chain the user actually sees
+  - `docs/codex-skills/durable-state-hardening/SKILL.md`
+    - whenever Bucket E touches pending state, recovery, work items, or any
+      durable operator/runtime path
+    - explicitly:
+      - write the state machine and completion owner table
+      - identify durable commit points
+      - treat in-memory state as optimization only
+      - test success, failure/interruption, duplicate/idempotency, and
+        recovery/restart as applicable
+
+Implementation rules (carry these literally into execution guidance):
+
+1. Fix contracts, not call sites.
+- Enumerate equivalent ingress paths with `rg` before editing.
+- For this repo, the parity checklist remains:
+  - message
+  - command
+  - callback
+  - admin
+  - CLI
+  - approval
+  - retry
+
+2. Use the strongest justified fix as the default.
+- Do not present a weaker shortcut as equally valid just because it is
+  cheaper.
+- If a larger cleanup clearly improves correctness, reliability,
+  maintainability, performance, safety, or operator usability, do it.
+- Only keep the scope narrower when the task is genuinely bounded to copy,
+  docs, or another cosmetic change.
+
+3. Use the authoritative source only.
+- If resolved execution context exists, use it in user-visible or
+  safety-sensitive logic.
+- If a builder/helper already owns a concept, update that owner instead of
+  duplicating equivalent logic inline.
+- If no authoritative owner exists for a cross-cutting setting family, create
+  one before patching multiple call sites.
+
+4. Treat failure paths and dead ends as product correctness.
+- No-op, already-handled, wrong-user, busy, startup-failure, doctor, provider
+  auth, and update-after-pull paths are first-class product behavior.
+- If the system tells the user or operator something false, that is a real
+  bug, not just “rough wording.”
+
+5. Simplification and refactoring are in scope when evidence-backed.
+- Include:
+  - dead code elimination
+  - duplicate helper/builder/dataclass rationalization
+  - stale inline logic removal after centralization
+  - test ownership cleanup
+  - weak duplicate test removal only when a stronger owner test exists
+- Do not include:
+  - repo-wide aesthetic churn
+  - speculative abstraction
+  - rename-only sweeps with no contract or ownership payoff
+  - “audit says no change” conclusions without a written candidate list and
+    justification
+
+6. Do not overclaim.
+- `STATUS-commercial-polish.md` must only move when code and tests prove the
+  runtime behavior.
+- Bucket E is not done because a few small fixes landed; the full audit,
+  simplification pass, and verification envelope must be complete.
+
+Milestone E is split into four required workstreams.
+
+### E1. Product-path hardening
+
+Audit and fix the current primary user and operator journeys end to end.
+
+Required audit surfaces:
+
+- Docker/operator path:
+  - `scripts/dev_up.sh`
+  - `scripts/guided_start.sh`
+  - `scripts/build_bot_image.sh`
+  - `scripts/provider_login.sh`
+  - `scripts/provider_status.sh`
+  - `scripts/provider_logout.sh`
+  - `scripts/db_bootstrap.sh`
+  - `scripts/db_update.sh`
+  - `scripts/db_doctor.sh`
+  - `README.md`
+- Telegram path:
+  - `/start`
+  - `/help`
+  - `/settings`
+  - `/project`
+  - `/session`
+  - `/model`
+  - approval / retry / recovery
+  - no-op / already-handled / wrong-user / busy paths
+  - public/trusted/admin restriction surfaces
 
 Required outcomes:
 
-- Rough edges in bootstrap, update, doctor, startup, onboarding, and main
-  Telegram flows are resolved.
-- The docs present one clear user path and one clear operator path.
-- The current product can be evaluated on its user experience rather than on
-  unresolved runtime friction.
+- One clear operator path and one clear end-user path
+- No stale command/docs drift
+- No misleading doctor/provider-health distinction
+- No misleading startup/update/rebuild guidance
+- No obviously confusing no-op or denial state left in the primary path
+- `STATUS-commercial-polish.md` and `README.md` reflect the real current
+  Bucket E state and do not preserve stale “Current / Next” pointers from
+  earlier bucket stages
 
-Implementation rules:
+### E2. Structural simplification and dead-code cleanup
 
-- Keep this milestone short and integrative.
-- Fix friction discovered from the earlier milestones rather than expanding
-  scope into later roadmap behavior.
-- Prefer tightening and simplifying existing code paths over adding new ones.
+Do a repo-wide audit of the seams touched by Milestones C-D and Buckets A-D.
 
-Tests required:
+Required audit targets:
 
-- Final targeted pass over:
-  - config/doctor/startup tests
-  - Compose E2E
-  - persistence/integration suites touched by the polish work
-  - user-visible handler flows touched by Milestones B-D
+- dead helpers, stale branches, unused imports, obsolete compatibility paths
+- duplicate concept owners in:
+  - `app/telegram_handlers.py`
+  - `app/user_messages.py`
+  - `app/execution_context.py`
+  - operator scripts
+- duplicate builders/helpers introduced by recent polish work
+- stale inline messages that should now live in the authoritative owner
+- explicitly review duplicated setting-family owners and builders in:
+  - `cmd_model`
+  - `cmd_project`
+  - `cmd_settings`
+  - `handle_settings_callback`
+  - `/approval`, `/compact`, `/policy` command-specific status/rendering paths
+
+Required outcomes:
+
+- Remove dead code where the authoritative seam has clearly replaced it
+- Consolidate duplicate concept logic where drift risk is real
+- Keep the simplification behavior-preserving unless a real contract bug is
+  also being fixed
+- Prefer a smaller number of authoritative helpers/builders over parallel
+  partial owners
+- Collapse duplicated model/project/policy/approval/compact logic so command
+  and callback paths share the same state-transition or row-building owner when
+  they are meant to express the same contract
+- Remove repeated button-row construction and open-coded mutation branches when
+  one small helper can own the concept more clearly
+
+Examples of the right work here:
+
+- consolidate duplicate display-state logic when `/settings`, `/model`,
+  `/session`, or help surfaces now share one truth
+- consolidate duplicated setting-family mutation logic when command and
+  callback paths both set the same durable fields and reset the same provider
+  state
+- consolidate duplicated settings row/button builders when `/settings` and
+  the dedicated setting command (`/model`, `/policy`, `/compact`, `/approval`)
+  should stay in lockstep
+- remove old helper paths left behind after centralizing user-facing copy
+- remove stale operator-path instructions that survive only in one script or
+  one doc
+
+### E3. Test ownership and suite rationalization
+
+This is required work, not optional cleanup.
+
+The codebase review shows that a few large suites have grown again and need an
+ownership pass:
+
+- `tests/test_handlers.py`
+- `tests/test_workitem_integration.py`
+- `tests/test_request_flow.py`
+- `tests/test_handlers_approval.py`
+
+Required audit questions:
+
+- Is this test asserting a distinct contract, boundary, or failure mode?
+- Is it in the suite that actually owns that contract?
+- Is there a weaker duplicate proving the same thing through the same
+  boundary?
+- Is a shared helper already available in `tests/support/handler_support.py`
+  and not being reused?
+- Is the test oracle correct (original message vs returned status message vs
+  edited callback message vs persisted state)?
+- Is this actually a handler-surface test that drifted into
+  `tests/test_request_flow.py` or another suite that should instead own only
+  context / orchestration / durable-state contracts?
+- If the conclusion is “no move needed,” what concrete candidate was reviewed
+  and what contract does the current suite uniquely own?
+
+Required outcomes:
+
+- Move misplaced tests into owner suites where that improves responsibility
+- Merge or delete weak duplicate tests only when a stronger owner test remains
+- Consolidate duplicate test helpers instead of cloning them again
+- Re-home public `/settings`, `/session`, `/model`, and related `setting_*`
+  surface checks so handler command/callback ownership is clear
+- Keep `tests/test_request_flow.py` focused on execution identity, trust
+  shaping, pending validation, and lifecycle contracts rather than regrowing
+  command-surface assertions
+- Reduce repeated `fresh_data_dir() + make_config() + setup_globals()`
+  scaffolding inside handler suites by reusing `fresh_env(...)` and other
+  helpers from `tests/support/handler_support.py`
+- Keep negative capability tests and boundary tests that prove the system
+  cannot overfire
+- Do not reduce confidence in the name of prettiness
+
+The standard is the earlier ownership refactor:
+- overflow suites removed
+- unique tests strengthened
+- owner suites clarified
+- shared helpers consolidated
+
+Bucket E should repeat that standard where recent growth warrants it.
+
+### E4. Final truthfulness and verification
+
+After the hardening and simplification work, run the full verification envelope
+for the touched areas.
+
+Required verification:
+
+- config / doctor / startup tests
+- shell/operator contract tests
+- Compose E2E
+- persistence/integration suites touched by the work
+- real handler/callback flows touched by Milestones B-D
+- owner suites touched by test rationalization
+
+Testing rules from the repo guidance and local skills apply directly:
+
+- every nontrivial change needs:
+  - a focused contract test
+  - a real entry-point integration test
+  - an adjacent regression test
+- every user-visible test must declare the right oracle
+- every classification or invalidation fix needs a false-positive boundary
+  test
+- if Bucket E touches a durable path, success/failure/interruption/recovery
+  ownership must still be proven
+
+Recommended implementation sequence:
+
+1. Write a contract-first preamble for Bucket E:
+  - contract(s) being changed
+  - source of truth
+  - affected entry points
+  - state/persistence touched
+  - failure paths
+  - required invariants
+  - tests to add or rationalize
+2. Do one bounded repo-wide audit and classify findings into:
+  - product-path friction
+  - dead code / stale code
+  - duplicate concept owner
+  - test ownership drift
+  - weak duplicate test
+  - stale docs/status
+  - duplicated setting-family owner
+  - handler-surface tests in the wrong suite
+  - repeated test setup that should use shared helpers
+3. Group the findings into separate contracts instead of one giant cleanup
+   patch.
+4. For each large owner seam or suite, write the candidate list and the chosen
+   target shape before editing. “No move” or “no extract” is acceptable only
+   with explicit evidence.
+5. Implement product fixes and structural simplifications together where they
+   share the same authoritative seam.
+6. Move/rationalize tests only after the owning seam is clear.
+7. Run the real verification envelope.
+8. Update `STATUS-commercial-polish.md` only after the runtime behavior and
+   tests are confirmed.
+
+Anti-patterns forbidden in this milestone:
+
+- wording-only patches when the real issue is a broken or duplicated owner
+- repo-wide rename churn without contract payoff
+- test deletion without a stronger remaining owner test
+- new generic frameworks or speculative abstractions
+- leaving duplicated setting-family owners in place after the audit already
+  proved drift risk, then claiming the simplification pass is complete
+- leaving handler-surface tests in `tests/test_request_flow.py` while claiming
+  test ownership was rationalized, unless the plan names the distinct contract
+  that suite still uniquely owns
+- claiming “hardening complete” while the large catch-all suites and touched
+  operator/handler paths still drift
 
 Done when:
 
-- The Docker path is boring.
-- `/doctor` is useful.
-- Onboarding is clear.
-- The top user-facing flows feel complete enough that more infrastructure work
-  would unlock the next need rather than compensate for current roughness.
+- The Docker/operator path is boring and self-consistent.
+- The main Telegram user journey is coherent end to end.
+- The remaining rough edges in doctor/startup/onboarding/update/no-op states
+  are resolved.
+- Dead code and duplicate concept owners exposed by the polish work are
+  removed or consolidated where justified.
+- The recently regrown suites are rationalized enough that test ownership is
+  clearer, not murkier.
+- The verification envelope passes:
+  - config/doctor/startup
+  - shell/operator
+  - Compose E2E
+  - touched persistence/integration suites
+  - touched handler/callback owner suites
+- The docs and status are truthful.
+- At that point, and only at that point, should work move to
+  **Phase 13 - Storage backend abstraction and Local Runtime mode**.
 
 #### Gate Before Phase 13
 

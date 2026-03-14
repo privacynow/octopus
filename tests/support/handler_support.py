@@ -57,6 +57,16 @@ def fresh_data_dir():
             _work_queue.close_transport_db(data_dir)
 
 
+def public_user_config_overrides(**extra):
+    """Default config overrides for tests that need a public (non-trusted) user.
+
+    Returns allow_open=True and allowed_user_ids=frozenset({42}) so that
+    uid 42 is trusted and any other uid (e.g. 999) is public. Merge with
+    test-specific overrides, e.g. public_model_profiles=frozenset({\"fast\"}).
+    """
+    return {"allow_open": True, "allowed_user_ids": frozenset({42}), **extra}
+
+
 @contextlib.contextmanager
 def fresh_env(*, config_overrides=None, provider_name="claude", boot_id="test-boot", bot_instance=None):
     """Context manager that sets up a temp data_dir, config, provider, globals,

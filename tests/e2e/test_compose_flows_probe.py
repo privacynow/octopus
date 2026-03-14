@@ -147,16 +147,68 @@ def test_remove_image_writes_log_on_failure_when_artifacts_dir_given(tmp_path):
     assert "stderr here" in content
 
 
+def test_compose_down_records_failure_log(tmp_path):
+    """_compose_down writes a cleanup log when docker compose down fails."""
+    ctx = {
+        "artifacts_dir": tmp_path,
+        "compose_files": ["-f", "docker-compose.yml"],
+        "env": {},
+    }
+    with patch.object(
+        m,
+        "_compose",
+        return_value=subprocess.CompletedProcess(["docker", "compose", "down"], 1, "", "compose down failed"),
+    ):
+        result, log_path = m._compose_down(ctx, "teardown")
+    assert result.returncode == 1
+    assert log_path == tmp_path / "teardown.compose-down.log"
+    assert log_path.exists()
+    assert "compose down failed" in log_path.read_text()
+
+
 def test_compose_ctx_teardown_calls_remove_image_after_down():
-    """Teardown path: compose down then _remove_image(bot_image). Removal failure does not raise."""
-    with patch.object(m, "_compose") as mc:
+    """Teardown path: compose down then _remove_image(bot_image)."""
+    with patch.object(m, "_compose_down", return_value=(subprocess.CompletedProcess(["docker", "compose", "down"], 0, "", ""), None)) as md:
         with patch.object(m, "_remove_image") as mr:
             ctx = {
                 "artifacts_dir": Path("/tmp/fake-e2e-artifacts"),
                 "bot_image": "telegram-agent-bot-e2e:gw0-abc123-claude",
             }
-            # Same order as compose_ctx fixture teardown
-            mc(ctx, "down", "-v", "--remove-orphans", "-t", "2", timeout=120)
+            down_result, down_log = m._compose_down(ctx)
             m._remove_image(ctx["bot_image"], ctx.get("artifacts_dir"))
+            assert down_result.returncode == 0
+            assert down_log is None
     mr.assert_called_once_with("telegram-agent-bot-e2e:gw0-abc123-claude", ctx["artifacts_dir"])
-    mc.assert_called_once_with(ctx, "down", "-v", "--remove-orphans", "-t", "2", timeout=120)
+    md.assert_called_once_with(ctx)
+
+
+def test_compose_down_includes_all_profiles(tmp_path):
+    """Cleanup must include profiled services so bot/stub containers are actually removed."""
+    ctx = {
+        "artifacts_dir": tmp_path,
+        "compose_files": ["-f", "docker-compose.yml"],
+        "env": {},
+    }
+    with patch.object(
+        m,
+        "_compose",
+        return_value=subprocess.CompletedProcess(["docker", "compose", "down"], 0, "", ""),
+    ) as mc:
+        result, log_path = m._compose_down(ctx)
+    assert result.returncode == 0
+    assert log_path is None
+    mc.assert_called_once_with(
+        ctx,
+        "--profile",
+        "tools",
+        "--profile",
+        "bot",
+        "--profile",
+        "stub",
+        "down",
+        "-v",
+        "--remove-orphans",
+        "-t",
+        "2",
+        timeout=120,
+    )

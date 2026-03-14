@@ -75,7 +75,7 @@ def _worker_id() -> str:
 def _compose(ctx: dict[str, object], *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["docker", "compose", *ctx["compose_files"], *args],
-        cwd=REPO_ROOT,
+        cwd=ctx.get("cwd", REPO_ROOT),
         env=ctx["env"],
         capture_output=True,
         text=True,
@@ -119,6 +119,36 @@ def _remove_image(tag: str, artifacts_dir: Path | None = None) -> None:
             f"tag={tag} returncode={r.returncode}\nstdout={r.stdout or ''}\nstderr={r.stderr or ''}",
             encoding="utf-8",
         )
+
+
+def _compose_down(ctx: dict[str, object], name: str = "teardown") -> tuple[subprocess.CompletedProcess, Path | None]:
+    """Bring the project down and record cleanup failure details if it fails."""
+    r = _compose(
+        ctx,
+        "--profile",
+        "tools",
+        "--profile",
+        "bot",
+        "--profile",
+        "stub",
+        "down",
+        "-v",
+        "--remove-orphans",
+        "-t",
+        "2",
+        timeout=120,
+    )
+    if r.returncode == 0:
+        return r, None
+    log_path = Path(ctx["artifacts_dir"]) / f"{name}.compose-down.log"
+    body = []
+    if r.stdout:
+        body.append(r.stdout)
+    if r.stderr:
+        body.append(r.stderr)
+    log_text = "\n".join(body).strip()
+    log_path.write_text(log_text + ("\n" if log_text else ""), encoding="utf-8")
+    return r, log_path
 
 
 @pytest.fixture(scope="module")
@@ -165,6 +195,7 @@ def compose_ctx(e2e_skip, tmp_path_factory):
             "-f", os.path.join(REPO_ROOT, "docker-compose.e2e.yml"),
             "-f", str(generated_override),
         ],
+        "cwd": REPO_ROOT,
         "env": {**os.environ, "COMPOSE_PROJECT_NAME": project},
         "env_file": env_file,
         "artifacts_dir": artifacts_dir,
@@ -174,8 +205,16 @@ def compose_ctx(e2e_skip, tmp_path_factory):
     try:
         _compose_logs(ctx, "final")
     finally:
-        _compose(ctx, "down", "-v", "--remove-orphans", "-t", "2", timeout=120)
+        down_result, down_log = _compose_down(ctx)
         _remove_image(ctx["bot_image"], ctx.get("artifacts_dir"))
+        if down_result.returncode != 0:
+            details = f"Compose cleanup failed for project {ctx['project']}."
+            if down_log is not None:
+                details += f"\n\nCompose cleanup log saved to: {down_log}"
+                log_text = down_log.read_text(encoding="utf-8").strip()
+                if log_text:
+                    details += f"\n\n{log_text}"
+            pytest.fail(details)
 
 
 def _docker_skip_message(reason: str, detail: str) -> str:
@@ -245,6 +284,12 @@ def test_compose_postgres_up_without_env_bot(e2e_skip, tmp_path):
         **os.environ,
         "COMPOSE_PROJECT_NAME": f"telegram-agent-bot-e2e-clean-{_worker_id()}-{uuid.uuid4().hex[:8]}",
     }
+    cleanup_ctx = {
+        "compose_files": ["-f", str(compose_base), "-f", str(compose_e2e)],
+        "cwd": tmp_path,
+        "env": env,
+        "artifacts_dir": tmp_path,
+    }
     try:
         r = subprocess.run(
             [
@@ -266,27 +311,15 @@ def test_compose_postgres_up_without_env_bot(e2e_skip, tmp_path):
         )
         assert r.returncode == 0, (r.stdout, r.stderr)
     finally:
-        subprocess.run(
-            [
-                "docker",
-                "compose",
-                "-f",
-                str(compose_base),
-                "-f",
-                str(compose_e2e),
-                "down",
-                "-v",
-                "--remove-orphans",
-                "-t",
-                "2",
-            ],
-            cwd=tmp_path,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
+        down_result, down_log = _compose_down(cleanup_ctx, "clean-repo-teardown")
+        if down_result.returncode != 0:
+            details = "Clean-repo Compose cleanup failed."
+            if down_log is not None:
+                details += f"\n\nCompose cleanup log saved to: {down_log}"
+                log_text = down_log.read_text(encoding="utf-8").strip()
+                if log_text:
+                    details += f"\n\n{log_text}"
+            raise AssertionError(details)
 
 
 def test_compose_bootstrap_doctor(postgres_up):

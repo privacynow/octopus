@@ -1486,3 +1486,51 @@ def test_forged_v2_db_wrong_partial_predicate_rejected(data_dir):
         _transport_db(data_dir)
     msg = str(exc_info.value)
     assert "Unsupported" in msg or "schema" in msg.lower()
+
+
+# -- Contract: non-duplicate IntegrityError must raise --
+
+def test_record_and_enqueue_raises_on_non_duplicate_integrity_error(data_dir):
+    """record_and_enqueue must only swallow duplicate update_id errors.
+    Other IntegrityError (e.g. NOT NULL on kind) must propagate."""
+    import sqlite3
+    with pytest.raises(sqlite3.IntegrityError, match="NOT NULL"):
+        record_and_enqueue(
+            data_dir, update_id=90001, chat_id=1, user_id=42, kind=None,
+        )
+
+
+def test_record_update_raises_on_non_duplicate_integrity_error(data_dir):
+    """record_update must only swallow duplicate update_id errors.
+    Other IntegrityError (e.g. NOT NULL on kind) must propagate."""
+    import sqlite3
+    with pytest.raises(sqlite3.IntegrityError, match="NOT NULL"):
+        record_update(data_dir, update_id=90002, chat_id=1, user_id=42, kind=None)
+
+
+def test_record_and_enqueue_still_returns_false_for_duplicate(data_dir):
+    """Duplicate update_id must still return (False, None), not raise."""
+    ok1, _ = record_and_enqueue(data_dir, update_id=90003, chat_id=1, user_id=42, kind="message")
+    assert ok1 is True
+    ok2, item2 = record_and_enqueue(data_dir, update_id=90003, chat_id=1, user_id=42, kind="message")
+    assert ok2 is False
+    assert item2 is None
+
+
+# -- Contract: complete_work_item clears error field --
+
+def test_complete_work_item_clears_stale_error(data_dir):
+    """complete_work_item must set error to NULL, even if the row previously had an error value."""
+    conn = _transport_db(data_dir)
+    # Create and enqueue a work item
+    ok, item_id = record_and_enqueue(data_dir, update_id=90010, chat_id=1, user_id=42, kind="message")
+    assert ok and item_id
+    # Manually inject an error value to simulate a prior failure
+    with _write_tx(conn):
+        conn.execute("UPDATE work_items SET error = 'old error' WHERE id = ?", (item_id,))
+    # Complete the item
+    complete_work_item(data_dir, item_id)
+    # Verify error is cleared
+    row = conn.execute("SELECT error, state FROM work_items WHERE id = ?", (item_id,)).fetchone()
+    assert row["state"] == "done"
+    assert row["error"] is None

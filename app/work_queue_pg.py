@@ -520,7 +520,7 @@ def complete_work_item(conn, item_id: str) -> None:
         with _cur(conn) as cur:
             cur.execute(
                 f"""
-                UPDATE {_SCHEMA}.work_items SET state = %s, completed_at = %s
+                UPDATE {_SCHEMA}.work_items SET state = %s, completed_at = %s, error = NULL
                 WHERE id = %s AND state = %s
                 """,
                 (result.new_state, now, item_id, loaded_state),
@@ -554,7 +554,7 @@ def fail_work_item(conn, item_id: str, error: str) -> None:
         result = run_transport_event(model, "fail")
         if not result.allowed:
             raise TransportStateCorruption(
-                f"fail_work_item: workflow rejected for item {item_id}: {result.disposition}"
+                f"fail_work_item: workflow rejected for item {item_id}: {result.disposition} — {result.reason}"
             )
         now = datetime.now(timezone.utc).isoformat()
         err = (error or "")[:500]

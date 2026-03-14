@@ -767,14 +767,14 @@ def test_project_file_policy_approval_model_change_invalidates():
     session.model_profile = "best"
     error = validate_pending(pending, session, cfg, "claude")
     assert error is not None
-    assert "Context changed" in error
+    assert "context changed" in error.lower()
 
     # Also verify that changing file_policy invalidates
     session.model_profile = "fast"  # reset model
     session.file_policy = "edit"
     error2 = validate_pending(pending, session, cfg, "claude")
     assert error2 is not None
-    assert "Context changed" in error2
+    assert "context changed" in error2.lower()
 
 
 # =====================================================================

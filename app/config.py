@@ -95,7 +95,9 @@ class BotConfig:
     public_model_profiles: frozenset[str]  # allowed profiles for public users (empty = all)
     # Skill registry
     registry_url: str  # URL to a JSON skill registry index (empty = disabled)
-    # Postgres (Phase 12). Empty = use SQLite; set = use Postgres as runtime backend.
+    # Runtime (Phase 13). local = only supported mode; shared = rejected until Phase 18.
+    runtime_mode: str  # BOT_RUNTIME_MODE: "local" (default) | "shared" (rejected)
+    # Postgres optional for local runtime. Empty = SQLite (default); set = Postgres as store backend.
     database_url: str  # BOT_DATABASE_URL (postgresql://...)
     db_pool_min_size: int
     db_pool_max_size: int
@@ -260,7 +262,8 @@ def load_config(instance: str | None = None) -> BotConfig:
             s.strip() for s in get("BOT_PUBLIC_MODEL_PROFILES").split(",") if s.strip()
         ),
         registry_url=get("BOT_REGISTRY_URL"),
-        database_url=get("BOT_DATABASE_URL").strip(),
+        runtime_mode=get("BOT_RUNTIME_MODE", "local").strip().lower() or "local",
+        database_url=get("BOT_DATABASE_URL", "").strip(),
         db_pool_min_size=max(0, get_int("BOT_DB_POOL_MIN_SIZE", "1")),
         db_pool_max_size=max(1, get_int("BOT_DB_POOL_MAX_SIZE", "10")),
         db_connect_timeout_seconds=max(1, get_int("BOT_DB_CONNECT_TIMEOUT", "10")),
@@ -341,6 +344,7 @@ def load_config_provider_health() -> BotConfig:
         public_working_dir="",
         public_model_profiles=frozenset(),
         registry_url="",
+        runtime_mode="local",
         database_url="",
         db_pool_min_size=1,
         db_pool_max_size=10,
@@ -394,6 +398,17 @@ def validate_config(config: BotConfig) -> list[str]:
     if config.bot_mode not in {"poll", "webhook"}:
         errors.append(
             f"BOT_MODE must be 'poll' or 'webhook', got '{config.bot_mode}'"
+        )
+
+    if config.runtime_mode == "shared":
+        errors.append(
+            "BOT_RUNTIME_MODE=shared is not supported until Phase 18. "
+            "Use BOT_RUNTIME_MODE=local (default) for Local Runtime."
+        )
+    elif config.runtime_mode != "local":
+        errors.append(
+            f"BOT_RUNTIME_MODE must be 'local' or 'shared', got '{config.runtime_mode}'. "
+            "Only 'local' is supported in Phase 13."
         )
 
     if config.bot_mode == "webhook":

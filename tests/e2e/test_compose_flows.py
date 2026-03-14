@@ -3,6 +3,10 @@
 Run only when E2E_COMPOSE=1 and Docker is available. Skipped in normal pytest runs.
 See README.md for the operator path and docs/ARCHITECTURE.md for the runtime/testing contract.
 
+Primary gate: test_compose_sqlite_local_runtime_primary — Docker Local Runtime with SQLite,
+no BOT_DATABASE_URL, no Postgres. Bounded Postgres coverage: test_compose_bootstrap_doctor,
+test_compose_db_update_smoke, test_compose_bot_startup_with_postgres.
+
 The harness isolates each worker/run with:
 - a unique COMPOSE_PROJECT_NAME
 - a generated override file for worker-local bot env and image tags
@@ -255,19 +259,51 @@ def postgres_up(compose_ctx):
     return compose_ctx
 
 
-@pytest.fixture(scope="module")
-def bot_image_built(postgres_up):
-    """Build the bot image once for all tests that need it. Avoids a second ~5 min build."""
+def _build_bot_image(ctx: dict[str, object]) -> None:
+    """Build the bot image and tag it as ctx['bot_image']."""
     r = subprocess.run(
         ["docker", "build", "-f", "Dockerfile.bot", "--build-arg", "BOT_PROVIDER=claude",
-         "-t", str(postgres_up["bot_image"]), "."],
+         "-t", str(ctx["bot_image"]), "."],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         timeout=300,
     )
     assert r.returncode == 0, (r.stdout, r.stderr)
-    return postgres_up
+
+
+# Postgres-backed bot override: inject BOT_DATABASE_URL so the bot actually uses Postgres.
+# Used only by test_compose_bot_startup_with_postgres. Probe tests assert this content.
+POSTGRES_BOT_OVERRIDE_YAML = """\
+services:
+  bot:
+    environment:
+      BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+"""
+
+
+def _postgres_bot_override_path(ctx: dict[str, object]) -> str:
+    """Write Postgres-bot override file and return its path. Used by Postgres E2E test."""
+    artifacts_dir = ctx["artifacts_dir"]
+    path = Path(artifacts_dir) / "docker-compose.e2e.postgres-bot.yml"
+    path.write_text(POSTGRES_BOT_OVERRIDE_YAML, encoding="utf-8")
+    return str(path)
+
+
+@pytest.fixture(scope="module")
+def bot_image_built(compose_ctx):
+    """Build the bot image once per module. Shared by SQLite-primary and Postgres-bounded tests."""
+    _build_bot_image(compose_ctx)
+    return compose_ctx
+
+
+@pytest.fixture(scope="module")
+def compose_ctx_postgres_bot(bot_image_built, postgres_up):
+    """Compose context with Postgres-bot override so bot service gets BOT_DATABASE_URL."""
+    ctx = dict(bot_image_built)
+    override_path = _postgres_bot_override_path(ctx)
+    ctx["compose_files"] = list(ctx["compose_files"]) + ["-f", override_path]
+    return ctx
 
 
 def test_compose_postgres_up_without_env_bot(e2e_skip, tmp_path):
@@ -355,24 +391,16 @@ def test_compose_bot_image_has_provider(bot_image_built):
     assert "claude" in (r.stdout or "").lower() or "claude" in (r.stderr or "").lower()
 
 
-def test_compose_bot_startup_validates_schema(bot_image_built):
-    """Supported bot image validates DB/schema, then fails clearly without provider auth.
+def test_compose_sqlite_local_runtime_primary(bot_image_built):
+    """Primary E2E gate: Docker Local Runtime with SQLite (no BOT_DATABASE_URL, no Postgres).
 
-    In CI/local E2E we do not perform an interactive provider login, so the real
-    provider-enabled image should reach DB/schema validation and then emit the
-    operator-facing provider-auth failure message rather than hanging or failing
-    obscurely.
-
-    Uses the image built by bot_image_built (single shared build for bot-image tests).
-    The bot runs provider.check_runtime_health() before printing that message; we
-    wait up to 35s for the message (health check has its own timeouts).
+    Bot starts without Postgres; uses SQLite in BOT_DATA_DIR. Verifies either
+    successful startup (long-poll) or the expected provider-auth failure message.
     """
-    r = _compose(bot_image_built, "--profile", "tools", "run", "--rm", "db-bootstrap")
-    assert r.returncode == 0, (r.stdout, r.stderr)
     r = _compose(bot_image_built, "--profile", "bot", "up", "-d", "bot")
     assert r.returncode == 0, (r.stdout, r.stderr)
     for _ in range(35):
-        _, logs = _compose_logs(bot_image_built, "bot-startup", "bot", "postgres")
+        _, logs = _compose_logs(bot_image_built, "bot-sqlite-startup", "bot")
         if "Bot starting (long-poll)" in logs or "Bot starting (webhook)" in logs:
             return
         if "Provider not authenticated or unavailable." in logs and "Run ./scripts/provider_login.sh" in logs:
@@ -380,8 +408,35 @@ def test_compose_bot_startup_validates_schema(bot_image_built):
         time.sleep(1)
     _fail_with_logs(
         bot_image_built,
-        "bot-startup-timeout",
-        "Bot did not reach startup or emit the expected provider-auth failure within 35 seconds (provider health check may block on interactive auth).",
+        "bot-sqlite-startup-timeout",
+        "Bot (SQLite Local Runtime) did not reach startup or emit provider-auth failure within 35s.",
+        "bot",
+    )
+
+
+def test_compose_bot_startup_with_postgres(compose_ctx_postgres_bot):
+    """Bounded Postgres path: bot runs with BOT_DATABASE_URL so runtime uses Postgres backend.
+
+    Override injects BOT_DATABASE_URL=postgresql://bot:bot@postgres:5432/bot into the bot
+    service. Bootstrap runs first; then bot starts and must reach startup or provider-auth
+    failure after Postgres doctor is satisfied.
+    """
+    ctx = compose_ctx_postgres_bot
+    r = _compose(ctx, "--profile", "tools", "run", "--rm", "db-bootstrap")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    r = _compose(ctx, "--profile", "bot", "up", "-d", "bot")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    for _ in range(35):
+        _, logs = _compose_logs(ctx, "bot-startup-postgres", "bot", "postgres")
+        if "Bot starting (long-poll)" in logs or "Bot starting (webhook)" in logs:
+            return
+        if "Provider not authenticated or unavailable." in logs and "Run ./scripts/provider_login.sh" in logs:
+            return
+        time.sleep(1)
+    _fail_with_logs(
+        ctx,
+        "bot-startup-postgres-timeout",
+        "Bot (Postgres backend) did not reach startup or provider-auth failure within 35s.",
         "bot",
         "postgres",
     )

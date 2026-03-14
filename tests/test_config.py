@@ -323,6 +323,19 @@ def test_load_config_reads_webhook_env_vars():
         os.unlink(env_path)
 
 
+def test_validate_config_rejects_shared_runtime_mode():
+    """Phase 13: BOT_RUNTIME_MODE=shared is rejected until Phase 18."""
+    errors = validate_config(make_config(runtime_mode="shared"))
+    assert any("shared" in e.lower() and "phase 18" in e.lower() for e in errors)
+
+
+def test_validate_config_accepts_local_runtime_mode():
+    """Phase 13: BOT_RUNTIME_MODE=local is valid (default)."""
+    errors = validate_config(make_config(runtime_mode="local"))
+    runtime_errors = [e for e in errors if "RUNTIME" in e or "runtime" in e]
+    assert runtime_errors == []
+
+
 def test_load_config_reads_database_url_and_pool_settings():
     """load_config picks up BOT_DATABASE_URL and pool settings from .env."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:

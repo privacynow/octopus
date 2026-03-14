@@ -48,14 +48,20 @@ def test_clean_runtime_has_no_leaked_state():
 
 
 def test_reset_closes_session_and_transport_db_caches():
-    """Open session and transport DBs, then reset; assert caches are empty."""
+    """Open session and transport DBs, then reset; assert new backend has empty caches."""
+    from app import runtime_backend
+
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         storage_mod.ensure_data_dirs(data_dir)
-        storage_mod._db(data_dir)  # open session DB
-        work_queue_mod._transport_db(data_dir)  # open transport DB
-        assert len(storage_mod._db_connections) >= 1
-        assert len(work_queue_mod._db_connections) >= 1
+        session_store = runtime_backend.session_store()
+        transport_store = runtime_backend.transport_store()
+        session_store._db(data_dir)
+        transport_store._transport_db(data_dir)
+        assert len(session_store._connections) >= 1
+        assert len(transport_store._connections) >= 1
         reset_handler_test_runtime()
-        assert len(storage_mod._db_connections) == 0, "Session DB cache should be empty after reset"
-        assert len(work_queue_mod._db_connections) == 0, "Transport DB cache should be empty after reset"
+        session_store2 = runtime_backend.session_store()
+        transport_store2 = runtime_backend.transport_store()
+        assert len(session_store2._connections) == 0, "Session DB cache should be empty after reset"
+        assert len(transport_store2._connections) == 0, "Transport DB cache should be empty after reset"

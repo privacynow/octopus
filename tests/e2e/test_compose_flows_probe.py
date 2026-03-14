@@ -212,3 +212,25 @@ def test_compose_down_includes_all_profiles(tmp_path):
         "2",
         timeout=120,
     )
+
+
+def test_postgres_bot_override_injects_bot_database_url():
+    """Postgres-bounded E2E must inject BOT_DATABASE_URL into the bot service.
+
+    The override YAML is used so the bot actually runs against Postgres, not SQLite.
+    """
+    assert "BOT_DATABASE_URL" in m.POSTGRES_BOT_OVERRIDE_YAML
+    assert "postgresql://" in m.POSTGRES_BOT_OVERRIDE_YAML
+    assert "postgres:5432" in m.POSTGRES_BOT_OVERRIDE_YAML
+    assert "bot:" in m.POSTGRES_BOT_OVERRIDE_YAML
+    assert "environment:" in m.POSTGRES_BOT_OVERRIDE_YAML
+
+
+def test_postgres_bot_override_path_writes_file(tmp_path):
+    """_postgres_bot_override_path writes override YAML and returns path."""
+    ctx = {"artifacts_dir": tmp_path}
+    path = m._postgres_bot_override_path(ctx)
+    assert path == str(tmp_path / "docker-compose.e2e.postgres-bot.yml")
+    content = Path(path).read_text()
+    assert "BOT_DATABASE_URL" in content
+    assert "postgresql://bot:bot@postgres:5432/bot" in content

@@ -85,44 +85,37 @@ def main() -> None:
     provider = make_provider(config)
     fail_fast(config)
 
-    # Phase 12: Postgres is the only supported runtime backend (required for both run and --doctor).
-    if not config.database_url:
-        print("BOT_DATABASE_URL is required.", file=sys.stderr)
-        print("Run: ./scripts/dev_up.sh (or docker compose up -d postgres && docker compose --profile tools run --rm db-bootstrap).", file=sys.stderr)
+    # Phase 13: Only local runtime is supported. Reject shared until Phase 18.
+    if config.runtime_mode != "local":
+        print("Only Local Runtime is supported (BOT_RUNTIME_MODE=local).", file=sys.stderr)
+        if config.runtime_mode == "shared":
+            print("BOT_RUNTIME_MODE=shared (Shared Runtime) is not available until Phase 18.", file=sys.stderr)
         sys.exit(1)
 
-    try:
-        from app.storage import set_postgres_backend as set_storage_pg
-        from app.work_queue import set_postgres_backend as set_transport_pg
-        set_storage_pg(
-            config.database_url,
-            pool_min=config.db_pool_min_size,
-            pool_max=config.db_pool_max_size,
-            connect_timeout=config.db_connect_timeout_seconds,
-        )
-        set_transport_pg(
-            config.database_url,
-            pool_min=config.db_pool_min_size,
-            pool_max=config.db_pool_max_size,
-            connect_timeout=config.db_connect_timeout_seconds,
-        )
-        from app.db.postgres import get_connection
-        from app.db.postgres_doctor import run_doctor as run_postgres_doctor
-        with get_connection(
-            config.database_url,
-            min_size=config.db_pool_min_size,
-            max_size=config.db_pool_max_size,
-            connect_timeout=config.db_connect_timeout_seconds,
-        ) as conn:
-            errors = run_postgres_doctor(conn)
-    except Exception as e:
-        print(f"Database error: {e}", file=sys.stderr)
-        sys.exit(1)
-    if errors:
-        for e in errors:
-            print(f"  FAIL: {e}", file=sys.stderr)
-        print("Run: docker compose --profile tools run --rm db-bootstrap (or db-update). See README.", file=sys.stderr)
-        sys.exit(1)
+    # Single backend bootstrap seam: SQLite (default) or Postgres when BOT_DATABASE_URL set.
+    from app import runtime_backend
+    runtime_backend.init(config)
+
+    # When using Postgres, run schema/doctor before proceeding.
+    if config.database_url:
+        try:
+            from app.db.postgres import get_connection
+            from app.db.postgres_doctor import run_doctor as run_postgres_doctor
+            with get_connection(
+                config.database_url,
+                min_size=config.db_pool_min_size,
+                max_size=config.db_pool_max_size,
+                connect_timeout=config.db_connect_timeout_seconds,
+            ) as conn:
+                errors = run_postgres_doctor(conn)
+        except Exception as e:
+            print(f"Database error: {e}", file=sys.stderr)
+            sys.exit(1)
+        if errors:
+            for e in errors:
+                print(f"  FAIL: {e}", file=sys.stderr)
+            print("Run: docker compose --profile tools run --rm db-bootstrap (or db-update). See README.", file=sys.stderr)
+            sys.exit(1)
 
     if args.doctor:
         run_doctor(config, provider)

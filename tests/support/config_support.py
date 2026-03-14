@@ -47,6 +47,7 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         public_working_dir="",
         public_model_profiles=frozenset(),
         registry_url="",
+        runtime_mode="local",
         database_url="",
         db_pool_min_size=1,
         db_pool_max_size=10,

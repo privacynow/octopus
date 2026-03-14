@@ -2056,3 +2056,404 @@ async def test_provider_empty_response():
 
         await send_text(chat, user, "hello")
         assert len(prov.run_calls) == 1
+
+
+# =====================================================================
+# Phase 15: Project-level inheritance in commands
+# =====================================================================
+
+from app.session_state import ProjectBinding
+
+
+async def test_policy_status_shows_project_default():
+    """/policy status reflects project-inherited file_policy when session has none."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project with inspect default
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        # Check /policy status — should show inspect (inherited from project)
+        msg = await send_command(th.cmd_policy, chat, user, "/policy")
+        reply = last_reply(msg)
+        assert "inspect" in reply
+
+
+async def test_policy_status_session_overrides_project():
+    """/policy status shows session-explicit value even if project has a different default."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project with inspect default
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        # Explicitly set edit
+        await send_command(th.cmd_policy, chat, user, "/policy", args=["edit"])
+        # Check /policy status — should show edit (session explicit wins)
+        msg = await send_command(th.cmd_policy, chat, user, "/policy")
+        reply = last_reply(msg)
+        assert "edit" in reply
+
+
+async def test_project_switch_shows_inherited_defaults():
+    """Project switch confirmation message includes inherited file_policy and model_profile."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect", model_profile="fast"),),
+        "model_profiles": {"fast": "haiku", "best": "opus"},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        msg = await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        reply = last_reply(msg)
+        assert "inspect" in reply, "Switch message should mention project default policy"
+        assert "fast" in reply, "Switch message should mention project default model"
+
+
+async def test_project_switch_no_defaults_no_extra_lines():
+    """Project with no inherited defaults shows basic switch message."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp"),),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        msg = await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        reply = last_reply(msg)
+        assert "default policy" not in reply.lower()
+        assert "default model" not in reply.lower()
+
+
+async def test_model_status_shows_project_default():
+    """/model status reflects project-inherited model_profile when session has none."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", model_profile="fast"),),
+        "model_profiles": {"fast": "haiku", "best": "opus"},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project with fast default
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        # Check /model status — should show fast profile with haiku model
+        msg = await send_command(th.cmd_model, chat, user, "/model")
+        reply = last_reply(msg)
+        assert "fast" in reply, "Model status should show project-inherited profile"
+        assert "haiku" in reply, "Model status should show effective model from project default"
+
+
+async def test_policy_same_as_project_default_shows_already():
+    """/policy inspect when project default is inspect and session has no override → already message."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        # Try to set inspect — should say "already" since project default is inspect
+        msg = await send_command(th.cmd_policy, chat, user, "/policy", args=["inspect"])
+        reply = last_reply(msg)
+        assert "already" in reply.lower()
+
+
+async def test_policy_inherit_clears_session_override():
+    """/policy inherit clears session-explicit policy, falls back to project default."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        # Explicitly set edit
+        await send_command(th.cmd_policy, chat, user, "/policy", args=["edit"])
+        # Inherit — should clear to project default
+        msg = await send_command(th.cmd_policy, chat, user, "/policy", args=["inherit"])
+        reply = last_reply(msg)
+        assert "cleared" in reply.lower()
+        assert "inspect" in reply  # effective is project default
+
+
+async def test_policy_inherit_already_inherited():
+    """/policy inherit when already inherited shows already-inherited."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        msg = await send_command(th.cmd_policy, chat, user, "/policy", args=["inherit"])
+        reply = last_reply(msg)
+        assert "already" in reply.lower()
+
+
+async def test_model_inherit_clears_session_override():
+    """/model inherit clears session-explicit model_profile, falls back to project default."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", model_profile="fast"),),
+        "model_profiles": {"fast": "haiku", "best": "opus"},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        # Explicitly set best
+        await send_command(th.cmd_model, chat, user, "/model", args=["best"])
+        # Inherit — should clear to project default
+        msg = await send_command(th.cmd_model, chat, user, "/model", args=["inherit"])
+        reply = last_reply(msg)
+        assert "cleared" in reply.lower()
+        assert "fast" in reply  # effective is project default
+        assert "haiku" in reply  # effective model ID
+
+
+async def test_model_inherit_already_inherited():
+    """/model inherit when already inherited shows already-inherited."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {"fast": "haiku"},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        msg = await send_command(th.cmd_model, chat, user, "/model", args=["inherit"])
+        reply = last_reply(msg)
+        assert "already" in reply.lower()
+
+
+# =====================================================================
+# Finding fixes: inherit guard + callback parity
+# =====================================================================
+
+
+async def test_model_inherit_works_when_no_profiles_configured():
+    """/model inherit clears stale override even when model_profiles is empty."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Manually set a stale model_profile override
+        session = th._load(1001)
+        session.model_profile = "fast"
+        th._save(1001, session)
+        # /model inherit should clear it even with no profiles
+        msg = await send_command(th.cmd_model, chat, user, "/model", args=["inherit"])
+        reply = last_reply(msg)
+        assert "cleared" in reply.lower()
+        # Verify the override is gone
+        session = th._load(1001)
+        assert session.model_profile == ""
+
+
+async def test_settings_callback_policy_inherit():
+    """setting_policy:inherit callback clears session file_policy override."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        # Set explicit edit
+        await send_command(th.cmd_policy, chat, user, "/policy", args=["edit"])
+        session = th._load(1001)
+        assert session.file_policy == "edit"
+        # Send inherit callback
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_policy:inherit")
+        reply = last_reply(cb_msg)
+        assert "cleared" in reply.lower() or "effective" in reply.lower()
+        # Verify override cleared
+        session = th._load(1001)
+        assert session.file_policy == ""
+
+
+async def test_settings_callback_model_inherit():
+    """setting_model:inherit callback clears session model_profile override."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", model_profile="fast"),),
+        "model_profiles": {"fast": "haiku", "best": "opus"},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project, set explicit best
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        await send_command(th.cmd_model, chat, user, "/model", args=["best"])
+        session = th._load(1001)
+        assert session.model_profile == "best"
+        # Send inherit callback
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_model:inherit")
+        reply = last_reply(cb_msg)
+        assert "cleared" in reply.lower()
+        session = th._load(1001)
+        assert session.model_profile == ""
+
+
+async def test_settings_callback_policy_inherit_already():
+    """setting_policy:inherit when already inherited shows already message."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_policy:inherit")
+        reply = last_reply(cb_msg)
+        assert "already" in reply.lower()
+
+
+async def test_settings_callback_model_inherit_already():
+    """setting_model:inherit when already inherited shows already message."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {"fast": "haiku"},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_model:inherit")
+        reply = last_reply(cb_msg)
+        assert "already" in reply.lower()
+
+
+async def test_policy_buttons_show_inherit_when_override_set():
+    """Policy buttons include Inherit button when session has explicit override."""
+    import app.telegram_handlers as th
+    buttons = th._settings_policy_buttons("inspect", has_explicit_override=True)
+    labels = [b.text for b in buttons]
+    assert any("Inherit" in l for l in labels)
+    callbacks = [b.callback_data for b in buttons]
+    assert "setting_policy:inherit" in callbacks
+
+
+async def test_policy_buttons_no_inherit_when_no_override():
+    """Policy buttons omit Inherit button when no explicit override."""
+    import app.telegram_handlers as th
+    buttons = th._settings_policy_buttons("edit", has_explicit_override=False)
+    labels = [b.text for b in buttons]
+    assert not any("Inherit" in l for l in labels)
+
+
+async def test_model_buttons_show_inherit_when_override_set():
+    """Model buttons include Inherit button when session has explicit override."""
+    import app.telegram_handlers as th
+    buttons = th._settings_model_buttons(["fast", "best"], "fast", has_explicit_override=True)
+    labels = [b.text for b in buttons]
+    assert any("Inherit" in l for l in labels)
+    callbacks = [b.callback_data for b in buttons]
+    assert "setting_model:inherit" in callbacks
+
+
+async def test_model_buttons_no_inherit_when_no_override():
+    """Model buttons omit Inherit button when no explicit override."""
+    import app.telegram_handlers as th
+    buttons = th._settings_model_buttons(["fast", "best"], "fast", has_explicit_override=False)
+    labels = [b.text for b in buttons]
+    assert not any("Inherit" in l for l in labels)
+
+
+# =====================================================================
+# Finding fixes: inherit discoverability + double-default rendering
+# =====================================================================
+
+
+async def test_model_no_profiles_with_stale_override_hints_inherit():
+    """/model with no profiles but stale override hints /model inherit."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Set stale override
+        session = th._load(1001)
+        session.model_profile = "fast"
+        th._save(1001, session)
+        # /model should mention inherit, not just "no profiles configured"
+        msg = await send_command(th.cmd_model, chat, user, "/model")
+        reply = last_reply(msg)
+        assert "inherit" in reply.lower()
+        assert "fast" in reply  # mentions the stale override
+
+
+async def test_model_no_profiles_no_override_shows_standard_message():
+    """/model with no profiles and no stale override shows standard message."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        msg = await send_command(th.cmd_model, chat, user, "/model")
+        reply = last_reply(msg)
+        assert "inherit" not in reply.lower()
+
+
+async def test_settings_shows_inherit_button_when_stale_model_override():
+    """/settings renders inherit button when profiles empty but stale override exists."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Set stale override
+        session = th._load(1001)
+        session.model_profile = "fast"
+        th._save(1001, session)
+        # /settings should show an inherit button
+        msg = await send_command(th.cmd_settings, chat, user, "/settings")
+        # Check keyboard for inherit callback
+        markup = msg.replies[-1].get("reply_markup")
+        assert markup is not None
+        all_callbacks = [
+            btn.callback_data
+            for row in markup.inline_keyboard
+            for btn in row
+        ]
+        assert "setting_model:inherit" in all_callbacks
+
+
+async def test_model_inherit_no_double_default():
+    """/model inherit does not render '(default) ((default))'."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Set stale override
+        session = th._load(1001)
+        session.model_profile = "fast"
+        th._save(1001, session)
+        # /model inherit
+        msg = await send_command(th.cmd_model, chat, user, "/model", args=["inherit"])
+        reply = last_reply(msg)
+        assert "cleared" in reply.lower()
+        assert "((default))" not in reply
+        assert "(default) (" not in reply
+
+
+async def test_settings_callback_model_inherit_no_double_default():
+    """setting_model:inherit callback does not render double default."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Set stale override
+        session = th._load(1001)
+        session.model_profile = "fast"
+        th._save(1001, session)
+        # Callback inherit
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_model:inherit")
+        reply = last_reply(cb_msg)
+        assert "cleared" in reply.lower()
+        assert "((default))" not in reply
+        assert "(default) (" not in reply

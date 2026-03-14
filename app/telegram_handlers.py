@@ -546,14 +546,14 @@ def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
 
 # -- Project helpers -------------------------------------------------------
 
-def _resolve_project(session: SessionState) -> tuple[str, str, tuple[str, ...]] | None:
-    """Return (name, root_dir, extra_dirs) for the session's bound project, or None."""
+def _resolve_project(session: SessionState):
+    """Return ProjectBinding for the session's bound project, or None."""
     project_id = session.project_id
     if not project_id:
         return None
-    for name, root_dir, extra_dirs in _cfg().projects:
-        if name == project_id:
-            return (name, root_dir, extra_dirs)
+    for proj in _cfg().projects:
+        if proj.name == project_id:
+            return proj
     return None
 
 
@@ -582,19 +582,32 @@ def _settings_model_profile_state(
                 break
         return (available, current)
     available = sorted(cfg.model_profiles.keys()) if cfg.model_profiles else []
-    current = session.model_profile or cfg.default_model_profile or "(default)"
+    if not available:
+        # No profiles configured — don't display a phantom profile name
+        return ([], "(default)")
+    # Resolution: session > project > global default (mirrors resolve_effective_model)
+    project_profile = ""
+    if session.project_id:
+        for proj in cfg.projects:
+            if proj.name == session.project_id:
+                project_profile = proj.model_profile
+                break
+    current = session.model_profile or project_profile or cfg.default_model_profile or "(default)"
     return (available, current)
 
 
-def _settings_model_buttons(available: list[str], current: str) -> list[InlineKeyboardButton]:
-    """One row of model profile buttons (same checkmark convention as /settings)."""
-    return [
+def _settings_model_buttons(available: list[str], current: str, has_explicit_override: bool = False) -> list[InlineKeyboardButton]:
+    """One row of model profile buttons, with optional Inherit button."""
+    buttons = [
         InlineKeyboardButton(
             f"\u2705 {p}" if p == current else p,
             callback_data=f"setting_model:{p}",
         )
         for p in available
     ]
+    if has_explicit_override:
+        buttons.append(InlineKeyboardButton("Inherit", callback_data="setting_model:inherit"))
+    return buttons
 
 
 def _settings_project_buttons(
@@ -605,9 +618,9 @@ def _settings_project_buttons(
     if not cfg.projects:
         return rows
     row = []
-    for name, _, _ in cfg.projects:
-        label = f"\u2705 {name}" if name == session.project_id else name
-        row.append(InlineKeyboardButton(label, callback_data=f"setting_project:{name}"))
+    for proj in cfg.projects:
+        label = f"\u2705 {proj.name}" if proj.name == session.project_id else proj.name
+        row.append(InlineKeyboardButton(label, callback_data=f"setting_project:{proj.name}"))
     if row:
         rows.append(row)
     if session.project_id:
@@ -615,9 +628,9 @@ def _settings_project_buttons(
     return rows
 
 
-def _settings_policy_buttons(policy: str) -> list[InlineKeyboardButton]:
-    """One row of file policy buttons."""
-    return [
+def _settings_policy_buttons(policy: str, has_explicit_override: bool = False) -> list[InlineKeyboardButton]:
+    """One row of file policy buttons, with optional Inherit button."""
+    buttons = [
         InlineKeyboardButton(
             "\u2705 Read only" if policy == "inspect" else "Read only",
             callback_data="setting_policy:inspect",
@@ -627,6 +640,9 @@ def _settings_policy_buttons(policy: str) -> list[InlineKeyboardButton]:
             callback_data="setting_policy:edit",
         ),
     ]
+    if has_explicit_override:
+        buttons.append(InlineKeyboardButton("Inherit", callback_data="setting_policy:inherit"))
+    return buttons
 
 
 def _settings_compact_buttons(compact: bool) -> list[InlineKeyboardButton]:
@@ -701,7 +717,7 @@ def _apply_project_change(
         _save(chat_id, session)
         return (True, _msg.trust_project_cleared(str(cfg.working_dir)))
     # value is project name
-    found = any(name == value for name, _, _ in cfg.projects)
+    found = any(proj.name == value for proj in cfg.projects)
     if not found:
         return (False, _msg.trust_unknown_project(value))
     if session.project_id == value:
@@ -710,8 +726,11 @@ def _apply_project_change(
     session.provider_state = _prov().new_provider_state()
     session.clear_pending()
     _save(chat_id, session)
-    proj_root = next(root for name, root, _ in cfg.projects if name == value)
-    return (True, _msg.trust_switched_project(value, str(proj_root)))
+    proj = next(p for p in cfg.projects if p.name == value)
+    return (True, _msg.trust_switched_project(
+        value, str(proj.root_dir),
+        file_policy=proj.file_policy, model_profile=proj.model_profile,
+    ))
 
 
 def _apply_policy_change(chat_id: int, session: SessionState, value: str) -> None:
@@ -2074,17 +2093,50 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
     msg = update.effective_message
     chat_id = event.chat_id
 
+    arg = event.args[0].lower() if event.args else ""
+
+    # inherit must run even when model_profiles is empty — clears stale overrides
+    if arg == "inherit":
+        trust = _trust_tier(event.user)
+        async with _chat_lock(chat_id, message=msg, update_id=update.update_id):
+            session = _load(chat_id)
+            if not session.model_profile:
+                await msg.reply_text("Model profile is already inherited.", parse_mode=ParseMode.HTML)
+                return
+            _apply_model_change(chat_id, session, "")
+        resolved = _resolve_context(_load(chat_id), trust)
+        effective = resolved.effective_model or cfg.model
+        _, profile_name = _settings_model_profile_state(_load(chat_id), cfg, trust, effective or "")
+        if effective and profile_name != "(default)":
+            cleared_text = f"Model profile cleared. Effective: <code>{html.escape(profile_name)}</code> ({html.escape(effective)})"
+        elif effective:
+            cleared_text = f"Model profile cleared. Using default model."
+        else:
+            cleared_text = "Model profile cleared. Using default model."
+        await msg.reply_text(
+            cleared_text,
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
     if not cfg.model_profiles:
-        await msg.reply_text(_msg.trust_no_model_profiles())
+        session = _load(chat_id)
+        if session.model_profile:
+            await msg.reply_text(
+                f"No model profiles configured, but this chat has a stale override "
+                f"(<code>{html.escape(session.model_profile)}</code>). "
+                "Use /model inherit to clear it.",
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await msg.reply_text(_msg.trust_no_model_profiles())
         return
 
     trust = _trust_tier(event.user)
     session = _load(chat_id)
-    from app.execution_context import resolve_effective_model
-    effective = resolve_effective_model(session, cfg, trust)
+    resolved = _resolve_context(session, trust)
+    effective = resolved.effective_model
     available, current = _settings_model_profile_state(session, cfg, trust, effective or "")
-
-    arg = event.args[0].lower() if event.args else ""
 
     if arg and arg != "status":
         async with _chat_lock(chat_id, message=msg, update_id=update.update_id):
@@ -2094,7 +2146,7 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     # Show current + inline keyboard (same effective-profile source as /settings)
-    buttons = _settings_model_buttons(available, current)
+    buttons = _settings_model_buttons(available, current, has_explicit_override=bool(session.model_profile))
     text = (
         f"Model profile: <b>{html.escape(current)}</b>\n"
         f"Effective model: <code>{html.escape(effective or cfg.model or '(default)')}</code>"
@@ -2606,6 +2658,25 @@ async def handle_settings_callback(event, query) -> None:
         session = _load(chat_id)
 
         if setting == "model":
+            if value == "inherit":
+                if not session.model_profile:
+                    await query.edit_message_text("Model profile is already inherited.", parse_mode=ParseMode.HTML)
+                    return
+                _apply_model_change(chat_id, session, "")
+                cfg = _cfg()
+                trust = _trust_tier(event.user)
+                resolved = _resolve_context(session, trust)
+                effective = resolved.effective_model or cfg.model
+                _, profile_name = _settings_model_profile_state(session, cfg, trust, effective or "")
+                if effective and profile_name != "(default)":
+                    cleared_text = f"Model profile cleared. Effective: <code>{html.escape(profile_name)}</code> ({html.escape(effective)})"
+                elif effective:
+                    cleared_text = f"Model profile cleared. Using default model."
+                else:
+                    cleared_text = "Model profile cleared. Using default model."
+                await query.edit_message_reply_markup(reply_markup=None)
+                await query.edit_message_text(cleared_text, parse_mode=ParseMode.HTML)
+                return
             cfg = _cfg()
             if not cfg.model_profiles:
                 await query.edit_message_text(_msg.trust_no_model_profiles())
@@ -2635,6 +2706,19 @@ async def handle_settings_callback(event, query) -> None:
         elif setting == "policy":
             if is_public_user(event.user):
                 await query.edit_message_text(_msg.trust_file_policy_public())
+                return
+            if value == "inherit":
+                if not session.file_policy:
+                    await query.edit_message_text("File policy is already inherited.", parse_mode=ParseMode.HTML)
+                    return
+                _apply_policy_change(chat_id, session, "")
+                resolved = _resolve_context(session, _trust_tier(event.user))
+                effective = resolved.file_policy or "edit"
+                await query.edit_message_reply_markup(reply_markup=None)
+                await query.edit_message_text(
+                    f"File policy cleared. Effective policy: <code>{html.escape(effective)}</code>",
+                    parse_mode=ParseMode.HTML,
+                )
                 return
             if value not in {"inspect", "edit"}:
                 return
@@ -2751,9 +2835,9 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         session = _load(event.chat_id)
         current = session.project_id
         lines = ["<b>Available projects:</b>"]
-        for name, root_dir, _ in cfg.projects:
-            marker = " (active)" if name == current else ""
-            lines.append(f"  <code>{html.escape(name)}</code> \u2192 {html.escape(root_dir)}{marker}")
+        for proj in cfg.projects:
+            marker = " (active)" if proj.name == current else ""
+            lines.append(f"  <code>{html.escape(proj.name)}</code> \u2192 {html.escape(proj.root_dir)}{marker}")
         await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
         return
 
@@ -2776,8 +2860,8 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Default: show current project with discoverable inline choices
     session = _load(event.chat_id)
     proj = _resolve_project(session)
-    working_dir = proj[1] if proj else str(cfg.working_dir)
-    project_label = proj[0] if proj else "No project"
+    working_dir = proj.root_dir if proj else str(cfg.working_dir)
+    project_label = proj.name if proj else "No project"
     lines = [
         f"Project: <b>{html.escape(project_label)}</b>",
         f"Working dir: <code>{html.escape(working_dir)}</code>",
@@ -2835,9 +2919,12 @@ async def cmd_settings(event, update: Update, context: ContextTypes.DEFAULT_TYPE
     keyboard: list[list[InlineKeyboardButton]] = []
     if trust != "public":
         keyboard.extend(_settings_project_buttons(cfg, session))
-        keyboard.append(_settings_policy_buttons(policy))
+        keyboard.append(_settings_policy_buttons(policy, has_explicit_override=bool(session.file_policy)))
     if model_available:
-        keyboard.append(_settings_model_buttons(model_available, model_display))
+        keyboard.append(_settings_model_buttons(model_available, model_display, has_explicit_override=bool(session.model_profile)))
+    elif session.model_profile:
+        # No profiles configured but stale override exists — show inherit-only button
+        keyboard.append([InlineKeyboardButton("Clear model override", callback_data="setting_model:inherit")])
     keyboard.append(_settings_compact_buttons(compact))
     keyboard.append(_settings_approval_buttons(approval))
 
@@ -2855,10 +2942,26 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     msg = update.effective_message
     arg = event.args[0].lower() if event.args else ""
 
+    if arg == "inherit":
+        async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
+            session = _load(event.chat_id)
+            if not session.file_policy:
+                await msg.reply_text("File policy is already inherited.", parse_mode=ParseMode.HTML)
+                return
+            _apply_policy_change(event.chat_id, session, "")
+        resolved = _resolve_context(_load(event.chat_id), _trust_tier(event.user))
+        effective = resolved.file_policy or "edit"
+        await msg.reply_text(
+            f"File policy cleared. Effective policy: <code>{html.escape(effective)}</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
     if arg in ("inspect", "edit"):
         async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
             session = _load(event.chat_id)
-            old_policy = session.file_policy or "edit"
+            resolved = _resolve_context(session, _trust_tier(event.user))
+            old_policy = resolved.file_policy or "edit"
             if old_policy == arg:
                 await msg.reply_text(f"File policy is already <code>{html.escape(arg)}</code>.", parse_mode=ParseMode.HTML)
                 return
@@ -2871,11 +2974,12 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if arg == "" or arg == "status":
         session = _load(event.chat_id)
-        policy = session.file_policy or "edit"
+        resolved = _resolve_context(session, _trust_tier(event.user))
+        policy = resolved.file_policy or "edit"
         await msg.reply_text(
             f"File policy: <b>{html.escape(policy)}</b>",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([_settings_policy_buttons(policy)]),
+            reply_markup=InlineKeyboardMarkup([_settings_policy_buttons(policy, has_explicit_override=bool(session.file_policy))]),
         )
         return
 

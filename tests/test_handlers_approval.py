@@ -517,6 +517,50 @@ async def test_reject_no_pending_shows_canonical_message():
         assert reply == approval_no_pending_reject()
 
 
+async def test_approve_callback_no_pending_shows_canonical_message():
+    """Phase 14 parity: approval_approve callback with no pending returns same message as /approve command."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, approval_mode="on")
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+        from app.user_messages import approval_no_pending_approve
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        assert not session.get("pending_approval") and not session.get("pending_retry")
+        save_session(data_dir, 12345, session)
+
+        query, cb_msg = await send_callback(th.handle_callback, chat, user, "approval_approve")
+        assert any(approval_no_pending_approve() in r.get("text", "") for r in cb_msg.replies), (
+            "Callback approve with no pending must show same canonical message as /approve command"
+        )
+
+
+async def test_reject_callback_no_pending_shows_canonical_message():
+    """Phase 14 parity: approval_reject callback with no pending returns same message as /reject command."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, approval_mode="on")
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+        from app.user_messages import approval_no_pending_reject
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        assert not session.get("pending_approval") and not session.get("pending_retry")
+        save_session(data_dir, 12345, session)
+
+        query, cb_msg = await send_callback(th.handle_callback, chat, user, "approval_reject")
+        assert any(approval_no_pending_reject() in r.get("text", "") for r in cb_msg.replies), (
+            "Callback reject with no pending must show same canonical message as /reject command"
+        )
+
+
 async def test_stale_pending_ttl():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, timeout_seconds=300)

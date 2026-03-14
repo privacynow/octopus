@@ -170,7 +170,8 @@ Use `/send <path>` to retrieve any file the agent created.
 
 Skills extend the bot with domain knowledge, credentials, and integrations.
 
-- `/skills list` shows what is active in the current chat
+- `/skills` shows active skills in the current chat
+- `/skills list` shows all available skills and whether they are active or need setup
 - `/skills add <name>` activates a capability
 - `/skills setup <name>` captures credentials when required
 - `/skills info <name>` shows the resolved tier and compatibility
@@ -188,37 +189,44 @@ to see the full output whenever you need it.
 
 | Command | What it does |
 |---|---|
-| `/start` | Show onboarding and current settings |
-| `/new` | Clear the current conversation |
-| `/help` | Show help |
-| `/approval on\|off` | Toggle approval mode |
+| `/start` | Show the main help and chat controls |
+| `/help` | Show main help, or `/help skills`, `/help approval`, `/help credentials` |
+| `/new` | Start a fresh conversation |
+| `/role <text>` | Set the AI's persona for this chat |
+| `/approval on\|off\|status` | Change or inspect approval mode |
 | `/approve` | Approve the current pending plan |
 | `/reject` | Reject the current pending plan |
-| `/cancel` | Cancel credential setup or a pending request |
-| `/doctor` | Show a health report |
+| `/cancel` | Cancel a running task, credential setup, or a pending request |
+| `/doctor` | Run the full app health check |
 
 ### Output and session
 
 | Command | What it does |
 |---|---|
-| `/raw` | Show the full last output |
 | `/compact on\|off` | Toggle compact mode |
+| `/raw` | Show the full last output |
 | `/export` | Export session output |
 | `/session` | Show current session details |
+| `/send <path>` | Retrieve a file the agent created |
+| `/id` | Show your Telegram user ID |
 
 ### Skills and settings
 
 | Command | What it does |
 |---|---|
-| `/skills list` | Show active skills |
+| `/skills` | Show active skills in this chat |
+| `/skills list` | Show available skills and status |
 | `/skills add <name>` | Activate a skill |
 | `/skills remove <name>` | Remove a skill |
 | `/skills setup <name>` | Configure a skill |
+| `/skills info <name>` | Show resolved skill details |
+| `/skills search <query>` | Search the bundled store and configured registry |
+| `/skills clear` | Deactivate all skills in this chat |
 | `/settings` | Open settings |
 | `/model` | Show or change profile |
 | `/model inherit` | Clear session override, use project/global default |
 | `/project` | Show or change project binding |
-| `/policy inspect\|edit` | Show or change file-access policy |
+| `/policy inspect\|edit\|inherit\|status` | Show or change file-access policy |
 | `/policy inherit` | Clear session override, use project/global default |
 | `/clear_credentials [skill]` | Remove stored skill credentials |
 
@@ -226,6 +234,7 @@ to see the full output whenever you need it.
 
 | Command | What it does |
 |---|---|
+| `/admin sessions` | Show a session overview (admin only) |
 | `/skills create <name>` | Scaffold a custom skill |
 | `/skills install <name>` | Install a managed skill from the bundled store or registry |
 | `/skills uninstall <name>` | Remove a managed skill |

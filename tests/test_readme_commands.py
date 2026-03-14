@@ -66,3 +66,27 @@ def test_readme_commands_section_includes_session():
     assert "| `/session`" in commands_section or "/session" in commands_section, (
         "README Commands section must include /session"
     )
+
+
+def test_readme_commands_section_includes_role_send_and_id():
+    """README Commands section should document other shipped core/session commands."""
+    repo = Path(__file__).resolve().parent.parent
+    readme = repo / "README.md"
+    text = readme.read_text()
+    match = re.search(r"## Commands\s+(.*?)(?=\n## |\Z)", text, re.DOTALL)
+    assert match
+    commands_section = match.group(1)
+    for command in ("/role <text>", "/send <path>", "/id"):
+        assert command in commands_section, f"README Commands section must include {command}"
+
+
+def test_readme_commands_section_includes_skill_search_and_admin_sessions():
+    """README Commands section should include managed/discoverability skill commands."""
+    repo = Path(__file__).resolve().parent.parent
+    readme = repo / "README.md"
+    text = readme.read_text()
+    match = re.search(r"## Commands\s+(.*?)(?=\n## |\Z)", text, re.DOTALL)
+    assert match
+    commands_section = match.group(1)
+    for command in ("/skills info <name>", "/skills search <query>", "/admin sessions"):
+        assert command in commands_section, f"README Commands section must include {command}"

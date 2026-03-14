@@ -192,35 +192,33 @@ Current as of 2026-03-14. Tracks progress against [PLAN-commercial-polish.md](PL
 
 ## Current Snapshot
 
-- Phases 1-10 are sealed as shipped.
-- The next numbered roadmap phase is **Phase 13 — storage backend abstraction and Local Runtime mode**.
-- Immediate execution focus is the pre-Phase-13 gate:
-  - turnkey Docker runtime
-  - config/onboarding simplification
-  - user-facing settings and `/project` polish
-  - progress/recovery/trust clarity
-  - usability hardening
-- Phase 12 is complete: the **shipped runtime today** uses Postgres and
-  requires `BOT_DATABASE_URL` at startup.
-- The roadmap direction after Phase 12 is now:
-  - **Local Runtime first**: backend-neutral product/core plus SQLite as the
-    planned default backend for both Docker and host deployments
-  - **Shared Runtime last**: Postgres queue authority and multi-process scale
-- Dockerized app + Postgres is the primary supported operational model.
-- Compose is the canonical shape for Postgres, DB tooling, and the app runtime.
+- Phases 1-14 are sealed as shipped.
+- Phase 15 is the active roadmap phase; Slice 1 (per-project defaults and
+  inherit semantics) is shipped.
+- The shipped runtime today is **Local Runtime**:
+  - SQLite is the default backend when `BOT_DATABASE_URL` is unset
+  - Postgres is a supported alternate backend when `BOT_DATABASE_URL` is set
+  - Shared Runtime remains deferred to Phases 18-19
+- Dockerized bot is the primary supported operational model.
+- Compose is the canonical operator surface:
+  - `./scripts/guided_start.sh` is the main SQLite-first zero-to-running path
+  - `./scripts/dev_up_postgres.sh` plus `BOT_DATABASE_URL` is the optional
+    Postgres bootstrap path
+  - `db-bootstrap`, `db-update`, and `db-doctor` remain explicit repo-owned
+    Postgres workflows
 - The **supported bot image** is a **real provider-enabled image** (includes the chosen Claude or Codex CLI). Built via repo-owned script from `BOT_PROVIDER` (e.g. `./scripts/build_bot_image.sh`); operators do not choose Docker targets manually. The stub-provider image (`Dockerfile.runnable`) exists only for **test/dev smoke** (e.g. E2E when real provider is not available) and is not the supported runtime.
-- Zero-to-running: clone → start Postgres → DB bootstrap → DB doctor → create `.env.bot` → build bot image for your provider → `docker compose --profile bot --env-file .env.bot run --rm bot`. README presents one Docker-first path; build complexity lives in the build script and deeper docs.
+- Zero-to-running: clone → create `.env.bot` → `./scripts/guided_start.sh`.
+  Optional Postgres adds the Postgres bootstrap/update/doctor step before bot
+  startup.
 - Host-run remains available as a secondary fallback/debug path.
-- DB bootstrap, DB update, and DB doctor are explicit repo-owned workflows; app
-  startup is validate-only.
 - Postgres integration suites use a harness-started test-only Docker container
   per pytest-xdist worker and never touch `BOT_DATABASE_URL`, dev, staging, or
   production databases.
 - The primary docs are now `README.md`, `ARCHITECTURE.md`,
   `PLAN-commercial-polish.md`, and `STATUS-commercial-polish.md`.
 - `transport idempotency` is shipped in Phase 9.
-- `content dedup` is intentionally unshipped and remains future work in
-  Phase 15.
+- `content dedup` is intentionally unshipped and remains future work in later
+  Phase 15 slices.
 
 ---
 
@@ -255,7 +253,10 @@ record. The authoritative roadmap ordering is the Phase 1-19 table above.
 
 ## Historical Execution Focus
 
-This section is preserved as a historical record of the Milestone E execution program that led into Phase 13. The current roadmap state is reflected above: **Phase 13 is complete and the next numbered phase is Phase 14**. Shared-runtime queue authority remains deferred to Phase 18.
+This section is preserved as a historical record of the Milestone E execution
+program that led into Phase 13. The current roadmap state is reflected above:
+**Phase 14 is sealed and Phase 15 is in progress**. Shared-runtime queue
+authority remains deferred to Phase 18.
 
 | Milestone | Status | Scope |
 |---|---|---|

@@ -234,3 +234,61 @@ def test_postgres_bot_override_path_writes_file(tmp_path):
     content = Path(path).read_text()
     assert "BOT_DATABASE_URL" in content
     assert "postgresql://bot:bot@postgres:5432/bot" in content
+
+
+# --- Build progress / artifact log contract (E2E build-progress follow-up) ---
+
+
+def test_docker_build_log_path_in_artifacts_dir(tmp_path):
+    """_docker_build_log_path returns artifacts_dir / docker-build.log."""
+    ctx = {"artifacts_dir": tmp_path}
+    path = m._docker_build_log_path(ctx)
+    assert path == tmp_path / m._DOCKER_BUILD_LOG_NAME
+    assert path.name == "docker-build.log"
+
+
+def test_build_bot_image_writes_log_file(tmp_path):
+    """_build_bot_image writes build log to artifact path even when build is mocked success."""
+    ctx = {"artifacts_dir": tmp_path, "bot_image": "test-e2e:tag"}
+    with patch.object(
+        m.subprocess,
+        "run",
+        return_value=subprocess.CompletedProcess(["docker", "build"], 0, "", ""),
+    ):
+        m._build_bot_image(ctx)
+    log_path = tmp_path / m._DOCKER_BUILD_LOG_NAME
+    assert log_path.exists()
+    content = log_path.read_text()
+    assert "Docker build" in content
+
+
+def test_build_bot_image_failure_message_includes_log_path(tmp_path):
+    """On build failure (non-zero exit), pytest.fail message must include the artifact log path."""
+    ctx = {"artifacts_dir": tmp_path, "bot_image": "test-e2e:tag"}
+    log_path = tmp_path / m._DOCKER_BUILD_LOG_NAME
+    with patch.object(
+        m.subprocess,
+        "run",
+        return_value=subprocess.CompletedProcess(["docker", "build"], 1, "", "build failed"),
+    ):
+        with pytest.raises(BaseException) as excinfo:
+            m._build_bot_image(ctx)
+    assert str(log_path) in str(excinfo.value), (
+        "Failure message must point to the log artifact so user can diagnose under pytest capture"
+    )
+
+
+def test_build_bot_image_timeout_message_includes_log_path(tmp_path):
+    """On build timeout, pytest.fail message must include timeout duration and artifact log path."""
+    ctx = {"artifacts_dir": tmp_path, "bot_image": "test-e2e:tag"}
+    log_path = tmp_path / m._DOCKER_BUILD_LOG_NAME
+    with patch.object(
+        m.subprocess,
+        "run",
+        side_effect=subprocess.TimeoutExpired("docker", m._DOCKER_BUILD_TIMEOUT),
+    ):
+        with pytest.raises(BaseException) as excinfo:
+            m._build_bot_image(ctx)
+    msg = str(excinfo.value)
+    assert str(log_path) in msg, "Timeout failure message must point to the log artifact"
+    assert "600" in msg or "timeout" in msg.lower(), "Timeout failure message must mention timeout"

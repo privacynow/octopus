@@ -13,11 +13,19 @@ The harness isolates each worker/run with:
 - no host Postgres port publication
 
 That lets these tests run safely alongside a local dev stack and across concurrent test runs.
+
+Bot startup is asserted by running the bot in the foreground (compose run --rm bot) with a
+single communicate(timeout=...), then checking stderr for startup or provider-auth messages.
+No log-polling loops.
+
+Docker build: output is written to artifacts_dir/docker-build.log; use pytest -s to see the
+pre-build notice; check the log file for build progress/details.
 """
 
 import os
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -87,8 +95,9 @@ def _compose(ctx: dict[str, object], *args: str, timeout: int = 120) -> subproce
     )
 
 
-def _compose_logs(ctx: dict[str, object], name: str, *services: str) -> tuple[Path, str]:
-    result = _compose(ctx, "logs", "--no-color", *services, timeout=120)
+def _compose_logs(ctx: dict[str, object], name: str, *services: str, timeout: int = 120) -> tuple[Path, str]:
+    """Fetch compose logs (for teardown and failure reporting)."""
+    result = _compose(ctx, "logs", "--no-color", *services, timeout=timeout)
     body = []
     if result.stdout:
         body.append(result.stdout)
@@ -259,17 +268,43 @@ def postgres_up(compose_ctx):
     return compose_ctx
 
 
+# Build can take several minutes on first run (no cache). Output is written to an artifact
+# log (docker-build.log); the pre-build notice is visible with pytest -s. Check the log for details.
+_DOCKER_BUILD_TIMEOUT = 600
+_DOCKER_BUILD_LOG_NAME = "docker-build.log"
+
+
+def _docker_build_log_path(ctx: dict[str, object]) -> Path:
+    """Path where Docker build stdout/stderr are written. Used for notice and failure message."""
+    return Path(ctx["artifacts_dir"]) / _DOCKER_BUILD_LOG_NAME
+
+
 def _build_bot_image(ctx: dict[str, object]) -> None:
-    """Build the bot image and tag it as ctx['bot_image']."""
-    r = subprocess.run(
-        ["docker", "build", "-f", "Dockerfile.bot", "--build-arg", "BOT_PROVIDER=claude",
-         "-t", str(ctx["bot_image"]), "."],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
-    assert r.returncode == 0, (r.stdout, r.stderr)
+    """Build the bot image and tag it as ctx['bot_image'].
+
+    Build output is written to artifacts_dir/docker-build.log. The pre-build notice is
+    visible with pytest -s; the log file is the source of build progress/details. On
+    failure (non-zero exit or timeout), pytest.fail points to the log path.
+    """
+    log_path = _docker_build_log_path(ctx)
+    print(f"Building bot image; output in {log_path}. Use pytest -s to see this notice.", file=sys.stderr)
+    sys.stderr.flush()
+    with open(log_path, "w") as log_file:
+        log_file.write("Docker build (Dockerfile.bot) log\n")
+        log_file.flush()
+        try:
+            r = subprocess.run(
+                ["docker", "build", "-f", "Dockerfile.bot", "--build-arg", "BOT_PROVIDER=claude",
+                 "-t", str(ctx["bot_image"]), "."],
+                cwd=REPO_ROOT,
+                timeout=_DOCKER_BUILD_TIMEOUT,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+            )
+        except subprocess.TimeoutExpired:
+            pytest.fail(f"docker build timed out after {_DOCKER_BUILD_TIMEOUT}s; see {log_path}")
+        if r.returncode != 0:
+            pytest.fail(f"docker build failed; see {log_path}")
 
 
 # Postgres-backed bot override: inject BOT_DATABASE_URL so the bot actually uses Postgres.
@@ -391,26 +426,43 @@ def test_compose_bot_image_has_provider(bot_image_built):
     assert "claude" in (r.stdout or "").lower() or "claude" in (r.stderr or "").lower()
 
 
+def _run_bot_foreground_and_capture(ctx: dict[str, object], timeout_seconds: int = 50) -> str:
+    """Run bot once in foreground (compose run --rm bot), capture stderr, return decoded text.
+
+    Single bounded wait — no log polling. On timeout we terminate and still capture what we got.
+    """
+    proc = subprocess.Popen(
+        ["docker", "compose", *ctx["compose_files"], "--profile", "bot", "run", "--rm", "bot"],
+        cwd=ctx.get("cwd", REPO_ROOT),
+        env=ctx["env"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        try:
+            out, err = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, err = proc.communicate(timeout=2)
+    return (err or b"").decode("utf-8", errors="replace")
+
+
 def test_compose_sqlite_local_runtime_primary(bot_image_built):
     """Primary E2E gate: Docker Local Runtime with SQLite (no BOT_DATABASE_URL, no Postgres).
 
-    Bot starts without Postgres; uses SQLite in BOT_DATA_DIR. Verifies either
-    successful startup (long-poll) or the expected provider-auth failure message.
+    Bot runs in foreground with one bounded wait. Verifies either successful startup
+    (long-poll) or the expected provider-auth failure message.
     """
-    r = _compose(bot_image_built, "--profile", "bot", "up", "-d", "bot")
-    assert r.returncode == 0, (r.stdout, r.stderr)
-    for _ in range(35):
-        _, logs = _compose_logs(bot_image_built, "bot-sqlite-startup", "bot")
-        if "Bot starting (long-poll)" in logs or "Bot starting (webhook)" in logs:
-            return
-        if "Provider not authenticated or unavailable." in logs and "Run ./scripts/provider_login.sh" in logs:
-            return
-        time.sleep(1)
-    _fail_with_logs(
-        bot_image_built,
-        "bot-sqlite-startup-timeout",
-        "Bot (SQLite Local Runtime) did not reach startup or emit provider-auth failure within 35s.",
-        "bot",
+    stderr = _run_bot_foreground_and_capture(bot_image_built, timeout_seconds=50)
+    if "Bot starting (long-poll)" in stderr or "Bot starting (webhook)" in stderr:
+        return
+    if "Provider not authenticated or unavailable." in stderr and "Run ./scripts/provider_login.sh" in stderr:
+        return
+    pytest.fail(
+        "Bot (SQLite Local Runtime) did not reach startup or emit provider-auth failure. Stderr:\n" + stderr
     )
 
 
@@ -418,27 +470,18 @@ def test_compose_bot_startup_with_postgres(compose_ctx_postgres_bot):
     """Bounded Postgres path: bot runs with BOT_DATABASE_URL so runtime uses Postgres backend.
 
     Override injects BOT_DATABASE_URL=postgresql://bot:bot@postgres:5432/bot into the bot
-    service. Bootstrap runs first; then bot starts and must reach startup or provider-auth
-    failure after Postgres doctor is satisfied.
+    service. Bootstrap runs first; then bot runs in foreground with one bounded wait.
     """
     ctx = compose_ctx_postgres_bot
     r = _compose(ctx, "--profile", "tools", "run", "--rm", "db-bootstrap")
     assert r.returncode == 0, (r.stdout, r.stderr)
-    r = _compose(ctx, "--profile", "bot", "up", "-d", "bot")
-    assert r.returncode == 0, (r.stdout, r.stderr)
-    for _ in range(35):
-        _, logs = _compose_logs(ctx, "bot-startup-postgres", "bot", "postgres")
-        if "Bot starting (long-poll)" in logs or "Bot starting (webhook)" in logs:
-            return
-        if "Provider not authenticated or unavailable." in logs and "Run ./scripts/provider_login.sh" in logs:
-            return
-        time.sleep(1)
-    _fail_with_logs(
-        ctx,
-        "bot-startup-postgres-timeout",
-        "Bot (Postgres backend) did not reach startup or provider-auth failure within 35s.",
-        "bot",
-        "postgres",
+    stderr = _run_bot_foreground_and_capture(ctx, timeout_seconds=50)
+    if "Bot starting (long-poll)" in stderr or "Bot starting (webhook)" in stderr:
+        return
+    if "Provider not authenticated or unavailable." in stderr and "Run ./scripts/provider_login.sh" in stderr:
+        return
+    pytest.fail(
+        "Bot (Postgres backend) did not reach startup or emit provider-auth failure. Stderr:\n" + stderr
     )
 
 

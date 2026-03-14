@@ -240,10 +240,9 @@ async def test_help_topics():
 
 async def test_help_and_start_include_settings():
     """/help and /start must expose /settings, /project, /session for discoverability (Bucket B)."""
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir)
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
+    with fresh_env(config_overrides={
+        "projects": (("testproj", "/tmp", ()),),
+    }) as (data_dir, cfg, prov):
         import app.telegram_handlers as th
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -274,6 +273,47 @@ async def test_help_and_start_include_settings():
         assert ("Run again" in help_text or "Skip" in help_text) and "status message" in help_text
         assert "Chat options:" in start_text
         assert ("Run again" in start_text or "Skip" in start_text) and "status message" in start_text
+
+
+async def test_help_and_start_no_model_when_profiles_empty():
+    """Phase 14: /help and /start must NOT advertise /model when no model profiles configured."""
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        help_msg = FakeMessage(chat=chat, text="/help")
+        await th.cmd_help(FakeUpdate(message=help_msg, user=user, chat=chat), FakeContext(args=[]))
+        help_text = help_msg.replies[0]["text"]
+        assert "/model" not in help_text, (
+            "/help must not advertise /model when no model profiles configured"
+        )
+        start_msg = FakeMessage(chat=chat, text="/start")
+        await th.cmd_start(FakeUpdate(message=start_msg, user=user, chat=chat), FakeContext(args=[]))
+        start_text = start_msg.replies[0]["text"]
+        assert "/model" not in start_text, (
+            "/start must not advertise /model when no model profiles configured"
+        )
+
+
+async def test_help_and_start_no_project_when_projects_empty():
+    """Phase 14: /help and /start must NOT advertise /project when no projects configured."""
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        help_msg = FakeMessage(chat=chat, text="/help")
+        await th.cmd_help(FakeUpdate(message=help_msg, user=user, chat=chat), FakeContext(args=[]))
+        help_text = help_msg.replies[0]["text"]
+        assert "/settings" in help_text
+        assert "/project" not in help_text, (
+            "/help must not advertise /project when no projects configured"
+        )
+        start_msg = FakeMessage(chat=chat, text="/start")
+        await th.cmd_start(FakeUpdate(message=start_msg, user=user, chat=chat), FakeContext(args=[]))
+        start_text = start_msg.replies[0]["text"]
+        assert "/project" not in start_text, (
+            "/start must not advertise /project when no projects configured"
+        )
 
 
 async def test_help_and_start_public_user_excludes_project_and_policy():
@@ -326,10 +366,11 @@ async def test_help_and_start_non_admin_excludes_admin_sessions():
 
 async def test_help_and_start_admin_sees_admin_sessions_and_trusted_commands():
     """Bucket B follow-up: admin users see /admin sessions and full trusted command set."""
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir, admin_user_ids=frozenset({42}), admin_usernames=frozenset())
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
+    with fresh_env(config_overrides={
+        "admin_user_ids": frozenset({42}),
+        "admin_usernames": frozenset(),
+        "projects": (("testproj", "/tmp", ()),),
+    }) as (data_dir, cfg, prov):
         import app.telegram_handlers as th
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -1361,6 +1402,34 @@ async def test_project_no_projects_shows_no_projects_configured():
         assert project_list_discover_hint() not in reply
 
 
+async def test_project_use_no_projects_shows_no_projects_configured():
+    """Phase 14: /project use <name> with no projects returns no-projects message, not unknown-project."""
+    import app.telegram_handlers as th
+    from app.user_messages import no_projects_configured
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_project, chat, user, "/project", args=["use", "anything"])
+        reply = last_reply(msg)
+        assert no_projects_configured() in reply, (
+            "/project use with no projects must say no-projects-configured, not unknown-project"
+        )
+
+
+async def test_project_clear_no_projects_shows_no_projects_configured():
+    """Phase 14: /project clear with no projects returns no-projects message."""
+    import app.telegram_handlers as th
+    from app.user_messages import no_projects_configured
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_project, chat, user, "/project", args=["clear"])
+        reply = last_reply(msg)
+        assert no_projects_configured() in reply, (
+            "/project clear with no projects must say no-projects-configured"
+        )
+
+
 async def test_settings_callback_project_use():
     """setting_project:<name> callback switches project and resets provider state."""
     import app.telegram_handlers as th
@@ -1398,6 +1467,57 @@ async def test_settings_callback_project_clear():
             assert session.get("project_id", "") == ""
             edit = cb_msg.replies[-1].get("edit_text", "")
             assert "Project cleared" in edit
+
+
+async def test_settings_callback_model_no_profiles_configured():
+    """Phase 14: setting_model:* callback with no model profiles returns no-profiles message."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    from app.user_messages import trust_no_model_profiles
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_model:anything")
+        edit = cb_msg.replies[-1].get("edit_text", "")
+        assert trust_no_model_profiles() in edit, (
+            "Callback setting_model:* with no profiles must say no-model-profiles"
+        )
+
+
+async def test_settings_callback_project_no_projects_configured():
+    """Phase 14: setting_project:* callback with no projects returns no-projects message, not mutation."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    from app.user_messages import no_projects_configured
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_project:anything")
+        edit = cb_msg.replies[-1].get("edit_text", "")
+        assert no_projects_configured() in edit, (
+            "Callback setting_project:* with no projects must say no-projects-configured"
+        )
+
+
+async def test_settings_callback_project_clear_no_projects_no_mutation():
+    """Phase 14: setting_project:clear with no projects must not clear persisted project_id."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    from app.storage import default_session, save_session
+    from app.user_messages import no_projects_configured
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session["project_id"] = "stale_project"
+        save_session(data_dir, 1, session)
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_project:clear")
+        edit = cb_msg.replies[-1].get("edit_text", "")
+        assert no_projects_configured() in edit
+        reloaded = load_session_disk(data_dir, 1, prov)
+        assert reloaded.get("project_id") == "stale_project", (
+            "Callback must not mutate session when projects are disabled"
+        )
 
 
 async def test_public_settings_shows_managed_and_no_project_policy_buttons():
@@ -1593,6 +1713,7 @@ async def test_session_includes_control_surface_hint_trusted():
     with fresh_env(config_overrides={
         "model_profiles": {"fast": "m1", "balanced": "m2"},
         "default_model_profile": "balanced",
+        "projects": (("testproj", "/tmp", ()),),
     }) as (data_dir, cfg, prov):
         chat = FakeChat(1)
         user = FakeUser(42)
@@ -1601,6 +1722,38 @@ async def test_session_includes_control_surface_hint_trusted():
         assert session_control_surface_hint_trusted() in reply
         assert "change chat settings" in reply
         assert "/project" in reply
+
+
+async def test_session_hint_omits_model_when_no_profiles():
+    """Phase 14: /session hint must not mention /model when no model profiles configured."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+        reply = last_reply(msg)
+        assert "change chat settings" in reply
+        assert "/model" not in reply, (
+            "/session hint must not advertise /model when no model profiles configured"
+        )
+
+
+async def test_session_control_surface_hint_trusted_no_projects_omits_project():
+    """Phase 14: /session for trusted user with no projects omits /project from hint."""
+    import app.telegram_handlers as th
+    from app.user_messages import session_control_surface_hint_public
+    with fresh_env(config_overrides={
+        "model_profiles": {"fast": "m1"},
+        "default_model_profile": "fast",
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+        reply = last_reply(msg)
+        assert session_control_surface_hint_public() in reply, (
+            "Trusted user with no projects must get public-style hint (no /project)"
+        )
+        assert "/project" not in reply
 
 
 async def test_session_control_surface_hint_public_no_project():

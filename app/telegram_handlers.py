@@ -1329,15 +1329,16 @@ def _help_command_lines(user) -> list[str]:
         "/cancel — cancel credential setup or a pending request",
         "/clear_credentials — remove your stored credentials",
         "/send &lt;path&gt; — retrieve a file from the server",
-        "/model — switch model profile (fast/balanced/best)",
         "/compact on|off — toggle short/full answers",
     ]
+    if _cfg().model_profiles:
+        lines.append("/model — switch model profile (fast/balanced/best)")
     if not is_public_user(user):
         lines.append("/policy inspect|edit — set file access policy")
     lines.extend([
         "/settings — view and change chat settings",
     ])
-    if not is_public_user(user):
+    if not is_public_user(user) and _cfg().projects:
         lines.append("/project — show or change project binding")
     lines.extend([
         "/session — show current session info",
@@ -1362,8 +1363,10 @@ def _build_main_help(user) -> str:
     ).format(instance=instance, provider=provider)
     command_block = "\n".join(_help_command_lines(user)) + "\n\n"
     # Intentional set of controls (trust-aware: no /project for public).
-    control_parts = ["/settings", "/session", "/model"]
-    if not is_public_user(user):
+    control_parts = ["/settings", "/session"]
+    if cfg.model_profiles:
+        control_parts.append("/model")
+    if not is_public_user(user) and cfg.projects:
         control_parts.append("/project")
     controls_line = "Chat options: " + " · ".join(control_parts) + "."
     recovery_line = "Interrupted? Use Run again or Skip on the status message."
@@ -1544,7 +1547,20 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     if trust == "public":
         body += "\n\n" + _msg.trust_settings_managed_public()
-    body += "\n\n" + (_msg.session_control_surface_hint_public() if trust == "public" else _msg.session_control_surface_hint_trusted())
+    cfg = _cfg()
+    session_cmds = ["/settings"]
+    if trust != "public" and cfg.projects:
+        session_cmds.append("/project")
+    if cfg.model_profiles:
+        session_cmds.append("/model")
+    if session_cmds:
+        if len(session_cmds) == 1:
+            cmd_str = session_cmds[0]
+        elif len(session_cmds) == 2:
+            cmd_str = session_cmds[0] + " or " + session_cmds[1]
+        else:
+            cmd_str = ", ".join(session_cmds[:-1]) + ", or " + session_cmds[-1]
+        body += "\n\n" + "Use " + cmd_str + " to change chat settings."
     await update.effective_message.reply_text(body, parse_mode=ParseMode.HTML)
 
 
@@ -2591,6 +2607,9 @@ async def handle_settings_callback(event, query) -> None:
 
         if setting == "model":
             cfg = _cfg()
+            if not cfg.model_profiles:
+                await query.edit_message_text(_msg.trust_no_model_profiles())
+                return
             trust = _trust_tier(event.user)
             _ok, text = _apply_model_selection(chat_id, session, value, cfg, trust)
             await query.edit_message_reply_markup(reply_markup=None)
@@ -2629,6 +2648,9 @@ async def handle_settings_callback(event, query) -> None:
         elif setting == "project":
             if is_public_user(event.user):
                 await query.edit_message_text(_msg.trust_project_public())
+                return
+            if not _cfg().projects:
+                await query.edit_message_text(_msg.no_projects_configured())
                 return
             ok, reply_text = _apply_project_change(chat_id, session, value)
             await query.edit_message_reply_markup(reply_markup=None)
@@ -2720,10 +2742,12 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     msg = update.effective_message
     arg = event.args[0].lower() if event.args else ""
 
+    # No projects configured: early exit for all subcommands
+    if not cfg.projects:
+        await msg.reply_text(_msg.no_projects_configured())
+        return
+
     if arg == "list":
-        if not cfg.projects:
-            await msg.reply_text(_msg.no_projects_configured())
-            return
         session = _load(event.chat_id)
         current = session.project_id
         lines = ["<b>Available projects:</b>"]
@@ -2748,10 +2772,6 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         await msg.reply_text(reply_text, parse_mode=ParseMode.HTML)
         return
 
-    # No projects configured: do not point user at /project list (dead end)
-    if not cfg.projects:
-        await msg.reply_text(_msg.no_projects_configured())
-        return
 
     # Default: show current project with discoverable inline choices
     session = _load(event.chat_id)
@@ -2763,19 +2783,13 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"Working dir: <code>{html.escape(working_dir)}</code>",
     ]
     buttons = _settings_project_buttons(cfg, session)
-    if buttons:
-        lines.append(_msg.project_use_buttons_or_list_hint())
-    else:
-        lines.append(_msg.project_list_discover_hint())
+    lines.append(_msg.project_use_buttons_or_list_hint())
     text = "\n".join(lines)
-    if buttons:
-        await msg.reply_text(
-            text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(buttons),
-        )
-    else:
-        await msg.reply_text(text, parse_mode=ParseMode.HTML)
+    await msg.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
 
 
 @_command_handler

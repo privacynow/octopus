@@ -1297,20 +1297,16 @@ async def test_terminal_status_says_completed():
         assert not any("Done." in e for e in all_edits), f"'Done.' should not appear: {all_edits}"
 
 
-async def test_claude_thinking_capitalized():
-    """Claude provider uses 'Thinking...' (capitalized, ascii dots) not 'thinking…'."""
+async def test_claude_tool_use_emits_semantic_event():
+    """Claude tool_use emits ToolStart render, not a raw ContentDelta fallback."""
     from app.providers.claude import ClaudeProvider
 
     provider = ClaudeProvider(_make_config())
-    # build_display is a closure inside _consume_stream — test the output pattern
-    # by checking the code path: when no text accumulated, display shows Thinking...
-    # We verify via a unit-level check on the progress HTML the provider would emit.
     import json
     import sys
     import asyncio
 
-    # Emit a tool_use block start — triggers build_display() with no accumulated text,
-    # which should show "Thinking..." as the fallback.
+    # Emit a tool_use block start — should produce a ToolStart progress event.
     events = [
         json.dumps({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "tool_use", "name": "Read"}}}),
     ]
@@ -1324,11 +1320,14 @@ async def test_claude_thinking_capitalized():
     text, _, _ = await provider._consume_stream(proc, progress)
     await proc.wait()
 
-    # With no text_delta events, the display should show "Thinking..." or "Thinking…"
-    thinking_updates = [u for u in progress.updates if "Thinking" in u and ("..." in u or "\u2026" in u)]
-    assert len(thinking_updates) >= 1, f"Expected 'Thinking...' in updates: {progress.updates}"
-    # Must NOT use lowercase "thinking" with ellipsis character
-    assert not any("thinking\u2026" in u for u in progress.updates)
+    # Should render as "Using tool: Read", not a "Thinking..." fallback
+    assert len(progress.updates) >= 1, f"Expected ToolStart update: {progress.updates}"
+    assert "Using tool" in progress.updates[0], f"Expected ToolStart render: {progress.updates[0]}"
+    assert "Read" in progress.updates[0]
+    # Must not leak provider internals
+    for u in progress.updates:
+        lower = u.lower()
+        assert "claude" not in lower, f"Leaked provider name: {u}"
 
 
 async def test_codex_thinking_capitalized():

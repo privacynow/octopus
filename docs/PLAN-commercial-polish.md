@@ -2314,18 +2314,398 @@ Scope:
 - Other backend-neutral product behaviors that do not require Shared Runtime
   queue authority
 
+Required workstreams and sequencing:
+
+1. **Slice 1 — Per-project defaults** is the first shipped workstream for
+   this phase and remains the behavioral reference for how Phase 15 should be
+   executed: extend existing config, execution-context, handler, and test
+   owners instead of building a parallel subsystem.
+2. **Slice 2 — Live cancellation of running work** is the next required
+   workstream. It adds user-visible cancellation of active provider execution
+   and approval preflight without changing transport states, queue ownership,
+   or durable workflow families.
+3. **Slice 3 — Claude progress usability** follows Slice 2. It improves Claude
+   progress structure by reusing the existing shared progress event family and
+   renderer rather than adding a Claude-only rendering path.
+4. **Later Slice — Content dedup** remains demand-gated future work and must
+   stay behind the shipped cancel/progress work. Do not let it overtake Slice 2
+   or Slice 3.
+
 Implementation rules:
 
-- Do not create a second scoping or dedup system.
+- Reuse existing data flows first. Before introducing a new helper, type, or
+  test family, inspect the current owners and extend them if they are already
+  the authoritative seam.
+- This phase is explicitly about enhancing the current architecture, not
+  building parallel capability systems. That means:
+  - reuse current handler and callback ingress
+  - reuse current provider protocol and result types
+  - reuse the existing work queue and `_chat_lock` ownership model
+  - reuse the existing shared progress event family and renderer
+  - enhance existing tests before creating a shadow suite
+- Do not force weak reuse when the concept genuinely needs a new local helper
+  or type. New code is allowed when it extends the existing owner cleanly.
+  What is forbidden is bypassing the current owners with a second mechanism.
+- Do not create a second scoping, dedup, progress, or cancellation system.
 - Keep behavior extensions layered above the existing transport and
   execution-context contracts.
+- Do not move progress or cancel orchestration into `request_flow.py`. That
+  module remains pure business logic with no Telegram transport, progress, or
+  subprocess ownership.
+- Do not add durable state, transport states, or a new FSM for live
+  cancellation in this phase. Cancellation of a running subprocess is a live
+  execution control problem, not a new durable workflow family.
+- Do not change the `ProgressSink` protocol to carry cancellation semantics.
+  Keep rendering and control separate even when they are used together in the
+  same execution path.
+- Do not invent Claude progress semantics that the raw stream does not prove.
+  If the stream does not clearly prove a `ToolFinish` or `CommandFinish`, do
+  not synthesize one.
 
-Tests required:
+#### Slice 2 — Live Cancellation Of Running Work
+
+Problem statement:
+
+- `/cancel` currently clears pending approval/retry or credential setup only.
+- When a provider subprocess is actively running, `/cancel` cannot interrupt it
+  because the current command path acquires `_chat_lock` and waits behind the
+  very execution it is trying to stop.
+
+Contracts in this slice:
+
+1. **Live cancel ingress contract**
+- `/cancel` during a live provider run must request cancellation immediately
+  rather than queueing behind `_chat_lock`.
+- `/cancel` when there is no live run must preserve the current pending/setup
+  and no-op behavior exactly.
+
+2. **Provider cancel outcome contract**
+- Provider execution gains a typed, user-initiated cancel outcome distinct from:
+  - timeout
+  - typed resume failure
+  - restart/shutdown interruption that remains `LeaveClaimed`
+- User-requested cancel must not route through restart recovery.
+
+Source of truth:
+
+- `_chat_lock` in `app/telegram_handlers.py` remains the owner of per-chat
+  serialization and work-item completion.
+- `work_queue` remains the owner of durable work-item lifecycle.
+- `execute_request()`, `request_approval()`, and replay execution in
+  `handle_recovery_callback()` remain the owners of terminal user-visible live
+  execution outcome.
+- `RunResult` in `app/providers/base.py` remains the provider outcome type.
+- Provider subprocess lifecycle remains owned inside `app/providers/claude.py`
+  and `app/providers/codex.py`.
+
+Required implementation shape:
+
+- Add `cancelled: bool = False` to `RunResult`.
+- Extend the provider `run()` and `run_preflight()` contract to accept a
+  separate cancel signal or execution-control object. Do **not** attach
+  cancellation semantics to the `ProgressSink` protocol.
+- In `app/telegram_handlers.py`, add a small private live-execution registry
+  keyed by `chat_id`. Use it only for process-local cancellation signaling and
+  cleanup. It must not become a second durable state model.
+- Register the live execution record before the provider call and clear it in a
+  `finally` block on every exit path.
+- `/cancel` must use a fast path **outside** `_chat_lock`:
+  - if a live execution exists, set the cancel signal immediately and return a
+    user-facing cancellation-requested message
+  - if no live execution exists, fall through to the current locked path for
+    credential setup and pending approval/retry cancellation
+- `execute_request()`, `request_approval()`, and replay execution must treat
+  `result.cancelled` as a normal terminal handled outcome:
+  - update the status message to cancelled
+  - do not send the final result text
+  - do not raise `LeaveClaimed`
+  - let the work item complete normally
+- Provider state must not be destructively reset on user cancel. Only typed
+  resume failure continues to justify provider-state reset.
+- Provider cancellation must not depend on “the next stdout line.” The provider
+  implementation must race the cancel signal against blocked reads and process
+  exit so a silent or stalled subprocess can still be cancelled promptly.
+
+Affected code paths:
+
+- `app/providers/base.py`
+- `app/providers/claude.py`
+- `app/providers/codex.py`
+- `app/telegram_handlers.py`
+- `app/user_messages.py`
+
+Failure-path rules:
+
+- Double-cancel is idempotent.
+- Cancel after process exit is a safe no-op.
+- Restart during cancellation drops the in-memory signal and falls back to the
+  existing `LeaveClaimed` recovery contract.
+- Unexpected cleanup failure is an ordinary execution failure, not a successful
+  cancel.
+
+Required invariants:
+
+- `/cancel` during live execution does not wait behind `_chat_lock`
+- `/cancel` during pending approval/retry still behaves exactly as before
+- `/cancel` with no live execution and no pending/setup still shows the current
+  nothing-to-cancel behavior
+- cancelled execution does not leave the work item in `claimed`
+- cancelled execution does not send the final assistant reply
+- cancelled execution does not corrupt provider state; the next request works
+  normally
+- live execution registry entries are always cleaned up
+
+Tests required for Slice 2:
+
+- Contract test: cancel signal set during Claude execution returns
+  `RunResult.cancelled=True` within bounded time
+- Contract test: cancel signal set during Codex execution returns
+  `RunResult.cancelled=True` within bounded time
+- Handler integration: `/cancel` during live execution updates the status
+  message to cancelled and final result text is not sent
+- Handler integration: `/cancel` during approval preflight has the same
+  semantics
+- Handler integration: `/cancel` with no live execution preserves the current
+  no-op behavior
+- Adjacent regression: cancelled execution does not corrupt provider state; the
+  next request succeeds normally
+- Cleanup regression: the live cancel registry entry is removed on both
+  cancellation and ordinary completion
+
+#### Slice 3 — Claude Progress Usability
+
+Problem statement:
+
+- Codex already emits structured semantic progress through the shared progress
+  event family.
+- Claude currently folds most tool activity into `ContentDelta` plus
+  `tool_activity`, which makes long runs feel like a replacing wall of text
+  instead of a tool-by-tool progression.
+
+Contracts in this slice:
+
+1. **Claude event mapping contract**
+- Claude stream events must map to the existing shared `ProgressEvent` family
+  when the raw stream proves those semantics.
+- This slice reuses the current renderer and event types; it does not create a
+  Claude-only progress layer.
+
+2. **Claude text-delivery invariants**
+- richer tool events must not break visible text accumulation, `content_started`
+  semantics, final result text, or rate limiting
+
+Source of truth:
+
+- `app/providers/claude.py` `_consume_stream()` remains the only Claude raw
+  event mapping owner.
+- `app/progress.py` remains the shared event family and renderer.
+- `TelegramProgress` in `app/telegram_handlers.py` remains the status-message
+  editor and rate limiter; it must not gain Claude-specific rendering logic.
+
+Required implementation shape:
+
+- Reuse the existing `ProgressEvent` types already used by Codex:
+  - `ToolStart`
+  - `ToolFinish`
+  - `CommandStart`
+  - `CommandFinish`
+  - `ContentDelta`
+- Promote Claude `tool_use` boundaries into separate semantic events when the
+  raw stream proves them.
+- Keep `ContentDelta` for actual visible text output. Text accumulation remains
+  authoritative for the live reply preview.
+- Stop using `tool_activity` as the primary structure once a tool is promoted
+  to its own semantic event.
+- Emit `ToolFinish` or `CommandFinish` only when the raw Claude stream clearly
+  proves an end boundary or command outcome. Do not fabricate tool finishes or
+  exit codes.
+- Keep `content_started` tied to the first text delta only, not tool events.
+- Keep final result text byte-for-byte equivalent to today. Progress changes are
+  display-only.
+- Keep the renderer unchanged in this slice. If existing events are sufficient,
+  no renderer or `ProgressSink` change is allowed.
+
+Affected code paths:
+
+- `app/providers/claude.py`
+- `tests/test_progress.py`
+- `tests/fixtures/progress/claude_trace.ndjson`
+
+Required invariants:
+
+- text content still accumulates and displays correctly
+- tool events do not swallow or delay text delivery
+- `content_started` is still set on first text delta only
+- final result text is unchanged
+- existing rate limiting behavior remains intact unless a semantic boundary
+  event explicitly needs `force=True`
+- heartbeat still does not overwrite recent provider progress
+
+Tests required for Slice 3:
+
+- Contract test: Claude stream with proven tool-use boundaries emits the
+  expected `ToolStart` and, where justified by raw traces, `ToolFinish`
+- Contract test: text deltas still emit `ContentDelta` without loss or delay
+- Regression test: `content_started` still flips on the first text delta only
+- Fixture test: updated Claude trace fixture produces the expected event
+  sequence
+- Adjacent regression: text-only Claude responses render identically to the
+  current behavior
+- Adjacent regression: existing Codex progress tests remain green unchanged
+
+Non-deliverables for Slice 2 and Slice 3:
+
+- no new transport states
+- no new FSM or new workflow library
+- no new durable state for live cancellation
+- no new progress event family if the current one is sufficient
+- no Claude-specific Telegram rendering path
+- no parallel provider-progress system
+- no Codex provider behavior changes unless a shared invariant is found broken
+
+#### Slice 4 — Cancel Concurrency Verification
+
+Problem statement:
+
+- Slices 2 and 3 shipped the cancel mechanism and progress improvements, but
+  the test suite proves contracts in isolation only.  No test exercises the
+  actual cooperative concurrency that makes `/cancel` work: one coroutine
+  blocked in `execute_request` while a second coroutine runs `cmd_cancel` on
+  the same event loop.
+- The readline/cancel race inside `_consume_stream` and `consume_stdout` is
+  tested with pre-set events and fake processes whose `readline()` returns
+  immediately.  Neither proves the race resolves correctly when `readline()`
+  is actually blocked on a real file descriptor.
+- The two-stage UX ("Cancellation requested." then "Cancelled." on the
+  status message) is asserted in separate tests but never proven to happen
+  in the correct order from a single concurrent execution.
+
+This is a test-only slice.  No production code changes.
+
+Contracts being verified (not changed):
+
+1. **readline/cancel race contract** — `asyncio.wait` with
+   `FIRST_COMPLETED` resolves promptly when the cancel event fires while
+   `readline()` is blocked on a real subprocess pipe.
+2. **Lock-free cancel ingress contract** — `cmd_cancel` completes and
+   delivers the user-facing ack while `_chat_lock` is held by
+   `execute_request`.
+3. **Two-stage UX ordering contract** — "Cancellation requested." is
+   delivered before "Cancelled." appears on the status message, from a
+   single concurrent execution.
+
+Source of truth:
+
+- `_LIVE_CANCEL` in `app/telegram_handlers.py` is the in-memory cancel
+  registry.
+- `_chat_lock` in `app/telegram_handlers.py` is the per-chat serialization
+  owner.
+- `_consume_stream` in `app/providers/claude.py` and `consume_stdout` in
+  `app/providers/codex.py` own the readline/cancel race.
+- `cmd_cancel` in `app/telegram_handlers.py` owns the cancel fast path.
+
+Required tests:
+
+1. **Readline/cancel race with real subprocess.**
+   - Spawn a real subprocess that blocks on stdout (e.g.
+     `python3 -c "import time; time.sleep(60)"`).
+   - Pass a cancel event to `_consume_stream`.
+   - Schedule `event.set()` after a short delay (e.g. 0.1s).
+   - Assert `_consume_stream` returns within a bounded time (e.g. 2s).
+   - Assert the subprocess was killed (`proc.returncode is not None`).
+   - Assert no spurious text was accumulated beyond what was emitted
+     before cancel.
+   - Run the same test shape for Codex `_run_cmd` with a blocking
+     subprocess and injected cancel event.
+
+2. **Lock-free cancel dispatch.**
+   - Use a `FakeProvider` whose `run()` awaits a gate event before
+     returning, so `execute_request` holds `_chat_lock` for a controlled
+     duration.
+   - Use `asyncio.gather` to run `handle_message` (which acquires the
+     lock and blocks in `run()`) and a helper that sends `/cancel` then
+     sets the gate.
+   - Assert `cmd_cancel` delivered "Cancellation requested." before
+     `handle_message` returned.
+   - Assert the cancel event was set and `run()` saw it.
+   - Assert `handle_message` completed with the cancelled outcome (status
+     message shows "Cancelled.", no final text sent).
+   - Use `_StickyReplyMessage` for the status-message oracle.
+
+3. **Two-stage UX ordering.**
+   - From the same test as (2), collect all user-visible messages in
+     delivery order.
+   - Assert "Cancellation requested." appears strictly before "Cancelled."
+     in the sequence.
+   - Assert no other cancel-related text appears between them.
+
+4. **Cancel mid-stream (partial output).**
+   - Spawn a subprocess that emits a few lines of JSON then blocks.
+   - Set cancel after partial output has been consumed.
+   - Assert accumulated text contains the partial output.
+   - Assert `RunResult.cancelled` is True.
+   - Assert no text corruption (partial line, truncated JSON).
+
+5. **Adjacent: cancel does not interfere with non-cancel paths.**
+   - After the concurrency cancel test completes, send a new message
+     to the same chat.
+   - Assert the new request executes normally (not cancelled).
+   - Assert `_LIVE_CANCEL` is clean for that chat.
+
+Failure-path coverage:
+
+- Cancel event set after subprocess has already exited naturally: the
+  readline returns `b""` first, `cancel.is_set()` check in the cancel
+  path is a safe no-op.  Test (1) covers this by also testing cancel
+  after a fast-exiting subprocess.
+- Double `/cancel` during a single execution: the event is already set,
+  `cmd_cancel` replies "Cancellation requested." again idempotently.
+  Existing test covers this; concurrency test (2) can optionally send
+  two `/cancel` commands.
+
+Implementation rules:
+
+- All tests use real `asyncio.Event` and `asyncio.gather` — no mocking
+  of the event loop or wait primitives.
+- Subprocess tests use `sys.executable` with inline scripts — no
+  external binary dependencies.
+- All concurrency tests have explicit timeouts via `asyncio.wait_for`
+  so a broken race fails fast (2–5s) rather than hanging.
+- Tests go in `tests/test_cancel.py` as a new `TestCancelConcurrency`
+  class.
+- No production code changes in this slice.  If a test reveals a bug,
+  the fix goes in a subsequent slice with its own preamble.
+
+Non-deliverables:
+
+- No cross-process or durable cancel testing (cancel is in-memory by
+  design; restart recovery is already tested elsewhere).
+- No worker-path cancel test (worker calls `execute_request` the same
+  way; the cancel event is registered by `execute_request` itself).
+- No Telegram network I/O or real PTB dispatcher in these tests.
+
+Tests required for Phase 15 generally:
 
 - Real handler/request-flow tests
 - Contract tests for user-visible behavior and opt-in policy
 - Regression tests for public/trust restrictions and execution-context
   invalidation
+- Slice 2 provider and handler cancel tests
+- Slice 3 Claude trace and progress contract tests
+
+Done when:
+
+- Slice 2 ships live cancellation of active provider execution and approval
+  preflight without introducing new durable state, queue states, or a parallel
+  cancellation system.
+- Slice 3 ships richer Claude progress by reusing the existing shared progress
+  event family and renderer without degrading text delivery or Codex behavior.
+- Slice 4 proves the cancel mechanism works under real cooperative concurrency:
+  readline/cancel race with real subprocesses, lock-free dispatch, two-stage
+  UX ordering, and partial-output cancel.  Test-only slice, no production
+  code changes.
+- New implementation work for Phase 15 continues to extend the current owners
+  instead of building shadow abstractions around them.
 
 ### Phase 16 - Registry Trust And Governance
 

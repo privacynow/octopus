@@ -94,6 +94,10 @@ log = logging.getLogger(__name__)
 
 CHAT_LOCKS: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
+# Live execution registry: maps chat_id -> cancel Event for running provider calls.
+# Used by /cancel to signal cancellation without acquiring _chat_lock.
+_LIVE_CANCEL: dict[int, asyncio.Event] = {}
+
 
 def _run_result_was_interrupted(returncode: int) -> bool:
     """Return True for subprocess exits caused by a signal.
@@ -1072,12 +1076,23 @@ async def execute_request(
     typing_task = asyncio.create_task(keep_typing(message.chat))
     heartbeat_task = asyncio.create_task(_heartbeat(progress, content_started))
 
+    cancel_event = asyncio.Event()
+    _LIVE_CANCEL[chat_id] = cancel_event
     try:
-        result = await prov.run(session.provider_state, prompt, image_paths, progress, context=context)
+        result = await prov.run(session.provider_state, prompt, image_paths, progress, context=context, cancel=cancel_event)
     finally:
+        _LIVE_CANCEL.pop(chat_id, None)
         heartbeat_task.cancel()
         typing_task.cancel()
         await asyncio.gather(heartbeat_task, typing_task, return_exceptions=True)
+
+    if result.cancelled:
+        # Persist provider_state_updates so thread/session continuity is not lost.
+        session = _load(chat_id)
+        session.provider_state.update(result.provider_state_updates)
+        _save(chat_id, session)
+        await progress.update(_msg.cancel_live_completed(), force=True)
+        return
 
     if _run_result_was_interrupted(result.returncode):
         log.info("%s interrupted for chat %d (rc=%s); leaving work item claimed",
@@ -1222,12 +1237,19 @@ async def request_approval(
     heartbeat_task = asyncio.create_task(_heartbeat(progress, content_started))
 
     preflight_prompt = build_preflight_prompt(prompt, prov.name)
+    cancel_event = asyncio.Event()
+    _LIVE_CANCEL[chat_id] = cancel_event
     try:
-        plan_result = await prov.run_preflight(preflight_prompt, image_paths, progress, context=preflight_context)
+        plan_result = await prov.run_preflight(preflight_prompt, image_paths, progress, context=preflight_context, cancel=cancel_event)
     finally:
+        _LIVE_CANCEL.pop(chat_id, None)
         heartbeat_task.cancel()
         typing_task.cancel()
         await asyncio.gather(heartbeat_task, typing_task, return_exceptions=True)
+
+    if plan_result.cancelled:
+        await progress.update(_msg.cancel_live_completed(), force=True)
+        return
 
     if _run_result_was_interrupted(plan_result.returncode):
         log.info("Preflight interrupted for chat %d (rc=%s); leaving work item claimed",
@@ -1345,7 +1367,7 @@ def _help_command_lines(user) -> list[str]:
         "/role &lt;text&gt; — set the AI's persona (e.g. <code>/role Python expert</code>)",
         "/approval on|off — show a plan before executing, or run immediately",
         "/approve / /reject — act on a pending plan",
-        "/cancel — cancel credential setup or a pending request",
+        "/cancel — cancel a running task, credential setup, or a pending request",
         "/clear_credentials — remove your stored credentials",
         "/send &lt;path&gt; — retrieve a file from the server",
         "/compact on|off — toggle short/full answers",
@@ -1853,6 +1875,13 @@ async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     chat_id = event.chat_id
     user_id = event.user.id
+
+    # Fast path: cancel live provider execution without waiting for _chat_lock.
+    cancel_event = _LIVE_CANCEL.get(chat_id)
+    if cancel_event is not None:
+        cancel_event.set()
+        await update.effective_message.reply_text(_msg.cancel_live_requested())
+        return
 
     async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = _load(chat_id)

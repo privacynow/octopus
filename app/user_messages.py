@@ -503,3 +503,14 @@ def credential_setup_another_user_in_progress() -> str:
 def credential_clear_cancelled() -> str:
     """When user cancels the clear-credentials confirmation (callback)."""
     return "Credential clear cancelled."
+
+def cancel_live_requested() -> str:
+    """When user cancels a live running execution."""
+    return "Cancellation requested."
+
+
+def cancel_live_completed() -> str:
+    """Status message update when live execution is cancelled."""
+    return "Cancelled."
+
+

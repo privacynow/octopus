@@ -12,7 +12,7 @@ from typing import Any
 from app.config import BotConfig
 from app.formatting import trim_text
 from app.progress import (
-    CommandFinish, ContentDelta, Denial, ToolStart,
+    CommandFinish, ContentDelta, Denial, ToolFinish, ToolStart,
     Thinking, render as render_progress,
 )
 from app.providers.base import PreflightContext, ProgressSink, RunContext, RunResult
@@ -137,10 +137,16 @@ class ClaudeProvider:
         self,
         proc: asyncio.subprocess.Process,
         progress: ProgressSink,
+        cancel: asyncio.Event | None = None,
     ) -> tuple[str, dict, list[str]]:
-        """Read stdout, update progress, return (accumulated_text, result_data, tool_activity)."""
+        """Read stdout, update progress, return (accumulated_text, result_data, tool_activity).
+
+        If *cancel* is set, kills the subprocess and returns immediately
+        with whatever text has been accumulated so far.
+        """
         accumulated_text = ""
         tool_activity: list[str] = []
+        current_tool: str = ""
         result_data: dict = {}
 
         async def _emit(evt, *, force: bool = False) -> None:
@@ -149,7 +155,22 @@ class ClaudeProvider:
                 await progress.update(rendered, force=force)
 
         while True:
-            line = await proc.stdout.readline()
+            read_coro = proc.stdout.readline()
+            if cancel is not None:
+                cancel_fut = asyncio.ensure_future(cancel.wait())
+                done, pending = await asyncio.wait(
+                    [asyncio.ensure_future(read_coro), cancel_fut],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for fut in pending:
+                    fut.cancel()
+                if cancel.is_set():
+                    proc.kill()
+                    await proc.wait()
+                    return accumulated_text, {}, tool_activity
+                line = done.pop().result()
+            else:
+                line = await read_coro
             if not line:
                 break
             line = line.decode("utf-8", errors="replace").strip()
@@ -175,18 +196,25 @@ class ClaudeProvider:
                         cs = getattr(progress, "content_started", None)
                         if cs and not cs.is_set():
                             cs.set()
+                        # Only show the currently-active tool in ContentDelta,
+                        # not the full history. ToolStart/ToolFinish own the
+                        # boundary display now.
+                        active = (f"\u2699 {current_tool}",) if current_tool else ()
                         await _emit(ContentDelta(
                             text=accumulated_text,
-                            tool_activity=tuple(tool_activity),
+                            tool_activity=active,
                         ))
                 elif itype == "content_block_start":
                     cb = inner.get("content_block", {})
                     if cb.get("type") == "tool_use":
-                        tool_activity.append(f"\u2699 {cb.get('name', '?')}")
-                        await _emit(ContentDelta(
-                            text=accumulated_text,
-                            tool_activity=tuple(tool_activity),
-                        ), force=True)
+                        tool_name = cb.get("name", "?")
+                        current_tool = tool_name
+                        tool_activity.append(f"\u2699 {tool_name}")
+                        await _emit(ToolStart(name=tool_name), force=True)
+                elif itype == "content_block_stop":
+                    if current_tool:
+                        await _emit(ToolFinish(name=current_tool))
+                        current_tool = ""
 
             elif etype == "assistant":
                 msg = event.get("message", {})
@@ -200,10 +228,7 @@ class ClaudeProvider:
                         block.get("content", "")
                     ).lower():
                         tool_activity.append("\u26d4 denied")
-                        await _emit(ContentDelta(
-                            text=accumulated_text,
-                            tool_activity=tuple(tool_activity),
-                        ), force=True)
+                        await _emit(Denial(detail=current_tool or ""), force=True)
 
             elif etype == "result":
                 result_data = event
@@ -225,6 +250,7 @@ class ClaudeProvider:
         timeout: int | None = None,
         extra_env: dict[str, str] | None = None,
         working_dir: str = "",
+        cancel: asyncio.Event | None = None,
     ) -> tuple[str, dict, int, str]:
         """Spawn claude, consume output, return (accumulated_text, result_data, returncode, stderr)."""
         log.info("claude: %s", " ".join(cmd[:-1] + ["<prompt>"]))
@@ -248,7 +274,7 @@ class ClaudeProvider:
 
         try:
             accumulated, result_data, _ = await asyncio.wait_for(
-                self._consume_stream(proc, progress),
+                self._consume_stream(proc, progress, cancel=cancel),
                 timeout=effective_timeout,
             )
             stderr = (await stderr_task).decode("utf-8", errors="replace").strip()
@@ -317,6 +343,7 @@ class ClaudeProvider:
         image_paths: list[str],
         progress: ProgressSink,
         context: RunContext | None = None,
+        cancel: asyncio.Event | None = None,
     ) -> RunResult:
         extra_dirs = context.extra_dirs if context else None
         effective_model = context.effective_model if context else ""
@@ -348,6 +375,7 @@ class ClaudeProvider:
         is_resume = provider_state.get("started", False)
         accumulated, result_data, rc, stderr = await self._run_process(
             cmd, progress, extra_env=extra_env, working_dir=working_dir,
+            cancel=cancel,
         )
 
         # Cleanup temp MCP config
@@ -356,6 +384,11 @@ class ClaudeProvider:
                 os.unlink(mcp_tmp)
             except OSError:
                 pass
+
+        # User-initiated cancel: _consume_stream killed the process.
+        if cancel is not None and cancel.is_set():
+            return RunResult(text=accumulated, cancelled=True,
+                             provider_state_updates={"started": True} if provider_state.get("started") else {})
 
         if rc == -1:
             # A timeout during a resumed session is strong evidence the session
@@ -388,6 +421,7 @@ class ClaudeProvider:
         image_paths: list[str],
         progress: ProgressSink,
         context: PreflightContext | None = None,
+        cancel: asyncio.Event | None = None,
     ) -> RunResult:
         extra_dirs = context.extra_dirs if context else None
         effective_model = getattr(context, 'effective_model', '') if context else ""
@@ -406,7 +440,11 @@ class ClaudeProvider:
         working_dir = context.working_dir if context else ""
         accumulated, result_data, rc, _stderr = await self._run_process(
             cmd, progress, timeout=120, working_dir=working_dir,
+            cancel=cancel,
         )
+
+        if cancel is not None and cancel.is_set():
+            return RunResult(text="", cancelled=True)
 
         if rc == -1:
             return RunResult(text="", timed_out=True, returncode=124)

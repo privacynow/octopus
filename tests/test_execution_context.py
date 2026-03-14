@@ -324,7 +324,7 @@ async def test_inspect_mode_always_readonly(provider_config):
     provider = CodexProvider(_make_config(codex_sandbox="workspace-write"))
     calls: list[list[str]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append(cmd)
         return RunResult(text="ok", provider_state_updates={"thread_id": "t-1"})
 

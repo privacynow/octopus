@@ -48,6 +48,13 @@ CLI. See [Building the bot image](#building-the-bot-image) below.
 
    Use `BOT_ALLOW_OPEN=1` instead of `BOT_ALLOWED_USERS` only if you want an open bot. Leave `BOT_DATABASE_URL` unset for Local Runtime (SQLite).
 
+   Optional project and model configuration:
+   ```bash
+   BOT_PROJECTS=frontend:/home/app/frontend|inspect|fast,backend:/home/app/backend|edit|best
+   BOT_MODEL_PROFILES=fast:claude-haiku-4-5-20251001,balanced:claude-sonnet-4-6,best:claude-opus-4-6
+   ```
+   Projects use `|` to separate optional per-project defaults (file policy, model profile).
+
 3. **Run the guided setup and start**
 
    ```bash
@@ -209,8 +216,10 @@ to see the full output whenever you need it.
 | `/skills setup <name>` | Configure a skill |
 | `/settings` | Open settings |
 | `/model` | Show or change profile |
+| `/model inherit` | Clear session override, use project/global default |
 | `/project` | Show or change project binding |
 | `/policy inspect\|edit` | Show or change file-access policy |
+| `/policy inherit` | Clear session override, use project/global default |
 | `/clear_credentials [skill]` | Remove stored skill credentials |
 
 ### Admin and managed skills

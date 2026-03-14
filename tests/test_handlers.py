@@ -269,6 +269,11 @@ async def test_help_and_start_include_settings():
         assert "/doctor" in start_text and "full" in start_text and "health" in start_text, (
             "/start must show /doctor as full app health check (Phase 14)"
         )
+        # Phase 14 second slice: controls set and recovery hint
+        assert "Chat options:" in help_text
+        assert ("Run again" in help_text or "Skip" in help_text) and "status message" in help_text
+        assert "Chat options:" in start_text
+        assert ("Run again" in start_text or "Skip" in start_text) and "status message" in start_text
 
 
 async def test_help_and_start_public_user_excludes_project_and_policy():

@@ -475,6 +475,48 @@ async def test_cancel_nothing_to_cancel():
         assert msg.replies[0]["text"] == nothing_to_cancel()
 
 
+async def test_approve_no_pending_shows_canonical_message():
+    """Phase 14 follow-up: /approve with no pending returns canonical message (true when approval already on)."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, approval_mode="on")
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+        from app.user_messages import approval_no_pending_approve
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        assert not session.get("pending_approval") and not session.get("pending_retry")
+        save_session(data_dir, 12345, session)
+
+        msg = await send_command(th.cmd_approve, chat, user, "/approve")
+        reply = last_reply(msg)
+        assert reply == approval_no_pending_approve()
+
+
+async def test_reject_no_pending_shows_canonical_message():
+    """Phase 14 follow-up: /reject with no pending returns canonical message (true when approval already on)."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, approval_mode="on")
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+        from app.user_messages import approval_no_pending_reject
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        assert not session.get("pending_approval") and not session.get("pending_retry")
+        save_session(data_dir, 12345, session)
+
+        msg = await send_command(th.cmd_reject, chat, user, "/reject")
+        reply = last_reply(msg)
+        assert reply == approval_no_pending_reject()
+
+
 async def test_stale_pending_ttl():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, timeout_seconds=300)

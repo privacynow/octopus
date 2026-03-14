@@ -144,13 +144,13 @@ def approval_already_waiting() -> str:
 
 
 def approval_no_pending_approve() -> str:
-    """When user runs /approve but there is no pending request."""
-    return "No pending request to approve."
+    """When user runs /approve but there is no pending request. True whether approval mode is on or off."""
+    return "No pending request to approve. Send a message to get a new plan."
 
 
 def approval_no_pending_reject() -> str:
-    """When user runs /reject but there is no pending request."""
-    return "No pending request to reject."
+    """When user runs /reject but there is no pending request. True whether approval mode is on or off."""
+    return "No pending request to reject. Send a message to get a new plan."
 
 
 def approval_rejected() -> str:
@@ -317,8 +317,8 @@ def trust_not_authorized() -> str:
 
 
 def trust_command_not_available_public() -> str:
-    """When public user uses a restricted command."""
-    return "This command is not available in public mode."
+    """When public user uses a restricted command. Include next step."""
+    return "This command is not available in public mode. Use /help to see available commands."
 
 
 def trust_file_policy_public() -> str:
@@ -452,8 +452,8 @@ def callback_wrong_user() -> str:
 
 
 def nothing_to_cancel() -> str:
-    """When user runs /cancel but there is nothing to cancel."""
-    return "Nothing to cancel."
+    """When user runs /cancel but there is nothing to cancel. No action needed."""
+    return "Nothing to cancel. No action needed."
 
 
 def cancel_pending_request() -> str:

@@ -445,10 +445,34 @@ async def test_cancel_pending():
         await th.cmd_cancel(update, FakeContext())
 
         reply = msg.replies[0]["text"]
-        assert "Pending request cancelled" in reply
+        from app.user_messages import cancel_pending_request
+        assert reply == cancel_pending_request()
 
         session = load_session_disk(data_dir, 12345, prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
+
+
+async def test_cancel_nothing_to_cancel():
+    """Bucket C: /cancel with no pending shows centralized nothing_to_cancel message."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+        from app.user_messages import nothing_to_cancel
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        assert not session.get("pending_approval") and not session.get("pending_retry")
+        save_session(data_dir, 12345, session)
+
+        msg = FakeMessage(chat=chat, text="/cancel")
+        await th.cmd_cancel(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+
+        assert len(msg.replies) == 1
+        assert msg.replies[0]["text"] == nothing_to_cancel()
 
 
 async def test_stale_pending_ttl():

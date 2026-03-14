@@ -1001,7 +1001,8 @@ async def test_cancel_setup():
         user = FakeUser(42)
         msg = FakeMessage(chat=chat, text="/cancel")
         await _th.cmd_cancel(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
-        assert "Credential setup cancelled" in msg.replies[0]["text"]
+        from app.user_messages import credential_setup_cancelled
+        assert msg.replies[0]["text"] == credential_setup_cancelled()
         session = load_session_disk(data_dir, 12345, prov)
         assert session.get("awaiting_skill_setup") is None
 
@@ -1038,7 +1039,34 @@ async def test_cancel_admin_foreign_setup():
         admin = FakeUser(99, "admin")
         msg = FakeMessage(chat=chat, text="/cancel")
         await _th.cmd_cancel(FakeUpdate(message=msg, user=admin, chat=chat), FakeContext())
-        assert "Credential setup cancelled" in msg.replies[0]["text"]
+        from app.user_messages import credential_setup_cancelled
+        assert msg.replies[0]["text"] == credential_setup_cancelled()
+
+
+async def test_cancel_foreign_setup_shows_another_user_message():
+    """Non-admin /cancel when another user's credential setup is in progress shows centralized message."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, admin_user_ids=frozenset())  # no admin
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session["awaiting_skill_setup"] = {
+            "user_id": 42,
+            "skill": "test-skill",
+            "started_at": time.time(),
+            "remaining": [{"key": "TOKEN", "prompt": "Enter token"}],
+        }
+        save_session(data_dir, 12345, session)
+
+        chat = FakeChat(12345)
+        other_user = FakeUser(99, "other")  # not setup owner, not admin
+        msg = FakeMessage(chat=chat, text="/cancel")
+        await _th.cmd_cancel(FakeUpdate(message=msg, user=other_user, chat=chat), FakeContext())
+        from app.user_messages import credential_setup_another_user_in_progress
+        assert msg.replies[0]["text"] == credential_setup_another_user_in_progress()
+        session = load_session_disk(data_dir, 12345, prov)
+        assert session.get("awaiting_skill_setup") is not None  # setup not cancelled
 
 
 async def test_friendly_validation_errors():
@@ -1190,7 +1218,8 @@ async def test_clear_credentials_cancel():
             assert len(query.answers) == 1
             assert not query.answer_show_alert
             assert has_markup_removal(cb_msg)
-            assert "cancelled" in cb_msg.replies[-1]["edit_text"].lower()
+            from app.user_messages import credential_clear_cancelled
+            assert cb_msg.replies[-1]["edit_text"] == credential_clear_cancelled()
             # Credentials should still exist
             creds = load_user_credentials(data_dir, 42, key)
             assert ("cred-test" in creds) == True
@@ -1316,10 +1345,11 @@ async def test_clear_credentials_cross_user_rejected():
             assert ("cred-test" in bob_creds) == True
             # No edit_text reply (only query.answer with alert)
             assert len(cb_msg.replies) == 0
-            # Callback should have shown an alert to the wrong user
+            # Callback should have shown centralized wrong-user message (Bucket C)
+            from app.user_messages import callback_wrong_user
             assert len(query.answers) == 1
             assert query.answer_show_alert
-            assert "another user" in query.answer_text.lower()
+            assert query.answer_text == callback_wrong_user()
     finally:
         skills_mod.CUSTOM_DIR = orig_custom_dir
 

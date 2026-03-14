@@ -1658,21 +1658,21 @@ async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
             if setup.user_id == user_id or is_admin(event.user):
                 session.awaiting_skill_setup = None
                 _save(chat_id, session)
-                await update.effective_message.reply_text("Credential setup cancelled.")
+                await update.effective_message.reply_text(_msg.credential_setup_cancelled())
                 return
             else:
                 await update.effective_message.reply_text(
-                    "Another user's credential setup is in progress. Only they or an admin can cancel it.",
+                    _msg.credential_setup_another_user_in_progress(),
                 )
                 return
 
         if session.has_pending:
             session.clear_pending()
             _save(chat_id, session)
-            await update.effective_message.reply_text("Pending request cancelled.")
+            await update.effective_message.reply_text(_msg.cancel_pending_request())
             return
 
-    await update.effective_message.reply_text("Nothing to cancel.")
+    await update.effective_message.reply_text(_msg.nothing_to_cancel())
 
 
 @_command_handler
@@ -1749,7 +1749,7 @@ async def _execute_clear_credentials(
     if removed:
         parts.append(f"Credentials cleared for: {html.escape(', '.join(removed))}.")
     if setup_cleared:
-        parts.append("Credential setup cancelled.")
+        parts.append(_msg.credential_setup_cancelled())
     if deactivated:
         parts.append(f"Deactivated in this chat: {html.escape(', '.join(deactivated))}.")
     if not parts:
@@ -1778,7 +1778,7 @@ async def handle_clear_cred_callback(event, query) -> None:
     if parts[0] == "clear_cred_cancel":
         await query.answer()
         await query.edit_message_reply_markup(reply_markup=None)
-        await query.edit_message_text("Credential clear cancelled.")
+        await query.edit_message_text(_msg.credential_clear_cancelled())
         return
 
     if parts[0] == "clear_cred_confirm_all":

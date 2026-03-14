@@ -115,3 +115,41 @@ def test_trust_settings_managed_public():
 def test_trust_model_profile_set_contains_placeholders():
     out = msg.trust_model_profile_set("fast", "claude-3-5-haiku")
     assert "fast" in out and "claude" in out
+
+
+# ---------------------------------------------------------------------------
+# E. Bucket C — no-op / busy / wrong-user clarity
+# ---------------------------------------------------------------------------
+
+def test_queue_busy_plain_and_actionable():
+    """queue_busy: request is queued and will run next; must not tell user to try again."""
+    text = msg.queue_busy()
+    assert "queued" in text.lower()
+    assert "try again" not in text.lower(), "queued request runs automatically; do not encourage resubmit"
+    assert "request" in text.lower()
+    # Implies waiting / automatic next execution
+    assert "run" in text.lower() or "next" in text.lower() or "wait" in text.lower()
+
+
+def test_callback_wrong_user_specific_to_button_owner():
+    """callback_wrong_user: must indicate button is for the person who started the request."""
+    text = msg.callback_wrong_user()
+    assert "button" in text.lower() or "request" in text.lower()
+    assert "person" in text.lower() or "started" in text.lower() or "another" in text.lower()
+
+
+def test_nothing_to_cancel_and_cancel_pending_request():
+    """No-op cancel paths: clear and distinct."""
+    nothing = msg.nothing_to_cancel()
+    cancelled = msg.cancel_pending_request()
+    assert "cancel" in nothing.lower()
+    assert "nothing" in nothing.lower() or "cancel" in nothing.lower()
+    assert "pending" in cancelled.lower() or "cancelled" in cancelled.lower() or "request" in cancelled.lower()
+
+
+def test_credential_cancellation_messages():
+    """Bucket C Option 2: credential setup/clear cancellation centralized."""
+    assert "credential" in msg.credential_setup_cancelled().lower()
+    assert "cancelled" in msg.credential_setup_cancelled().lower() or "cancel" in msg.credential_setup_cancelled().lower()
+    assert "another" in msg.credential_setup_another_user_in_progress().lower() or "admin" in msg.credential_setup_another_user_in_progress().lower()
+    assert "clear" in msg.credential_clear_cancelled().lower() or "credential" in msg.credential_clear_cancelled().lower()

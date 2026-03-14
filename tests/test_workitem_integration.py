@@ -695,10 +695,11 @@ async def test_recovery_discard_callback_finalizes_item():
             # Query was answered
             assert query.answered
 
-            # Message was edited to show discard confirmation
+            # Message was edited to show centralized discard confirmation (Bucket C)
             edits = [r for r in query.message.replies if "edit_text" in r]
             assert edits
-            assert "discarded" in edits[0]["edit_text"].lower()
+            from app.user_messages import recovery_discarded_edit
+            assert edits[0]["edit_text"] == recovery_discarded_edit()
         finally:
             set_bot_instance(None)
 
@@ -881,9 +882,10 @@ async def test_recovery_double_click_is_idempotent():
             )
             await th.handle_recovery_callback(upd2, FakeContext())
 
-            # Second click was answered (no crash)
+            # Second click was answered with centralized already-handled message (Bucket C)
             assert query2.answered
-            assert "already been handled" in (query2.answer_text or "")
+            from app.user_messages import recovery_already_handled
+            assert query2.answer_text == recovery_already_handled()
         finally:
             set_bot_instance(None)
 

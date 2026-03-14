@@ -41,7 +41,7 @@ def recovery_already_handled() -> str:
 
 def recovery_discarded_confirm() -> str:
     """Toast after user chooses discard."""
-    return "Skipped."
+    return "Request skipped."
 
 
 def recovery_discarded_edit() -> str:
@@ -191,7 +191,7 @@ def approval_context_changed() -> str:
 
 def retry_skip_confirmation() -> str:
     """Edit text when user chooses skip retry (clear retry without running again)."""
-    return "Retry skipped."
+    return "Retry skipped. Nothing to run again."
 
 
 def retry_nothing_pending() -> str:
@@ -405,10 +405,35 @@ def generic_error_try_again() -> str:
 
 
 def queue_busy() -> str:
-    """When user's request is queued because another is in progress."""
-    return "Working on your previous request — yours is queued."
+    """When user's request is queued because another is in progress. Do not tell them to try again — it will run next."""
+    return "Another request is already running. Yours is queued and will run next."
 
 
 def callback_wrong_user() -> str:
-    """When callback was for another user (e.g. approval)."""
-    return "This button is for another user."
+    """When callback was for another user (e.g. approval, clear credentials)."""
+    return "This button is only for the person who started the request."
+
+
+def nothing_to_cancel() -> str:
+    """When user runs /cancel but there is nothing to cancel."""
+    return "Nothing to cancel."
+
+
+def cancel_pending_request() -> str:
+    """When user cancels a pending approval/retry request."""
+    return "Pending request cancelled."
+
+
+def credential_setup_cancelled() -> str:
+    """When user (or admin) cancels credential setup."""
+    return "Credential setup cancelled."
+
+
+def credential_setup_another_user_in_progress() -> str:
+    """When user runs /cancel but another user's credential setup is in progress."""
+    return "Another user's credential setup is in progress. Only they or an admin can cancel it."
+
+
+def credential_clear_cancelled() -> str:
+    """When user cancels the clear-credentials confirmation (callback)."""
+    return "Credential clear cancelled."

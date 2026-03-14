@@ -1306,6 +1306,8 @@ async def test_settings_command_shows_current_values():
             assert "setting_compact:off" in cbs
             assert "setting_approval:on" in cbs
             assert "setting_approval:off" in cbs
+            from app.user_messages import settings_use_buttons_hint
+            assert settings_use_buttons_hint() in text
 
 
 async def test_project_default_shows_inline_keyboard():
@@ -1328,6 +1330,34 @@ async def test_project_default_shows_inline_keyboard():
             msg2 = await send_command(th.cmd_project, chat, user, "/project")
             cbs2 = get_callback_data_values(msg2.replies[-1])
             assert "setting_project:clear" in cbs2
+
+
+async def test_project_includes_next_step_hint():
+    """Phase 14: /project (with projects) includes actionability hint (buttons or /project list)."""
+    import app.telegram_handlers as th
+    from app.user_messages import project_use_buttons_or_list_hint
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("backend", proj_dir, ()), ("frontend", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(1)
+            user = FakeUser(42)
+            msg = await send_command(th.cmd_project, chat, user, "/project")
+            reply = last_reply(msg)
+            assert project_use_buttons_or_list_hint() in reply
+            assert "buttons below" in reply or "project list" in reply.lower()
+
+
+async def test_project_no_projects_includes_list_hint():
+    """Phase 14: /project (no projects configured) includes /project list discoverability hint."""
+    import app.telegram_handlers as th
+    from app.user_messages import project_list_discover_hint
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_project, chat, user, "/project")
+        reply = last_reply(msg)
+        assert project_list_discover_hint() in reply
 
 
 async def test_settings_callback_project_use():
@@ -1461,6 +1491,21 @@ async def test_public_model_shows_only_public_profiles():
         assert "setting_model:fast" in model_buttons
 
 
+async def test_model_includes_choose_profile_hint():
+    """Phase 14: /model (with profiles) includes selection hint."""
+    import app.telegram_handlers as th
+    from app.user_messages import model_choose_profile_hint
+    with fresh_env(config_overrides={
+        "model_profiles": {"fast": "m1", "balanced": "m2"},
+        "default_model_profile": "balanced",
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_model, chat, user, "/model")
+        reply = last_reply(msg)
+        assert model_choose_profile_hint() in reply
+
+
 async def test_settings_callback_policy_denial_public():
     """Bucket D: public user clicking policy button gets trust_file_policy_public (command/callback parity)."""
     import app.telegram_handlers as th
@@ -1538,6 +1583,40 @@ async def test_session_shows_prompt_weight():
         msg = await send_command(th.cmd_session, chat, user, "/session")
         reply = last_reply(msg)
         assert "Prompt weight" in reply
+
+
+async def test_session_includes_control_surface_hint_trusted():
+    """Phase 14: /session for trusted user includes pointer to /settings, /project, /model."""
+    import app.telegram_handlers as th
+    from app.user_messages import session_control_surface_hint_trusted
+    with fresh_env(config_overrides={
+        "model_profiles": {"fast": "m1", "balanced": "m2"},
+        "default_model_profile": "balanced",
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+        reply = last_reply(msg)
+        assert session_control_surface_hint_trusted() in reply
+        assert "/project" in reply
+
+
+async def test_session_control_surface_hint_public_no_project():
+    """Phase 14: /session for public user must not advertise /project in control-surface hint."""
+    import app.telegram_handlers as th
+    from app.user_messages import session_control_surface_hint_public
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "m1"},
+        public_model_profiles=frozenset({"fast"}),
+        projects=(("proj1", "/tmp/p1", ()),),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+        reply = last_reply(msg)
+        assert session_control_surface_hint_public() in reply
+        assert "Use /settings or /model" in reply
+        assert "Use /settings, /project, or /model" not in reply
 
 
 # -- Re-homed from test_request_flow: handler-surface /session, /settings, /model, callbacks ---

@@ -422,6 +422,40 @@ def no_projects_configured() -> str:
     return "No projects configured. Set BOT_PROJECTS in your instance config."
 
 
+# ---------------------------------------------------------------------------
+# Command actionability (Phase 14: next-step hints)
+# ---------------------------------------------------------------------------
+
+def settings_use_buttons_hint() -> str:
+    """Hint on /settings: use inline buttons to change chat settings."""
+    return "Use the buttons below to change settings for this chat."
+
+
+def project_use_buttons_or_list_hint() -> str:
+    """Hint on /project when projects exist: use buttons or /project list."""
+    return "Use the buttons below or /project list to switch project."
+
+
+def project_list_discover_hint() -> str:
+    """Hint on /project when no project choices (no projects or no buttons)."""
+    return "Use /project list to see available projects."
+
+
+def model_choose_profile_hint() -> str:
+    """Hint on /model: choose profile via inline buttons."""
+    return "Choose a profile below for this chat."
+
+
+def session_control_surface_hint_public() -> str:
+    """Footer on /session for public users: point to /settings and /model only (no /project)."""
+    return "Use /settings or /model to change these values."
+
+
+def session_control_surface_hint_trusted() -> str:
+    """Footer on /session for trusted users: point to /settings, /project, /model."""
+    return "Use /settings, /project, or /model to change these values."
+
+
 def approval_usage() -> str:
     """Usage hint for /approval."""
     return "Use /approval on, /approval off, or /approval status."

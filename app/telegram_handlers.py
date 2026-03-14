@@ -1544,6 +1544,7 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     if trust == "public":
         body += "\n\n" + _msg.trust_settings_managed_public()
+    body += "\n\n" + (_msg.session_control_surface_hint_public() if trust == "public" else _msg.session_control_surface_hint_trusted())
     await update.effective_message.reply_text(body, parse_mode=ParseMode.HTML)
 
 
@@ -2083,6 +2084,7 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
         f"Effective model: <code>{html.escape(effective or cfg.model or '(default)')}</code>"
     )
     if buttons:
+        text += "\n\n" + _msg.model_choose_profile_hint()
         await msg.reply_text(text, parse_mode=ParseMode.HTML,
                              reply_markup=InlineKeyboardMarkup([buttons]))
     else:
@@ -2756,6 +2758,10 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"Working dir: <code>{html.escape(working_dir)}</code>",
     ]
     buttons = _settings_project_buttons(cfg, session)
+    if buttons:
+        lines.append(_msg.project_use_buttons_or_list_hint())
+    else:
+        lines.append(_msg.project_list_discover_hint())
     text = "\n".join(lines)
     if buttons:
         await msg.reply_text(
@@ -2798,6 +2804,7 @@ async def cmd_settings(event, update: Update, context: ContextTypes.DEFAULT_TYPE
         f"File policy: <code>{html.escape(policy)}</code>",
         f"Compact mode: <b>{compact_label}</b>",
         f"Approval mode: <b>{approval}</b>",
+        _msg.settings_use_buttons_hint(),
     ]
     if effective_model:
         lines.insert(3, f"Effective model: <code>{html.escape(effective_model)}</code>")

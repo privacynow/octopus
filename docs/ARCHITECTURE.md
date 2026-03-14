@@ -277,15 +277,29 @@ session contract. The current authoritative fields are:
 - `SessionState.file_policy`
 - `SessionState.compact_mode`
 
+`ProjectBinding` (in `app/session_state.py`) carries per-project inherited
+defaults: `file_policy` and `model_profile`. These are parsed from
+`BOT_PROJECTS` using `|`-separated optional fields:
+`name:/path[|file_policy[|model_profile]]`.
+
+Resolution order (applied in `resolve_execution_context`):
+
+- **file_policy:** session explicit > project default > "" (edit)
+- **model_profile:** session explicit > project default > config default > config.model
+
+`/policy inherit` and `/model inherit` clear session-explicit overrides,
+returning to project or global defaults. The same semantics are available via
+`setting_policy:inherit` and `setting_model:inherit` callbacks.
+
 Current mutating entry points live in `app/telegram_handlers.py`:
 
 - command handlers:
   - `cmd_project`
-  - `cmd_model`
-  - `cmd_policy`
+  - `cmd_model` (including `inherit` subcommand)
+  - `cmd_policy` (including `inherit` subcommand)
   - `cmd_compact`
 - inline callback handler:
-  - `handle_settings_callback`
+  - `handle_settings_callback` (handles `setting_model:inherit`, `setting_policy:inherit`)
 
 Preferred inline-callback shape:
 

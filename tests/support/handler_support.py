@@ -236,7 +236,7 @@ class FakeProvider:
             return {"thread_id": None}
         return {"session_id": "test-session-id", "started": False}
 
-    async def run(self, provider_state, prompt, image_paths, progress, context=None):
+    async def run(self, provider_state, prompt, image_paths, progress, context=None, cancel=None):
         self.run_calls.append({
             "provider_state": dict(provider_state),
             "prompt": prompt,
@@ -249,7 +249,7 @@ class FakeProvider:
             return self.run_results.pop(0)
         return RunResult(text="default response")
 
-    async def run_preflight(self, prompt, image_paths, progress, context=None):
+    async def run_preflight(self, prompt, image_paths, progress, context=None, cancel=None):
         self.preflight_calls.append({
             "prompt": prompt,
             "image_paths": image_paths,

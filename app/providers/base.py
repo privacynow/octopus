@@ -1,5 +1,7 @@
 """Provider protocol and shared result dataclass."""
 
+import asyncio
+
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -12,6 +14,7 @@ class RunResult:
     resume_failed: bool = False  # True only when --resume target is dead/invalid
     provider_state_updates: dict[str, Any] = field(default_factory=dict)
     denials: list[dict[str, Any]] = field(default_factory=list)
+    cancelled: bool = False
 
 
 @dataclass
@@ -54,6 +57,7 @@ class Provider(Protocol):
         image_paths: list[str],
         progress: ProgressSink,
         context: RunContext | None = None,
+        cancel: asyncio.Event | None = None,
     ) -> RunResult:
         """Execute a prompt against the CLI backend."""
         ...
@@ -64,6 +68,7 @@ class Provider(Protocol):
         image_paths: list[str],
         progress: ProgressSink,
         context: PreflightContext | None = None,
+        cancel: asyncio.Event | None = None,
     ) -> RunResult:
         """Run a read-only approval preflight."""
         ...

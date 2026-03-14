@@ -122,7 +122,7 @@ async def test_file_policy_inspect_sets_sandbox_readonly():
     provider = CodexProvider(make_config())
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 
@@ -143,7 +143,7 @@ async def test_file_policy_edit_uses_default_sandbox():
     provider = CodexProvider(make_config(codex_sandbox="workspace-write"))
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 
@@ -163,7 +163,7 @@ async def test_file_policy_inspect_overrides_provider_config_sandbox():
     provider = CodexProvider(make_config())
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 
@@ -187,7 +187,7 @@ async def test_provider_config_sandbox_applies_without_inspect():
     provider = CodexProvider(make_config(codex_sandbox="workspace-write"))
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 
@@ -211,7 +211,7 @@ async def test_skip_permissions_fresh_exec_preserves_full_auto():
     provider = CodexProvider(make_config(codex_full_auto=True))
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 
@@ -231,7 +231,7 @@ async def test_skip_permissions_fresh_exec_adds_dangerous_when_needed():
     provider = CodexProvider(make_config(codex_full_auto=False))
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 
@@ -250,7 +250,7 @@ async def test_skip_permissions_resume():
     provider = CodexProvider(make_config(codex_full_auto=True))
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 

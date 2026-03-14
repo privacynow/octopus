@@ -586,6 +586,133 @@ def _settings_model_profile_state(
     return (available, current)
 
 
+def _settings_model_buttons(available: list[str], current: str) -> list[InlineKeyboardButton]:
+    """One row of model profile buttons (same checkmark convention as /settings)."""
+    return [
+        InlineKeyboardButton(
+            f"\u2705 {p}" if p == current else p,
+            callback_data=f"setting_model:{p}",
+        )
+        for p in available
+    ]
+
+
+def _settings_project_buttons(
+    cfg: BotConfig, session: SessionState
+) -> list[list[InlineKeyboardButton]]:
+    """Project rows: one row of project names, optional clear row. For trusted users only."""
+    rows: list[list[InlineKeyboardButton]] = []
+    if not cfg.projects:
+        return rows
+    row = []
+    for name, _, _ in cfg.projects:
+        label = f"\u2705 {name}" if name == session.project_id else name
+        row.append(InlineKeyboardButton(label, callback_data=f"setting_project:{name}"))
+    if row:
+        rows.append(row)
+    if session.project_id:
+        rows.append([InlineKeyboardButton("Clear project", callback_data="setting_project:clear")])
+    return rows
+
+
+def _settings_policy_buttons(policy: str) -> list[InlineKeyboardButton]:
+    """One row of file policy buttons."""
+    return [
+        InlineKeyboardButton(
+            "\u2705 Read only" if policy == "inspect" else "Read only",
+            callback_data="setting_policy:inspect",
+        ),
+        InlineKeyboardButton(
+            "\u2705 Read & write" if policy == "edit" else "Read & write",
+            callback_data="setting_policy:edit",
+        ),
+    ]
+
+
+def _settings_compact_buttons(compact: bool) -> list[InlineKeyboardButton]:
+    """One row of compact mode buttons."""
+    return [
+        InlineKeyboardButton(
+            "\u2705 Short answers" if compact else "Short answers",
+            callback_data="setting_compact:on",
+        ),
+        InlineKeyboardButton(
+            "\u2705 Full answers" if not compact else "Full answers",
+            callback_data="setting_compact:off",
+        ),
+    ]
+
+
+def _settings_approval_buttons(approval: str) -> list[InlineKeyboardButton]:
+    """One row of approval mode buttons."""
+    return [
+        InlineKeyboardButton(
+            "\u2705 Review first" if approval == "on" else "Review first",
+            callback_data="setting_approval:on",
+        ),
+        InlineKeyboardButton(
+            "\u2705 Run immediately" if approval == "off" else "Run immediately",
+            callback_data="setting_approval:off",
+        ),
+    ]
+
+
+# -- Setting mutators (single authority per family for command + callback) ----
+
+def _apply_model_change(chat_id: int, session: SessionState, value: str) -> None:
+    """Set session model_profile and persist. Caller sends reply."""
+    session.model_profile = value
+    _save(chat_id, session)
+
+
+def _apply_project_change(
+    chat_id: int, session: SessionState, value: str
+) -> tuple[bool, str]:
+    """Apply project change (clear or set). Returns (success, message). Caller sends message."""
+    cfg = _cfg()
+    if value == "clear":
+        if not session.project_id:
+            return (False, _msg.trust_no_project_active())
+        session.project_id = ""
+        session.provider_state = _prov().new_provider_state()
+        session.clear_pending()
+        _save(chat_id, session)
+        return (True, _msg.trust_project_cleared(str(cfg.working_dir)))
+    # value is project name
+    found = any(name == value for name, _, _ in cfg.projects)
+    if not found:
+        return (False, _msg.trust_unknown_project(value))
+    if session.project_id == value:
+        return (False, _msg.trust_already_using_project(value))
+    session.project_id = value
+    session.provider_state = _prov().new_provider_state()
+    session.clear_pending()
+    _save(chat_id, session)
+    proj_root = next(root for name, root, _ in cfg.projects if name == value)
+    return (True, _msg.trust_switched_project(value, str(proj_root)))
+
+
+def _apply_policy_change(chat_id: int, session: SessionState, value: str) -> None:
+    """Set file_policy, reset provider_state and pending, persist. Caller sends reply."""
+    session.file_policy = value
+    session.provider_state = _prov().new_provider_state()
+    session.clear_pending()
+    _save(chat_id, session)
+
+
+def _apply_approval_change(chat_id: int, session: SessionState, value: str) -> None:
+    """Set approval_mode and approval_mode_explicit, persist. Caller sends reply."""
+    session.approval_mode = value
+    session.approval_mode_explicit = True
+    _save(chat_id, session)
+
+
+def _apply_compact_change(chat_id: int, session: SessionState, value: bool) -> None:
+    """Set compact_mode and persist. Caller sends reply."""
+    session.compact_mode = value
+    _save(chat_id, session)
+
+
 # -- Helpers ---------------------------------------------------------------
 
 def _allowed_roots(chat_id: int, resolved: ResolvedExecutionContext | None = None) -> list[Path]:
@@ -1402,23 +1529,13 @@ async def cmd_approval(event, update: Update, context: ContextTypes.DEFAULT_TYPE
         if arg == "status":
             mode = session.approval_mode
             source = _approval_mode_source(session)
-            buttons = [
-                InlineKeyboardButton(
-                    f"\u2705 Review first" if mode == "on" else "Review first",
-                    callback_data="setting_approval:on"),
-                InlineKeyboardButton(
-                    f"\u2705 Run immediately" if mode == "off" else "Run immediately",
-                    callback_data="setting_approval:off"),
-            ]
             await update.effective_message.reply_text(
                 f"Approval mode is <b>{mode}</b> ({source}).",
                 parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([buttons]),
+                reply_markup=InlineKeyboardMarkup([_settings_approval_buttons(mode)]),
             )
             return
-        session.approval_mode = arg
-        session.approval_mode_explicit = True
-        _save(chat_id, session)
+        _apply_approval_change(chat_id, session, arg)
     await update.effective_message.reply_text(
         f"Approval mode set to {arg} for this chat."
     )
@@ -1823,18 +1940,10 @@ async def cmd_compact(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         session = _load(chat_id)
         current = session.compact_mode if session.compact_mode is not None else _cfg().compact_mode
         state = "on" if current else "off"
-        buttons = [
-            InlineKeyboardButton(
-                "\u2705 Short answers" if current else "Short answers",
-                callback_data="setting_compact:on"),
-            InlineKeyboardButton(
-                "\u2705 Full answers" if not current else "Full answers",
-                callback_data="setting_compact:off"),
-        ]
         await update.effective_message.reply_text(
             f"Compact mode is <b>{state}</b>.",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([buttons]),
+            reply_markup=InlineKeyboardMarkup([_settings_compact_buttons(current)]),
         )
         return
 
@@ -1845,8 +1954,7 @@ async def cmd_compact(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = _load(chat_id)
-        session.compact_mode = mode == "on"
-        _save(chat_id, session)
+        _apply_compact_change(chat_id, session, mode == "on")
 
     label = _msg.settings_compact_on_label() if mode == "on" else _msg.settings_compact_off_label()
     await update.effective_message.reply_text(
@@ -1937,8 +2045,7 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         async with _chat_lock(chat_id, message=msg, update_id=update.update_id):
             session = _load(chat_id)
-            session.model_profile = arg
-            _save(chat_id, session)
+            _apply_model_change(chat_id, session, arg)
         await msg.reply_text(
             _msg.trust_model_profile_set(arg, cfg.model_profiles[arg]),
             parse_mode=ParseMode.HTML,
@@ -1946,11 +2053,7 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     # Show current + inline keyboard (same effective-profile source as /settings)
-    buttons = []
-    for profile in available:
-        label = f"\u2705 {profile}" if profile == current else profile
-        buttons.append(InlineKeyboardButton(label, callback_data=f"setting_model:{profile}"))
-
+    buttons = _settings_model_buttons(available, current)
     text = (
         f"Model profile: <b>{html.escape(current)}</b>\n"
         f"Effective model: <code>{html.escape(effective or cfg.model or '(default)')}</code>"
@@ -2471,8 +2574,7 @@ async def handle_settings_callback(event, query) -> None:
             if value not in available:
                 await query.edit_message_text(_msg.trust_unknown_or_restricted_profile(value))
                 return
-            session.model_profile = value
-            _save(chat_id, session)
+            _apply_model_change(chat_id, session, value)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(
                 _msg.trust_model_profile_set(value, cfg.model_profiles[value]),
@@ -2482,16 +2584,13 @@ async def handle_settings_callback(event, query) -> None:
         elif setting == "approval":
             if value not in {"on", "off"}:
                 return
-            session.approval_mode = value
-            session.approval_mode_explicit = True
-            _save(chat_id, session)
+            _apply_approval_change(chat_id, session, value)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(
                 f"Approval mode set to {value} for this chat.")
 
         elif setting == "compact":
-            session.compact_mode = value == "on"
-            _save(chat_id, session)
+            _apply_compact_change(chat_id, session, value == "on")
             await query.edit_message_reply_markup(reply_markup=None)
             label = _msg.settings_compact_on_label() if value == "on" else _msg.settings_compact_off_label()
             await query.edit_message_text(
@@ -2505,10 +2604,7 @@ async def handle_settings_callback(event, query) -> None:
                 return
             if value not in {"inspect", "edit"}:
                 return
-            session.file_policy = value
-            session.provider_state = _prov().new_provider_state()
-            session.clear_pending()
-            _save(chat_id, session)
+            _apply_policy_change(chat_id, session, value)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(
                 _msg.trust_file_policy_set(value),
@@ -2519,46 +2615,9 @@ async def handle_settings_callback(event, query) -> None:
             if is_public_user(event.user):
                 await query.edit_message_text(_msg.trust_project_public())
                 return
-            cfg = _cfg()
-            if value == "clear":
-                if not session.project_id:
-                    await query.edit_message_reply_markup(reply_markup=None)
-                    await query.edit_message_text(_msg.trust_no_project_active(), parse_mode=ParseMode.HTML)
-                    return
-                session.project_id = ""
-                session.provider_state = _prov().new_provider_state()
-                session.clear_pending()
-                _save(chat_id, session)
-                await query.edit_message_reply_markup(reply_markup=None)
-                await query.edit_message_text(
-                    _msg.trust_project_cleared(str(cfg.working_dir)),
-                    parse_mode=ParseMode.HTML,
-                )
-                return
-            # value is project name
-            found = any(name == value for name, _, _ in cfg.projects)
-            if not found:
-                await query.edit_message_text(
-                    _msg.trust_unknown_project(value),
-                    parse_mode=ParseMode.HTML,
-                )
-                return
-            if session.project_id == value:
-                await query.edit_message_reply_markup(reply_markup=None)
-                await query.edit_message_text(
-                    _msg.trust_already_using_project(value), parse_mode=ParseMode.HTML
-                )
-                return
-            session.project_id = value
-            session.provider_state = _prov().new_provider_state()
-            session.clear_pending()
-            _save(chat_id, session)
-            proj_root = next(root for name, root, _ in cfg.projects if name == value)
+            ok, reply_text = _apply_project_change(chat_id, session, value)
             await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(
-                _msg.trust_switched_project(value, str(proj_root)),
-                parse_mode=ParseMode.HTML,
-            )
+            await query.edit_message_text(reply_text, parse_mode=ParseMode.HTML)
 
 
 # -- Application builder ---------------------------------------------------
@@ -2661,44 +2720,17 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if arg == "use" and len(event.args) >= 2:
         project_name = event.args[1]
-        found = any(name == project_name for name, _, _ in cfg.projects)
-        if not found:
-            await msg.reply_text(
-                _msg.trust_unknown_project(project_name),
-                parse_mode=ParseMode.HTML,
-            )
-            return
         async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
             session = _load(event.chat_id)
-            old_project = session.project_id
-            if old_project == project_name:
-                await msg.reply_text(_msg.trust_already_using_project(project_name), parse_mode=ParseMode.HTML)
-                return
-            session.project_id = project_name
-            session.provider_state = _prov().new_provider_state()
-            session.clear_pending()
-            _save(event.chat_id, session)
-        proj_root = next(root for name, root, _ in cfg.projects if name == project_name)
-        await msg.reply_text(
-            _msg.trust_switched_project(project_name, str(proj_root)),
-            parse_mode=ParseMode.HTML,
-        )
+            ok, reply_text = _apply_project_change(event.chat_id, session, project_name)
+        await msg.reply_text(reply_text, parse_mode=ParseMode.HTML)
         return
 
     if arg == "clear":
         async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
             session = _load(event.chat_id)
-            if not session.project_id:
-                await msg.reply_text(_msg.trust_no_project_active())
-                return
-            session.project_id = ""
-            session.provider_state = _prov().new_provider_state()
-            session.clear_pending()
-            _save(event.chat_id, session)
-        await msg.reply_text(
-            _msg.trust_project_cleared(str(cfg.working_dir)),
-            parse_mode=ParseMode.HTML,
-        )
+            ok, reply_text = _apply_project_change(event.chat_id, session, "clear")
+        await msg.reply_text(reply_text, parse_mode=ParseMode.HTML)
         return
 
     # Default: show current project with discoverable inline choices
@@ -2710,16 +2742,7 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"Project: <b>{html.escape(project_label)}</b>",
         f"Working dir: <code>{html.escape(working_dir)}</code>",
     ]
-    buttons: list[list[InlineKeyboardButton]] = []
-    if cfg.projects:
-        row = []
-        for name, _, _ in cfg.projects:
-            label = f"\u2705 {name}" if name == session.project_id else name
-            row.append(InlineKeyboardButton(label, callback_data=f"setting_project:{name}"))
-        if row:
-            buttons.append(row)
-        if session.project_id:
-            buttons.append([InlineKeyboardButton("Clear project", callback_data="setting_project:clear")])
+    buttons = _settings_project_buttons(cfg, session)
     text = "\n".join(lines)
     if buttons:
         await msg.reply_text(
@@ -2772,36 +2795,12 @@ async def cmd_settings(event, update: Update, context: ContextTypes.DEFAULT_TYPE
     # Inline keyboard: omit project and policy controls for public users
     keyboard: list[list[InlineKeyboardButton]] = []
     if trust != "public":
-        if cfg.projects:
-            row = []
-            for name, _, _ in cfg.projects:
-                label = f"\u2705 {name}" if name == session.project_id else name
-                row.append(InlineKeyboardButton(label, callback_data=f"setting_project:{name}"))
-            if row:
-                keyboard.append(row)
-            if session.project_id:
-                keyboard.append([InlineKeyboardButton("Clear project", callback_data="setting_project:clear")])
-        row = [
-            InlineKeyboardButton("\u2705 Read only" if policy == "inspect" else "Read only", callback_data="setting_policy:inspect"),
-            InlineKeyboardButton("\u2705 Read & write" if policy == "edit" else "Read & write", callback_data="setting_policy:edit"),
-        ]
-        keyboard.append(row)
+        keyboard.extend(_settings_project_buttons(cfg, session))
+        keyboard.append(_settings_policy_buttons(policy))
     if model_available:
-        row = []
-        for profile in model_available:
-            label = f"\u2705 {profile}" if profile == model_display else profile
-            row.append(InlineKeyboardButton(label, callback_data=f"setting_model:{profile}"))
-        keyboard.append(row)
-    row = [
-        InlineKeyboardButton("\u2705 Short answers" if compact else "Short answers", callback_data="setting_compact:on"),
-        InlineKeyboardButton("\u2705 Full answers" if not compact else "Full answers", callback_data="setting_compact:off"),
-    ]
-    keyboard.append(row)
-    row = [
-        InlineKeyboardButton("\u2705 Review first" if approval == "on" else "Review first", callback_data="setting_approval:on"),
-        InlineKeyboardButton("\u2705 Run immediately" if approval == "off" else "Run immediately", callback_data="setting_approval:off"),
-    ]
-    keyboard.append(row)
+        keyboard.append(_settings_model_buttons(model_available, model_display))
+    keyboard.append(_settings_compact_buttons(compact))
+    keyboard.append(_settings_approval_buttons(approval))
 
     await msg.reply_text(
         text,
@@ -2824,10 +2823,7 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
             if old_policy == arg:
                 await msg.reply_text(f"File policy is already <code>{html.escape(arg)}</code>.", parse_mode=ParseMode.HTML)
                 return
-            session.file_policy = arg
-            session.provider_state = _prov().new_provider_state()
-            session.clear_pending()
-            _save(event.chat_id, session)
+            _apply_policy_change(event.chat_id, session, arg)
         await msg.reply_text(
             _msg.trust_file_policy_set(arg),
             parse_mode=ParseMode.HTML,
@@ -2837,18 +2833,10 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if arg == "" or arg == "status":
         session = _load(event.chat_id)
         policy = session.file_policy or "edit"
-        buttons = [
-            InlineKeyboardButton(
-                "\u2705 Read only" if policy == "inspect" else "Read only",
-                callback_data="setting_policy:inspect"),
-            InlineKeyboardButton(
-                "\u2705 Read & write" if policy == "edit" else "Read & write",
-                callback_data="setting_policy:edit"),
-        ]
         await msg.reply_text(
             f"File policy: <b>{html.escape(policy)}</b>",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([buttons]),
+            reply_markup=InlineKeyboardMarkup([_settings_policy_buttons(policy)]),
         )
         return
 

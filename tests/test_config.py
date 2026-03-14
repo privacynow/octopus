@@ -4,8 +4,9 @@ import os
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.config import load_config, load_dotenv_file, parse_allowed_users, validate_config
 from tests.support.config_support import make_config
@@ -209,16 +210,30 @@ def test_config_defaults_to_poll():
 
 # -- main.py mode selection --
 
-def test_main_calls_run_polling_in_poll_mode():
-    """When BOT_MODE=poll, main() calls app.run_polling()."""
-    cfg = make_config(bot_mode="poll", database_url="postgresql://bot:bot@localhost:5432/bot")
-    mock_app = MagicMock()
-    from contextlib import contextmanager
+
+def _runtime_ok_provider(name: str = "claude"):
+    """Provider double that matches main()'s startup health contract."""
+    provider = MagicMock()
+    provider.name = name
+    provider.check_runtime_health = AsyncMock(return_value=[])
+    return provider
+
+
+@contextmanager
+def _patched_main_runtime(cfg, mock_app, provider=None):
+    """Patch main() dependencies for mode-selection tests.
+
+    main() now always validates provider runtime auth before starting, so the
+    provider double must expose an awaitable check_runtime_health().
+    """
+    provider = provider or _runtime_ok_provider()
+
     @contextmanager
     def _fake_conn():
         yield MagicMock()
+
     with patch("app.main.load_config", return_value=cfg), \
-         patch("app.main.make_provider"), \
+         patch("app.main.make_provider", return_value=provider), \
          patch("app.main.fail_fast"), \
          patch("app.main.ensure_data_dirs"), \
          patch("app.main.startup_recovery"), \
@@ -231,6 +246,13 @@ def test_main_calls_run_polling_in_poll_mode():
          patch("app.db.postgres_doctor.run_doctor", return_value=[]), \
          patch("app.db.postgres.close_pools"), \
          patch("sys.argv", ["bot"]):
+        yield provider
+
+def test_main_calls_run_polling_in_poll_mode():
+    """When BOT_MODE=poll, main() calls app.run_polling()."""
+    cfg = make_config(bot_mode="poll", database_url="postgresql://bot:bot@localhost:5432/bot")
+    mock_app = MagicMock()
+    with _patched_main_runtime(cfg, mock_app):
         from app.main import main
         main()
     mock_app.run_polling.assert_called_once()
@@ -248,24 +270,7 @@ def test_main_calls_run_webhook_in_webhook_mode():
         database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
-    from contextlib import contextmanager
-    @contextmanager
-    def _fake_conn():
-        yield MagicMock()
-    with patch("app.main.load_config", return_value=cfg), \
-         patch("app.main.make_provider"), \
-         patch("app.main.fail_fast"), \
-         patch("app.main.ensure_data_dirs"), \
-         patch("app.main.startup_recovery"), \
-         patch("app.main.build_application", return_value=mock_app), \
-         patch("app.main.close_db"), \
-         patch("app.main.close_transport_db"), \
-         patch("app.main.recover_stale_claims"), \
-         patch("app.main.purge_old"), \
-         patch("app.db.postgres.get_connection", side_effect=lambda *a, **k: _fake_conn()), \
-         patch("app.db.postgres_doctor.run_doctor", return_value=[]), \
-         patch("app.db.postgres.close_pools"), \
-         patch("sys.argv", ["bot"]):
+    with _patched_main_runtime(cfg, mock_app):
         from app.main import main
         main()
     mock_app.run_webhook.assert_called_once_with(
@@ -287,24 +292,7 @@ def test_main_webhook_empty_secret_passes_none():
         database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
-    from contextlib import contextmanager
-    @contextmanager
-    def _fake_conn():
-        yield MagicMock()
-    with patch("app.main.load_config", return_value=cfg), \
-         patch("app.main.make_provider"), \
-         patch("app.main.fail_fast"), \
-         patch("app.main.ensure_data_dirs"), \
-         patch("app.main.startup_recovery"), \
-         patch("app.main.build_application", return_value=mock_app), \
-         patch("app.main.close_db"), \
-         patch("app.main.close_transport_db"), \
-         patch("app.main.recover_stale_claims"), \
-         patch("app.main.purge_old"), \
-         patch("app.db.postgres.get_connection", side_effect=lambda *a, **k: _fake_conn()), \
-         patch("app.db.postgres_doctor.run_doctor", return_value=[]), \
-         patch("app.db.postgres.close_pools"), \
-         patch("sys.argv", ["bot"]):
+    with _patched_main_runtime(cfg, mock_app):
         from app.main import main
         main()
     call_kwargs = mock_app.run_webhook.call_args[1]

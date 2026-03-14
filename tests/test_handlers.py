@@ -14,14 +14,17 @@ from tests.support.handler_support import (
     FakeProvider,
     FakeUpdate,
     FakeUser,
+    fresh_data_dir,
+    fresh_env,
+    get_callback_data_values,
     last_reply,
     load_session_disk,
     make_config,
+    public_user_config_overrides,
+    send_callback,
     send_command,
     send_text,
     setup_globals,
-    fresh_data_dir,
-    fresh_env,
 )
 
 
@@ -1352,19 +1355,12 @@ async def test_public_settings_shows_managed_and_no_project_policy_buttons():
     """Bucket D: public user /settings shows managed message and no project/policy buttons."""
     import app.telegram_handlers as th
     from app.user_messages import trust_settings_managed_public
-    from tests.support.handler_support import get_callback_data_values
 
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(
-            data_dir,
-            allow_open=True,
-            allowed_user_ids=frozenset({1, 2, 3}),
-            model_profiles={"fast": "claude-fast", "balanced": "claude-balanced"},
-            public_model_profiles=frozenset({"fast"}),
-            projects=(("proj1", "/tmp/proj1", ()),),
-        )
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-fast", "balanced": "claude-balanced"},
+        public_model_profiles=frozenset({"fast"}),
+        projects=(("proj1", "/tmp/proj1", ()),),
+    )) as (data_dir, cfg, prov):
         chat = FakeChat(12345)
         user = FakeUser(999)
         msg = await send_command(th.cmd_settings, chat, user, "/settings")
@@ -1384,19 +1380,12 @@ async def test_public_settings_model_text_and_button_agree_when_default_restrict
     the screen must show Model profile: fast and the fast button must be checked.
     """
     import app.telegram_handlers as th
-    from tests.support.handler_support import get_callback_data_values
 
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(
-            data_dir,
-            allow_open=True,
-            allowed_user_ids=frozenset({1, 2, 3}),
-            model_profiles={"fast": "m1", "balanced": "m2"},
-            default_model_profile="balanced",
-            public_model_profiles=frozenset({"fast"}),
-        )
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "m1", "balanced": "m2"},
+        default_model_profile="balanced",
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
         chat = FakeChat(12345)
         user = FakeUser(999)
         msg = await send_command(th.cmd_settings, chat, user, "/settings")
@@ -1423,16 +1412,10 @@ async def test_public_session_shows_resolved_and_managed_message():
     import app.telegram_handlers as th
     from app.user_messages import trust_settings_managed_public
 
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(
-            data_dir,
-            allow_open=True,
-            allowed_user_ids=frozenset({1, 2, 3}),
-            model_profiles={"fast": "claude-fast"},
-            public_model_profiles=frozenset({"fast"}),
-        )
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-fast"},
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
         chat = FakeChat(12345)
         user = FakeUser(999)
         msg = await send_command(th.cmd_session, chat, user, "/session")
@@ -1445,19 +1428,12 @@ async def test_public_session_shows_resolved_and_managed_message():
 async def test_public_model_shows_only_public_profiles():
     """Bucket D: public user /model shows only public_model_profiles in buttons."""
     import app.telegram_handlers as th
-    from tests.support.handler_support import get_callback_data_values
 
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(
-            data_dir,
-            allow_open=True,
-            allowed_user_ids=frozenset({1, 2, 3}),
-            model_profiles={"fast": "m1", "balanced": "m2", "best": "m3"},
-            default_model_profile="balanced",
-            public_model_profiles=frozenset({"fast"}),
-        )
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "m1", "balanced": "m2", "best": "m3"},
+        default_model_profile="balanced",
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
         chat = FakeChat(12345)
         user = FakeUser(999)
         msg = await send_command(th.cmd_model, chat, user, "/model")
@@ -1472,14 +1448,7 @@ async def test_settings_callback_policy_denial_public():
     import app.telegram_handlers as th
     from app.user_messages import trust_file_policy_public
 
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(
-            data_dir,
-            allow_open=True,
-            allowed_user_ids=frozenset({1, 2, 3}),
-        )
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
+    with fresh_env(config_overrides=public_user_config_overrides()) as (data_dir, cfg, prov):
         chat = FakeChat(12345)
         user = FakeUser(999)
         await send_command(th.cmd_settings, chat, user, "/settings")
@@ -1496,15 +1465,9 @@ async def test_settings_callback_project_denial_public():
     import app.telegram_handlers as th
     from app.user_messages import trust_project_public
 
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(
-            data_dir,
-            allow_open=True,
-            allowed_user_ids=frozenset({1, 2, 3}),
-            projects=(("aproj", "/tmp/a", ()),),
-        )
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
+    with fresh_env(config_overrides=public_user_config_overrides(
+        projects=(("aproj", "/tmp/a", ()),),
+    )) as (data_dir, cfg, prov):
         chat = FakeChat(12345)
         user = FakeUser(999)
         await send_command(th.cmd_settings, chat, user, "/settings")
@@ -1557,6 +1520,142 @@ async def test_session_shows_prompt_weight():
         msg = await send_command(th.cmd_session, chat, user, "/session")
         reply = last_reply(msg)
         assert "Prompt weight" in reply
+
+
+# -- Re-homed from test_request_flow: handler-surface /session, /settings, /model, callbacks ---
+
+async def test_session_command_shows_public_context():
+    """/session display reflects public-user restrictions (resolved context)."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides=public_user_config_overrides(public_working_dir="/tmp/public-sandbox")) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+        msg = await send_command(th.cmd_session, chat, stranger, "/session")
+        reply = last_reply(msg)
+        assert "/tmp/public-sandbox" in reply
+        assert "inspect" in reply.lower()
+
+
+async def test_settings_command_public_user_no_trusted_leak():
+    """/settings for public user must not leak trusted project/path; use resolved context."""
+    import app.telegram_handlers as th
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides=public_user_config_overrides(
+            public_working_dir="/tmp/public-sandbox",
+            projects=(("secret", proj_dir, ()),),
+        )) as (data_dir, cfg, prov):
+            chat = FakeChat(12345)
+            trusted_user = FakeUser(uid=42, username="owner")
+            stranger = FakeUser(uid=999, username="nobody")
+            await send_command(th.cmd_project, chat, trusted_user, "/project", args=["use", "secret"])
+            msg = await send_command(th.cmd_settings, chat, stranger, "/settings")
+            reply = last_reply(msg)
+            assert "/tmp/public-sandbox" in reply
+            assert "inspect" in reply.lower()
+            assert proj_dir not in reply
+            assert "secret" not in reply
+            assert "No project" in reply
+
+
+async def test_settings_command_public_user_keyboard_no_project_or_policy():
+    """/settings keyboard for public user must not include setting_project:* or setting_policy:*."""
+    import app.telegram_handlers as th
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides=public_user_config_overrides(
+            public_working_dir="/tmp/pub",
+            projects=(("myproj", proj_dir, ()),),
+            model_profiles={"fast": "claude-haiku", "best": "claude-opus"},
+            public_model_profiles=frozenset({"fast"}),
+        )) as (data_dir, cfg, prov):
+            chat = FakeChat(12345)
+            stranger = FakeUser(uid=999, username="nobody")
+            msg = await send_command(th.cmd_settings, chat, stranger, "/settings")
+            reply = msg.replies[-1]
+            cbs = get_callback_data_values(reply)
+            assert not any(cb.startswith("setting_project:") for cb in cbs)
+            assert not any(cb.startswith("setting_policy:") for cb in cbs)
+            assert any(cb.startswith("setting_model:") for cb in cbs)
+            assert "setting_compact:on" in cbs or "setting_compact:off" in cbs
+            assert "setting_approval:on" in cbs or "setting_approval:off" in cbs
+
+
+async def test_model_command_public_user_can_switch_to_allowed_profile():
+    """/model fast succeeds for public user when fast is in public_model_profiles."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+        msg = await send_command(th.cmd_model, chat, stranger, "/model fast", args=["fast"])
+        reply = last_reply(msg)
+        assert "fast" in reply.lower()
+        assert "not available" not in reply.lower()
+
+
+async def test_model_command_public_user_rejected_for_restricted_profile():
+    """/model best fails for public user when best is not in public_model_profiles."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+        msg = await send_command(th.cmd_model, chat, stranger, "/model best", args=["best"])
+        reply = last_reply(msg)
+        assert "unknown" in reply.lower() or "available" in reply.lower()
+
+
+async def test_model_callback_public_user_rejected_for_restricted_profile():
+    """setting_model:best callback fails for public user when best is restricted."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+        query, cb_msg = await send_callback(
+            th.handle_settings_callback, chat, stranger, "setting_model:best")
+        replies = cb_msg.replies
+        assert any("restricted" in str(r).lower() or "unknown" in str(r).lower() for r in replies)
+
+
+async def test_model_callback_public_user_allowed_for_available_profile():
+    """setting_model:fast callback succeeds for public user when fast is allowed."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+        query, cb_msg = await send_callback(
+            th.handle_settings_callback, chat, stranger, "setting_model:fast")
+        replies = cb_msg.replies
+        assert any("fast" in str(r).lower() for r in replies)
+        assert not any("restricted" in str(r).lower() for r in replies)
+
+
+async def test_project_callback_public_user_denied():
+    """setting_project:<name> callback is denied for public user."""
+    import app.telegram_handlers as th
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides=public_user_config_overrides(
+            projects=(("myproj", proj_dir, ()),),
+        )) as (data_dir, cfg, prov):
+            chat = FakeChat(12345)
+            stranger = FakeUser(uid=999, username="nobody")
+            query, cb_msg = await send_callback(
+                th.handle_settings_callback, chat, stranger, "setting_project:myproj")
+            replies = cb_msg.replies
+            edit_texts = [r.get("edit_text", "") for r in replies if r.get("edit_text")]
+            assert any(
+                "public" in t.lower() and ("managed" in t.lower() or "not available" in t.lower())
+                for t in edit_texts
+            )
 
 
 # -- Handler edge cases (from test_edge_sessions.py, test_edge_providers.py) --

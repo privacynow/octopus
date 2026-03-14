@@ -216,6 +216,21 @@ def postgres_up(compose_ctx):
     return compose_ctx
 
 
+@pytest.fixture(scope="module")
+def bot_image_built(postgres_up):
+    """Build the bot image once for all tests that need it. Avoids a second ~5 min build."""
+    r = subprocess.run(
+        ["docker", "build", "-f", "Dockerfile.bot", "--build-arg", "BOT_PROVIDER=claude",
+         "-t", str(postgres_up["bot_image"]), "."],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    return postgres_up
+
+
 def test_compose_postgres_up_without_env_bot(e2e_skip, tmp_path):
     """Clean-repo tooling path: postgres comes up without .env.bot.
 
@@ -291,60 +306,49 @@ def test_compose_db_update_smoke(postgres_up):
     assert r.returncode == 0, (r.stdout, r.stderr)
 
 
-def test_compose_bot_image_has_provider(postgres_up):
+def test_compose_bot_image_has_provider(bot_image_built):
     """Supported bot image (Dockerfile.bot) contains the selected provider binary.
 
-    Builds the real provider-enabled image with a worker-local tag, then runs it
-    via compose --profile bot. This is safe alongside parallel E2E runs.
+    Uses the image built by bot_image_built fixture. Runs claude --version in
+    the container with a 60s timeout so interactive auth cannot hang the run.
     """
-    r = subprocess.run(
-        ["docker", "build", "-f", "Dockerfile.bot", "--build-arg", "BOT_PROVIDER=claude",
-         "-t", str(postgres_up["bot_image"]), "."],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=300,
+    r = _compose(
+        bot_image_built, "--profile", "bot", "run", "--rm",
+        "-e", "BOT_PROVIDER=claude", "-e", "TELEGRAM_BOT_TOKEN=fake", "-e", "BOT_ALLOW_OPEN=1",
+        "bot", "sh", "-c", "claude --version",
+        timeout=60,
     )
-    assert r.returncode == 0, (r.stdout, r.stderr)
-    r = _compose(postgres_up, "--profile", "bot", "run", "--rm",
-                 "-e", "BOT_PROVIDER=claude", "-e", "TELEGRAM_BOT_TOKEN=fake", "-e", "BOT_ALLOW_OPEN=1",
-                 "bot", "sh", "-c", "claude --version")
     assert r.returncode == 0, (r.stdout, r.stderr)
     assert "claude" in (r.stdout or "").lower() or "claude" in (r.stderr or "").lower()
 
 
-def test_compose_bot_startup_validates_schema(postgres_up):
+def test_compose_bot_startup_validates_schema(bot_image_built):
     """Supported bot image validates DB/schema, then fails clearly without provider auth.
 
     In CI/local E2E we do not perform an interactive provider login, so the real
     provider-enabled image should reach DB/schema validation and then emit the
     operator-facing provider-auth failure message rather than hanging or failing
     obscurely.
+
+    Uses the image built by bot_image_built (single shared build for bot-image tests).
+    The bot runs provider.check_runtime_health() before printing that message; we
+    wait up to 35s for the message (health check has its own timeouts).
     """
-    r = subprocess.run(
-        ["docker", "build", "-f", "Dockerfile.bot", "--build-arg", "BOT_PROVIDER=claude",
-         "-t", str(postgres_up["bot_image"]), "."],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    r = _compose(bot_image_built, "--profile", "tools", "run", "--rm", "db-bootstrap")
     assert r.returncode == 0, (r.stdout, r.stderr)
-    r = _compose(postgres_up, "--profile", "tools", "run", "--rm", "db-bootstrap")
+    r = _compose(bot_image_built, "--profile", "bot", "up", "-d", "bot")
     assert r.returncode == 0, (r.stdout, r.stderr)
-    r = _compose(postgres_up, "--profile", "bot", "up", "-d", "bot")
-    assert r.returncode == 0, (r.stdout, r.stderr)
-    for _ in range(15):
-        _, logs = _compose_logs(postgres_up, "bot-startup", "bot", "postgres")
+    for _ in range(35):
+        _, logs = _compose_logs(bot_image_built, "bot-startup", "bot", "postgres")
         if "Bot starting (long-poll)" in logs or "Bot starting (webhook)" in logs:
             return
         if "Provider not authenticated or unavailable." in logs and "Run ./scripts/provider_login.sh" in logs:
             return
         time.sleep(1)
     _fail_with_logs(
-        postgres_up,
+        bot_image_built,
         "bot-startup-timeout",
-        "Bot did not reach startup or emit the expected provider-auth failure within 15 seconds.",
+        "Bot did not reach startup or emit the expected provider-auth failure within 35 seconds (provider health check may block on interactive auth).",
         "bot",
         "postgres",
     )

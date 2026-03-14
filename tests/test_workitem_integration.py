@@ -1090,10 +1090,11 @@ async def test_discard_race_after_replay_answers_already_handled():
             )
             await th.handle_recovery_callback(upd, FakeContext())
 
-            # Must answer "already handled", not "Discarded."
+            # Must answer with authoritative already-handled message, not "Discarded."
+            from app.user_messages import recovery_already_handled
             assert query.answered
-            assert "already been handled" in (query.answer_text or ""), (
-                f"Expected 'already been handled', got: {query.answer_text}"
+            assert query.answer_text == recovery_already_handled(), (
+                f"Expected recovery_already_handled(), got: {query.answer_text}"
             )
 
             # Item must NOT have been finalized by the discard path.

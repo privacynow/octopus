@@ -32,9 +32,8 @@ from app.approvals import (
 from app.config import BotConfig
 from app.formatting import extract_send_directives, md_to_telegram_html, split_html, trim_text
 from app.execution_context import ResolvedExecutionContext, resolve_execution_context
-from app.providers.base import Provider, RunContext, PreflightContext
+from app.providers.base import Provider
 from app.request_flow import (
-    build_setup_state,
     check_credential_satisfaction,
     classify_pending_validation,
     extra_dirs_from_denials,
@@ -50,7 +49,6 @@ from app.workflows.pending_request import (
     run_pending_request_event,
 )
 from app.session_state import (
-    AwaitingSkillSetup,
     PendingApproval,
     PendingRetry,
     SessionState,
@@ -60,7 +58,7 @@ from app.session_state import (
 from app.skills import (
     build_run_context, build_preflight_context,
     get_provider_config_digest, get_skill_digests,
-    get_skill_requirements, check_credentials, load_user_credentials,
+    get_skill_requirements,
     save_user_credential, delete_user_credentials, list_user_credential_skills,
     derive_encryption_key,
     build_credential_env,
@@ -79,7 +77,7 @@ from app.storage import (
     list_sessions,
 )
 from app.ratelimit import RateLimiter
-from app.summarize import export_chat_history, load_raw, save_raw, summarize
+from app.summarize import export_chat_history, load_raw, save_raw
 from app import work_queue
 from app.workflows.results import TransportStateCorruption
 from app.transport import (
@@ -557,12 +555,6 @@ def _resolve_project(session: SessionState) -> tuple[str, str, tuple[str, ...]] 
         if name == project_id:
             return (name, root_dir, extra_dirs)
     return None
-
-
-def _project_working_dir(session: SessionState) -> str:
-    """Return the working directory for this session's project, or empty string for default."""
-    proj = _resolve_project(session)
-    return proj[1] if proj else ""
 
 
 def _resolve_context(session: SessionState, trust_tier: str = "trusted") -> ResolvedExecutionContext:
@@ -1367,7 +1359,9 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         wd_display = resolved.working_dir
 
     file_policy = resolved.file_policy or "edit"
-    model_profile = session.model_profile or cfg.default_model_profile or "(default)"
+    _, model_profile = _settings_model_profile_state(
+        session, cfg, trust, resolved.effective_model or ""
+    )
     model_id = resolved.effective_model or cfg.model or "(default)"
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
     compact_display = "on" if compact else "off"
@@ -1401,7 +1395,7 @@ async def cmd_approval(event, update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = event.chat_id
     arg = (event.args[0].lower() if event.args else "status")
     if arg not in {"on", "off", "status"}:
-        await update.effective_message.reply_text("Use /approval on, /approval off, or /approval status.")
+        await update.effective_message.reply_text(_msg.approval_usage())
         return
     async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = _load(chat_id)
@@ -1511,7 +1505,7 @@ async def cmd_export(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     history = export_chat_history(cfg.data_dir, chat_id)
     if not history:
-        await update.effective_message.reply_text("No conversation history to export.")
+        await update.effective_message.reply_text(_msg.no_conversation_to_export())
         return
 
     # Add session metadata header — use resolved context for user-visible data
@@ -1545,7 +1539,7 @@ async def cmd_export(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 @_command_handler
 async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(event.user):
-        await update.effective_message.reply_text("Admin access required.")
+        await update.effective_message.reply_text(_msg.admin_required())
         return
 
     args = event.args
@@ -1560,7 +1554,7 @@ async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
     sessions = list_sessions(cfg.data_dir)
 
     if not sessions:
-        await update.effective_message.reply_text("No sessions found.")
+        await update.effective_message.reply_text(_msg.no_sessions_found())
         return
 
     # Filter stale active_skills that no longer resolve
@@ -1854,7 +1848,7 @@ async def cmd_compact(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         session.compact_mode = mode == "on"
         _save(chat_id, session)
 
-    label = "on — long responses will be summarized" if mode == "on" else "off"
+    label = _msg.settings_compact_on_label() if mode == "on" else _msg.settings_compact_off_label()
     await update.effective_message.reply_text(
         f"Compact mode set to <b>{label}</b>.", parse_mode=ParseMode.HTML,
     )
@@ -2468,12 +2462,12 @@ async def handle_settings_callback(event, query) -> None:
 
         if setting == "model":
             cfg = _cfg()
-            # Use the same availability logic as /model command
             trust = _trust_tier(event.user)
-            if trust == "public" and cfg.public_model_profiles:
-                available = cfg.public_model_profiles & cfg.model_profiles.keys()
-            else:
-                available = set(cfg.model_profiles.keys())
+            resolved = _resolve_context(session, trust_tier=trust)
+            available_list, _ = _settings_model_profile_state(
+                session, cfg, trust, resolved.effective_model or ""
+            )
+            available = set(available_list)
             if value not in available:
                 await query.edit_message_text(_msg.trust_unknown_or_restricted_profile(value))
                 return
@@ -2499,7 +2493,7 @@ async def handle_settings_callback(event, query) -> None:
             session.compact_mode = value == "on"
             _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
-            label = "on — long responses will be summarized" if value == "on" else "off"
+            label = _msg.settings_compact_on_label() if value == "on" else _msg.settings_compact_off_label()
             await query.edit_message_text(
                 f"Compact mode set to <b>{label}</b>.",
                 parse_mode=ParseMode.HTML,
@@ -2654,7 +2648,7 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if arg == "list":
         if not cfg.projects:
-            await msg.reply_text("No projects configured. Set BOT_PROJECTS in your instance config.")
+            await msg.reply_text(_msg.no_projects_configured())
             return
         session = _load(event.chat_id)
         current = session.project_id
@@ -2858,7 +2852,7 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return
 
-    await msg.reply_text("Use /policy inspect, /policy edit, or /policy status.")
+    await msg.reply_text(_msg.policy_usage())
 
 
 class _BotMessage:

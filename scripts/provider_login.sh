@@ -6,35 +6,22 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
+# shellcheck source=scripts/lib_env.sh
+. "$(dirname "$0")/lib_env.sh"
 
-if [ ! -f .env.bot ]; then
-  echo "Create .env.bot first (TELEGRAM_BOT_TOKEN, BOT_PROVIDER, BOT_ALLOWED_USERS or BOT_ALLOW_OPEN=1)." >&2
-  exit 1
-fi
-
-provider=""
+check_env_bot_required
 if [ -n "${1:-}" ]; then
-  provider="$1"
+  case "$1" in
+    claude|codex) provider="$1" ;;
+    *)
+      echo "BOT_PROVIDER must be 'claude' or 'codex', got: $1" >&2
+      exit 1
+      ;;
+  esac
+  check_provider_image "$provider" >/dev/null
 else
-  provider=$(grep -E '^\s*BOT_PROVIDER=' .env.bot 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)
-fi
-if [ -z "$provider" ]; then
-  provider="claude"
-fi
-case "$provider" in
-  claude|codex) ;;
-  *)
-    echo "BOT_PROVIDER must be 'claude' or 'codex', got: $provider" >&2
-    exit 1
-    ;;
-esac
-
-# Ensure the provider image exists; otherwise we may run the wrong image and get "codex: not found" etc.
-if ! docker image inspect "telegram-agent-bot:$provider" >/dev/null 2>&1; then
-  echo "Image telegram-agent-bot:$provider not found." >&2
-  echo "Run: ./scripts/build_bot_image.sh $provider" >&2
-  echo "Then run this script again." >&2
-  exit 1
+  provider=$(get_bot_provider)
+  check_provider_image "$provider" >/dev/null
 fi
 
 # Image selection uses BOT_PROVIDER at Compose parse time (--env-file and shell). Pass it so we run the correct image.

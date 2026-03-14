@@ -7,19 +7,12 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
+# shellcheck source=scripts/lib_env.sh
+. "$(dirname "$0")/lib_env.sh"
 
-if [ ! -f .env.bot ]; then
-  echo "Create .env.bot first (so we know which image to use)." >&2
-  exit 1
-fi
-
-provider=$(grep -E '^\s*BOT_PROVIDER=' .env.bot 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)
-provider="${provider:-claude}"
-if ! docker image inspect "telegram-agent-bot:$provider" >/dev/null 2>&1; then
-  echo "Image telegram-agent-bot:$provider not found." >&2
-  echo "Run: ./scripts/build_bot_image.sh $provider" >&2
-  exit 1
-fi
+check_env_bot_required
+provider=$(get_bot_provider)
+check_provider_image "$provider" >/dev/null
 
 echo "Clearing provider auth state from bot-home volume (no Postgres required)..."
 docker compose --profile bot run --rm --env-file .env.bot bot-provider sh -c '

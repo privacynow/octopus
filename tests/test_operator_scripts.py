@@ -22,11 +22,17 @@ def test_provider_status_reminds_full_doctor():
 
 
 def test_provider_status_requires_env_bot():
-    """provider_status.sh must fail clearly when .env.bot is missing."""
+    """provider_status.sh (or its sourced lib) must tell operator to create .env.bot when missing."""
     repo = Path(__file__).resolve().parent.parent
     script = repo / "scripts" / "provider_status.sh"
-    text = script.read_text()
-    assert ".env.bot" in text
-    assert "Create .env.bot" in text or "create .env.bot" in text.lower(), (
-        "provider_status.sh must tell operator to create .env.bot when missing"
+    lib_env = repo / "scripts" / "lib_env.sh"
+    script_text = script.read_text()
+    assert ".env.bot" in script_text
+    # Message may live in script or in sourced lib_env.sh
+    script_has_message = "Create .env.bot" in script_text or "create .env.bot" in script_text.lower()
+    lib_has_message = (
+        lib_env.read_text().count("Create .env.bot") >= 1 or "create .env.bot" in lib_env.read_text().lower()
+    )
+    assert script_has_message or lib_has_message, (
+        "provider_status.sh or scripts/lib_env.sh must tell operator to create .env.bot when missing"
     )

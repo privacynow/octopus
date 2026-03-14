@@ -665,6 +665,28 @@ def _apply_model_change(chat_id: int, session: SessionState, value: str) -> None
     _save(chat_id, session)
 
 
+def _apply_model_selection(
+    chat_id: int,
+    session: SessionState,
+    profile: str,
+    cfg: BotConfig,
+    trust_tier: str,
+) -> tuple[bool, str]:
+    """Validate model profile for this context, apply if allowed, return (ok, message).
+
+    Single authority for both cmd_model and handle_settings_callback model branch.
+    Caller sends the returned message (reply or edit_text).
+    """
+    resolved = _resolve_context(session, trust_tier=trust_tier)
+    effective = resolved.effective_model or ""
+    available_list, _ = _settings_model_profile_state(session, cfg, trust_tier, effective)
+    available = set(available_list)
+    if profile not in available:
+        return (False, _msg.trust_model_profile_not_available(profile, list(available_list)))
+    _apply_model_change(chat_id, session, profile)
+    return (True, _msg.trust_model_profile_set(profile, cfg.model_profiles[profile]))
+
+
 def _apply_project_change(
     chat_id: int, session: SessionState, value: str
 ) -> tuple[bool, str]:
@@ -2040,16 +2062,10 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
     arg = event.args[0].lower() if event.args else ""
 
     if arg and arg != "status":
-        if arg not in available:
-            await msg.reply_text(_msg.trust_unknown_profile_available(list(available)))
-            return
         async with _chat_lock(chat_id, message=msg, update_id=update.update_id):
             session = _load(chat_id)
-            _apply_model_change(chat_id, session, arg)
-        await msg.reply_text(
-            _msg.trust_model_profile_set(arg, cfg.model_profiles[arg]),
-            parse_mode=ParseMode.HTML,
-        )
+            _ok, text = _apply_model_selection(chat_id, session, arg, cfg, trust)
+        await msg.reply_text(text, parse_mode=ParseMode.HTML)
         return
 
     # Show current + inline keyboard (same effective-profile source as /settings)
@@ -2566,20 +2582,9 @@ async def handle_settings_callback(event, query) -> None:
         if setting == "model":
             cfg = _cfg()
             trust = _trust_tier(event.user)
-            resolved = _resolve_context(session, trust_tier=trust)
-            available_list, _ = _settings_model_profile_state(
-                session, cfg, trust, resolved.effective_model or ""
-            )
-            available = set(available_list)
-            if value not in available:
-                await query.edit_message_text(_msg.trust_unknown_or_restricted_profile(value))
-                return
-            _apply_model_change(chat_id, session, value)
+            _ok, text = _apply_model_selection(chat_id, session, value, cfg, trust)
             await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(
-                _msg.trust_model_profile_set(value, cfg.model_profiles[value]),
-                parse_mode=ParseMode.HTML,
-            )
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML)
 
         elif setting == "approval":
             if value not in {"on", "off"}:

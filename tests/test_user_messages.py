@@ -117,6 +117,15 @@ def test_trust_model_profile_set_contains_placeholders():
     assert "fast" in out and "claude" in out
 
 
+def test_trust_model_profile_not_available_canonical():
+    """Canonical model-selection denial: profile + available list (command/callback parity)."""
+    out = msg.trust_model_profile_not_available("best", ["fast", "balanced"])
+    assert "best" in out and "not available" in out
+    assert "fast" in out and "balanced" in out
+    out_empty = msg.trust_model_profile_not_available("x", [])
+    assert "x" in out_empty and "not available" in out_empty
+
+
 # ---------------------------------------------------------------------------
 # E. Bucket C — no-op / busy / wrong-user clarity
 # ---------------------------------------------------------------------------

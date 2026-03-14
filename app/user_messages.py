@@ -331,9 +331,16 @@ def trust_project_public() -> str:
     return "Project selection is managed by the operator in public mode."
 
 
-def trust_unknown_or_restricted_profile(profile: str) -> str:
-    """When model profile is unknown or not allowed for this user."""
-    return f"Unknown or restricted profile: {_html.escape(profile)}"
+def trust_model_profile_not_available(profile: str, available: list[str]) -> str:
+    """Canonical denial when requested model profile is not available for this context.
+
+    Used by both /model and setting_model:* so command and callback share the same contract.
+    """
+    escaped_profile = _html.escape(profile)
+    if available:
+        available_str = ", ".join(_html.escape(p) for p in available)
+        return f"Profile <b>{escaped_profile}</b> is not available for this chat. Available: {available_str}"
+    return f"Profile <b>{escaped_profile}</b> is not available for this chat."
 
 
 def trust_model_profile_set(profile: str, model_id: str) -> str:
@@ -378,11 +385,6 @@ def trust_file_policy_set(value: str) -> str:
 def trust_no_model_profiles() -> str:
     """When no model profiles are configured."""
     return "No model profiles configured. Set BOT_MODEL_PROFILES."
-
-
-def trust_unknown_profile_available(available: list[str]) -> str:
-    """When profile argument is unknown. available is list of profile names."""
-    return f"Unknown profile. Available: {', '.join(available)}"
 
 
 def trust_settings_managed_public() -> str:

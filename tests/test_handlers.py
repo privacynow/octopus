@@ -1580,8 +1580,9 @@ async def test_settings_command_public_user_keyboard_no_project_or_policy():
 
 
 async def test_model_command_public_user_can_switch_to_allowed_profile():
-    """/model fast succeeds for public user when fast is in public_model_profiles."""
+    """/model fast succeeds for public user; reply is exact canonical success message."""
     import app.telegram_handlers as th
+    from app import user_messages as uimsg
     with fresh_env(config_overrides=public_user_config_overrides(
         model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
         public_model_profiles=frozenset({"fast"}),
@@ -1590,13 +1591,14 @@ async def test_model_command_public_user_can_switch_to_allowed_profile():
         stranger = FakeUser(uid=999, username="nobody")
         msg = await send_command(th.cmd_model, chat, stranger, "/model fast", args=["fast"])
         reply = last_reply(msg)
-        assert "fast" in reply.lower()
-        assert "not available" not in reply.lower()
+        expected = uimsg.trust_model_profile_set("fast", cfg.model_profiles["fast"])
+        assert reply == expected
 
 
 async def test_model_command_public_user_rejected_for_restricted_profile():
-    """/model best fails for public user when best is not in public_model_profiles."""
+    """/model best fails for public user; reply is exact canonical denial message."""
     import app.telegram_handlers as th
+    from app import user_messages as uimsg
     with fresh_env(config_overrides=public_user_config_overrides(
         model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
         public_model_profiles=frozenset({"fast"}),
@@ -1605,12 +1607,14 @@ async def test_model_command_public_user_rejected_for_restricted_profile():
         stranger = FakeUser(uid=999, username="nobody")
         msg = await send_command(th.cmd_model, chat, stranger, "/model best", args=["best"])
         reply = last_reply(msg)
-        assert "unknown" in reply.lower() or "available" in reply.lower()
+        expected = uimsg.trust_model_profile_not_available("best", ["fast"])
+        assert reply == expected
 
 
 async def test_model_callback_public_user_rejected_for_restricted_profile():
-    """setting_model:best callback fails for public user when best is restricted."""
+    """setting_model:best callback fails for public user; edit_text is exact canonical denial."""
     import app.telegram_handlers as th
+    from app import user_messages as uimsg
     with fresh_env(config_overrides=public_user_config_overrides(
         model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
         public_model_profiles=frozenset({"fast"}),
@@ -1619,13 +1623,16 @@ async def test_model_callback_public_user_rejected_for_restricted_profile():
         stranger = FakeUser(uid=999, username="nobody")
         query, cb_msg = await send_callback(
             th.handle_settings_callback, chat, stranger, "setting_model:best")
-        replies = cb_msg.replies
-        assert any("restricted" in str(r).lower() or "unknown" in str(r).lower() for r in replies)
+        edit_texts = [r.get("edit_text", "") for r in cb_msg.replies if r.get("edit_text")]
+        assert edit_texts
+        expected = uimsg.trust_model_profile_not_available("best", ["fast"])
+        assert edit_texts[-1] == expected
 
 
 async def test_model_callback_public_user_allowed_for_available_profile():
-    """setting_model:fast callback succeeds for public user when fast is allowed."""
+    """setting_model:fast callback succeeds for public user; edit_text is exact canonical success."""
     import app.telegram_handlers as th
+    from app import user_messages as uimsg
     with fresh_env(config_overrides=public_user_config_overrides(
         model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
         public_model_profiles=frozenset({"fast"}),
@@ -1634,14 +1641,57 @@ async def test_model_callback_public_user_allowed_for_available_profile():
         stranger = FakeUser(uid=999, username="nobody")
         query, cb_msg = await send_callback(
             th.handle_settings_callback, chat, stranger, "setting_model:fast")
-        replies = cb_msg.replies
-        assert any("fast" in str(r).lower() for r in replies)
-        assert not any("restricted" in str(r).lower() for r in replies)
+        edit_texts = [r.get("edit_text", "") for r in cb_msg.replies if r.get("edit_text")]
+        assert edit_texts
+        expected = uimsg.trust_model_profile_set("fast", cfg.model_profiles["fast"])
+        assert edit_texts[-1] == expected
+
+
+async def test_model_command_and_callback_same_denial_contract():
+    """Parity: /model <restricted> and setting_model:<restricted> produce the same denial message."""
+    import app.telegram_handlers as th
+    from app import user_messages as uimsg
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-haiku", "best": "claude-opus"},
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+        cmd_msg = await send_command(th.cmd_model, chat, stranger, "/model best", args=["best"])
+        cmd_reply = last_reply(cmd_msg)
+        query, cb_msg = await send_callback(
+            th.handle_settings_callback, chat, stranger, "setting_model:best")
+        edit_texts = [r.get("edit_text", "") for r in cb_msg.replies if r.get("edit_text")]
+        assert edit_texts
+        cb_denial = edit_texts[-1]
+        assert cmd_reply == cb_denial == uimsg.trust_model_profile_not_available("best", ["fast"])
+
+
+async def test_model_command_and_callback_same_success_contract():
+    """Parity: /model <allowed> and setting_model:<allowed> produce the same success message."""
+    import app.telegram_handlers as th
+    from app import user_messages as uimsg
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-haiku", "best": "claude-opus"},
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+        cmd_msg = await send_command(th.cmd_model, chat, stranger, "/model fast", args=["fast"])
+        cmd_reply = last_reply(cmd_msg)
+        query, cb_msg = await send_callback(
+            th.handle_settings_callback, chat, stranger, "setting_model:fast")
+        edit_texts = [r.get("edit_text", "") for r in cb_msg.replies if r.get("edit_text")]
+        assert edit_texts
+        cb_success = edit_texts[-1]
+        expected = uimsg.trust_model_profile_set("fast", cfg.model_profiles["fast"])
+        assert cmd_reply == cb_success == expected
 
 
 async def test_project_callback_public_user_denied():
-    """setting_project:<name> callback is denied for public user."""
+    """setting_project:<name> callback is denied for public user; edit_text equals trust_project_public()."""
     import app.telegram_handlers as th
+    from app.user_messages import trust_project_public
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides=public_user_config_overrides(
             projects=(("myproj", proj_dir, ()),),
@@ -1650,12 +1700,9 @@ async def test_project_callback_public_user_denied():
             stranger = FakeUser(uid=999, username="nobody")
             query, cb_msg = await send_callback(
                 th.handle_settings_callback, chat, stranger, "setting_project:myproj")
-            replies = cb_msg.replies
-            edit_texts = [r.get("edit_text", "") for r in replies if r.get("edit_text")]
-            assert any(
-                "public" in t.lower() and ("managed" in t.lower() or "not available" in t.lower())
-                for t in edit_texts
-            )
+            edit_texts = [r.get("edit_text", "") for r in cb_msg.replies if r.get("edit_text")]
+            assert edit_texts
+            assert edit_texts[-1] == trust_project_public()
 
 
 # -- Handler edge cases (from test_edge_sessions.py, test_edge_providers.py) --

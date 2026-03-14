@@ -299,3 +299,93 @@ def test_upload_isolation_provider_commands():
         extra_dirs=["/tmp/data/uploads/111"]
     )
     assert "/tmp/data/uploads/111" in cmd_with
+
+
+# -- Session contract: corruption fallback --
+
+def test_load_session_corrupt_provider_state_falls_back_to_defaults():
+    """If stored provider_state is not a mapping (e.g. a list), load_session must
+    fall back to defaults instead of raising TypeError."""
+    import sqlite3
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        # Save a valid session first
+        s = default_session("claude", {"session_id": "abc", "started": False}, "on")
+        save_session(data_dir, 55555, s)
+        # Corrupt provider_state to a list in the raw JSON
+        db_path = data_dir / "sessions.db"
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute("SELECT data FROM sessions WHERE chat_id = 55555").fetchone()
+        import json as _json
+        data = _json.loads(row[0])
+        data["provider_state"] = [1, 2, 3]  # not a mapping
+        conn.execute("UPDATE sessions SET data = ? WHERE chat_id = 55555", (_json.dumps(data),))
+        conn.commit()
+        conn.close()
+        # Close cached connection so load_session re-reads the corrupted file
+        from app.storage import close_db
+        close_db(data_dir)
+        # Must not raise — should fall back to fresh provider_state
+        loaded = load_session(data_dir, 55555, "claude", lambda: {"session_id": "new", "started": False}, "on")
+        assert isinstance(loaded["provider_state"], dict)
+        assert loaded["provider_state"]["session_id"] == "new"
+        # Prove the row was actually found and partially loaded (not a fresh/empty session)
+        assert loaded["created_at"] == s["created_at"], "session row was not read — test is blind"
+        _reset_db(data_dir)
+
+
+def test_created_at_preserved_on_resave():
+    """created_at must not change on subsequent saves (write-once contract)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        s = default_session("claude", {"session_id": "abc", "started": False}, "on")
+        original_created = s["created_at"]
+        save_session(data_dir, 77777, s)
+        # Load, mutate, and re-save
+        loaded = load_session(data_dir, 77777, "claude", lambda: {"session_id": "abc", "started": False}, "on")
+        loaded["role"] = "test-role"
+        save_session(data_dir, 77777, loaded)
+        # Reload and verify created_at is unchanged
+        reloaded = load_session(data_dir, 77777, "claude", lambda: {"session_id": "abc", "started": False}, "on")
+        assert reloaded["created_at"] == original_created
+        _reset_db(data_dir)
+
+
+def test_falsy_created_at_normalized_on_save():
+    """If created_at is falsy (empty string), save must normalize it to a
+    real timestamp so it round-trips as a non-empty value."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        s = default_session("claude", {"session_id": "abc", "started": False}, "on")
+        s["created_at"] = ""  # force falsy
+        save_session(data_dir, 88888, s)
+        loaded = load_session(data_dir, 88888, "claude", lambda: {"session_id": "abc", "started": False}, "on")
+        assert loaded["created_at"] != "", "falsy created_at was not normalized on save"
+        assert len(loaded["created_at"]) > 10, "created_at should be an ISO timestamp"
+        _reset_db(data_dir)
+
+
+def test_load_session_non_object_json_falls_back_to_defaults():
+    """If stored JSON decodes to a non-object (e.g. a list), load_session must
+    fall back to defaults instead of raising AttributeError."""
+    import sqlite3
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        s = default_session("claude", {"session_id": "abc", "started": False}, "on")
+        save_session(data_dir, 66666, s)
+        # Overwrite stored data with a valid-JSON non-object
+        db_path = data_dir / "sessions.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("UPDATE sessions SET data = '[]' WHERE chat_id = 66666")
+        conn.commit()
+        conn.close()
+        from app.storage import close_db
+        close_db(data_dir)
+        loaded = load_session(data_dir, 66666, "claude", lambda: {"session_id": "new", "started": False}, "on")
+        assert isinstance(loaded["provider_state"], dict)
+        assert loaded["provider"] == "claude"
+        _reset_db(data_dir)

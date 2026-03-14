@@ -450,8 +450,10 @@ def record_and_enqueue(
                 created_at=now,
             )
         return True, item_id
-    except sqlite3.IntegrityError:
-        return False, None
+    except sqlite3.IntegrityError as exc:
+        if "updates.update_id" in str(exc):
+            return False, None
+        raise
 
 
 def record_update(
@@ -471,8 +473,10 @@ def record_update(
                 (update_id, chat_id, user_id, kind, payload, now),
             )
         return True
-    except sqlite3.IntegrityError:
-        return False
+    except sqlite3.IntegrityError as exc:
+        if "updates.update_id" in str(exc):
+            return False
+        raise
 
 
 def enqueue_work_item(

@@ -99,10 +99,16 @@ class SQLiteSessionStore:
             pass
 
     def _upsert(self, conn: sqlite3.Connection, chat_id: int, session: dict[str, Any]) -> None:
+        from datetime import datetime, timezone
         has_pending = (
             session.get("pending_approval") is not None
             or session.get("pending_retry") is not None
         )
+        # Normalize timestamps before serializing so JSON data and column agree
+        if not session.get("created_at"):
+            session["created_at"] = datetime.now(timezone.utc).isoformat()
+        if not session.get("updated_at"):
+            session["updated_at"] = datetime.now(timezone.utc).isoformat()
         conn.execute(
             """INSERT OR REPLACE INTO sessions
                (chat_id, provider, data, has_pending, has_setup,
@@ -116,8 +122,8 @@ class SQLiteSessionStore:
                 1 if session.get("awaiting_skill_setup") is not None else 0,
                 session.get("project_id"),
                 session.get("file_policy"),
-                session.get("created_at", ""),
-                session.get("updated_at", ""),
+                session["created_at"],
+                session["updated_at"],
             ),
         )
 
@@ -162,7 +168,7 @@ class SQLiteSessionStore:
                     fresh_state = provider_state_factory()
                     fresh_state.update(saved.get("provider_state", {}))
                     session["provider_state"] = fresh_state
-            except (json.JSONDecodeError, KeyError):
+            except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
                 pass
         return session
 

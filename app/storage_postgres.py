@@ -47,8 +47,8 @@ def load_session(
     if row is None:
         return session
     raw = row[0]
-    saved = raw if isinstance(raw, dict) else json.loads(raw)
     try:
+        saved = raw if isinstance(raw, dict) else json.loads(raw)
         for key in (
             "active_skills", "role", "pending_approval", "pending_retry",
             "awaiting_skill_setup", "compact_mode", "project_id", "file_policy",
@@ -63,7 +63,7 @@ def load_session(
             fresh_state = provider_state_factory()
             fresh_state.update(saved.get("provider_state", {}))
             session["provider_state"] = fresh_state
-    except (json.JSONDecodeError, KeyError, TypeError):
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
         pass
     return session
 
@@ -74,9 +74,14 @@ def _upsert(conn, chat_id: int, session: dict[str, Any]) -> None:
         or session.get("pending_retry") is not None
     )
     has_setup = session.get("awaiting_skill_setup") is not None
+    # Normalize timestamps before serializing so JSON data and column agree
+    if not session.get("created_at"):
+        session["created_at"] = datetime.now(timezone.utc).isoformat()
+    if not session.get("updated_at"):
+        session["updated_at"] = datetime.now(timezone.utc).isoformat()
+    created_at = session["created_at"]
+    updated_at = session["updated_at"]
     data_json = json.dumps(session, sort_keys=True)
-    created_at = session.get("created_at", "") or datetime.now(timezone.utc).isoformat()
-    updated_at = session.get("updated_at", "") or datetime.now(timezone.utc).isoformat()
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -90,7 +95,6 @@ def _upsert(conn, chat_id: int, session: dict[str, Any]) -> None:
                 has_setup = EXCLUDED.has_setup,
                 project_id = EXCLUDED.project_id,
                 file_policy = EXCLUDED.file_policy,
-                created_at = EXCLUDED.created_at,
                 updated_at = EXCLUDED.updated_at
             """,
             (

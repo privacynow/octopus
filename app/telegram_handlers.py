@@ -570,6 +570,30 @@ def _resolve_context(session: SessionState, trust_tier: str = "trusted") -> Reso
     return resolve_execution_context(session, _cfg(), _prov().name, trust_tier=trust_tier)
 
 
+def _settings_model_profile_state(
+    session: SessionState,
+    cfg: BotConfig,
+    trust_tier: str,
+    effective_model: str,
+) -> tuple[list[str], str]:
+    """Return (available profile names sorted, current profile name for display/checkmark).
+
+    For public users, current is derived from effective_model over public profiles only,
+    so text and keyboard selection stay consistent when saved/default is restricted.
+    """
+    if trust_tier == "public" and cfg.public_model_profiles and cfg.model_profiles:
+        available = sorted(cfg.public_model_profiles & cfg.model_profiles.keys())
+        current = "(default)"
+        for p in available:
+            if cfg.model_profiles.get(p) == effective_model:
+                current = p
+                break
+        return (available, current)
+    available = sorted(cfg.model_profiles.keys()) if cfg.model_profiles else []
+    current = session.model_profile or cfg.default_model_profile or "(default)"
+    return (available, current)
+
+
 # -- Helpers ---------------------------------------------------------------
 
 def _allowed_roots(chat_id: int, resolved: ResolvedExecutionContext | None = None) -> list[Path]:
@@ -1317,6 +1341,8 @@ async def cmd_new(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     session = _load(event.chat_id)
     cfg = _cfg()
+    trust = _trust_tier(event.user)
+    resolved = _resolve_context(session, trust_tier=trust)
     pstate = session.provider_state
 
     # Show provider-relevant session ID
@@ -1329,7 +1355,6 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         session_line = f"Thread: <code>{html.escape(str(tid))}</code>"
 
     pending = "yes" if session.has_pending else "no"
-    resolved = _resolve_context(session, trust_tier=_trust_tier(event.user))
     role_display = resolved.role or "(default)"
     skills_display = ", ".join(resolved.active_skills) if resolved.active_skills else "(none)"
     approval_mode = session.approval_mode
@@ -1352,7 +1377,7 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     sys_prompt = build_system_prompt(resolved.role, resolved.active_skills)
     prompt_weight = f"~{len(sys_prompt)} chars" if sys_prompt else "minimal"
 
-    await update.effective_message.reply_text(
+    body = (
         f"Provider: <code>{html.escape(_prov().name)}</code>\n"
         f"Instance: <code>{html.escape(cfg.instance)}</code>\n"
         f"Working dir: <code>{html.escape(wd_display)}</code>\n"
@@ -1364,9 +1389,11 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"Approval mode: <code>{approval_mode}</code> ({approval_source})\n"
         f"Role: <code>{html.escape(role_display)}</code>\n"
         f"Skills: <code>{html.escape(skills_display)}</code>\n"
-        f"Pending: <code>{pending}</code>",
-        parse_mode=ParseMode.HTML,
+        f"Pending: <code>{pending}</code>"
     )
+    if trust == "public":
+        body += "\n\n" + _msg.trust_settings_managed_public()
+    await update.effective_message.reply_text(body, parse_mode=ParseMode.HTML)
 
 
 @_command_handler
@@ -1902,12 +1929,11 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await msg.reply_text(_msg.trust_no_model_profiles())
         return
 
-    # Determine available profiles
     trust = _trust_tier(event.user)
-    if trust == "public" and cfg.public_model_profiles:
-        available = sorted(cfg.public_model_profiles & cfg.model_profiles.keys())
-    else:
-        available = sorted(cfg.model_profiles.keys())
+    session = _load(chat_id)
+    from app.execution_context import resolve_effective_model
+    effective = resolve_effective_model(session, cfg, trust)
+    available, current = _settings_model_profile_state(session, cfg, trust, effective or "")
 
     arg = event.args[0].lower() if event.args else ""
 
@@ -1925,12 +1951,7 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return
 
-    # Show current + inline keyboard
-    session = _load(chat_id)
-    current = session.model_profile or cfg.default_model_profile or "(none)"
-    from app.execution_context import resolve_effective_model
-    effective = resolve_effective_model(session, cfg, trust)
-
+    # Show current + inline keyboard (same effective-profile source as /settings)
     buttons = []
     for profile in available:
         label = f"\u2705 {profile}" if profile == current else profile
@@ -2734,8 +2755,10 @@ async def cmd_settings(event, update: Update, context: ContextTypes.DEFAULT_TYPE
     policy = resolved.file_policy or "edit"
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
     compact_label = "on" if compact else "off"
-    model_display = session.model_profile or cfg.default_model_profile or "(default)"
     effective_model = resolved.effective_model
+    model_available, model_display = _settings_model_profile_state(
+        session, cfg, trust, effective_model or ""
+    )
     approval = session.approval_mode
 
     lines = [
@@ -2769,18 +2792,12 @@ async def cmd_settings(event, update: Update, context: ContextTypes.DEFAULT_TYPE
             InlineKeyboardButton("\u2705 Read & write" if policy == "edit" else "Read & write", callback_data="setting_policy:edit"),
         ]
         keyboard.append(row)
-    if cfg.model_profiles:
-        available = (
-            sorted(cfg.public_model_profiles & cfg.model_profiles.keys())
-            if trust == "public" and cfg.public_model_profiles
-            else sorted(cfg.model_profiles.keys())
-        )
-        if available:
-            row = []
-            for profile in available:
-                label = f"\u2705 {profile}" if (session.model_profile or cfg.default_model_profile) == profile else profile
-                row.append(InlineKeyboardButton(label, callback_data=f"setting_model:{profile}"))
-            keyboard.append(row)
+    if model_available:
+        row = []
+        for profile in model_available:
+            label = f"\u2705 {profile}" if profile == model_display else profile
+            row.append(InlineKeyboardButton(label, callback_data=f"setting_model:{profile}"))
+        keyboard.append(row)
     row = [
         InlineKeyboardButton("\u2705 Short answers" if compact else "Short answers", callback_data="setting_compact:on"),
         InlineKeyboardButton("\u2705 Full answers" if not compact else "Full answers", callback_data="setting_compact:off"),

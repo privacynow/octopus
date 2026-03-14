@@ -307,11 +307,6 @@ def progress_action_blocked() -> str:
     return "Action blocked."
 
 
-def progress_liveness() -> str:
-    """Liveness text is passed through from provider; this is the wrapper meaning."""
-    return ""  # caller uses event.detail
-
-
 # ---------------------------------------------------------------------------
 # Trust / profile / settings (restrictions and clarity)
 # ---------------------------------------------------------------------------
@@ -393,6 +388,46 @@ def trust_unknown_profile_available(available: list[str]) -> str:
 def trust_settings_managed_public() -> str:
     """Line in /settings for public users."""
     return "Project selection and file policy are managed by the operator in public mode."
+
+
+def settings_compact_on_label() -> str:
+    """Label for compact mode on (settings and callback)."""
+    return "on — long responses will be summarized"
+
+
+def settings_compact_off_label() -> str:
+    """Label for compact mode off."""
+    return "off"
+
+
+def admin_required() -> str:
+    """When non-admin tries an admin-only action."""
+    return "Admin access required."
+
+
+def no_sessions_found() -> str:
+    """When admin lists sessions and there are none."""
+    return "No sessions found."
+
+
+def no_conversation_to_export() -> str:
+    """When /export but no conversation history."""
+    return "No conversation history to export."
+
+
+def no_projects_configured() -> str:
+    """When projects are referenced but BOT_PROJECTS is not set."""
+    return "No projects configured. Set BOT_PROJECTS in your instance config."
+
+
+def approval_usage() -> str:
+    """Usage hint for /approval."""
+    return "Use /approval on, /approval off, or /approval status."
+
+
+def policy_usage() -> str:
+    """Usage hint for /policy."""
+    return "Use /policy inspect, /policy edit, or /policy status."
 
 
 # ---------------------------------------------------------------------------

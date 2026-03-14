@@ -5,22 +5,14 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
+# shellcheck source=scripts/lib_env.sh
+. "$(dirname "$0")/lib_env.sh"
 
 echo "=== Guided setup and start ==="
 
 # 1. .env.bot
-if [ ! -f .env.bot ]; then
-  echo "Create .env.bot first with: TELEGRAM_BOT_TOKEN, BOT_PROVIDER (claude or codex), and BOT_ALLOWED_USERS or BOT_ALLOW_OPEN=1"
-  echo "Example:"
-  echo "  TELEGRAM_BOT_TOKEN=<from @BotFather>"
-  echo "  BOT_PROVIDER=claude"
-  echo "  BOT_ALLOWED_USERS=123456789"
-  echo "See README.md Quick Start step 2."
-  exit 1
-fi
-
-env_provider=$(grep -E '^\s*BOT_PROVIDER=' .env.bot 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)
-env_provider="${env_provider:-claude}"
+check_env_bot_required
+env_provider=$(get_bot_provider)
 
 # 2. Postgres + bootstrap + doctor (no bot config required)
 echo "Step 1/4: Postgres and database..."

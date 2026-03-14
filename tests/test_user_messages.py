@@ -153,3 +153,15 @@ def test_credential_cancellation_messages():
     assert "cancelled" in msg.credential_setup_cancelled().lower() or "cancel" in msg.credential_setup_cancelled().lower()
     assert "another" in msg.credential_setup_another_user_in_progress().lower() or "admin" in msg.credential_setup_another_user_in_progress().lower()
     assert "clear" in msg.credential_clear_cancelled().lower() or "credential" in msg.credential_clear_cancelled().lower()
+
+
+def test_settings_and_admin_messages_bucket_e():
+    """Bucket E: settings/admin/usage messages centralized and non-empty."""
+    assert "summarized" in msg.settings_compact_on_label().lower() or "long" in msg.settings_compact_on_label().lower()
+    assert msg.settings_compact_off_label() == "off"
+    assert "admin" in msg.admin_required().lower()
+    assert "session" in msg.no_sessions_found().lower() or "found" in msg.no_sessions_found().lower()
+    assert "conversation" in msg.no_conversation_to_export().lower() or "export" in msg.no_conversation_to_export().lower()
+    assert "project" in msg.no_projects_configured().lower() or "BOT_PROJECTS" in msg.no_projects_configured()
+    assert "/approval" in msg.approval_usage()
+    assert "/policy" in msg.policy_usage()

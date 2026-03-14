@@ -7,6 +7,7 @@ from pathlib import Path
 from app.providers.base import RunContext, RunResult
 from app.storage import default_session, save_session
 from tests.support.handler_support import (
+    FakeCallbackQuery,
     FakeChat,
     FakeContext,
     FakeMessage,
@@ -1345,6 +1346,174 @@ async def test_settings_callback_project_clear():
             assert session.get("project_id", "") == ""
             edit = cb_msg.replies[-1].get("edit_text", "")
             assert "Project cleared" in edit
+
+
+async def test_public_settings_shows_managed_and_no_project_policy_buttons():
+    """Bucket D: public user /settings shows managed message and no project/policy buttons."""
+    import app.telegram_handlers as th
+    from app.user_messages import trust_settings_managed_public
+    from tests.support.handler_support import get_callback_data_values
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            allow_open=True,
+            allowed_user_ids=frozenset({1, 2, 3}),
+            model_profiles={"fast": "claude-fast", "balanced": "claude-balanced"},
+            public_model_profiles=frozenset({"fast"}),
+            projects=(("proj1", "/tmp/proj1", ()),),
+        )
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        msg = await send_command(th.cmd_settings, chat, user, "/settings")
+        text = msg.replies[0]["text"]
+        assert trust_settings_managed_public() in text
+        cbs = get_callback_data_values(msg.replies[0])
+        assert not any(cb.startswith("setting_project:") for cb in cbs)
+        assert "setting_policy:inspect" not in cbs
+        assert "setting_policy:edit" not in cbs
+        assert any(cb.startswith("setting_model:") for cb in cbs)
+
+
+async def test_public_settings_model_text_and_button_agree_when_default_restricted():
+    """Bucket D follow-up: public /settings shows same profile in text and as selected button.
+
+    When default_model_profile is restricted (e.g. balanced) and public only has fast,
+    the screen must show Model profile: fast and the fast button must be checked.
+    """
+    import app.telegram_handlers as th
+    from tests.support.handler_support import get_callback_data_values
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            allow_open=True,
+            allowed_user_ids=frozenset({1, 2, 3}),
+            model_profiles={"fast": "m1", "balanced": "m2"},
+            default_model_profile="balanced",
+            public_model_profiles=frozenset({"fast"}),
+        )
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        msg = await send_command(th.cmd_settings, chat, user, "/settings")
+        reply = msg.replies[0]
+        text = reply["text"]
+        assert "Model profile:" in text
+        assert "fast" in text
+        cbs = get_callback_data_values(reply)
+        assert "setting_model:fast" in cbs
+        assert not any(cb.startswith("setting_model:") and cb != "setting_model:fast" for cb in cbs)
+        markup = reply.get("reply_markup")
+        assert markup is not None
+        checkmark = "\u2705"
+        for row in markup.inline_keyboard:
+            for btn in row:
+                if getattr(btn, "callback_data", None) == "setting_model:fast":
+                    assert btn.text.startswith(checkmark), "fast button must be selected (checkmark)"
+                    return
+        assert False, "setting_model:fast button not found"
+
+
+async def test_public_session_shows_resolved_and_managed_message():
+    """Bucket D: public user /session shows resolved context and operator-managed message."""
+    import app.telegram_handlers as th
+    from app.user_messages import trust_settings_managed_public
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            allow_open=True,
+            allowed_user_ids=frozenset({1, 2, 3}),
+            model_profiles={"fast": "claude-fast"},
+            public_model_profiles=frozenset({"fast"}),
+        )
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+        text = msg.replies[0]["text"]
+        assert trust_settings_managed_public() in text
+        assert "inspect" in text
+        assert "Working dir" in text or "Provider" in text
+
+
+async def test_public_model_shows_only_public_profiles():
+    """Bucket D: public user /model shows only public_model_profiles in buttons."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import get_callback_data_values
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            allow_open=True,
+            allowed_user_ids=frozenset({1, 2, 3}),
+            model_profiles={"fast": "m1", "balanced": "m2", "best": "m3"},
+            default_model_profile="balanced",
+            public_model_profiles=frozenset({"fast"}),
+        )
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        msg = await send_command(th.cmd_model, chat, user, "/model")
+        cbs = get_callback_data_values(msg.replies[0])
+        model_buttons = [c for c in cbs if c.startswith("setting_model:")]
+        assert len(model_buttons) == 1
+        assert "setting_model:fast" in model_buttons
+
+
+async def test_settings_callback_policy_denial_public():
+    """Bucket D: public user clicking policy button gets trust_file_policy_public (command/callback parity)."""
+    import app.telegram_handlers as th
+    from app.user_messages import trust_file_policy_public
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            allow_open=True,
+            allowed_user_ids=frozenset({1, 2, 3}),
+        )
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        await send_command(th.cmd_settings, chat, user, "/settings")
+        cb_msg = FakeMessage(chat=chat)
+        query = FakeCallbackQuery("setting_policy:edit", message=cb_msg)
+        update = FakeUpdate(user=user, chat=chat, callback_query=query)
+        await th.handle_settings_callback(update, FakeContext())
+        edit_text = cb_msg.replies[-1].get("edit_text", "")
+        assert edit_text == trust_file_policy_public()
+
+
+async def test_settings_callback_project_denial_public():
+    """Bucket D: public user clicking project button gets trust_project_public (command/callback parity)."""
+    import app.telegram_handlers as th
+    from app.user_messages import trust_project_public
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            allow_open=True,
+            allowed_user_ids=frozenset({1, 2, 3}),
+            projects=(("aproj", "/tmp/a", ()),),
+        )
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        await send_command(th.cmd_settings, chat, user, "/settings")
+        cb_msg = FakeMessage(chat=chat)
+        query = FakeCallbackQuery("setting_project:aproj", message=cb_msg)
+        update = FakeUpdate(user=user, chat=chat, callback_query=query)
+        await th.handle_settings_callback(update, FakeContext())
+        edit_text = cb_msg.replies[-1].get("edit_text", "")
+        assert edit_text == trust_project_public()
 
 
 async def test_settings_callback_project_clears_pending():

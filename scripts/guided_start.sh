@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Single guided path: Postgres, build, provider login (if needed), then start the bot.
-# For non-technical users: one script from .env.bot to running bot.
+# Single guided path: build, provider login (if needed), then start the bot. Local Runtime (SQLite) by default.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -8,19 +7,14 @@ cd "$REPO_DIR"
 # shellcheck source=scripts/lib_env.sh
 . "$(dirname "$0")/lib_env.sh"
 
-echo "=== Guided setup and start ==="
+echo "=== Guided setup and start (Local Runtime) ==="
 
 # 1. .env.bot
 check_env_bot_required
 env_provider=$(get_bot_provider)
 
-# 2. Postgres + bootstrap + doctor (no bot config required)
-echo "Step 1/4: Postgres and database..."
-./scripts/dev_up.sh
-
-# 3. Ensure provider image exists and is not stale (repo/Dockerfile changed since build)
-echo ""
-echo "Step 2/4: Bot image for $env_provider..."
+# 2. Ensure provider image exists and is not stale
+echo "Step 1/3: Bot image for $env_provider..."
 need_build=0
 if ! docker image inspect "telegram-agent-bot:$env_provider" >/dev/null 2>&1; then
   need_build=1
@@ -76,9 +70,9 @@ else
   echo "Image telegram-agent-bot:$env_provider already present and up to date."
 fi
 
-# 4. Provider auth: check, run login if needed, then re-check
+# 3. Provider auth: check, run login if needed, then re-check
 echo ""
-echo "Step 3/4: Provider auth..."
+echo "Step 2/3: Provider auth..."
 if ./scripts/provider_status.sh >/dev/null 2>&1; then
   echo "Provider already authenticated."
 else
@@ -91,9 +85,9 @@ else
   fi
 fi
 
-# 5. Start bot and verify it stayed up
+# 4. Start bot and verify it stayed up
 echo ""
-echo "Step 4/4: Starting bot (background service)..."
+echo "Step 3/3: Starting bot (background service)..."
 docker compose --profile bot --env-file .env.bot up -d bot
 
 echo "Waiting a few seconds to confirm the bot stayed up..."

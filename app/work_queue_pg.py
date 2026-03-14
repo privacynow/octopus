@@ -16,7 +16,7 @@ from app.workflows.transport_recovery import (
     TransportWorkflowModel,
     run_transport_event,
 )
-from app.work_queue import (
+from app.transport_contract import (
     ApplyResult,
     DiscardResult,
     ReclaimBlocked,

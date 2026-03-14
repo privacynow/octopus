@@ -7,7 +7,7 @@ from pathlib import Path
 import app.telegram_handlers as _th
 from app.providers.base import RunResult
 from app.ratelimit import RateLimiter
-from app.storage import close_all_db, close_db, ensure_data_dirs, load_session
+from app.storage import close_db, ensure_data_dirs, load_session
 from app import work_queue as _work_queue
 from tests.support.config_support import make_config as _make_config
 
@@ -17,7 +17,11 @@ def reset_handler_test_runtime() -> None:
 
     Call before/after tests so no state leaks between cases. Required for
     parallel-safe handler tests (Priority 4).
+    Phase 13: reset backend first so session_store()/transport_store() are valid.
     """
+    import app.runtime_backend as _rb
+    _rb.reset_for_test()
+
     _th._config = None
     _th._provider = None
     _th._boot_id = ""
@@ -31,13 +35,7 @@ def reset_handler_test_runtime() -> None:
         pass
     global _next_update_id
     _next_update_id = 0
-    close_all_db()
-    _work_queue.close_all_transport_db()
-    # Phase 12: clear Postgres backend so tests use SQLite unless they set it
-    import app.storage as _storage_mod
-    import app.work_queue as _wq_mod
-    _storage_mod.set_postgres_backend("")
-    _wq_mod.set_postgres_backend("")
+    # Backend lifecycle is owned by runtime_backend.reset_for_test() above; no duplicate close.
 
 
 @contextlib.contextmanager

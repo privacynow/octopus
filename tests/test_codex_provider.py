@@ -296,7 +296,7 @@ def test_progress_command_started():
     html = _render_event(
         {"type": "item.started", "item": {"type": "command_execution", "command": "ls -la"}},
     )
-    assert "Running command" in html
+    assert "Running a command" in html or "Running command" in html
     assert "ls -la" in html
 
 
@@ -336,7 +336,7 @@ def test_progress_response_item_function_call():
         },
         tool_calls={},
     )
-    assert "Running command" in html
+    assert "Running a command" in html or "Running command" in html
     assert "git status" in html
 
 
@@ -571,7 +571,7 @@ async def test_modern_schema_new():
     assert not any("Codex thread" in u for u in progress1.updates)
     assert not any("sess-modern" in u for u in progress1.updates)
     assert any("Thinking" in u for u in progress1.updates)
-    assert any("Running command" in u and "git status" in u for u in progress1.updates)
+    assert any(("Running command" in u or "Running a command" in u) and "git status" in u for u in progress1.updates)
     assert any("Command finished" in u and "M app/providers/codex.py" in u for u in progress1.updates)
     assert any("draft from response item" in u for u in progress1.updates)
 

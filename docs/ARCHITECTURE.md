@@ -6,16 +6,15 @@ lives in [STATUS-commercial-polish.md](STATUS-commercial-polish.md).
 
 For end-user usage, start with [README.md](../README.md).
 
-Phase 12 is complete: the **shipped runtime today** is Postgres-only. The app
-requires `BOT_DATABASE_URL` at startup and validates schema via DB doctor before
-running. SQLite remains in the codebase today mostly as historical/local-mode
-implementation material while the **roadmap after Phase 12** now changes direction:
-introduce backend-neutral storage/runtime contracts and restore a first-class
-**Local Runtime** mode with SQLite as the default backend for both Docker and
-host deployments, while deferring **Shared Runtime** Postgres queue authority
-to a later capability tier. Roadmap work preserves the Phase 11 workflow and
-repository ownership and the typed session, transport-payload, and
-execution-context contracts described here.
+Phase 13 is complete: **Local Runtime** is the only supported mode. The default
+path is **SQLite** (no `BOT_DATABASE_URL`); **Postgres** is a supported alternate
+backend when `BOT_DATABASE_URL` is set. **Shared Runtime** is out of scope until
+a later phase.
+
+- **Runtime matrix:** local + sqlite = default; local + postgres = supported; shared = rejected.
+- **Backend seam:** `app/runtime_backend.py` is the only backend selector; `storage.py` and `work_queue.py` are backend-neutral facades. Implementations: `storage_sqlite`, `storage_postgres`, `work_queue_sqlite`, `work_queue_postgres`.
+- **Contract suites:** `tests/contracts/test_session_store_contract.py` and `tests/contracts/test_transport_store_contract.py` run against both SQLite and Postgres and define backend-neutral behavior.
+- **E2E:** Primary gate is `test_compose_sqlite_local_runtime_primary` (Docker bot, no Postgres). Bounded Postgres coverage: bootstrap/doctor and bot startup with Postgres tooling.
 
 ---
 

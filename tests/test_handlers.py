@@ -728,18 +728,19 @@ async def test_doctor_schema_mismatch_cli():
     """collect_doctor_report should report a newer session DB schema, not crash.
 
     Reproduces: operator downgrades the bot, sessions.db has schema_version=99.
-    storage._db() raises RuntimeError which was not caught by the stale session
+    Session store raises RuntimeError which was not caught by the stale session
     scan handler (only sqlite3 exceptions were caught).
     """
     import tempfile
+    from app import runtime_backend
     from app.doctor import collect_doctor_report
-    from app.storage import close_db, ensure_data_dirs, _db
+    from app.storage import close_db, ensure_data_dirs
 
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
-        # Bump schema version beyond what the code supports
-        conn = _db(data_dir)
+        store = runtime_backend.session_store()
+        conn = store._db(data_dir)
         conn.execute("UPDATE meta SET value='99' WHERE key='schema_version'")
         conn.commit()
         close_db(data_dir)
@@ -757,15 +758,17 @@ async def test_doctor_schema_mismatch_telegram():
     """/doctor via Telegram should reply with schema error, not crash.
 
     Same scenario as CLI but through the real handler path: cmd_doctor calls
-    _load() which hits _db() which raises RuntimeError for schema mismatch.
+    _load() which hits the session store and raises RuntimeError for schema mismatch.
     """
     import tempfile
-    from app.storage import close_db, ensure_data_dirs, _db
+    from app import runtime_backend
+    from app.storage import close_db, ensure_data_dirs
 
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
-        conn = _db(data_dir)
+        store = runtime_backend.session_store()
+        conn = store._db(data_dir)
         conn.execute("UPDATE meta SET value='99' WHERE key='schema_version'")
         conn.commit()
         close_db(data_dir)

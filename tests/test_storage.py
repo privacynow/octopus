@@ -53,8 +53,8 @@ def test_session_management():
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
-        assert (data_dir / "sessions.db").exists()
         assert (data_dir / "uploads").is_dir()
+        # sessions.db is created on first session use (no longer by ensure_data_dirs)
 
         # default_session
         s = default_session("claude", {"session_id": "abc", "started": False}, "on")
@@ -64,8 +64,9 @@ def test_session_management():
         assert "created_at" in s
         assert "updated_at" in s
 
-        # save + load
+        # save + load (first use creates sessions.db)
         save_session(data_dir, 12345, s)
+        assert (data_dir / "sessions.db").exists()
         assert session_exists(data_dir, 12345)
         assert not session_exists(data_dir, 99998)
 
@@ -194,8 +195,9 @@ def test_json_file_migration():
         # Also a corrupt file — should be skipped
         (sessions_dir / "bad.json").write_text("{corrupt")
 
-        # Initialize DB — should migrate JSON files
         ensure_data_dirs(data_dir)
+        # First use of session store creates DB and runs JSON migration
+        list_sessions(data_dir)
 
         assert not sessions_dir.exists()
         assert (data_dir / "sessions.db").exists()

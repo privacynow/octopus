@@ -1348,16 +1348,17 @@ async def test_project_includes_next_step_hint():
             assert "buttons below" in reply or "project list" in reply.lower()
 
 
-async def test_project_no_projects_includes_list_hint():
-    """Phase 14: /project (no projects configured) includes /project list discoverability hint."""
+async def test_project_no_projects_shows_no_projects_configured():
+    """Phase 14 follow-up: /project when no projects configured shows truthful message, not /project list hint."""
     import app.telegram_handlers as th
-    from app.user_messages import project_list_discover_hint
+    from app.user_messages import no_projects_configured, project_list_discover_hint
     with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
         chat = FakeChat(1)
         user = FakeUser(42)
         msg = await send_command(th.cmd_project, chat, user, "/project")
         reply = last_reply(msg)
-        assert project_list_discover_hint() in reply
+        assert no_projects_configured() in reply
+        assert project_list_discover_hint() not in reply
 
 
 async def test_settings_callback_project_use():
@@ -1586,7 +1587,7 @@ async def test_session_shows_prompt_weight():
 
 
 async def test_session_includes_control_surface_hint_trusted():
-    """Phase 14: /session for trusted user includes pointer to /settings, /project, /model."""
+    """Phase 14: /session for trusted user includes pointer to /settings, /project, /model (chat settings)."""
     import app.telegram_handlers as th
     from app.user_messages import session_control_surface_hint_trusted
     with fresh_env(config_overrides={
@@ -1598,11 +1599,12 @@ async def test_session_includes_control_surface_hint_trusted():
         msg = await send_command(th.cmd_session, chat, user, "/session")
         reply = last_reply(msg)
         assert session_control_surface_hint_trusted() in reply
+        assert "change chat settings" in reply
         assert "/project" in reply
 
 
 async def test_session_control_surface_hint_public_no_project():
-    """Phase 14: /session for public user must not advertise /project in control-surface hint."""
+    """Phase 14: /session for public user must not advertise /project; hint says change chat settings."""
     import app.telegram_handlers as th
     from app.user_messages import session_control_surface_hint_public
     with fresh_env(config_overrides=public_user_config_overrides(
@@ -1615,7 +1617,7 @@ async def test_session_control_surface_hint_public_no_project():
         msg = await send_command(th.cmd_session, chat, user, "/session")
         reply = last_reply(msg)
         assert session_control_surface_hint_public() in reply
-        assert "Use /settings or /model" in reply
+        assert "change chat settings" in reply
         assert "Use /settings, /project, or /model" not in reply
 
 

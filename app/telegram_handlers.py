@@ -2748,6 +2748,11 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         await msg.reply_text(reply_text, parse_mode=ParseMode.HTML)
         return
 
+    # No projects configured: do not point user at /project list (dead end)
+    if not cfg.projects:
+        await msg.reply_text(_msg.no_projects_configured())
+        return
+
     # Default: show current project with discoverable inline choices
     session = _load(event.chat_id)
     proj = _resolve_project(session)

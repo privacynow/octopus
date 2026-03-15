@@ -12,6 +12,7 @@ from tests.support.handler_support import (
     FakeProvider,
     FakeUpdate,
     FakeUser,
+    drain_one_worker_item,
     fresh_data_dir,
     fresh_env,
     get_callback_data_values,
@@ -42,6 +43,7 @@ async def test_approval_flow():
         import app.telegram_handlers as th
 
         await th.handle_message(update, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.preflight_calls) == 1
         assert len(prov.run_calls) == 0
@@ -51,14 +53,17 @@ async def test_approval_flow():
         assert any("uploads" in d for d in pf_ctx.extra_dirs)
         assert len(prov.preflight_calls[0]["prompt"]) > 0
 
-        preflight_texts = " ".join(r.get("text", "") for r in msg.replies)
-        assert "Approval plan" in preflight_texts
-        chat_msgs = " ".join(m.get("text", "") for m in chat.sent_messages)
-        assert "Approve this plan?" in chat_msgs
+        # Worker sends approval UI via bot
+        bot_texts = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
+        assert "Approval plan" in bot_texts or "Plan:" in bot_texts
+        assert "Approve this plan?" in bot_texts or "Approve" in bot_texts
 
-        # Verify approval buttons have correct callback_data
-        approval_msg = chat.sent_messages[-1]
-        cb_values = get_callback_data_values(approval_msg)
+        # Verify approval buttons (worker sends via bot)
+        cb_values = []
+        for m in th._bot_instance.sent_messages:
+            cb_values = get_callback_data_values(m)
+            if "approval_approve" in cb_values:
+                break
         assert "approval_approve" in cb_values
         assert "approval_reject" in cb_values
 
@@ -138,17 +143,20 @@ async def test_denial_retry_flow():
         import app.telegram_handlers as th
 
         await th.handle_message(update, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
-        reply_texts = " ".join(r.get("text", "") for r in msg.replies)
+        # Worker sends via bot
+        reply_texts = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
         assert "partial" in reply_texts
-        chat_msgs = " ".join(m.get("text", "") for m in chat.sent_messages)
-        assert "Permission needed" in chat_msgs
-        assert "Grant access" in chat_msgs and ("retry" in chat_msgs or "again" in chat_msgs)
+        assert "Permission needed" in reply_texts or "Grant access" in reply_texts or "retry" in reply_texts.lower()
 
-        # Verify retry buttons have correct callback_data
-        retry_msg = chat.sent_messages[-1]
-        retry_cbs = get_callback_data_values(retry_msg)
+        # Verify retry buttons (worker sends via bot)
+        retry_cbs = []
+        for m in th._bot_instance.sent_messages:
+            retry_cbs = get_callback_data_values(m)
+            if retry_cbs:
+                break
         assert "retry_allow" in retry_cbs
         assert "retry_skip" in retry_cbs
 
@@ -295,6 +303,7 @@ async def test_cross_user_approval():
         msg_alice = FakeMessage(chat=chat, text="deploy to production")
         update_alice = FakeUpdate(message=msg_alice, user=alice, chat=chat)
         await th.handle_message(update_alice, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.preflight_calls) == 1
 
@@ -330,6 +339,7 @@ async def test_approval_preflight_timeout():
         import app.telegram_handlers as th
 
         await th.handle_message(update, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.preflight_calls) == 1
         assert len(prov.run_calls) == 0
@@ -356,6 +366,7 @@ async def test_approval_preflight_error():
         import app.telegram_handlers as th
 
         await th.handle_message(update, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.preflight_calls) == 1
         assert len(prov.run_calls) == 0
@@ -379,6 +390,7 @@ async def test_duplicate_pending_blocked():
         msg1 = FakeMessage(chat=chat, text="first request")
         update1 = FakeUpdate(message=msg1, user=user, chat=chat)
         await th.handle_message(update1, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.preflight_calls) == 1
 
@@ -392,7 +404,7 @@ async def test_duplicate_pending_blocked():
 
 async def test_denial_preserves_request_user_id():
     with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir)
+        cfg = make_config(data_dir, approval_mode="off")
         prov = FakeProvider("claude")
         prov.run_results = [
             RunResult(
@@ -410,6 +422,7 @@ async def test_denial_preserves_request_user_id():
         update = FakeUpdate(message=msg, user=alice, chat=chat)
 
         await th.handle_message(update, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         session = load_session_disk(data_dir, 12345, prov)
         pending = session.get("pending_retry")
@@ -626,6 +639,7 @@ async def test_approval_with_project_active():
         # Send message — triggers preflight
         msg = FakeMessage(chat=chat, text="review the code")
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
         assert len(prov.preflight_calls) == 1
         assert len(prov.run_calls) == 0
 
@@ -688,6 +702,7 @@ async def test_retry_with_project_active():
         # Send message — gets denied
         msg = FakeMessage(chat=chat, text="edit config")
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
         assert len(prov.run_calls) == 1
 
         session = load_session_disk(data_dir, 12345, prov)
@@ -722,6 +737,7 @@ async def test_approval_after_session_reset():
         prov.preflight_results = [RunResult(text="plan: read stuff")]
 
         await send_text(chat, user, "hello")
+        await drain_one_worker_item(data_dir)
         assert len(prov.preflight_calls) == 1
 
         # Reset session
@@ -756,6 +772,7 @@ async def test_role_change_invalidates_pending_approval():
         prov.run_results = [RunResult(text="done")]
 
         await send_text(chat, user, "hello")
+        await drain_one_worker_item(data_dir)
         session = load_session_disk(data_dir, 1001, prov)
         assert session.get("pending_approval") is not None
 

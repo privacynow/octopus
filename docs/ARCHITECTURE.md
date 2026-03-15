@@ -382,7 +382,7 @@ outcome.
 
 - SQLite `transport.db` has a versioned schema and local validation/migration
   for supported layouts
-- Postgres uses `sql/postgres/` migrations for the same durable transport
+- Postgres uses `app/db/migrations/postgres/` migrations for the same durable transport
   contract
 - Both backends must satisfy the same transport-store contract suites
 - Unsupported schema/layout fails fast with a neutral error
@@ -1367,7 +1367,7 @@ debugging and tests.
   Postgres DSN to use Postgres as the backend for the same product/runtime
   contract. The app validates backend compatibility at startup.
 - **Optional Postgres workflows:** explicit repo-owned DB commands
-  (`scripts/db_bootstrap.sh`, `scripts/db_update.sh`, `scripts/db_doctor.sh`)
+  (`scripts/db/db_bootstrap.sh`, `scripts/db/db_update.sh`, `scripts/db/db_doctor.sh`)
   prepare and verify Postgres before the bot starts when `BOT_DATABASE_URL` is
   set.
 - **Environment identity:** Each running bot environment has its own database,
@@ -1379,15 +1379,15 @@ debugging and tests.
   2. repo-owned DB/runtime commands apply schema and validate compatibility
   3. the app validates and runs; it does not create the DB, role, or schema at startup
 - **Primary operational model:** Dockerized bot is the main operator path.
-  `./scripts/guided_start.sh` is the main zero-to-running path for SQLite Local
-  Runtime. `./scripts/dev_up_postgres.sh` exists for the alternate Postgres
+  `./scripts/app/guided_start.sh` is the main zero-to-running path for SQLite Local
+  Runtime. `./scripts/db/dev_up_postgres.sh` exists for the alternate Postgres
   backend.
 - **Supported bot image:** The supported Docker path uses a **real provider-enabled
   image** (includes the chosen Claude or Codex CLI). Build it with
-  `./scripts/build_bot_image.sh`; the script selects the image target from
+  `./scripts/provider/build_bot_image.sh`; the script selects the image target from
   `BOT_PROVIDER` so operators don’t choose Docker targets manually. Built from
-  `Dockerfile.bot` (shared base + provider-specific stage). A **stub-provider
-  image** (`Dockerfile.runnable`) exists only for **test/dev smoke** (e.g. E2E
+  `infra/docker/Dockerfile.bot` (shared base + provider-specific stage). A **stub-provider
+  image** (`infra/docker/Dockerfile.runnable`) exists only for **test/dev smoke** (e.g. E2E
   when the real CLI is unavailable) and is not the supported runtime.
 - **Provider authentication contract:** Docker-first operation keeps the real
   provider CLI inside the image, but **auth state is not baked into the image**:
@@ -1399,7 +1399,7 @@ debugging and tests.
   This keeps the product Docker-first while preserving the subscription-style
   CLI login model for Claude Code and Codex.
 - **Provider-login ownership:** The supported onboarding flow is one
-  uniform repo-owned command (for example `scripts/provider_login.sh`) that
+  uniform repo-owned command (for example `scripts/provider/provider_login.sh`) that
   reads `BOT_PROVIDER`, launches the provider-specific login flow in-container,
   then verifies provider health using the same image + volume pair that the
   runtime bot will use. Operators should not need to know provider-specific

@@ -46,7 +46,7 @@ use. The standard setup is one guided script.
 3. **Run the guided setup**
 
    ```bash
-   ./scripts/guided_start.sh
+   ./scripts/app/guided_start.sh
    ```
 
    The script builds what it needs, walks you through provider login if needed,
@@ -67,7 +67,7 @@ The bot is designed to feel simple from Telegram:
 - upload files when you want the agent to inspect them
 - use `/cancel` if you want to stop the current request
 
-After a `git pull`, run `./scripts/guided_start.sh` again. It will rebuild and
+After a `git pull`, run `./scripts/app/guided_start.sh` again. It will rebuild and
 restart the bot if needed.
 
 ## Using the Bot
@@ -145,8 +145,8 @@ to see the full output whenever you need it.
 
 ### Provider not authenticated or unavailable
 
-If startup tells you to run `./scripts/provider_login.sh`, do that once and
-then run `./scripts/guided_start.sh` again.
+If startup tells you to run `./scripts/provider/provider_login.sh`, do that once and
+then run `./scripts/app/guided_start.sh` again.
 
 The login script will walk you through the right sign-in flow for your
 provider.
@@ -163,13 +163,13 @@ docker compose --profile bot --env-file .env.bot run --rm bot python -m app.main
 
 Try these in order:
 
-1. Run `./scripts/guided_start.sh` again
+1. Run `./scripts/app/guided_start.sh` again
 2. If it asks for provider login, complete that step
 3. Run `/doctor` in Telegram or the full app health command above
 
 ### `claude` or `codex` not found
 
-Run `./scripts/guided_start.sh` again. It will rebuild the bot image if needed.
+Run `./scripts/app/guided_start.sh` again. It will rebuild the bot image if needed.
 
 ### Polling conflict
 

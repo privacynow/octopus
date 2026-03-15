@@ -1,92 +1,115 @@
-"""Contract tests: README Commands section must not document non-existent commands.
+"""Contract tests: README commands section matches the simplified user-facing contract.
 
-Milestone E: the command table is user-facing documentation. It must only list
-commands that exist (registered CommandHandlers). /retry and /clear were removed
-because they do not exist as top-level commands (retry is via inline buttons;
-conversation clear is /new).
+The README intentionally documents a practical subset for first-time users
+(Most Useful Commands). Tests enforce that contract: the section exists, uses
+the allowed title, includes the simplified command set, and must NOT list
+removed/non-top-level commands (/retry, /clear).
 """
 
 import re
 from pathlib import Path
 
 
+# Section title: shipped README uses "Most Useful Commands"; allow "Commands" as fallback.
+_COMMANDS_SECTION_RE = re.compile(
+    r"## (?:Most Useful Commands|Commands)\s+(.*?)(?=\n## |\Z)",
+    re.DOTALL,
+)
+
+
+def _get_commands_section(readme_path: Path) -> str | None:
+    """Extract the user-facing commands section. Returns None if not found."""
+    text = readme_path.read_text()
+    m = _COMMANDS_SECTION_RE.search(text)
+    return m.group(1) if m else None
+
+
+# Simplified set the README is required to document (product contract).
+_REQUIRED_COMMANDS = [
+    "/start",
+    "/help",
+    "/approval",
+    "/approve",
+    "/reject",
+    "/cancel",
+    "/send <path>",
+    "/skills",
+    "/skills list",
+    "/skills add <name>",
+    "/skills setup <name>",
+    "/settings",
+    "/session",
+    "/doctor",
+]
+
+# Must NOT appear as top-level commands (retry is via buttons; clear is /new).
+_FORBIDDEN_AS_COMMANDS = ["/retry", "/clear"]
+
+
+def test_readme_has_user_facing_commands_section():
+    """README must contain a user-facing commands section (Most Useful Commands or Commands)."""
+    repo = Path(__file__).resolve().parent.parent
+    readme = repo / "README.md"
+    assert readme.exists()
+    section = _get_commands_section(readme)
+    assert section is not None, (
+        "README should have a user-facing commands section titled "
+        '"## Most Useful Commands" or "## Commands"'
+    )
+
+
 def test_readme_commands_section_does_not_list_retry_or_clear():
     """README must not document /retry or /clear as top-level commands."""
     repo = Path(__file__).resolve().parent.parent
     readme = repo / "README.md"
-    assert readme.exists()
-    text = readme.read_text()
-    # Commands section: from "## Commands" to next "## " or end
-    match = re.search(r"## Commands\s+(.*?)(?=\n## |\Z)", text, re.DOTALL)
-    assert match, "README should have a Commands section"
-    commands_section = match.group(1)
-    # Must not list /retry or /clear as command rows (| `/retry` or | `/clear`)
-    assert "| `/retry`" not in commands_section, (
-        "README must not list /retry (no such command; retry is via inline buttons)"
-    )
-    assert "| `/clear`" not in commands_section, (
-        "README must not list /clear (no such command; conversation clear is /new)"
-    )
+    section = _get_commands_section(readme)
+    assert section is not None
+    for forbidden in _FORBIDDEN_AS_COMMANDS:
+        assert f"| `{forbidden}`" not in section, (
+            f"README must not list {forbidden} (no such top-level command)"
+        )
+
+
+def test_readme_commands_section_includes_simplified_set():
+    """README commands section must include the simplified practical command set."""
+    repo = Path(__file__).resolve().parent.parent
+    readme = repo / "README.md"
+    section = _get_commands_section(readme)
+    assert section is not None
+    # Core identifiers that must appear (table may use | `/cmd` | or similar)
+    required_parts = [
+        "/start", "/help", "approval", "/approve", "/reject", "/cancel",
+        "/send", "/skills", "skills list", "skills add", "skills setup",
+        "/settings", "/session", "/doctor",
+    ]
+    for part in required_parts:
+        assert part in section, (
+            f"README commands section must include {part!r} (simplified contract)"
+        )
 
 
 def test_readme_commands_section_includes_settings():
-    """README Commands section must include /settings for discoverability (Bucket B)."""
+    """README commands section must include /settings (Bucket B discoverability)."""
     repo = Path(__file__).resolve().parent.parent
     readme = repo / "README.md"
-    text = readme.read_text()
-    match = re.search(r"## Commands\s+(.*?)(?=\n## |\Z)", text, re.DOTALL)
-    assert match
-    commands_section = match.group(1)
-    assert "| `/settings`" in commands_section or "/settings" in commands_section, (
-        "README Commands section must include /settings"
-    )
-
-
-def test_readme_commands_section_includes_project():
-    """README Commands section must include /project for discoverability (Bucket B)."""
-    repo = Path(__file__).resolve().parent.parent
-    readme = repo / "README.md"
-    text = readme.read_text()
-    match = re.search(r"## Commands\s+(.*?)(?=\n## |\Z)", text, re.DOTALL)
-    assert match
-    commands_section = match.group(1)
-    assert "| `/project`" in commands_section or "/project" in commands_section, (
-        "README Commands section must include /project"
-    )
+    section = _get_commands_section(readme)
+    assert section is not None
+    assert "/settings" in section
 
 
 def test_readme_commands_section_includes_session():
-    """README Commands section must include /session for discoverability (Bucket B)."""
+    """README commands section must include /session (Bucket B discoverability)."""
     repo = Path(__file__).resolve().parent.parent
     readme = repo / "README.md"
-    text = readme.read_text()
-    match = re.search(r"## Commands\s+(.*?)(?=\n## |\Z)", text, re.DOTALL)
-    assert match
-    commands_section = match.group(1)
-    assert "| `/session`" in commands_section or "/session" in commands_section, (
-        "README Commands section must include /session"
-    )
+    section = _get_commands_section(readme)
+    assert section is not None
+    assert "/session" in section
 
 
-def test_readme_commands_section_includes_role_send_and_id():
-    """README Commands section should document other shipped core/session commands."""
+def test_readme_commands_section_includes_doctor():
+    """README commands section must include /doctor for health check discoverability."""
     repo = Path(__file__).resolve().parent.parent
     readme = repo / "README.md"
-    text = readme.read_text()
-    match = re.search(r"## Commands\s+(.*?)(?=\n## |\Z)", text, re.DOTALL)
-    assert match
-    commands_section = match.group(1)
-    for command in ("/role <text>", "/send <path>", "/id"):
-        assert command in commands_section, f"README Commands section must include {command}"
-
-
-def test_readme_commands_section_includes_skill_search_and_admin_sessions():
-    """README Commands section should include managed/discoverability skill commands."""
-    repo = Path(__file__).resolve().parent.parent
-    readme = repo / "README.md"
-    text = readme.read_text()
-    match = re.search(r"## Commands\s+(.*?)(?=\n## |\Z)", text, re.DOTALL)
-    assert match
-    commands_section = match.group(1)
-    for command in ("/skills info <name>", "/skills search <query>", "/admin sessions"):
-        assert command in commands_section, f"README Commands section must include {command}"
+    section = _get_commands_section(readme)
+    assert section is not None
+    assert "/doctor" in section

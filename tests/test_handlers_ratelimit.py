@@ -6,6 +6,7 @@ from tests.support.handler_support import (
     FakeChat,
     FakeProvider,
     FakeUser,
+    drain_one_worker_item,
     last_reply,
     make_config,
     send_text,
@@ -28,8 +29,11 @@ async def test_rate_limit_blocks_after_threshold():
         user = FakeUser(42)
 
         msg1 = await send_text(chat, user, "first")
+        await drain_one_worker_item(data_dir)
         msg2 = await send_text(chat, user, "second")
+        await drain_one_worker_item(data_dir)
         msg3 = await send_text(chat, user, "third")
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 2
         all_replies = " ".join(r.get("text", r.get("edit_text", "")) for r in msg3.replies)
@@ -56,8 +60,11 @@ async def test_rate_limit_admin_exempt():
         admin = FakeUser(42)
 
         await send_text(chat, admin, "first")
+        await drain_one_worker_item(data_dir)
         await send_text(chat, admin, "second")
+        await drain_one_worker_item(data_dir)
         await send_text(chat, admin, "third")
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 3
 
@@ -77,6 +84,7 @@ async def test_rate_limit_disabled_by_default():
 
         for i in range(5):
             await send_text(chat, user, f"msg {i}")
+            await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 5
 
@@ -96,9 +104,13 @@ async def test_rate_limit_per_user_isolation():
         user_b = FakeUser(200)
 
         await send_text(chat, user_a, "hello")
+        await drain_one_worker_item(data_dir)
         await send_text(chat, user_b, "hello")
+        await drain_one_worker_item(data_dir)
         msg_a2 = await send_text(chat, user_a, "again")
+        await drain_one_worker_item(data_dir)
         msg_b2 = await send_text(chat, user_b, "again")
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 2
         a2_replies = " ".join(r.get("text", r.get("edit_text", "")) for r in msg_a2.replies)
@@ -129,7 +141,9 @@ async def test_rate_limit_implicit_admin_not_exempt():
         user = FakeUser(42)
 
         await send_text(chat, user, "first")
+        await drain_one_worker_item(data_dir)
         msg2 = await send_text(chat, user, "second")
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         all_replies = " ".join(r.get("text", r.get("edit_text", "")) for r in msg2.replies)
@@ -158,6 +172,8 @@ async def test_rate_limit_explicit_admin_equal_to_allowed_still_exempt():
         user = FakeUser(42)
 
         await send_text(chat, user, "first")
+        await drain_one_worker_item(data_dir)
         await send_text(chat, user, "second")
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 2

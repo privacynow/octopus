@@ -207,13 +207,13 @@ Current as of 2026-03-15. Tracks progress against [plan.md](plan.md).
   - Shared Runtime remains deferred to Phases 18-19
 - Dockerized bot is the primary supported operational model.
 - Compose is the canonical operator surface:
-  - `./scripts/guided_start.sh` is the main SQLite-first zero-to-running path
-  - `./scripts/dev_up_postgres.sh` plus `BOT_DATABASE_URL` is the optional
+  - `./scripts/app/guided_start.sh` is the main SQLite-first zero-to-running path
+  - `./scripts/db/dev_up_postgres.sh` plus `BOT_DATABASE_URL` is the optional
     Postgres bootstrap path
   - `db-bootstrap`, `db-update`, and `db-doctor` remain explicit repo-owned
     Postgres workflows
-- The **supported bot image** is a **real provider-enabled image** (includes the chosen Claude or Codex CLI). Built via repo-owned script from `BOT_PROVIDER` (e.g. `./scripts/build_bot_image.sh`); operators do not choose Docker targets manually. The stub-provider image (`Dockerfile.runnable`) exists only for **test/dev smoke** (e.g. E2E when real provider is not available) and is not the supported runtime.
-- Zero-to-running: clone → create `.env.bot` → `./scripts/guided_start.sh`.
+- The **supported bot image** is a **real provider-enabled image** (includes the chosen Claude or Codex CLI). Built via repo-owned script from `BOT_PROVIDER` (e.g. `./scripts/provider/build_bot_image.sh`); operators do not choose Docker targets manually. The stub-provider image (`infra/docker/Dockerfile.runnable`) exists only for **test/dev smoke** (e.g. E2E when real provider is not available) and is not the supported runtime.
+- Zero-to-running: clone → create `.env.bot` → `./scripts/app/guided_start.sh`.
   Optional Postgres adds the Postgres bootstrap/update/doctor step before bot
   startup.
 - Host-run remains available as a secondary fallback/debug path.
@@ -284,7 +284,7 @@ Bounded audit of Docker/operator and Telegram surfaces. Classifications: **disco
 | First run | guided_start 4-step flow and README Quick Start align. dev_up ends with “To run the bot” + guided_start hint. | — |
 | Provider login | provider_login.sh requires .env.bot, checks image, clear “build first” message. | — |
 | Provider status | Script prints “Provider auth and runtime only (no DB/Telegram checks)”; comment says “For full app health use … app.main --doctor”. Operator may still treat provider_status success as “all good”. | **operator trap** |
-| Provider logout | Clear; “Done. Run ./scripts/provider_login.sh to authenticate again.” | — |
+| Provider logout | Clear; “Done. Run ./scripts/provider/provider_login.sh to authenticate again.” | — |
 | Update after pull | README: db-update, build, up -d bot; guided_start rebuilds when rev/files changed. | — |
 | Doctor | Three distinct things: (1) db_doctor = Postgres/schema only, (2) provider_status = provider auth only, (3) app --doctor / in-chat /doctor = full. README and provider_status mention full doctor but distinction could be clearer. | **discoverability** / **operator trap** |
 | Stale image / rebuild | guided_start rev + mtime; build_bot_image suggests guided_start. | — |
@@ -326,12 +326,12 @@ Executed 2026-03-13. Scope: Docker/runtime only; no user-facing polish, no Phase
 
 | Milestone | Delivered |
 |-----------|-----------|
-| **A1. Supported runnable image** | **Real** provider-enabled image: `Dockerfile.bot` (base + provider install via `scripts/install_provider_claude.sh`, `scripts/install_provider_codex.sh`). `./scripts/build_bot_image.sh` selects target from `BOT_PROVIDER`. Stub image (`Dockerfile.runnable`) and `bot-stub` Compose service (profile `stub`) for **test/dev-only** (E2E_USE_STUB_IMAGE=1). |
-| **A2. Clean zero-to-running path** | Flow: clone → Postgres → bootstrap → doctor → `.env.bot` → **./scripts/build_bot_image.sh** → start bot container. One README path; build complexity in script and deeper docs. E2E: bootstrap/doctor/update; `test_compose_bot_image_has_provider` (real image has provider binary); `test_compose_bot_startup_validates_schema` (real image); `test_compose_bot_stub_smoke` (test-only). |
-| **A3. Docker config and onboarding simplification** | One `.env.bot` path. Config errors mention `.env.bot` and `./scripts/build_bot_image.sh`. DB CLI message for missing `BOT_DATABASE_URL` points to Docker vs host-run. |
+| **A1. Supported runnable image** | **Real** provider-enabled image: `infra/docker/Dockerfile.bot` (base + provider install via `scripts/provider/install_provider_claude.sh`, `scripts/provider/install_provider_codex.sh`). `./scripts/provider/build_bot_image.sh` selects target from `BOT_PROVIDER`. Stub image (`infra/docker/Dockerfile.runnable`) and `bot-stub` Compose service (profile `stub`) for **test/dev-only** (E2E_USE_STUB_IMAGE=1). |
+| **A2. Clean zero-to-running path** | Flow: clone → Postgres → bootstrap → doctor → `.env.bot` → **./scripts/provider/build_bot_image.sh** → start bot container. One README path; build complexity in script and deeper docs. E2E: bootstrap/doctor/update; `test_compose_bot_image_has_provider` (real image has provider binary); `test_compose_bot_startup_validates_schema` (real image); `test_compose_bot_stub_smoke` (test-only). |
+| **A3. Docker config and onboarding simplification** | One `.env.bot` path. Config errors mention `.env.bot` and `./scripts/provider/build_bot_image.sh`. DB CLI message for missing `BOT_DATABASE_URL` points to Docker vs host-run. |
 | **A4. Docker usability hardening** | Stabilization; docs truthful (supported = real provider image; stub = test-only). |
 
-Artifacts: `Dockerfile.bot`, `scripts/build_bot_image.sh`, `scripts/install_provider_claude.sh`, `scripts/install_provider_codex.sh`; `Dockerfile.runnable` and `bot-stub` (profile stub) for test/dev-only; E2E and config tests.
+Artifacts: `infra/docker/Dockerfile.bot`, `scripts/provider/build_bot_image.sh`, `scripts/provider/install_provider_claude.sh`, `scripts/provider/install_provider_codex.sh`; `infra/docker/Dockerfile.runnable` and `bot-stub` (profile stub) for test/dev-only; E2E and config tests.
 
 ---
 
@@ -360,7 +360,7 @@ structured errors.
 
 ## Test Suite
 
-Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setup.sh`)
+Canonical full-suite runner: `./scripts/test/test_all.sh` (runs `pytest` + `test_setup.sh`)
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 Default: **4 workers** (`addopts = "-v -n 4"`). Full suite runs on Linux and

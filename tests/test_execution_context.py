@@ -52,6 +52,7 @@ from tests.support.handler_support import (
     FakeProvider,
     FakeUpdate,
     FakeUser,
+    drain_one_worker_item,
     fresh_data_dir,
     fresh_env,
     last_reply,
@@ -124,6 +125,7 @@ async def test_approval_hash_round_trip(combo):
         # Send message — triggers preflight
         msg = FakeMessage(chat=chat, text="do work")
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
         assert len(prov.preflight_calls) == 1
 
         # Approve immediately — must NOT say "Context changed"
@@ -150,7 +152,7 @@ async def test_retry_hash_round_trip(combo):
     with fresh_data_dir() as data_dir:
         project_dir = tempfile.mkdtemp() if combo.get("project") else None
         projects = (("frontend", project_dir, ()),) if project_dir else ()
-        cfg = make_config(data_dir, projects=projects)
+        cfg = make_config(data_dir, approval_mode="off", projects=projects)
         prov = FakeProvider("claude")
         prov.run_results = [
             RunResult(
@@ -185,6 +187,7 @@ async def test_retry_hash_round_trip(combo):
 
         msg = FakeMessage(chat=chat, text="edit config")
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
         assert len(prov.run_calls) == 1
 
         # Retry immediately
@@ -242,6 +245,7 @@ async def test_approval_detects_stale_context(change):
         # Send message to create pending request
         msg = FakeMessage(chat=chat, text="do work")
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
         assert len(prov.preflight_calls) == 1
 
         # Now change context before approving
@@ -628,6 +632,7 @@ async def test_configured_extra_dirs_forwarded_to_provider():
             FakeUpdate(message=FakeMessage(chat=chat, text="hello"), user=user, chat=chat),
             FakeContext(),
         )
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         ctx = prov.run_calls[0]["context"]

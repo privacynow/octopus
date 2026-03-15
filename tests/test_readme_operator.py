@@ -31,7 +31,7 @@ def test_readme_guided_start_is_the_primary_setup_path():
     repo = Path(__file__).resolve().parent.parent
     readme = repo / "README.md"
     text = readme.read_text()
-    assert "./scripts/guided_start.sh" in text, (
+    assert "./scripts/app/guided_start.sh" in text, (
         "README must tell first-time users to use guided_start.sh"
     )
     assert "First-Time Setup" in text
@@ -43,7 +43,7 @@ def test_readme_explains_provider_login_and_doctor_in_plain_language():
     repo = Path(__file__).resolve().parent.parent
     readme = repo / "README.md"
     text = readme.read_text()
-    assert "./scripts/provider_login.sh" in text, (
+    assert "./scripts/provider/provider_login.sh" in text, (
         "README must explain how to recover from missing provider auth"
     )
     assert "/doctor" in text, "README should point users to /doctor"

@@ -22,7 +22,7 @@ esac
 
 echo "Verifying provider auth (no DB or Telegram checks)..."
 if ! python -m app.main --provider-health; then
-  echo "Provider health check failed (see above). Re-run ./scripts/provider_login.sh or check your subscription." >&2
+  echo "Provider health check failed (see above). Re-run ./scripts/provider/provider_login.sh or check your subscription." >&2
   exit 1
 fi
 echo "Provider login and health check succeeded."

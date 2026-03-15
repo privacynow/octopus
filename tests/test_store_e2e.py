@@ -29,6 +29,7 @@ from tests.support.handler_support import (
     FakeProvider,
     FakeUpdate,
     FakeUser,
+    drain_one_worker_item,
     last_reply,
     last_run_context,
     make_config,
@@ -150,6 +151,7 @@ async def test_install_add_message_prompt():
             # Send a message — provider should receive the skill content
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "do something")
+            await drain_one_worker_item(data_dir)
             ctx = last_run_context(prov)
             assert ctx is not None and ctx.system_prompt
             assert MARKER_V1 in ctx.system_prompt
@@ -181,6 +183,7 @@ async def test_update_propagates_to_prompt():
             # Verify V1
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go")
+            await drain_one_worker_item(data_dir)
             assert MARKER_V1 in last_run_context(prov).system_prompt
             prov.run_calls.clear()
 
@@ -191,6 +194,7 @@ async def test_update_propagates_to_prompt():
             # Verify V2 replaces V1
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go again")
+            await drain_one_worker_item(data_dir)
             prompt = last_run_context(prov).system_prompt
             assert MARKER_V2 in prompt
             assert MARKER_V1 not in prompt
@@ -427,6 +431,7 @@ async def test_custom_override_shadows_managed_in_prompt():
             # Send message — provider should get custom content
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go")
+            await drain_one_worker_item(data_dir)
             prompt = last_run_context(prov).system_prompt
             assert MARKER_CUSTOM in prompt
             assert MARKER_V1 not in prompt
@@ -460,6 +465,7 @@ async def test_uninstall_message_doesnt_crash():
             # Message should work and not include stale content
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go")
+            await drain_one_worker_item(data_dir)
             prompt = last_run_context(prov).system_prompt
             assert MARKER_V1 not in prompt
         finally:
@@ -494,6 +500,7 @@ async def test_cross_user_managed_skill():
             await send_command(th.cmd_skills, user_chat, regular, "/skills add helper", ["add", "helper"])
             prov.run_results = [RunResult(text="ok")]
             await send_text(user_chat, regular, "hello")
+            await drain_one_worker_item(data_dir)
             assert MARKER_V1 in last_run_context(prov).system_prompt
         finally:
             cleanup()
@@ -528,6 +535,7 @@ async def test_three_tier_resolution_in_prompt():
             # Without custom override — should use managed (V1), not catalog
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go")
+            await drain_one_worker_item(data_dir)
             prompt = last_run_context(prov).system_prompt
             assert MARKER_V1 in prompt
             assert MARKER_CATALOG not in prompt
@@ -537,6 +545,7 @@ async def test_three_tier_resolution_in_prompt():
             make_skill(tmp_custom, "helper", body=MARKER_CUSTOM)
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go again")
+            await drain_one_worker_item(data_dir)
             prompt2 = last_run_context(prov).system_prompt
             assert MARKER_CUSTOM in prompt2
             assert MARKER_V1 not in prompt2
@@ -773,6 +782,7 @@ async def test_catalog_skill_usable_without_install():
 
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go")
+            await drain_one_worker_item(data_dir)
             assert MARKER_CATALOG in last_run_context(prov).system_prompt
         finally:
             cleanup()

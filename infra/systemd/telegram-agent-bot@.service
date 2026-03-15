@@ -1,7 +1,7 @@
 # Systemd user service template for Telegram Agent Bot.
 #
 # Before installing, replace REPO_DIR with the actual path:
-#   sed "s|REPO_DIR|$(pwd)|g" deploy/telegram-agent-bot@.service \
+#   sed "s|REPO_DIR|$(pwd)|g" infra/systemd/telegram-agent-bot@.service \
 #     > ~/.config/systemd/user/telegram-agent-bot@.service
 #   systemctl --user daemon-reload
 
@@ -12,7 +12,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=REPO_DIR/scripts/run.sh %i
+ExecStart=REPO_DIR/scripts/app/run.sh %i
 WorkingDirectory=REPO_DIR
 Restart=on-failure
 RestartSec=10

@@ -4,10 +4,10 @@
 # For full app health use: docker compose --profile bot --env-file .env.bot run --rm bot python -m app.main --doctor
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
 # shellcheck source=scripts/lib_env.sh
-. "$(dirname "$0")/lib_env.sh"
+. "$REPO_DIR/scripts/lib_env.sh"
 
 check_env_bot_required
 provider=$(get_bot_provider)

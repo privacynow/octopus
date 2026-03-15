@@ -2,16 +2,16 @@
 # Run the full test suite: pytest (Python) + test_setup.sh + test_docker_ops.sh + test_dev_up_contract.sh (bash).
 #
 # Usage:
-#   ./scripts/test_all.sh              # run everything
-#   ./scripts/test_all.sh -n auto      # parallel via pytest-xdist
-#   ./scripts/test_all.sh -k doctor    # only pytest tests matching "doctor"
+#   ./scripts/test/test_all.sh              # run everything
+#   ./scripts/test/test_all.sh -n auto      # parallel via pytest-xdist
+#   ./scripts/test/test_all.sh -k doctor    # only pytest tests matching "doctor"
 #
 # Any arguments are forwarded to pytest.
 # When arguments are present, only pytest runs (bash tests are skipped)
 # because flags like -k, -x, --lf, or path filters don't apply to bash tests.
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
 
 .venv/bin/python -m pytest "$@"

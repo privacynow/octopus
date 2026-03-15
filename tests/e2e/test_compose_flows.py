@@ -302,7 +302,7 @@ def _build_bot_image(ctx: dict[str, object]) -> None:
         log_file.flush()
         try:
             r = subprocess.run(
-                ["docker", "build", "-f", "Dockerfile.bot", "--build-arg", "BOT_PROVIDER=claude",
+                ["docker", "build", "-f", "infra/docker/Dockerfile.bot", "--build-arg", "BOT_PROVIDER=claude",
                  "-t", str(ctx["bot_image"]), "."],
                 cwd=REPO_ROOT,
                 timeout=_DOCKER_BUILD_TIMEOUT,
@@ -467,7 +467,7 @@ def test_compose_sqlite_local_runtime_primary(bot_image_built):
     stderr = _run_bot_foreground_and_capture(bot_image_built, timeout_seconds=50)
     if "Bot starting (long-poll)" in stderr or "Bot starting (webhook)" in stderr:
         return
-    if "Provider not authenticated or unavailable." in stderr and "Run ./scripts/provider_login.sh" in stderr:
+    if "Provider not authenticated or unavailable." in stderr and "Run ./scripts/provider/provider_login.sh" in stderr:
         return
     pytest.fail(
         "Bot (SQLite Local Runtime) did not reach startup or emit provider-auth failure. Stderr:\n" + stderr
@@ -486,7 +486,7 @@ def test_compose_bot_startup_with_postgres(compose_ctx_postgres_bot):
     stderr = _run_bot_foreground_and_capture(ctx, timeout_seconds=50)
     if "Bot starting (long-poll)" in stderr or "Bot starting (webhook)" in stderr:
         return
-    if "Provider not authenticated or unavailable." in stderr and "Run ./scripts/provider_login.sh" in stderr:
+    if "Provider not authenticated or unavailable." in stderr and "Run ./scripts/provider/provider_login.sh" in stderr:
         return
     pytest.fail(
         "Bot (Postgres backend) did not reach startup or emit provider-auth failure. Stderr:\n" + stderr

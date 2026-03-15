@@ -14,8 +14,8 @@ import asyncio
 
 import pytest
 
+from app import runtime_backend, work_queue
 from app.providers.base import RunResult
-from app import work_queue
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
@@ -23,6 +23,7 @@ from tests.support.handler_support import (
     FakeMessage,
     FakeUpdate,
     FakeUser,
+    drain_one_worker_item,
     fresh_env,
     send_command,
     set_bot_instance,
@@ -47,26 +48,25 @@ async def test_fresh_message_does_not_consume_stale_recovered_item():
         # Simulate a stale recovered item sitting in the queue
         work_queue.record_and_enqueue(data_dir, 100, chat_id, 42, "message")
 
-        # A fresh message arrives through the real handler path
-        prov.run_results = [RunResult(text="fresh response")]
+        # A fresh message arrives through the real handler path; chat already has queued item 100
+        # so record_and_admit_message returns busy and creates terminal item for fresh
         chat = FakeChat(chat_id=chat_id)
         user = FakeUser(uid=42)
         msg = FakeMessage(chat=chat, text="fresh message")
         upd = FakeUpdate(message=msg, user=user, chat=chat)
         await th.handle_message(upd, FakeContext())
 
-        # The fresh message's work item (update_id from FakeUpdate) is done
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         fresh_item = conn.execute(
-            "SELECT state FROM work_items WHERE update_id = ?",
+            "SELECT state, error FROM work_items WHERE update_id = ?",
             (upd.update_id,),
         ).fetchone()
         assert fresh_item is not None
-        assert fresh_item["state"] == "done", (
-            f"Fresh item should be done, got: {fresh_item['state']}"
+        assert fresh_item["state"] == "failed" and fresh_item["error"] == "chat_busy", (
+            f"Fresh message should be rejected as busy (terminal chat_busy), got: {dict(fresh_item)}"
         )
 
-        # Stale item 100 must still be queued — available for worker_loop
+        # Stale item 100 must still be queued — available for worker_loop (not consumed by fresh)
         stale_item = conn.execute(
             "SELECT state FROM work_items WHERE update_id = 100",
         ).fetchone()
@@ -105,14 +105,14 @@ async def test_concurrent_messages_each_claim_own_item():
         msg2 = FakeMessage(chat=chat, text="second")
         upd2 = FakeUpdate(message=msg2, user=user, chat=chat)
 
-        # Launch both concurrently — _chat_lock serializes them
-        await asyncio.gather(
-            th.handle_message(upd1, FakeContext()),
-            th.handle_message(upd2, FakeContext()),
-        )
+        # Serialized: admit then drain each so both get executed
+        await th.handle_message(upd1, FakeContext())
+        await drain_one_worker_item(data_dir)
+        await th.handle_message(upd2, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         # Both items should be done
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         for upd in [upd1, upd2]:
             row = conn.execute(
                 "SELECT state FROM work_items WHERE update_id = ?",
@@ -159,7 +159,7 @@ async def test_claim_for_update_blocked_by_existing_claimed_item():
         assert second is None, "Must not claim while another item is claimed"
 
         # Verify only one claimed item exists
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         claimed_count = conn.execute(
             "SELECT count(*) as n FROM work_items WHERE chat_id = ? AND state = 'claimed'",
             (chat_id,),
@@ -194,6 +194,7 @@ async def test_approval_callback_does_not_consume_stale_item():
         msg1 = FakeMessage(chat=chat, text="do something requiring approval")
         upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
         await th.handle_message(upd1, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         session = th._load(chat_id)
         assert session.pending_approval is not None, "Should have pending approval"
@@ -212,7 +213,7 @@ async def test_approval_callback_does_not_consume_stale_item():
         await th.handle_callback(upd2, FakeContext())
 
         # Step 4: verify stale item 500 is still queued
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         stale = conn.execute(
             "SELECT state FROM work_items WHERE update_id = 500",
         ).fetchone()
@@ -247,10 +248,11 @@ async def test_project_switch_waits_for_inflight_request():
         chat = FakeChat(chat_id=chat_id)
         user = FakeUser(uid=42)
 
-        # Send message — this holds the lock during execution
+        # Send message then drain so worker runs it
         msg1 = FakeMessage(chat=chat, text="do work")
         upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
         await th.handle_message(upd1, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         # Verify started=True
         session = th._load(chat_id)
@@ -299,10 +301,11 @@ async def test_preflight_and_execution_use_same_model():
         chat = FakeChat(chat_id=chat_id)
         user = FakeUser(uid=42)
 
-        # Send message — triggers preflight
+        # Send message then drain — triggers preflight in worker
         msg = FakeMessage(chat=chat, text="do something")
         upd = FakeUpdate(message=msg, user=user, chat=chat)
         await th.handle_message(upd, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         # Verify preflight received the model
         assert len(prov.preflight_calls) == 1
@@ -357,7 +360,7 @@ async def test_live_command_blocked_by_worker_claimed_item():
         user = FakeUser(uid=42)
         await send_command(th.cmd_new, chat, user, "/new")
 
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
 
         # Worker's item must still be claimed — not touched by the command
         row_100 = conn.execute(
@@ -412,7 +415,7 @@ async def test_live_message_blocked_by_worker_claimed_item():
         upd = FakeUpdate(message=msg, user=user, chat=chat)
         await th.handle_message(upd, FakeContext())
 
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
 
         # Worker's item stays claimed
         row_100 = conn.execute(
@@ -420,15 +423,15 @@ async def test_live_message_blocked_by_worker_claimed_item():
         ).fetchone()
         assert row_100["state"] == "claimed"
 
-        # The message's work item stays queued (not done, not claimed)
+        # The message is rejected as busy (terminal item, not runnable)
         msg_item = conn.execute(
-            "SELECT state FROM work_items WHERE update_id = ?",
+            "SELECT state, error FROM work_items WHERE update_id = ?",
             (upd.update_id,),
         ).fetchone()
         assert msg_item is not None, "Message work item should exist"
-        assert msg_item["state"] == "queued", (
-            f"Message item should be queued (blocked by worker), "
-            f"got: {msg_item['state']}"
+        assert msg_item["state"] == "failed" and msg_item["error"] == "chat_busy", (
+            f"Message item should be terminal chat_busy (blocked by worker), "
+            f"got: state={msg_item['state']} error={msg_item['error']}"
         )
 
         # Provider was never called
@@ -462,21 +465,24 @@ async def test_blocked_item_processable_after_worker_completes():
         upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
         await th.handle_message(upd1, FakeContext())
 
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         item1 = conn.execute(
-            "SELECT state FROM work_items WHERE update_id = ?",
+            "SELECT state, error FROM work_items WHERE update_id = ?",
             (upd1.update_id,),
         ).fetchone()
-        assert item1["state"] == "queued", "Should be queued while worker holds claim"
+        assert item1["state"] == "failed" and item1["error"] == "chat_busy", (
+            "Should be terminal chat_busy while worker holds claim"
+        )
 
         # Worker finishes
         work_queue.complete_work_item(data_dir, worker_item["id"])
 
-        # Now the message can be processed normally
+        # Now a new message can be admitted and processed
         prov.run_results = [RunResult(text="now it works")]
         msg2 = FakeMessage(chat=chat, text="blocked message")
         upd2 = FakeUpdate(message=msg2, user=user, chat=chat)
         await th.handle_message(upd2, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         # The new message's item should be done
         item2 = conn.execute(
@@ -488,13 +494,12 @@ async def test_blocked_item_processable_after_worker_completes():
             f"got: {item2['state']}"
         )
 
-        # And the original blocked item is still queued (would be picked
-        # up by worker_loop in production)
+        # Original blocked message's item stays terminal (rejected as busy)
         item1_after = conn.execute(
             "SELECT state FROM work_items WHERE update_id = ?",
             (upd1.update_id,),
         ).fetchone()
-        assert item1_after["state"] == "queued"
+        assert item1_after["state"] == "failed"
 
 
 # ---------------------------------------------------------------------------
@@ -520,6 +525,7 @@ async def test_live_callback_blocked_by_worker_and_query_answered():
         msg1 = FakeMessage(chat=chat, text="do something requiring approval")
         upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
         await th.handle_message(upd1, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         session = th._load(chat_id)
         assert session.pending_approval is not None
@@ -545,7 +551,7 @@ async def test_live_callback_blocked_by_worker_and_query_answered():
             "Callback query must be answered even when ClaimBlocked fires"
         )
 
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
 
         # Worker's item stays claimed
         row_600 = conn.execute(
@@ -606,7 +612,7 @@ async def test_worker_dispatch_sends_recovery_notice():
             data_dir, 500, chat_id, 42, "message",
             payload='{"text": "do something dangerous"}',
         )
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'claimed', worker_id = 'test', claimed_at = ? WHERE id = ?",
             ("2025-01-01T00:00:00", item_id),
@@ -622,7 +628,7 @@ async def test_worker_dispatch_sends_recovery_notice():
                 text="do something dangerous",
                 attachments=(),
             )
-            item = {"chat_id": chat_id, "update_id": 500, "id": item_id}
+            item = {"chat_id": chat_id, "update_id": 500, "id": item_id, "dispatch_mode": "recovery"}
 
             with pytest.raises(work_queue.PendingRecovery):
                 await th.worker_dispatch("message", event, item)
@@ -662,7 +668,7 @@ async def test_recovery_discard_callback_finalizes_item():
             data_dir, 600, chat_id, 42, "message",
             payload='{"text": "old message"}',
         )
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id,),
@@ -695,10 +701,11 @@ async def test_recovery_discard_callback_finalizes_item():
             # Query was answered
             assert query.answered
 
-            # Message was edited to show discard confirmation
+            # Message was edited to show centralized discard confirmation (Bucket C)
             edits = [r for r in query.message.replies if "edit_text" in r]
             assert edits
-            assert "discarded" in edits[0]["edit_text"].lower()
+            from app.user_messages import recovery_discarded_edit
+            assert edits[0]["edit_text"] == recovery_discarded_edit()
         finally:
             set_bot_instance(None)
 
@@ -728,7 +735,7 @@ async def test_recovery_replay_callback_executes_original():
         _, item_id = work_queue.record_and_enqueue(
             data_dir, 700, chat_id, 42, "message", payload=payload,
         )
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id,),
@@ -791,7 +798,7 @@ async def test_fresh_message_supersedes_pending_recovery():
             data_dir, 800, chat_id, 42, "message",
             payload='{"text": "old message"}',
         )
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id,),
@@ -805,6 +812,7 @@ async def test_fresh_message_supersedes_pending_recovery():
         msg = FakeMessage(chat=chat, text="new question")
         upd = FakeUpdate(message=msg, user=user, chat=chat)
         await th.handle_message(upd, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         # Fresh message's item is done
         fresh_row = conn.execute(
@@ -839,7 +847,7 @@ async def test_recovery_double_click_is_idempotent():
             data_dir, 900, chat_id, 42, "message",
             payload='{"text": "test"}',
         )
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id,),
@@ -881,9 +889,10 @@ async def test_recovery_double_click_is_idempotent():
             )
             await th.handle_recovery_callback(upd2, FakeContext())
 
-            # Second click was answered (no crash)
+            # Second click was answered with centralized already-handled message (Bucket C)
             assert query2.answered
-            assert "already been handled" in (query2.answer_text or "")
+            from app.user_messages import recovery_already_handled
+            assert query2.answer_text == recovery_already_handled()
         finally:
             set_bot_instance(None)
 
@@ -946,7 +955,7 @@ async def test_failed_notice_delivery_marks_item_failed_via_worker_loop():
                               stop_event=stop, poll_interval=0)
 
             # Item must be failed — not done, not pending_recovery.
-            conn = work_queue._transport_db(data_dir)
+            conn = runtime_backend.transport_store()._transport_db(data_dir)
             row = conn.execute(
                 "SELECT state, error FROM work_items WHERE id = ?", (item_id,)
             ).fetchone()
@@ -982,7 +991,7 @@ async def test_multiple_pending_recovery_items_each_addressable():
             data_dir, 1701, chat_id, 42, "message",
             payload='{"text": "second recovered"}',
         )
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id IN (?, ?)",
             (item_id_1, item_id_2),
@@ -1062,7 +1071,7 @@ async def test_discard_race_after_replay_answers_already_handled():
             data_dir, 1800, chat_id, 42, "message",
             payload='{"text": "raced"}',
         )
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id,),
@@ -1088,10 +1097,11 @@ async def test_discard_race_after_replay_answers_already_handled():
             )
             await th.handle_recovery_callback(upd, FakeContext())
 
-            # Must answer "already handled", not "Discarded."
+            # Must answer with authoritative already-handled message, not "Discarded."
+            from app.user_messages import recovery_already_handled
             assert query.answered
-            assert "already been handled" in (query.answer_text or ""), (
-                f"Expected 'already been handled', got: {query.answer_text}"
+            assert query.answer_text == recovery_already_handled(), (
+                f"Expected recovery_already_handled(), got: {query.answer_text}"
             )
 
             # Item must NOT have been finalized by the discard path.
@@ -1132,7 +1142,7 @@ async def test_replay_reclaim_blocked_by_existing_claimed_item():
             data_dir, 1901, chat_id, 42, "message",
             payload='{"text": "fresh in-flight"}',
         )
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id_recovery,),
@@ -1186,7 +1196,7 @@ async def test_replay_callback_blocked_by_claimed_item_answers_user():
         _, item_id_worker = work_queue.record_and_enqueue(
             data_dir, 1911, chat_id, 42, "message",
         )
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id_recovery,),
@@ -1252,7 +1262,7 @@ async def test_command_does_not_supersede_pending_recovery():
             data_dir, 2100, chat_id, 42, "message",
             payload='{"text": "interrupted request"}',
         )
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id_recovery,),
@@ -1299,7 +1309,7 @@ async def test_reclaim_distinguishes_gone_from_blocked():
         _, item_id_claimed = work_queue.record_and_enqueue(
             data_dir, 2201, chat_id, 42, "message",
         )
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id_recovery,),
@@ -1353,7 +1363,7 @@ async def test_fresh_command_item_created_as_claimed():
         # Send a lock-free command through the real decorator
         await send_command(th.cmd_session, chat, user, "/session")
 
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
 
         # The work item must be 'done' (handler completed it), and its
         # worker_id must be the inline handler's _boot_id, not a worker.
@@ -1389,7 +1399,7 @@ async def test_worker_cannot_steal_handler_owned_item():
         )
 
         # The item is still claimed by the handler
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         row = conn.execute(
             "SELECT state, worker_id FROM work_items WHERE id = ?", (item_id,)
         ).fetchone()
@@ -1432,7 +1442,7 @@ async def test_no_false_recovery_for_compact():
         assert stolen is None
 
         # Work item completed by handler
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         row = conn.execute(
             "SELECT state FROM work_items WHERE chat_id = ?", (chat_id,),
         ).fetchone()
@@ -1577,7 +1587,7 @@ async def test_complete_work_item_does_not_overwrite_terminal_state():
         # Complete it
         work_queue.complete_work_item(data_dir, item_id)
 
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         row = conn.execute(
             "SELECT state, completed_at FROM work_items WHERE id = ?", (item_id,)
         ).fetchone()
@@ -1623,10 +1633,52 @@ async def test_preclaim_falls_back_to_queued_when_chat_busy():
 
         # New item must be 'queued' (not 'claimed') because the chat
         # already has a claimed item
-        conn = work_queue._transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         row = conn.execute(
             "SELECT state FROM work_items WHERE id = ?", (item_id,)
         ).fetchone()
         assert row["state"] == "queued", (
             "Should fall back to queued when chat has existing claimed item"
         )
+
+
+# ---------------------------------------------------------------------------
+# Durable anti-fan-out: second message while chat has runnable item is busy
+#
+# Admitting A then B (before worker runs A) must reject B as busy and
+# create exactly one terminal item with error=chat_busy. No second
+# runnable item — closes the cost-explosion class of bug.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_second_message_while_chat_has_runnable_is_busy_no_fan_out():
+    """Admit A, then B before worker runs A. B gets busy; exactly one runnable item for chat."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import last_reply
+    from app import user_messages as _msg
+
+    with fresh_env() as (data_dir, cfg, prov):
+        chat_id = 13001
+        chat = FakeChat(chat_id=chat_id)
+        user = FakeUser(uid=42)
+
+        msg_a = FakeMessage(chat=chat, text="first")
+        upd_a = FakeUpdate(message=msg_a, user=user, chat=chat)
+        await th.handle_message(upd_a, FakeContext())
+
+        msg_b = FakeMessage(chat=chat, text="second")
+        upd_b = FakeUpdate(message=msg_b, user=user, chat=chat)
+        await th.handle_message(upd_b, FakeContext())
+
+        reply_b = last_reply(msg_b)
+        assert _msg.queue_busy() in reply_b, f"B must get busy reply. Got: {reply_b}"
+
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        rows = conn.execute(
+            "SELECT id, update_id, state, error FROM work_items WHERE chat_id = ? ORDER BY id",
+            (chat_id,),
+        ).fetchall()
+        runnable = [r for r in rows if r["state"] in ("queued", "claimed")]
+        busy_terminal = [r for r in rows if (r["error"] if "error" in r.keys() else None) == "chat_busy"]
+        assert len(runnable) == 1, f"Exactly one runnable item for chat. Got: {rows}"
+        assert len(busy_terminal) == 1, f"Exactly one terminal chat_busy item. Got: {rows}"

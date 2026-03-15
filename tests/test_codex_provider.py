@@ -122,7 +122,7 @@ async def test_file_policy_inspect_sets_sandbox_readonly():
     provider = CodexProvider(make_config())
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 
@@ -143,7 +143,7 @@ async def test_file_policy_edit_uses_default_sandbox():
     provider = CodexProvider(make_config(codex_sandbox="workspace-write"))
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 
@@ -163,7 +163,7 @@ async def test_file_policy_inspect_overrides_provider_config_sandbox():
     provider = CodexProvider(make_config())
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 
@@ -187,7 +187,7 @@ async def test_provider_config_sandbox_applies_without_inspect():
     provider = CodexProvider(make_config(codex_sandbox="workspace-write"))
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 
@@ -211,7 +211,7 @@ async def test_skip_permissions_fresh_exec_preserves_full_auto():
     provider = CodexProvider(make_config(codex_full_auto=True))
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 
@@ -231,7 +231,7 @@ async def test_skip_permissions_fresh_exec_adds_dangerous_when_needed():
     provider = CodexProvider(make_config(codex_full_auto=False))
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 
@@ -250,7 +250,7 @@ async def test_skip_permissions_resume():
     provider = CodexProvider(make_config(codex_full_auto=True))
     calls: list[tuple[list[str], bool]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append((cmd, is_resume))
         return RunResult(text="ok", provider_state_updates={"thread_id": "thread-123"})
 
@@ -296,7 +296,7 @@ def test_progress_command_started():
     html = _render_event(
         {"type": "item.started", "item": {"type": "command_execution", "command": "ls -la"}},
     )
-    assert "Running command" in html
+    assert "Running a command" in html or "Running command" in html
     assert "ls -la" in html
 
 
@@ -336,7 +336,7 @@ def test_progress_response_item_function_call():
         },
         tool_calls={},
     )
-    assert "Running command" in html
+    assert "Running a command" in html or "Running command" in html
     assert "git status" in html
 
 
@@ -571,7 +571,7 @@ async def test_modern_schema_new():
     assert not any("Codex thread" in u for u in progress1.updates)
     assert not any("sess-modern" in u for u in progress1.updates)
     assert any("Thinking" in u for u in progress1.updates)
-    assert any("Running command" in u and "git status" in u for u in progress1.updates)
+    assert any(("Running command" in u or "Running a command" in u) and "git status" in u for u in progress1.updates)
     assert any("Command finished" in u and "M app/providers/codex.py" in u for u in progress1.updates)
     assert any("draft from response item" in u for u in progress1.updates)
 

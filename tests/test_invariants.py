@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+from app import runtime_backend
 from app.providers.base import (
     RunResult,
 )
@@ -40,6 +41,7 @@ from tests.support.handler_support import (
     FakeProvider,
     FakeUpdate,
     FakeUser,
+    drain_one_worker_item,
     fresh_data_dir,
     fresh_env,
     make_config,
@@ -263,6 +265,8 @@ async def test_duplicate_update_id_skipped():
         dup_id = upd1.update_id
 
         await th.handle_message(upd1, FakeContext())
+        drained = await drain_one_worker_item(data_dir)
+        assert drained is True
         assert len(prov.run_calls) == 1
 
         # Same update_id again
@@ -534,8 +538,8 @@ async def test_chat_lock_sends_message_feedback_when_locked():
             await task
 
             all_text = " ".join(str(r.get("text", "")) for r in msg.replies)
-            assert "queued" in all_text.lower(), (
-                f"Expected queued feedback, got: {all_text[:200]}")
+            assert "already running" in all_text.lower() or "cancel" in all_text.lower(), (
+                f"Expected busy feedback, got: {all_text[:200]}")
         finally:
             if lock.locked():
                 lock.release()
@@ -565,8 +569,8 @@ async def test_chat_lock_sends_callback_feedback_when_locked():
 
             assert yielded is True, "Expected _chat_lock to yield True when lock was held"
             assert query.answers, "Expected callback answer for queued feedback"
-            assert any("queued" in str(a.get("text", "")).lower() for a in query.answers), (
-                f"Expected queued feedback in callback answer, got: {query.answers}")
+            assert any("already running" in str(a.get("text", "")).lower() or "cancel" in str(a.get("text", "")).lower() for a in query.answers), (
+                f"Expected busy feedback in callback answer, got: {query.answers}")
         finally:
             if lock.locked():
                 lock.release()
@@ -636,7 +640,7 @@ async def test_contended_approval_callback_single_answer():
 
         assert len(query.answers) == 1, (
             f"Expected exactly 1 answer under contention, got {len(query.answers)}: {query.answers}")
-        assert "queued" in str(query.answers[0].get("text", "")).lower()
+        assert "already running" in str(query.answers[0].get("text", "")).lower() or "cancel" in str(query.answers[0].get("text", "")).lower()
 
 
 @pytest.mark.asyncio
@@ -669,7 +673,7 @@ async def test_contended_settings_callback_single_answer():
 
         assert len(query.answers) == 1, (
             f"Expected exactly 1 answer under contention, got {len(query.answers)}: {query.answers}")
-        assert "queued" in str(query.answers[0].get("text", "")).lower()
+        assert "already running" in str(query.answers[0].get("text", "")).lower() or "cancel" in str(query.answers[0].get("text", "")).lower()
 
 
 @pytest.mark.asyncio
@@ -703,8 +707,8 @@ async def test_contended_clear_cred_callback_single_answer():
 
         assert len(query.answers) == 1, (
             f"Expected exactly 1 answer under contention, got {len(query.answers)}: {query.answers}")
-        assert "queued" in str(query.answers[0].get("text", "")).lower(), (
-            f"Expected queued feedback, got: {query.answers}")
+        assert "already running" in str(query.answers[0].get("text", "")).lower() or "cancel" in str(query.answers[0].get("text", "")).lower(), (
+            f"Expected busy feedback, got: {query.answers}")
 
 
 # ---------------------------------------------------------------------------
@@ -718,7 +722,6 @@ async def test_same_chat_overlapping_updates_complete_correctly():
     left queued forever.
     """
     import app.telegram_handlers as th
-    from app.work_queue import _transport_db
 
     with fresh_env() as (data_dir, cfg, prov):
         prov.run_results = [RunResult(text="reply1"), RunResult(text="reply2")]
@@ -734,13 +737,15 @@ async def test_same_chat_overlapping_updates_complete_correctly():
         uid2 = upd2.update_id
 
         await th.handle_message(upd1, FakeContext())
+        await drain_one_worker_item(data_dir)
         await th.handle_message(upd2, FakeContext())
+        await drain_one_worker_item(data_dir)
 
-        # Both requests were processed
+        # Both requests were processed (serialized: admit then drain each)
         assert len(prov.run_calls) == 2
 
         # Both work items are done (not queued)
-        conn = _transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         rows = conn.execute(
             "SELECT update_id, state FROM work_items WHERE chat_id = 9001 "
             "ORDER BY update_id"
@@ -783,14 +788,14 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
     is raised so worker_loop skips completion."""
     import app.telegram_handlers as th
     from app.transport import InboundMessage, InboundUser
-    from app.work_queue import PendingRecovery, record_and_enqueue, _transport_db
+    from app.work_queue import PendingRecovery, record_and_enqueue
 
     with fresh_env(config_overrides={
         "allowed_user_ids": frozenset({42}),
     }) as (data_dir, cfg, prov):
         # Create a real claimed work item in the DB (must set claimed_at for CHECK and validator).
         _, item_id = record_and_enqueue(data_dir, 9999, 12345, 42, "message")
-        conn = _transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'claimed', worker_id = ?, claimed_at = ? WHERE id = ?",
             ("test", "2025-01-01T00:00:00+00:00", item_id),
@@ -806,7 +811,7 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
                 text="replay this message",
                 attachments=(),
             )
-            item = {"chat_id": 12345, "update_id": 9999, "id": item_id}
+            item = {"chat_id": 12345, "update_id": 9999, "id": item_id, "dispatch_mode": "recovery"}
 
             with pytest.raises(PendingRecovery):
                 await th.worker_dispatch("message", event, item)
@@ -849,7 +854,7 @@ class _StickyReplyMessage(FakeMessage):
 @pytest.mark.asyncio
 async def test_interrupted_message_run_stays_claimed_for_recovery():
     import app.telegram_handlers as th
-    from app.work_queue import _transport_db, recover_stale_claims
+    from app.work_queue import recover_stale_claims
 
     with fresh_env() as (data_dir, cfg, prov):
         prov.run_results = [RunResult(text="[Claude error (rc=-15)]", returncode=-15)]
@@ -859,15 +864,16 @@ async def test_interrupted_message_run_stays_claimed_for_recovery():
         upd = FakeUpdate(message=msg, user=user, chat=chat)
 
         await th.handle_message(upd, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
+        bot = th._bot_instance
         joined = " ".join(
-            entry.get("text", "") + " " + entry.get("edit_text", "")
-            for entry in msg.replies
+            entry.get("text", entry.get("edit_text", "")) for entry in bot.sent_messages
         )
         assert "Claude error" not in joined
 
-        conn = _transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         row = conn.execute(
             "SELECT state, worker_id FROM work_items WHERE update_id = ?",
             (upd.update_id,),
@@ -897,7 +903,6 @@ async def test_interrupted_message_run_stays_claimed_for_recovery():
 @pytest.mark.parametrize("rc", [-2, -6, -9, -15])
 async def test_any_signal_treated_as_interrupted(rc):
     import app.telegram_handlers as th
-    from app.work_queue import _transport_db
 
     with fresh_env() as (data_dir, cfg, prov):
         prov.run_results = [RunResult(text="killed", returncode=rc)]
@@ -907,16 +912,17 @@ async def test_any_signal_treated_as_interrupted(rc):
         upd = FakeUpdate(message=msg, user=user, chat=chat)
 
         await th.handle_message(upd, FakeContext())
+        await drain_one_worker_item(data_dir)
 
-        # No error surfaced to user
+        # No error surfaced to user (worker sends via bot)
+        bot = th._bot_instance
         joined = " ".join(
-            entry.get("text", "") + " " + entry.get("edit_text", "")
-            for entry in msg.replies
+            entry.get("text", entry.get("edit_text", "")) for entry in bot.sent_messages
         )
         assert "error" not in joined.lower() or "killed" not in joined.lower()
 
         # Work item stays claimed
-        conn = _transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         row = conn.execute(
             "SELECT state FROM work_items WHERE update_id = ?",
             (upd.update_id,),
@@ -943,10 +949,11 @@ async def test_provider_error_empty_output_still_shows_message():
         upd = FakeUpdate(message=msg, user=user, chat=chat)
 
         await th.handle_message(upd, FakeContext())
+        await drain_one_worker_item(data_dir)
 
+        bot = th._bot_instance
         joined = " ".join(
-            entry.get("text", "") + " " + entry.get("edit_text", "")
-            for entry in msg.replies
+            entry.get("text", entry.get("edit_text", "")) for entry in bot.sent_messages
         )
         # User gets some feedback about the error
         assert "exited with code 1" in joined.lower() or "error" in joined.lower()
@@ -965,11 +972,12 @@ async def test_provider_error_long_output_truncated():
         upd = FakeUpdate(message=msg, user=user, chat=chat)
 
         await th.handle_message(upd, FakeContext())
+        await drain_one_worker_item(data_dir)
 
-        # Verify user got feedback (not silent)
+        # Verify user got feedback (not silent); worker sends via bot
+        bot = th._bot_instance
         joined = " ".join(
-            entry.get("text", "") + " " + entry.get("edit_text", "")
-            for entry in msg.replies
+            entry.get("text", entry.get("edit_text", "")) for entry in bot.sent_messages
         )
         assert len(joined) > 0
         # Full 5000-char error should not appear verbatim
@@ -1052,7 +1060,6 @@ async def test_global_error_handler_sends_message_on_real_update():
 async def test_command_exception_marks_work_item_failed():
     """A command handler that raises must leave the work item as failed."""
     import app.telegram_handlers as th
-    from app.work_queue import _transport_db
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=9500)
@@ -1072,7 +1079,7 @@ async def test_command_exception_marks_work_item_failed():
         finally:
             th._load = original_load
 
-        conn = _transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         row = conn.execute(
             "SELECT state FROM work_items WHERE update_id = ?",
             (upd.update_id,),
@@ -1084,7 +1091,6 @@ async def test_command_exception_marks_work_item_failed():
 async def test_callback_exception_marks_work_item_failed():
     """A callback handler that raises must leave the work item as failed."""
     import app.telegram_handlers as th
-    from app.work_queue import _transport_db
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=9501)
@@ -1105,7 +1111,7 @@ async def test_callback_exception_marks_work_item_failed():
         finally:
             th._load = original_load
 
-        conn = _transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         row = conn.execute(
             "SELECT state FROM work_items WHERE update_id = ?",
             (upd.update_id,),
@@ -1167,7 +1173,6 @@ async def test_format_provider_error_kills_subprocess_on_timeout():
 async def test_callback_none_event_completes_work_item():
     """When normalize_callback returns None, the work item must be completed (not leaked)."""
     import app.telegram_handlers as th
-    from app.work_queue import _transport_db
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=9600)
@@ -1185,7 +1190,7 @@ async def test_callback_none_event_completes_work_item():
         finally:
             th.normalize_callback = original
 
-        conn = _transport_db(data_dir)
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
         row = conn.execute(
             "SELECT state FROM work_items WHERE update_id = ?",
             (upd.update_id,),
@@ -1201,32 +1206,41 @@ async def test_callback_none_event_completes_work_item():
 # =====================================================================
 
 async def test_initial_status_no_provider_name_claude():
-    """handle_message for Claude shows 'Working...' not 'Starting claude...'."""
+    """Worker path: Claude shows 'Working...' not 'Starting claude...'."""
     with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
-        msg = await send_text(chat, user, "hello")
+        await send_text(chat, user, "hello")
+        await drain_one_worker_item(data_dir)
 
-        initial_reply = msg.replies[0]
-        assert initial_reply["text"] == "Working..."
-        assert "claude" not in initial_reply["text"].lower()
+        bot = th._bot_instance
+        texts = [m.get("text", "") for m in bot.sent_messages if m.get("text")]
+        working = next((t for t in texts if "Working" in t), "")
+        assert working.replace("\u2026", "...") == "Working..."
+        assert "claude" not in working.lower()
 
 
 async def test_initial_status_no_provider_name_codex():
-    """handle_message for Codex shows 'Working...' not 'Starting codex...'."""
+    """Worker path: Codex shows 'Working...' not 'Starting codex...'."""
     with fresh_env(provider_name="codex") as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
-        msg = await send_text(chat, user, "hello")
+        await send_text(chat, user, "hello")
+        await drain_one_worker_item(data_dir)
 
-        initial_reply = msg.replies[0]
-        assert initial_reply["text"] == "Working..."
-        assert "codex" not in initial_reply["text"].lower()
+        bot = th._bot_instance
+        texts = [m.get("text", "") for m in bot.sent_messages if m.get("text")]
+        working = next((t for t in texts if "Working" in t), "")
+        assert working.replace("\u2026", "...") == "Working..."
+        assert "codex" not in working.lower()
 
 
 async def test_resume_status_no_provider_name():
-    """Resuming a session shows 'Resuming...' not 'Resuming claude...'."""
+    """Resuming a session shows 'Resuming...' not 'Resuming claude...' (worker path)."""
     with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
 
@@ -1235,85 +1249,64 @@ async def test_resume_status_no_provider_name():
             RunResult(text="first reply", provider_state_updates={"started": True}),
         ]
         await send_text(chat, user, "first")
+        await drain_one_worker_item(data_dir)
         # Second message — resumes session (provider_state.started is True)
-        msg2 = await send_text(chat, user, "second")
+        await send_text(chat, user, "second")
+        await drain_one_worker_item(data_dir)
 
-        initial_reply = msg2.replies[0]
-        assert initial_reply["text"] == "Resuming..."
-        assert "claude" not in initial_reply["text"].lower()
+        bot = th._bot_instance
+        texts = [m.get("text", "") for m in bot.sent_messages if m.get("text")]
+        resuming = next((t for t in texts if "Resuming" in t), "")
+        assert resuming.replace("\u2026", "...") == "Resuming..."
+        assert "claude" not in resuming.lower()
 
 
 async def test_timeout_message_no_provider_name():
-    """Timeout shows 'Request timed out' not 'claude timed out'."""
+    """Timeout shows 'Request timed out' not 'claude timed out' (worker path)."""
     import app.telegram_handlers as th
+    from tests.support.handler_support import bot_texts
 
     with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
         prov.run_results = [RunResult(text="", timed_out=True, returncode=124)]
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
         msg = FakeMessage(chat=chat, text="slow request")
-        # Use a tracking FakeMessage that captures the status sub-message
-        status_messages = []
-        original_reply_text = msg.reply_text
-
-        async def tracking_reply_text(text, **kwargs):
-            result = await original_reply_text(text, **kwargs)
-            status_messages.append(result)
-            return result
-
-        msg.reply_text = tracking_reply_text
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
 
-        # The status message receives progress edits including the timeout
-        assert len(status_messages) >= 1
-        status_msg = status_messages[0]
-        all_edits = [r.get("edit_text", "") for r in status_msg.replies]
-        timeout_text = " ".join(all_edits)
+        timeout_text = " ".join(bot_texts(th._bot_instance))
         assert "Request timed out" in timeout_text
         assert "claude" not in timeout_text.lower()
         assert "codex" not in timeout_text.lower()
 
 
 async def test_terminal_status_says_completed():
-    """Successful run shows 'Completed.' not 'Done.'."""
+    """Successful run shows 'Completed.' not 'Done.' (worker path)."""
     import app.telegram_handlers as th
+    from tests.support.handler_support import bot_texts
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
         msg = FakeMessage(chat=chat, text="do work")
-        status_messages = []
-        original_reply_text = msg.reply_text
-
-        async def tracking_reply_text(text, **kwargs):
-            result = await original_reply_text(text, **kwargs)
-            status_messages.append(result)
-            return result
-
-        msg.reply_text = tracking_reply_text
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
 
-        assert len(status_messages) >= 1
-        status_msg = status_messages[0]
-        all_edits = [r.get("edit_text", "") for r in status_msg.replies]
-        assert any("Completed." in e for e in all_edits), f"Expected 'Completed.' in edits: {all_edits}"
-        assert not any("Done." in e for e in all_edits), f"'Done.' should not appear: {all_edits}"
+        all_text = " ".join(bot_texts(th._bot_instance))
+        assert "Completed." in all_text, f"Expected 'Completed.' in bot output: {all_text}"
+        assert "Done." not in all_text, f"'Done.' should not appear: {all_text}"
 
 
-async def test_claude_thinking_capitalized():
-    """Claude provider uses 'Thinking...' (capitalized, ascii dots) not 'thinking…'."""
+async def test_claude_tool_use_emits_semantic_event():
+    """Claude tool_use emits ToolStart render, not a raw ContentDelta fallback."""
     from app.providers.claude import ClaudeProvider
 
     provider = ClaudeProvider(_make_config())
-    # build_display is a closure inside _consume_stream — test the output pattern
-    # by checking the code path: when no text accumulated, display shows Thinking...
-    # We verify via a unit-level check on the progress HTML the provider would emit.
     import json
     import sys
     import asyncio
 
-    # Emit a tool_use block start — triggers build_display() with no accumulated text,
-    # which should show "Thinking..." as the fallback.
+    # Emit a tool_use block start — should produce a ToolStart progress event.
     events = [
         json.dumps({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "tool_use", "name": "Read"}}}),
     ]
@@ -1327,18 +1320,21 @@ async def test_claude_thinking_capitalized():
     text, _, _ = await provider._consume_stream(proc, progress)
     await proc.wait()
 
-    # With no text_delta events, the display should show "Thinking..."
-    thinking_updates = [u for u in progress.updates if "Thinking..." in u]
-    assert len(thinking_updates) >= 1, f"Expected 'Thinking...' in updates: {progress.updates}"
-    # Must NOT use lowercase "thinking" with ellipsis character
-    assert not any("thinking\u2026" in u for u in progress.updates)
+    # Should render as "Using tool: Read", not a "Thinking..." fallback
+    assert len(progress.updates) >= 1, f"Expected ToolStart update: {progress.updates}"
+    assert "Using tool" in progress.updates[0], f"Expected ToolStart render: {progress.updates[0]}"
+    assert "Read" in progress.updates[0]
+    # Must not leak provider internals
+    for u in progress.updates:
+        lower = u.lower()
+        assert "claude" not in lower, f"Leaked provider name: {u}"
 
 
 async def test_codex_thinking_capitalized():
     """Codex provider uses 'Thinking...' for turn/task started events."""
     evt = CodexProvider._map_event({"type": "turn.started"}, False)
     html = render_progress(evt)
-    assert html == "<i>Thinking...</i>"
+    assert html.replace("\u2026", "...") == "<i>Thinking...</i>"
 
 
 async def test_codex_no_thread_id_in_progress():
@@ -1399,7 +1395,7 @@ async def test_heartbeat_fires_on_idle():
         await task
 
     assert len(progress.updates) >= 1, f"Expected heartbeat updates, got: {progress.updates}"
-    assert all("Still working..." in u for u in progress.updates)
+    assert all("Still working" in u and ("..." in u or "\u2026" in u) for u in progress.updates)
     # Should contain elapsed seconds
     assert any("s)" in u for u in progress.updates)
 
@@ -1582,17 +1578,22 @@ async def test_approval_initial_status_neutral():
     import app.telegram_handlers as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
-        msg = await send_text(chat, user, "do work with approval")
+        await send_text(chat, user, "do work with approval")
+        await drain_one_worker_item(data_dir)
 
-        # In approval mode, the first reply should be the approval status
-        initial_reply = msg.replies[0]
-        initial_text = initial_reply.get("text", "")
+        # In approval mode, worker sends approval status via bot
+        bot = th._bot_instance
+        texts = [m.get("text", m.get("edit_text", "")) for m in bot.sent_messages if m.get("text") or m.get("edit_text")]
+        initial_text = " ".join(texts[:2])  # first send + maybe first edit
         assert "preflight" not in initial_text.lower(), (
             f"Internal 'preflight' leaked to user: {initial_text}"
         )
-        assert initial_text == "Preparing approval..."
+        assert "Preparing" in initial_text and ("approval" in initial_text or "plan" in initial_text), (
+            f"Expected Preparing/approval in: {initial_text}"
+        )
 
 
 async def test_approval_no_preflight_in_any_user_text():
@@ -1610,22 +1611,23 @@ async def test_approval_no_preflight_in_any_user_text():
         msg = _StickyReplyMessage(chat=chat, text="do work with approval")
         upd = FakeUpdate(message=msg, user=user, chat=chat)
         await th.handle_message(upd, FakeContext())
+        await drain_one_worker_item(data_dir)
 
+        bot = th._bot_instance
         all_texts = []
         edit_texts = []
-        for r in msg.replies:
-            all_texts.append(r.get("text", ""))
-            et = r.get("edit_text", "")
-            all_texts.append(et)
-            if et:
-                edit_texts.append(et)
-        for sent in chat.sent_messages:
-            all_texts.append(sent.get("text", ""))
+        for m in bot.sent_messages:
+            t = m.get("text", m.get("edit_text", ""))
+            if t:
+                all_texts.append(t)
+                if m.get("edit_text"):
+                    edit_texts.append(t)
 
-        # Positive: prove the test observes the status edit path
-        assert any("Approval required." in t for t in edit_texts), (
-            f"Expected 'Approval required.' in status edits but got: {edit_texts}"
-        )
+        # Positive: prove the test observes the status edit path (approval/plan wording)
+        assert any(
+            "Approval required." in t or "Review the plan" in t or "approve or reject" in t
+            for t in edit_texts
+        ), f"Expected approval/plan wording in status edits but got: {edit_texts}"
 
         for text in all_texts:
             if text:
@@ -1650,20 +1652,22 @@ async def test_approval_error_no_preflight():
         msg = _StickyReplyMessage(chat=chat, text="do failing approval work")
         upd = FakeUpdate(message=msg, user=user, chat=chat)
         await th.handle_message(upd, FakeContext())
+        await drain_one_worker_item(data_dir)
 
+        bot = th._bot_instance
         all_texts = []
         edit_texts = []
-        for r in msg.replies:
-            all_texts.append(r.get("text", ""))
-            et = r.get("edit_text", "")
-            all_texts.append(et)
-            if et:
-                edit_texts.append(et)
+        for m in bot.sent_messages:
+            t = m.get("text", m.get("edit_text", ""))
+            if t:
+                all_texts.append(t)
+                if m.get("edit_text"):
+                    edit_texts.append(t)
 
         # Positive: prove the test observes the error edit path
-        assert any("Approval check failed:" in t for t in edit_texts), (
-            f"Expected 'Approval check failed:' in status edits but got: {edit_texts}"
-        )
+        assert any(
+            "Approval check failed:" in t or "Plan check failed:" in t for t in edit_texts
+        ), f"Expected approval/plan check failed in status edits but got: {edit_texts}"
 
         for text in all_texts:
             if text:
@@ -1807,6 +1811,7 @@ async def test_claude_resume_error_resets_provider_state():
         msg1 = _StickyReplyMessage(chat=chat, text="first request")
         upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
         await th.handle_message(upd1, FakeContext())
+        await drain_one_worker_item(data_dir)
         assert len(prov.run_calls) == 1
 
         # Verify session now has started=True
@@ -1818,6 +1823,7 @@ async def test_claude_resume_error_resets_provider_state():
         msg2 = _StickyReplyMessage(chat=chat, text="second request")
         upd2 = FakeUpdate(message=msg2, user=user, chat=chat)
         await th.handle_message(upd2, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         # Session must be reset to fresh state
         session = th._load(5001)
@@ -1828,13 +1834,13 @@ async def test_claude_resume_error_resets_provider_state():
         # the fake provider returns a static value, so we just verify it was called)
         assert "session_id" in session.provider_state
 
-        # Verify user got the "starts fresh" message
+        # Verify user got the "start fresh" / "starts fresh" message (worker sends via bot)
+        bot = th._bot_instance
         all_text = " ".join(
-            r.get("text", "") + " " + r.get("edit_text", "")
-            for r in msg2.replies
+            r.get("text", r.get("edit_text", "")) for r in bot.sent_messages
         )
-        assert "starts fresh" in all_text.lower(), (
-            f"Expected 'starts fresh' in user text: {all_text}"
+        assert "start fresh" in all_text.lower() or "starts fresh" in all_text.lower(), (
+            f"Expected 'start fresh' in user text: {all_text}"
         )
 
         # Third request should show "Working..." not "Resuming..."
@@ -1842,10 +1848,13 @@ async def test_claude_resume_error_resets_provider_state():
         msg3 = _StickyReplyMessage(chat=chat, text="third request")
         upd3 = FakeUpdate(message=msg3, user=user, chat=chat)
         await th.handle_message(upd3, FakeContext())
+        await drain_one_worker_item(data_dir)
 
-        initial_status = msg3.replies[0].get("text", "")
-        assert initial_status == "Working...", (
-            f"After resume reset, expected 'Working...' but got: {initial_status!r}"
+        # First status for third request is in bot sent_messages (send then edits)
+        texts = [m.get("text", m.get("edit_text", "")) for m in bot.sent_messages if m.get("text") or m.get("edit_text")]
+        working = next((t for t in texts if "Working" in t or "Resuming" in t), "")
+        assert working.replace("\u2026", "...") == "Working...", (
+            f"After resume reset, expected 'Working...' but got: {working!r}"
         )
 
 
@@ -1869,6 +1878,7 @@ async def test_codex_resume_error_still_clears_thread():
         msg = _StickyReplyMessage(chat=chat, text="codex request")
         upd = FakeUpdate(message=msg, user=user, chat=chat)
         await th.handle_message(upd, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         session = th._load(6001)
         assert session.provider_state["thread_id"] is None, (
@@ -1896,6 +1906,7 @@ async def test_claude_generic_error_during_resume_does_not_reset():
         msg1 = _StickyReplyMessage(chat=chat, text="first request")
         upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
         await th.handle_message(upd1, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         session = th._load(7001)
         assert session.provider_state["started"] is True
@@ -1906,6 +1917,7 @@ async def test_claude_generic_error_during_resume_does_not_reset():
         msg2 = _StickyReplyMessage(chat=chat, text="second request")
         upd2 = FakeUpdate(message=msg2, user=user, chat=chat)
         await th.handle_message(upd2, FakeContext())
+        await drain_one_worker_item(data_dir)
 
         # Session must NOT be reset — still started=True with same session_id
         session = th._load(7001)
@@ -1916,10 +1928,10 @@ async def test_claude_generic_error_during_resume_does_not_reset():
             "Generic error should not change session_id"
         )
 
-        # "starts fresh" message should NOT appear
+        # "starts fresh" message should NOT appear (worker sends via bot)
+        bot = th._bot_instance
         all_text = " ".join(
-            r.get("text", "") + " " + r.get("edit_text", "")
-            for r in msg2.replies
+            r.get("text", r.get("edit_text", "")) for r in bot.sent_messages
         )
         assert "starts fresh" not in all_text.lower(), (
             f"Generic error should not show 'starts fresh': {all_text}"

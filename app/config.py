@@ -3,7 +3,9 @@
 import os
 import shutil
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+
+from app.session_state import ProjectBinding, field
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -86,7 +88,7 @@ class BotConfig:
     webhook_port: int
     webhook_secret: str
     # Projects — optional named working directories
-    projects: tuple[tuple[str, str, tuple[str, ...]], ...]  # ((name, root_dir, extra_dirs), ...)
+    projects: tuple[ProjectBinding, ...]  # parsed from BOT_PROJECTS
     # Model profiles — stable user-facing tier names mapped to provider model IDs
     model_profiles: dict[str, str]  # e.g. {"fast": "claude-haiku-4-5-20251001", ...}
     default_model_profile: str  # "fast", "balanced", "best", or "" (use raw BOT_MODEL)
@@ -95,6 +97,13 @@ class BotConfig:
     public_model_profiles: frozenset[str]  # allowed profiles for public users (empty = all)
     # Skill registry
     registry_url: str  # URL to a JSON skill registry index (empty = disabled)
+    # Runtime (Phase 13). local = only supported mode; shared = rejected until Phase 18.
+    runtime_mode: str  # BOT_RUNTIME_MODE: "local" (default) | "shared" (rejected)
+    # Postgres optional for local runtime. Empty = SQLite (default); set = Postgres as store backend.
+    database_url: str  # BOT_DATABASE_URL (postgresql://...)
+    db_pool_min_size: int
+    db_pool_max_size: int
+    db_connect_timeout_seconds: int
 
 
 def _parse_model_profiles(raw: str) -> dict[str, str]:
@@ -116,23 +125,42 @@ def _parse_model_profiles(raw: str) -> dict[str, str]:
     return profiles
 
 
-def _parse_projects(raw: str) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
-    """Parse BOT_PROJECTS into a tuple of (name, root_dir, extra_dirs).
+def _parse_projects(raw: str) -> tuple[ProjectBinding, ...]:
+    """Parse BOT_PROJECTS into a tuple of ProjectBinding.
 
-    Format: "name1:/path/to/dir1,name2:/path/to/dir2"
-    Each entry is "name:path" where path is the project root directory.
+    Format: "name:/path[|policy[|model_profile]], ..."
+    Separator between root_dir and optional fields is "|" to avoid
+    ambiguity with path "/" separators.
+
+    Examples:
+      "frontend:/home/app/frontend"
+      "frontend:/home/app/frontend|inspect"
+      "frontend:/home/app/frontend|inspect|fast"
+      "frontend:/home/app/frontend||fast"   (skip policy, set profile)
     """
     if not raw.strip():
         return ()
-    projects: list[tuple[str, str, tuple[str, ...]]] = []
+    projects: list[ProjectBinding] = []
     for entry in raw.split(","):
         entry = entry.strip()
         if not entry or ":" not in entry:
             continue
-        name, path = entry.split(":", 1)
-        name, path = name.strip(), path.strip()
-        if name and path:
-            projects.append((name, path, ()))
+        name, rest = entry.split(":", 1)
+        name = name.strip()
+        rest = rest.strip()
+        if not name or not rest:
+            continue
+        parts = rest.split("|")
+        root_dir = parts[0].strip()
+        file_policy = parts[1].strip() if len(parts) > 1 else ""
+        model_profile = parts[2].strip() if len(parts) > 2 else ""
+        if root_dir:
+            projects.append(ProjectBinding(
+                name=name,
+                root_dir=root_dir,
+                file_policy=file_policy,
+                model_profile=model_profile,
+            ))
     return tuple(projects)
 
 
@@ -255,6 +283,93 @@ def load_config(instance: str | None = None) -> BotConfig:
             s.strip() for s in get("BOT_PUBLIC_MODEL_PROFILES").split(",") if s.strip()
         ),
         registry_url=get("BOT_REGISTRY_URL"),
+        runtime_mode=get("BOT_RUNTIME_MODE", "local").strip().lower() or "local",
+        database_url=get("BOT_DATABASE_URL", "").strip(),
+        db_pool_min_size=max(0, get_int("BOT_DB_POOL_MIN_SIZE", "1")),
+        db_pool_max_size=max(1, get_int("BOT_DB_POOL_MAX_SIZE", "10")),
+        db_connect_timeout_seconds=max(1, get_int("BOT_DB_CONNECT_TIMEOUT", "10")),
+    )
+
+
+def load_config_provider_health() -> BotConfig:
+    """Load minimal config from environment for provider-only health checks.
+
+    Used by --provider-health. Does not require BOT_DATABASE_URL or Telegram
+    config. Reads BOT_PROVIDER, BOT_MODEL, BOT_DATA_DIR, BOT_WORKING_DIR, and
+    provider-specific vars so check_health/check_runtime_health work correctly.
+    """
+    def get(key: str, default: str = "") -> str:
+        return os.environ.get(key, default)
+
+    def get_bool(key: str, default: str = "0") -> bool:
+        return get(key, default).lower() in {"1", "true", "yes", "on"}
+
+    def get_int(key: str, default: str) -> int:
+        raw = get(key, default)
+        try:
+            return int(raw)
+        except ValueError:
+            return int(default)
+
+    def get_float(key: str, default: str) -> float:
+        raw = get(key, default)
+        try:
+            return float(raw)
+        except ValueError:
+            return float(default)
+
+    instance = get("BOT_INSTANCE", "default")
+    default_data = Path.home() / ".telegram-agent-bot" / instance
+    extra_dirs_raw = get("BOT_EXTRA_DIRS")
+    extra_dirs = tuple(
+        Path(d.strip()) for d in extra_dirs_raw.split(",") if d.strip()
+    )
+    return BotConfig(
+        instance=instance,
+        telegram_token="",
+        allow_open=False,
+        allowed_user_ids=frozenset(),
+        allowed_usernames=frozenset(),
+        provider_name=get("BOT_PROVIDER", "claude").strip() or "claude",
+        model=get("BOT_MODEL"),
+        working_dir=Path(get("BOT_WORKING_DIR", str(Path.home()))),
+        extra_dirs=extra_dirs,
+        data_dir=Path(get("BOT_DATA_DIR", str(default_data))),
+        timeout_seconds=get_int("BOT_TIMEOUT_SECONDS", "300"),
+        approval_mode="on",
+        role="",
+        role_from_file=False,
+        default_skills=(),
+        stream_update_interval_seconds=get_float("BOT_STREAM_UPDATE_INTERVAL", "1.0"),
+        typing_interval_seconds=get_float("BOT_TYPING_INTERVAL", "4.0"),
+        codex_sandbox=get("CODEX_SANDBOX", "workspace-write"),
+        codex_skip_git_repo_check=get_bool("CODEX_SKIP_GIT_REPO_CHECK", "1"),
+        codex_full_auto=get_bool("CODEX_FULL_AUTO"),
+        codex_dangerous=get_bool("CODEX_DANGEROUS"),
+        codex_profile=get("CODEX_PROFILE"),
+        admin_user_ids=frozenset(),
+        admin_usernames=frozenset(),
+        admin_users_explicit=False,
+        compact_mode=True,
+        summary_model=get("BOT_SUMMARY_MODEL", "claude-haiku-4-5-20251001"),
+        rate_limit_per_minute=0,
+        rate_limit_per_hour=0,
+        bot_mode="poll",
+        webhook_url="",
+        webhook_listen="127.0.0.1",
+        webhook_port=8443,
+        webhook_secret="",
+        projects=(),
+        model_profiles={},
+        default_model_profile="",
+        public_working_dir="",
+        public_model_profiles=frozenset(),
+        registry_url="",
+        runtime_mode="local",
+        database_url="",
+        db_pool_min_size=1,
+        db_pool_max_size=10,
+        db_connect_timeout_seconds=10,
     )
 
 
@@ -263,17 +378,20 @@ def validate_config(config: BotConfig) -> list[str]:
     errors: list[str] = []
 
     if not config.telegram_token:
-        errors.append("TELEGRAM_BOT_TOKEN is not set")
+        errors.append(
+            "TELEGRAM_BOT_TOKEN is not set. Get a token from @BotFather and set it in .env.bot (or your env file)."
+        )
 
     if config.provider_name not in {"claude", "codex"}:
         errors.append(
-            f"BOT_PROVIDER must be 'claude' or 'codex', got '{config.provider_name}'"
+            f"BOT_PROVIDER must be 'claude' or 'codex', got '{config.provider_name}'. "
+            "Set BOT_PROVIDER=claude or BOT_PROVIDER=codex in .env.bot."
         )
 
     if not config.allowed_user_ids and not config.allowed_usernames and not config.allow_open:
         errors.append(
-            "BOT_ALLOWED_USERS is empty and BOT_ALLOW_OPEN is not set. "
-            "Set BOT_ALLOW_OPEN=1 to explicitly allow open access."
+            "Access not configured: BOT_ALLOWED_USERS is empty and BOT_ALLOW_OPEN is not set. "
+            "Set BOT_ALLOWED_USERS=<your-telegram-user-id> or BOT_ALLOW_OPEN=1 in .env.bot."
         )
 
     if not config.working_dir.is_dir():
@@ -281,7 +399,10 @@ def validate_config(config: BotConfig) -> list[str]:
 
     binary = "claude" if config.provider_name == "claude" else "codex"
     if config.provider_name in {"claude", "codex"} and not shutil.which(binary):
-        errors.append(f"Provider binary '{binary}' not found in PATH")
+        errors.append(
+            f"Provider binary '{binary}' not found in PATH. "
+            f"Install the {binary} CLI, or build the bot image with ./scripts/build_bot_image.sh {config.provider_name}."
+        )
 
     for d in config.extra_dirs:
         if not d.is_dir():
@@ -300,17 +421,46 @@ def validate_config(config: BotConfig) -> list[str]:
             f"BOT_MODE must be 'poll' or 'webhook', got '{config.bot_mode}'"
         )
 
+    if config.runtime_mode == "shared":
+        errors.append(
+            "BOT_RUNTIME_MODE=shared is not supported until Phase 18. "
+            "Use BOT_RUNTIME_MODE=local (default) for Local Runtime."
+        )
+    elif config.runtime_mode != "local":
+        errors.append(
+            f"BOT_RUNTIME_MODE must be 'local' or 'shared', got '{config.runtime_mode}'. "
+            "Only 'local' is supported in Phase 13."
+        )
+
     if config.bot_mode == "webhook":
         if not config.webhook_url:
             errors.append("BOT_WEBHOOK_URL is required when BOT_MODE=webhook")
 
+    if config.database_url and not (
+        config.database_url.startswith("postgresql://")
+        or config.database_url.startswith("postgresql+")
+    ):
+        errors.append(
+            "BOT_DATABASE_URL must be a postgresql:// connection string when set"
+        )
+
     seen_project_names: set[str] = set()
-    for name, root_dir, _ in config.projects:
-        if name in seen_project_names:
-            errors.append(f"Duplicate project name: '{name}'")
-        seen_project_names.add(name)
-        if not Path(root_dir).is_dir():
-            errors.append(f"Project '{name}' root dir does not exist: {root_dir}")
+    for proj in config.projects:
+        if proj.name in seen_project_names:
+            errors.append(f"Duplicate project name: '{proj.name}'")
+        seen_project_names.add(proj.name)
+        if not Path(proj.root_dir).is_dir():
+            errors.append(f"Project '{proj.name}' root dir does not exist: {proj.root_dir}")
+        if proj.file_policy and proj.file_policy not in ("inspect", "edit"):
+            errors.append(f"Project '{proj.name}' has invalid file_policy: '{proj.file_policy}'")
+        if proj.model_profile:
+            if not config.model_profiles:
+                errors.append(
+                    f"Project '{proj.name}' sets model_profile='{proj.model_profile}' "
+                    "but no BOT_MODEL_PROFILES are configured"
+                )
+            elif proj.model_profile not in config.model_profiles:
+                errors.append(f"Project '{proj.name}' has unknown model_profile: '{proj.model_profile}'")
 
     # Validate default_skills against catalog
     if config.default_skills:

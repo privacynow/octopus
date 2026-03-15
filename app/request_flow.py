@@ -22,6 +22,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.execution_context import resolve_execution_context
+from app.user_messages import (
+    approval_context_changed,
+    approval_expired,
+    approval_expired_fallback,
+)
 from app.session_state import (
     AwaitingSkillSetup,
     PendingApproval,
@@ -190,7 +195,7 @@ def pending_expired(
     age = time.time() - created_at
     if age > ttl:
         minutes = int(age // 60)
-        return f"This request has expired (created {minutes} minutes ago). Please resend your message."
+        return approval_expired(minutes)
     return None
 
 
@@ -244,9 +249,9 @@ def validate_pending(
     """
     kind = classify_pending_validation(pending, session, config, provider_name)
     if kind == "expired":
-        return pending_expired(pending, config.timeout_seconds) or "This request has expired."
+        return pending_expired(pending, config.timeout_seconds) or approval_expired_fallback()
     if kind == "context_changed":
-        return "Context changed since this request was made. Please resend."
+        return approval_context_changed()
     return None
 
 

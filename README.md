@@ -1,52 +1,27 @@
 # Telegram Agent Bot
 
-Talk to Claude Code or Codex from Telegram. The bot runs in Docker, keeps its
-runtime state in SQLite by default (Local Runtime), and sends results back to the same chat.
+Talk to Claude Code or Codex from Telegram.
+
+This bot lets you:
+
+- ask for coding help from Telegram
+- review a plan before anything runs
+- upload files and get files back
+- add skills and credentials when needed
+
+You do **not** need to set up a database or choose a storage backend for normal
+use. The standard setup is one guided script.
 
 **Repo:** [github.com/privacynow/octopus](https://github.com/privacynow/octopus)
-
-## What It Does
-
-- talk to your coding agent from Telegram
-- review plans before execution
-- send files in and get files back
-- add skills and credentials
-- run separate bot environments with separate databases and tokens
-
-## Recommended Path
-
-Use Docker for the bot. **Local Runtime** is the default: the bot uses SQLite (no Postgres required).  
-Optional: use Postgres by setting `BOT_DATABASE_URL` and running the Postgres stack.
-
-## Runtime Model
-
-The current runtime is **worker-owned** for normal chat requests:
-
-- fresh plain messages are admitted durably, then executed by the background worker
-- approval preflight for those requests follows the same durable worker-owned lane
-- credential setup replies stay inline and **off queue**
-- `/cancel` can stop:
-  - a live running worker-owned request
-  - an admitted-but-not-yet-running queued request
-  - credential setup or other pending request state when applicable
-
-This is the same Local Runtime whether the backend is:
-
-- **SQLite** in `BOT_DATA_DIR` (default)
-- **Postgres** via `BOT_DATABASE_URL` (supported alternate backend)
 
 ## What You Need
 
 - Docker and Docker Compose
 - a Telegram bot token from `@BotFather`
 - one provider: `claude` or `codex`
+- your Telegram user ID for `BOT_ALLOWED_USERS`
 
-You build the bot image **once** for your chosen provider; the repo’s build
-script uses `BOT_PROVIDER` (from `.env.bot` or the command line) so you don’t
-choose Docker targets manually. The image includes the real Claude or Codex
-CLI. See [Building the bot image](#building-the-bot-image) below.
-
-## Quick Start
+## First-Time Setup
 
 1. **Clone the repo**
 
@@ -55,7 +30,9 @@ CLI. See [Building the bot image](#building-the-bot-image) below.
    cd ~/telegram-agent-bot
    ```
 
-2. **Create `.env.bot`** with your token, provider, and access (example):
+2. **Create `.env.bot`**
+
+   Minimal example:
 
    ```bash
    TELEGRAM_BOT_TOKEN=<from @BotFather>
@@ -63,84 +40,35 @@ CLI. See [Building the bot image](#building-the-bot-image) below.
    BOT_ALLOWED_USERS=123456789
    ```
 
-   Use `BOT_ALLOW_OPEN=1` instead of `BOT_ALLOWED_USERS` only if you want an open bot. Leave `BOT_DATABASE_URL` unset for Local Runtime (SQLite).
+   `BOT_ALLOWED_USERS` should be your own Telegram user ID so the bot starts in
+   a simple private mode.
 
-   Optional project and model configuration:
-   ```bash
-   BOT_PROJECTS=frontend:/home/app/frontend|inspect|fast,backend:/home/app/backend|edit|best
-   BOT_MODEL_PROFILES=fast:claude-haiku-4-5-20251001,balanced:claude-sonnet-4-6,best:claude-opus-4-6
-   ```
-   Projects use `|` to separate optional per-project defaults (file policy, model profile).
-
-3. **Run the guided setup and start**
+3. **Run the guided setup**
 
    ```bash
    ./scripts/guided_start.sh
    ```
 
-   That script: builds (or reuses) the bot image, runs interactive provider login if needed, then starts the bot. No database to start for the default path. When it finishes, message the bot in Telegram.
+   The script builds what it needs, walks you through provider login if needed,
+   and starts the bot.
 
-That’s the main path. Manual steps and reference are below.
+4. **Message the bot in Telegram**
 
----
+   Start with `/start`, then send a normal request such as:
 
-## Manual steps (reference)
+   > Review this diff and suggest a safer refactor.
 
-If you prefer to run steps yourself instead of `guided_start.sh`:
+## Day-To-Day Use
 
-- **Local Runtime (default):** No database to start. `./scripts/dev_up.sh` prints a short message and points to `guided_start.sh`. Data lives in the `bot-home` volume (SQLite under `BOT_DATA_DIR`).
-- **Optional Postgres:** `./scripts/dev_up_postgres.sh` — starts Postgres, db-bootstrap or db-update, db-doctor. Then set `BOT_DATABASE_URL=postgresql://bot:bot@postgres:5432/bot` in `.env.bot`.
+The bot is designed to feel simple from Telegram:
 
-- **Build bot image:**  
-  `./scripts/build_bot_image.sh` (uses `BOT_PROVIDER` from `.env.bot`) or `./scripts/build_bot_image.sh claude` / `./scripts/build_bot_image.sh codex`.  
-  Images are tagged `telegram-agent-bot:claude` and `telegram-agent-bot:codex`.
+- send a normal message to ask for work
+- turn approval on if you want to review a plan first
+- upload files when you want the agent to inspect them
+- use `/cancel` if you want to stop the current request
 
-- **Provider login (one-time):**  
-  `./scripts/provider_login.sh`  
-  Codex: complete sign-in in the browser. Claude: in the Claude window run `/login` and complete auth. Login state is stored in the `bot-home` volume.
-
-- **Start the bot:**  
-  `docker compose --profile bot --env-file .env.bot up -d bot`  
-  Foreground (e.g. for logs): `docker compose --profile bot --env-file .env.bot run --rm bot`
-
-The bot service is under the **`bot`** profile. By default it uses SQLite (no Postgres). For Postgres, start postgres and set `BOT_DATABASE_URL` in `.env.bot`.
-
-## After Updating
-
-After a `git pull`, the bot runs from a **prebuilt image**. To run the updated code you must **rebuild that image**, then restart:
-
-```bash
-./scripts/build_bot_image.sh
-docker compose --profile bot --env-file .env.bot up -d bot
-```
-
-If you use **`./scripts/guided_start.sh`** after a pull, it will rebuild the image when code or config changed since the image was built. If you use Postgres, also run `docker compose --profile tools run --rm db-update` when the repo adds new SQL.
-
-## Common Commands
-
-| Command | Purpose |
-|---|---|
-| `./scripts/guided_start.sh` | **One path:** build → provider login (if needed) → start bot (Local Runtime) |
-| `./scripts/dev_up.sh` | Local Runtime: no DB to start; prints instructions |
-| `./scripts/dev_up_postgres.sh` | Optional: start Postgres and run DB bootstrap/update/doctor |
-| `./scripts/build_bot_image.sh` | Build `telegram-agent-bot:claude` or `:codex` (from `.env.bot` or arg) |
-| `./scripts/provider_login.sh` | One-time interactive provider auth |
-| `./scripts/provider_status.sh` | **Provider auth and runtime only** (not DB/Telegram) |
-| `./scripts/provider_logout.sh` | Clear provider auth (best-effort) |
-| `docker compose up -d postgres` | Start Postgres only (tooling independent of bot config) |
-| `docker compose --profile tools run --rm db-bootstrap` | Apply full schema |
-| `docker compose --profile tools run --rm db-update` | Apply pending schema versions |
-| `docker compose --profile tools run --rm db-doctor` | Validate Postgres and schema |
-| `docker compose --profile bot --env-file .env.bot up -d bot` | Start the bot (background) |
-| `docker compose --profile bot --env-file .env.bot run --rm bot` | Start the bot (foreground) |
-
-### Building the bot image and provider auth
-
-The bot uses **provider-tagged images** (`telegram-agent-bot:claude`, `telegram-agent-bot:codex`) and **persistent provider login** in the `bot-home` volume. Build with **`./scripts/build_bot_image.sh`**; run **`./scripts/provider_login.sh`** once to authenticate.
-
-**Health surfaces (operator):** Use the right check for the right scope. **(1) Provider only** — `./scripts/provider_status.sh` checks provider auth and runtime; success there does **not** prove the bot can start (no DB or Telegram). **(2) Postgres/schema only** — `docker compose --profile tools run --rm db-doctor` validates Postgres and schema. **(3) Full app health** — `docker compose --profile bot --env-file .env.bot run --rm bot python -m app.main --doctor` (or in-chat `/doctor`) checks DB, config, and Telegram. For “can the bot start?” use (3).
-
-**`./scripts/provider_login.sh`** and **`./scripts/provider_logout.sh`** use the same Compose service (no Postgres). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+After a `git pull`, run `./scripts/guided_start.sh` again. It will rebuild and
+restart the bot if needed.
 
 ## Using the Bot
 
@@ -194,98 +122,54 @@ If a skill would make the composed prompt too large, the bot warns you first.
 Long responses get summarized automatically when compact mode is on. Use `/raw`
 to see the full output whenever you need it.
 
-## Commands
-
-### Core flow
+## Most Useful Commands
 
 | Command | What it does |
 |---|---|
 | `/start` | Show the main help and chat controls |
-| `/help` | Show main help, or `/help skills`, `/help approval`, `/help credentials` |
-| `/new` | Start a fresh conversation |
-| `/role <text>` | Set the AI's persona for this chat |
-| `/approval on\|off\|status` | Change or inspect approval mode |
+| `/help` | Show help |
+| `/approval on\|off\|status` | Review plans before execution |
 | `/approve` | Approve the current pending plan |
 | `/reject` | Reject the current pending plan |
-| `/cancel` | Cancel a running task, a queued admitted task, credential setup, or another pending request |
-| `/doctor` | Run the full app health check |
-
-### Output and session
-
-| Command | What it does |
-|---|---|
-| `/compact on\|off` | Toggle compact mode |
-| `/raw` | Show the full last output |
-| `/export` | Export session output |
-| `/session` | Show current session details |
+| `/cancel` | Stop the current request or pending action |
 | `/send <path>` | Retrieve a file the agent created |
-| `/id` | Show your Telegram user ID |
-
-### Skills and settings
-
-| Command | What it does |
-|---|---|
-| `/skills` | Show active skills in this chat |
-| `/skills list` | Show available skills and status |
+| `/skills` | See active skills |
+| `/skills list` | See available skills |
 | `/skills add <name>` | Activate a skill |
-| `/skills remove <name>` | Remove a skill |
-| `/skills setup <name>` | Configure a skill |
-| `/skills info <name>` | Show resolved skill details |
-| `/skills search <query>` | Search the bundled store and configured registry |
-| `/skills clear` | Deactivate all skills in this chat |
-| `/settings` | Open settings |
-| `/model` | Show or change profile |
-| `/model inherit` | Clear session override, use project/global default |
-| `/project` | Show or change project binding |
-| `/policy inspect\|edit\|inherit\|status` | Show or change file-access policy |
-| `/policy inherit` | Clear session override, use project/global default |
-| `/clear_credentials [skill]` | Remove stored skill credentials |
-
-### Admin and managed skills
-
-| Command | What it does |
-|---|---|
-| `/admin sessions` | Show a session overview (admin only) |
-| `/skills create <name>` | Scaffold a custom skill |
-| `/skills install <name>` | Install a managed skill from the bundled store or registry |
-| `/skills uninstall <name>` | Remove a managed skill |
-| `/skills update <name>` | Update a managed skill |
-| `/skills update all` | Update all managed skills |
-| `/skills updates` | Show available managed skill updates |
-| `/skills diff <name>` | Show a managed skill diff |
+| `/skills setup <name>` | Configure a skill when prompted |
+| `/settings` | Open chat settings |
+| `/session` | Show current session details |
+| `/doctor` | Run the bot health check |
 
 ## Troubleshooting
 
 ### Provider not authenticated or unavailable
 
-The bot validates provider auth at startup. If you see “Provider not authenticated or unavailable” and a suggestion to run `./scripts/provider_login.sh`, run that script once to sign in (Codex: browser sign-in; Claude: run `/login` in the Claude window). Login state is stored in the `bot-home` volume and reused. Use `./scripts/provider_status.sh` to verify provider auth and runtime only; for full app health (DB, Telegram) run `docker compose --profile bot --env-file .env.bot run --rm bot python -m app.main --doctor`. Use `./scripts/provider_logout.sh` to clear auth (best-effort) and re-login.
+If startup tells you to run `./scripts/provider_login.sh`, do that once and
+then run `./scripts/guided_start.sh` again.
 
-### Database (SQLite default, Postgres optional)
+The login script will walk you through the right sign-in flow for your
+provider.
 
-The default runtime uses **SQLite** in `BOT_DATA_DIR`; you do **not** need to set
-`BOT_DATABASE_URL`. Leave it unset for Local Runtime with SQLite.
+If you want the bot to check itself from Telegram, use `/doctor`.
 
-To use **Postgres** as the backend instead, set `BOT_DATABASE_URL` (e.g.
-`postgresql://bot:bot@postgres:5432/bot`) in `.env.bot` and run Postgres and
-db-bootstrap/db-update before starting the bot. See “Optional Postgres” in the
-manual steps above.
+If a technical helper wants to run the full health check locally, use:
+
+```bash
+docker compose --profile bot --env-file .env.bot run --rm bot python -m app.main --doctor
+```
+
+### The bot still will not start
+
+Try these in order:
+
+1. Run `./scripts/guided_start.sh` again
+2. If it asks for provider login, complete that step
+3. Run `/doctor` in Telegram or the full app health command above
 
 ### `claude` or `codex` not found
 
-The supported path uses a **real** provider-enabled image. Build it with
-`./scripts/build_bot_image.sh` (and the same `BOT_PROVIDER` as in `.env.bot`).
-Ensure you have built the image for your chosen provider before running the bot.
-
-### DB doctor says bootstrap or update is required
-
-Use **db-bootstrap** for a fresh DB (no schema yet). Use **db-update** when the DB already has schema (e.g. after a git pull with new migrations). Then run db-doctor to confirm.
-
-```bash
-docker compose --profile tools run --rm db-bootstrap   # fresh DB
-# or
-docker compose --profile tools run --rm db-update      # existing schema
-docker compose --profile tools run --rm db-doctor
-```
+Run `./scripts/guided_start.sh` again. It will rebuild the bot image if needed.
 
 ### Polling conflict
 
@@ -293,9 +177,7 @@ Telegram allows a single active polling connection per bot token. If you see
 `Conflict: terminated by other getUpdates request`, another process is already
 using that token. Stop it first, then start the current instance.
 
-## Advanced and Internal Details
-
-The README intentionally keeps one Docker-first path.
+## Want The Technical Details?
 
 For deeper details, use:
 

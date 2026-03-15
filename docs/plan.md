@@ -729,12 +729,20 @@ Library choice: [python-statemachine](https://pypi.org/project/python-statemachi
 
 **Phase 11 seal checklist (done when moving to Phase 12):** All three claim entry points use one shared claim helper; both initial-insert paths use one shared insert helper; no transport mutation helper open-codes its own CAS/reread classification; repository-shape tests pin the single-claim and single-insert behavior; docs/status truthfully reflect that state.
 
-### Phase 12 - Postgres Runtime Cutover *(complete)*
+### Phase 12 - Postgres Runtime Cutover *(complete, historical phase record)*
 
-Make Postgres the only supported runtime backend after cutover. Phase 12 is a
-contract-preserving backend replacement and environment/bootstrap phase, not a
-queue redesign phase and not a CI/CD phase. Implementation complete; see
-[status.md](status.md).
+This section is preserved because it explains why the repo still has explicit
+Postgres tooling, migrations, and integration suites. It is a sealed
+historical phase record, not the current runtime contract. The current shipped
+runtime is the Phase 13+ Local Runtime baseline: SQLite-default, Postgres as a
+supported alternate backend, with the current operator paths documented in
+[README.md](../README.md), [status.md](status.md), and
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
+Phase 12 itself made Postgres the only supported runtime backend after cutover.
+It was a contract-preserving backend replacement and
+environment/bootstrap phase, not a queue redesign phase and not a CI/CD phase.
+Implementation complete; see [status.md](status.md).
 
 **What Phase 12 is solving.**
 
@@ -857,7 +865,7 @@ supported lifecycle:
 
 1. App bootstrap
    - Build or refresh the app image and related runtime assets.
-   - `scripts/bootstrap.sh` remains useful for local development and tests, but
+   - `scripts/app/bootstrap.sh` remains useful for local development and tests, but
      Docker is the primary product-facing operational path.
 2. DB bootstrap
    - Apply repo-owned schema to an *existing* database (database and runtime role
@@ -877,12 +885,12 @@ The app itself should not absorb these workflows.
 
 The exact filenames can change, but the plan should assume a command set like:
 
-- `scripts/bootstrap.sh`
-- `scripts/db_bootstrap.sh`
-- `scripts/db_update.sh`
-- `scripts/db_doctor.sh`
+- `scripts/app/bootstrap.sh`
+- `scripts/db/db_bootstrap.sh`
+- `scripts/db/db_update.sh`
+- `scripts/db/db_doctor.sh`
 - optional convenience wrapper for local development such as:
-  - `scripts/dev_up.sh`
+  - `scripts/app/dev_up.sh`
   - or `make dev-first`
   - or Compose profiles plus one-shot services
 

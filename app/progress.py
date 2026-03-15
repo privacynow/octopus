@@ -14,6 +14,7 @@ import html as _html
 from dataclasses import dataclass, field
 
 from app.formatting import md_to_telegram_html, trim_text
+from app import user_messages as _msg
 
 
 # ---------------------------------------------------------------------------
@@ -98,47 +99,47 @@ def render(event: ProgressEvent) -> str | None:
     """Render a progress event to Telegram HTML.
 
     Returns None if the event should not produce a visible update
-    (e.g. suppressed internal detail).
+    (e.g. suppressed internal detail). Wording from user_messages (Milestone D).
     """
     if isinstance(event, Thinking):
-        return "<i>Thinking...</i>"
+        return f"<i>{_msg.progress_thinking()}</i>"
 
     if isinstance(event, CommandStart):
         if event.command:
             return (
-                f"<i>Running command:</i>\n"
+                f"<i>{_msg.progress_running_command_with_command()}</i>\n"
                 f"<pre>{_html.escape(trim_text(event.command, 600))}</pre>"
             )
-        return "<i>Running command...</i>"
+        return f"<i>{_msg.progress_running_command()}</i>"
 
     if isinstance(event, CommandFinish):
         if event.exit_code is None:
-            header = "<i>Command finished.</i>"
+            header = f"<i>{_msg.progress_command_finished()}</i>"
         else:
-            header = f"<i>Command finished (exit {_html.escape(str(event.exit_code))}):</i>"
+            header = f"<i>{_msg.progress_command_finished_exit(event.exit_code)}</i>"
         if event.command:
             header += f"\n<pre>{_html.escape(trim_text(event.command, 400))}</pre>"
         parts = [header]
         if event.output_preview:
             parts.append(
-                f"<i>Output:</i>\n<pre>{_html.escape(trim_text(event.output_preview, 700))}</pre>"
+                f"<i>{_msg.progress_output()}</i>\n<pre>{_html.escape(trim_text(event.output_preview, 700))}</pre>"
             )
         return "\n\n".join(parts)
 
     if isinstance(event, ToolStart):
         return (
-            f"<i>Using tool:</i>\n"
+            f"<i>{_msg.progress_using_tool()}</i>\n"
             f"<code>{_html.escape(trim_text(event.name, 120))}</code>"
         )
 
     if isinstance(event, ToolFinish):
         parts = [
-            f"<i>Tool finished:</i>\n"
+            f"<i>{_msg.progress_tool_finished()}</i>\n"
             f"<code>{_html.escape(trim_text(event.name, 120))}</code>"
         ]
         if event.output_preview:
             parts.append(
-                f"<i>Output:</i>\n<pre>{_html.escape(trim_text(event.output_preview, 700))}</pre>"
+                f"<i>{_msg.progress_output()}</i>\n<pre>{_html.escape(trim_text(event.output_preview, 700))}</pre>"
             )
         return "\n\n".join(parts)
 
@@ -151,19 +152,19 @@ def render(event: ProgressEvent) -> str | None:
         if event.text:
             parts.append(md_to_telegram_html(trim_text(event.text, 3200)))
         else:
-            parts.append("<i>Thinking...</i>")
+            parts.append(f"<i>{_msg.progress_thinking()}</i>")
         return "\n".join(parts)
 
     if isinstance(event, DraftReply):
         preview = trim_text(event.text.strip(), 700)
         if preview:
-            return f"<i>Draft reply received:</i>\n\n{md_to_telegram_html(preview)}"
-        return "<i>Reply received.</i>"
+            return f"<i>{_msg.progress_draft_reply_received()}</i>\n\n{md_to_telegram_html(preview)}"
+        return f"<i>{_msg.progress_reply_received()}</i>"
 
     if isinstance(event, Denial):
         if event.detail:
-            return f"<i>Blocked:</i> {_html.escape(trim_text(event.detail, 200))}"
-        return "<i>Action blocked.</i>"
+            return f"<i>{_msg.progress_blocked()}</i> {_html.escape(trim_text(event.detail, 200))}"
+        return f"<i>{_msg.progress_action_blocked()}</i>"
 
     if isinstance(event, Liveness):
         return f"<i>{_html.escape(event.detail)}</i>"

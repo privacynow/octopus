@@ -73,13 +73,15 @@ def resolve_effective_model(
     session: "SessionState",
     config: "BotConfig",
     trust_tier: str = "trusted",
+    project_binding: "ProjectBinding | None" = None,
 ) -> str:
     """Resolve the effective model ID from session profile + config.
 
-    Resolution order: session.model_profile → config.default_model_profile → config.model.
+    Resolution order: session.model_profile → project.model_profile → config.default_model_profile → config.model.
     Public users may be restricted to a subset of profiles.
     """
-    profile = session.model_profile or config.default_model_profile
+    project_profile = project_binding.model_profile if project_binding else ""
+    profile = session.model_profile or project_profile or config.default_model_profile
 
     if profile and config.model_profiles:
         # Public users restricted to allowed profiles
@@ -131,16 +133,17 @@ def resolve_execution_context(
     from app.session_state import ProjectBinding
     from app.skills import get_provider_config_digest, get_skill_digests
 
-    # Resolve effective model from session profile
-    effective_model = resolve_effective_model(session, config, trust_tier)
-
-    # Resolve project binding (disabled for public users)
+    # Resolve project binding first (needed for model and policy inheritance).
+    # Disabled for public users.
     project_binding: ProjectBinding | None = None
     if trust_tier != "public" and session.project_id:
-        for name, root_dir, extra_dirs in config.projects:
-            if name == session.project_id:
-                project_binding = ProjectBinding(name=name, root_dir=root_dir, extra_dirs=extra_dirs)
+        for proj in config.projects:
+            if proj.name == session.project_id:
+                project_binding = proj
                 break
+
+    # Resolve effective model: session > project > global default
+    effective_model = resolve_effective_model(session, config, trust_tier, project_binding)
 
     # Working dir: public users get forced public root
     if trust_tier == "public" and config.public_working_dir:
@@ -150,8 +153,16 @@ def resolve_execution_context(
     else:
         working_dir = str(config.working_dir)
 
-    # File policy: public users forced to inspect
-    file_policy = "inspect" if trust_tier == "public" else session.file_policy
+    # File policy: session explicit > project default > "" (inherit)
+    # Public users always forced to inspect.
+    if trust_tier == "public":
+        file_policy = "inspect"
+    elif session.file_policy:
+        file_policy = session.file_policy
+    elif project_binding and project_binding.file_policy:
+        file_policy = project_binding.file_policy
+    else:
+        file_policy = ""
 
     # Extra dirs: public users get none (no operator extra dirs).
     # Project extra_dirs are folded in alongside config extra_dirs.

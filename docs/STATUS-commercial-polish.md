@@ -1,12 +1,56 @@
 # Commercial Polish — Implementation Status
 
-Current as of 2026-03-12. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
+Current as of 2026-03-14. Tracks progress against [PLAN-commercial-polish.md](PLAN-commercial-polish.md).
 
-> **Latest change (2026-03-12):** Docs aligned to the shipped Phase 11 code and the current Phase 12 direction. Architecture now reflects both workflow families (`TransportRecoveryMachine`, `PendingRequestMachine`) as shipped Phase 11 ownership. Phase 12 now explicitly includes the environment/bootstrap contract and the testing contract: Dockerized app + Postgres as the canonical dev shape, explicit DB bootstrap/update/doctor workflows, validate-only app startup, owner suites retained as the main contract layer, persistence/integration coverage migrated to real Postgres, one database per pytest worker, truncate/reset cleanup, and a small Compose-based E2E layer for bootstrap/startup/update flows.
+> **Current state — Phase 15 Slice 1 (per-project defaults) shipped; Phase 14 sealed; Phase 13 done.** (1) **Runtime matrix:** local + sqlite = default path; local + postgres = supported path; shared = out of scope. (2) **Single backend seam:** `app/runtime_backend.py` is the only backend selector; `storage.py` and `work_queue.py` are backend-neutral facades; no facade leaks of SQLite-only internals. (3) **Contract suites:** `tests/contracts/test_session_store_contract.py` and `tests/contracts/test_transport_store_contract.py` are parameterized for both SQLite and Postgres. **Note:** Postgres parameters skip when Docker/Postgres is unavailable; on environments without Docker the contract suites only exercise SQLite. (4) **Startup/operator:** Default path is SQLite Local Runtime (no `BOT_DATABASE_URL`); Docker `bot` service does not depend on Postgres; `dev_up.sh` and `guided_start.sh` are SQLite-first; README documents SQLite as default, Postgres as optional; troubleshooting section no longer claims Postgres-only. (5) **E2E:** Primary gate is `test_compose_sqlite_local_runtime_primary` (Docker Local Runtime with SQLite). Bounded Postgres coverage is **real**: `test_compose_bot_startup_with_postgres` uses a dedicated override that injects `BOT_DATABASE_URL=postgresql://bot:bot@postgres:5432/bot` into the bot service so the bot actually runs against Postgres. One module-scoped `bot_image_built` fixture; no duplicate image build. (6) **Probe tests:** `test_postgres_bot_override_injects_bot_database_url` and `test_postgres_bot_override_path_writes_file` assert the Postgres override contract. (7) **Tests:** Contract suites + storage, work_queue, config, handler_runtime_isolation, sqlite/workitem integration; Postgres tests remain for supported backend. **Phase 14 sealed** (operator health clarity, dead-end command fixes, command-specific actionability, command/callback parity).
+>
+> **Phase 14 (first slice, complete) — operator health clarity and recovery discoverability.** (1) **Provider-only health:** `provider_status.sh` success output now states explicitly that success does **not** prove the bot can start and points to the full app health command. (2) **Three health surfaces:** README presents a short operator model: (1) provider only — `provider_status.sh`; (2) Postgres/schema only — `db-doctor`; (3) full app health — `python -m app.main --doctor` or in-chat `/doctor`. Local Runtime default and Postgres optional unchanged. (3) **In-bot:** `/doctor` in main help reads as “run full app health check (DB, config, Telegram)”; `HELP_APPROVAL` adds one line that retry/recovery happens via in-chat buttons when a request cannot continue normally. (4) **Parity:** provider_status.sh, README operator section, `/doctor` help line, and HELP_APPROVAL express the same product meaning. (5) **Tests:** test_operator_scripts (provider-only, success ≠ readiness, points to full health); test_readme_operator (three surfaces, SQLite default, no Postgres-only); test_handlers (/start and /help include full /doctor wording, /help approval mentions retry/recovery; /help still does not advertise /retry). Phase 14 first slice complete.
+>
+> **Phase 14 (second slice, complete) — Telegram-path discoverability and dead-end clarity.** (1) **Main help:** `/start` and `/help` now include a trust-aware "Chat options" line (e.g. /settings · /session · /model · /project for trusted users; /project omitted for public) and a recovery hint ("Interrupted? Use Run again or Skip on the status message."). (2) **Dead-end/no-op:** `user_messages`: `nothing_to_cancel` now ends with "No action needed."; `trust_command_not_available_public` points to "Use /help to see available commands."; `approval_no_pending_approve` and `approval_no_pending_reject` give a next step truthful in both approval-mode states ("No pending request to approve/reject. Send a message to get a new plan."). Follow-up: removed misleading "Turn on approval" wording when there is no pending request (handlers do not branch on approval on/off); tests tightened to reject that wording and handler-level tests pin canonical no-pending messages. (3) **No workflow/FSM change:** all changes stay in existing handler/session/message seams. (4) **Tests:** test_user_messages (nothing_to_cancel no-action-needed, trust_command /help, approval no-pending must not say "turn on approval", must say send message/plan); test_handlers (help includes "Chat options:" and recovery hint; /retry still not advertised; public/trusted boundaries unchanged); test_handlers_approval (test_approve_no_pending_shows_canonical_message, test_reject_no_pending_shows_canonical_message). test_handlers, test_handlers_approval, test_user_messages, test_request_flow all pass. Phase 14 second slice complete.
+>
+> **Phase 14 (third slice, complete) — command-specific actionability and command/callback parity.** (1) **Objective:** Make /settings, /project, /model, and /session tell users what they can do next, not just show current state. Ensure command and callback paths enforce identical guards for disabled configs. (2) **user_messages.py:** New hints: `settings_use_buttons_hint`, `project_use_buttons_or_list_hint`, `model_choose_profile_hint`. Static session hints (`session_control_surface_hint_public`, `session_control_surface_hint_trusted`) replaced by dynamic builder in cmd_session that includes only configured commands. Dead code `project_list_discover_hint` retained in user_messages but unreferenced. (3) **Handlers — command path:** cmd_project: no-projects guard moved to top (before `use`/`clear`/`list` branches) so all subcommands return `no_projects_configured()` consistently. cmd_model: existing empty-config guard at top. cmd_settings appends settings_use_buttons_hint. cmd_session builds hint dynamically from cfg.projects and cfg.model_profiles. (4) **Handlers — callback path:** `handle_settings_callback` `setting_project:*` now guards `if not _cfg().projects` before calling `_apply_project_change()`. `setting_model:*` now guards `if not cfg.model_profiles` before calling `_apply_model_selection()`. Both return canonical no-config messages, matching command path. (5) **Actionability surfaces:** `/help`, `/start` "Chat options" line and command list now gate `/project` on `cfg.projects` and `/model` on `cfg.model_profiles`. `/session` hint dynamically includes only configured commands. Empty-config users see `/settings` only (no dead-end `/project` or `/model` pointers). (6) **Tests (1050 passed, 54 skipped):** Command no-config: test_project_use_no_projects, test_project_clear_no_projects, test_project_list_no_projects, test_project_no_projects. Callback no-config: test_settings_callback_project_no_projects_configured, test_settings_callback_project_clear_no_projects_no_mutation (proves session not mutated), test_settings_callback_model_no_profiles_configured. Callback no-pending parity: test_approve_callback_no_pending, test_reject_callback_no_pending. Help/start: test_help_and_start_no_project_when_projects_empty, test_help_and_start_no_model_when_profiles_empty. Session: test_session_hint_omits_model_when_no_profiles, test_session_control_surface_hint_trusted_no_projects_omits_project. Existing tests updated to include projects/model_profiles in config where those features are expected.
+>
+> **Phase 14 seal review (complete).** (1) **Dead code removed:** `project_list_discover_hint()`, `session_control_surface_hint_public()`, `session_control_surface_hint_trusted()` removed from `user_messages.py` — replaced by dynamic hint builder in `cmd_session` and unreachable branch removal in `cmd_project`. (2) **Tests hardened:** Session hint tests now assert on actual string content (/settings, /project, /model presence) instead of importing dead static functions as oracles. (3) **Coverage gap closed:** `test_settings_command_minimal_config_shows_compact_approval_only` — /settings with empty config shows only compact/approval buttons, no model/project buttons. `test_session_hint_minimal_config_shows_settings_only` — /session with both projects and model_profiles empty shows only /settings in hint. (4) **Parity audit complete:** All 5 setting families (project, model, policy, compact, approval) audited for command/callback guard parity — all pass. Approve/reject, retry, recovery, and cancel paths audited. No guard bypasses or permission leaks. (5) **Final suite: 1051 passed, 54 skipped.** Phase 14 sealed.
+>
+> **Milestone E closure:** (1) **Full Compose E2E passed** — `E2E_COMPOSE=1 .venv/bin/python -m pytest tests/e2e/test_compose_flows.py -v -n 0` run to completion; all E2E tests passed. E2E bot image build writes to an artifact log (docker-build.log in run artifacts); use `pytest -s` to see the pre-build notice; check the log file for build progress/details. (2) **test_config.py failures fixed** — the three asyncio/polling failures in tests/test_config.py were resolved. (3) **Model-setting follow-up landed** — single canonical denial `trust_model_profile_not_available(profile, available)` and selection helper `_apply_model_selection`; cmd_model and handle_settings_callback model branch both use it; re-homed tests assert exact canonical messages and parity tests pin command/callback same contract. (4) **E deliverable summary:** Setting-family owner collapse (mutators + row helpers), handler-surface tests re-homed to test_handlers, setup reduced via `public_user_config_overrides` and `fresh_env`, model-selection single contract and stronger tests. All touched suites green; E2E green; test_config green.
+>
+> **Prior (E in progress):** README dev_up/doctor; lib_env.sh and script consolidation; telegram_handlers: 7 unused imports and _project_working_dir removed, 8 user_messages wired, _settings_model_profile_state used in cmd_session/cmd_settings/cmd_model/callback; E2E single bot_image_built and timeouts; test fixes and test_settings_and_admin_messages_bucket_e.
+>
+> **Prior (2026-03-13):** **Bucket D follow-up — public /settings model text and keyboard unified.** Public `/settings` was showing resolved effective model in the text but the selected model button from raw session/default, so when default was restricted (e.g. balanced) and public only had fast, the screen could show "Model profile: fast" with the fast button unchecked. **Fix:** (1) Added `_settings_model_profile_state(session, cfg, trust_tier, effective_model)` in `telegram_handlers.py` returning `(available_profiles, current_profile_for_display)` so public users get current from effective model over public profiles only. (2) `cmd_settings` now uses that single source for both the "Model profile:" line and the inline keyboard checkmark. (3) `cmd_model` uses the same helper so `/model` and `/settings` stay aligned. (4) **Test:** `test_public_settings_model_text_and_button_agree_when_default_restricted` — default_model_profile="balanced", public_model_profiles={"fast"} → reply text shows "Model profile:" and "fast", only setting_model:fast button, and that button is checked. Handler suite 75 passed. Bucket D complete; then Bucket E.
+>
+> **Prior (2026-03-13):** **Bucket D — restriction / trust / profile clarity done.** (1) **Resolved context as display authority:** `/settings` and `/session` already used `_resolve_context`; public `/settings` model display now derived from resolved effective model (profile name from public set or "(default)"); public `/session` appends `trust_settings_managed_public()` so project/file-policy are clearly operator-managed. (2) **`/model`:** Public "current" profile label is the profile matching `resolve_effective_model` from public set, or "(default)". (3) **Shared wording:** No new user_messages; existing `trust_settings_managed_public`, `trust_file_policy_public`, `trust_project_public` used. (4) **Command/callback parity:** Callbacks already used same trust checks and messages; no divergence. (5) **Tests:** `test_public_settings_shows_managed_and_no_project_policy_buttons`, `test_public_session_shows_resolved_and_managed_message`, `test_public_model_shows_only_public_profiles`, `test_settings_callback_policy_denial_public`, `test_settings_callback_project_denial_public`; trusted `test_settings_command_shows_current_values` unchanged. Full handler suite 74 passed. Then Bucket E (final hardening and truthfulness), then Phase 13.
+>
+> **Prior (2026-03-13):** **Bucket C follow-up — Option 2: adjacent cancellation strings centralized.** (1) **queue_busy()** fixed: "Yours is queued and will run next" (no "try again"). (2) **Option 2:** Credential cancellation copy moved to user_messages: `credential_setup_cancelled()`, `credential_setup_another_user_in_progress()`, `credential_clear_cancelled()`. Handlers: cmd_cancel (own setup + another user's setup), _execute_clear_credentials (setup_cleared line), handle_clear_cred_callback (clear_cred_cancel). **Tests:** test_credential_cancellation_messages; test_cancel_setup and test_cancel_admin_foreign_setup pin credential_setup_cancelled(); test_cancel_foreign_setup_shows_another_user_message pins credential_setup_another_user_in_progress(); test_clear_credentials_cancel pins credential_clear_cancelled(). Status claim now matches implementation.
+>
+> **Prior:** **Bucket C — no-op / already-handled / busy / wrong-user clarity.** User-facing dead-end and “you can’t do that now” messages are centralized and clarified. **Seams:** (1) `app/user_messages.py` — wording improved: `recovery_discarded_confirm` "Request skipped."; `retry_skip_confirmation` "Retry skipped. Nothing to run again."; `queue_busy` "Another request is already running. Yours is queued and will run next."; `callback_wrong_user` "This button is only for the person who started the request."; added `nothing_to_cancel()` and `cancel_pending_request()`. (2) `app/telegram_handlers.py` — cmd_cancel uses `_msg.nothing_to_cancel()` and `_msg.cancel_pending_request()`; recovery/retry/approval/clear_cred paths already used user_messages. (3) **Tests:** test_user_messages (queue_busy, callback_wrong_user, nothing_to_cancel, cancel_pending_request); test_cancel_nothing_to_cancel; test_clear_credentials_cross_user_rejected pins callback_wrong_user(); test_recovery_double_click pins recovery_already_handled(); test_recovery_discard_callback_finalizes_item pins recovery_discarded_edit(); test_cancel_pending pins cancel_pending_request(). No workflow or FSM changes. Next: Bucket D.
+>
+> **Prior:** **Bucket B follow-up — Trust- and admin-aware help.** `/start` and `/help` reflect current user's usable command surface; public no /project or /policy; non-admin no /admin sessions.
+>
+> **Prior:** **Bucket B — Command/help/discoverability done.** Main user path discoverable in-bot and truthful in docs; HELP_TEMPLATE added /project; help/start/README parity; tests for settings/project/session and registration.
+>
+> **Prior:** **Compose E2E harness isolation fixed and verified.** The E2E suite no longer publishes a host Postgres port, uses a unique Compose project per run/worker, generates a per-run override with a temporary `.env.bot` and unique bot image tag, captures full logs on failure and teardown, and tears down only its own project with `down -v --remove-orphans`. Verified with real runs: `E2E_COMPOSE=1 .venv/bin/python -m pytest -q tests/e2e/test_compose_flows.py -n 0` and `-n 4` both passed (`5 passed, 1 skipped`).
+>
+> **Prior:** **Roadmap correction after Phase 12.** The future roadmap is no longer “Postgres queue next for everyone.” The next numbered phase is now **Phase 13 — Storage backend abstraction and Local Runtime mode**, with SQLite as the planned default backend for both Docker and host deployments. Shared-runtime Postgres queue work has been moved to the end of the roadmap as a later capability tier. Docs updated to distinguish: (1) **shipped today** = Postgres-only runtime from Phase 12, and (2) **planned next** = backend-neutral product/core plus Local Runtime first, Shared Runtime later.
+>
+> **Prior:** **Milestone D follow-up.** Stale/invalidated pending message fixed: `approval_context_changed()` now describes execution-context change truthfully ("This request can't continue because the chat context changed…"), not only settings/project. Retry callback wording fully centralized: `retry_skip_confirmation()` ("Retry skipped.") and `retry_nothing_pending()` ("No retry is waiting.") in `user_messages.py`; handlers use them. Tests: user_messages pins context-changed wording (no "settings or project" only); test_retry_skip asserts retry-skip edit text; test_retry_allow_no_pending asserts no-retry wording; test_stale_context_hash and test_validate_pending_detects_real_context_change assert "context" in reply. 200 passed.
+>
+> **Prior:** **Milestone D complete.** Progress, recovery, approval, and trust clarity. User-facing copy centralized in `app/user_messages.py`. Progress: provider-neutral labels. Recovery: interruption notice, Run again/Skip, already-handled/blocked/discarded. Approval/retry: plan review, approve/reject, expired/context-changed, permission/retry prompt. Trust: not authorized, public-mode restrictions, settings managed. Tests: test_user_messages.py; handler/approval/request_flow/progress updated; all pass.
+>
+> **Prior:** **Milestone C follow-up.** `/settings` now respects public-user execution-context: display built from `_resolve_context` only (no trusted project/path leak); project and file-policy controls omitted for public users; optional line "Project selection and file policy are managed by the operator in public mode." `/settings` added to `HELP_TEMPLATE` so `/help` and `/start` expose it. Tests: public `/settings` trust-boundary (no leak), public keyboard restriction (no `setting_project:*`/`setting_policy:*`), trusted regression (project/policy/model/compact/approval), help/start discoverability; existing Milestone C tests unchanged.
+>
+> **Prior:** **Milestone C complete.** `/settings` as discoverability surface (current project, model, policy, compact, approval + inline controls). `/project` default shows inline project selection and clear. `handle_settings_callback` extended with `setting_project:<name>` and `setting_project:clear`; same mutation/invalidation as commands. Public user denied project callback. Tests: settings view, project default keyboard, project use/clear/clears-pending callbacks, compact does not reset provider state, project callback public denied.
+>
+> **Prior:** **dev_up.sh DB lifecycle:** Uses **db-update** as the branch selector; runs **db-bootstrap** only when update reports the explicit "Schema or schema_migrations table missing" condition. All other failures (connectivity, auth, drift, newer-than-supported schema) surface clearly and exit non-zero; doctor is post-action validation only. **tests/test_dev_up_contract.sh** pins update-success, missing-schema→bootstrap, other-failure→no bootstrap, and **guided_start.sh** propagation of dev_up failure.
+>
+> **Prior (2026-03-13):** Tooling independent of bot config: **bot** service under profile **bot** so `docker compose up -d postgres` and db-* tooling work without `.env.bot`. Bot start: **docker compose --profile bot --env-file .env.bot up -d bot**. **Provider-tagged images** (`telegram-agent-bot:claude`, `telegram-agent-bot:codex`); build via `./scripts/build_bot_image.sh` (docker build, no compose build); **provider_login.sh** checks `docker image inspect` and fails with rebuild message if image missing. **guided_start.sh** single-pass: runs provider_login if needed, then starts bot (no “rerun script”). README front door: clone, `.env.bot`, **./scripts/guided_start.sh**. E2E: **test_compose_postgres_up_without_env_bot**; shell contract: image-inspect guard, --profile bot in compose args.
+>
+> **Prior (2026-03-13):** Provider login as first-class Docker workflow: **bot-home** volume at `/home/bot` persists provider auth; **entrypoint** chowns bot-home to uid 1000 then runs as bot (gosu). **provider_login.sh** runs in-container login (codex `--login` / claude `/login`) using same image and volume, then verifies provider health; **provider_status.sh** runs `--doctor`; **provider_logout.sh** clears provider auth in bot-home. Startup validates provider auth (runtime health) and fails with “Run ./scripts/provider_login.sh” when missing. README Quick Start includes provider login; Troubleshooting and scripts table updated. ARCHITECTURE documents bot-home and provider-login ownership. Prior: supported path = real provider image; stub test-only.
+>
+> **Prior (2026-03-12):** Post-Phase-12 execution program was made explicit in the roadmap. This historical note predates the later roadmap correction that moved shared-runtime queue authority to the end of the plan; the gate itself remains, but now leads into Milestone E and then **Phase 13 — storage backend abstraction and Local Runtime mode** rather than immediate queue-authority work.
 > **Schema policy (corrected):** Transport schema is versioned; migration/upgrade path is deferred, not rejected as product direction. No "fresh-schema-only" or "delete DB and restart" product policy. Current build expects current schema/layout; unsupported schema/layout fails fast with a neutral error (`Unsupported transport.db schema/layout for this build`). Bootstrap: brand-new DB (no tables) gets `_CREATE_SQL` + schema_version; existing DB is validated only (tables, columns, `idx_one_claimed_per_chat`, meta schema_version) and is not mutated before validation.
 > **Transport repository shape:** Single claim path `_claim_queued_item`; single insert path `_insert_initial_work_item`. All mutators use `_write_tx(conn)`; nested use raises `RuntimeError("nested transport transaction")`. Impossible machine rejections are fatal: `_apply_transport_event` and `_insert_initial_work_item` raise `TransportStateCorruption` on workflow rejection; `_claim_queued_item` returns None only for `other_claimed_for_chat`, else raises; `mark_pending_recovery`, `discard_recovery`, `supersede_pending_recovery`, `reclaim_for_replay` raise on invalid_transition (recover_stale_claims allows guard_failed as “not stale, skip”). Chat integrity: `_assert_no_invalid_rows_for_chat(conn, chat_id)` is called in `has_queued_or_claimed`, `get_latest_pending_recovery`, `reclaim_for_replay`, `supersede_pending_recovery`. Strict helpers: `_apply_claim_event` for claim-style transitions (exact CAS, reread); reclaim_for_replay uses it; supersede_pending_recovery applies _apply_transport_event per item in one transaction; recover_stale_claims uses exact source predicate (id, state, worker_id, claimed_at) and reread classification.
 > **Transaction and invariant fixes:** One transaction wrapper for all mutating entry points; rollback on any exception. `_assert_no_invalid_rows_for_chat()` enforces at most one claimed per chat. Current schema includes `idx_one_claimed_per_chat`. Tests: rollback on non-IntegrityError, two-claimed raises, fresh schema index, meta/schema_version validation (unsupported layout/mismatch raise neutral error).
-> **Phase 11 sealed.** Next: Phase 12 (Postgres runtime cutover plus explicit environment/bootstrap contract).
+> **Phase 11 sealed.** Phase 12 complete (Postgres runtime cutover). Next after Milestone E: **Phase 13 (storage backend abstraction and Local Runtime mode).**
 >
 > **Prior:** Phase 11 second workflow (pending approval/retry machine, invalidation in machine, 39 machine tests).
 >
@@ -58,12 +102,11 @@ Current as of 2026-03-12. Tracks progress against [PLAN-commercial-polish.md](PL
 > contract and expand/collapse), IV, Ext (webhook), restart recovery
 > hardening — all shipped and tested.
 >
-> Remaining work now follows the linear Phase 11-19 roadmap in
-> [PLAN-commercial-polish.md](PLAN-commercial-polish.md). Phases 1-10 are
-> sealed as shipped. Current planned order is workflow ownership extraction,
-> Postgres cutover, Postgres queue authority, multi-process workers,
-> durability confidence, product polish, behavior extensions, registry trust,
-> and usage accounting.
+> Historical note (superseded by the roadmap correction above): remaining work
+> previously followed the older linear Phase 11-19 sequence in
+> [PLAN-commercial-polish.md](PLAN-commercial-polish.md), with Postgres queue
+> authority immediately after the Postgres cutover. The current roadmap no
+> longer uses that ordering.
 >
 > Prior: Progress UX Layer 2, user-intent-owned replay, restart recovery
 > hardening, supersede_recovery guard, ReclaimBlocked exception.
@@ -149,17 +192,33 @@ Current as of 2026-03-12. Tracks progress against [PLAN-commercial-polish.md](PL
 
 ## Current Snapshot
 
-- Phases 1-10 are sealed as shipped.
-- The next planned roadmap item is Phase 12, Postgres runtime cutover.
-- The shipped runtime still uses SQLite-backed session and transport stores
-  today; the roadmap shifts runtime authority to Postgres in Phases 12-14.
-- Current shipped bootstrap remains `setup.sh` + `scripts/bootstrap.sh` +
-  `scripts/run.sh` / systemd, with app-owned SQLite first-use bootstrap.
-- Planned Phase 12 development shape is Dockerized app + Postgres, explicit DB
-  bootstrap/update/doctor commands, and validate-only app startup.
+- Phases 1-14 are sealed as shipped.
+- Phase 15 is the active roadmap phase; Slice 1 (per-project defaults and
+  inherit semantics) is shipped.
+- The shipped runtime today is **Local Runtime**:
+  - SQLite is the default backend when `BOT_DATABASE_URL` is unset
+  - Postgres is a supported alternate backend when `BOT_DATABASE_URL` is set
+  - Shared Runtime remains deferred to Phases 18-19
+- Dockerized bot is the primary supported operational model.
+- Compose is the canonical operator surface:
+  - `./scripts/guided_start.sh` is the main SQLite-first zero-to-running path
+  - `./scripts/dev_up_postgres.sh` plus `BOT_DATABASE_URL` is the optional
+    Postgres bootstrap path
+  - `db-bootstrap`, `db-update`, and `db-doctor` remain explicit repo-owned
+    Postgres workflows
+- The **supported bot image** is a **real provider-enabled image** (includes the chosen Claude or Codex CLI). Built via repo-owned script from `BOT_PROVIDER` (e.g. `./scripts/build_bot_image.sh`); operators do not choose Docker targets manually. The stub-provider image (`Dockerfile.runnable`) exists only for **test/dev smoke** (e.g. E2E when real provider is not available) and is not the supported runtime.
+- Zero-to-running: clone → create `.env.bot` → `./scripts/guided_start.sh`.
+  Optional Postgres adds the Postgres bootstrap/update/doctor step before bot
+  startup.
+- Host-run remains available as a secondary fallback/debug path.
+- Postgres integration suites use a harness-started test-only Docker container
+  per pytest-xdist worker and never touch `BOT_DATABASE_URL`, dev, staging, or
+  production databases.
+- The primary docs are now `README.md`, `ARCHITECTURE.md`,
+  `PLAN-commercial-polish.md`, and `STATUS-commercial-polish.md`.
 - `transport idempotency` is shipped in Phase 9.
-- `content dedup` is intentionally unshipped and remains future work in
-  Phase 17.
+- `content dedup` is intentionally unshipped and remains future work in later
+  Phase 15 slices.
 
 ---
 
@@ -178,17 +237,95 @@ Current as of 2026-03-12. Tracks progress against [PLAN-commercial-polish.md](PL
 | 9 | Durable transport, transport idempotency, webhook mode, and restart recovery | Done | Durable queue, webhook path, replay/discard recovery, and polling conflict detection shipped. |
 | 10 | Structural hardening, invariants, and test ownership | Done | Invariant coverage, test ownership refactor, and runtime isolation hardening shipped. |
 | 11 | Workflow ownership extraction | Done | Transport/recovery and pending approval/retry are now library-owned workflow families. Transport uses one claim path, one insert path, `_apply_claim_event`, one transaction wrapper, fatal impossible rejections, and chat-integrity checks; pending invalidation flows through `PendingRequestMachine`. Phase 11 sealed. |
-| 12 | Postgres runtime cutover | Planned | Postgres replaces SQLite under the Phase 11 contracts and adds the missing environment/bootstrap and testing contracts: explicit DB bootstrap/update/doctor workflows, validate-only app startup, Dockerized app + Postgres as the canonical dev shape, owner suites retained, Postgres-backed persistence/integration tests, one DB per pytest worker, and a small Compose-based E2E layer. |
-| 13 | Postgres queue authority in webhook mode | Planned | Core request transport stays app-owned in Postgres. |
-| 14 | Multi-process / multi-worker deployment | Planned | Shared Postgres queue authority expands to cross-process ingress and workers. |
-| 15 | Durability confidence phase | Planned | Add crash, lease, webhook, and cross-process confidence coverage. |
-| 16 | Product polish on stable foundations | Planned | `/project` inline keyboard and optional verbose progress. |
-| 17 | Behavior extensions | Planned | Demand-gated `content dedup` and richer project/policy scope. |
-| 18 | Registry trust and governance | Planned | Publisher signing and organizational trust policy on top of digest verification. |
-| 19 | Usage accounting, quotas, and billing | Planned | Usage recording, quota enforcement, and billing built last. |
+| 12 | Postgres runtime cutover | Done | M1–M9 complete. At the end of Phase 12, the shipped runtime was Postgres-only (`BOT_DATABASE_URL` required) with E2E and zero-to-running docs in place. This was later superseded by Phase 13 Local Runtime support. |
+| 13 | Storage backend abstraction and Local Runtime mode | Done | Two-backend Local Runtime: SQLite default, Postgres supported; single backend seam (runtime_backend); contract suites; SQLite-first startup/E2E; real Postgres E2E gate with BOT_DATABASE_URL override. |
+| 14 | Product polish on local foundations | Done | Operator health clarity, dead-end command fixes, command-specific actionability, command/callback parity. Phase 14 sealed. |
+| 15 | Per-project defaults and behavior extensions | In progress | Slice 1 shipped: ProjectBinding with per-project file_policy/model_profile; BOT_PROJECTS `name:/path\|policy\|profile` format; resolve_execution_context inheritance (session > project > global); `/policy inherit` and `/model inherit` clear session overrides; `setting_model:inherit` and `setting_policy:inherit` callbacks (command/callback parity); phantom profile validation and display guard; stale-override discoverability in `/model` and `/settings`. 1100 passed, 54 skipped. |
+| 16 | Registry trust and governance | Planned | Publisher signing and organizational trust policy on top of digest verification. |
+| 17 | Usage accounting, quotas, and billing | Planned | Usage recording, quota enforcement, and billing before Shared Runtime queue work. |
+| 18 | Shared Runtime: Postgres queue authority in webhook mode | Planned | Advanced deployment capability: persist-first webhook ingress and app-owned Postgres queue authority. |
+| 19 | Shared Runtime: multi-process scale and durability confidence | Planned | Multi-process workers, leases, recovery metrics, crash confidence, and shared-runtime durability. |
 
 Detailed workstream sections below are preserved as historical implementation
 record. The authoritative roadmap ordering is the Phase 1-19 table above.
+
+---
+
+## Historical Execution Focus
+
+This section is preserved as a historical record of the Milestone E execution
+program that led into Phase 13. The current roadmap state is reflected above:
+**Phase 14 is sealed and Phase 15 is in progress**. Shared-runtime queue
+authority remains deferred to Phase 18.
+
+| Milestone | Status | Scope |
+|---|---|---|
+| **Docker-first productization track (A1–A4)** | **Done** | Clean zero-to-running path, one `.env.bot` path, config/doctor/startup messages. **Supported** path uses **real** provider-enabled image (build script from BOT_PROVIDER); stub image is test/dev-only. |
+| A. Turnkey Docker runtime | Done (track) | Real provider-enabled image build (Dockerfile.bot + build script); Compose E2E for bootstrap/doctor/update; tests prove provider in image and execution path where possible. |
+| B. Config and onboarding simplification (Docker scope) | Done (track) | One primary `.env.bot` path; config/startup/DB CLI messages reference `.env.bot` and build script. |
+| C. User-facing settings and `/project` polish | Done | `/settings` discoverability surface; `/project` default with inline keyboard; `setting_project:*` callbacks in `handle_settings_callback`; project/policy/compact/model/approval parity; tests for settings view, project callbacks, public denial, compact-no-reset. Follow-up: `/settings` uses resolved context only (public-safe display), no project/policy buttons for public users; `/settings` in `HELP_TEMPLATE`; tests for public trust-boundary, keyboard restriction, help/start discoverability. |
+| D. Progress, recovery, and trust clarity | Done | Centralized user-facing copy in `app/user_messages.py`. Progress: provider-neutral wording. Recovery: interruption notice, Run again/Skip, already-handled/blocked/discarded messages. Approval/retry: plan review, approve/reject, expired/context-changed, permission/retry prompt. Trust: not authorized, public-mode restrictions, settings managed. Tests: test_user_messages.py; handler/approval/request_flow/progress tests updated; existing behavior tests intact. |
+| E. Usability hardening before Phase 13 | Done | Full scope per PLAN: Docker/operator path, command/help/discoverability, no-op and restriction clarity, config/doctor/startup tests, Compose E2E, handler flows. Landed: README/dev_up/guided_start, model-selection single contract, handler re-homing, test_config and E2E green. Phase 13 then completed (backend seam, contract suites, SQLite-first, real Postgres E2E). |
+
+### Milestone E — Historical usability audit (Step 1)
+
+Bounded audit of Docker/operator and Telegram surfaces. Classifications: **discoverability**, **misleading wording**, **wrong/no-op state**, **path drift**, **stale docs**, **operator trap**.
+
+**Docker/operator path**
+
+| Surface | Finding | Classification |
+|--------|---------|-----------------|
+| First run | guided_start 4-step flow and README Quick Start align. dev_up ends with “To run the bot” + guided_start hint. | — |
+| Provider login | provider_login.sh requires .env.bot, checks image, clear “build first” message. | — |
+| Provider status | Script prints “Provider auth and runtime only (no DB/Telegram checks)”; comment says “For full app health use … app.main --doctor”. Operator may still treat provider_status success as “all good”. | **operator trap** |
+| Provider logout | Clear; “Done. Run ./scripts/provider_login.sh to authenticate again.” | — |
+| Update after pull | README: db-update, build, up -d bot; guided_start rebuilds when rev/files changed. | — |
+| Doctor | Three distinct things: (1) db_doctor = Postgres/schema only, (2) provider_status = provider auth only, (3) app --doctor / in-chat /doctor = full. README and provider_status mention full doctor but distinction could be clearer. | **discoverability** / **operator trap** |
+| Stale image / rebuild | guided_start rev + mtime; build_bot_image suggests guided_start. | — |
+| Missing image / provider auth / DB | Scripts and startup fail with clear messages (build image, provider_login, rerun dev_up). | — |
+
+**Telegram path**
+
+| Surface | Finding | Classification |
+|--------|---------|-----------------|
+| /start, /help | HELP_TEMPLATE includes /settings, /session, /approve, /reject, /cancel, /doctor. Command table (README) fixed (no /retry, /clear). | — |
+| /settings, /session | In HELP_TEMPLATE. /project only reachable via “view and change chat settings” (no separate /project line in main command list). | **discoverability** |
+| Approval / retry / recovery | Centralized copy in user_messages; buttons in-context. No explicit “retry” or “Run again/Skip” in main help text. | **discoverability** (minor) |
+| Already-handled / no-op / busy / wrong-user | recovery_already_handled, retry_nothing_pending, queue_busy, callback_wrong_user centralized; handlers use them. | — |
+| Public restriction | trust_* and settings_managed_public centralized. | — |
+
+**Step 2 — Execution plan (Bucket A → E)**
+
+| Bucket | Scope | Owner seam | Tests required |
+|--------|--------|------------|----------------|
+| **A** | guided_start, dev_up, provider_login/status/logout, README, doctor vs provider-health | Scripts + README operator section; provider_status vs app --doctor wording | Shell/operator contract; config/doctor/startup; Compose E2E for touched flows |
+| **B** | /start, /help, /settings, /project, /session | HELP_TEMPLATE + cmd_start/cmd_help; README command table | Handler tests start/help; discoverability parity; README command checks if touched |
+| **C** | retry, recovery, queue busy, wrong user, nothing pending, already-handled, skip/discard/replay no-op | user_messages + callback/handler paths | Handler/callback tests on user-visible text; adjacent regression |
+| **D** | public restrictions, unavailable profile/settings, trust wording | user_messages + _public_guard / resolve paths | request_flow/handler tests; public-mode regression; trusted parity |
+| **E** | Final pass: Docker path + Telegram journey, docs/status alignment | All touched seams | config/doctor/startup; Compose E2E; persistence/integration touched; handler flows; then mark E done |
+
+**Historical checkpoint:** At this point in Milestone E execution, Bucket C was done and the next step was Bucket D (restriction / trust / profile clarity).
+
+**Bucket C completed:** No-op / already-handled / busy / wrong-user clarity. **Centralized in user_messages.py (and used by handlers):** recovery discard confirmation, retry skip confirmation, queue busy ("Yours is queued and will run next"), wrong-user callback, nothing_to_cancel, cancel_pending_request; credential_setup_cancelled, credential_setup_another_user_in_progress, credential_clear_cancelled (Option 2 follow-up). cmd_cancel, handle_clear_cred_callback, and _execute_clear_credentials use these. **Tests:** user_messages (queue_busy, callback_wrong_user, nothing_to_cancel, cancel_pending_request, credential_cancellation_messages); handler tests pin credential_setup_cancelled(), credential_setup_another_user_in_progress(), credential_clear_cancelled(); test_cancel_foreign_setup_shows_another_user_message; test_clear_credentials_cancel; test_cancel_setup, test_cancel_admin_foreign_setup. Invariants unchanged. No new FSM or workflow.
+
+**Bucket B completed:** Command/help/discoverability, then follow-up for trust- and admin-aware help. Main user path discoverable from `/start` and `/help`; README command table matches real surface; `/project` visible for trusted users only. **Seams:** Static HELP_TEMPLATE replaced by `_help_command_lines(user)` and `_build_main_help(user)`; cmd_start and cmd_help both call `_build_main_help(event.user)`. Public users do not see `/project` or `/policy`; non-admin users do not see `/admin sessions`; trusted/admin see full relevant set. **Tests:** `test_help_and_start_include_settings` (trusted: settings, project, session; no /retry, no standalone /clear); `test_help_and_start_public_user_excludes_project_and_policy`; `test_help_and_start_non_admin_excludes_admin_sessions`; `test_help_and_start_admin_sees_admin_sessions_and_trusted_commands`; README and registration parity tests unchanged. No new FSM or help framework.
+
+**Bucket A completed:** Provider vs full-doctor distinction hardened. **Seams:** (1) `scripts/provider_status.sh` — on success now prints one line: "For full app health (DB, config, Telegram) run: docker compose … bot python -m app.main --doctor". (2) README Building section — explicit "provider_status checks only provider auth and runtime (no DB or Telegram); it is **not** full app health." (3) Compose E2E harness is now isolated and parallel-safe: no host Postgres port publication, unique Compose project per run/worker, generated temp `.env.bot`, unique bot image tag, full log capture, and project-scoped teardown with `down -v --remove-orphans`. **Tests:** `tests/test_operator_scripts.py` (provider_status reminds full doctor, requires .env.bot); `tests/test_dev_up_contract.sh`; `tests/test_readme_commands.py`; doctor handler tests; `tests/test_db_postgres.py` doctor slice; and real Compose E2E runs via `E2E_COMPOSE=1 .venv/bin/python -m pytest -q tests/e2e/test_compose_flows.py -n 0` and `-n 4` (`5 passed, 1 skipped` in both modes).
+
+---
+
+## Docker-first productization track (complete)
+
+Executed 2026-03-13. Scope: Docker/runtime only; no user-facing polish, no Phase 13 work.
+
+| Milestone | Delivered |
+|-----------|-----------|
+| **A1. Supported runnable image** | **Real** provider-enabled image: `Dockerfile.bot` (base + provider install via `scripts/install_provider_claude.sh`, `scripts/install_provider_codex.sh`). `./scripts/build_bot_image.sh` selects target from `BOT_PROVIDER`. Stub image (`Dockerfile.runnable`) and `bot-stub` Compose service (profile `stub`) for **test/dev-only** (E2E_USE_STUB_IMAGE=1). |
+| **A2. Clean zero-to-running path** | Flow: clone → Postgres → bootstrap → doctor → `.env.bot` → **./scripts/build_bot_image.sh** → start bot container. One README path; build complexity in script and deeper docs. E2E: bootstrap/doctor/update; `test_compose_bot_image_has_provider` (real image has provider binary); `test_compose_bot_startup_validates_schema` (real image); `test_compose_bot_stub_smoke` (test-only). |
+| **A3. Docker config and onboarding simplification** | One `.env.bot` path. Config errors mention `.env.bot` and `./scripts/build_bot_image.sh`. DB CLI message for missing `BOT_DATABASE_URL` points to Docker vs host-run. |
+| **A4. Docker usability hardening** | Stabilization; docs truthful (supported = real provider image; stub = test-only). |
+
+Artifacts: `Dockerfile.bot`, `scripts/build_bot_image.sh`, `scripts/install_provider_claude.sh`, `scripts/install_provider_codex.sh`; `Dockerfile.runnable` and `bot-stub` (profile stub) for test/dev-only; E2E and config tests.
 
 ---
 
@@ -487,7 +624,8 @@ retained only as historical execution record:
 
 1. **Test-suite ownership refactor** — DONE. Overflow files deleted (20 weak
    duplicates removed), owner suites created (test_execution_context,
-   test_request_flow). See `docs/testing-ownership.md` for ownership map.
+   test_request_flow). Ownership and layering now live in
+   `docs/ARCHITECTURE.md`.
 2. **Fresh command ownership race** — DONE. `record_and_enqueue()` creates
    items as `claimed` (handler-owned). Worker cannot steal fresh commands.
    `claim_for_update()` recognizes pre-claimed items. `complete_work_item()`

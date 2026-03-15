@@ -1,0 +1,24 @@
+# TEST/DEV ONLY: stub-provider image. Not the supported runtime.
+# Use for E2E smoke when the real Claude/Codex CLI is unavailable (e.g. CI).
+# The supported path uses the real provider-enabled image; build with
+# ./scripts/build_bot_image.sh and Dockerfile.bot.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app ./app
+COPY skills ./skills
+COPY sql ./sql
+COPY scripts ./scripts
+
+# Stub providers: satisfy config validation and doctor/startup so the container
+# can start. For real use, replace with an image that includes claude/codex CLI.
+COPY scripts/stub_claude.py /usr/local/bin/claude
+COPY scripts/stub_codex.py /usr/local/bin/codex
+RUN chmod +x /usr/local/bin/claude /usr/local/bin/codex
+
+ENV PYTHONUNBUFFERED=1
+CMD ["python", "-m", "app.main"]

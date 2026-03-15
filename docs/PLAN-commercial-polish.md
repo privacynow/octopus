@@ -26,10 +26,10 @@ Use this document for four different questions:
 - `ARCHITECTURE.md`
   Source of truth for runtime boundaries, queue/storage authority, and
   contracts that code must preserve.
-- `PLAN-agent-roles-and-skills.md`
-  Archived implementation reference for the detailed roles/skills build.
-- `STATUS-agent-roles-and-skills.md`
-  Archived shipped-status reference for the detailed roles/skills build.
+- Archived roles/skills docs
+  Historical appendices only; the current product definition, shipped outcome,
+  and roadmap are fully captured in this plan, the status mirror, the
+  architecture doc, and the README.
 
 The detailed historical steps inside the separate roles/skills design doc stay
 as they are. This document summarizes that shipped work under Phases 3-5 and
@@ -133,15 +133,25 @@ The product is complete when these capability areas are in place.
 ## Roadmap Rules
 
 - The roadmap is one strict execution order, not priority buckets.
-- Phases 1-10 are sealed as shipped history.
-- New roadmap work begins at Phase 12.
+- Phases 1-12 are sealed as shipped history.
+- New roadmap work begins at Phase 13.
+- The roadmap after Phase 12 is now split by **capability tier**, not by
+  database ideology:
+  - **local/product track first**: backend-neutral product work plus a
+    first-class Local Runtime mode
+  - **shared-runtime track last**: Postgres queue authority, multi-process
+    ingress, and durability confidence
 - `transport idempotency` means the durable `update_id` journal and work-item
   uniqueness.
 - `content dedup` means optional suppression of identical consecutive
   messages. It is not part of the core transport contract.
-- Postgres is the sole runtime backend after Phase 12 lands. SQLite is the
-  current shipped backend until then; any SQLite-to-Postgres import bridge is
-  optional follow-on work, not a required part of the cutover.
+- **Current shipped state:** Phase 12 runtime is Postgres-only.
+- **Roadmap direction after Phase 12:** restore a first-class **Local Runtime**
+  mode, with SQLite as the default backend for both Docker and host
+  deployments, behind backend-neutral storage/runtime contracts.
+- Shared Postgres queue authority is no longer the immediate universal next
+  step; it is deferred to the end of the roadmap as an advanced
+  **Shared Runtime** capability tier.
 
 ---
 
@@ -162,21 +172,21 @@ This is the authoritative phase sequence.
 | 9 | Durable transport, transport idempotency, webhook mode, and restart recovery | Sealed / shipped |
 | 10 | Structural hardening, invariants, and test ownership | Sealed / shipped |
 | 11 | Workflow ownership extraction | Sealed / shipped |
-| 12 | Postgres runtime cutover | Remaining |
-| 13 | Postgres queue authority in webhook mode | Remaining |
-| 14 | Multi-process / multi-worker deployment | Remaining |
-| 15 | Durability confidence phase | Remaining |
-| 16 | Product polish on stable foundations | Remaining |
-| 17 | Behavior extensions | Remaining |
-| 18 | Registry trust and governance | Remaining |
-| 19 | Usage accounting, quotas, and billing | Remaining |
+| 12 | Postgres runtime cutover | Sealed / shipped |
+| 13 | Storage backend abstraction and Local Runtime mode | Remaining |
+| 14 | Product polish on local foundations | Remaining |
+| 15 | Behavior extensions | Remaining |
+| 16 | Registry trust and governance | Remaining |
+| 17 | Usage accounting, quotas, and billing | Remaining |
+| 18 | Shared Runtime: Postgres queue authority in webhook mode | Remaining |
+| 19 | Shared Runtime: multi-process scale and durability confidence | Remaining |
 
 ---
 
-## Sealed Phases 1-11
+## Sealed Phases 1-12
 
-Phases 1-11 are shipped and sealed. They stay here as historical reference,
-but the active roadmap begins at Phase 12.
+Phases 1-12 are shipped and sealed. They stay here as historical reference,
+but the active roadmap begins at Phase 13.
 
 | Phase | Historical source | What shipped | Lasting lesson |
 |------:|-------------------|--------------|----------------|
@@ -191,10 +201,10 @@ but the active roadmap begins at Phase 12.
 | 9 | Former Phase IV plus later recovery hardening | Durable transport, transport idempotency, webhook foundation, queued feedback, and explicit replay/discard recovery. | `transport idempotency` is core. Automatic replay is unsafe. `content dedup` is optional policy, not the transport contract. |
 | 10 | Former Phase H plus later hardening/testing work | Invariants, owner suites, execution-context hardening, and test isolation. | Confidence comes from explicit ownership and invariant tests, not from ever-growing overflow suites. |
 | 11 | Phase 11 (this plan) | Workflow ownership extraction: transport and pending_request state machines (python-statemachine), single claim and single insert paths, repository-owned CAS and idempotency, versioned transport schema (validate-only for existing DBs), impossible rejections fatal, chat integrity, strict replay/supersede/recover helpers. | Extract workflow ownership before database migration so the new backend does not inherit open-coded transition logic. Library owns graph and guards; repository owns SQL and already_handled. |
+| 12 | Phase 12 (this plan) | Postgres runtime cutover: Postgres-backed session and transport stores shipped, `BOT_DATABASE_URL` required at startup, validate-only runtime startup, explicit DB bootstrap/update/doctor commands, Postgres integration suites, and Compose-based tooling/E2E layer. | Split runtime ownership cleanly: infrastructure provides the database, repo-owned commands bootstrap/update/doctor it, and the app validates then runs. |
 
-For the detailed capability-system lineage behind Phases 3-5, keep using
-[PLAN-agent-roles-and-skills.md](PLAN-agent-roles-and-skills.md) and
-[STATUS-agent-roles-and-skills.md](STATUS-agent-roles-and-skills.md).
+The archived roles/skills docs remain as historical appendices for now, but
+their product-level content is already absorbed here under Phases 3-5.
 
 ---
 
@@ -568,8 +578,6 @@ The docs should have distinct jobs:
   Product vision, roadmap, and durable lessons and decisions.
 - `ARCHITECTURE.md`
   Contracts, components, and runtime model.
-- `OPS-*`
-  Operator playbooks.
 
 If a document starts turning into another document, split it rather than
 blurring the audience.
@@ -579,8 +587,10 @@ blurring the audience.
 ## Remaining Phases
 
 These phases are the active roadmap. Every still-relevant deferred or future
-item belongs somewhere in this ordered sequence. Phase 11 is sealed; active
-work begins at Phase 12.
+item belongs somewhere in this ordered sequence. Phase 12 is sealed. The next
+numbered infrastructure phase is Phase 13, but work should not start there
+immediately: the required pre-Phase-13 execution program below must be
+completed first.
 
 ### Phase 11 - Workflow Ownership Extraction (Sealed)
 
@@ -714,11 +724,12 @@ Library choice: [python-statemachine](https://pypi.org/project/python-statemachi
 
 **Phase 11 seal checklist (done when moving to Phase 12):** All three claim entry points use one shared claim helper; both initial-insert paths use one shared insert helper; no transport mutation helper open-codes its own CAS/reread classification; repository-shape tests pin the single-claim and single-insert behavior; docs/status truthfully reflect that state.
 
-### Phase 12 - Postgres Runtime Cutover
+### Phase 12 - Postgres Runtime Cutover *(complete)*
 
 Make Postgres the only supported runtime backend after cutover. Phase 12 is a
 contract-preserving backend replacement and environment/bootstrap phase, not a
-queue redesign phase and not a CI/CD phase.
+queue redesign phase and not a CI/CD phase. Implementation complete; see
+[STATUS-commercial-polish.md](STATUS-commercial-polish.md).
 
 **What Phase 12 is solving.**
 
@@ -733,8 +744,8 @@ queue redesign phase and not a CI/CD phase.
 
 - Build the Postgres runtime for current development use first.
 - Keep webhook-primary queue authority, leases, and multi-worker behavior in
-  Phase 13-14. Phase 12 only replaces the storage backend under the current
-  single-process contract.
+  the later **Shared Runtime** phases (now Phases 18-19). Phase 12 only
+  replaces the storage backend under the current single-process contract.
 - Do not spend Phase 12 effort on in-place SQLite schema migrations.
 - Do not make SQLite-to-Postgres import a gating requirement during
   development. If preserving dev/test data becomes worthwhile later, that can
@@ -764,8 +775,9 @@ Phase 12 should be built around three separate responsibilities:
    - This may be Docker-managed in development, Docker-managed or external in
      staging, and external/managed in production.
 2. Database bootstrap and update
-   - The database, runtime role, schema namespace, tables, indexes, and schema
-     version records are created and updated by explicit repo-owned commands.
+   - The schema namespace, tables, indexes, and schema version records are
+     created and updated by explicit repo-owned commands against an existing
+     database and runtime role supplied by infrastructure.
    - This is not implicit application startup behavior.
 3. Application runtime
    - The bot reads runtime config, connects, validates schema compatibility, and
@@ -809,28 +821,29 @@ separate Postgres databases, not one shared database with mixed state.
 | Environment | Recommended app shape | Recommended Postgres shape | Reason |
 |-------------|-----------------------|----------------------------|--------|
 | Development | Docker container | Docker Compose Postgres | Preserves "fresh machine works" with an explicit, reproducible local stack. |
-| Staging | Docker container | Start with Docker Compose Postgres; allow external Postgres later | Matches dev initially, then can move closer to production once the contract is stable. |
-| Production | Docker container or current host-run model | External / managed or separately managed Postgres | Keeps runtime contracts the same while avoiding single-host Postgres fragility by default. |
+| Staging | Docker container | Start with Docker Compose Postgres; allow external Postgres later | Matches development initially, then can move closer to production once the contract is stable. |
+| Production | Docker container | External / managed or separately managed Postgres | Keeps runtime contracts the same while avoiding single-host Postgres fragility by default. |
 
 Production is intentionally left open at the infrastructure layer. Phase 12
 should not hard-code AWS, SSH-only deploys, or a specific hosting platform. The
 important contract is that the app runtime and database lifecycle stay
 separate.
 
-**Canonical Phase 12 recommendation.**
+**Shipped Phase 12 operating shape.**
 
 - Development:
-  - Dockerize both app and Postgres.
-  - Use Docker Compose as the canonical local bring-up path.
+  - Docker Compose is the canonical shape for Postgres, DB tooling, and the app runtime.
+  - The supported bot image is real provider-enabled (includes the chosen
+    Claude or Codex CLI), built via repo-owned script from `BOT_PROVIDER`;
+    stub-provider image is test/dev-only.
 - Staging:
-  - Start with the same Compose-driven shape as development if that reduces
-    unknowns.
-  - Later, move Postgres external while keeping the same bootstrap/update
-    contract.
+  - Follows the same Docker-first bootstrap/update/doctor contract as development.
+  - Postgres may remain Compose-managed or move external without changing the
+    ownership model.
 - Production:
-  - Keep the app containerizable.
+  - Keep the app containerized.
   - Prefer external or managed Postgres over a same-host Postgres container
-    unless this is an intentionally low-ops deployment.
+    unless this is intentionally low-ops.
 
 **Repo-owned workflows (the things operators and developers actually run).**
 
@@ -838,15 +851,14 @@ Phase 12 should introduce four explicit workflows and document them as the only
 supported lifecycle:
 
 1. App bootstrap
-   - Python dependencies, image build, or equivalent app/runtime preparation.
-   - Current `scripts/bootstrap.sh` remains the anchor for non-container
-     bootstrap and local test environments.
+   - Build or refresh the app image and related runtime assets.
+   - `scripts/bootstrap.sh` remains useful for local development and tests, but
+     Docker is the primary product-facing operational path.
 2. DB bootstrap
-   - First-time environment creation:
-     - ensure Postgres is reachable
-     - create database and runtime role if needed
-     - create schema namespace
-     - apply full repo-owned SQL from scratch
+   - Apply repo-owned schema to an *existing* database (database and runtime role
+     must already exist, e.g. via Compose postgres image or out-of-band provisioning).
+   - CLI reads `BOT_DATABASE_URL` and runs schema SQL only; create schema namespace
+     and apply full repo-owned SQL from scratch.
 3. DB update
    - Apply pending schema versions to an existing environment before app
      restart when the repo adds new SQL files
@@ -872,44 +884,50 @@ The exact filenames can change, but the plan should assume a command set like:
 These commands are the missing DevOps seam. CI/CD can automate them later, but
 Phase 12 should make them usable manually first.
 
-**Docker-first development shape.**
+**Docker-first operating shape.**
 
-For development, Phase 12 should define one canonical Compose stack instead of
-leaving every developer to improvise.
+Phase 12 establishes one canonical Compose shape for the tooling layer instead
+of leaving every developer to improvise:
 
-- Expected services:
+- expected services:
   - `postgres`
-  - `bot`
-  - one-shot repo-owned helpers such as:
+  - one-shot repo-owned helpers:
     - `db-bootstrap`
     - `db-update`
     - `db-doctor`
-- The helper services should run from the repo/app image (or a closely related
-  tooling image), so the SQL runner and validation logic are versioned with the
-  code.
-- The app container should not run `systemd`; the container runtime owns the
-  process lifecycle.
-- Current host-run scripts can remain for tests and non-container operation,
-  but Compose becomes the canonical development environment shape.
+  - `bot`
+- helper services run from the repo/app image (or a closely related tooling
+  image), so SQL and validation logic are versioned with the code
+- the app container does not run `systemd`; the container runtime owns the
+  process lifecycle
+- the tooling stack must be runnable from a clean repo with no bot runtime env
+- the bot runtime is environment-specific and container-first:
+  - the container receives explicit runtime env
+  - it uses the Compose hostname `postgres`
+  - the image must include the chosen provider runtime
+  - provider login state is expected to persist in a dedicated bot-home volume,
+    not in the image layers
 
 **First-time sequence for a brand-new development environment.**
 
-The first-time path should be explicit and repeatable:
+The first-time path is explicit and repeatable:
 
 1. Build or bootstrap the app runtime.
 2. Start the Compose Postgres service.
 3. Wait for Postgres readiness.
-4. Run DB bootstrap against that Postgres:
-   - create DB + runtime role if needed
+4. Run DB bootstrap against that Postgres (DB and role already exist; Compose
+   postgres image creates them from env):
    - create schema namespace
    - apply all repo SQL
-5. Write the environment config for the bot:
+5. Run DB doctor.
+6. Provide runtime env for the bot container:
    - Telegram token
-   - provider/model settings
-   - `BOT_DATABASE_URL`
-   - working-dir and policy settings
-6. Run DB doctor.
-7. Start the app container.
+   - provider selection
+   - access policy (`BOT_ALLOWED_USERS` or `BOT_ALLOW_OPEN`)
+7. Run the guided provider-login step in the bot container so the selected CLI
+   stores its login state in the bot-home volume.
+8. Verify provider health.
+9. Start the bot container against the bootstrapped Postgres service.
 
 The long-term UX can be wrapped in a single convenience command, but Phase 12
 must document the underlying steps clearly first.
@@ -923,6 +941,8 @@ must document the underlying steps clearly first.
   - run DB update first
   - then restart app
 - App startup should fail if schema is behind the current build
+- App startup should fail if the chosen provider CLI is missing or its runtime
+  auth/health check is not usable
 - Do not hide schema updates inside bot startup "just this once"
 
 **Runtime config and credentials.**
@@ -1084,16 +1104,15 @@ must document the underlying steps clearly first.
 - Keep claim transactions short. Do not hold database transactions open across
   provider execution or Telegram I/O.
 - Keep queue redesign out of Phase 12. Row-lock worker claiming as the primary
-  queue authority belongs to Phase 13.
+  queue authority belongs to the later **Shared Runtime** phases.
 
 **Testing strategy for Phase 12 and beyond.**
 
-Phase 12 should extend the current contract-owner suite structure, not replace
-it with container-heavy black-box testing.
+Phase 12 extends the contract-owner suite structure; it does not replace it
+with container-heavy black-box testing.
 
-- Keep the current owner-suite model from `docs/testing-ownership.md`.
 - Keep pure contract and workflow suites fast and backend-independent.
-- Migrate persistence and integration coverage from SQLite to real Postgres.
+- Keep persistence and integration confidence in real Postgres.
 - Add a small explicit bootstrap/startup/update E2E layer on top of that.
 - Do not make app-container E2E the main confidence layer.
 
@@ -1120,15 +1139,17 @@ it with container-heavy black-box testing.
    - Small smoke set only: first boot, schema update, startup validation,
      minimal happy-path request flow.
 
-**Isolation model (required).**
+**Isolation model (current shipped harness).**
 
-- Use one Postgres service per test run, not one container per test.
-- Use one database per pytest worker (for example `test_bot_gw0` through
-  `test_bot_gw3` for `-n 4`).
+- Postgres integration suites require Docker.
+- The harness starts a dedicated test-only Postgres container per pytest-xdist
+  worker.
 - Each worker:
-  - creates its database once
+  - gets one database inside that container
   - applies schema once
   - truncates or resets runtime tables between tests
+- The harness never uses `BOT_DATABASE_URL` or any dev/staging/production DB
+  for truncation or schema mutation.
 - Do not use transaction rollback as the global isolation strategy.
 
 **Why truncate or reset, not rollback.**
@@ -1200,10 +1221,10 @@ split for the core request path.
 
 1. Freeze the Phase 11 repository contract with the current tests so the
    backend swap is measured against behavior, not assumptions.
-2. Add the Phase 12 operational contract to the repo:
-   - environment identity model
-   - documented bootstrap/update/doctor workflows
-   - canonical development Compose stack
+2. Absorb the Phase 12 operational and testing contract into the core docs:
+   - README for operator-facing bootstrap/run/update guidance
+   - ARCHITECTURE for runtime and testing contracts
+   - STATUS for current shipped posture
 3. Add runtime config:
    - `BOT_DATABASE_URL`
    - pool size / timeout settings
@@ -1212,9 +1233,9 @@ split for the core request path.
    - versioned SQL runner
    - schema/version validation
    - explicit DB bootstrap command
-5. Add the test harness for Phase 12:
-   - one Postgres service per run
-   - one database per pytest worker
+5. Add the Phase 12 Postgres harness:
+   - dedicated test-only Postgres container per pytest worker
+   - one database per worker
    - truncate/reset cleanup between tests
    - clear split between backend-independent suites, Postgres integration
      suites, and E2E
@@ -1243,7 +1264,8 @@ split for the core request path.
     development.
 17. Remove the long-term SQLite runtime test path once Postgres is the
     supported backend.
-18. Only then move to Phase 13 queue-authority work.
+18. Only then move to Phase 13 storage-backend abstraction and Local Runtime
+    work.
 
 **Acceptance and test plan for Phase 12.**
 
@@ -1313,105 +1335,1568 @@ split for the core request path.
   using repo-owned commands without tribal knowledge.
 - No application layer outside the storage/work-queue boundary depends on
   SQLite-specific behavior.
-- The codebase is ready for Phase 13 without re-litigating state ownership,
-  repository semantics, or basic environment bootstrap.
+- The codebase is ready for the next roadmap phase without re-litigating state
+  ownership, repository semantics, or basic environment bootstrap.
 
-### Phase 13 - Postgres Queue Authority In Webhook Mode
+### Pre-Phase-13 Execution Program (Required Gate)
 
-Keep the core Telegram request path as an app-owned Postgres queue, not a
-generic task broker.
+This is not a new numbered phase. It is the required execution program between
+sealed Phase 12 and the next structural roadmap phase.
 
-- Retain explicit `updates` and `work_items` tables.
-- Retain row-lock claiming, leases, recovery metadata, and replay/discard
-  ownership.
-- Retain stable recovery references and explicit terminal-disposition fields.
-- In webhook mode, ingress should normalize, persist, and acknowledge
-  quickly.
-- Workers become the primary execution path.
-- Provider execution should remain outside long-lived claim transactions.
+Reason:
 
-### Phase 14 - Multi-Process / Multi-Worker Deployment
+- Phase 12 established the Postgres runtime, Docker-first operating shape, and
+  explicit DB lifecycle.
+- That foundation should now be turned into a genuinely low-friction product
+  path before more infrastructure is added.
+- Starting Phase 13 too early would create another infra-heavy cycle before the
+  current product path is simple and trustworthy for operators and users.
 
-Add true cross-process ingress and worker concurrency on top of the Postgres
-queue.
+Execution rule:
 
-- Preserve per-chat single-flight ordering, `transport idempotency`, recovery
-  safety, and explicit terminal ownership across processes.
-- Polling stays single-owner and dev-oriented.
-- Scale path is webhook plus Postgres plus workers.
-- Add queue depth, lease, worker-health, and recovery metrics.
-- Treat multi-worker support as a deployment extension on top of the queue
-  contract, not as a new product model.
+- Complete these milestones in order.
+- Do not start the next milestone until the current one has:
+  - code implemented through existing contracts
+  - realistic tests added or migrated
+  - relevant targeted suites passing
+  - `STATUS-commercial-polish.md` updated accurately
+- Do not mark the pre-Phase-13 gate complete until the gate checklist at the
+  end of this section is satisfied.
 
-### Phase 15 - Durability Confidence Phase
+#### Milestone A - Turnkey Docker Runtime
 
-Add the confidence work that becomes important only after the infrastructure
-shift.
+Objective:
 
-- Cross-process queue tests.
-- Crash and lease-recovery tests.
-- Webhook ingress durability tests.
-- Real provider smoke coverage for the new worker model.
+- Make the Docker path the real happy path, not just the documented one.
 
-This is a distinct phase, not hidden inside earlier acceptance criteria.
+Required outcomes:
 
-### Phase 16 - Product Polish On Stable Foundations
+- The supported bot image includes the selected provider runtime.
+- The supported Docker path includes a guided provider-auth step that persists
+  CLI login state in a bot-home volume and reuses that same volume at runtime.
+- A fresh machine can go from clone to working bot with:
+  - Docker
+  - Postgres
+  - DB bootstrap
+  - DB doctor
+  - provider login
+  - provider health verification
+  - bot startup
+- The Docker path should not require operator improvisation beyond token and
+  access configuration and one guided provider login.
 
-Add the small UI work that is only worth doing after queue and worker
-semantics stabilize.
+Implementation rules:
 
-- Add `/project` inline keyboard by reusing the existing settings-inline-
-  keyboard pattern and callback handling.
-- Add optional verbose progress mode only after queue and worker semantics are
-  stable.
-- Any richer progress mode should layer on top of the shared semantic-rich
-  progress model rather than invent provider-specific output paths.
-- Keep this phase intentionally small and UI-focused.
+- Reuse the current Compose and DB tooling shape; do not invent a second
+  bootstrap path.
+- Keep app startup validate-only.
+- Keep DB bootstrap/update/doctor explicit and separate from app startup.
+- Keep provider auth out of the image build itself; use runtime login state in
+  a persistent bot-home volume instead.
+- Keep one uniform operator command for provider login even if the underlying
+  provider-specific flows differ (`codex --login` vs `claude` + `/login`).
+- Provider-login setup must use the same image and the same persistent bot-home
+  volume as the runtime bot service.
+- Do not reintroduce multiple equally-promoted runtime modes in the user-facing
+  docs.
 
-### Phase 17 - Behavior Extensions
+Tests required:
 
-Add demand-gated behavior extensions after the runtime is stable.
+- Clean-repo Compose tooling E2E:
+  - Postgres starts
+  - DB bootstrap succeeds
+  - DB doctor succeeds
+- Bot image and runtime: the supported image is real provider-enabled (built
+  from `Dockerfile.bot` via build script). Tests should prove the image
+  contains the selected provider and can reach a real request execution path,
+  not only startup.
+- Provider auth and persistence:
+  - guided provider-login step writes auth state into the bot-home volume
+  - runtime bot service reuses that same volume
+  - startup fails clearly when provider auth is missing
+  - `/doctor` and any provider-status tooling report unauthenticated state with
+    the exact next step
+- Tooling/bootstrap/doctor Compose E2E remain. Stub-provider image may be used
+  for test/dev-only smoke when real provider is unavailable, but it is not the
+  supported product-runtime proof.
+- Update smoke:
+  - DB update runs cleanly on an already bootstrapped environment
 
-- Add demand-gated `content dedup` using a durable content fingerprint and
-  explicit user acknowledgment instead of silent drop.
-- Expand project and policy scope using the existing project binding and
-  resolved execution-context model rather than inventing a second scoping
-  system.
+Done when:
 
-### Phase 18 - Registry Trust And Governance
+- `README.md` can honestly present Docker as the primary path without caveats
+  that force users into host-run.
+- The supported image, provider-login flow, and Compose runtime are enough for
+  a fresh operator to reach a working bot.
 
-Extend the managed store with publisher signing and organizational trust
-policy on top of the existing digest-verification model.
+#### Milestone B - Config and Onboarding Simplification
+
+Objective:
+
+- Reduce the number of operator choices and the amount of setup knowledge
+  needed before first success.
+
+Required outcomes:
+
+- One primary bot runtime config shape:
+  - container env file for Docker path
+- One primary provider-auth shape for the Docker product path:
+  - guided in-container CLI login persisted in the bot-home volume
+- Error messages for missing token/provider/access settings point directly to
+  the correct fix.
+- `/doctor`, startup validation, provider-status checks, and DB tooling tell
+  operators what is wrong in product language, not only implementation
+  language.
+
+Implementation rules:
+
+- Keep one primary `.env.bot` path in Docker docs and examples.
+- Do not expand the front-door docs with multiple equivalent modes.
+- Keep advanced/fallback modes documented only in deeper docs.
+
+Tests required:
+
+- Config validation tests for missing/invalid token, provider, and access
+  policy
+- Provider-auth validation tests for:
+  - missing login/auth state
+  - missing provider binary
+  - login state persisted and reused across setup/runtime containers
+- Doctor output tests for missing config and runtime misconfiguration
+- Startup integration tests for common failure paths
+- Compose smoke that proves the documented minimal env actually works
+
+Done when:
+
+- A new operator can follow one short path without choosing between run modes.
+- The top setup failures produce clear next steps.
+
+#### Milestone C - User-Facing Settings And `/project` Polish
+
+Objective:
+
+- Use the stable backend and workflow contracts to improve the product surface
+  people actually touch.
+
+Required outcomes:
+
+- `/project` is low-friction and discoverable.
+- Settings/profile changes are discoverable without memorizing many commands.
+- Inline keyboard flows reuse the existing settings callback patterns instead of
+  creating one-off UI paths.
+
+Implementation rules:
+
+- Reuse the existing settings-inline-keyboard and callback handling patterns.
+- Reuse existing dataclasses, session fields, and execution-context semantics.
+- Do not create a second project or profile scoping system.
+- This milestone intentionally pulls forward low-risk discoverability and UX
+  polish that was previously deferred to later roadmap work. Do not widen it
+  into queue-dependent or multi-worker-dependent UX.
+
+Current implementation seams that this milestone must extend, not replace:
+
+- Command handlers in `app/telegram_handlers.py`:
+  - `cmd_project`
+  - `cmd_model`
+  - `cmd_policy`
+  - `cmd_compact`
+- Inline callback path in `app/telegram_handlers.py`:
+  - `handle_settings_callback`
+- Session and storage contract:
+  - `SessionState.project_id`
+  - `SessionState.model_profile`
+  - `SessionState.file_policy`
+  - `SessionState.compact_mode`
+  - `_load()` / `_save()` over the existing session store
+- Serialization / concurrency boundary:
+  - `_chat_lock(...)` for all mutating command and callback paths
+- Authoritative context / invalidation logic:
+  - `resolve_execution_context(...)`
+  - `ResolvedExecutionContext.context_hash`
+  - existing provider-session reset pattern:
+    `session.provider_state = _prov().new_provider_state()`
+  - existing pending-state clearing pattern:
+    `session.clear_pending()`
+
+No new workflow state machine is required for this milestone. Project and
+settings changes are synchronous session mutations under `_chat_lock`, with
+existing pending-request invalidation and provider-session reset rules already
+providing the necessary safety behavior. Do not introduce a new FSM, queue
+concept, or persistence layer here.
+
+Detailed design:
+
+1. Add one discoverable entry surface, not a second settings system.
+- Add `/settings` as a thin menu entry point over the existing setting fields.
+- `/settings` should not own new state; it should render the current values and
+  expose buttons that reuse the same mutations already supported by:
+  - `/model`
+  - `/policy`
+  - `/compact`
+  - the new `/project` inline flow
+- Keep command parity: commands remain first-class and must continue to work.
+  Inline UI is a discoverability layer over the same authoritative mutations.
+
+2. Make `/project` work like the other discoverable runtime controls.
+- Keep `/project list`, `/project use <name>`, and `/project clear`.
+- Add an inline keyboard path for `/project` status/default invocation:
+  - show current project (or default working dir)
+  - show configured projects as buttons
+  - show a clear button when a project is active
+- Reuse the existing callback routing pattern instead of inventing a separate
+  callback subsystem.
+- Preferred callback shape: stay inside the current `setting_*` namespace, for
+  example `setting_project:<name>` and `setting_project:clear`, so one handler
+  continues to own session-setting callbacks.
+
+3. Keep mutation semantics identical across commands and callbacks.
+- `/project use`, `/project clear`, `/model`, `/policy`, `/compact`, and the
+  corresponding inline buttons must all funnel into the same session mutation
+  semantics:
+  - acquire `_chat_lock(...)`
+  - load `SessionState`
+  - mutate the existing session fields
+  - when required, reset `provider_state`
+  - when required, clear pending approval/retry state
+  - save via `_save(...)`
+- Do not let command paths and callback paths drift into different behavior.
+
+4. Keep context invalidation rules explicit and minimal.
+- Changing `project_id` must:
+  - reset provider session state
+  - clear pending approval/retry state
+  - preserve the rest of the session
+- Changing `file_policy` must:
+  - reset provider session state
+  - clear pending approval/retry state
+- Changing `model_profile` should continue to rely on the existing
+  `ResolvedExecutionContext.context_hash` invalidation rules and current
+  handler behavior. Do not add separate ad hoc invalidation state.
+- Changing `compact_mode` is a rendering setting and should not reset provider
+  session state.
+
+5. Respect trust/public restrictions through existing gates.
+- Keep `_public_guard(...)` as the entry gate for project and file-policy
+  mutations.
+- Keep public-user profile restrictions in the existing model-profile
+  resolution path (`resolve_effective_model` / public profile allowlist).
+- Do not add a second public-safety check tree in the new inline flow.
+
+6. Stay inside existing libraries and patterns.
+- Continue using `python-telegram-bot` `InlineKeyboardButton` and
+  `InlineKeyboardMarkup`.
+- Continue using the existing typed dataclasses and provider/session reset
+  semantics.
+- Do not add a new UI helper library, state container, callback registry, or
+  custom persistence abstraction for this milestone.
+
+Recommended implementation sequence:
+
+1. Add `/settings` as a read-only summary + inline keyboard entry point over
+   current settings.
+2. Extend `handle_settings_callback` to support project selection/clear in the
+   same callback namespace and mutation pattern.
+3. Update `/project` default output to show the same discoverable inline
+   choices instead of text-only status.
+4. Refine `/model`, `/policy`, and `/compact` output so commands and callbacks
+   render consistently.
+5. Only after the command/callback parity is correct, tighten wording and
+   markup for discoverability.
+
+Tests required:
+
+- Real handler/integration tests through production code paths for:
+  - `/project` list/use/clear
+  - inline settings/profile changes
+  - callback flows and markup cleanup
+- Regression tests that prove context hashes and pending invalidation still
+  behave correctly when project/profile changes occur
+- Real handler/integration tests through production paths for:
+  - `/settings` default view and keyboard contents
+  - `/project` default view with active/no-active project
+  - `setting_project:<name>` and `setting_project:clear`
+  - command/callback parity for model/profile, policy, compact, and project
+- Contention tests that prove project/settings callbacks still answer exactly
+  once and serialize through `_chat_lock(...)` under in-flight work
+- Public-user tests for:
+  - `/project` denied in public mode
+  - `setting_policy:*` denied in public mode
+  - restricted model profiles still blocked through the callback path
+- Regression tests that prove:
+  - project changes reset `provider_state`
+  - policy changes reset `provider_state`
+  - project/policy changes clear pending approval/retry state
+  - compact changes do not reset `provider_state`
+  - context hash changes still flow through the existing
+    `ResolvedExecutionContext` contract rather than a new ad hoc mechanism
+
+Done when:
+
+- Project binding, model/profile selection, and key settings are discoverable
+  and low-friction.
+- `/settings` and `/project` are thin discoverability layers over the same
+  authoritative session mutations the command paths already use.
+- No new settings/project state model, persistence path, or workflow framework
+  was introduced.
+
+#### Milestone D - Progress, Recovery, And Trust Clarity
+
+Objective:
+
+- Make long-running work, interruptions, and trust/profile state feel simpler
+  and more understandable to non-technical users.
+
+Required outcomes:
+
+- Progress wording stays provider-neutral and truthful.
+- Recovery/replay/discard wording is clear and avoids “system-like” jargon.
+- Approval/retry prompts and trust/profile visibility are easier to interpret.
+
+Implementation rules:
+
+- Keep provider semantics rich internally, but simplify user-visible wording.
+- Do not flatten away meaningful semantic distinctions in the shared progress
+  model.
+- Reuse the existing recovery and approval contracts; improve wording and
+  presentation around them.
+
+Tests required:
+
+- Handler/output/recovery suites for user-visible strings and flows
+- Scenario tests for:
+  - interrupted run
+  - approval required
+  - retry invalidated by stale context
+  - compact/progress wording under long runs
+
+Done when:
+
+- Interrupted runs, approval flows, and long-running tasks feel understandable
+  rather than “system-like.”
+
+#### Milestone E - Usability Hardening Before Phase 13
+
+Objective:
+
+- Finish the pre-Phase-13 gate by making the current product boring,
+  self-consistent, and easier to maintain.
+- This milestone is **not only wording cleanup**. It is the final
+  end-to-end hardening pass over the current Docker/operator path, the main
+  Telegram user journey, and the recently grown code/test structure that now
+  owns those behaviors.
+- The default path is the strongest justified fix: if a full simplification,
+  dead-code removal, duplicate-concept consolidation, or owner-suite cleanup
+  will leave the product more correct, reliable, maintainable, or easier to
+  operate, it belongs here.
+
+Why this milestone is broader than a “polish pass”:
+
+- Earlier phases already proved that the repo gets riskier when:
+  - duplicated invariants and overflow suites create the illusion of coverage
+    instead of clear ownership
+  - dead code and stale helpers survive after the authoritative seam moved
+  - message/callback/operator parity drifts while each path individually looks
+    acceptable
+- The repo history already contains successful examples of the right cleanup
+  model:
+  - weak duplicate tests removed and unique tests moved into owner suites
+  - dead code removed after review
+  - duplicate helper/test infrastructure consolidated
+- Milestone E should apply the same standard again where the current codebase
+  review shows it is warranted.
+
+Current codebase review that drives this milestone:
+
+- Handler ownership is still concentrated in a very large
+  `app/telegram_handlers.py` (~3000 lines). This is not automatically wrong,
+  but it increases the cost of duplicated helpers, stale inline copy, and
+  drift between command/callback/admin paths.
+- Test ownership has grown again in a few large suites:
+  - `tests/test_handlers.py` (~1600 lines)
+  - `tests/test_workitem_integration.py` (~1600 lines)
+  - `tests/test_request_flow.py` (~1000 lines)
+  - `tests/test_handlers_approval.py` (~680 lines)
+- Shared test helpers already live in `tests/support/handler_support.py`
+  (`fresh_data_dir`, `FakeProgress`, `send_command`, `get_callback_data_values`)
+  and prior refactors already consolidated some duplication there. Bucket E
+  should continue that model instead of tolerating new drift.
+- The current milestone work has improved user-facing seams (`/settings`,
+  `/project`, recovery/retry copy, trust/profile display, operator scripts),
+  which means Bucket E must now:
+  - finish the remaining friction in those primary paths
+  - remove stale duplicate logic introduced or exposed during the polish work
+  - re-home or merge tests that no longer belong in catch-all suites
+
+Concrete cleanup items already identified by review and therefore in scope:
+
+- **Settings / project / model owner collapse in `app/telegram_handlers.py`.**
+  The same setting families still have too many owners:
+  - model mutation and display:
+    - `cmd_model`
+    - `handle_settings_callback(setting == "model")`
+    - `cmd_settings`
+    - `_settings_model_profile_state(...)`
+  - project mutation and display:
+    - `cmd_project`
+    - `handle_settings_callback(setting == "project")`
+    - `cmd_settings`
+    - `_resolve_project(...)`
+  - approval / compact / policy row rendering:
+    - dedicated commands (`/approval`, `/compact`, `/policy`)
+    - `/settings`
+  This is an explicit Bucket E contract. The target shape is:
+  - one small authoritative mutator per setting family where command and
+    callback paths share the same durable mutation and reset behavior
+  - one small authoritative row/builder per setting family where the dedicated
+    command and `/settings` share the same visible control state
+  - fewer open-coded button rows and fewer repeated inline state transitions
+    in command/callback bodies
+
+- **Public command/callback surface tests must be re-homed out of
+  `tests/test_request_flow.py`.**
+  The current review found handler-surface tests regrowing in the request-flow
+  suite:
+  - public `/session` display checks
+  - public `/settings` display and keyboard checks
+  - public `/model` command and `setting_model:*` callback surface checks
+  - public `setting_project:*` denial surface checks
+  Those belong with handler command/callback ownership, not with execution
+  context / pending validation / trust-hash logic. The target shape is:
+  - `tests/test_handlers.py` owns user-visible command/callback surfaces
+  - `tests/test_request_flow.py` owns execution context, trust shaping,
+    invalidation, stale detection, and request-lifecycle contracts
+  - where overlap remains intentional, the plan must name the distinct
+    contract each suite owns
+
+- **Handler-suite setup reuse must improve.**
+  The review found repeated open-coded:
+  - `fresh_data_dir()`
+  - `make_config(...)`
+  - `setup_globals(...)`
+  blocks inside `tests/test_handlers.py`, including recent Bucket D cases,
+  despite `tests/support/handler_support.py` already providing:
+  - `fresh_env(...)`
+  - `send_command(...)`
+  - `send_callback(...)`
+  - `get_callback_data_values(...)`
+  This is an explicit Bucket E rationalization target. The target shape is:
+  - new handler-surface tests default to `fresh_env(config_overrides=...)`
+  - repeated public-user setup is factored into one small shared test helper if
+    that reduces drift
+  - no new hand-rolled setup clones are added while shared fixtures already
+    exist
+
+- **“No moves” or “no refactor needed” is not an acceptable conclusion unless
+  the candidate audit is written down.**
+  For each large owner seam or suite above, Bucket E must record:
+  - what candidates were considered
+  - which ones were merged / moved / extracted / deleted
+  - which ones stayed and why
+  Silent “looked fine” is not enough for this milestone.
+
+Mandatory guidance inputs before coding:
+
+- Repo-local guidance:
+  - `AGENTS.md`
+  - `CLAUDE.md`
+- Global guidance:
+  - `docs/AGENTS-global.md`
+  - `docs/CLAUDE-global.md`
+- Local skills that must be used where they apply:
+  - `docs/codex-skills/contract-change-audit/SKILL.md`
+    - for any cross-cutting user-visible or operator-visible contract change
+    - explicitly:
+      - state the contract being changed
+      - identify the authoritative source
+      - enumerate equivalent ingress paths with `rg`
+      - audit raw vs resolved reads
+      - list failure paths, including restart-in-the-middle and
+        recovery-interrupted-again
+      - define invariants before touching code
+  - `docs/codex-skills/invariant-test-builder/SKILL.md`
+    - for every multi-axis test cleanup or owner-suite rationalization
+    - explicitly:
+      - identify the contract axes first
+      - add focused contract, real entry-point, and adjacent regression tests
+      - prefer negative-capability checks
+      - assert both visible output and state
+      - name the oracle explicitly
+  - `docs/codex-skills/progress-ux-audit/SKILL.md`
+    - for any remaining progress/liveness/output/rendering cleanup
+    - explicitly:
+      - keep wording provider-neutral
+      - keep compact/full/raw/export derived from one stable source
+      - verify the message object chain the user actually sees
+  - `docs/codex-skills/durable-state-hardening/SKILL.md`
+    - whenever Bucket E touches pending state, recovery, work items, or any
+      durable operator/runtime path
+    - explicitly:
+      - write the state machine and completion owner table
+      - identify durable commit points
+      - treat in-memory state as optimization only
+      - test success, failure/interruption, duplicate/idempotency, and
+        recovery/restart as applicable
+
+Implementation rules (carry these literally into execution guidance):
+
+1. Fix contracts, not call sites.
+- Enumerate equivalent ingress paths with `rg` before editing.
+- For this repo, the parity checklist remains:
+  - message
+  - command
+  - callback
+  - admin
+  - CLI
+  - approval
+  - retry
+
+2. Use the strongest justified fix as the default.
+- Do not present a weaker shortcut as equally valid just because it is
+  cheaper.
+- If a larger cleanup clearly improves correctness, reliability,
+  maintainability, performance, safety, or operator usability, do it.
+- Only keep the scope narrower when the task is genuinely bounded to copy,
+  docs, or another cosmetic change.
+
+3. Use the authoritative source only.
+- If resolved execution context exists, use it in user-visible or
+  safety-sensitive logic.
+- If a builder/helper already owns a concept, update that owner instead of
+  duplicating equivalent logic inline.
+- If no authoritative owner exists for a cross-cutting setting family, create
+  one before patching multiple call sites.
+
+4. Treat failure paths and dead ends as product correctness.
+- No-op, already-handled, wrong-user, busy, startup-failure, doctor, provider
+  auth, and update-after-pull paths are first-class product behavior.
+- If the system tells the user or operator something false, that is a real
+  bug, not just “rough wording.”
+
+5. Simplification and refactoring are in scope when evidence-backed.
+- Include:
+  - dead code elimination
+  - duplicate helper/builder/dataclass rationalization
+  - stale inline logic removal after centralization
+  - test ownership cleanup
+  - weak duplicate test removal only when a stronger owner test exists
+- Do not include:
+  - repo-wide aesthetic churn
+  - speculative abstraction
+  - rename-only sweeps with no contract or ownership payoff
+  - “audit says no change” conclusions without a written candidate list and
+    justification
+
+6. Do not overclaim.
+- `STATUS-commercial-polish.md` must only move when code and tests prove the
+  runtime behavior.
+- Bucket E is not done because a few small fixes landed; the full audit,
+  simplification pass, and verification envelope must be complete.
+
+Milestone E is split into four required workstreams.
+
+### E1. Product-path hardening
+
+Audit and fix the current primary user and operator journeys end to end.
+
+Required audit surfaces:
+
+- Docker/operator path:
+  - `scripts/dev_up.sh`
+  - `scripts/guided_start.sh`
+  - `scripts/build_bot_image.sh`
+  - `scripts/provider_login.sh`
+  - `scripts/provider_status.sh`
+  - `scripts/provider_logout.sh`
+  - `scripts/db_bootstrap.sh`
+  - `scripts/db_update.sh`
+  - `scripts/db_doctor.sh`
+  - `README.md`
+- Telegram path:
+  - `/start`
+  - `/help`
+  - `/settings`
+  - `/project`
+  - `/session`
+  - `/model`
+  - approval / retry / recovery
+  - no-op / already-handled / wrong-user / busy paths
+  - public/trusted/admin restriction surfaces
+
+Required outcomes:
+
+- One clear operator path and one clear end-user path
+- No stale command/docs drift
+- No misleading doctor/provider-health distinction
+- No misleading startup/update/rebuild guidance
+- No obviously confusing no-op or denial state left in the primary path
+- `STATUS-commercial-polish.md` and `README.md` reflect the real current
+  Bucket E state and do not preserve stale “Current / Next” pointers from
+  earlier bucket stages
+
+### E2. Structural simplification and dead-code cleanup
+
+Do a repo-wide audit of the seams touched by Milestones C-D and Buckets A-D.
+
+Required audit targets:
+
+- dead helpers, stale branches, unused imports, obsolete compatibility paths
+- duplicate concept owners in:
+  - `app/telegram_handlers.py`
+  - `app/user_messages.py`
+  - `app/execution_context.py`
+  - operator scripts
+- duplicate builders/helpers introduced by recent polish work
+- stale inline messages that should now live in the authoritative owner
+- explicitly review duplicated setting-family owners and builders in:
+  - `cmd_model`
+  - `cmd_project`
+  - `cmd_settings`
+  - `handle_settings_callback`
+  - `/approval`, `/compact`, `/policy` command-specific status/rendering paths
+
+Required outcomes:
+
+- Remove dead code where the authoritative seam has clearly replaced it
+- Consolidate duplicate concept logic where drift risk is real
+- Keep the simplification behavior-preserving unless a real contract bug is
+  also being fixed
+- Prefer a smaller number of authoritative helpers/builders over parallel
+  partial owners
+- Collapse duplicated model/project/policy/approval/compact logic so command
+  and callback paths share the same state-transition or row-building owner when
+  they are meant to express the same contract
+- Remove repeated button-row construction and open-coded mutation branches when
+  one small helper can own the concept more clearly
+
+Examples of the right work here:
+
+- consolidate duplicate display-state logic when `/settings`, `/model`,
+  `/session`, or help surfaces now share one truth
+- consolidate duplicated setting-family mutation logic when command and
+  callback paths both set the same durable fields and reset the same provider
+  state
+- consolidate duplicated settings row/button builders when `/settings` and
+  the dedicated setting command (`/model`, `/policy`, `/compact`, `/approval`)
+  should stay in lockstep
+- remove old helper paths left behind after centralizing user-facing copy
+- remove stale operator-path instructions that survive only in one script or
+  one doc
+
+### E3. Test ownership and suite rationalization
+
+This is required work, not optional cleanup.
+
+The codebase review shows that a few large suites have grown again and need an
+ownership pass:
+
+- `tests/test_handlers.py`
+- `tests/test_workitem_integration.py`
+- `tests/test_request_flow.py`
+- `tests/test_handlers_approval.py`
+
+Required audit questions:
+
+- Is this test asserting a distinct contract, boundary, or failure mode?
+- Is it in the suite that actually owns that contract?
+- Is there a weaker duplicate proving the same thing through the same
+  boundary?
+- Is a shared helper already available in `tests/support/handler_support.py`
+  and not being reused?
+- Is the test oracle correct (original message vs returned status message vs
+  edited callback message vs persisted state)?
+- Is this actually a handler-surface test that drifted into
+  `tests/test_request_flow.py` or another suite that should instead own only
+  context / orchestration / durable-state contracts?
+- If the conclusion is “no move needed,” what concrete candidate was reviewed
+  and what contract does the current suite uniquely own?
+
+Required outcomes:
+
+- Move misplaced tests into owner suites where that improves responsibility
+- Merge or delete weak duplicate tests only when a stronger owner test remains
+- Consolidate duplicate test helpers instead of cloning them again
+- Re-home public `/settings`, `/session`, `/model`, and related `setting_*`
+  surface checks so handler command/callback ownership is clear
+- Keep `tests/test_request_flow.py` focused on execution identity, trust
+  shaping, pending validation, and lifecycle contracts rather than regrowing
+  command-surface assertions
+- Reduce repeated `fresh_data_dir() + make_config() + setup_globals()`
+  scaffolding inside handler suites by reusing `fresh_env(...)` and other
+  helpers from `tests/support/handler_support.py`
+- Keep negative capability tests and boundary tests that prove the system
+  cannot overfire
+- Do not reduce confidence in the name of prettiness
+
+The standard is the earlier ownership refactor:
+- overflow suites removed
+- unique tests strengthened
+- owner suites clarified
+- shared helpers consolidated
+
+Bucket E should repeat that standard where recent growth warrants it.
+
+### E4. Final truthfulness and verification
+
+After the hardening and simplification work, run the full verification envelope
+for the touched areas.
+
+Required verification:
+
+- config / doctor / startup tests
+- shell/operator contract tests
+- Compose E2E
+- persistence/integration suites touched by the work
+- real handler/callback flows touched by Milestones B-D
+- owner suites touched by test rationalization
+
+Testing rules from the repo guidance and local skills apply directly:
+
+- every nontrivial change needs:
+  - a focused contract test
+  - a real entry-point integration test
+  - an adjacent regression test
+- every user-visible test must declare the right oracle
+- every classification or invalidation fix needs a false-positive boundary
+  test
+- if Bucket E touches a durable path, success/failure/interruption/recovery
+  ownership must still be proven
+
+Recommended implementation sequence:
+
+1. Write a contract-first preamble for Bucket E:
+  - contract(s) being changed
+  - source of truth
+  - affected entry points
+  - state/persistence touched
+  - failure paths
+  - required invariants
+  - tests to add or rationalize
+2. Do one bounded repo-wide audit and classify findings into:
+  - product-path friction
+  - dead code / stale code
+  - duplicate concept owner
+  - test ownership drift
+  - weak duplicate test
+  - stale docs/status
+  - duplicated setting-family owner
+  - handler-surface tests in the wrong suite
+  - repeated test setup that should use shared helpers
+3. Group the findings into separate contracts instead of one giant cleanup
+   patch.
+4. For each large owner seam or suite, write the candidate list and the chosen
+   target shape before editing. “No move” or “no extract” is acceptable only
+   with explicit evidence.
+5. Implement product fixes and structural simplifications together where they
+   share the same authoritative seam.
+6. Move/rationalize tests only after the owning seam is clear.
+7. Run the real verification envelope.
+8. Update `STATUS-commercial-polish.md` only after the runtime behavior and
+   tests are confirmed.
+
+Anti-patterns forbidden in this milestone:
+
+- wording-only patches when the real issue is a broken or duplicated owner
+- repo-wide rename churn without contract payoff
+- test deletion without a stronger remaining owner test
+- new generic frameworks or speculative abstractions
+- leaving duplicated setting-family owners in place after the audit already
+  proved drift risk, then claiming the simplification pass is complete
+- leaving handler-surface tests in `tests/test_request_flow.py` while claiming
+  test ownership was rationalized, unless the plan names the distinct contract
+  that suite still uniquely owns
+- claiming “hardening complete” while the large catch-all suites and touched
+  operator/handler paths still drift
+
+Done when:
+
+- The Docker/operator path is boring and self-consistent.
+- The main Telegram user journey is coherent end to end.
+- The remaining rough edges in doctor/startup/onboarding/update/no-op states
+  are resolved.
+- Dead code and duplicate concept owners exposed by the polish work are
+  removed or consolidated where justified.
+- The recently regrown suites are rationalized enough that test ownership is
+  clearer, not murkier.
+- The verification envelope passes:
+  - config/doctor/startup
+  - shell/operator
+  - Compose E2E
+  - touched persistence/integration suites
+  - touched handler/callback owner suites
+- The docs and status are truthful.
+- At that point, and only at that point, should work move to
+  **Phase 13 - Storage backend abstraction and Local Runtime mode**.
+
+#### Gate Before Phase 13
+
+Do not start Phase 13 until all of the following are true:
+
+- The Docker path is the actual supported happy path, not just the documented
+  one.
+- New users can get from zero to running without advanced choices.
+- The main Telegram workflows feel polished enough that more infrastructure work
+  would clearly unlock the next need.
+- The current product is stable enough that webhook/multi-process work solves a
+  real problem rather than an architectural desire.
+- `STATUS-commercial-polish.md` truthfully reports the pre-Phase-13 execution
+  program as complete.
+
+### Remaining-Phase Execution Discipline
+
+These rules apply to every remaining phase below. They are not optional.
+
+- **Classify the work first:**
+  - `session/config/UI mutation`
+  - or `workflow/runtime`
+- Use the existing FSM architecture only for real workflow/runtime problems:
+  durable named states, allowed/forbidden transitions, recovery/terminal
+  outcomes, or time-/actor-separated progression.
+- Do **not** add a new FSM for simple synchronous settings, session, UI, or
+  operator-path mutation.
+- Fix contracts, not call sites.
+- Audit equivalent paths before coding:
+  command, callback, handler, worker, script, operator flow, and docs.
+- Prefer resolved context over raw session/config for user-visible and
+  safety-sensitive behavior.
+- Tests must prove the user/operator contract through the real boundary, not
+  only helper behavior.
+- Rendering and wording are product correctness, not decorative polish.
+- Update `STATUS-commercial-polish.md` only after code and tests confirm the
+  behavior.
+
+### Phase 13 - Storage Backend Abstraction And Local Runtime Mode
+
+Guidance baseline:
+
+- Follow the repo-local and global execution guidance before changing code or
+  contracts:
+  - `AGENTS.md`
+  - `CLAUDE.md`
+  - `docs/AGENTS-global.md`
+  - `docs/CLAUDE-global.md`
+- Apply the workflow decision rule from `Remaining-Phase Execution Discipline`
+  before introducing abstractions: use the existing FSM architecture only for
+  real workflows; do not add a new FSM for simple synchronous storage,
+  session, or UI mutation.
+
+Objective:
+
+- Restore a first-class **Local Runtime** mode, with SQLite as the default
+  backend for both Docker and host deployments, while keeping product behavior
+  as backend-neutral as possible.
+
+Workflow classification:
+
+- This phase is primarily **storage/runtime abstraction**, not a new workflow
+  family.
+- Reuse the existing Phase 11 workflow machines; do not add a third workflow
+  FSM.
+
+Required outcomes:
+
+- Introduce backend-neutral runtime/storage contracts around:
+  - session storage
+  - transport/work-item storage
+  - pending approval/retry persistence
+- Support **Local Runtime** directly in:
+  - Docker
+  - host mode
+- SQLite becomes the **default** backend for Local Runtime.
+- Product/core code above the storage boundary should not need code changes
+  just because the deployment is using SQLite instead of Postgres.
+- Postgres may remain supported as a simple store backend, but **without**
+  shared-runtime queue authority semantics in this phase.
+
+Implementation rules:
+
+- Do not pretend SQLite and Postgres are identical at the shared-runtime queue
+  authority layer.
+- Do isolate genuinely common storage contracts so product features can stay
+  backend-neutral.
+- Do not hand-roll a second storage model in handlers or request flow.
+- Reuse the current repository/workflow contracts as the behavioral reference.
+- Keep Local Runtime single-machine semantics explicit rather than trying to
+  emulate Shared Runtime queue authority in SQLite.
+
+Tests required:
+
+- Storage contract tests against the Local Runtime backend
+- Same product behavior tests through real command/callback/handler paths under
+  Local Runtime
+- Docker and host local-mode startup/bootstrap/update/doctor tests
+- Regression tests proving Local Runtime preserves current product semantics for
+  session, approval/retry, and transport ownership
+
+Done when:
+
+- Local Runtime works in both Docker and host mode with SQLite as the default
+  backend.
+- Product-layer features above the storage boundary no longer require
+  backend-specific code changes in normal implementation work.
+
+### Phase 14 - Product Polish On Local Foundations
+
+Guidance baseline:
+
+- Follow the repo-local and global execution guidance before changing code or
+  contracts:
+  - `AGENTS.md`
+  - `CLAUDE.md`
+  - `docs/AGENTS-global.md`
+  - `docs/CLAUDE-global.md`
+- Apply the workflow decision rule from `Remaining-Phase Execution Discipline`
+  before introducing abstractions: default to session/config/UI mutation and
+  reuse the current handler/session architecture unless a real workflow with
+  durable states and transitions appears.
+
+Objective:
+
+- Continue user-facing polish on top of the Local Runtime and backend-neutral
+  product contracts.
+
+Workflow classification:
+
+- Default: `session/config/UI mutation`.
+- No new FSM unless a real workflow problem appears and is justified.
+
+Implementation rules:
+
+- Reuse existing handler, callback, session, and user-message seams.
+- Keep command/callback parity.
+- Fix authoritative seams, not one-off strings or one call site.
+- Use resolved context as the display/safety authority.
+
+Tests required:
+
+- Real handler and callback integration tests
+- Adjacent regression tests for discoverability, restrictions, and no-op
+  states
+- Usability-focused contract tests on the actual user-facing surfaces
+
+Done when:
+
+- The main Telegram product journey remains coherent under Local Runtime and
+  backend-neutral contracts.
+
+### Phase 15 - Behavior Extensions
+
+Guidance baseline:
+
+- Follow the repo-local and global execution guidance before changing code or
+  contracts:
+  - `AGENTS.md`
+  - `CLAUDE.md`
+  - `docs/AGENTS-global.md`
+  - `docs/CLAUDE-global.md`
+- Apply the workflow decision rule from `Remaining-Phase Execution Discipline`
+  before introducing abstractions: only add or extend FSM-backed logic when a
+  new durable workflow truly exists; otherwise keep changes inside existing
+  session, request-flow, and rendering seams.
+
+Objective:
+
+- Add demand-gated product behavior extensions without coupling them to a
+  specific runtime backend.
+
+Workflow classification:
+
+- Most work here should remain product/session/config work.
+- If a new extension becomes a real workflow, reuse the existing FSM approach
+  rather than hand-rolling transitions.
+
+Scope:
+
+- Demand-gated `content dedup` using explicit user-visible policy and durable
+  fingerprints
+- Expanded project/policy scope using the existing execution-context and
+  project binding model
+- Other backend-neutral product behaviors that do not require Shared Runtime
+  queue authority
+
+Required workstreams and sequencing:
+
+1. **Slice 1 — Per-project defaults** is the first shipped workstream for
+   this phase and remains the behavioral reference for how Phase 15 should be
+   executed: extend existing config, execution-context, handler, and test
+   owners instead of building a parallel subsystem.
+2. **Slice 2 — Live cancellation of running work** is the next required
+   workstream. It adds user-visible cancellation of active provider execution
+   and approval preflight without changing transport states, queue ownership,
+   or durable workflow families.
+3. **Slice 3 — Claude progress usability** follows Slice 2. It improves Claude
+   progress structure by reusing the existing shared progress event family and
+   renderer rather than adding a Claude-only rendering path.
+4. **Later Slice — Content dedup** remains demand-gated future work and must
+   stay behind the shipped cancel/progress work. Do not let it overtake Slice 2
+   or Slice 3.
+
+Implementation rules:
+
+- Reuse existing data flows first. Before introducing a new helper, type, or
+  test family, inspect the current owners and extend them if they are already
+  the authoritative seam.
+- This phase is explicitly about enhancing the current architecture, not
+  building parallel capability systems. That means:
+  - reuse current handler and callback ingress
+  - reuse current provider protocol and result types
+  - reuse the existing work queue and `_chat_lock` ownership model
+  - reuse the existing shared progress event family and renderer
+  - enhance existing tests before creating a shadow suite
+- Do not force weak reuse when the concept genuinely needs a new local helper
+  or type. New code is allowed when it extends the existing owner cleanly.
+  What is forbidden is bypassing the current owners with a second mechanism.
+- Do not create a second scoping, dedup, progress, or cancellation system.
+- Keep behavior extensions layered above the existing transport and
+  execution-context contracts.
+- Do not move progress or cancel orchestration into `request_flow.py`. That
+  module remains pure business logic with no Telegram transport, progress, or
+  subprocess ownership.
+- Do not add durable state, transport states, or a new FSM for live
+  cancellation in this phase. Cancellation of a running subprocess is a live
+  execution control problem, not a new durable workflow family.
+- Do not change the `ProgressSink` protocol to carry cancellation semantics.
+  Keep rendering and control separate even when they are used together in the
+  same execution path.
+- Do not invent Claude progress semantics that the raw stream does not prove.
+  If the stream does not clearly prove a `ToolFinish` or `CommandFinish`, do
+  not synthesize one.
+
+#### Slice 2 — Live Cancellation Of Running Work
+
+Problem statement:
+
+- `/cancel` currently clears pending approval/retry or credential setup only.
+- When a provider subprocess is actively running, `/cancel` cannot interrupt it
+  because the current command path acquires `_chat_lock` and waits behind the
+  very execution it is trying to stop.
+
+Contracts in this slice:
+
+1. **Live cancel ingress contract**
+- `/cancel` during a live provider run must request cancellation immediately
+  rather than queueing behind `_chat_lock`.
+- `/cancel` when there is no live run must preserve the current pending/setup
+  and no-op behavior exactly.
+
+2. **Provider cancel outcome contract**
+- Provider execution gains a typed, user-initiated cancel outcome distinct from:
+  - timeout
+  - typed resume failure
+  - restart/shutdown interruption that remains `LeaveClaimed`
+- User-requested cancel must not route through restart recovery.
+
+Source of truth:
+
+- `_chat_lock` in `app/telegram_handlers.py` remains the owner of per-chat
+  serialization and work-item completion.
+- `work_queue` remains the owner of durable work-item lifecycle.
+- `execute_request()`, `request_approval()`, and replay execution in
+  `handle_recovery_callback()` remain the owners of terminal user-visible live
+  execution outcome.
+- `RunResult` in `app/providers/base.py` remains the provider outcome type.
+- Provider subprocess lifecycle remains owned inside `app/providers/claude.py`
+  and `app/providers/codex.py`.
+
+Required implementation shape:
+
+- Add `cancelled: bool = False` to `RunResult`.
+- Extend the provider `run()` and `run_preflight()` contract to accept a
+  separate cancel signal or execution-control object. Do **not** attach
+  cancellation semantics to the `ProgressSink` protocol.
+- In `app/telegram_handlers.py`, add a small private live-execution registry
+  keyed by `chat_id`. Use it only for process-local cancellation signaling and
+  cleanup. It must not become a second durable state model.
+- Register the live execution record before the provider call and clear it in a
+  `finally` block on every exit path.
+- `/cancel` must use a fast path **outside** `_chat_lock`:
+  - if a live execution exists, set the cancel signal immediately and return a
+    user-facing cancellation-requested message
+  - if no live execution exists, fall through to the current locked path for
+    credential setup and pending approval/retry cancellation
+- `execute_request()`, `request_approval()`, and replay execution must treat
+  `result.cancelled` as a normal terminal handled outcome:
+  - update the status message to cancelled
+  - do not send the final result text
+  - do not raise `LeaveClaimed`
+  - let the work item complete normally
+- Provider state must not be destructively reset on user cancel. Only typed
+  resume failure continues to justify provider-state reset.
+- Provider cancellation must not depend on “the next stdout line.” The provider
+  implementation must race the cancel signal against blocked reads and process
+  exit so a silent or stalled subprocess can still be cancelled promptly.
+
+Affected code paths:
+
+- `app/providers/base.py`
+- `app/providers/claude.py`
+- `app/providers/codex.py`
+- `app/telegram_handlers.py`
+- `app/user_messages.py`
+
+Failure-path rules:
+
+- Double-cancel is idempotent.
+- Cancel after process exit is a safe no-op.
+- Restart during cancellation drops the in-memory signal and falls back to the
+  existing `LeaveClaimed` recovery contract.
+- Unexpected cleanup failure is an ordinary execution failure, not a successful
+  cancel.
+
+Required invariants:
+
+- `/cancel` during live execution does not wait behind `_chat_lock`
+- `/cancel` during pending approval/retry still behaves exactly as before
+- `/cancel` with no live execution and no pending/setup still shows the current
+  nothing-to-cancel behavior
+- cancelled execution does not leave the work item in `claimed`
+- cancelled execution does not send the final assistant reply
+- cancelled execution does not corrupt provider state; the next request works
+  normally
+- live execution registry entries are always cleaned up
+
+Tests required for Slice 2:
+
+- Contract test: cancel signal set during Claude execution returns
+  `RunResult.cancelled=True` within bounded time
+- Contract test: cancel signal set during Codex execution returns
+  `RunResult.cancelled=True` within bounded time
+- Handler integration: `/cancel` during live execution updates the status
+  message to cancelled and final result text is not sent
+- Handler integration: `/cancel` during approval preflight has the same
+  semantics
+- Handler integration: `/cancel` with no live execution preserves the current
+  no-op behavior
+- Adjacent regression: cancelled execution does not corrupt provider state; the
+  next request succeeds normally
+- Cleanup regression: the live cancel registry entry is removed on both
+  cancellation and ordinary completion
+
+#### Slice 3 — Claude Progress Usability
+
+Problem statement:
+
+- Codex already emits structured semantic progress through the shared progress
+  event family.
+- Claude currently folds most tool activity into `ContentDelta` plus
+  `tool_activity`, which makes long runs feel like a replacing wall of text
+  instead of a tool-by-tool progression.
+
+Contracts in this slice:
+
+1. **Claude event mapping contract**
+- Claude stream events must map to the existing shared `ProgressEvent` family
+  when the raw stream proves those semantics.
+- This slice reuses the current renderer and event types; it does not create a
+  Claude-only progress layer.
+
+2. **Claude text-delivery invariants**
+- richer tool events must not break visible text accumulation, `content_started`
+  semantics, final result text, or rate limiting
+
+Source of truth:
+
+- `app/providers/claude.py` `_consume_stream()` remains the only Claude raw
+  event mapping owner.
+- `app/progress.py` remains the shared event family and renderer.
+- `TelegramProgress` in `app/telegram_handlers.py` remains the status-message
+  editor and rate limiter; it must not gain Claude-specific rendering logic.
+
+Required implementation shape:
+
+- Reuse the existing `ProgressEvent` types already used by Codex:
+  - `ToolStart`
+  - `ToolFinish`
+  - `CommandStart`
+  - `CommandFinish`
+  - `ContentDelta`
+- Promote Claude `tool_use` boundaries into separate semantic events when the
+  raw stream proves them.
+- Keep `ContentDelta` for actual visible text output. Text accumulation remains
+  authoritative for the live reply preview.
+- Stop using `tool_activity` as the primary structure once a tool is promoted
+  to its own semantic event.
+- Emit `ToolFinish` or `CommandFinish` only when the raw Claude stream clearly
+  proves an end boundary or command outcome. Do not fabricate tool finishes or
+  exit codes.
+- Keep `content_started` tied to the first text delta only, not tool events.
+- Keep final result text byte-for-byte equivalent to today. Progress changes are
+  display-only.
+- Keep the renderer unchanged in this slice. If existing events are sufficient,
+  no renderer or `ProgressSink` change is allowed.
+
+Affected code paths:
+
+- `app/providers/claude.py`
+- `tests/test_progress.py`
+- `tests/fixtures/progress/claude_trace.ndjson`
+
+Required invariants:
+
+- text content still accumulates and displays correctly
+- tool events do not swallow or delay text delivery
+- `content_started` is still set on first text delta only
+- final result text is unchanged
+- existing rate limiting behavior remains intact unless a semantic boundary
+  event explicitly needs `force=True`
+- heartbeat still does not overwrite recent provider progress
+
+Tests required for Slice 3:
+
+- Contract test: Claude stream with proven tool-use boundaries emits the
+  expected `ToolStart` and, where justified by raw traces, `ToolFinish`
+- Contract test: text deltas still emit `ContentDelta` without loss or delay
+- Regression test: `content_started` still flips on the first text delta only
+- Fixture test: updated Claude trace fixture produces the expected event
+  sequence
+- Adjacent regression: text-only Claude responses render identically to the
+  current behavior
+- Adjacent regression: existing Codex progress tests remain green unchanged
+
+Non-deliverables for Slice 2 and Slice 3:
+
+- no new transport states
+- no new FSM or new workflow library
+- no new durable state for live cancellation
+- no new progress event family if the current one is sufficient
+- no Claude-specific Telegram rendering path
+- no parallel provider-progress system
+- no Codex provider behavior changes unless a shared invariant is found broken
+
+#### Slice 4 — Cancel Concurrency Verification
+
+Problem statement:
+
+- Slices 2 and 3 shipped the cancel mechanism and progress improvements, but
+  the test suite proves contracts in isolation only.  No test exercises the
+  actual cooperative concurrency that makes `/cancel` work: one coroutine
+  blocked in `execute_request` while a second coroutine runs `cmd_cancel` on
+  the same event loop.
+- The readline/cancel race inside `_consume_stream` and `consume_stdout` is
+  tested with pre-set events and fake processes whose `readline()` returns
+  immediately.  Neither proves the race resolves correctly when `readline()`
+  is actually blocked on a real file descriptor.
+- The two-stage UX ("Cancellation requested." then "Cancelled." on the
+  status message) is asserted in separate tests but never proven to happen
+  in the correct order from a single concurrent execution.
+
+This is a test-only slice.  No production code changes.
+
+Contracts being verified (not changed):
+
+1. **readline/cancel race contract** — `asyncio.wait` with
+   `FIRST_COMPLETED` resolves promptly when the cancel event fires while
+   `readline()` is blocked on a real subprocess pipe.
+2. **Lock-free cancel ingress contract** — `cmd_cancel` completes and
+   delivers the user-facing ack while `_chat_lock` is held by
+   `execute_request`.
+3. **Two-stage UX ordering contract** — "Cancellation requested." is
+   delivered before "Cancelled." appears on the status message, from a
+   single concurrent execution.
+
+Source of truth:
+
+- `_LIVE_CANCEL` in `app/telegram_handlers.py` is the in-memory cancel
+  registry.
+- `_chat_lock` in `app/telegram_handlers.py` is the per-chat serialization
+  owner.
+- `_consume_stream` in `app/providers/claude.py` and `consume_stdout` in
+  `app/providers/codex.py` own the readline/cancel race.
+- `cmd_cancel` in `app/telegram_handlers.py` owns the cancel fast path.
+
+Required tests:
+
+1. **Readline/cancel race with real subprocess.**
+   - Spawn a real subprocess that blocks on stdout (e.g.
+     `python3 -c "import time; time.sleep(60)"`).
+   - Pass a cancel event to `_consume_stream`.
+   - Schedule `event.set()` after a short delay (e.g. 0.1s).
+   - Assert `_consume_stream` returns within a bounded time (e.g. 2s).
+   - Assert the subprocess was killed (`proc.returncode is not None`).
+   - Assert no spurious text was accumulated beyond what was emitted
+     before cancel.
+   - Run the same test shape for Codex `_run_cmd` with a blocking
+     subprocess and injected cancel event.
+
+2. **Lock-free cancel dispatch.**
+   - Use a `FakeProvider` whose `run()` awaits a gate event before
+     returning, so `execute_request` holds `_chat_lock` for a controlled
+     duration.
+   - Use `asyncio.gather` to run `handle_message` (which acquires the
+     lock and blocks in `run()`) and a helper that sends `/cancel` then
+     sets the gate.
+   - Assert `cmd_cancel` delivered "Cancellation requested." before
+     `handle_message` returned.
+   - Assert the cancel event was set and `run()` saw it.
+   - Assert `handle_message` completed with the cancelled outcome (status
+     message shows "Cancelled.", no final text sent).
+   - Use `_StickyReplyMessage` for the status-message oracle.
+
+3. **Two-stage UX ordering.**
+   - From the same test as (2), collect all user-visible messages in
+     delivery order.
+   - Assert "Cancellation requested." appears strictly before "Cancelled."
+     in the sequence.
+   - Assert no other cancel-related text appears between them.
+
+4. **Cancel mid-stream (partial output).**
+   - Spawn a subprocess that emits a few lines of JSON then blocks.
+   - Set cancel after partial output has been consumed.
+   - Assert accumulated text contains the partial output.
+   - Assert `RunResult.cancelled` is True.
+   - Assert no text corruption (partial line, truncated JSON).
+
+5. **Adjacent: cancel does not interfere with non-cancel paths.**
+   - After the concurrency cancel test completes, send a new message
+     to the same chat.
+   - Assert the new request executes normally (not cancelled).
+   - Assert `_LIVE_CANCEL` is clean for that chat.
+
+Failure-path coverage:
+
+- Cancel event set after subprocess has already exited naturally: the
+  readline returns `b""` first, `cancel.is_set()` check in the cancel
+  path is a safe no-op.  Test (1) covers this by also testing cancel
+  after a fast-exiting subprocess.
+- Double `/cancel` during a single execution: the event is already set,
+  `cmd_cancel` replies "Cancellation requested." again idempotently.
+  Existing test covers this; concurrency test (2) can optionally send
+  two `/cancel` commands.
+
+Implementation rules:
+
+- All tests use real `asyncio.Event` and `asyncio.gather` — no mocking
+  of the event loop or wait primitives.
+- Subprocess tests use `sys.executable` with inline scripts — no
+  external binary dependencies.
+- All concurrency tests have explicit timeouts via `asyncio.wait_for`
+  so a broken race fails fast (2–5s) rather than hanging.
+- Tests go in `tests/test_cancel.py` as a new `TestCancelConcurrency`
+  class.
+- No production code changes in this slice.  If a test reveals a bug,
+  the fix goes in a subsequent slice with its own preamble.
+
+Non-deliverables:
+
+- No cross-process or durable cancel testing (cancel is in-memory by
+  design; restart recovery is already tested elsewhere).
+- No worker-path cancel test (worker calls `execute_request` the same
+  way; the cancel event is registered by `execute_request` itself).
+- No Telegram network I/O or real PTB dispatcher in these tests.
+
+Tests required for Phase 15 generally:
+
+- Real handler/request-flow tests
+- Contract tests for user-visible behavior and opt-in policy
+- Regression tests for public/trust restrictions and execution-context
+  invalidation
+- Slice 2 provider and handler cancel tests
+- Slice 3 Claude trace and progress contract tests
+
+Done when:
+
+- Slice 2 ships live cancellation of active provider execution and approval
+  preflight without introducing new durable state, queue states, or a parallel
+  cancellation system.
+- Slice 3 ships richer Claude progress by reusing the existing shared progress
+  event family and renderer without degrading text delivery or Codex behavior.
+- Slice 4 proves the cancel mechanism works under real cooperative concurrency:
+  readline/cancel race with real subprocesses, lock-free dispatch, two-stage
+  UX ordering, and partial-output cancel.  Test-only slice, no production
+  code changes.
+- New implementation work for Phase 15 continues to extend the current owners
+  instead of building shadow abstractions around them.
+
+### Phase 16 - Registry Trust And Governance
+
+Guidance baseline:
+
+- Follow the repo-local and global execution guidance before changing code or
+  contracts:
+  - `AGENTS.md`
+  - `CLAUDE.md`
+  - `docs/AGENTS-global.md`
+  - `docs/CLAUDE-global.md`
+- Apply the workflow decision rule from `Remaining-Phase Execution Discipline`
+  before introducing abstractions: governance and trust visibility should stay
+  on existing product and resolved-context contracts unless a new durable
+  workflow is explicitly justified.
+
+Objective:
+
+- Extend store and registry trust without coupling the product to Shared
+  Runtime queue semantics.
+
+Workflow classification:
+
+- Primarily capability-management and governance work, not a new FSM by
+  default.
+
+Implementation rules:
 
 - Reuse the current object/ref store architecture.
-- Reuse the current registry metadata flow.
+- Reuse the current registry metadata flow and digest-verification contract.
+- Keep publisher signing and trust policy explicit and testable.
 
-### Phase 19 - Usage Accounting, Quotas, And Billing
+Tests required:
 
-Build this last.
+- Store/registry contract tests
+- Trust-policy behavior tests
+- Operator-path tests for governance and verification flows
 
-- Meter usage from authoritative execution completion points, not from
-  provider-progress heuristics.
+### Phase 17 - Usage Accounting, Quotas, And Billing
+
+Guidance baseline:
+
+- Follow the repo-local and global execution guidance before changing code or
+  contracts:
+  - `AGENTS.md`
+  - `CLAUDE.md`
+  - `docs/AGENTS-global.md`
+  - `docs/CLAUDE-global.md`
+- Apply the workflow decision rule from `Remaining-Phase Execution Discipline`
+  before introducing abstractions: accounting and quotas should reuse
+  authoritative completion points and existing repository contracts rather than
+  inventing a second execution-tracking model.
+
+Objective:
+
+- Add usage recording and quota logic in a backend-neutral product layer before
+  Shared Runtime queue work.
+
+Workflow classification:
+
+- Primarily product/accounting logic.
+- If later background processing is required, do not invent a broker now; keep
+  accounting tied to authoritative completion points.
+
+Implementation rules:
+
+- Meter usage from authoritative execution completion points, not provider
+  progress heuristics.
 - Add usage recording first.
 - Add quota enforcement second.
 - Add billing integration and reporting third.
-- If secondary background jobs are needed here, use a Postgres-native task
-  library only for those non-core jobs.
+
+Tests required:
+
+- Completion-owner and accounting attribution tests
+- Quota enforcement tests through real request paths
+- Regression tests proving accounting does not drift across backends
+
+### Phase 18 - Shared Runtime: Postgres Queue Authority In Webhook Mode
+
+Guidance baseline:
+
+- Follow the repo-local and global execution guidance before changing code or
+  contracts:
+  - `AGENTS.md`
+  - `CLAUDE.md`
+  - `docs/AGENTS-global.md`
+  - `docs/CLAUDE-global.md`
+- Apply the workflow decision rule from `Remaining-Phase Execution Discipline`
+  before introducing abstractions: this is explicit workflow/runtime work, so
+  extend the existing FSM-backed transport and repository contracts rather than
+  hand-rolling new queue logic in handlers or stores.
+
+Objective:
+
+- Introduce the **Shared Runtime** capability tier last, after Local Runtime
+  and product work are stable.
+
+Workflow classification:
+
+- This is real **workflow/runtime** work.
+- Reuse the existing transport workflow machine and repository ownership model;
+  do not hand-roll queue transitions in handlers or workers.
+
+Required outcomes:
+
+- Keep the core Telegram request path as an app-owned Postgres queue, not a
+  generic task broker.
+- Retain explicit `updates` and `work_items` tables.
+- Retain row-lock claiming, leases, recovery metadata, replay/discard
+  ownership, stable recovery references, and explicit terminal dispositions.
+- In webhook mode, ingress should normalize, persist, and acknowledge quickly.
+- Workers become the primary execution path.
+
+Implementation rules:
+
+- This capability is for **Shared Runtime** only. Do not force Local Runtime to
+  emulate it.
+- Do not break the backend-neutral product layer above the runtime boundary.
+- Keep provider execution outside long-lived claim transactions.
+
+Tests required:
+
+- Shared-runtime queue contract tests
+- Webhook persist-first ingress tests
+- Recovery/replay/discard ownership tests under the queue path
+
+### Phase 19 - Shared Runtime: Multi-Process Scale And Durability Confidence
+
+Guidance baseline:
+
+- Follow the repo-local and global execution guidance before changing code or
+  contracts:
+  - `AGENTS.md`
+  - `CLAUDE.md`
+  - `docs/AGENTS-global.md`
+  - `docs/CLAUDE-global.md`
+- Apply the workflow decision rule from `Remaining-Phase Execution Discipline`
+  before introducing abstractions: multi-process scale and durability remain
+  workflow/runtime coordination work and must keep extending the existing
+  transport FSM and repository ownership, not a parallel control plane.
+
+Objective:
+
+- Add multi-process scale and confidence work only after Shared Runtime queue
+  authority exists.
+
+Workflow classification:
+
+- Real workflow/runtime coordination work; continue using the existing
+  transport FSM and repository semantics as the transition authority.
+
+Scope:
+
+- Multi-process / multi-worker deployment
+- Cross-process ingress and worker concurrency
+- Queue depth, lease, worker-health, and recovery metrics
+- Crash and lease-recovery tests
+- Webhook ingress durability tests
+- Real provider smoke coverage for the shared-runtime model
+
+Implementation rules:
+
+- Preserve per-chat single-flight ordering, `transport idempotency`, and
+  explicit terminal ownership across processes.
+- Treat Shared Runtime as a deployment capability tier, not as a second
+  product.
+- Do not widen Local Runtime complexity just to mimic Shared Runtime.
 
 ---
 
 ## Architecture Decisions
 
-- Postgres is the sole runtime backend after cutover. SQLite is the current
-  development backend until Phase 12 lands; SQLite-to-Postgres import is
-  optional and deferred unless preserving dev/test data becomes worthwhile.
+- Current shipped runtime after Phase 12 is Postgres-only.
+- The roadmap after Phase 12 now changes direction: restore a first-class
+  **Local Runtime** mode with SQLite as the default backend for both Docker and
+  host deployments, behind backend-neutral storage/runtime contracts.
+- Treat **Local Runtime** and **Shared Runtime** as explicit capability tiers:
+  - Local Runtime: single-machine, SQLite-default, product-first
+  - Shared Runtime: later Postgres queue authority, multi-process, webhook
+    persist-first
+- Product/core code should depend on common storage/runtime contracts where
+  they are genuinely common, and should not need backend-specific code changes
+  for normal feature work.
 - Extract workflow ownership before any database migration so the new backend
   does not inherit open-coded transition logic.
 - Use contract-first workflow state machines; implementation is
   python-statemachine (narrow use; persistence and queue authority remain
   in-app). See Phase 11 implementation.
-- Keep the core request queue app-owned in Postgres. Do not adopt Celery,
-  Temporal, PGMQ, or a dedicated broker for Phases 11-14.
+- Keep the shared-runtime request queue app-owned. Do not adopt Celery,
+  Temporal, PGMQ, or a dedicated broker for the Shared Runtime phases.
 - Reuse existing `SessionState`, `PendingApproval`, `PendingRetry`,
   normalized inbound payloads, and resolved execution-context shapes. Extend
   only where needed for leases, attempts, and terminal disposition.
@@ -1422,19 +2907,22 @@ Build this last.
 
 ## Assumptions And Defaults
 
-- The roadmap should be optimized for a Postgres-first deployment model, not
-  for dual backend support.
-- Phase 12 should be executable without building an in-place SQLite upgrade
-  path or SQLite-to-Postgres import tool. Those are optional follow-on tasks,
-  not development-time gating requirements.
+- The roadmap should now be optimized for:
+  - backend-neutral product/core contracts
+  - Local Runtime as the default deployment tier
+  - Shared Runtime as a later advanced capability tier
+- Phase 12 remains shipped history; no in-place SQLite upgrade or
+  SQLite-to-Postgres import path is required as development-time gating
+  work for the new roadmap direction.
 - The master roadmap should present a strict execution order, not priority
   buckets.
-- Confidence work remains in the roadmap even though it is not user-facing,
-  because the infrastructure phases materially change failure modes.
+- Confidence work remains in the roadmap because the Shared Runtime phases
+  materially change failure modes.
 - Workflow contracts are defined first; library choice (python-statemachine)
   is narrow and subordinate to the explicit state/ownership model.
-- Payments and billing stay last because they depend on stable transport,
-  worker ownership, and trustworthy execution accounting.
+- Usage recording and quotas now move ahead of Shared Runtime queue work, but
+  must still depend on authoritative completion points rather than progress
+  heuristics.
 - Queue or library evaluation basis:
   [Celery broker docs](https://docs.celeryq.dev/en/stable/getting-started/backends-and-brokers/index.html),
   [Temporal workflows](https://docs.temporal.io/workflows),

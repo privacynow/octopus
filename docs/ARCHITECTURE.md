@@ -6,13 +6,16 @@ lives in [STATUS-commercial-polish.md](STATUS-commercial-polish.md).
 
 For end-user usage, start with [README.md](../README.md).
 
-After Phase 12 lands, Postgres is the sole supported runtime backend. The
-current SQLite-backed session and transport stores remain the shipped baseline
-and the current runtime authority until that cutover happens. Any
-SQLite-to-Postgres import bridge is optional follow-on work, not a required
-part of the Phase 12 contract. Planned roadmap work should preserve and build
-on the Phase 11 workflow and repository ownership without changing the typed
-session, transport-payload, and execution-context contracts described here.
+Current shipped baseline (through Phase 15 Slice 1): **Local Runtime** is the
+supported mode. The default path is **SQLite** (leave `BOT_DATABASE_URL`
+unset); **Postgres** is a supported alternate backend for the same local
+runtime when `BOT_DATABASE_URL` is set. **Shared Runtime** remains deferred to
+later roadmap phases.
+
+- **Runtime matrix:** local + sqlite = default; local + postgres = supported; shared = rejected.
+- **Backend seam:** `app/runtime_backend.py` is the only backend selector; `storage.py` and `work_queue.py` are backend-neutral facades. Implementations: `storage_sqlite`, `storage_postgres`, `work_queue_sqlite`, `work_queue_postgres`.
+- **Contract suites:** `tests/contracts/test_session_store_contract.py` and `tests/contracts/test_transport_store_contract.py` run against both SQLite and Postgres and define backend-neutral behavior.
+- **E2E:** Primary gate is `test_compose_sqlite_local_runtime_primary` (Docker bot, no Postgres). Bounded Postgres coverage: bootstrap/doctor and bot startup with Postgres tooling.
 
 ---
 
@@ -264,6 +267,80 @@ Contract:
 - user-selected runtime controls (project binding, file policy, compact mode,
   model profile) belong here
 - authorization policy does not belong here; trust tier is resolved per request
+
+**Project and settings UX contract**
+
+Project binding and session settings are part of the same durable chat-scoped
+session contract. The current authoritative fields are:
+
+- `SessionState.project_id`
+- `SessionState.model_profile`
+- `SessionState.file_policy`
+- `SessionState.compact_mode`
+
+`ProjectBinding` (in `app/session_state.py`) carries per-project inherited
+defaults: `file_policy` and `model_profile`. These are parsed from
+`BOT_PROJECTS` using `|`-separated optional fields:
+`name:/path[|file_policy[|model_profile]]`.
+
+Resolution order (applied in `resolve_execution_context`):
+
+- **file_policy:** session explicit > project default > "" (edit)
+- **model_profile:** session explicit > project default > config default > config.model
+
+`/policy inherit` and `/model inherit` clear session-explicit overrides,
+returning to project or global defaults. The same semantics are available via
+`setting_policy:inherit` and `setting_model:inherit` callbacks.
+
+Current mutating entry points live in `app/telegram_handlers.py`:
+
+- command handlers:
+  - `cmd_project`
+  - `cmd_model` (including `inherit` subcommand)
+  - `cmd_policy` (including `inherit` subcommand)
+  - `cmd_compact`
+- inline callback handler:
+  - `handle_settings_callback` (handles `setting_model:inherit`, `setting_policy:inherit`)
+
+Preferred inline-callback shape:
+
+- Keep one settings callback namespace and one handler-owned mutation path.
+- Extend the existing `setting_*` callback family for future discoverability
+  work (for example project selection/clear) instead of introducing a second
+  project-specific callback subsystem.
+
+Contract:
+
+- `/settings` is a discoverability surface over these existing
+  fields and mutations, not a second configuration system.
+- Commands and inline callbacks must converge on the same mutation semantics:
+  acquire `_chat_lock(...)`, load `SessionState`, mutate the existing fields,
+  apply reset/invalidation rules, and `_save(...)`.
+- Project and settings UI must not bypass the typed session boundary or create
+  raw-dict mutation paths.
+- No additional workflow state machine belongs here. This surface is
+  synchronous session mutation; the existing Phase 11 workflow families remain:
+  transport/recovery and pending approval/retry.
+
+Reset and invalidation rules:
+
+- Changing `project_id` resets provider session state and clears pending
+  approval/retry state.
+- Changing `file_policy` resets provider session state and clears pending
+  approval/retry state.
+- Changing `model_profile` relies on the existing `ResolvedExecutionContext`
+  and `context_hash` invalidation contract; no second invalidation mechanism is
+  allowed.
+- Changing `compact_mode` is a rendering preference and does not reset
+  provider session state.
+
+Trust/public contract:
+
+- Public-mode restrictions for project and policy changes stay at the existing
+  handler gates (`_public_guard(...)`) and model-resolution layer
+  (`resolve_effective_model(...)` public profile restrictions).
+- Settings discoverability must not introduce a second public/trusted policy
+  tree in callbacks or markup code.
 
 ### 4. Execution-context boundary
 
@@ -727,12 +804,12 @@ message.
 
 ### Durable storage
 
-The shipped implementation uses two SQLite databases with different
-lifecycles. After migration, equivalent runtime authority moves to Postgres
-for session state and the core request queue while preserving the same typed
-session, transport-payload, and execution-context contracts. Phase 11 already
-completed the workflow-owner extraction so the Postgres runtime does not
-inherit open-coded transition logic.
+The shipped implementation uses backend-neutral facades with two concrete local
+runtime backends. By default, authority lives in the SQLite-backed
+`sessions.db` and `transport.db`. When `BOT_DATABASE_URL` is set, the same
+session, transport-payload, and execution-context contracts are backed by
+Postgres. Phase 11 already extracted workflow ownership, so both backends share
+the same transition legality and orchestration rules.
 
 **Current shipped `sessions.db`** — chat session state:
 
@@ -893,10 +970,13 @@ Credential setup is conversational state, not a hidden side effect.
 - `content dedup` is not part of this contract; if added later it is optional
   behavior layered above durable delivery
 
-Scaling path: single-process polling today. Future multi-worker uses webhook +
-shared Postgres queue authority + worker loop as primary processing path. The
-current shipped implementation uses `transport.db` as the single-host
-foundation.
+Scaling path now has two explicit tiers:
+
+- **Local Runtime**: the shipped mode today; single-machine authority, simpler
+  deployment, SQLite by default, Postgres optional, and no shared
+  queue-authority requirement.
+- **Shared Runtime**: later webhook ingress plus shared Postgres queue
+  authority plus worker loop as primary processing path.
 
 ### Workflow ownership (Phase 11 shipped shape)
 
@@ -1019,101 +1099,89 @@ summaries, stale pending and setup visibility.
 
 The test suite is organized around contracts, not only features.
 
-### Current shipped persistence test shape
-
-Storage-backed tests currently use real SQLite files in per-test temp dirs.
-That gives the repo a lightweight, realistic persistence layer today without
-containers in the normal test loop.
-
-- handler and integration tests use real `sessions.db` / `transport.db`
-- shared test reset helpers clear handler globals and close cached DB
-  connections between tests
-- "e2e" in the current repo means full handler-stack coverage with fake
-  Telegram/provider edges, not real Telegram API traffic
-
-### Handler and scenario tests
-
-Exercise real user entry points through Telegram handlers. Use shared test
-support (`tests/support/handler_support.py`) with `FakeChat`, `FakeProvider`,
-`FakeProgress`, and helpers for `send_text`, `send_command`, `send_callback`.
-
-### Invariant tests
-
-Protect cross-cutting rules: context-hash stability, approval/retry freshness,
-inspect-mode enforcement, public-trust enforcement, effective-model
-propagation, credential satisfaction, command/callback parity, registry
-integrity, async non-blocking guarantees, provider-context propagation,
-transport delivery guarantees.
-
-### Progress contract tests
-
-Dedicated suite (`test_progress.py`) testing five layers: render() contract
-for all event types, no-internals leak checks, Codex `_map_event` mapping,
-end-to-end pipeline, Claude `_consume_stream` integration.
-
-### Output and compact-mode tests
-
-`test_handlers_output.py` covers compact toggle, `/raw` retrieval, table
-rendering, blockquote and expand/collapse button paths, summary-first prompt
-injection, expand→collapse→expand round-trips, rotated buffer edge case.
-
-### Edge-case suites
-
-Callback races, provider failures, formatting boundaries, session reset.
-
-### Setup / bootstrap tests
-
-`test_setup.sh` protects the installation wizard and generated configs.
-
-### Planned Phase 12 testing contract
-
-Phase 12 keeps this contract-owner suite structure and moves the persistence
-backend under it from SQLite to Postgres. The goal is behavioral parity under
-the new backend, not a permanent SQLite/Postgres matrix.
-
-**Four-layer model**
+### Four-layer model (current)
 
 1. Pure or owner suites
-   - workflow machines, execution context, request-flow business rules,
-     provider-event mapping, formatting, progress, and other backend-neutral
-     contracts
+   - workflow machines, execution context, request-flow rules, providers,
+     progress, formatting, and other backend-neutral contracts
    - no Postgres required
    - no app container required
 2. In-process integration
-   - real handlers, real request flow, real session/work-queue repositories,
-     fake Telegram, fake providers, real Postgres
-   - this becomes the main confidence layer for the Phase 12 cutover
-   - pytest runs on host/venv here, not inside the app container
-3. Postgres bootstrap and schema integration
-   - DB bootstrap, DB update, DB doctor, and startup validation against real
-     Postgres
-   - focused on the operational contract, not normal handler behavior
+   - real handlers, real request flow, real repositories or stores, fake
+     Telegram, fake providers, and real local persistence
+   - SQLite still appears here for fast owner and handler coverage that uses
+     `fresh_data_dir`
+   - Postgres-backed persistence and queue integration now has its own suites
+3. Postgres bootstrap and repository integration
+   - `test_db_postgres.py`, `test_storage_pg.py`, and `test_work_queue_pg.py`
+   - real Postgres, real schema bootstrap/update/doctor, real connection pool
+   - focused on runtime storage, bootstrap/update rules, and schema validation
 4. E2E
-   - small full-stack smoke layer: app container + Postgres container +
-     explicit bootstrap/update/doctor flows
-   - covers first boot, startup validation, schema update, and a minimal
-     happy-path request flow
+   - Compose-based smoke layer in `tests/e2e/test_compose_flows.py`
+   - bootstrap, doctor, and startup validation of the tooling/runtime contract
+   - bot-container tests use the real provider-enabled image when built (and
+     prove provider + execution path where possible), or the stub image for
+     test/dev-only smoke
 
-**Isolation model**
+### Current Postgres test harness
 
-- one Postgres service per test run
-- one database per pytest worker
-- schema applied once per worker DB
-- truncate/reset runtime tables between tests
-- rollback is allowed only in narrow single-connection repository tests; it is
-  not the suite-wide isolation strategy because runtime behavior spans real
-  commits, multiple connections, async coordination, and later a pool
+The Postgres integration harness is intentionally separate from app runtime
+configuration.
 
-**Migration rule for SQLite-era tests**
+- Docker is required for Postgres integration suites.
+- The harness starts a dedicated **test-only** Postgres container per
+  pytest-xdist worker.
+- Each worker gets its own database inside that container.
+- Schema is applied once per worker DB.
+- Runtime tables are truncated between tests.
+- The harness never uses `BOT_DATABASE_URL`, dev, staging, or production
+  databases for truncation or schema mutation.
+- The current implementation uses one dedicated container per worker, not one
+  shared Postgres service for all workers.
 
-- backend-independent owner suites stay fast and should not gain a Docker or
-  Postgres dependency
-- persistence and integration coverage must migrate from SQLite to Postgres
-- `test_sqlite_integration.py` does not survive long-term as a runtime suite;
-  its backend-neutral coverage moves into shared suites and its runtime
-  coverage moves to Postgres-backed integration/E2E
-- app-container testing belongs only in the small E2E layer, not in the
-  normal integration loop
+### Owner suites and cross-cutting tests
+
+The owner-suite model from Phase 10 still stands:
+
+- one primary owner suite per contract
+- `test_invariants.py` only for genuinely cross-cutting rules
+- overflow and edge-case suites should be folded back into owner suites rather
+  than kept as permanent parallel test taxonomies
+
+Current owner families:
+
+- request and approval contracts:
+  `test_request_flow.py`, `test_pending_request_workflow_machine.py`,
+  `test_handlers_approval.py`
+- handler surfaces:
+  `test_handlers.py`, `test_handlers_*`
+- transport and recovery:
+  `test_transport.py`, `test_work_queue.py`, `test_work_queue_pg.py`,
+  `test_workitem_integration.py`, `test_transport_workflow_machine.py`
+- storage and store:
+  `test_storage.py`, `test_storage_pg.py`, `test_store.py`,
+  `test_store_e2e.py`, `test_registry.py`
+- provider and rendering contracts:
+  `test_claude_provider.py`, `test_codex_provider.py`, `test_progress.py`,
+  `test_formatting.py`, `test_summarize.py`
+- configuration and setup:
+  `test_config.py`, `tests/test_setup.sh`
+- **operator shell scripts** (provider_login, provider_status, provider_logout,
+  container_provider_login): `tests/test_docker_ops.sh` — fast shell contract
+  tests with mocked `docker`, `python`, `claude`, and `codex`; pins argv, env
+  propagation, and doctor failure output. Compose/E2E covers the heavier
+  runtime and bootstrap path.
+
+### Backend coverage and Local Runtime testing
+
+- SQLite is the default shipped backend and remains the fast path for
+  in-process integration coverage.
+- Postgres-backed suites validate the supported alternate backend under the
+  same storage and transport contracts.
+- Compose E2E keeps the SQLite local-runtime path as the primary gate, with
+  bounded Postgres startup/bootstrap coverage.
+- App-container testing still belongs only in the small E2E layer, not in the
+  normal integration loop.
 
 ---
 
@@ -1134,24 +1202,66 @@ must run with a Python environment that has those packages installed.
 - **Bootstrap script:** `scripts/bootstrap.sh` installs from `requirements.txt`
   every time it runs (creating or updating the venv), then runs a quick import
   check so missing dependencies fail immediately instead of at runtime.
-- **Current shipped runtime bootstrap:** SQLite session and transport stores are
-  created or validated by the app on first use. That is why a fresh host can
-  currently go from `./setup.sh` to a working bot without separate database
-  provisioning.
-- **Planned Phase 12 operational contract:** Postgres introduces an external
-  runtime dependency, so the lifecycle splits into three responsibilities:
-  infrastructure provisioning, DB bootstrap/update, and app runtime. The app
-  remains validate-only at startup; explicit repo-owned DB workflows
-  (`bootstrap`, `update`, `doctor`) prepare and verify the database before the
-  bot starts.
-- **Environment identity:** Each running bot environment should have its own
-  database, config, Telegram token, and app instance identity. Side-by-side
-  dev/staging environments should mean separate databases, not one shared
-  runtime database with mixed state.
-- **Planned Phase 12 environment shape:** Dockerized app + Postgres is the
-  canonical development shape; staging may start with the same shape; later
-  environments may move Postgres external while preserving the same explicit DB
-  bootstrap/update contract.
+- **Current runtime contract:** Local Runtime is the supported deployment mode.
+  Leave `BOT_DATABASE_URL` unset for SQLite (default), or set it to a
+  Postgres DSN to use Postgres as the backend for the same product/runtime
+  contract. The app validates backend compatibility at startup.
+- **Optional Postgres workflows:** explicit repo-owned DB commands
+  (`scripts/db_bootstrap.sh`, `scripts/db_update.sh`, `scripts/db_doctor.sh`)
+  prepare and verify Postgres before the bot starts when `BOT_DATABASE_URL` is
+  set.
+- **Roadmap direction after the current local-runtime baseline:** keep Local
+  Runtime as the primary operator path and add Shared Runtime later for
+  persist-first ingress and multi-process workers.
+- **Environment identity:** Each running bot environment has its own database,
+  config, Telegram token, and app instance identity. Side-by-side dev/staging
+  environments use separate databases, regardless of whether the environment is
+  running in Local Runtime or Shared Runtime mode.
+- **Responsibilities are explicit:**
+  1. infrastructure provides the runtime substrate for the selected mode
+  2. repo-owned DB/runtime commands apply schema and validate compatibility
+  3. the app validates and runs; it does not create the DB, role, or schema at startup
+- **Primary operational model:** Dockerized bot is the primary operator path.
+  `./scripts/guided_start.sh` is the main zero-to-running path for SQLite Local
+  Runtime; `./scripts/dev_up_postgres.sh` is the optional Postgres bootstrap
+  path.
+- **Supported bot image:** The supported Docker path uses a **real provider-enabled
+  image** (includes the chosen Claude or Codex CLI). Build it with
+  `./scripts/build_bot_image.sh`; the script selects the image target from
+  `BOT_PROVIDER` so operators don’t choose Docker targets manually. Built from
+  `Dockerfile.bot` (shared base + provider-specific stage). A **stub-provider
+  image** (`Dockerfile.runnable`) exists only for **test/dev smoke** (e.g. E2E
+  when the real CLI is unavailable) and is not the supported runtime.
+- **Provider authentication contract (current direction):** Docker-first
+  operation keeps the real provider CLI inside the image, but **auth state is
+  not baked into the image**. The product direction is:
+  1. a guided repo-owned provider-login step runs **inside the same bot image**
+  2. login state is persisted in a dedicated **bot-home Docker volume**
+  3. the runtime bot service mounts that same volume
+  4. startup and `/doctor` validate not only binary presence but provider
+     runtime/auth health before the bot is treated as ready
+  This keeps the product Docker-first while preserving the subscription-style
+  CLI login model for Claude Code and Codex. Advanced non-interactive modes
+  such as API-key, Bedrock, or Vertex auth remain possible, but they are not
+  the primary product-facing contract.
+- **Provider-login ownership:** The intended supported onboarding flow is one
+  uniform repo-owned command (for example `scripts/provider_login.sh`) that
+  reads `BOT_PROVIDER`, launches the provider-specific login flow in-container,
+  then verifies provider health using the same image + volume pair that the
+  runtime bot will use. Operators should not need to know provider-specific
+  credential file paths or Docker internals.
+- **Bot-home volume and entrypoint:** The bot container uses a persistent
+  `bot-home` volume mounted at `/home/bot`. The image runs an entrypoint that
+  chowns `/home/bot` to the bot user (uid 1000) then execs as that user, so
+  provider auth and data persist across runs regardless of volume creation
+  order. Login/setup and runtime use the same image and volume.
+- **Host-run bot:** Still supported as a secondary fallback/debug path with the
+  same Local Runtime contract above the storage boundary.
+- **Later environments:** staging and production may choose:
+  - Local Runtime for simpler single-machine deployments
+  - Shared Runtime for more operationally demanding deployments
+  while keeping explicit bootstrap/update/doctor contracts for the selected
+  mode.
 
 See [README.md](../README.md) for Get Started and "After updating (git pull)".
 

@@ -144,7 +144,7 @@ async def test_denial_retry_flow():
         assert "partial" in reply_texts
         chat_msgs = " ".join(m.get("text", "") for m in chat.sent_messages)
         assert "Permission needed" in chat_msgs
-        assert "Grant access and retry from the beginning" in chat_msgs
+        assert "Grant access" in chat_msgs and ("retry" in chat_msgs or "again" in chat_msgs)
 
         # Verify retry buttons have correct callback_data
         retry_msg = chat.sent_messages[-1]
@@ -208,6 +208,37 @@ async def test_retry_skip():
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
         assert len(prov.run_calls) == 0
 
+        edit_texts = [r.get("edit_text", "") for r in cb_msg.replies if r.get("edit_text")]
+        from app.user_messages import retry_skip_confirmation
+        assert any(retry_skip_confirmation() in t for t in edit_texts)
+
+
+async def test_retry_allow_no_pending():
+    """retry_allow when no pending_retry shows centralized no-retry wording."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        session = default_session("claude", prov.new_provider_state(), "off")
+        assert session.get("pending_retry") is None
+        save_session(data_dir, 12345, session)
+
+        chat = FakeChat(12345)
+        cb_msg = FakeMessage(chat=chat)
+        query = FakeCallbackQuery("retry_allow", message=cb_msg)
+        user = FakeUser(42)
+        cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
+        cb_update.effective_message = cb_msg
+
+        import app.telegram_handlers as th
+
+        await th.handle_callback(cb_update, FakeContext())
+
+        edit_texts = [r.get("edit_text", "") for r in cb_msg.replies if r.get("edit_text")]
+        from app.user_messages import retry_nothing_pending
+        assert any(retry_nothing_pending() in t for t in edit_texts)
+
 
 async def test_stale_context_hash():
     with fresh_data_dir() as data_dir:
@@ -243,7 +274,8 @@ async def test_stale_context_hash():
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
         reply_texts = " ".join(r.get("edit_text", r.get("text", "")) for r in cb_msg.replies)
-        assert "Context changed" in reply_texts
+        assert "changed" in reply_texts and "request" in reply_texts
+        assert "context" in reply_texts
 
 
 async def test_cross_user_approval():
@@ -413,10 +445,120 @@ async def test_cancel_pending():
         await th.cmd_cancel(update, FakeContext())
 
         reply = msg.replies[0]["text"]
-        assert "Pending request cancelled" in reply
+        from app.user_messages import cancel_pending_request
+        assert reply == cancel_pending_request()
 
         session = load_session_disk(data_dir, 12345, prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
+
+
+async def test_cancel_nothing_to_cancel():
+    """Bucket C: /cancel with no pending shows centralized nothing_to_cancel message."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+        from app.user_messages import nothing_to_cancel
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        assert not session.get("pending_approval") and not session.get("pending_retry")
+        save_session(data_dir, 12345, session)
+
+        msg = FakeMessage(chat=chat, text="/cancel")
+        await th.cmd_cancel(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+
+        assert len(msg.replies) == 1
+        assert msg.replies[0]["text"] == nothing_to_cancel()
+
+
+async def test_approve_no_pending_shows_canonical_message():
+    """Phase 14 follow-up: /approve with no pending returns canonical message (true when approval already on)."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, approval_mode="on")
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+        from app.user_messages import approval_no_pending_approve
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        assert not session.get("pending_approval") and not session.get("pending_retry")
+        save_session(data_dir, 12345, session)
+
+        msg = await send_command(th.cmd_approve, chat, user, "/approve")
+        reply = last_reply(msg)
+        assert reply == approval_no_pending_approve()
+
+
+async def test_reject_no_pending_shows_canonical_message():
+    """Phase 14 follow-up: /reject with no pending returns canonical message (true when approval already on)."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, approval_mode="on")
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+        from app.user_messages import approval_no_pending_reject
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        assert not session.get("pending_approval") and not session.get("pending_retry")
+        save_session(data_dir, 12345, session)
+
+        msg = await send_command(th.cmd_reject, chat, user, "/reject")
+        reply = last_reply(msg)
+        assert reply == approval_no_pending_reject()
+
+
+async def test_approve_callback_no_pending_shows_canonical_message():
+    """Phase 14 parity: approval_approve callback with no pending returns same message as /approve command."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, approval_mode="on")
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+        from app.user_messages import approval_no_pending_approve
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        assert not session.get("pending_approval") and not session.get("pending_retry")
+        save_session(data_dir, 12345, session)
+
+        query, cb_msg = await send_callback(th.handle_callback, chat, user, "approval_approve")
+        assert any(approval_no_pending_approve() in r.get("text", "") for r in cb_msg.replies), (
+            "Callback approve with no pending must show same canonical message as /approve command"
+        )
+
+
+async def test_reject_callback_no_pending_shows_canonical_message():
+    """Phase 14 parity: approval_reject callback with no pending returns same message as /reject command."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, approval_mode="on")
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+        from app.user_messages import approval_no_pending_reject
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        assert not session.get("pending_approval") and not session.get("pending_retry")
+        save_session(data_dir, 12345, session)
+
+        query, cb_msg = await send_callback(th.handle_callback, chat, user, "approval_reject")
+        assert any(approval_no_pending_reject() in r.get("text", "") for r in cb_msg.replies), (
+            "Callback reject with no pending must show same canonical message as /reject command"
+        )
 
 
 async def test_stale_pending_ttl():

@@ -20,10 +20,19 @@ from typing import Any
 
 @dataclass
 class ProjectBinding:
-    """Resolved project configuration from BotConfig.projects."""
+    """Resolved project configuration from BotConfig.projects.
+
+    Serves as both the config record (BotConfig.projects) and the
+    runtime-resolved binding (ResolvedExecutionContext.project_binding).
+
+    file_policy and model_profile are per-project inherited defaults:
+    empty string means "inherit from session or global config."
+    """
     name: str
     root_dir: str
     extra_dirs: tuple[str, ...] = ()
+    file_policy: str = ""    # "" = inherit, "inspect" or "edit" = project default
+    model_profile: str = ""  # "" = inherit, profile name = project default
 
 
 @dataclass

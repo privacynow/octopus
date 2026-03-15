@@ -1,0 +1,14 @@
+.venv
+.venv-host
+.git
+.pytest_cache
+__pycache__
+*.pyc
+.env
+*.env
+! .env.example
+tests
+docs
+deploy
+*.md
+! README.md

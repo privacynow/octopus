@@ -7,7 +7,7 @@ from pathlib import Path
 import app.telegram_handlers as _th
 from app.providers.base import RunResult
 from app.ratelimit import RateLimiter
-from app.storage import close_all_db, close_db, ensure_data_dirs, load_session
+from app.storage import close_db, ensure_data_dirs, load_session
 from app import work_queue as _work_queue
 from tests.support.config_support import make_config as _make_config
 
@@ -17,7 +17,11 @@ def reset_handler_test_runtime() -> None:
 
     Call before/after tests so no state leaks between cases. Required for
     parallel-safe handler tests (Priority 4).
+    Phase 13: reset backend first so session_store()/transport_store() are valid.
     """
+    import app.runtime_backend as _rb
+    _rb.reset_for_test()
+
     _th._config = None
     _th._provider = None
     _th._boot_id = ""
@@ -31,8 +35,7 @@ def reset_handler_test_runtime() -> None:
         pass
     global _next_update_id
     _next_update_id = 0
-    close_all_db()
-    _work_queue.close_all_transport_db()
+    # Backend lifecycle is owned by runtime_backend.reset_for_test() above; no duplicate close.
 
 
 @contextlib.contextmanager
@@ -50,6 +53,16 @@ def fresh_data_dir():
         finally:
             close_db(data_dir)
             _work_queue.close_transport_db(data_dir)
+
+
+def public_user_config_overrides(**extra):
+    """Default config overrides for tests that need a public (non-trusted) user.
+
+    Returns allow_open=True and allowed_user_ids=frozenset({42}) so that
+    uid 42 is trusted and any other uid (e.g. 999) is public. Merge with
+    test-specific overrides, e.g. public_model_profiles=frozenset({\"fast\"}).
+    """
+    return {"allow_open": True, "allowed_user_ids": frozenset({42}), **extra}
 
 
 @contextlib.contextmanager
@@ -223,7 +236,7 @@ class FakeProvider:
             return {"thread_id": None}
         return {"session_id": "test-session-id", "started": False}
 
-    async def run(self, provider_state, prompt, image_paths, progress, context=None):
+    async def run(self, provider_state, prompt, image_paths, progress, context=None, cancel=None):
         self.run_calls.append({
             "provider_state": dict(provider_state),
             "prompt": prompt,
@@ -236,7 +249,7 @@ class FakeProvider:
             return self.run_results.pop(0)
         return RunResult(text="default response")
 
-    async def run_preflight(self, prompt, image_paths, progress, context=None):
+    async def run_preflight(self, prompt, image_paths, progress, context=None, cancel=None):
         self.preflight_calls.append({
             "prompt": prompt,
             "image_paths": image_paths,

@@ -2,7 +2,6 @@
 
 import dataclasses
 import logging
-import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -123,7 +122,8 @@ async def collect_doctor_report(
             if stale_setup:
                 report.warnings.append(
                     f"{stale_setup} session(s) with stale credential setup (>10m old).")
-        except (sqlite3.DatabaseError, sqlite3.OperationalError, RuntimeError) as e:
+        except Exception as e:
+            # SQLite, Postgres (e.g. psycopg.OperationalError), and other storage/connection errors
             report.errors.append(f"Session database error: {e}")
 
     return report

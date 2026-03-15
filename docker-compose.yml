@@ -1,0 +1,94 @@
+# Phase 13: Local Runtime default — bot uses SQLite (no Postgres). Optional: postgres + db-* for BOT_DATABASE_URL.
+# bot-home volume: provider auth (Claude/Codex) and BOT_DATA_DIR (sessions + transport SQLite).
+
+volumes:
+  bot-home:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bot
+      POSTGRES_PASSWORD: bot
+      POSTGRES_DB: bot
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot -d bot"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  db-bootstrap:
+    build: .
+    command: ["python", "-m", "app.db.cli", "bootstrap"]
+    environment:
+      BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - tools
+
+  db-update:
+    build: .
+    command: ["python", "-m", "app.db.cli", "update"]
+    environment:
+      BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - tools
+
+  db-doctor:
+    build: .
+    command: ["python", "-m", "app.db.cli", "doctor"]
+    environment:
+      BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - tools
+
+  # Provider-only checks (no Postgres): used by provider_status.sh and provider_login.sh.
+  # Same image and bot-home as bot; no depends_on so Compose does not start postgres.
+  bot-provider:
+    image: telegram-agent-bot:${BOT_PROVIDER:-claude}
+    profiles:
+      - bot
+    env_file: .env.bot
+    environment:
+      BOT_DATA_DIR: /home/bot/data
+    volumes:
+      - bot-home:/home/bot
+    command: ["python", "-m", "app.main", "--provider-health"]
+
+  # Bot service (Local Runtime default: SQLite in BOT_DATA_DIR, no Postgres).
+  # Build: ./scripts/build_bot_image.sh. Start: docker compose --profile bot --env-file .env.bot up -d bot
+  # Optional Postgres: set BOT_DATABASE_URL in .env.bot and start postgres first; use compose override or run postgres + bot.
+  bot:
+    image: telegram-agent-bot:${BOT_PROVIDER:-claude}
+    profiles:
+      - bot
+    env_file: .env.bot
+    environment:
+      BOT_DATA_DIR: /home/bot/data
+    volumes:
+      - bot-home:/home/bot
+    command: ["python", "-m", "app.main"]
+
+  # TEST/DEV ONLY: stub-provider image for E2E when real provider unavailable (E2E_USE_STUB_IMAGE=1).
+  bot-stub:
+    build:
+      context: .
+      dockerfile: Dockerfile.runnable
+    profiles:
+      - stub
+    environment:
+      BOT_DATABASE_URL: postgresql://bot:bot@postgres:5432/bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "-m", "app.main"]

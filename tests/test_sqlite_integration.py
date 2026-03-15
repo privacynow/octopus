@@ -16,8 +16,8 @@ import tempfile
 from pathlib import Path
 
 from app.providers.base import RunResult
+from app import runtime_backend
 from app.storage import (
-    _db,
     _reset_db,
     close_db,
     default_session,
@@ -73,7 +73,7 @@ async def test_handler_roundtrip_through_sqlite():
         assert sessions_dir.exists() is False
 
         # Verify the actual SQLite DB file has the row
-        conn = _db(data_dir)
+        conn = runtime_backend.session_store()._db(data_dir)
         row = conn.execute(
             "SELECT provider, has_pending FROM sessions WHERE chat_id = ?", (7001,)
         ).fetchone()
@@ -102,11 +102,12 @@ async def test_migration_then_handler_message():
         legacy["role"] = "You are helpful."
         (sessions_dir / "8001.json").write_text(json.dumps(legacy))
 
-        # Boot DB — triggers migration
         ensure_data_dirs(data_dir)
+        # First use of session store creates DB and runs JSON migration
+        list_sessions(data_dir)
 
         try:
-            # JSON dir should be gone
+            # JSON dir should be gone after migration
             assert sessions_dir.exists() is False
 
             # Session should be in SQLite
@@ -210,7 +211,7 @@ async def test_delete_session():
         assert fresh["role"] == ""
 
         # Verify at DB level
-        conn = _db(data_dir)
+        conn = runtime_backend.session_store()._db(data_dir)
         row = conn.execute("SELECT 1 FROM sessions WHERE chat_id = ?", (5001,)).fetchone()
         assert row is None
 
@@ -367,7 +368,7 @@ async def test_db_no_fd_leak_on_schema_error():
     per call (fds grew from 4 to 45 after 20 calls)."""
     import pytest
 
-    from app.storage import _db, _db_connections
+    from app import runtime_backend
 
     if _count_open_fds() is None:
         pytest.skip("Cannot count open fds on this platform (/proc/pid/fd, /dev/fd)")
@@ -388,18 +389,19 @@ async def test_db_no_fd_leak_on_schema_error():
         conn.close()
 
         fd_count_before = _count_open_fds()
+        store = runtime_backend.session_store()
 
         # Repeatedly trigger the error — should NOT accumulate open fds
         for _ in range(20):
             try:
-                _db(data_dir)
+                store._db(data_dir)
             except RuntimeError:
                 pass
 
         fd_count_after = _count_open_fds()
 
         # The data_dir should never have been cached
-        assert data_dir not in _db_connections
+        assert data_dir not in store._connections
         # The actual bug: each failed call leaked an open fd.
         # Allow at most 2 fd variance for unrelated runtime activity.
         assert fd_count_after - fd_count_before <= 2, (

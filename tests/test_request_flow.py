@@ -1,6 +1,7 @@
 """Request flow — trust tiers, public enforcement, validation, credentials.
 
-Owner suite for:
+Owner suite for (distinct contract from test_handlers):
+- Execution context, trust shaping, invalidation, stale detection, request-lifecycle contracts
 - Public trust tier enforcement in resolve_execution_context
 - is_public_user / is_allowed predicates
 - Public trust command gating
@@ -10,10 +11,16 @@ Owner suite for:
 - Approval/retry trust tier round-trips
 - validate_pending with stored trust tier
 - Credential satisfaction checks
-- Model command/callback parity for public users
 - extra_dirs_from_denials extraction
 - Cross-feature: compact + long reply + public user
 - Export resolved skills (not raw session)
+
+Re-homed to test_handlers (Milestone E): handler-surface tests for /session, /settings, /model,
+setting_model:*, setting_project:* (test_session_command_shows_public_context,
+test_settings_command_public_user_no_trusted_leak, test_settings_command_public_user_keyboard_*,
+test_model_command_public_user_*, test_model_callback_public_user_*, test_project_callback_public_user_denied).
+Those tests assert user-visible command/callback behaviour; test_handlers owns that contract.
+This file keeps contract over execution context, trust shaping, validate_pending, and request lifecycle.
 
 Migrated from tests/test_invariants.py invariants 13–24 and related
 cross-feature checks, and tests/test_high_risk.py (extra_dirs_from_denials).
@@ -553,26 +560,6 @@ async def test_pending_retry_preserves_trust_tier():
     assert restored.pending_retry.trust_tier == "public"
 
 
-@pytest.mark.asyncio
-async def test_session_command_shows_public_context():
-    """/session display reflects public-user restrictions."""
-    import app.telegram_handlers as th
-
-    with fresh_env(config_overrides={
-        "allow_open": True,
-        "allowed_user_ids": frozenset({42}),
-        "public_working_dir": "/tmp/public-sandbox",
-    }) as (data_dir, cfg, prov):
-        chat = FakeChat(12345)
-        stranger = FakeUser(uid=999, username="nobody")
-
-        msg = await send_command(
-            th.cmd_session, chat, stranger, "/session")
-        reply = last_reply(msg)
-        assert "/tmp/public-sandbox" in reply
-        assert "inspect" in reply.lower()
-
-
 # =====================================================================
 # Pending validation uses stored trust tier
 # =====================================================================
@@ -629,7 +616,7 @@ def test_validate_pending_detects_real_context_change():
 
     error = validate_pending(pending, session, cfg, "claude")
     assert error is not None
-    assert "Context changed" in error
+    assert "context" in error and "changed" in error
 
 
 def test_classify_pending_validation_returns_ok_expired_context_changed():
@@ -718,93 +705,6 @@ def test_credential_check_with_resolved_skills():
         )
         # Unknown skills have no requirements, so satisfied
         assert result.satisfied
-
-
-# =====================================================================
-# Model command/callback parity for public users
-# =====================================================================
-
-@pytest.mark.asyncio
-async def test_model_command_public_user_can_switch_to_allowed_profile():
-    """/model fast succeeds for public user when fast is in public_model_profiles."""
-    import app.telegram_handlers as th
-
-    with fresh_env(config_overrides={
-        "allow_open": True,
-        "allowed_user_ids": frozenset({42}),
-        "model_profiles": {"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
-        "public_model_profiles": frozenset({"fast"}),
-    }) as (data_dir, cfg, prov):
-        chat = FakeChat(12345)
-        stranger = FakeUser(uid=999, username="nobody")
-
-        msg = await send_command(
-            th.cmd_model, chat, stranger, "/model fast", args=["fast"])
-        reply = last_reply(msg)
-        assert "fast" in reply.lower()
-        assert "not available" not in reply.lower()
-
-
-@pytest.mark.asyncio
-async def test_model_command_public_user_rejected_for_restricted_profile():
-    """/model best fails for public user when best is not in public_model_profiles."""
-    import app.telegram_handlers as th
-
-    with fresh_env(config_overrides={
-        "allow_open": True,
-        "allowed_user_ids": frozenset({42}),
-        "model_profiles": {"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
-        "public_model_profiles": frozenset({"fast"}),
-    }) as (data_dir, cfg, prov):
-        chat = FakeChat(12345)
-        stranger = FakeUser(uid=999, username="nobody")
-
-        msg = await send_command(
-            th.cmd_model, chat, stranger, "/model best", args=["best"])
-        reply = last_reply(msg)
-        assert "unknown" in reply.lower() or "available" in reply.lower()
-
-
-@pytest.mark.asyncio
-async def test_model_callback_public_user_rejected_for_restricted_profile():
-    """setting_model:best callback fails for public user when best is restricted."""
-    import app.telegram_handlers as th
-
-    with fresh_env(config_overrides={
-        "allow_open": True,
-        "allowed_user_ids": frozenset({42}),
-        "model_profiles": {"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
-        "public_model_profiles": frozenset({"fast"}),
-    }) as (data_dir, cfg, prov):
-        chat = FakeChat(12345)
-        stranger = FakeUser(uid=999, username="nobody")
-
-        query, cb_msg = await send_callback(
-            th.handle_settings_callback, chat, stranger, "setting_model:best")
-        # Should be rejected
-        replies = cb_msg.replies
-        assert any("restricted" in str(r).lower() or "unknown" in str(r).lower() for r in replies)
-
-
-@pytest.mark.asyncio
-async def test_model_callback_public_user_allowed_for_available_profile():
-    """setting_model:fast callback succeeds for public user when fast is allowed."""
-    import app.telegram_handlers as th
-
-    with fresh_env(config_overrides={
-        "allow_open": True,
-        "allowed_user_ids": frozenset({42}),
-        "model_profiles": {"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
-        "public_model_profiles": frozenset({"fast"}),
-    }) as (data_dir, cfg, prov):
-        chat = FakeChat(12345)
-        stranger = FakeUser(uid=999, username="nobody")
-
-        query, cb_msg = await send_callback(
-            th.handle_settings_callback, chat, stranger, "setting_model:fast")
-        replies = cb_msg.replies
-        assert any("fast" in str(r).lower() for r in replies)
-        assert not any("restricted" in str(r).lower() for r in replies)
 
 
 # =====================================================================

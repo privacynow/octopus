@@ -1,25 +1,30 @@
 """Core handler integration tests: happy-path routing, session lifecycle, /help, /start, /doctor, /project."""
 
+import re
 import tempfile
 from pathlib import Path
 
 from app.providers.base import RunContext, RunResult
 from app.storage import default_session, save_session
 from tests.support.handler_support import (
+    FakeCallbackQuery,
     FakeChat,
     FakeContext,
     FakeMessage,
     FakeProvider,
     FakeUpdate,
     FakeUser,
+    fresh_data_dir,
+    fresh_env,
+    get_callback_data_values,
     last_reply,
     load_session_disk,
     make_config,
+    public_user_config_overrides,
+    send_callback,
     send_command,
     send_text,
     setup_globals,
-    fresh_data_dir,
-    fresh_env,
 )
 
 
@@ -216,7 +221,11 @@ async def test_help_topics():
 
         msg2 = FakeMessage(chat=chat, text="/help approval")
         await th.cmd_help(FakeUpdate(message=msg2, user=user, chat=chat), FakeContext(args=["approval"]))
-        assert "Approval Mode" in msg2.replies[0]["text"]
+        approval_text = msg2.replies[0]["text"]
+        assert "Approval Mode" in approval_text
+        assert ("retry" in approval_text.lower() or "recovery" in approval_text.lower()) and (
+            "button" in approval_text.lower() or "in-chat" in approval_text.lower()
+        ), "/help approval must mention retry/recovery via in-chat buttons (Phase 14)"
 
         msg3 = FakeMessage(chat=chat, text="/help credentials")
         await th.cmd_help(FakeUpdate(message=msg3, user=user, chat=chat), FakeContext(args=["credentials"]))
@@ -226,6 +235,192 @@ async def test_help_topics():
         await th.cmd_help(FakeUpdate(message=msg4, user=user, chat=chat), FakeContext(args=[]))
         assert "/skills" in msg4.replies[0]["text"]
         assert "CLI Bridge" not in msg4.replies[0]["text"]
+        assert "/settings" in msg4.replies[0]["text"]
+
+
+async def test_help_and_start_include_settings():
+    """/help and /start must expose /settings, /project, /session for discoverability (Bucket B)."""
+    with fresh_env(config_overrides={
+        "projects": (("testproj", "/tmp", ()),),
+    }) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        help_msg = FakeMessage(chat=chat, text="/help")
+        await th.cmd_help(FakeUpdate(message=help_msg, user=user, chat=chat), FakeContext(args=[]))
+        help_text = help_msg.replies[0]["text"]
+        assert "/settings" in help_text
+        assert "/project" in help_text
+        assert "/session" in help_text
+        assert "/retry" not in help_text
+        assert not re.search(r"(?:^|\n)/clear\s", help_text), "must not advertise /clear (use /new); /clear_credentials is fine"
+        start_msg = FakeMessage(chat=chat, text="/start")
+        await th.cmd_start(FakeUpdate(message=start_msg, user=user, chat=chat), FakeContext(args=[]))
+        start_text = start_msg.replies[0]["text"]
+        assert "/settings" in start_text
+        assert "/project" in start_text
+        assert "/session" in start_text
+        assert "/retry" not in start_text
+        assert not re.search(r"(?:^|\n)/clear\s", start_text), "must not advertise /clear (use /new)"
+        assert "/doctor" in help_text and "full" in help_text and "health" in help_text, (
+            "/help must show /doctor as full app health check (Phase 14)"
+        )
+        assert "/doctor" in start_text and "full" in start_text and "health" in start_text, (
+            "/start must show /doctor as full app health check (Phase 14)"
+        )
+        # Phase 14 second slice: controls set and recovery hint
+        assert "Chat options:" in help_text
+        assert ("Run again" in help_text or "Skip" in help_text) and "status message" in help_text
+        assert "Chat options:" in start_text
+        assert ("Run again" in start_text or "Skip" in start_text) and "status message" in start_text
+
+
+async def test_help_and_start_no_model_when_profiles_empty():
+    """Phase 14: /help and /start must NOT advertise /model when no model profiles configured."""
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        help_msg = FakeMessage(chat=chat, text="/help")
+        await th.cmd_help(FakeUpdate(message=help_msg, user=user, chat=chat), FakeContext(args=[]))
+        help_text = help_msg.replies[0]["text"]
+        assert "/model" not in help_text, (
+            "/help must not advertise /model when no model profiles configured"
+        )
+        start_msg = FakeMessage(chat=chat, text="/start")
+        await th.cmd_start(FakeUpdate(message=start_msg, user=user, chat=chat), FakeContext(args=[]))
+        start_text = start_msg.replies[0]["text"]
+        assert "/model" not in start_text, (
+            "/start must not advertise /model when no model profiles configured"
+        )
+
+
+async def test_help_and_start_no_project_when_projects_empty():
+    """Phase 14: /help and /start must NOT advertise /project when no projects configured."""
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        help_msg = FakeMessage(chat=chat, text="/help")
+        await th.cmd_help(FakeUpdate(message=help_msg, user=user, chat=chat), FakeContext(args=[]))
+        help_text = help_msg.replies[0]["text"]
+        assert "/settings" in help_text
+        assert "/project" not in help_text, (
+            "/help must not advertise /project when no projects configured"
+        )
+        start_msg = FakeMessage(chat=chat, text="/start")
+        await th.cmd_start(FakeUpdate(message=start_msg, user=user, chat=chat), FakeContext(args=[]))
+        start_text = start_msg.replies[0]["text"]
+        assert "/project" not in start_text, (
+            "/start must not advertise /project when no projects configured"
+        )
+
+
+async def test_help_and_start_public_user_excludes_project_and_policy():
+    """Bucket B follow-up: public users must not see /project or /policy in /start or /help."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            allow_open=True,
+            allowed_user_ids=frozenset({1, 2, 3}),
+        )
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        import app.telegram_handlers as th
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        help_msg = FakeMessage(chat=chat, text="/help")
+        await th.cmd_help(FakeUpdate(message=help_msg, user=user, chat=chat), FakeContext(args=[]))
+        help_text = help_msg.replies[0]["text"]
+        assert "/project" not in help_text
+        assert "/policy" not in help_text
+        assert "/settings" in help_text
+        assert "/session" in help_text
+        start_msg = FakeMessage(chat=chat, text="/start")
+        await th.cmd_start(FakeUpdate(message=start_msg, user=user, chat=chat), FakeContext(args=[]))
+        start_text = start_msg.replies[0]["text"]
+        assert "/project" not in start_text
+        assert "/policy" not in start_text
+        assert "/settings" in start_text
+        assert "/session" in start_text
+
+
+async def test_help_and_start_non_admin_excludes_admin_sessions():
+    """Bucket B follow-up: non-admin trusted users must not see /admin sessions in /start or /help."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, admin_user_ids=frozenset(), admin_usernames=frozenset())
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        import app.telegram_handlers as th
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        help_msg = FakeMessage(chat=chat, text="/help")
+        await th.cmd_help(FakeUpdate(message=help_msg, user=user, chat=chat), FakeContext(args=[]))
+        help_text = help_msg.replies[0]["text"]
+        assert "/admin sessions" not in help_text
+        start_msg = FakeMessage(chat=chat, text="/start")
+        await th.cmd_start(FakeUpdate(message=start_msg, user=user, chat=chat), FakeContext(args=[]))
+        start_text = start_msg.replies[0]["text"]
+        assert "/admin sessions" not in start_text
+
+
+async def test_help_and_start_admin_sees_admin_sessions_and_trusted_commands():
+    """Bucket B follow-up: admin users see /admin sessions and full trusted command set."""
+    with fresh_env(config_overrides={
+        "admin_user_ids": frozenset({42}),
+        "admin_usernames": frozenset(),
+        "projects": (("testproj", "/tmp", ()),),
+    }) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        help_msg = FakeMessage(chat=chat, text="/help")
+        await th.cmd_help(FakeUpdate(message=help_msg, user=user, chat=chat), FakeContext(args=[]))
+        help_text = help_msg.replies[0]["text"]
+        assert "/admin sessions" in help_text
+        assert "/project" in help_text
+        assert "/settings" in help_text
+        assert "/session" in help_text
+        start_msg = FakeMessage(chat=chat, text="/start")
+        await th.cmd_start(FakeUpdate(message=start_msg, user=user, chat=chat), FakeContext(args=[]))
+        start_text = start_msg.replies[0]["text"]
+        assert "/admin sessions" in start_text
+        assert "/project" in start_text
+
+
+def test_bucket_b_command_registration_parity():
+    """Bucket B: key user-facing commands (start, help, settings, project, session) must be registered."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        import app.telegram_handlers as th
+        from telegram.ext import CommandHandler
+
+        app = th.build_application(cfg, prov)
+        registered = set()
+        for group_handlers in app.handlers.values():
+            for h in group_handlers:
+                if isinstance(h, CommandHandler):
+                    commands = getattr(h, "commands", None) or (
+                        (getattr(h, "command", None),) if getattr(h, "command", None) else ()
+                    )
+                    registered.update(commands)
+        required = {"start", "help", "settings", "project", "session", "cancel"}
+        missing = required - registered
+        assert not missing, f"Bucket B main commands must be registered; missing: {missing}"
+
+
+def test_build_application_enables_concurrent_updates_for_live_cancel():
+    """build_application must enable concurrent update dispatch so /cancel can interrupt live work."""
+    with fresh_env() as (_, cfg, prov):
+        import app.telegram_handlers as th
+
+        app = th.build_application(cfg, prov)
+        max_updates = getattr(app.update_processor, "max_concurrent_updates", 1)
+        assert max_updates > 1, (
+            "Dispatcher must allow overlapping updates; otherwise /cancel is serialized behind "
+            "the long-running handler it is supposed to interrupt"
+        )
 
 
 async def test_first_run_welcome():
@@ -602,18 +797,19 @@ async def test_doctor_schema_mismatch_cli():
     """collect_doctor_report should report a newer session DB schema, not crash.
 
     Reproduces: operator downgrades the bot, sessions.db has schema_version=99.
-    storage._db() raises RuntimeError which was not caught by the stale session
+    Session store raises RuntimeError which was not caught by the stale session
     scan handler (only sqlite3 exceptions were caught).
     """
     import tempfile
+    from app import runtime_backend
     from app.doctor import collect_doctor_report
-    from app.storage import close_db, ensure_data_dirs, _db
+    from app.storage import close_db, ensure_data_dirs
 
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
-        # Bump schema version beyond what the code supports
-        conn = _db(data_dir)
+        store = runtime_backend.session_store()
+        conn = store._db(data_dir)
         conn.execute("UPDATE meta SET value='99' WHERE key='schema_version'")
         conn.commit()
         close_db(data_dir)
@@ -631,15 +827,17 @@ async def test_doctor_schema_mismatch_telegram():
     """/doctor via Telegram should reply with schema error, not crash.
 
     Same scenario as CLI but through the real handler path: cmd_doctor calls
-    _load() which hits _db() which raises RuntimeError for schema mismatch.
+    _load() which hits the session store and raises RuntimeError for schema mismatch.
     """
     import tempfile
-    from app.storage import close_db, ensure_data_dirs, _db
+    from app import runtime_backend
+    from app.storage import close_db, ensure_data_dirs
 
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
-        conn = _db(data_dir)
+        store = runtime_backend.session_store()
+        conn = store._db(data_dir)
         conn.execute("UPDATE meta SET value='99' WHERE key='schema_version'")
         conn.commit()
         close_db(data_dir)
@@ -810,7 +1008,7 @@ async def test_project_show_current():
             # No project active
             msg = await send_command(th.cmd_project, chat, user, "/project")
             reply = last_reply(msg)
-            assert "No project active" in reply
+            assert "No project" in reply
 
             # Bind and check
             await send_command(th.cmd_project, chat, user, "/project", args=["use", "backend"])
@@ -1115,6 +1313,416 @@ async def test_settings_callback_policy():
         assert session.get("file_policy") == "inspect"
 
 
+async def test_compact_change_does_not_reset_provider_state():
+    """Changing compact mode via callback must not reset provider_state."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        prov.run_results = [RunResult(text="ok", provider_state_updates={"started": True})]
+        await send_text(chat, user, "hi")
+        session_before = load_session_disk(data_dir, 1, prov)
+        assert session_before["provider_state"].get("started") is True
+        await send_callback(th.handle_settings_callback, chat, user, "setting_compact:on")
+        session_after = load_session_disk(data_dir, 1, prov)
+        assert session_after["provider_state"].get("started") is True
+        assert session_after.get("compact_mode") is True
+
+
+async def test_settings_command_shows_current_values():
+    """/settings shows current project, model, policy, compact, approval and inline controls."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import get_callback_data_values
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("myapp", proj_dir, ()),),
+            "model_profiles": {"fast": "claude-3-5-haiku", "balanced": "claude-sonnet-4-6"},
+            "default_model_profile": "balanced",
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(1)
+            user = FakeUser(42)
+            msg = await send_command(th.cmd_settings, chat, user, "/settings")
+            reply = msg.replies[-1]
+            text = reply.get("text", "")
+            assert "Chat settings" in text
+            assert "Project" in text
+            assert "Model profile" in text
+            assert "File policy" in text
+            assert "Compact mode" in text
+            assert "Approval mode" in text
+            cbs = get_callback_data_values(reply)
+            assert any(cb.startswith("setting_project:") for cb in cbs)
+            assert any(cb.startswith("setting_model:") for cb in cbs)
+            assert "setting_policy:inspect" in cbs
+            assert "setting_policy:edit" in cbs
+            assert "setting_compact:on" in cbs
+            assert "setting_compact:off" in cbs
+            assert "setting_approval:on" in cbs
+            assert "setting_approval:off" in cbs
+            from app.user_messages import settings_use_buttons_hint
+            assert settings_use_buttons_hint() in text
+
+
+async def test_project_default_shows_inline_keyboard():
+    """/project with no args shows inline project selection when projects configured."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import get_callback_data_values
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("backend", proj_dir, ()), ("frontend", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(1)
+            user = FakeUser(42)
+            msg = await send_command(th.cmd_project, chat, user, "/project")
+            reply = msg.replies[-1]
+            cbs = get_callback_data_values(reply)
+            assert "setting_project:backend" in cbs
+            assert "setting_project:frontend" in cbs
+            # Clear button only when a project is active
+            await send_command(th.cmd_project, chat, user, "/project", args=["use", "backend"])
+            msg2 = await send_command(th.cmd_project, chat, user, "/project")
+            cbs2 = get_callback_data_values(msg2.replies[-1])
+            assert "setting_project:clear" in cbs2
+
+
+async def test_project_includes_next_step_hint():
+    """Phase 14: /project (with projects) includes actionability hint (buttons or /project list)."""
+    import app.telegram_handlers as th
+    from app.user_messages import project_use_buttons_or_list_hint
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("backend", proj_dir, ()), ("frontend", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(1)
+            user = FakeUser(42)
+            msg = await send_command(th.cmd_project, chat, user, "/project")
+            reply = last_reply(msg)
+            assert project_use_buttons_or_list_hint() in reply
+            assert "buttons below" in reply or "project list" in reply.lower()
+
+
+async def test_project_no_projects_shows_no_projects_configured():
+    """Phase 14 follow-up: /project when no projects configured shows truthful message, not /project list hint."""
+    import app.telegram_handlers as th
+    from app.user_messages import no_projects_configured
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_project, chat, user, "/project")
+        reply = last_reply(msg)
+        assert no_projects_configured() in reply
+        assert "/project list" not in reply, "Must not point to /project list when no projects configured"
+
+
+async def test_project_use_no_projects_shows_no_projects_configured():
+    """Phase 14: /project use <name> with no projects returns no-projects message, not unknown-project."""
+    import app.telegram_handlers as th
+    from app.user_messages import no_projects_configured
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_project, chat, user, "/project", args=["use", "anything"])
+        reply = last_reply(msg)
+        assert no_projects_configured() in reply, (
+            "/project use with no projects must say no-projects-configured, not unknown-project"
+        )
+
+
+async def test_project_clear_no_projects_shows_no_projects_configured():
+    """Phase 14: /project clear with no projects returns no-projects message."""
+    import app.telegram_handlers as th
+    from app.user_messages import no_projects_configured
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_project, chat, user, "/project", args=["clear"])
+        reply = last_reply(msg)
+        assert no_projects_configured() in reply, (
+            "/project clear with no projects must say no-projects-configured"
+        )
+
+
+async def test_settings_callback_project_use():
+    """setting_project:<name> callback switches project and resets provider state."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("myproj", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(1)
+            user = FakeUser(42)
+            prov.run_results = [RunResult(text="ok")]
+            await send_text(chat, user, "hi")
+            query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_project:myproj")
+            session = load_session_disk(data_dir, 1, prov)
+            assert session["project_id"] == "myproj"
+            assert session["provider_state"].get("started") is not True
+            edit = cb_msg.replies[-1].get("edit_text", "")
+            assert "Switched to project" in edit
+            assert "myproj" in edit
+
+
+async def test_settings_callback_project_clear():
+    """setting_project:clear callback clears project and resets provider state."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("p1", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(1)
+            user = FakeUser(42)
+            await send_command(th.cmd_project, chat, user, "/project", args=["use", "p1"])
+            query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_project:clear")
+            session = load_session_disk(data_dir, 1, prov)
+            assert session.get("project_id", "") == ""
+            edit = cb_msg.replies[-1].get("edit_text", "")
+            assert "Project cleared" in edit
+
+
+async def test_settings_command_minimal_config_shows_compact_approval_only():
+    """Phase 14: /settings with no projects and no model profiles shows only compact/approval buttons."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_settings, chat, user, "/settings")
+        reply = last_reply(msg)
+        assert "Chat settings" in reply
+        # Should still show compact and approval
+        assert "Compact mode" in reply
+        assert "Approval mode" in reply
+        # Keyboard should have compact and approval buttons but no model/project
+        markup = msg.replies[-1].get("reply_markup")
+        assert markup is not None, "/settings must always have inline keyboard"
+        all_data = []
+        for row in markup.inline_keyboard:
+            for btn in row:
+                all_data.append(btn.callback_data)
+        assert any("setting_compact:" in d for d in all_data), "Must have compact buttons"
+        assert any("setting_approval:" in d for d in all_data), "Must have approval buttons"
+        assert not any("setting_model:" in d for d in all_data), (
+            "Must not have model buttons when no profiles configured"
+        )
+        assert not any("setting_project:" in d for d in all_data), (
+            "Must not have project buttons when no projects configured"
+        )
+
+
+async def test_settings_callback_model_no_profiles_configured():
+    """Phase 14: setting_model:* callback with no model profiles returns no-profiles message."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    from app.user_messages import trust_no_model_profiles
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_model:anything")
+        edit = cb_msg.replies[-1].get("edit_text", "")
+        assert trust_no_model_profiles() in edit, (
+            "Callback setting_model:* with no profiles must say no-model-profiles"
+        )
+
+
+async def test_settings_callback_project_no_projects_configured():
+    """Phase 14: setting_project:* callback with no projects returns no-projects message, not mutation."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    from app.user_messages import no_projects_configured
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_project:anything")
+        edit = cb_msg.replies[-1].get("edit_text", "")
+        assert no_projects_configured() in edit, (
+            "Callback setting_project:* with no projects must say no-projects-configured"
+        )
+
+
+async def test_settings_callback_project_clear_no_projects_no_mutation():
+    """Phase 14: setting_project:clear with no projects must not clear persisted project_id."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    from app.storage import default_session, save_session
+    from app.user_messages import no_projects_configured
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session["project_id"] = "stale_project"
+        save_session(data_dir, 1, session)
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_project:clear")
+        edit = cb_msg.replies[-1].get("edit_text", "")
+        assert no_projects_configured() in edit
+        reloaded = load_session_disk(data_dir, 1, prov)
+        assert reloaded.get("project_id") == "stale_project", (
+            "Callback must not mutate session when projects are disabled"
+        )
+
+
+async def test_public_settings_shows_managed_and_no_project_policy_buttons():
+    """Bucket D: public user /settings shows managed message and no project/policy buttons."""
+    import app.telegram_handlers as th
+    from app.user_messages import trust_settings_managed_public
+
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-fast", "balanced": "claude-balanced"},
+        public_model_profiles=frozenset({"fast"}),
+        projects=(("proj1", "/tmp/proj1", ()),),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        msg = await send_command(th.cmd_settings, chat, user, "/settings")
+        text = msg.replies[0]["text"]
+        assert trust_settings_managed_public() in text
+        cbs = get_callback_data_values(msg.replies[0])
+        assert not any(cb.startswith("setting_project:") for cb in cbs)
+        assert "setting_policy:inspect" not in cbs
+        assert "setting_policy:edit" not in cbs
+        assert any(cb.startswith("setting_model:") for cb in cbs)
+
+
+async def test_public_settings_model_text_and_button_agree_when_default_restricted():
+    """Bucket D follow-up: public /settings shows same profile in text and as selected button.
+
+    When default_model_profile is restricted (e.g. balanced) and public only has fast,
+    the screen must show Model profile: fast and the fast button must be checked.
+    """
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "m1", "balanced": "m2"},
+        default_model_profile="balanced",
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        msg = await send_command(th.cmd_settings, chat, user, "/settings")
+        reply = msg.replies[0]
+        text = reply["text"]
+        assert "Model profile:" in text
+        assert "fast" in text
+        cbs = get_callback_data_values(reply)
+        assert "setting_model:fast" in cbs
+        assert not any(cb.startswith("setting_model:") and cb != "setting_model:fast" for cb in cbs)
+        markup = reply.get("reply_markup")
+        assert markup is not None
+        checkmark = "\u2705"
+        for row in markup.inline_keyboard:
+            for btn in row:
+                if getattr(btn, "callback_data", None) == "setting_model:fast":
+                    assert btn.text.startswith(checkmark), "fast button must be selected (checkmark)"
+                    return
+        assert False, "setting_model:fast button not found"
+
+
+async def test_public_session_shows_resolved_and_managed_message():
+    """Bucket D: public user /session shows resolved context and operator-managed message."""
+    import app.telegram_handlers as th
+    from app.user_messages import trust_settings_managed_public
+
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-fast"},
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+        text = msg.replies[0]["text"]
+        assert trust_settings_managed_public() in text
+        assert "inspect" in text
+        assert "Working dir" in text or "Provider" in text
+
+
+async def test_public_model_shows_only_public_profiles():
+    """Bucket D: public user /model shows only public_model_profiles in buttons."""
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "m1", "balanced": "m2", "best": "m3"},
+        default_model_profile="balanced",
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        msg = await send_command(th.cmd_model, chat, user, "/model")
+        cbs = get_callback_data_values(msg.replies[0])
+        model_buttons = [c for c in cbs if c.startswith("setting_model:")]
+        assert len(model_buttons) == 1
+        assert "setting_model:fast" in model_buttons
+
+
+async def test_model_includes_choose_profile_hint():
+    """Phase 14: /model (with profiles) includes selection hint."""
+    import app.telegram_handlers as th
+    from app.user_messages import model_choose_profile_hint
+    with fresh_env(config_overrides={
+        "model_profiles": {"fast": "m1", "balanced": "m2"},
+        "default_model_profile": "balanced",
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_model, chat, user, "/model")
+        reply = last_reply(msg)
+        assert model_choose_profile_hint() in reply
+
+
+async def test_settings_callback_policy_denial_public():
+    """Bucket D: public user clicking policy button gets trust_file_policy_public (command/callback parity)."""
+    import app.telegram_handlers as th
+    from app.user_messages import trust_file_policy_public
+
+    with fresh_env(config_overrides=public_user_config_overrides()) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        await send_command(th.cmd_settings, chat, user, "/settings")
+        cb_msg = FakeMessage(chat=chat)
+        query = FakeCallbackQuery("setting_policy:edit", message=cb_msg)
+        update = FakeUpdate(user=user, chat=chat, callback_query=query)
+        await th.handle_settings_callback(update, FakeContext())
+        edit_text = cb_msg.replies[-1].get("edit_text", "")
+        assert edit_text == trust_file_policy_public()
+
+
+async def test_settings_callback_project_denial_public():
+    """Bucket D: public user clicking project button gets trust_project_public (command/callback parity)."""
+    import app.telegram_handlers as th
+    from app.user_messages import trust_project_public
+
+    with fresh_env(config_overrides=public_user_config_overrides(
+        projects=(("aproj", "/tmp/a", ()),),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        await send_command(th.cmd_settings, chat, user, "/settings")
+        cb_msg = FakeMessage(chat=chat)
+        query = FakeCallbackQuery("setting_project:aproj", message=cb_msg)
+        update = FakeUpdate(user=user, chat=chat, callback_query=query)
+        await th.handle_settings_callback(update, FakeContext())
+        edit_text = cb_msg.replies[-1].get("edit_text", "")
+        assert edit_text == trust_project_public()
+
+
+async def test_settings_callback_project_clears_pending():
+    """Project change via callback clears pending approval/retry."""
+    import app.telegram_handlers as th
+    from tests.support.handler_support import send_callback
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides={
+            "projects": (("proj1", proj_dir, ()),),
+        }) as (data_dir, cfg, prov):
+            chat = FakeChat(1)
+            user = FakeUser(42)
+            session = default_session("claude", prov.new_provider_state(), "on")
+            session["pending_approval"] = {"prompt": "do it", "created_at": 0}
+            save_session(data_dir, 1, session)
+            await send_callback(th.handle_settings_callback, chat, user, "setting_project:proj1")
+            session = load_session_disk(data_dir, 1, prov)
+            assert session.get("pending_approval") is None and session.get("pending_retry") is None
+
+
 async def test_session_shows_model_profile():
     """/session should display the model profile and effective model."""
     import app.telegram_handlers as th
@@ -1138,6 +1746,264 @@ async def test_session_shows_prompt_weight():
         msg = await send_command(th.cmd_session, chat, user, "/session")
         reply = last_reply(msg)
         assert "Prompt weight" in reply
+
+
+async def test_session_includes_control_surface_hint_trusted():
+    """Phase 14: /session for trusted user includes pointer to /settings, /project, /model (chat settings)."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {"fast": "m1", "balanced": "m2"},
+        "default_model_profile": "balanced",
+        "projects": (("testproj", "/tmp", ()),),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+        reply = last_reply(msg)
+        assert "change chat settings" in reply
+        assert "/settings" in reply
+        assert "/project" in reply
+        assert "/model" in reply
+
+
+async def test_session_hint_minimal_config_shows_settings_only():
+    """Phase 14: /session with no projects and no model profiles shows only /settings."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+        reply = last_reply(msg)
+        assert "change chat settings" in reply
+        assert "/settings" in reply
+        assert "/model" not in reply, (
+            "/session hint must not advertise /model when no model profiles configured"
+        )
+        assert "/project" not in reply, (
+            "/session hint must not advertise /project when no projects configured"
+        )
+
+
+async def test_session_control_surface_hint_trusted_no_projects_omits_project():
+    """Phase 14: /session for trusted user with no projects omits /project from hint."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {"fast": "m1"},
+        "default_model_profile": "fast",
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(1)
+        user = FakeUser(42)
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+        reply = last_reply(msg)
+        assert "change chat settings" in reply
+        assert "/settings" in reply
+        assert "/model" in reply
+        assert "/project" not in reply, (
+            "Trusted user with no projects must not see /project in hint"
+        )
+
+
+async def test_session_control_surface_hint_public_no_project():
+    """Phase 14: /session for public user must not advertise /project; hint says change chat settings."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "m1"},
+        public_model_profiles=frozenset({"fast"}),
+        projects=(("proj1", "/tmp/p1", ()),),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(999)
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+        reply = last_reply(msg)
+        assert "change chat settings" in reply
+        assert "/settings" in reply
+        assert "/model" in reply
+        assert "/project" not in reply, (
+            "Public user must not see /project in session hint"
+        )
+
+
+# -- Re-homed from test_request_flow: handler-surface /session, /settings, /model, callbacks ---
+
+async def test_session_command_shows_public_context():
+    """/session display reflects public-user restrictions (resolved context)."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides=public_user_config_overrides(public_working_dir="/tmp/public-sandbox")) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+        msg = await send_command(th.cmd_session, chat, stranger, "/session")
+        reply = last_reply(msg)
+        assert "/tmp/public-sandbox" in reply
+        assert "inspect" in reply.lower()
+
+
+async def test_settings_command_public_user_no_trusted_leak():
+    """/settings for public user must not leak trusted project/path; use resolved context."""
+    import app.telegram_handlers as th
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides=public_user_config_overrides(
+            public_working_dir="/tmp/public-sandbox",
+            projects=(("secret", proj_dir, ()),),
+        )) as (data_dir, cfg, prov):
+            chat = FakeChat(12345)
+            trusted_user = FakeUser(uid=42, username="owner")
+            stranger = FakeUser(uid=999, username="nobody")
+            await send_command(th.cmd_project, chat, trusted_user, "/project", args=["use", "secret"])
+            msg = await send_command(th.cmd_settings, chat, stranger, "/settings")
+            reply = last_reply(msg)
+            assert "/tmp/public-sandbox" in reply
+            assert "inspect" in reply.lower()
+            assert proj_dir not in reply
+            assert "secret" not in reply
+            assert "No project" in reply
+
+
+async def test_settings_command_public_user_keyboard_no_project_or_policy():
+    """/settings keyboard for public user must not include setting_project:* or setting_policy:*."""
+    import app.telegram_handlers as th
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides=public_user_config_overrides(
+            public_working_dir="/tmp/pub",
+            projects=(("myproj", proj_dir, ()),),
+            model_profiles={"fast": "claude-haiku", "best": "claude-opus"},
+            public_model_profiles=frozenset({"fast"}),
+        )) as (data_dir, cfg, prov):
+            chat = FakeChat(12345)
+            stranger = FakeUser(uid=999, username="nobody")
+            msg = await send_command(th.cmd_settings, chat, stranger, "/settings")
+            reply = msg.replies[-1]
+            cbs = get_callback_data_values(reply)
+            assert not any(cb.startswith("setting_project:") for cb in cbs)
+            assert not any(cb.startswith("setting_policy:") for cb in cbs)
+            assert any(cb.startswith("setting_model:") for cb in cbs)
+            assert "setting_compact:on" in cbs or "setting_compact:off" in cbs
+            assert "setting_approval:on" in cbs or "setting_approval:off" in cbs
+
+
+async def test_model_command_public_user_can_switch_to_allowed_profile():
+    """/model fast succeeds for public user; reply is exact canonical success message."""
+    import app.telegram_handlers as th
+    from app import user_messages as uimsg
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+        msg = await send_command(th.cmd_model, chat, stranger, "/model fast", args=["fast"])
+        reply = last_reply(msg)
+        expected = uimsg.trust_model_profile_set("fast", cfg.model_profiles["fast"])
+        assert reply == expected
+
+
+async def test_model_command_public_user_rejected_for_restricted_profile():
+    """/model best fails for public user; reply is exact canonical denial message."""
+    import app.telegram_handlers as th
+    from app import user_messages as uimsg
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+        msg = await send_command(th.cmd_model, chat, stranger, "/model best", args=["best"])
+        reply = last_reply(msg)
+        expected = uimsg.trust_model_profile_not_available("best", ["fast"])
+        assert reply == expected
+
+
+async def test_model_callback_public_user_rejected_for_restricted_profile():
+    """setting_model:best callback fails for public user; edit_text is exact canonical denial."""
+    import app.telegram_handlers as th
+    from app import user_messages as uimsg
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+        query, cb_msg = await send_callback(
+            th.handle_settings_callback, chat, stranger, "setting_model:best")
+        edit_texts = [r.get("edit_text", "") for r in cb_msg.replies if r.get("edit_text")]
+        assert edit_texts
+        expected = uimsg.trust_model_profile_not_available("best", ["fast"])
+        assert edit_texts[-1] == expected
+
+
+async def test_model_callback_public_user_allowed_for_available_profile():
+    """setting_model:fast callback succeeds for public user; edit_text is exact canonical success."""
+    import app.telegram_handlers as th
+    from app import user_messages as uimsg
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+        query, cb_msg = await send_callback(
+            th.handle_settings_callback, chat, stranger, "setting_model:fast")
+        edit_texts = [r.get("edit_text", "") for r in cb_msg.replies if r.get("edit_text")]
+        assert edit_texts
+        expected = uimsg.trust_model_profile_set("fast", cfg.model_profiles["fast"])
+        assert edit_texts[-1] == expected
+
+
+async def test_model_command_and_callback_same_denial_contract():
+    """Parity: /model <restricted> and setting_model:<restricted> produce the same denial message."""
+    import app.telegram_handlers as th
+    from app import user_messages as uimsg
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-haiku", "best": "claude-opus"},
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+        cmd_msg = await send_command(th.cmd_model, chat, stranger, "/model best", args=["best"])
+        cmd_reply = last_reply(cmd_msg)
+        query, cb_msg = await send_callback(
+            th.handle_settings_callback, chat, stranger, "setting_model:best")
+        edit_texts = [r.get("edit_text", "") for r in cb_msg.replies if r.get("edit_text")]
+        assert edit_texts
+        cb_denial = edit_texts[-1]
+        assert cmd_reply == cb_denial == uimsg.trust_model_profile_not_available("best", ["fast"])
+
+
+async def test_model_command_and_callback_same_success_contract():
+    """Parity: /model <allowed> and setting_model:<allowed> produce the same success message."""
+    import app.telegram_handlers as th
+    from app import user_messages as uimsg
+    with fresh_env(config_overrides=public_user_config_overrides(
+        model_profiles={"fast": "claude-haiku", "best": "claude-opus"},
+        public_model_profiles=frozenset({"fast"}),
+    )) as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        stranger = FakeUser(uid=999, username="nobody")
+        cmd_msg = await send_command(th.cmd_model, chat, stranger, "/model fast", args=["fast"])
+        cmd_reply = last_reply(cmd_msg)
+        query, cb_msg = await send_callback(
+            th.handle_settings_callback, chat, stranger, "setting_model:fast")
+        edit_texts = [r.get("edit_text", "") for r in cb_msg.replies if r.get("edit_text")]
+        assert edit_texts
+        cb_success = edit_texts[-1]
+        expected = uimsg.trust_model_profile_set("fast", cfg.model_profiles["fast"])
+        assert cmd_reply == cb_success == expected
+
+
+async def test_project_callback_public_user_denied():
+    """setting_project:<name> callback is denied for public user; edit_text equals trust_project_public()."""
+    import app.telegram_handlers as th
+    from app.user_messages import trust_project_public
+    with tempfile.TemporaryDirectory() as proj_dir:
+        with fresh_env(config_overrides=public_user_config_overrides(
+            projects=(("myproj", proj_dir, ()),),
+        )) as (data_dir, cfg, prov):
+            chat = FakeChat(12345)
+            stranger = FakeUser(uid=999, username="nobody")
+            query, cb_msg = await send_callback(
+                th.handle_settings_callback, chat, stranger, "setting_project:myproj")
+            edit_texts = [r.get("edit_text", "") for r in cb_msg.replies if r.get("edit_text")]
+            assert edit_texts
+            assert edit_texts[-1] == trust_project_public()
 
 
 # -- Handler edge cases (from test_edge_sessions.py, test_edge_providers.py) --
@@ -1203,3 +2069,404 @@ async def test_provider_empty_response():
 
         await send_text(chat, user, "hello")
         assert len(prov.run_calls) == 1
+
+
+# =====================================================================
+# Phase 15: Project-level inheritance in commands
+# =====================================================================
+
+from app.session_state import ProjectBinding
+
+
+async def test_policy_status_shows_project_default():
+    """/policy status reflects project-inherited file_policy when session has none."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project with inspect default
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        # Check /policy status — should show inspect (inherited from project)
+        msg = await send_command(th.cmd_policy, chat, user, "/policy")
+        reply = last_reply(msg)
+        assert "inspect" in reply
+
+
+async def test_policy_status_session_overrides_project():
+    """/policy status shows session-explicit value even if project has a different default."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project with inspect default
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        # Explicitly set edit
+        await send_command(th.cmd_policy, chat, user, "/policy", args=["edit"])
+        # Check /policy status — should show edit (session explicit wins)
+        msg = await send_command(th.cmd_policy, chat, user, "/policy")
+        reply = last_reply(msg)
+        assert "edit" in reply
+
+
+async def test_project_switch_shows_inherited_defaults():
+    """Project switch confirmation message includes inherited file_policy and model_profile."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect", model_profile="fast"),),
+        "model_profiles": {"fast": "haiku", "best": "opus"},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        msg = await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        reply = last_reply(msg)
+        assert "inspect" in reply, "Switch message should mention project default policy"
+        assert "fast" in reply, "Switch message should mention project default model"
+
+
+async def test_project_switch_no_defaults_no_extra_lines():
+    """Project with no inherited defaults shows basic switch message."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp"),),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        msg = await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        reply = last_reply(msg)
+        assert "default policy" not in reply.lower()
+        assert "default model" not in reply.lower()
+
+
+async def test_model_status_shows_project_default():
+    """/model status reflects project-inherited model_profile when session has none."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", model_profile="fast"),),
+        "model_profiles": {"fast": "haiku", "best": "opus"},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project with fast default
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        # Check /model status — should show fast profile with haiku model
+        msg = await send_command(th.cmd_model, chat, user, "/model")
+        reply = last_reply(msg)
+        assert "fast" in reply, "Model status should show project-inherited profile"
+        assert "haiku" in reply, "Model status should show effective model from project default"
+
+
+async def test_policy_same_as_project_default_shows_already():
+    """/policy inspect when project default is inspect and session has no override → already message."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        # Try to set inspect — should say "already" since project default is inspect
+        msg = await send_command(th.cmd_policy, chat, user, "/policy", args=["inspect"])
+        reply = last_reply(msg)
+        assert "already" in reply.lower()
+
+
+async def test_policy_inherit_clears_session_override():
+    """/policy inherit clears session-explicit policy, falls back to project default."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        # Explicitly set edit
+        await send_command(th.cmd_policy, chat, user, "/policy", args=["edit"])
+        # Inherit — should clear to project default
+        msg = await send_command(th.cmd_policy, chat, user, "/policy", args=["inherit"])
+        reply = last_reply(msg)
+        assert "cleared" in reply.lower()
+        assert "inspect" in reply  # effective is project default
+
+
+async def test_policy_inherit_already_inherited():
+    """/policy inherit when already inherited shows already-inherited."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        msg = await send_command(th.cmd_policy, chat, user, "/policy", args=["inherit"])
+        reply = last_reply(msg)
+        assert "already" in reply.lower()
+
+
+async def test_model_inherit_clears_session_override():
+    """/model inherit clears session-explicit model_profile, falls back to project default."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", model_profile="fast"),),
+        "model_profiles": {"fast": "haiku", "best": "opus"},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        # Explicitly set best
+        await send_command(th.cmd_model, chat, user, "/model", args=["best"])
+        # Inherit — should clear to project default
+        msg = await send_command(th.cmd_model, chat, user, "/model", args=["inherit"])
+        reply = last_reply(msg)
+        assert "cleared" in reply.lower()
+        assert "fast" in reply  # effective is project default
+        assert "haiku" in reply  # effective model ID
+
+
+async def test_model_inherit_already_inherited():
+    """/model inherit when already inherited shows already-inherited."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {"fast": "haiku"},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        msg = await send_command(th.cmd_model, chat, user, "/model", args=["inherit"])
+        reply = last_reply(msg)
+        assert "already" in reply.lower()
+
+
+# =====================================================================
+# Finding fixes: inherit guard + callback parity
+# =====================================================================
+
+
+async def test_model_inherit_works_when_no_profiles_configured():
+    """/model inherit clears stale override even when model_profiles is empty."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Manually set a stale model_profile override
+        session = th._load(1001)
+        session.model_profile = "fast"
+        th._save(1001, session)
+        # /model inherit should clear it even with no profiles
+        msg = await send_command(th.cmd_model, chat, user, "/model", args=["inherit"])
+        reply = last_reply(msg)
+        assert "cleared" in reply.lower()
+        # Verify the override is gone
+        session = th._load(1001)
+        assert session.model_profile == ""
+
+
+async def test_settings_callback_policy_inherit():
+    """setting_policy:inherit callback clears session file_policy override."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        # Set explicit edit
+        await send_command(th.cmd_policy, chat, user, "/policy", args=["edit"])
+        session = th._load(1001)
+        assert session.file_policy == "edit"
+        # Send inherit callback
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_policy:inherit")
+        reply = last_reply(cb_msg)
+        assert "cleared" in reply.lower() or "effective" in reply.lower()
+        # Verify override cleared
+        session = th._load(1001)
+        assert session.file_policy == ""
+
+
+async def test_settings_callback_model_inherit():
+    """setting_model:inherit callback clears session model_profile override."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "projects": (ProjectBinding(name="fe", root_dir="/tmp", model_profile="fast"),),
+        "model_profiles": {"fast": "haiku", "best": "opus"},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Switch to project, set explicit best
+        await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
+        await send_command(th.cmd_model, chat, user, "/model", args=["best"])
+        session = th._load(1001)
+        assert session.model_profile == "best"
+        # Send inherit callback
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_model:inherit")
+        reply = last_reply(cb_msg)
+        assert "cleared" in reply.lower()
+        session = th._load(1001)
+        assert session.model_profile == ""
+
+
+async def test_settings_callback_policy_inherit_already():
+    """setting_policy:inherit when already inherited shows already message."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_policy:inherit")
+        reply = last_reply(cb_msg)
+        assert "already" in reply.lower()
+
+
+async def test_settings_callback_model_inherit_already():
+    """setting_model:inherit when already inherited shows already message."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {"fast": "haiku"},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_model:inherit")
+        reply = last_reply(cb_msg)
+        assert "already" in reply.lower()
+
+
+async def test_policy_buttons_show_inherit_when_override_set():
+    """Policy buttons include Inherit button when session has explicit override."""
+    import app.telegram_handlers as th
+    buttons = th._settings_policy_buttons("inspect", has_explicit_override=True)
+    labels = [b.text for b in buttons]
+    assert any("Inherit" in l for l in labels)
+    callbacks = [b.callback_data for b in buttons]
+    assert "setting_policy:inherit" in callbacks
+
+
+async def test_policy_buttons_no_inherit_when_no_override():
+    """Policy buttons omit Inherit button when no explicit override."""
+    import app.telegram_handlers as th
+    buttons = th._settings_policy_buttons("edit", has_explicit_override=False)
+    labels = [b.text for b in buttons]
+    assert not any("Inherit" in l for l in labels)
+
+
+async def test_model_buttons_show_inherit_when_override_set():
+    """Model buttons include Inherit button when session has explicit override."""
+    import app.telegram_handlers as th
+    buttons = th._settings_model_buttons(["fast", "best"], "fast", has_explicit_override=True)
+    labels = [b.text for b in buttons]
+    assert any("Inherit" in l for l in labels)
+    callbacks = [b.callback_data for b in buttons]
+    assert "setting_model:inherit" in callbacks
+
+
+async def test_model_buttons_no_inherit_when_no_override():
+    """Model buttons omit Inherit button when no explicit override."""
+    import app.telegram_handlers as th
+    buttons = th._settings_model_buttons(["fast", "best"], "fast", has_explicit_override=False)
+    labels = [b.text for b in buttons]
+    assert not any("Inherit" in l for l in labels)
+
+
+# =====================================================================
+# Finding fixes: inherit discoverability + double-default rendering
+# =====================================================================
+
+
+async def test_model_no_profiles_with_stale_override_hints_inherit():
+    """/model with no profiles but stale override hints /model inherit."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Set stale override
+        session = th._load(1001)
+        session.model_profile = "fast"
+        th._save(1001, session)
+        # /model should mention inherit, not just "no profiles configured"
+        msg = await send_command(th.cmd_model, chat, user, "/model")
+        reply = last_reply(msg)
+        assert "inherit" in reply.lower()
+        assert "fast" in reply  # mentions the stale override
+
+
+async def test_model_no_profiles_no_override_shows_standard_message():
+    """/model with no profiles and no stale override shows standard message."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        msg = await send_command(th.cmd_model, chat, user, "/model")
+        reply = last_reply(msg)
+        assert "inherit" not in reply.lower()
+
+
+async def test_settings_shows_inherit_button_when_stale_model_override():
+    """/settings renders inherit button when profiles empty but stale override exists."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Set stale override
+        session = th._load(1001)
+        session.model_profile = "fast"
+        th._save(1001, session)
+        # /settings should show an inherit button
+        msg = await send_command(th.cmd_settings, chat, user, "/settings")
+        # Check keyboard for inherit callback
+        markup = msg.replies[-1].get("reply_markup")
+        assert markup is not None
+        all_callbacks = [
+            btn.callback_data
+            for row in markup.inline_keyboard
+            for btn in row
+        ]
+        assert "setting_model:inherit" in all_callbacks
+
+
+async def test_model_inherit_no_double_default():
+    """/model inherit does not render '(default) ((default))'."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Set stale override
+        session = th._load(1001)
+        session.model_profile = "fast"
+        th._save(1001, session)
+        # /model inherit
+        msg = await send_command(th.cmd_model, chat, user, "/model", args=["inherit"])
+        reply = last_reply(msg)
+        assert "cleared" in reply.lower()
+        assert "((default))" not in reply
+        assert "(default) (" not in reply
+
+
+async def test_settings_callback_model_inherit_no_double_default():
+    """setting_model:inherit callback does not render double default."""
+    import app.telegram_handlers as th
+    with fresh_env(config_overrides={
+        "model_profiles": {},
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=1001)
+        user = FakeUser(uid=42, username="testuser")
+        # Set stale override
+        session = th._load(1001)
+        session.model_profile = "fast"
+        th._save(1001, session)
+        # Callback inherit
+        query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_model:inherit")
+        reply = last_reply(cb_msg)
+        assert "cleared" in reply.lower()
+        assert "((default))" not in reply
+        assert "(default) (" not in reply

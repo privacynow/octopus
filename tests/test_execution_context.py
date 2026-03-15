@@ -324,7 +324,7 @@ async def test_inspect_mode_always_readonly(provider_config):
     provider = CodexProvider(_make_config(codex_sandbox="workspace-write"))
     calls: list[list[str]] = []
 
-    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir=""):
+    async def fake_run_cmd(cmd, progress, is_resume=False, extra_env=None, working_dir="", cancel=None):
         calls.append(cmd)
         return RunResult(text="ok", provider_state_updates={"thread_id": "t-1"})
 
@@ -767,14 +767,14 @@ def test_project_file_policy_approval_model_change_invalidates():
     session.model_profile = "best"
     error = validate_pending(pending, session, cfg, "claude")
     assert error is not None
-    assert "Context changed" in error
+    assert "context changed" in error.lower()
 
     # Also verify that changing file_policy invalidates
     session.model_profile = "fast"  # reset model
     session.file_policy = "edit"
     error2 = validate_pending(pending, session, cfg, "claude")
     assert error2 is not None
-    assert "Context changed" in error2
+    assert "context changed" in error2.lower()
 
 
 # =====================================================================
@@ -795,3 +795,193 @@ def test_project_extra_dirs_folded_into_resolved_context():
         assert "/tmp/proj-extra" in resolved.base_extra_dirs, (
             f"Project extra_dirs should be in base_extra_dirs: {resolved.base_extra_dirs}"
         )
+
+
+# =====================================================================
+# Phase 15: Project-level file_policy and model_profile inheritance
+#
+# Resolution order:
+#   file_policy:   session explicit > project default > ""
+#   model_profile: session explicit > project default > config.default_model_profile > config.model
+# =====================================================================
+
+
+def test_file_policy_inherits_from_project():
+    """Empty session file_policy inherits project default."""
+    from app.session_state import ProjectBinding
+    cfg = _make_config(projects=(
+        ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),
+    ))
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        project_id="fe",
+    )
+    ctx = resolve_execution_context(session, cfg, "claude")
+    assert ctx.file_policy == "inspect"
+
+
+def test_file_policy_session_overrides_project():
+    """Explicit session file_policy wins over project default."""
+    from app.session_state import ProjectBinding
+    cfg = _make_config(projects=(
+        ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),
+    ))
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        project_id="fe", file_policy="edit",
+    )
+    ctx = resolve_execution_context(session, cfg, "claude")
+    assert ctx.file_policy == "edit"
+
+
+def test_file_policy_no_project_no_session():
+    """No project, no session file_policy → empty string."""
+    cfg = _make_config()
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+    )
+    ctx = resolve_execution_context(session, cfg, "claude")
+    assert ctx.file_policy == ""
+
+
+def test_file_policy_project_default_empty_falls_through():
+    """Project with empty file_policy does not override session empty."""
+    from app.session_state import ProjectBinding
+    cfg = _make_config(projects=(
+        ProjectBinding(name="fe", root_dir="/tmp", file_policy=""),
+    ))
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        project_id="fe",
+    )
+    ctx = resolve_execution_context(session, cfg, "claude")
+    assert ctx.file_policy == ""
+
+
+def test_model_profile_inherits_from_project():
+    """Empty session model_profile inherits project default."""
+    from app.session_state import ProjectBinding
+    cfg = _make_config(
+        projects=(ProjectBinding(name="fe", root_dir="/tmp", model_profile="fast"),),
+        model_profiles=_MODEL_PROFILES,
+    )
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        project_id="fe",
+    )
+    ctx = resolve_execution_context(session, cfg, "claude")
+    assert ctx.effective_model == "haiku"
+
+
+def test_model_profile_session_overrides_project():
+    """Session model_profile wins over project default."""
+    from app.session_state import ProjectBinding
+    cfg = _make_config(
+        projects=(ProjectBinding(name="fe", root_dir="/tmp", model_profile="fast"),),
+        model_profiles=_MODEL_PROFILES,
+    )
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        project_id="fe", model_profile="best",
+    )
+    ctx = resolve_execution_context(session, cfg, "claude")
+    assert ctx.effective_model == "opus"
+
+
+def test_model_profile_project_falls_through_to_global_default():
+    """Project with empty model_profile falls through to config.default_model_profile."""
+    from app.session_state import ProjectBinding
+    cfg = _make_config(
+        projects=(ProjectBinding(name="fe", root_dir="/tmp", model_profile=""),),
+        model_profiles=_MODEL_PROFILES,
+        default_model_profile="balanced",
+    )
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        project_id="fe",
+    )
+    ctx = resolve_execution_context(session, cfg, "claude")
+    assert ctx.effective_model == "sonnet"
+
+
+def test_project_defaults_change_context_hash():
+    """Switching to a project with different defaults must change the context hash."""
+    from app.session_state import ProjectBinding
+    cfg = _make_config(
+        projects=(
+            ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect", model_profile="fast"),
+            ProjectBinding(name="be", root_dir="/tmp", file_policy="edit", model_profile="best"),
+        ),
+        model_profiles=_MODEL_PROFILES,
+    )
+    session_a = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        project_id="fe",
+    )
+    session_b = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        project_id="be",
+    )
+    hash_a = resolve_execution_context(session_a, cfg, "claude").context_hash
+    hash_b = resolve_execution_context(session_b, cfg, "claude").context_hash
+    assert hash_a != hash_b
+
+
+def test_public_trust_ignores_project_file_policy():
+    """Public users are always forced to inspect, regardless of project default."""
+    from app.session_state import ProjectBinding
+    cfg = _make_config(
+        projects=(ProjectBinding(name="fe", root_dir="/tmp", file_policy="edit"),),
+        public_working_dir="/tmp",
+    )
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        project_id="fe",
+    )
+    ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
+    assert ctx.file_policy == "inspect"
+    # Public users also get no project binding
+    assert ctx.project_binding is None
+
+
+def test_public_trust_ignores_project_model_profile():
+    """Public users don't get project binding, so project model_profile is ignored."""
+    from app.session_state import ProjectBinding
+    cfg = _make_config(
+        projects=(ProjectBinding(name="fe", root_dir="/tmp", model_profile="best"),),
+        model_profiles=_MODEL_PROFILES,
+        public_working_dir="/tmp",
+    )
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        project_id="fe",
+    )
+    ctx = resolve_execution_context(session, cfg, "claude", trust_tier="public")
+    # Project binding is None for public, so project profile is not used
+    assert ctx.project_binding is None
+    # Model falls through to config.model (no default_model_profile set)
+    assert ctx.effective_model == cfg.model
+
+
+def test_phantom_profile_not_displayed_when_no_profiles_configured():
+    """When model_profiles is empty, display must show (default), not project profile name.
+
+    This is a display-level guard: even if a project somehow has a model_profile
+    set without any model_profiles configured, the UI must not show a phantom name.
+    """
+    from app.session_state import ProjectBinding
+    # Note: this config would fail validation, but we test display resilience
+    cfg = _make_config(
+        projects=(ProjectBinding(name="fe", root_dir="/tmp", model_profile="fast"),),
+        model_profiles={},  # no profiles
+    )
+    session = SessionState(
+        provider="claude", provider_state={}, approval_mode="off",
+        project_id="fe",
+    )
+
+    # Import the display helper
+    import app.telegram_handlers as th
+    available, current = th._settings_model_profile_state(session, cfg, "trusted", cfg.model)
+    assert available == []
+    assert current == "(default)", f"Expected '(default)' but got '{current}'"

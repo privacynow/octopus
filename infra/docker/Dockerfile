@@ -7,10 +7,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Application and schema
+# Application and schema (migrations live in app/db/migrations/postgres)
 COPY app ./app
 COPY skills ./skills
-COPY sql ./sql
 COPY scripts ./scripts
 
 # Default: run the bot (overridden by compose for one-shot db commands)

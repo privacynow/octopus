@@ -24,7 +24,7 @@ check_provider_image() {
   fi
   if ! docker image inspect "telegram-agent-bot:$provider" >/dev/null 2>&1; then
     echo "Image telegram-agent-bot:$provider not found." >&2
-    echo "Run: ./scripts/build_bot_image.sh $provider" >&2
+    echo "Run: ./scripts/provider/build_bot_image.sh $provider" >&2
     exit 1
   fi
   echo "$provider"

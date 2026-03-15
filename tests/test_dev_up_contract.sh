@@ -125,14 +125,14 @@ MOCKSLEEP
 chmod +x "$MOCK_BIN/sleep"
 # But the script invokes "sleep" - is it via PATH? Usually yes. So PATH has MOCK_BIN first, so our sleep will be used. Good.
 
-# Run dev_up.sh with given mock update exit code and stdout (passed to child so mock sees them).
+# Run dev_up_postgres.sh with given mock update exit code and stdout (passed to child so mock sees them).
 run_dev_up() {
   local want_rc="$1" want_out="$2"
   rm -f "$RECORD_BOOTSTRAP_CALLED"
   : > "$RECORD_DOCKER_INVOCATIONS"
   set +e
   DEV_UP_MOCK_UPDATE_RC="$want_rc" DEV_UP_MOCK_UPDATE_OUT="$want_out" \
-    "$REPO_DIR/scripts/dev_up.sh" > "$TEST_DIR/dev_up_stdout" 2> "$TEST_DIR/dev_up_stderr"
+    "$REPO_DIR/scripts/db/dev_up_postgres.sh" > "$TEST_DIR/dev_up_stdout" 2> "$TEST_DIR/dev_up_stderr"
   echo $?
   set -e
 }
@@ -151,7 +151,7 @@ check_contains "dev_up mentions guided_start for full path" "$(cat "$TEST_DIR/de
 # --- 2. Update fails with missing-schema message -> bootstrap and doctor ---
 echo ""
 echo "=== dev_up: update fails with missing-schema -> bootstrap and doctor ==="
-exitcode=$(run_dev_up 1 "Schema or schema_migrations table missing. Run DB bootstrap first (scripts/db_bootstrap.sh or python -m app.db.cli bootstrap).")
+exitcode=$(run_dev_up 1 "Schema or schema_migrations table missing. Run DB bootstrap first (scripts/db/db_bootstrap.sh or python -m app.db.cli bootstrap).")
 check_exit "dev_up exits 0 when missing-schema then bootstrap" "$exitcode" "0"
 check_file_exists "bootstrap was called" "$RECORD_BOOTSTRAP_CALLED"
 invocations=$(cat "$RECORD_DOCKER_INVOCATIONS")
@@ -169,7 +169,7 @@ check_file_missing "bootstrap not called on other failure" "$RECORD_BOOTSTRAP_CA
 stderr=$(cat "$TEST_DIR/dev_up_stderr")
 check_contains "stderr says not a fresh database" "$stderr" "This does not look like a fresh database"
 check_contains "stderr shows real error" "$stderr" "connection refused"
-check_contains "stderr hints rerun dev_up" "$stderr" "rerun ./scripts/dev_up.sh"
+check_contains "stderr hints rerun dev_up" "$stderr" "rerun ./scripts/db/dev_up_postgres.sh"
 
 # --- 4. Update fails with schema-drift style error -> no bootstrap ---
 echo ""
@@ -185,10 +185,10 @@ echo "=== guided_start.sh: propagates dev_up failure, does not continue to Step 
 if [ -f "$REPO_DIR/.env.bot" ]; then
   cp "$REPO_DIR/.env.bot" "$REPO_DIR/.env.bot.dev_up_test_backup"
 fi
-printf 'TELEGRAM_BOT_TOKEN=x\nBOT_PROVIDER=claude\nBOT_ALLOWED_USERS=1\n' > "$REPO_DIR/.env.bot"
+printf 'TELEGRAM_BOT_TOKEN=x\nBOT_PROVIDER=claude\nBOT_ALLOWED_USERS=1\nBOT_DATABASE_URL=postgresql://bot:bot@postgres:5432/bot\n' > "$REPO_DIR/.env.bot"
 set +e
 DEV_UP_MOCK_UPDATE_RC=1 DEV_UP_MOCK_UPDATE_OUT="Database error: connection refused" \
-  PATH="$MOCK_BIN:$PATH" "$REPO_DIR/scripts/guided_start.sh" \
+  PATH="$MOCK_BIN:$PATH" "$REPO_DIR/scripts/app/guided_start.sh" \
   > "$TEST_DIR/guided_stdout" 2> "$TEST_DIR/guided_stderr"
 guided_exit=$?
 set -e

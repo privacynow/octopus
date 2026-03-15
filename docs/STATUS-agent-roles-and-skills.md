@@ -130,7 +130,7 @@ The highest-signal coverage remains in the handler integration suites. These exe
 | 10 | /skills command (list/add/remove/clear) | Done | Also: /skills setup, /skills create |
 | 11 | /role command (view/set/clear) | Done | |
 | 12 | /help and /session updates | Done | |
-| 13 | setup.sh role/skill prompts | Done | |
+| 13 | setup_instance.sh role/skill prompts | Done | |
 | 14 | .env.example updates | Done | |
 | 15 | Tests: §8.5 invariants, skill engine, config, context hash, providers | Done | test_skills.py, test_high_risk.py |
 

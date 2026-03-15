@@ -151,7 +151,8 @@ def test_compose_down_records_failure_log(tmp_path):
     """_compose_down writes a cleanup log when docker compose down fails."""
     ctx = {
         "artifacts_dir": tmp_path,
-        "compose_files": ["-f", "docker-compose.yml"],
+        "project_dir": tmp_path,
+        "compose_files": ["-f", "infra/compose/docker-compose.yml"],
         "env": {},
     }
     with patch.object(
@@ -186,7 +187,8 @@ def test_compose_down_includes_all_profiles(tmp_path):
     """Cleanup must include profiled services so bot/stub containers are actually removed."""
     ctx = {
         "artifacts_dir": tmp_path,
-        "compose_files": ["-f", "docker-compose.yml"],
+        "project_dir": tmp_path,
+        "compose_files": ["-f", "infra/compose/docker-compose.yml"],
         "env": {},
     }
     with patch.object(

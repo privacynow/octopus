@@ -58,6 +58,7 @@ from tests.support.handler_support import (
     FakeProvider,
     FakeUpdate,
     FakeUser,
+    drain_one_worker_item,
     fresh_data_dir,
     fresh_env,
     last_reply,
@@ -488,6 +489,7 @@ async def test_handle_message_public_user_threads_trust_tier():
         stranger = FakeUser(uid=999, username="nobody")
 
         msg = await send_text(chat, stranger, "hello from public user")
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         ctx = prov.run_calls[0]["context"]
@@ -509,6 +511,7 @@ async def test_handle_message_trusted_user_not_forced_inspect():
         trusted = FakeUser(uid=42, username="trustedguy")
 
         msg = await send_text(chat, trusted, "hello from trusted user")
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         ctx = prov.run_calls[0]["context"]
@@ -779,11 +782,13 @@ async def test_compact_long_reply_public_user():
         prov.run_results = [RunResult(text=long_response)]
 
         msg = await send_text(chat, stranger, "analyze this")
+        await drain_one_worker_item(data_dir)
 
-        all_text = " ".join(str(r.get("text", "")) for r in msg.replies)
+        # Worker sends via bot
+        all_text = " ".join(str(m.get("text", "")) for m in th._bot_instance.sent_messages)
         # Should have compact rendering (blockquote or expand button)
         has_blockquote = "blockquote" in all_text
-        has_expand_button = any(r.get("reply_markup") is not None for r in msg.replies)
+        has_expand_button = any(m.get("reply_markup") is not None for m in th._bot_instance.sent_messages)
         assert has_blockquote or has_expand_button, (
             f"Expected compact rendering for public user, got: {all_text[:200]}")
 

@@ -1,5 +1,5 @@
 # Supported bot image: real provider-enabled (Claude or Codex CLI in image).
-# Build with: ./scripts/build_bot_image.sh [claude|codex]  (tags telegram-agent-bot:claude | :codex).
+# Build with: ./scripts/provider/build_bot_image.sh [claude|codex]  (tags telegram-agent-bot:claude | :codex).
 # One shared base; provider-specific install in final stage.
 
 FROM python:3.12-slim AS base
@@ -8,14 +8,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY skills ./skills
-COPY sql ./sql
 COPY scripts ./scripts
 
 ARG BOT_PROVIDER=claude
 RUN if [ "$BOT_PROVIDER" = "claude" ]; then \
-      bash /app/scripts/install_provider_claude.sh; \
+      bash /app/scripts/provider/install_provider_claude.sh; \
     elif [ "$BOT_PROVIDER" = "codex" ]; then \
-      bash /app/scripts/install_provider_codex.sh; \
+      bash /app/scripts/provider/install_provider_codex.sh; \
     else \
       echo "BOT_PROVIDER must be claude or codex" && exit 1; \
     fi
@@ -35,6 +34,6 @@ ENV PYTHONPATH=/app
 
 # entrypoint: chown bot-home to bot (uid 1000) then run as bot (gosu)
 RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
-RUN chmod +x /app/scripts/docker-entrypoint.sh
-ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]
+RUN chmod +x /app/scripts/docker/docker-entrypoint.sh
+ENTRYPOINT ["/app/scripts/docker/docker-entrypoint.sh"]
 CMD ["python", "-m", "app.main"]

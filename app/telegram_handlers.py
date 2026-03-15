@@ -9,6 +9,7 @@ import re
 import time
 import uuid
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,9 @@ from app.session_state import (
     session_from_dict,
     session_to_dict,
 )
+from app.transports.admission import admit_fresh_message
+from app.transports.telegram_adapter import TelegramConversationIO
+from app.transports.types import InboundEnvelope
 from app.skills import (
     build_run_context, build_preflight_context,
     get_provider_config_digest, get_skill_digests,
@@ -94,8 +98,10 @@ log = logging.getLogger(__name__)
 
 CHAT_LOCKS: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-# Live execution registry: maps chat_id -> cancel Event for running provider calls.
-# Used by /cancel to signal cancellation without acquiring _chat_lock.
+# Worker-owned live execution: chat_id -> cancel Event for the active provider run.
+# Populated by worker_dispatch when it starts execute_request/request_approval;
+# /cancel sets the event so the running provider can exit. Busy/admission gating
+# is done at the store (record_and_admit_message), not via this registry.
 _LIVE_CANCEL: dict[int, asyncio.Event] = {}
 
 
@@ -227,8 +233,9 @@ async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int |
         elif query is not None:
             await query.answer(_msg.queue_busy())
     async with lock:
-        # Worker path: item already claimed externally, just provide the lock.
+        # Worker path: item already claimed externally; supersede any pending_recovery for this chat.
         if worker_item is not None:
+            work_queue.supersede_pending_recovery(data_dir, chat_id)
             try:
                 yield sent_feedback
             except work_queue.LeaveClaimed:
@@ -471,7 +478,6 @@ def _command_handler(fn):
     import functools
     @functools.wraps(fn)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        log.info("_command_handler wrapper called for %s update_id=%d", fn.__name__, update.update_id)
         event = normalize_command(update, context)
         payload = serialize_inbound(event) if event else "{}"
         if _dedup_update(update, kind="command", payload=payload):
@@ -1872,17 +1878,21 @@ async def cmd_skills(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 @_command_handler
 async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    log.info("cmd_cancel invoked for chat_id=%d, _LIVE_CANCEL keys=%s", event.chat_id, list(_LIVE_CANCEL.keys()))
     if await _public_guard(event, update):
         return
     chat_id = event.chat_id
     user_id = event.user.id
 
-    # Fast path: cancel live provider execution without waiting for _chat_lock.
+    # Worker-owned live run: set cancel event so the running execute_request/request_approval sees it.
     cancel_event = _LIVE_CANCEL.get(chat_id)
     if cancel_event is not None:
         cancel_event.set()
         await update.effective_message.reply_text(_msg.cancel_live_requested())
+        return
+
+    # Admitted but not yet running: cancel queued fresh item so the worker won't run it.
+    if work_queue.cancel_queued_fresh_for_chat(_cfg().data_dir, chat_id):
+        await update.effective_message.reply_text(_msg.cancel_queued_superseded())
         return
 
     async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
@@ -2191,67 +2201,65 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if _dedup_update(update, kind="message"):
-        return
-    uid = update.update_id
+    """Normalize input, enqueue provider work for the worker, or handle credential setup inline.
 
+    Provider execution runs only in the worker; handlers return quickly so /cancel
+    can be delivered without PTB concurrency. At most one fresh (queued or claimed) item
+    per chat: admission is serialized at the store; when the chat already has one we
+    reply busy and do not enqueue a second run.
+    """
+    uid = update.update_id
     user = normalize_user(update.effective_user)
     if user is None or not is_allowed(user):
-        _complete_pending_work_item(uid)
         return
 
-    # Rate limit check (admins exempt)
     if _rate_limiter and _rate_limiter.enabled and not (_cfg().admin_users_explicit and is_admin(user)):
         allowed, retry_after = _rate_limiter.check(user.id)
         if not allowed:
             await update.effective_message.reply_text(
                 f"Rate limit reached. Please wait {retry_after} seconds.")
-            _complete_pending_work_item(uid)
             return
 
     msg = await normalize_message(update, context, _cfg().data_dir)
     if msg is None:
-        _complete_pending_work_item(uid)
         return
-
-    # Store serialized payload now that normalization is complete
-    work_queue.update_payload(_cfg().data_dir, update.update_id, serialize_inbound(msg))
 
     message = update.effective_message
     chat_id = msg.chat_id
-    prompt, image_paths = build_user_prompt(msg.text, list(msg.attachments))
-
     user_id = user.id
+    prompt, image_paths = build_user_prompt(msg.text, list(msg.attachments))
+    payload = serialize_inbound(msg)
 
-    # First-run welcome for plain messages only (commands like /start and /help
-    # already provide orientation, so the welcome is only needed when a user
-    # sends a plain message without knowing what the bot does).
     cfg = _cfg()
     if not session_exists(cfg.data_dir, chat_id):
         welcome = "I'm ready. Send me a message or type /help to see what I can do."
         if cfg.approval_mode == "on":
             welcome += "\nApproval mode is on \u2014 I'll show a plan before acting."
-        effective_compact = cfg.compact_mode  # no session override yet
+        effective_compact = cfg.compact_mode
         if effective_compact:
             welcome += "\nCompact mode is on \u2014 long answers are summarized. Use /compact off for full answers."
         await message.chat.send_message(welcome)
 
-    try:
-        async with _chat_lock(chat_id, message=message, update_id=update.update_id,
-                              supersede_recovery=True):
-            await message.chat.send_action(ChatAction.TYPING)
-            session = _load(chat_id)
-
-            setup = session.awaiting_skill_setup
-            if setup and setup.user_id == user_id:
-                cfg = _cfg()
-                key = _encryption_key()
+    data_dir = cfg.data_dir
+    session = _load(chat_id)
+    setup = session.awaiting_skill_setup
+    if setup and setup.user_id == user_id:
+        # Credential setup: record update for dedupe only; handle inline. No work item so worker
+        # never sees this message as provider work (avoids race and secret-leak path).
+        if not work_queue.record_update(data_dir, uid, chat_id, user_id, "message", payload=payload):
+            return  # duplicate update_id
+        try:
+            async with _chat_lock(chat_id, message=message, update_id=uid, supersede_recovery=True):
+                session = _load(chat_id)
+                setup = session.awaiting_skill_setup
+                if not setup or setup.user_id != user_id:
+                    return
+                await message.chat.send_action(ChatAction.TYPING)
                 req = setup.remaining[0]
                 raw_value = (message.text or "").strip()
                 if not raw_value:
                     await message.reply_text("Please send the credential value as a text message.")
                     return
-
                 if req.get("validate"):
                     ok, detail = await validate_credential(
                         SkillRequirement(key=req["key"], prompt=req["prompt"],
@@ -2269,16 +2277,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                             parse_mode=ParseMode.HTML,
                         )
                         return
-
                 save_user_credential(
-                    cfg.data_dir, user_id, setup.skill, req["key"], raw_value, key,
+                    cfg.data_dir, user_id, setup.skill, req["key"], raw_value, _encryption_key(),
                 )
-
                 try:
                     await message.delete()
                 except Exception:
                     log.warning("Could not delete credential message for user %d", user_id)
-
                 setup.remaining.pop(0)
                 if setup.remaining:
                     next_req = setup.remaining[0]
@@ -2297,18 +2302,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         f"Skill <code>{html.escape(skill_name)}</code> is ready.",
                         parse_mode=ParseMode.HTML,
                     )
-                return
-
-            trust = _trust_tier(user)
-
-            if session.approval_mode == "on":
-                await request_approval(chat_id, prompt, image_paths, list(msg.attachments), message, request_user_id=user_id, trust_tier=trust)
-                return
-            await execute_request(chat_id, prompt, image_paths, message, request_user_id=user_id, trust_tier=trust)
-    except ClaimBlocked:
-        # Worker owns this chat — our work item stays queued for worker_loop.
-        _pending_work_items.pop(uid, None)
+        except Exception:
+            raise
         return
+
+    envelope = InboundEnvelope(
+        transport="telegram",
+        update_id=uid,
+        conversation_id=chat_id,
+        actor_id=user_id,
+        received_at=datetime.now(timezone.utc),
+        event=msg,
+    )
+    status, item_id = admit_fresh_message(data_dir, envelope)
+    if status == "duplicate":
+        return
+    if status == "busy":
+        await message.reply_text(
+            f"<i>{_msg.queue_busy()}</i>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    if status != "admitted" or item_id is None:
+        return
+
+    # Enqueued for worker; return so /cancel can be processed without blocking.
+    return
 
 
 @_callback_handler
@@ -3017,42 +3036,8 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await msg.reply_text(_msg.policy_usage())
 
 
-class _BotMessage:
-    """Minimal message proxy for worker replay — sends via Bot API directly."""
-
-    def __init__(self, bot, chat_id: int):
-        self._bot = bot
-        self.chat = self
-        self.chat_id = chat_id
-        self.text = None
-        self.replies: list[str] = []
-
-    async def reply_text(self, text, **kwargs):
-        sent = await self._bot.send_message(self.chat_id, text, **kwargs)
-        self.replies.append(text)
-        return sent
-
-    async def reply_document(self, document, **kwargs):
-        await self._bot.send_document(self.chat_id, document, **kwargs)
-
-    async def reply_photo(self, photo, **kwargs):
-        await self._bot.send_photo(self.chat_id, photo, **kwargs)
-
-    async def send_action(self, action):
-        try:
-            await self._bot.send_chat_action(self.chat_id, action)
-        except Exception:
-            pass
-
-    async def send_message(self, text, **kwargs):
-        return await self._bot.send_message(self.chat_id, text, **kwargs)
-
-    async def edit_text(self, text, **kwargs):
-        pass  # No original message to edit in replay
-
-    async def delete(self):
-        pass  # Nothing to delete in replay
-
+# Worker path uses the transport adapter; handler path uses PTB message directly.
+_BotMessage = TelegramConversationIO
 
 _bot_instance = None  # Set by build_application
 
@@ -3060,10 +3045,10 @@ _bot_instance = None  # Set by build_application
 async def worker_dispatch(kind: str, event, item: dict) -> None:
     """Dispatch a deserialized inbound event from the worker loop.
 
-    Called for work items claimed by the background worker — typically
-    items recovered after a crash.  Messages are replayed through the
-    provider.  Commands and callbacks get a user notification since the
-    original UI context (inline keyboards etc.) is gone.
+    Items with dispatch_mode 'recovery' get a recovery notice and move to
+    pending_recovery. Fresh message items (dispatch_mode 'fresh') are executed
+    here: execute_request or request_approval; they register _LIVE_CANCEL so
+    /cancel works.
     """
     from app.transport import InboundMessage, InboundCommand, InboundCallback
 
@@ -3073,40 +3058,62 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
         return
 
     bot = _bot_instance
+    data_dir = _cfg().data_dir
 
     if isinstance(event, InboundMessage):
-        log.info("Worker sending recovery notice for chat %d (update %s)",
-                 chat_id, item.get("update_id"))
+        # Recovered item: send notice and move to pending_recovery.
+        if item.get("dispatch_mode") == "recovery":
+            log.info("Worker sending recovery notice for chat %d (update %s)",
+                     chat_id, item.get("update_id"))
+            if not is_allowed(event.user):
+                work_queue.fail_work_item(data_dir, item["id"], error="not_allowed")
+                return
+            update_id = item.get("update_id", 0)
+            original_text = event.text or ""
+            preview = html.escape(original_text[:200] + ("\u2026" if len(original_text) > 200 else ""))
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("\u25b6\ufe0f " + _msg.recovery_button_run_again(), callback_data=f"recovery_replay:{update_id}"),
+                InlineKeyboardButton("\u2716 " + _msg.recovery_button_skip(), callback_data=f"recovery_discard:{update_id}"),
+            ]])
+            try:
+                await bot.send_message(
+                    chat_id,
+                    f"<i>{_msg.recovery_notice_intro()}</i>\n\n"
+                    f"{preview}\n\n"
+                    f"{_msg.recovery_notice_prompt()}",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard,
+                )
+            except Exception:
+                log.exception("Failed to send recovery notice for chat %d", chat_id)
+                raise
+            work_queue.mark_pending_recovery(data_dir, item["id"])
+            raise work_queue.PendingRecovery(item["id"])
+
+        # Fresh message: run provider (execute_request/request_approval register _LIVE_CANCEL).
         if not is_allowed(event.user):
+            work_queue.fail_work_item(data_dir, item["id"], error="not_allowed")
             return
-        update_id = item.get("update_id", 0)
-        original_text = event.text or ""
-        preview = html.escape(original_text[:200] + ("\u2026" if len(original_text) > 200 else ""))
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("\u25b6\ufe0f " + _msg.recovery_button_run_again(), callback_data=f"recovery_replay:{update_id}"),
-            InlineKeyboardButton("\u2716 " + _msg.recovery_button_skip(), callback_data=f"recovery_discard:{update_id}"),
-        ]])
+        bot_msg = _BotMessage(bot, chat_id)
+        prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
+        user_id = event.user.id
+        trust = _trust_tier(event.user)
         try:
-            await bot.send_message(
-                chat_id,
-                f"<i>{_msg.recovery_notice_intro()}</i>\n\n"
-                f"{preview}\n\n"
-                f"{_msg.recovery_notice_prompt()}",
-                parse_mode=ParseMode.HTML,
-                reply_markup=keyboard,
-            )
-        except Exception:
-            # Notice never reached the user — do NOT move to pending_recovery.
-            # Re-raise so worker_loop marks the item failed (not done).
-            # The user never saw buttons; the item must not look like it
-            # completed successfully.
-            log.exception("Failed to send recovery notice for chat %d", chat_id)
+            async with _chat_lock(chat_id, worker_item=item):
+                session = _load(chat_id)
+                if session.approval_mode == "on":
+                    await request_approval(
+                        chat_id, prompt, image_paths, list(event.attachments),
+                        bot_msg, request_user_id=user_id, trust_tier=trust,
+                    )
+                else:
+                    await execute_request(
+                        chat_id, prompt, image_paths, bot_msg,
+                        request_user_id=user_id, trust_tier=trust,
+                    )
+        except work_queue.LeaveClaimed:
             raise
-        # Notice delivered — transition to pending_recovery.
-        # Worker_loop skips completion (PendingRecovery).
-        data_dir = _cfg().data_dir
-        work_queue.mark_pending_recovery(data_dir, item["id"])
-        raise work_queue.PendingRecovery(item["id"])
+        return
 
     if isinstance(event, (InboundCommand, InboundCallback)):
         log.info("Worker recovered orphaned %s for chat %d (update %s)",
@@ -3139,7 +3146,8 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
         log.info("Public mode: applying default rate limits (5/min, 30/hr)")
     _rate_limiter = RateLimiter(per_minute=per_minute, per_hour=per_hour)
 
-    app = Application.builder().token(config.telegram_token).concurrent_updates(True).build()
+    # Sequential update processing; live runs are worker-owned so /cancel is delivered promptly.
+    app = Application.builder().token(config.telegram_token).build()
     _bot_instance = app.bot
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))

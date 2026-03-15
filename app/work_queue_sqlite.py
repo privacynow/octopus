@@ -35,7 +35,7 @@ class SQLiteTransportStore:
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1"
             ).fetchone() is not None
             if has_tables:
-                work_queue_sqlite_impl._validate_existing_transport_db(conn)
+                work_queue_sqlite_impl._ensure_schema_version(conn)
             else:
                 work_queue_sqlite_impl._create_new_transport_db(conn)
         except RuntimeError:
@@ -80,6 +80,23 @@ class SQLiteTransportStore:
         return work_queue_sqlite_impl.record_and_enqueue(
             conn, update_id, chat_id, user_id, kind, payload, worker_id=worker_id
         )
+
+    def record_and_admit_message(
+        self,
+        data_dir: Path,
+        update_id: int,
+        chat_id: int,
+        user_id: int,
+        kind: str,
+        payload: str = "{}",
+    ) -> tuple[str, str | None]:
+        conn = self._transport_db(data_dir)
+        try:
+            return work_queue_sqlite_impl.record_and_admit_message(
+                conn, update_id, chat_id, user_id, kind, payload,
+            )
+        except work_queue_sqlite_impl._DuplicateUpdate:
+            return ("duplicate", None)
 
     def record_update(
         self,
@@ -138,6 +155,10 @@ class SQLiteTransportStore:
         conn = self._transport_db(data_dir)
         work_queue_sqlite_impl.fail_work_item(conn, item_id, error)
 
+    def cancel_queued_fresh_for_chat(self, data_dir: Path, chat_id: int) -> bool:
+        conn = self._transport_db(data_dir)
+        return work_queue_sqlite_impl.cancel_queued_fresh_for_chat(conn, chat_id)
+
     def has_claimed_for_chat(self, data_dir: Path, chat_id: int) -> bool:
         conn = self._transport_db(data_dir)
         return work_queue_sqlite_impl.has_claimed_for_chat(conn, chat_id)
@@ -149,6 +170,10 @@ class SQLiteTransportStore:
     def get_update_payload(self, data_dir: Path, update_id: int) -> str | None:
         conn = self._transport_db(data_dir)
         return work_queue_sqlite_impl.get_update_payload(conn, update_id)
+
+    def get_work_items_for_chat(self, data_dir: Path, chat_id: int) -> list[dict[str, Any]]:
+        conn = self._transport_db(data_dir)
+        return work_queue_sqlite_impl.get_work_items_for_chat(conn, chat_id)
 
     def mark_pending_recovery(self, data_dir: Path, item_id: str) -> None:
         conn = self._transport_db(data_dir)

@@ -149,13 +149,11 @@ def test_trust_model_profile_not_available_canonical():
 # ---------------------------------------------------------------------------
 
 def test_queue_busy_plain_and_actionable():
-    """queue_busy: request is queued and will run next; must not tell user to try again."""
+    """queue_busy: message was not started; user should wait or use /cancel."""
     text = msg.queue_busy()
-    assert "queued" in text.lower()
-    assert "try again" not in text.lower(), "queued request runs automatically; do not encourage resubmit"
-    assert "request" in text.lower()
-    # Implies waiting / automatic next execution
-    assert "run" in text.lower() or "next" in text.lower() or "wait" in text.lower()
+    assert "not started" in text.lower() or "another request" in text.lower()
+    assert "wait" in text.lower() or "cancel" in text.lower()
+    assert "queued" not in text.lower(), "busy means rejected, not queued for next"
 
 
 def test_callback_wrong_user_specific_to_button_owner():

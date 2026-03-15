@@ -94,7 +94,7 @@ def _load_work_item_by_chat_update(conn, chat_id: int, update_id: int) -> dict[s
 def _assert_no_invalid_rows_for_chat(conn, chat_id: int) -> None:
     with _cur(conn) as cur:
         cur.execute(
-            f"SELECT id, state, worker_id, claimed_at FROM {_SCHEMA}.work_items WHERE chat_id = %s",
+            f"SELECT id, state, worker_id, claimed_at, dispatch_mode FROM {_SCHEMA}.work_items WHERE chat_id = %s",
             (chat_id,),
         )
         rows = cur.fetchall()
@@ -305,8 +305,8 @@ def _insert_initial_work_item(
                 cur.execute(
                     f"""
                     INSERT INTO {_SCHEMA}.work_items
-                    (id, chat_id, update_id, state, worker_id, claimed_at, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    (id, chat_id, update_id, state, worker_id, claimed_at, created_at, dispatch_mode)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'fresh')
                     """,
                     (item_id, chat_id, update_id, result.new_state, worker_id, created_at, created_at),
                 )
@@ -318,8 +318,8 @@ def _insert_initial_work_item(
     with _cur(conn) as cur:
         cur.execute(
             f"""
-            INSERT INTO {_SCHEMA}.work_items (id, chat_id, update_id, state, created_at)
-            VALUES (%s, %s, %s, 'queued', %s)
+            INSERT INTO {_SCHEMA}.work_items (id, chat_id, update_id, state, created_at, dispatch_mode)
+            VALUES (%s, %s, %s, 'queued', %s, 'fresh')
             """,
             (item_id, chat_id, update_id, created_at),
         )
@@ -362,6 +362,60 @@ def record_and_enqueue(
         return True, item_id
     except _DuplicateUpdate:
         return False, None
+
+
+def record_and_admit_message(
+    conn,
+    update_id: int,
+    chat_id: int,
+    user_id: int,
+    kind: str,
+    payload: str = "{}",
+) -> tuple[str, str | None]:
+    """Record update and admit or reject for provider work. Returns (status, item_id).
+    status: 'duplicate' | 'admitted' | 'busy'. item_id set when admitted or busy."""
+    now = datetime.now(timezone.utc).isoformat()
+    item_id = uuid.uuid4().hex
+    try:
+        with _write_tx(conn):
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.updates (update_id, chat_id, user_id, kind, payload, received_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (update_id) DO NOTHING
+                    """,
+                    (update_id, chat_id, user_id, kind, payload, now),
+                )
+                if cur.rowcount == 0:
+                    raise _DuplicateUpdate()
+            # Serialize admission per chat so only one fresh queued/claimed per chat (anti-fan-out).
+            with _cur(conn) as cur:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(%s::bigint)",
+                    (chat_id % (1 << 63),),
+                )
+            if has_fresh_queued_or_claimed(conn, chat_id):
+                with _cur(conn) as cur:
+                    cur.execute(
+                        f"""
+                        INSERT INTO {_SCHEMA}.work_items (id, chat_id, update_id, state, error, created_at, dispatch_mode)
+                        VALUES (%s, %s, %s, 'failed', 'chat_busy', %s, 'fresh')
+                        """,
+                        (item_id, chat_id, update_id, now),
+                    )
+                return ("busy", item_id)
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.work_items (id, chat_id, update_id, state, created_at, dispatch_mode)
+                    VALUES (%s, %s, %s, 'queued', %s, 'fresh')
+                    """,
+                    (item_id, chat_id, update_id, now),
+                )
+            return ("admitted", item_id)
+    except _DuplicateUpdate:
+        return ("duplicate", None)
 
 
 def record_update(conn, update_id: int, chat_id: int, user_id: int, kind: str, payload: str = "{}") -> bool:
@@ -602,6 +656,61 @@ def has_queued_or_claimed(conn, chat_id: int) -> bool:
         return cur.fetchone() is not None
 
 
+def has_fresh_queued_or_claimed(conn, chat_id: int) -> bool:
+    """True if this chat has any work item in queued or claimed state with dispatch_mode='fresh'."""
+    _assert_no_invalid_rows_for_chat(conn, chat_id)
+    with _cur(conn) as cur:
+        cur.execute(
+            f"SELECT 1 FROM {_SCHEMA}.work_items WHERE chat_id = %s AND state IN ('queued', 'claimed') "
+            "AND dispatch_mode = 'fresh' LIMIT 1",
+            (chat_id,),
+        )
+        return cur.fetchone() is not None
+
+
+def cancel_queued_fresh_for_chat(conn, chat_id: int) -> bool:
+    """If this chat has a queued fresh item, mark it failed with error='cancelled'. Returns True if one was cancelled."""
+    with _write_tx(conn):
+        with _cur(conn) as cur:
+            cur.execute(
+                f"""
+                SELECT id FROM {_SCHEMA}.work_items
+                WHERE chat_id = %s AND state = 'queued' AND dispatch_mode = 'fresh'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (chat_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return False
+        item_id = row["id"]
+        now = datetime.now(timezone.utc).isoformat()
+        with _cur(conn) as cur:
+            cur.execute(
+                f"""
+                UPDATE {_SCHEMA}.work_items SET state = 'failed', completed_at = %s, error = 'cancelled'
+                WHERE id = %s AND state = 'queued'
+                """,
+                (now, item_id),
+            )
+            return cur.rowcount > 0
+
+
+def get_work_items_for_chat(conn, chat_id: int) -> list[dict[str, Any]]:
+    """Return work items for chat with id, update_id, state, error, dispatch_mode, kind. Read-only."""
+    with _cur(conn) as cur:
+        cur.execute(
+            f"SELECT w.id, w.update_id, w.state, w.error, w.dispatch_mode, u.kind "
+            f"FROM {_SCHEMA}.work_items w "
+            f"JOIN {_SCHEMA}.updates u ON w.update_id = u.update_id "
+            f"WHERE w.chat_id = %s ORDER BY w.created_at ASC",
+            (chat_id,),
+        )
+        rows = cur.fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_update_payload(conn, update_id: int) -> str | None:
     import json
     with _cur(conn) as cur:
@@ -737,7 +846,7 @@ def recover_stale_claims(conn, current_worker_id: str, max_age_seconds: int = 30
     with _write_tx(conn):
         with _cur(conn) as cur:
             cur.execute(
-                f"SELECT id, state, worker_id, claimed_at FROM {_SCHEMA}.work_items WHERE state = 'claimed'"
+                f"SELECT id, state, worker_id, claimed_at, dispatch_mode FROM {_SCHEMA}.work_items WHERE state = 'claimed'"
             )
             rows = cur.fetchall()
         requeued = 0
@@ -769,7 +878,7 @@ def recover_stale_claims(conn, current_worker_id: str, max_age_seconds: int = 30
                     cur.execute(
                         f"""
                         UPDATE {_SCHEMA}.work_items
-                        SET state = %s, worker_id = NULL, claimed_at = NULL
+                        SET state = %s, worker_id = NULL, claimed_at = NULL, dispatch_mode = 'recovery'
                         WHERE id = %s AND state = 'claimed' AND worker_id = %s AND claimed_at = %s
                         """,
                         (result.new_state, row["id"], row["worker_id"], row["claimed_at"]),

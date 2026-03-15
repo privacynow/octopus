@@ -1,8 +1,76 @@
 """Tests for Postgres-backed work queue (Phase 12). Require Postgres harness."""
 
+import threading
+
 import pytest
 
 from app import work_queue_pg
+
+
+def test_record_and_admit_message_concurrent_two_connections_one_admitted(postgres_truncated):
+    """Two connections, same chat, concurrent record_and_admit_message: exactly one admitted, one busy, one fresh runnable item."""
+    from app.db.postgres import get_connection
+
+    results = []
+    barrier = threading.Barrier(2)
+
+    def run(update_id: int):
+        with get_connection(postgres_truncated) as conn:
+            barrier.wait()
+            out = work_queue_pg.record_and_admit_message(
+                conn, update_id=update_id, chat_id=100, user_id=200, kind="message", payload="{}"
+            )
+            results.append((update_id, out))
+
+    t1 = threading.Thread(target=run, args=(1,))
+    t2 = threading.Thread(target=run, args=(2,))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    statuses = [r[1][0] for r in results]
+    assert statuses.count("admitted") == 1, f"Exactly one admitted, got: {statuses}"
+    assert statuses.count("busy") == 1, f"Exactly one busy, got: {statuses}"
+
+    with get_connection(postgres_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM bot_runtime.work_items "
+                "WHERE chat_id = 100 AND state IN ('queued', 'claimed') AND dispatch_mode = 'fresh'"
+            )
+            (n,) = cur.fetchone()
+    assert n == 1, f"Exactly one fresh runnable item per chat, got count: {n}"
+
+
+def test_cancel_queued_fresh_for_chat_terminal_state_postgres(postgres_truncated):
+    """Postgres: cancel_queued_fresh_for_chat leaves work item in terminal failed/cancelled."""
+    from app.db.postgres import get_connection
+
+    chat_id = 88
+    with get_connection(postgres_truncated) as conn:
+        status, item_id = work_queue_pg.record_and_admit_message(
+            conn, update_id=7001, chat_id=chat_id, user_id=42, kind="message", payload="{}"
+        )
+    assert status == "admitted"
+    assert item_id is not None
+
+    with get_connection(postgres_truncated) as conn:
+        ok = work_queue_pg.cancel_queued_fresh_for_chat(conn, chat_id)
+    assert ok is True
+
+    with get_connection(postgres_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, state, error FROM bot_runtime.work_items WHERE chat_id = %s ORDER BY created_at ASC",
+                (chat_id,),
+            )
+            rows = cur.fetchall()
+    items = [{"id": r[0], "state": r[1], "error": r[2]} for r in rows]
+    cancelled = [i for i in items if i["state"] == "failed" and i["error"] == "cancelled"]
+    runnable = [i for i in items if i["state"] in ("queued", "claimed")]
+    assert len(cancelled) == 1, f"Exactly one failed/cancelled, got: {items}"
+    assert len(runnable) == 0, f"No runnable after cancel, got: {items}"
 
 
 def test_record_and_enqueue_idempotent(postgres_truncated):

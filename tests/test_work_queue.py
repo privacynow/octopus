@@ -331,10 +331,10 @@ def test_load_work_item_by_id_raises_on_invalid_state():
     conn.row_factory = sqlite3.Row
     conn.execute(
         "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
-        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT, dispatch_mode TEXT NOT NULL DEFAULT 'fresh')"
     )
     conn.execute(
-        "INSERT INTO work_items (id, chat_id, update_id, state, created_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO work_items (id, chat_id, update_id, state, created_at, dispatch_mode) VALUES (?, ?, ?, ?, ?, 'fresh')",
         ("item-bogus", 1, 406, "bogus", "2025-01-01T00:00:00"),
     )
     conn.commit()
@@ -351,14 +351,14 @@ def test_assert_no_invalid_rows_for_chat_raises():
     conn.row_factory = sqlite3.Row
     conn.execute(
         "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
-        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT, dispatch_mode TEXT NOT NULL DEFAULT 'fresh')"
     )
     conn.execute(
-        "INSERT INTO work_items (id, chat_id, update_id, state, created_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO work_items (id, chat_id, update_id, state, created_at, dispatch_mode) VALUES (?, ?, ?, ?, ?, 'fresh')",
         ("item-1", 1, 407, "queued", "2025-01-01T00:00:00"),
     )
     conn.execute(
-        "INSERT INTO work_items (id, chat_id, update_id, state, created_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO work_items (id, chat_id, update_id, state, created_at, dispatch_mode) VALUES (?, ?, ?, ?, ?, 'fresh')",
         ("item-2", 1, 408, "bogus", "2025-01-01T00:00:01"),
     )
     conn.commit()
@@ -896,14 +896,14 @@ def test_assert_no_invalid_rows_raises_when_two_claimed_in_chat(data_dir):
     conn.row_factory = sqlite3.Row
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
-        "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+        "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT, dispatch_mode TEXT NOT NULL DEFAULT 'fresh')"
     )
     conn.execute(
-        "INSERT INTO work_items (id, chat_id, update_id, state, worker_id, claimed_at, created_at) VALUES (?, 1, 22001, 'claimed', 'w1', ?, ?)",
+        "INSERT INTO work_items (id, chat_id, update_id, state, worker_id, claimed_at, created_at, dispatch_mode) VALUES (?, 1, 22001, 'claimed', 'w1', ?, ?, 'fresh')",
         ("id-1", now, now),
     )
     conn.execute(
-        "INSERT INTO work_items (id, chat_id, update_id, state, worker_id, claimed_at, created_at) VALUES (?, 1, 22002, 'claimed', 'w2', ?, ?)",
+        "INSERT INTO work_items (id, chat_id, update_id, state, worker_id, claimed_at, created_at, dispatch_mode) VALUES (?, 1, 22002, 'claimed', 'w2', ?, ?, 'fresh')",
         ("id-2", now, now),
     )
     conn.commit()
@@ -1219,7 +1219,7 @@ def test_validate_work_item_row_ownerless_claimed():
     """Validator raises TransportStateCorruption for claimed row with worker_id None."""
     with pytest.raises(TransportStateCorruption) as exc_info:
         _validate_work_item_row(
-            {"state": "claimed", "worker_id": None, "claimed_at": "2025-01-01T00:00:00Z"},
+            {"state": "claimed", "worker_id": None, "claimed_at": "2025-01-01T00:00:00Z", "dispatch_mode": "fresh"},
             "item-1",
         )
     assert "worker_id" in str(exc_info.value).lower()
@@ -1229,7 +1229,7 @@ def test_validate_work_item_row_claimed_without_claimed_at():
     """Validator raises TransportStateCorruption for claimed row with claimed_at None."""
     with pytest.raises(TransportStateCorruption) as exc_info:
         _validate_work_item_row(
-            {"state": "claimed", "worker_id": "w1", "claimed_at": None},
+            {"state": "claimed", "worker_id": "w1", "claimed_at": None, "dispatch_mode": "fresh"},
             "item-2",
         )
     assert "claimed_at" in str(exc_info.value).lower()
@@ -1241,11 +1241,11 @@ def test_load_work_item_by_id_raises_on_ownerless_claimed():
     conn.row_factory = sqlite3.Row
     conn.execute(
         "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
-        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT, dispatch_mode TEXT NOT NULL DEFAULT 'fresh')"
     )
     conn.execute(
-        "INSERT INTO work_items (id, chat_id, update_id, state, worker_id, claimed_at, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO work_items (id, chat_id, update_id, state, worker_id, claimed_at, created_at, dispatch_mode) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 'fresh')",
         ("item-claimed", 1, 500, "claimed", None, None, "2025-01-01T00:00:00"),
     )
     conn.commit()
@@ -1262,11 +1262,11 @@ def test_load_work_item_by_id_raises_on_claimed_without_claimed_at():
     conn.row_factory = sqlite3.Row
     conn.execute(
         "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
-        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT, dispatch_mode TEXT NOT NULL DEFAULT 'fresh')"
     )
     conn.execute(
-        "INSERT INTO work_items (id, chat_id, update_id, state, worker_id, claimed_at, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO work_items (id, chat_id, update_id, state, worker_id, claimed_at, created_at, dispatch_mode) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 'fresh')",
         ("item-claimed", 1, 501, "claimed", "w1", None, "2025-01-01T00:00:00"),
     )
     conn.commit()
@@ -1360,6 +1360,7 @@ def test_complete_work_item_exact_cas_does_not_overwrite_later_claim(data_dir):
         "completed_at": None,
         "error": None,
         "created_at": "2025-01-01T00:00:00+00:00",
+        "dispatch_mode": "fresh",
     }
 
     with patch("app.work_queue_sqlite_impl._load_work_item_by_id", return_value=stale_row):
@@ -1442,7 +1443,7 @@ def test_forged_v2_db_with_wrong_index_rejected(data_dir):
     )
     conn.execute(
         "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
-        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT, dispatch_mode TEXT NOT NULL DEFAULT 'fresh')"
     )
     # Forged: same index name but non-unique and on update_id, no partial predicate
     conn.execute(
@@ -1474,7 +1475,7 @@ def test_forged_v2_db_wrong_partial_predicate_rejected(data_dir):
     )
     conn.execute(
         "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
-        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT, dispatch_mode TEXT NOT NULL DEFAULT 'fresh')"
     )
     conn.execute(
         "CREATE UNIQUE INDEX idx_one_claimed_per_chat ON work_items(chat_id) WHERE state != 'claimed'"

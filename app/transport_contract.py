@@ -41,6 +41,12 @@ def validate_work_item_row(row: dict[str, Any], item_id: str = "") -> None:
         raise TransportStateCorruption(
             f"unknown state {state!r}" + (f" for item {item_id}" if item_id else "")
         )
+    dispatch_mode = row.get("dispatch_mode")
+    if dispatch_mode not in ("fresh", "recovery"):
+        raise TransportStateCorruption(
+            "work item row must have dispatch_mode in ('fresh', 'recovery')"
+            + (f" (item {item_id})" if item_id else "")
+        )
     if state == "claimed":
         if row.get("worker_id") is None:
             raise TransportStateCorruption(

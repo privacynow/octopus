@@ -372,6 +372,7 @@ class CodexProvider:
         is_resume: bool = False,
         extra_env: dict[str, str] | None = None,
         working_dir: str = "",
+        cancel: asyncio.Event | None = None,
     ) -> RunResult:
         log.info("codex: %s", " ".join(cmd[:-1] + ["<prompt>"]))
 
@@ -401,7 +402,22 @@ class CodexProvider:
         async def consume_stdout() -> None:
             nonlocal thread_id, final_text, draft_text
             while True:
-                raw_line = await proc.stdout.readline()
+                read_coro = proc.stdout.readline()
+                if cancel is not None:
+                    cancel_fut = asyncio.ensure_future(cancel.wait())
+                    done, pending = await asyncio.wait(
+                        [asyncio.ensure_future(read_coro), cancel_fut],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for fut in pending:
+                        fut.cancel()
+                    if cancel.is_set():
+                        proc.kill()
+                        await proc.wait()
+                        return
+                    raw_line = done.pop().result()
+                else:
+                    raw_line = await read_coro
                 if not raw_line:
                     break
                 line = raw_line.decode("utf-8", errors="replace").strip()
@@ -470,6 +486,14 @@ class CodexProvider:
                 stderr = (await stderr_task).decode("utf-8", errors="replace").strip()
                 return RunResult(text="", timed_out=True, returncode=124)
 
+        # User-initiated cancel: consume_stdout killed the process.
+        if cancel is not None and cancel.is_set():
+            state_updates: dict[str, Any] = {}
+            if thread_id:
+                state_updates["thread_id"] = thread_id
+            return RunResult(text=final_text or "", cancelled=True,
+                             provider_state_updates=state_updates)
+
         state_updates: dict[str, Any] = {}
         if thread_id:
             state_updates["thread_id"] = thread_id
@@ -495,6 +519,7 @@ class CodexProvider:
         image_paths: list[str],
         progress: ProgressSink,
         context: RunContext | None = None,
+        cancel: asyncio.Event | None = None,
     ) -> RunResult:
         extra_dirs = context.extra_dirs if context else None
 
@@ -545,7 +570,7 @@ class CodexProvider:
 
         extra_env = context.credential_env if context else {}
         working_dir = context.working_dir if context else ""
-        return await self._run_cmd(cmd, progress, is_resume=is_resume, extra_env=extra_env, working_dir=working_dir)
+        return await self._run_cmd(cmd, progress, is_resume=is_resume, extra_env=extra_env, working_dir=working_dir, cancel=cancel)
 
     async def run_preflight(
         self,
@@ -553,6 +578,7 @@ class CodexProvider:
         image_paths: list[str],
         progress: ProgressSink,
         context: PreflightContext | None = None,
+        cancel: asyncio.Event | None = None,
     ) -> RunResult:
         system_prompt = ""
         if context and context.system_prompt:
@@ -570,4 +596,4 @@ class CodexProvider:
             extra_dirs=extra_dirs, effective_model=effective_model,
         )
         working_dir = context.working_dir if context else ""
-        return await self._run_cmd(cmd, progress, working_dir=working_dir)
+        return await self._run_cmd(cmd, progress, working_dir=working_dir, cancel=cancel)

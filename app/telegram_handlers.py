@@ -9,6 +9,7 @@ import re
 import time
 import uuid
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from telegram.ext import (
     filters,
 )
 
+from app import user_messages as _msg
 from app.approvals import (
     build_preflight_prompt,
     format_denials_html,
@@ -31,9 +33,8 @@ from app.approvals import (
 from app.config import BotConfig
 from app.formatting import extract_send_directives, md_to_telegram_html, split_html, trim_text
 from app.execution_context import ResolvedExecutionContext, resolve_execution_context
-from app.providers.base import Provider, RunContext, PreflightContext
+from app.providers.base import Provider
 from app.request_flow import (
-    build_setup_state,
     check_credential_satisfaction,
     classify_pending_validation,
     extra_dirs_from_denials,
@@ -49,17 +50,19 @@ from app.workflows.pending_request import (
     run_pending_request_event,
 )
 from app.session_state import (
-    AwaitingSkillSetup,
     PendingApproval,
     PendingRetry,
     SessionState,
     session_from_dict,
     session_to_dict,
 )
+from app.transports.admission import admit_fresh_message
+from app.transports.telegram_adapter import TelegramConversationIO
+from app.transports.types import InboundEnvelope
 from app.skills import (
     build_run_context, build_preflight_context,
     get_provider_config_digest, get_skill_digests,
-    get_skill_requirements, check_credentials, load_user_credentials,
+    get_skill_requirements,
     save_user_credential, delete_user_credentials, list_user_credential_skills,
     derive_encryption_key,
     build_credential_env,
@@ -78,7 +81,7 @@ from app.storage import (
     list_sessions,
 )
 from app.ratelimit import RateLimiter
-from app.summarize import export_chat_history, load_raw, save_raw, summarize
+from app.summarize import export_chat_history, load_raw, save_raw
 from app import work_queue
 from app.workflows.results import TransportStateCorruption
 from app.transport import (
@@ -94,6 +97,12 @@ from app.transport import (
 log = logging.getLogger(__name__)
 
 CHAT_LOCKS: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+# Worker-owned live execution: chat_id -> cancel Event for the active provider run.
+# Populated by worker_dispatch when it starts execute_request/request_approval;
+# /cancel sets the event so the running provider can exit. Busy/admission gating
+# is done at the store (record_and_admit_message), not via this registry.
+_LIVE_CANCEL: dict[int, asyncio.Event] = {}
 
 
 def _run_result_was_interrupted(returncode: int) -> bool:
@@ -219,13 +228,14 @@ async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int |
         sent_feedback = True
         if message is not None:
             await message.reply_text(
-                "<i>Working on your previous request \u2014 yours is queued.</i>",
+                f"<i>{_msg.queue_busy()}</i>",
                 parse_mode=ParseMode.HTML)
         elif query is not None:
-            await query.answer("Working on your previous request \u2014 yours is queued.")
+            await query.answer(_msg.queue_busy())
     async with lock:
-        # Worker path: item already claimed externally, just provide the lock.
+        # Worker path: item already claimed externally; supersede any pending_recovery for this chat.
         if worker_item is not None:
+            work_queue.supersede_pending_recovery(data_dir, chat_id)
             try:
                 yield sent_feedback
             except work_queue.LeaveClaimed:
@@ -243,22 +253,18 @@ async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int |
             log.exception("Transport state corruption in claim path for chat %s: %s", chat_id, e)
             if message is not None:
                 await message.reply_text(
-                    "<i>Something went wrong with the request queue. Please try again or contact support.</i>",
+                    f"<i>{_msg.generic_error_try_again()}</i>",
                     parse_mode=ParseMode.HTML,
                 )
             elif query is not None:
-                await query.answer("Something went wrong. Please try again or contact support.", show_alert=True)
+                await query.answer(_msg.generic_error_try_again(), show_alert=True)
             return
 
         # If claim failed and the reason is a concurrent claimed item (worker
         # claimed outside the lock), the handler must not run.  The work item
         # stays queued for worker_loop to pick up after its current item.
         if item is None and effective_update_id is not None:
-            has_claimed = work_queue._transport_db(data_dir).execute(
-                "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
-                (chat_id,),
-            ).fetchone()
-            if has_claimed:
+            if work_queue.has_claimed_for_chat(data_dir, chat_id):
                 raise ClaimBlocked(chat_id)
 
         item_id = item["id"] if item else None
@@ -462,7 +468,7 @@ def _trust_tier(user) -> str:
 async def _public_guard(event, update: Update) -> bool:
     """Return True (and send denial) if the user is public. Use at top of restricted commands."""
     if is_public_user(event.user):
-        await update.effective_message.reply_text("This command is not available in public mode.")
+        await update.effective_message.reply_text(_msg.trust_command_not_available_public())
         return True
     return False
 
@@ -516,7 +522,7 @@ def _callback_handler(fn):
             return
         query = update.callback_query
         if not is_allowed(event.user):
-            await query.answer("Not authorized.", show_alert=True)
+            await query.answer(_msg.trust_not_authorized(), show_alert=True)
             _complete_pending_work_item(uid)
             return
         token = _current_update_id.set(uid)
@@ -525,7 +531,7 @@ def _callback_handler(fn):
         except ClaimBlocked:
             _pending_work_items.pop(uid, None)
             try:
-                await query.answer("Working on your previous request — yours is queued.")
+                await query.answer(_msg.queue_busy())
             except Exception:
                 pass
             return
@@ -551,26 +557,212 @@ def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
 
 # -- Project helpers -------------------------------------------------------
 
-def _resolve_project(session: SessionState) -> tuple[str, str, tuple[str, ...]] | None:
-    """Return (name, root_dir, extra_dirs) for the session's bound project, or None."""
+def _resolve_project(session: SessionState):
+    """Return ProjectBinding for the session's bound project, or None."""
     project_id = session.project_id
     if not project_id:
         return None
-    for name, root_dir, extra_dirs in _cfg().projects:
-        if name == project_id:
-            return (name, root_dir, extra_dirs)
+    for proj in _cfg().projects:
+        if proj.name == project_id:
+            return proj
     return None
-
-
-def _project_working_dir(session: SessionState) -> str:
-    """Return the working directory for this session's project, or empty string for default."""
-    proj = _resolve_project(session)
-    return proj[1] if proj else ""
 
 
 def _resolve_context(session: SessionState, trust_tier: str = "trusted") -> ResolvedExecutionContext:
     """Build the single authoritative execution identity from session + config."""
     return resolve_execution_context(session, _cfg(), _prov().name, trust_tier=trust_tier)
+
+
+def _settings_model_profile_state(
+    session: SessionState,
+    cfg: BotConfig,
+    trust_tier: str,
+    effective_model: str,
+) -> tuple[list[str], str]:
+    """Return (available profile names sorted, current profile name for display/checkmark).
+
+    For public users, current is derived from effective_model over public profiles only,
+    so text and keyboard selection stay consistent when saved/default is restricted.
+    """
+    if trust_tier == "public" and cfg.public_model_profiles and cfg.model_profiles:
+        available = sorted(cfg.public_model_profiles & cfg.model_profiles.keys())
+        current = "(default)"
+        for p in available:
+            if cfg.model_profiles.get(p) == effective_model:
+                current = p
+                break
+        return (available, current)
+    available = sorted(cfg.model_profiles.keys()) if cfg.model_profiles else []
+    if not available:
+        # No profiles configured — don't display a phantom profile name
+        return ([], "(default)")
+    # Resolution: session > project > global default (mirrors resolve_effective_model)
+    project_profile = ""
+    if session.project_id:
+        for proj in cfg.projects:
+            if proj.name == session.project_id:
+                project_profile = proj.model_profile
+                break
+    current = session.model_profile or project_profile or cfg.default_model_profile or "(default)"
+    return (available, current)
+
+
+def _settings_model_buttons(available: list[str], current: str, has_explicit_override: bool = False) -> list[InlineKeyboardButton]:
+    """One row of model profile buttons, with optional Inherit button."""
+    buttons = [
+        InlineKeyboardButton(
+            f"\u2705 {p}" if p == current else p,
+            callback_data=f"setting_model:{p}",
+        )
+        for p in available
+    ]
+    if has_explicit_override:
+        buttons.append(InlineKeyboardButton("Inherit", callback_data="setting_model:inherit"))
+    return buttons
+
+
+def _settings_project_buttons(
+    cfg: BotConfig, session: SessionState
+) -> list[list[InlineKeyboardButton]]:
+    """Project rows: one row of project names, optional clear row. For trusted users only."""
+    rows: list[list[InlineKeyboardButton]] = []
+    if not cfg.projects:
+        return rows
+    row = []
+    for proj in cfg.projects:
+        label = f"\u2705 {proj.name}" if proj.name == session.project_id else proj.name
+        row.append(InlineKeyboardButton(label, callback_data=f"setting_project:{proj.name}"))
+    if row:
+        rows.append(row)
+    if session.project_id:
+        rows.append([InlineKeyboardButton("Clear project", callback_data="setting_project:clear")])
+    return rows
+
+
+def _settings_policy_buttons(policy: str, has_explicit_override: bool = False) -> list[InlineKeyboardButton]:
+    """One row of file policy buttons, with optional Inherit button."""
+    buttons = [
+        InlineKeyboardButton(
+            "\u2705 Read only" if policy == "inspect" else "Read only",
+            callback_data="setting_policy:inspect",
+        ),
+        InlineKeyboardButton(
+            "\u2705 Read & write" if policy == "edit" else "Read & write",
+            callback_data="setting_policy:edit",
+        ),
+    ]
+    if has_explicit_override:
+        buttons.append(InlineKeyboardButton("Inherit", callback_data="setting_policy:inherit"))
+    return buttons
+
+
+def _settings_compact_buttons(compact: bool) -> list[InlineKeyboardButton]:
+    """One row of compact mode buttons."""
+    return [
+        InlineKeyboardButton(
+            "\u2705 Short answers" if compact else "Short answers",
+            callback_data="setting_compact:on",
+        ),
+        InlineKeyboardButton(
+            "\u2705 Full answers" if not compact else "Full answers",
+            callback_data="setting_compact:off",
+        ),
+    ]
+
+
+def _settings_approval_buttons(approval: str) -> list[InlineKeyboardButton]:
+    """One row of approval mode buttons."""
+    return [
+        InlineKeyboardButton(
+            "\u2705 Review first" if approval == "on" else "Review first",
+            callback_data="setting_approval:on",
+        ),
+        InlineKeyboardButton(
+            "\u2705 Run immediately" if approval == "off" else "Run immediately",
+            callback_data="setting_approval:off",
+        ),
+    ]
+
+
+# -- Setting mutators (single authority per family for command + callback) ----
+
+def _apply_model_change(chat_id: int, session: SessionState, value: str) -> None:
+    """Set session model_profile and persist. Caller sends reply."""
+    session.model_profile = value
+    _save(chat_id, session)
+
+
+def _apply_model_selection(
+    chat_id: int,
+    session: SessionState,
+    profile: str,
+    cfg: BotConfig,
+    trust_tier: str,
+) -> tuple[bool, str]:
+    """Validate model profile for this context, apply if allowed, return (ok, message).
+
+    Single authority for both cmd_model and handle_settings_callback model branch.
+    Caller sends the returned message (reply or edit_text).
+    """
+    resolved = _resolve_context(session, trust_tier=trust_tier)
+    effective = resolved.effective_model or ""
+    available_list, _ = _settings_model_profile_state(session, cfg, trust_tier, effective)
+    available = set(available_list)
+    if profile not in available:
+        return (False, _msg.trust_model_profile_not_available(profile, list(available_list)))
+    _apply_model_change(chat_id, session, profile)
+    return (True, _msg.trust_model_profile_set(profile, cfg.model_profiles[profile]))
+
+
+def _apply_project_change(
+    chat_id: int, session: SessionState, value: str
+) -> tuple[bool, str]:
+    """Apply project change (clear or set). Returns (success, message). Caller sends message."""
+    cfg = _cfg()
+    if value == "clear":
+        if not session.project_id:
+            return (False, _msg.trust_no_project_active())
+        session.project_id = ""
+        session.provider_state = _prov().new_provider_state()
+        session.clear_pending()
+        _save(chat_id, session)
+        return (True, _msg.trust_project_cleared(str(cfg.working_dir)))
+    # value is project name
+    found = any(proj.name == value for proj in cfg.projects)
+    if not found:
+        return (False, _msg.trust_unknown_project(value))
+    if session.project_id == value:
+        return (False, _msg.trust_already_using_project(value))
+    session.project_id = value
+    session.provider_state = _prov().new_provider_state()
+    session.clear_pending()
+    _save(chat_id, session)
+    proj = next(p for p in cfg.projects if p.name == value)
+    return (True, _msg.trust_switched_project(
+        value, str(proj.root_dir),
+        file_policy=proj.file_policy, model_profile=proj.model_profile,
+    ))
+
+
+def _apply_policy_change(chat_id: int, session: SessionState, value: str) -> None:
+    """Set file_policy, reset provider_state and pending, persist. Caller sends reply."""
+    session.file_policy = value
+    session.provider_state = _prov().new_provider_state()
+    session.clear_pending()
+    _save(chat_id, session)
+
+
+def _apply_approval_change(chat_id: int, session: SessionState, value: str) -> None:
+    """Set approval_mode and approval_mode_explicit, persist. Caller sends reply."""
+    session.approval_mode = value
+    session.approval_mode_explicit = True
+    _save(chat_id, session)
+
+
+def _apply_compact_change(chat_id: int, session: SessionState, value: bool) -> None:
+    """Set compact_mode and persist. Caller sends reply."""
+    session.compact_mode = value
+    _save(chat_id, session)
 
 
 # -- Helpers ---------------------------------------------------------------
@@ -742,7 +934,7 @@ async def _heartbeat(progress, content_started: asyncio.Event) -> None:
                 await asyncio.sleep(_HEARTBEAT_SUBSEQUENT - since_last)
                 continue
             elapsed = int(time.monotonic() - start)
-            await progress.update(f"<i>Still working... ({elapsed}s)</i>", force=True)
+            await progress.update(_msg.progress_still_working(elapsed), force=True)
             await asyncio.sleep(_HEARTBEAT_SUBSEQUENT)
     except asyncio.CancelledError:
         pass
@@ -883,7 +1075,7 @@ async def execute_request(
         _save(chat_id, session)
 
     is_resume = bool(session.provider_state.get("thread_id") or session.provider_state.get("started"))
-    label = "Resuming..." if is_resume else "Working..."
+    label = _msg.progress_resuming() if is_resume else _msg.progress_working()
     status_msg = await message.reply_text(label)
     progress = TelegramProgress(status_msg, cfg)
     content_started = asyncio.Event()
@@ -891,12 +1083,23 @@ async def execute_request(
     typing_task = asyncio.create_task(keep_typing(message.chat))
     heartbeat_task = asyncio.create_task(_heartbeat(progress, content_started))
 
+    cancel_event = asyncio.Event()
+    _LIVE_CANCEL[chat_id] = cancel_event
     try:
-        result = await prov.run(session.provider_state, prompt, image_paths, progress, context=context)
+        result = await prov.run(session.provider_state, prompt, image_paths, progress, context=context, cancel=cancel_event)
     finally:
+        _LIVE_CANCEL.pop(chat_id, None)
         heartbeat_task.cancel()
         typing_task.cancel()
         await asyncio.gather(heartbeat_task, typing_task, return_exceptions=True)
+
+    if result.cancelled:
+        # Persist provider_state_updates so thread/session continuity is not lost.
+        session = _load(chat_id)
+        session.provider_state.update(result.provider_state_updates)
+        _save(chat_id, session)
+        await progress.update(_msg.cancel_live_completed(), force=True)
+        return
 
     if _run_result_was_interrupted(result.returncode):
         log.info("%s interrupted for chat %d (rc=%s); leaving work item claimed",
@@ -931,22 +1134,20 @@ async def execute_request(
     _save(chat_id, session)
 
     if result.timed_out:
-        await progress.update(
-            f"Request timed out after {cfg.timeout_seconds} seconds.", force=True
-        )
+        await progress.update(_msg.progress_request_timed_out(cfg.timeout_seconds), force=True)
         return
 
     if result.returncode != 0:
         error_text = await _format_provider_error(result.text, result.returncode)
         if result.resume_failed:
-            error_text += "\n\n<i>Session could not be resumed \u2014 next message starts fresh.</i>"
+            error_text += _msg.progress_session_not_resumed()
         await progress.update(error_text, force=True)
         return
 
     # Claude denial/retry flow — show denials BEFORE output so the user
     # understands the result is partial before reading it.
     if result.denials:
-        await progress.update("Completed with blocked actions.", force=True)
+        await progress.update(_msg.progress_completed_with_blocked(), force=True)
 
         session = _load(chat_id)
         session.pending_retry = PendingRetry(
@@ -961,13 +1162,13 @@ async def execute_request(
         _save(chat_id, session)
 
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("\u2705 Grant access & retry", callback_data="retry_allow"),
-            InlineKeyboardButton("\u274c Skip retry", callback_data="retry_skip"),
+            InlineKeyboardButton("\u2705 " + _msg.retry_button_grant(), callback_data="retry_allow"),
+            InlineKeyboardButton("\u274c " + _msg.retry_button_skip(), callback_data="retry_skip"),
         ]])
         await message.chat.send_message(
-            f"\u26a0\ufe0f <b>Permission needed:</b>\n"
+            f"\u26a0\ufe0f <b>{_msg.retry_permission_prompt()}</b>\n"
             f"{format_denials_html(result.denials)}\n\n"
-            "Grant access and retry from the beginning?",
+            f"{_msg.retry_grant_and_retry_question()}",
             parse_mode=ParseMode.HTML,
             reply_markup=keyboard,
         )
@@ -978,7 +1179,7 @@ async def execute_request(
             await send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
         return
 
-    await progress.update("Completed.", force=True)
+    await progress.update(_msg.progress_completed(), force=True)
 
     cleaned_reply, directives = extract_send_directives(result.text)
 
@@ -1009,9 +1210,7 @@ async def request_approval(
     session = _load(chat_id)
 
     if session.has_pending:
-        await message.reply_text(
-            "An approval is already waiting. Use /approve or /reject first."
-        )
+        await message.reply_text(_msg.approval_already_waiting())
         return
 
     # Resolve the authoritative execution identity once
@@ -1037,9 +1236,7 @@ async def request_approval(
     # Use the single authoritative context hash
     context_hash = resolved.context_hash
 
-    status_msg = await message.reply_text(
-        "Preparing approval...",
-    )
+    status_msg = await message.reply_text(_msg.approval_preparing())
     progress = TelegramProgress(status_msg, cfg)
     content_started = asyncio.Event()
     progress.content_started = content_started
@@ -1047,12 +1244,19 @@ async def request_approval(
     heartbeat_task = asyncio.create_task(_heartbeat(progress, content_started))
 
     preflight_prompt = build_preflight_prompt(prompt, prov.name)
+    cancel_event = asyncio.Event()
+    _LIVE_CANCEL[chat_id] = cancel_event
     try:
-        plan_result = await prov.run_preflight(preflight_prompt, image_paths, progress, context=preflight_context)
+        plan_result = await prov.run_preflight(preflight_prompt, image_paths, progress, context=preflight_context, cancel=cancel_event)
     finally:
+        _LIVE_CANCEL.pop(chat_id, None)
         heartbeat_task.cancel()
         typing_task.cancel()
         await asyncio.gather(heartbeat_task, typing_task, return_exceptions=True)
+
+    if plan_result.cancelled:
+        await progress.update(_msg.cancel_live_completed(), force=True)
+        return
 
     if _run_result_was_interrupted(plan_result.returncode):
         log.info("Preflight interrupted for chat %d (rc=%s); leaving work item claimed",
@@ -1060,12 +1264,12 @@ async def request_approval(
         raise work_queue.LeaveClaimed()
 
     if plan_result.timed_out:
-        await progress.update("Approval request timed out.", force=True)
+        await progress.update(_msg.approval_timeout(), force=True)
         return
 
     if plan_result.returncode != 0:
         error_text = await _format_provider_error(plan_result.text, plan_result.returncode)
-        await progress.update(f"Approval check failed:\n{error_text}", force=True)
+        await progress.update(f"{_msg.approval_check_failed_prefix()}\n{error_text}", force=True)
         return
 
     attachment_dicts = [
@@ -1084,24 +1288,24 @@ async def request_approval(
     _save(chat_id, session)
 
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("\u2705 Approve plan", callback_data="approval_approve"),
-        InlineKeyboardButton("\u274c Reject plan", callback_data="approval_reject"),
+        InlineKeyboardButton("\u2705 " + _msg.approval_button_approve(), callback_data="approval_approve"),
+        InlineKeyboardButton("\u274c " + _msg.approval_button_reject(), callback_data="approval_reject"),
     ]])
-    await progress.update("Approval required.", force=True)
+    await progress.update(_msg.approval_required(), force=True)
     plan_text = plan_result.text or "[empty plan]"
     save_raw(cfg.data_dir, chat_id, prompt, plan_text, kind="approval")
     await send_formatted_reply(
         message,
         "**Approval plan:**\n\n" + plan_text,
     )
-    await message.chat.send_message("Approve this plan?", reply_markup=keyboard)
+    await message.chat.send_message(_msg.approval_plan_question(), reply_markup=keyboard)
 
 
 async def approve_pending(chat_id: int, message) -> None:
     session = _load(chat_id)
     pending = session.pending_approval or session.pending_retry
     if not pending:
-        await message.reply_text("No pending request to approve.")
+        await message.reply_text(_msg.approval_no_pending_approve())
         return
 
     state = "pending_approval" if session.pending_approval else "pending_retry"
@@ -1118,14 +1322,14 @@ async def approve_pending(chat_id: int, message) -> None:
         session.clear_pending()
         _save(chat_id, session)
         error = validate_pending(pending, session, _cfg(), _prov().name)
-        await message.reply_text(error or "Request is no longer valid.")
+        await message.reply_text(error or _msg.approval_request_no_longer_valid())
         return
 
     if result.disposition != PendingRequestDisposition.executed:
         session.clear_pending()
         _save(chat_id, session)
         error = validate_pending(pending, session, _cfg(), _prov().name)
-        await message.reply_text(error or "Request is no longer valid.")
+        await message.reply_text(error or _msg.approval_request_no_longer_valid())
         return
 
     denials = getattr(pending, "denials", None) or []
@@ -1146,38 +1350,76 @@ async def approve_pending(chat_id: int, message) -> None:
 async def reject_pending(chat_id: int, message) -> None:
     session = _load(chat_id)
     if not session.has_pending:
-        await message.reply_text("No pending request to reject.")
+        await message.reply_text(_msg.approval_no_pending_reject())
         return
     state = "pending_approval" if session.pending_approval else "pending_retry"
     model = PendingRequestWorkflowModel(state=state)
     run_pending_request_event(model, "reject")
     session.clear_pending()
     _save(chat_id, session)
-    await message.reply_text("Pending request rejected.")
+    await message.reply_text(_msg.approval_rejected())
 
 
 # -- Command handlers ------------------------------------------------------
 
-HELP_TEMPLATE = (
-    "<b>Agent Bot</b> (instance: <code>{instance}</code>, provider: {provider})\n\n"
-    "Send a message, photo, or document and the AI will respond.\n\n"
-    "<b>Commands:</b>\n"
-    "/new — start a fresh conversation\n"
-    "/skills — browse and activate skills (e.g. <code>/skills list</code>)\n"
-    "/role &lt;text&gt; — set the AI's persona (e.g. <code>/role Python expert</code>)\n"
-    "/approval on|off — show a plan before executing, or run immediately\n"
-    "/approve / /reject — act on a pending plan\n"
-    "/cancel — cancel credential setup or a pending request\n"
-    "/clear_credentials — remove your stored credentials\n"
-    "/send &lt;path&gt; — retrieve a file from the server\n"
-    "/model — switch model profile (fast/balanced/best)\n"
-    "/compact on|off — toggle short/full answers\n"
-    "/policy inspect|edit — set file access policy\n"
-    "/session — show current session info\n"
-    "/id — show your Telegram user ID\n"
-    "/doctor — run health checks\n""/export — download recent conversation history\n""/admin sessions — session overview (admin only)\n\n"
-    "Type /help skills, /help approval, or /help credentials for details."
-)
+def _help_command_lines(user) -> list[str]:
+    """Build the main help command list for the given user (trust- and admin-aware).
+
+    Public users do not see /project or /policy (blocked by _public_guard in handlers).
+    Non-admin users do not see /admin sessions.
+    """
+    lines = [
+        "/new — start a fresh conversation",
+        "/skills — browse and activate skills (e.g. <code>/skills list</code>)",
+        "/role &lt;text&gt; — set the AI's persona (e.g. <code>/role Python expert</code>)",
+        "/approval on|off — show a plan before executing, or run immediately",
+        "/approve / /reject — act on a pending plan",
+        "/cancel — cancel a running task, credential setup, or a pending request",
+        "/clear_credentials — remove your stored credentials",
+        "/send &lt;path&gt; — retrieve a file from the server",
+        "/compact on|off — toggle short/full answers",
+    ]
+    if _cfg().model_profiles:
+        lines.append("/model — switch model profile (fast/balanced/best)")
+    if not is_public_user(user):
+        lines.append("/policy inspect|edit — set file access policy")
+    lines.extend([
+        "/settings — view and change chat settings",
+    ])
+    if not is_public_user(user) and _cfg().projects:
+        lines.append("/project — show or change project binding")
+    lines.extend([
+        "/session — show current session info",
+        "/id — show your Telegram user ID",
+        "/doctor — run full app health check (DB, config, Telegram)",
+        "/export — download recent conversation history",
+    ])
+    if is_admin(user):
+        lines.append("/admin sessions — session overview (admin only)")
+    return lines
+
+
+def _build_main_help(user) -> str:
+    """Build the full main help text for the given user (trust- and admin-aware)."""
+    cfg = _cfg()
+    provider = _prov().name.capitalize()
+    instance = cfg.instance
+    header = (
+        "<b>Agent Bot</b> (instance: <code>{instance}</code>, provider: {provider})\n\n"
+        "Send a message, photo, or document and the AI will respond.\n\n"
+        "<b>Commands:</b>\n"
+    ).format(instance=instance, provider=provider)
+    command_block = "\n".join(_help_command_lines(user)) + "\n\n"
+    # Intentional set of controls (trust-aware: no /project for public).
+    control_parts = ["/settings", "/session"]
+    if cfg.model_profiles:
+        control_parts.append("/model")
+    if not is_public_user(user) and cfg.projects:
+        control_parts.append("/project")
+    controls_line = "Chat options: " + " · ".join(control_parts) + "."
+    recovery_line = "Interrupted? Use Run again or Skip on the status message."
+    footer = controls_line + "\n" + recovery_line + "\n\nType /help skills, /help approval, or /help credentials for details."
+    return header + command_block + footer
 
 HELP_SKILLS = (
     "<b>Skills</b>\n\n"
@@ -1195,6 +1437,8 @@ HELP_APPROVAL = (
     "<b>Approval Mode</b>\n\n"
     "When approval mode is on, the AI shows a plan before executing. "
     "You review and approve or reject it.\n\n"
+    "If a request needs approval, retry, or recovery (e.g. interrupted or blocked), "
+    "use the in-chat buttons on the status message — Run again or Skip — no separate command needed.\n\n"
     "/approval on — require approval before execution\n"
     "/approval off — execute immediately\n"
     "/approval status — check current setting\n"
@@ -1228,11 +1472,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     uid = update.update_id
     if event is None or not is_allowed(event.user):
-        await update.effective_message.reply_text("Not authorized.")
+        await update.effective_message.reply_text(_msg.trust_not_authorized())
         _complete_pending_work_item(uid)
         return
-    cfg = _cfg()
-    text = HELP_TEMPLATE.format(provider=_prov().name.capitalize(), instance=cfg.instance)
+    text = _build_main_help(event.user)
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
     _complete_pending_work_item(uid)
 
@@ -1245,10 +1488,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     uid = update.update_id
     if event is None or not is_allowed(event.user):
-        await update.effective_message.reply_text("Not authorized.")
+        await update.effective_message.reply_text(_msg.trust_not_authorized())
         _complete_pending_work_item(uid)
         return
-    cfg = _cfg()
     args = event.args
 
     if args:
@@ -1264,7 +1506,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         _complete_pending_work_item(uid)
         return
 
-    text = HELP_TEMPLATE.format(provider=_prov().name.capitalize(), instance=cfg.instance)
+    text = _build_main_help(event.user)
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
     _complete_pending_work_item(uid)
 
@@ -1299,6 +1541,8 @@ async def cmd_new(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     session = _load(event.chat_id)
     cfg = _cfg()
+    trust = _trust_tier(event.user)
+    resolved = _resolve_context(session, trust_tier=trust)
     pstate = session.provider_state
 
     # Show provider-relevant session ID
@@ -1311,7 +1555,6 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         session_line = f"Thread: <code>{html.escape(str(tid))}</code>"
 
     pending = "yes" if session.has_pending else "no"
-    resolved = _resolve_context(session, trust_tier=_trust_tier(event.user))
     role_display = resolved.role or "(default)"
     skills_display = ", ".join(resolved.active_skills) if resolved.active_skills else "(none)"
     approval_mode = session.approval_mode
@@ -1324,7 +1567,9 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         wd_display = resolved.working_dir
 
     file_policy = resolved.file_policy or "edit"
-    model_profile = session.model_profile or cfg.default_model_profile or "(default)"
+    _, model_profile = _settings_model_profile_state(
+        session, cfg, trust, resolved.effective_model or ""
+    )
     model_id = resolved.effective_model or cfg.model or "(default)"
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
     compact_display = "on" if compact else "off"
@@ -1334,7 +1579,7 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     sys_prompt = build_system_prompt(resolved.role, resolved.active_skills)
     prompt_weight = f"~{len(sys_prompt)} chars" if sys_prompt else "minimal"
 
-    await update.effective_message.reply_text(
+    body = (
         f"Provider: <code>{html.escape(_prov().name)}</code>\n"
         f"Instance: <code>{html.escape(cfg.instance)}</code>\n"
         f"Working dir: <code>{html.escape(wd_display)}</code>\n"
@@ -1346,9 +1591,25 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"Approval mode: <code>{approval_mode}</code> ({approval_source})\n"
         f"Role: <code>{html.escape(role_display)}</code>\n"
         f"Skills: <code>{html.escape(skills_display)}</code>\n"
-        f"Pending: <code>{pending}</code>",
-        parse_mode=ParseMode.HTML,
+        f"Pending: <code>{pending}</code>"
     )
+    if trust == "public":
+        body += "\n\n" + _msg.trust_settings_managed_public()
+    cfg = _cfg()
+    session_cmds = ["/settings"]
+    if trust != "public" and cfg.projects:
+        session_cmds.append("/project")
+    if cfg.model_profiles:
+        session_cmds.append("/model")
+    if session_cmds:
+        if len(session_cmds) == 1:
+            cmd_str = session_cmds[0]
+        elif len(session_cmds) == 2:
+            cmd_str = session_cmds[0] + " or " + session_cmds[1]
+        else:
+            cmd_str = ", ".join(session_cmds[:-1]) + ", or " + session_cmds[-1]
+        body += "\n\n" + "Use " + cmd_str + " to change chat settings."
+    await update.effective_message.reply_text(body, parse_mode=ParseMode.HTML)
 
 
 @_command_handler
@@ -1356,30 +1617,20 @@ async def cmd_approval(event, update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = event.chat_id
     arg = (event.args[0].lower() if event.args else "status")
     if arg not in {"on", "off", "status"}:
-        await update.effective_message.reply_text("Use /approval on, /approval off, or /approval status.")
+        await update.effective_message.reply_text(_msg.approval_usage())
         return
     async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = _load(chat_id)
         if arg == "status":
             mode = session.approval_mode
             source = _approval_mode_source(session)
-            buttons = [
-                InlineKeyboardButton(
-                    f"\u2705 Review first" if mode == "on" else "Review first",
-                    callback_data="setting_approval:on"),
-                InlineKeyboardButton(
-                    f"\u2705 Run immediately" if mode == "off" else "Run immediately",
-                    callback_data="setting_approval:off"),
-            ]
             await update.effective_message.reply_text(
                 f"Approval mode is <b>{mode}</b> ({source}).",
                 parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([buttons]),
+                reply_markup=InlineKeyboardMarkup([_settings_approval_buttons(mode)]),
             )
             return
-        session.approval_mode = arg
-        session.approval_mode_explicit = True
-        _save(chat_id, session)
+        _apply_approval_change(chat_id, session, arg)
     await update.effective_message.reply_text(
         f"Approval mode set to {arg} for this chat."
     )
@@ -1466,7 +1717,7 @@ async def cmd_export(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     history = export_chat_history(cfg.data_dir, chat_id)
     if not history:
-        await update.effective_message.reply_text("No conversation history to export.")
+        await update.effective_message.reply_text(_msg.no_conversation_to_export())
         return
 
     # Add session metadata header — use resolved context for user-visible data
@@ -1500,7 +1751,7 @@ async def cmd_export(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 @_command_handler
 async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(event.user):
-        await update.effective_message.reply_text("Admin access required.")
+        await update.effective_message.reply_text(_msg.admin_required())
         return
 
     args = event.args
@@ -1515,7 +1766,7 @@ async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
     sessions = list_sessions(cfg.data_dir)
 
     if not sessions:
-        await update.effective_message.reply_text("No sessions found.")
+        await update.effective_message.reply_text(_msg.no_sessions_found())
         return
 
     # Filter stale active_skills that no longer resolve
@@ -1632,6 +1883,18 @@ async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     chat_id = event.chat_id
     user_id = event.user.id
 
+    # Worker-owned live run: set cancel event so the running execute_request/request_approval sees it.
+    cancel_event = _LIVE_CANCEL.get(chat_id)
+    if cancel_event is not None:
+        cancel_event.set()
+        await update.effective_message.reply_text(_msg.cancel_live_requested())
+        return
+
+    # Admitted but not yet running: cancel queued fresh item so the worker won't run it.
+    if work_queue.cancel_queued_fresh_for_chat(_cfg().data_dir, chat_id):
+        await update.effective_message.reply_text(_msg.cancel_queued_superseded())
+        return
+
     async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = _load(chat_id)
 
@@ -1640,21 +1903,21 @@ async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
             if setup.user_id == user_id or is_admin(event.user):
                 session.awaiting_skill_setup = None
                 _save(chat_id, session)
-                await update.effective_message.reply_text("Credential setup cancelled.")
+                await update.effective_message.reply_text(_msg.credential_setup_cancelled())
                 return
             else:
                 await update.effective_message.reply_text(
-                    "Another user's credential setup is in progress. Only they or an admin can cancel it.",
+                    _msg.credential_setup_another_user_in_progress(),
                 )
                 return
 
         if session.has_pending:
             session.clear_pending()
             _save(chat_id, session)
-            await update.effective_message.reply_text("Pending request cancelled.")
+            await update.effective_message.reply_text(_msg.cancel_pending_request())
             return
 
-    await update.effective_message.reply_text("Nothing to cancel.")
+    await update.effective_message.reply_text(_msg.nothing_to_cancel())
 
 
 @_command_handler
@@ -1731,7 +1994,7 @@ async def _execute_clear_credentials(
     if removed:
         parts.append(f"Credentials cleared for: {html.escape(', '.join(removed))}.")
     if setup_cleared:
-        parts.append("Credential setup cancelled.")
+        parts.append(_msg.credential_setup_cancelled())
     if deactivated:
         parts.append(f"Deactivated in this chat: {html.escape(', '.join(deactivated))}.")
     if not parts:
@@ -1754,13 +2017,13 @@ async def handle_clear_cred_callback(event, query) -> None:
         except (ValueError, IndexError):
             owner_id = 0
         if owner_id and clicker_id != owner_id:
-            await query.answer("This button is for another user.", show_alert=True)
+            await query.answer(_msg.callback_wrong_user(), show_alert=True)
             return
 
     if parts[0] == "clear_cred_cancel":
         await query.answer()
         await query.edit_message_reply_markup(reply_markup=None)
-        await query.edit_message_text("Credential clear cancelled.")
+        await query.edit_message_text(_msg.credential_clear_cancelled())
         return
 
     if parts[0] == "clear_cred_confirm_all":
@@ -1784,18 +2047,10 @@ async def cmd_compact(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         session = _load(chat_id)
         current = session.compact_mode if session.compact_mode is not None else _cfg().compact_mode
         state = "on" if current else "off"
-        buttons = [
-            InlineKeyboardButton(
-                "\u2705 Short answers" if current else "Short answers",
-                callback_data="setting_compact:on"),
-            InlineKeyboardButton(
-                "\u2705 Full answers" if not current else "Full answers",
-                callback_data="setting_compact:off"),
-        ]
         await update.effective_message.reply_text(
             f"Compact mode is <b>{state}</b>.",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([buttons]),
+            reply_markup=InlineKeyboardMarkup([_settings_compact_buttons(current)]),
         )
         return
 
@@ -1806,10 +2061,9 @@ async def cmd_compact(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = _load(chat_id)
-        session.compact_mode = mode == "on"
-        _save(chat_id, session)
+        _apply_compact_change(chat_id, session, mode == "on")
 
-    label = "on — long responses will be summarized" if mode == "on" else "off"
+    label = _msg.settings_compact_on_label() if mode == "on" else _msg.settings_compact_off_label()
     await update.effective_message.reply_text(
         f"Compact mode set to <b>{label}</b>.", parse_mode=ParseMode.HTML,
     )
@@ -1880,51 +2134,66 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
     msg = update.effective_message
     chat_id = event.chat_id
 
-    if not cfg.model_profiles:
-        await msg.reply_text("No model profiles configured. Set BOT_MODEL_PROFILES.")
-        return
-
-    # Determine available profiles
-    trust = _trust_tier(event.user)
-    if trust == "public" and cfg.public_model_profiles:
-        available = sorted(cfg.public_model_profiles & cfg.model_profiles.keys())
-    else:
-        available = sorted(cfg.model_profiles.keys())
-
     arg = event.args[0].lower() if event.args else ""
 
-    if arg and arg != "status":
-        if arg not in available:
-            await msg.reply_text(
-                f"Unknown profile. Available: {', '.join(available)}")
-            return
+    # inherit must run even when model_profiles is empty — clears stale overrides
+    if arg == "inherit":
+        trust = _trust_tier(event.user)
         async with _chat_lock(chat_id, message=msg, update_id=update.update_id):
             session = _load(chat_id)
-            session.model_profile = arg
-            _save(chat_id, session)
+            if not session.model_profile:
+                await msg.reply_text("Model profile is already inherited.", parse_mode=ParseMode.HTML)
+                return
+            _apply_model_change(chat_id, session, "")
+        resolved = _resolve_context(_load(chat_id), trust)
+        effective = resolved.effective_model or cfg.model
+        _, profile_name = _settings_model_profile_state(_load(chat_id), cfg, trust, effective or "")
+        if effective and profile_name != "(default)":
+            cleared_text = f"Model profile cleared. Effective: <code>{html.escape(profile_name)}</code> ({html.escape(effective)})"
+        elif effective:
+            cleared_text = f"Model profile cleared. Using default model."
+        else:
+            cleared_text = "Model profile cleared. Using default model."
         await msg.reply_text(
-            f"Model profile set to <b>{html.escape(arg)}</b> "
-            f"(<code>{html.escape(cfg.model_profiles[arg])}</code>).",
+            cleared_text,
             parse_mode=ParseMode.HTML,
         )
         return
 
-    # Show current + inline keyboard
+    if not cfg.model_profiles:
+        session = _load(chat_id)
+        if session.model_profile:
+            await msg.reply_text(
+                f"No model profiles configured, but this chat has a stale override "
+                f"(<code>{html.escape(session.model_profile)}</code>). "
+                "Use /model inherit to clear it.",
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await msg.reply_text(_msg.trust_no_model_profiles())
+        return
+
+    trust = _trust_tier(event.user)
     session = _load(chat_id)
-    current = session.model_profile or cfg.default_model_profile or "(none)"
-    from app.execution_context import resolve_effective_model
-    effective = resolve_effective_model(session, cfg, trust)
+    resolved = _resolve_context(session, trust)
+    effective = resolved.effective_model
+    available, current = _settings_model_profile_state(session, cfg, trust, effective or "")
 
-    buttons = []
-    for profile in available:
-        label = f"\u2705 {profile}" if profile == current else profile
-        buttons.append(InlineKeyboardButton(label, callback_data=f"setting_model:{profile}"))
+    if arg and arg != "status":
+        async with _chat_lock(chat_id, message=msg, update_id=update.update_id):
+            session = _load(chat_id)
+            _ok, text = _apply_model_selection(chat_id, session, arg, cfg, trust)
+        await msg.reply_text(text, parse_mode=ParseMode.HTML)
+        return
 
+    # Show current + inline keyboard (same effective-profile source as /settings)
+    buttons = _settings_model_buttons(available, current, has_explicit_override=bool(session.model_profile))
     text = (
         f"Model profile: <b>{html.escape(current)}</b>\n"
         f"Effective model: <code>{html.escape(effective or cfg.model or '(default)')}</code>"
     )
     if buttons:
+        text += "\n\n" + _msg.model_choose_profile_hint()
         await msg.reply_text(text, parse_mode=ParseMode.HTML,
                              reply_markup=InlineKeyboardMarkup([buttons]))
     else:
@@ -1932,67 +2201,65 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if _dedup_update(update, kind="message"):
-        return
-    uid = update.update_id
+    """Normalize input, enqueue provider work for the worker, or handle credential setup inline.
 
+    Provider execution runs only in the worker; handlers return quickly so /cancel
+    can be delivered without PTB concurrency. At most one fresh (queued or claimed) item
+    per chat: admission is serialized at the store; when the chat already has one we
+    reply busy and do not enqueue a second run.
+    """
+    uid = update.update_id
     user = normalize_user(update.effective_user)
     if user is None or not is_allowed(user):
-        _complete_pending_work_item(uid)
         return
 
-    # Rate limit check (admins exempt)
     if _rate_limiter and _rate_limiter.enabled and not (_cfg().admin_users_explicit and is_admin(user)):
         allowed, retry_after = _rate_limiter.check(user.id)
         if not allowed:
             await update.effective_message.reply_text(
                 f"Rate limit reached. Please wait {retry_after} seconds.")
-            _complete_pending_work_item(uid)
             return
 
     msg = await normalize_message(update, context, _cfg().data_dir)
     if msg is None:
-        _complete_pending_work_item(uid)
         return
-
-    # Store serialized payload now that normalization is complete
-    work_queue.update_payload(_cfg().data_dir, update.update_id, serialize_inbound(msg))
 
     message = update.effective_message
     chat_id = msg.chat_id
-    prompt, image_paths = build_user_prompt(msg.text, list(msg.attachments))
-
     user_id = user.id
+    prompt, image_paths = build_user_prompt(msg.text, list(msg.attachments))
+    payload = serialize_inbound(msg)
 
-    # First-run welcome for plain messages only (commands like /start and /help
-    # already provide orientation, so the welcome is only needed when a user
-    # sends a plain message without knowing what the bot does).
     cfg = _cfg()
     if not session_exists(cfg.data_dir, chat_id):
         welcome = "I'm ready. Send me a message or type /help to see what I can do."
         if cfg.approval_mode == "on":
             welcome += "\nApproval mode is on \u2014 I'll show a plan before acting."
-        effective_compact = cfg.compact_mode  # no session override yet
+        effective_compact = cfg.compact_mode
         if effective_compact:
             welcome += "\nCompact mode is on \u2014 long answers are summarized. Use /compact off for full answers."
         await message.chat.send_message(welcome)
 
-    try:
-        async with _chat_lock(chat_id, message=message, update_id=update.update_id,
-                              supersede_recovery=True):
-            await message.chat.send_action(ChatAction.TYPING)
-            session = _load(chat_id)
-
-            setup = session.awaiting_skill_setup
-            if setup and setup.user_id == user_id:
-                cfg = _cfg()
-                key = _encryption_key()
+    data_dir = cfg.data_dir
+    session = _load(chat_id)
+    setup = session.awaiting_skill_setup
+    if setup and setup.user_id == user_id:
+        # Credential setup: record update for dedupe only; handle inline. No work item so worker
+        # never sees this message as provider work (avoids race and secret-leak path).
+        if not work_queue.record_update(data_dir, uid, chat_id, user_id, "message", payload=payload):
+            return  # duplicate update_id
+        try:
+            async with _chat_lock(chat_id, message=message, update_id=uid, supersede_recovery=True):
+                session = _load(chat_id)
+                setup = session.awaiting_skill_setup
+                if not setup or setup.user_id != user_id:
+                    return
+                await message.chat.send_action(ChatAction.TYPING)
                 req = setup.remaining[0]
                 raw_value = (message.text or "").strip()
                 if not raw_value:
                     await message.reply_text("Please send the credential value as a text message.")
                     return
-
                 if req.get("validate"):
                     ok, detail = await validate_credential(
                         SkillRequirement(key=req["key"], prompt=req["prompt"],
@@ -2010,16 +2277,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                             parse_mode=ParseMode.HTML,
                         )
                         return
-
                 save_user_credential(
-                    cfg.data_dir, user_id, setup.skill, req["key"], raw_value, key,
+                    cfg.data_dir, user_id, setup.skill, req["key"], raw_value, _encryption_key(),
                 )
-
                 try:
                     await message.delete()
                 except Exception:
                     log.warning("Could not delete credential message for user %d", user_id)
-
                 setup.remaining.pop(0)
                 if setup.remaining:
                     next_req = setup.remaining[0]
@@ -2038,18 +2302,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         f"Skill <code>{html.escape(skill_name)}</code> is ready.",
                         parse_mode=ParseMode.HTML,
                     )
-                return
-
-            trust = _trust_tier(user)
-
-            if session.approval_mode == "on":
-                await request_approval(chat_id, prompt, image_paths, list(msg.attachments), message, request_user_id=user_id, trust_tier=trust)
-                return
-            await execute_request(chat_id, prompt, image_paths, message, request_user_id=user_id, trust_tier=trust)
-    except ClaimBlocked:
-        # Worker owns this chat — our work item stays queued for worker_loop.
-        _pending_work_items.pop(uid, None)
+        except Exception:
+            raise
         return
+
+    envelope = InboundEnvelope(
+        transport="telegram",
+        update_id=uid,
+        conversation_id=chat_id,
+        actor_id=user_id,
+        received_at=datetime.now(timezone.utc),
+        event=msg,
+    )
+    status, item_id = admit_fresh_message(data_dir, envelope)
+    if status == "duplicate":
+        return
+    if status == "busy":
+        await message.reply_text(
+            f"<i>{_msg.queue_busy()}</i>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    if status != "admitted" or item_id is None:
+        return
+
+    # Enqueued for worker; return so /cancel can be processed without blocking.
+    return
 
 
 @_callback_handler
@@ -2074,14 +2352,14 @@ async def handle_callback(event, query) -> None:
             session.clear_pending()
             _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
-            await query.message.edit_text("Skipped.")
+            await query.message.edit_text(_msg.retry_skip_confirmation())
             return
 
         if event.data == "retry_allow":
             session = _load(chat_id)
             pending = session.pending_retry
             if not pending:
-                await query.message.edit_text("Nothing to retry.")
+                await query.message.edit_text(_msg.retry_nothing_pending())
                 return
 
             classification = classify_pending_validation(pending, session, _cfg(), _prov().name)
@@ -2098,7 +2376,7 @@ async def handle_callback(event, query) -> None:
                 _save(chat_id, session)
                 await query.edit_message_reply_markup(reply_markup=None)
                 error = validate_pending(pending, session, _cfg(), _prov().name)
-                await query.message.edit_text(error or "Request is no longer valid.")
+                await query.message.edit_text(error or _msg.approval_request_no_longer_valid())
                 return
 
             prompt = pending.prompt
@@ -2138,19 +2416,19 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     user = _to_inbound_user(update.effective_user)
     if user is None or not is_allowed(user):
-        await query.answer("Not authorized.", show_alert=True)
+        await query.answer(_msg.trust_not_authorized(), show_alert=True)
         return
 
     data = query.data or ""
     parts = data.split(":", 1)
     if len(parts) != 2:
-        await query.answer("Invalid recovery action.")
+        await query.answer(_msg.recovery_invalid_action())
         return
     action, update_id_str = parts
     try:
         update_id = int(update_id_str)
     except (ValueError, TypeError):
-        await query.answer("Invalid recovery action.")
+        await query.answer(_msg.recovery_invalid_action())
         return
 
     chat_id = update.effective_chat.id
@@ -2160,12 +2438,12 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
         recovery_item = work_queue.get_pending_recovery_for_update(data_dir, chat_id, update_id)
     except TransportStateCorruption as e:
         log.exception("Transport state corruption in recovery callback for chat %s: %s", chat_id, e)
-        await query.answer("Something went wrong. Please try again or contact support.", show_alert=True)
+        await query.answer(_msg.recovery_error_try_again(), show_alert=True)
         return
 
     if recovery_item is None:
         # Already handled (double-click, superseded, etc.) — idempotent.
-        await query.answer("This recovery has already been handled.")
+        await query.answer(_msg.recovery_already_handled())
         return
 
     # -- Discard path --
@@ -2174,18 +2452,18 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
             discard_outcome = work_queue.discard_recovery(data_dir, recovery_item["id"])
         except TransportStateCorruption as e:
             log.exception("Transport state corruption on discard for item %s: %s", recovery_item["id"], e)
-            await query.answer("Something went wrong. Please try again or contact support.", show_alert=True)
+            await query.answer(_msg.recovery_error_try_again(), show_alert=True)
             return
         if discard_outcome == work_queue.DiscardResult.already_handled:
-            await query.answer("This recovery has already been handled.")
+            await query.answer(_msg.recovery_already_handled())
             return
         if discard_outcome == work_queue.DiscardResult.corruption:
-            await query.answer("Something went wrong; please try again or contact support.")
+            await query.answer(_msg.recovery_error_discard_try_again())
             return
-        await query.answer("Discarded.")
+        await query.answer(_msg.recovery_discarded_confirm())
         try:
             await query.edit_message_text(
-                "<i>Recovered request discarded.</i>",
+                _msg.recovery_discarded_edit(),
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -2194,23 +2472,23 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
 
     # -- Replay path --
     if action != "recovery_replay":
-        await query.answer("Unknown action.")
+        await query.answer(_msg.recovery_unknown_action())
         return
 
-    await query.answer("Replaying\u2026")
+    await query.answer(_msg.recovery_replaying_toast())
 
     # Reclaim the item for replay execution.
     try:
         item = work_queue.reclaim_for_replay(data_dir, recovery_item["id"], _boot_id)
     except TransportStateCorruption as e:
         log.exception("Transport state corruption on reclaim for item %s: %s", recovery_item["id"], e)
-        await query.answer("Something went wrong. Please try again or contact support.", show_alert=True)
+        await query.answer(_msg.recovery_error_try_again(), show_alert=True)
         return
     except work_queue.ReclaimBlocked:
         # Another request is in progress — item is still pending_recovery.
         try:
             await query.edit_message_text(
-                "<i>Another request is in progress \u2014 try again shortly.</i>",
+                _msg.recovery_blocked_replay_edit(),
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -2220,7 +2498,7 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
         # Race: already handled between our check and reclaim.
         try:
             await query.edit_message_text(
-                "<i>This recovery has already been handled.</i>",
+                _msg.recovery_already_handled_edit(),
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -2234,7 +2512,7 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
         work_queue.fail_work_item(data_dir, item["id"], error="payload_missing")
         try:
             await query.edit_message_text(
-                "<i>Could not retrieve the original request.</i>",
+                _msg.recovery_payload_missing_edit(),
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -2247,7 +2525,7 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
         work_queue.fail_work_item(data_dir, item["id"], error="deserialize_error")
         try:
             await query.edit_message_text(
-                "<i>Could not replay this request.</i>",
+                _msg.recovery_replay_failed_edit(),
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -2258,7 +2536,7 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
         work_queue.fail_work_item(data_dir, item["id"], error="not_message")
         try:
             await query.edit_message_text(
-                "<i>Could not replay this request type.</i>",
+                _msg.recovery_replay_failed_edit(),
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -2268,7 +2546,7 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
     # Update the notice to show replay is in progress.
     try:
         await query.edit_message_text(
-            "<i>Replaying your request\u2026</i>",
+            _msg.recovery_replaying_edit(),
             parse_mode=ParseMode.HTML,
         )
     except Exception:
@@ -2300,10 +2578,7 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
         log.exception("Replay failed for chat %d", chat_id)
         work_queue.fail_work_item(data_dir, item["id"], error="replay_failed")
         try:
-            await _bot_instance.send_message(
-                chat_id,
-                "Sorry, replaying your recovered request failed. Please re-send your message.",
-            )
+            await _bot_instance.send_message(chat_id, _msg.recovery_replay_failed_message())
         except Exception:
             pass
 
@@ -2433,40 +2708,46 @@ async def handle_settings_callback(event, query) -> None:
         session = _load(chat_id)
 
         if setting == "model":
-            cfg = _cfg()
-            # Use the same availability logic as /model command
-            trust = _trust_tier(event.user)
-            if trust == "public" and cfg.public_model_profiles:
-                available = cfg.public_model_profiles & cfg.model_profiles.keys()
-            else:
-                available = set(cfg.model_profiles.keys())
-            if value not in available:
-                await query.edit_message_text(f"Unknown or restricted profile: {value}")
+            if value == "inherit":
+                if not session.model_profile:
+                    await query.edit_message_text("Model profile is already inherited.", parse_mode=ParseMode.HTML)
+                    return
+                _apply_model_change(chat_id, session, "")
+                cfg = _cfg()
+                trust = _trust_tier(event.user)
+                resolved = _resolve_context(session, trust)
+                effective = resolved.effective_model or cfg.model
+                _, profile_name = _settings_model_profile_state(session, cfg, trust, effective or "")
+                if effective and profile_name != "(default)":
+                    cleared_text = f"Model profile cleared. Effective: <code>{html.escape(profile_name)}</code> ({html.escape(effective)})"
+                elif effective:
+                    cleared_text = f"Model profile cleared. Using default model."
+                else:
+                    cleared_text = "Model profile cleared. Using default model."
+                await query.edit_message_reply_markup(reply_markup=None)
+                await query.edit_message_text(cleared_text, parse_mode=ParseMode.HTML)
                 return
-            session.model_profile = value
-            _save(chat_id, session)
+            cfg = _cfg()
+            if not cfg.model_profiles:
+                await query.edit_message_text(_msg.trust_no_model_profiles())
+                return
+            trust = _trust_tier(event.user)
+            _ok, text = _apply_model_selection(chat_id, session, value, cfg, trust)
             await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(
-                f"Model profile set to <b>{html.escape(value)}</b> "
-                f"(<code>{html.escape(cfg.model_profiles[value])}</code>).",
-                parse_mode=ParseMode.HTML,
-            )
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML)
 
         elif setting == "approval":
             if value not in {"on", "off"}:
                 return
-            session.approval_mode = value
-            session.approval_mode_explicit = True
-            _save(chat_id, session)
+            _apply_approval_change(chat_id, session, value)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(
                 f"Approval mode set to {value} for this chat.")
 
         elif setting == "compact":
-            session.compact_mode = value == "on"
-            _save(chat_id, session)
+            _apply_compact_change(chat_id, session, value == "on")
             await query.edit_message_reply_markup(reply_markup=None)
-            label = "on — long responses will be summarized" if value == "on" else "off"
+            label = _msg.settings_compact_on_label() if value == "on" else _msg.settings_compact_off_label()
             await query.edit_message_text(
                 f"Compact mode set to <b>{label}</b>.",
                 parse_mode=ParseMode.HTML,
@@ -2474,19 +2755,40 @@ async def handle_settings_callback(event, query) -> None:
 
         elif setting == "policy":
             if is_public_user(event.user):
-                await query.edit_message_text("File policy cannot be changed in public mode.")
+                await query.edit_message_text(_msg.trust_file_policy_public())
+                return
+            if value == "inherit":
+                if not session.file_policy:
+                    await query.edit_message_text("File policy is already inherited.", parse_mode=ParseMode.HTML)
+                    return
+                _apply_policy_change(chat_id, session, "")
+                resolved = _resolve_context(session, _trust_tier(event.user))
+                effective = resolved.file_policy or "edit"
+                await query.edit_message_reply_markup(reply_markup=None)
+                await query.edit_message_text(
+                    f"File policy cleared. Effective policy: <code>{html.escape(effective)}</code>",
+                    parse_mode=ParseMode.HTML,
+                )
                 return
             if value not in {"inspect", "edit"}:
                 return
-            session.file_policy = value
-            session.provider_state = _prov().new_provider_state()
-            session.clear_pending()
-            _save(chat_id, session)
+            _apply_policy_change(chat_id, session, value)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(
-                f"File policy set to <code>{html.escape(value)}</code>. Provider session reset.",
+                _msg.trust_file_policy_set(value),
                 parse_mode=ParseMode.HTML,
             )
+
+        elif setting == "project":
+            if is_public_user(event.user):
+                await query.edit_message_text(_msg.trust_project_public())
+                return
+            if not _cfg().projects:
+                await query.edit_message_text(_msg.no_projects_configured())
+                return
+            ok, reply_text = _apply_project_change(chat_id, session, value)
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.edit_message_text(reply_text, parse_mode=ParseMode.HTML)
 
 
 # -- Application builder ---------------------------------------------------
@@ -2574,79 +2876,113 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     msg = update.effective_message
     arg = event.args[0].lower() if event.args else ""
 
+    # No projects configured: early exit for all subcommands
+    if not cfg.projects:
+        await msg.reply_text(_msg.no_projects_configured())
+        return
+
     if arg == "list":
-        if not cfg.projects:
-            await msg.reply_text("No projects configured. Set BOT_PROJECTS in your instance config.")
-            return
         session = _load(event.chat_id)
         current = session.project_id
         lines = ["<b>Available projects:</b>"]
-        for name, root_dir, _ in cfg.projects:
-            marker = " (active)" if name == current else ""
-            lines.append(f"  <code>{html.escape(name)}</code> \u2192 {html.escape(root_dir)}{marker}")
+        for proj in cfg.projects:
+            marker = " (active)" if proj.name == current else ""
+            lines.append(f"  <code>{html.escape(proj.name)}</code> \u2192 {html.escape(proj.root_dir)}{marker}")
         await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
         return
 
     if arg == "use" and len(event.args) >= 2:
         project_name = event.args[1]
-        found = any(name == project_name for name, _, _ in cfg.projects)
-        if not found:
-            await msg.reply_text(
-                f"Unknown project: <code>{html.escape(project_name)}</code>\n"
-                f"Use /project list to see available projects.",
-                parse_mode=ParseMode.HTML,
-            )
-            return
         async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
             session = _load(event.chat_id)
-            old_project = session.project_id
-            if old_project == project_name:
-                await msg.reply_text(f"Already using project <code>{html.escape(project_name)}</code>.", parse_mode=ParseMode.HTML)
-                return
-            session.project_id = project_name
-            session.provider_state = _prov().new_provider_state()
-            session.clear_pending()
-            _save(event.chat_id, session)
-        proj_root = next(root for name, root, _ in cfg.projects if name == project_name)
-        await msg.reply_text(
-            f"Switched to project <code>{html.escape(project_name)}</code>\n"
-            f"Working dir: <code>{html.escape(proj_root)}</code>\n"
-            f"Provider session reset.",
-            parse_mode=ParseMode.HTML,
-        )
+            ok, reply_text = _apply_project_change(event.chat_id, session, project_name)
+        await msg.reply_text(reply_text, parse_mode=ParseMode.HTML)
         return
 
     if arg == "clear":
         async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
             session = _load(event.chat_id)
-            if not session.project_id:
-                await msg.reply_text("No project is active.")
-                return
-            session.project_id = ""
-            session.provider_state = _prov().new_provider_state()
-            session.clear_pending()
-            _save(event.chat_id, session)
-        await msg.reply_text(
-            f"Project cleared. Using instance default: <code>{html.escape(str(cfg.working_dir))}</code>\n"
-            f"Provider session reset.",
-            parse_mode=ParseMode.HTML,
-        )
+            ok, reply_text = _apply_project_change(event.chat_id, session, "clear")
+        await msg.reply_text(reply_text, parse_mode=ParseMode.HTML)
         return
 
-    # Default: show current project
+
+    # Default: show current project with discoverable inline choices
     session = _load(event.chat_id)
     proj = _resolve_project(session)
-    if proj:
-        await msg.reply_text(
-            f"Project: <code>{html.escape(proj[0])}</code>\n"
-            f"Working dir: <code>{html.escape(proj[1])}</code>",
-            parse_mode=ParseMode.HTML,
-        )
-    else:
-        await msg.reply_text(
-            f"No project active. Using instance default: <code>{html.escape(str(cfg.working_dir))}</code>",
-            parse_mode=ParseMode.HTML,
-        )
+    working_dir = proj.root_dir if proj else str(cfg.working_dir)
+    project_label = proj.name if proj else "No project"
+    lines = [
+        f"Project: <b>{html.escape(project_label)}</b>",
+        f"Working dir: <code>{html.escape(working_dir)}</code>",
+    ]
+    buttons = _settings_project_buttons(cfg, session)
+    lines.append(_msg.project_use_buttons_or_list_hint())
+    text = "\n".join(lines)
+    await msg.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+@_command_handler
+async def cmd_settings(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Discoverability surface: current chat settings and inline controls (same mutations as commands)."""
+    cfg = _cfg()
+    msg = update.effective_message
+    chat_id = event.chat_id
+    session = _load(chat_id)
+    trust = _trust_tier(event.user)
+    resolved = _resolve_context(session, trust_tier=trust)
+
+    # Display from resolved context only (public-safe: no trusted project/path leak)
+    project_display = resolved.project_id or "No project"
+    if trust == "public":
+        project_display = "No project"
+    working_dir = resolved.working_dir
+    policy = resolved.file_policy or "edit"
+    compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
+    compact_label = "on" if compact else "off"
+    effective_model = resolved.effective_model
+    model_available, model_display = _settings_model_profile_state(
+        session, cfg, trust, effective_model or ""
+    )
+    approval = session.approval_mode
+
+    lines = [
+        "<b>Chat settings</b>",
+        f"Project: <code>{html.escape(project_display)}</code> \u2192 <code>{html.escape(working_dir)}</code>",
+        f"Model profile: <code>{html.escape(model_display)}</code>",
+        f"File policy: <code>{html.escape(policy)}</code>",
+        f"Compact mode: <b>{compact_label}</b>",
+        f"Approval mode: <b>{approval}</b>",
+        _msg.settings_use_buttons_hint(),
+    ]
+    if effective_model:
+        lines.insert(3, f"Effective model: <code>{html.escape(effective_model)}</code>")
+    if trust == "public":
+        lines.append(_msg.trust_settings_managed_public())
+    text = "\n".join(lines)
+
+    # Inline keyboard: omit project and policy controls for public users
+    keyboard: list[list[InlineKeyboardButton]] = []
+    if trust != "public":
+        keyboard.extend(_settings_project_buttons(cfg, session))
+        keyboard.append(_settings_policy_buttons(policy, has_explicit_override=bool(session.file_policy)))
+    if model_available:
+        keyboard.append(_settings_model_buttons(model_available, model_display, has_explicit_override=bool(session.model_profile)))
+    elif session.model_profile:
+        # No profiles configured but stale override exists — show inherit-only button
+        keyboard.append([InlineKeyboardButton("Clear model override", callback_data="setting_model:inherit")])
+    keyboard.append(_settings_compact_buttons(compact))
+    keyboard.append(_settings_approval_buttons(approval))
+
+    await msg.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
 
 
 @_command_handler
@@ -2656,80 +2992,52 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     msg = update.effective_message
     arg = event.args[0].lower() if event.args else ""
 
+    if arg == "inherit":
+        async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
+            session = _load(event.chat_id)
+            if not session.file_policy:
+                await msg.reply_text("File policy is already inherited.", parse_mode=ParseMode.HTML)
+                return
+            _apply_policy_change(event.chat_id, session, "")
+        resolved = _resolve_context(_load(event.chat_id), _trust_tier(event.user))
+        effective = resolved.file_policy or "edit"
+        await msg.reply_text(
+            f"File policy cleared. Effective policy: <code>{html.escape(effective)}</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
     if arg in ("inspect", "edit"):
         async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
             session = _load(event.chat_id)
-            old_policy = session.file_policy or "edit"
+            resolved = _resolve_context(session, _trust_tier(event.user))
+            old_policy = resolved.file_policy or "edit"
             if old_policy == arg:
                 await msg.reply_text(f"File policy is already <code>{html.escape(arg)}</code>.", parse_mode=ParseMode.HTML)
                 return
-            session.file_policy = arg
-            session.provider_state = _prov().new_provider_state()
-            session.clear_pending()
-            _save(event.chat_id, session)
+            _apply_policy_change(event.chat_id, session, arg)
         await msg.reply_text(
-            f"File policy set to <code>{html.escape(arg)}</code>.\nProvider session reset.",
+            _msg.trust_file_policy_set(arg),
             parse_mode=ParseMode.HTML,
         )
         return
 
     if arg == "" or arg == "status":
         session = _load(event.chat_id)
-        policy = session.file_policy or "edit"
-        buttons = [
-            InlineKeyboardButton(
-                "\u2705 Read only" if policy == "inspect" else "Read only",
-                callback_data="setting_policy:inspect"),
-            InlineKeyboardButton(
-                "\u2705 Read & write" if policy == "edit" else "Read & write",
-                callback_data="setting_policy:edit"),
-        ]
+        resolved = _resolve_context(session, _trust_tier(event.user))
+        policy = resolved.file_policy or "edit"
         await msg.reply_text(
             f"File policy: <b>{html.escape(policy)}</b>",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([buttons]),
+            reply_markup=InlineKeyboardMarkup([_settings_policy_buttons(policy, has_explicit_override=bool(session.file_policy))]),
         )
         return
 
-    await msg.reply_text("Use /policy inspect, /policy edit, or /policy status.")
+    await msg.reply_text(_msg.policy_usage())
 
 
-class _BotMessage:
-    """Minimal message proxy for worker replay — sends via Bot API directly."""
-
-    def __init__(self, bot, chat_id: int):
-        self._bot = bot
-        self.chat = self
-        self.chat_id = chat_id
-        self.text = None
-        self.replies: list[str] = []
-
-    async def reply_text(self, text, **kwargs):
-        sent = await self._bot.send_message(self.chat_id, text, **kwargs)
-        self.replies.append(text)
-        return sent
-
-    async def reply_document(self, document, **kwargs):
-        await self._bot.send_document(self.chat_id, document, **kwargs)
-
-    async def reply_photo(self, photo, **kwargs):
-        await self._bot.send_photo(self.chat_id, photo, **kwargs)
-
-    async def send_action(self, action):
-        try:
-            await self._bot.send_chat_action(self.chat_id, action)
-        except Exception:
-            pass
-
-    async def send_message(self, text, **kwargs):
-        return await self._bot.send_message(self.chat_id, text, **kwargs)
-
-    async def edit_text(self, text, **kwargs):
-        pass  # No original message to edit in replay
-
-    async def delete(self):
-        pass  # Nothing to delete in replay
-
+# Worker path uses the transport adapter; handler path uses PTB message directly.
+_BotMessage = TelegramConversationIO
 
 _bot_instance = None  # Set by build_application
 
@@ -2737,10 +3045,10 @@ _bot_instance = None  # Set by build_application
 async def worker_dispatch(kind: str, event, item: dict) -> None:
     """Dispatch a deserialized inbound event from the worker loop.
 
-    Called for work items claimed by the background worker — typically
-    items recovered after a crash.  Messages are replayed through the
-    provider.  Commands and callbacks get a user notification since the
-    original UI context (inline keyboards etc.) is gone.
+    Items with dispatch_mode 'recovery' get a recovery notice and move to
+    pending_recovery. Fresh message items (dispatch_mode 'fresh') are executed
+    here: execute_request or request_approval; they register _LIVE_CANCEL so
+    /cancel works.
     """
     from app.transport import InboundMessage, InboundCommand, InboundCallback
 
@@ -2750,40 +3058,62 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
         return
 
     bot = _bot_instance
+    data_dir = _cfg().data_dir
 
     if isinstance(event, InboundMessage):
-        log.info("Worker sending recovery notice for chat %d (update %s)",
-                 chat_id, item.get("update_id"))
+        # Recovered item: send notice and move to pending_recovery.
+        if item.get("dispatch_mode") == "recovery":
+            log.info("Worker sending recovery notice for chat %d (update %s)",
+                     chat_id, item.get("update_id"))
+            if not is_allowed(event.user):
+                work_queue.fail_work_item(data_dir, item["id"], error="not_allowed")
+                return
+            update_id = item.get("update_id", 0)
+            original_text = event.text or ""
+            preview = html.escape(original_text[:200] + ("\u2026" if len(original_text) > 200 else ""))
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("\u25b6\ufe0f " + _msg.recovery_button_run_again(), callback_data=f"recovery_replay:{update_id}"),
+                InlineKeyboardButton("\u2716 " + _msg.recovery_button_skip(), callback_data=f"recovery_discard:{update_id}"),
+            ]])
+            try:
+                await bot.send_message(
+                    chat_id,
+                    f"<i>{_msg.recovery_notice_intro()}</i>\n\n"
+                    f"{preview}\n\n"
+                    f"{_msg.recovery_notice_prompt()}",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard,
+                )
+            except Exception:
+                log.exception("Failed to send recovery notice for chat %d", chat_id)
+                raise
+            work_queue.mark_pending_recovery(data_dir, item["id"])
+            raise work_queue.PendingRecovery(item["id"])
+
+        # Fresh message: run provider (execute_request/request_approval register _LIVE_CANCEL).
         if not is_allowed(event.user):
+            work_queue.fail_work_item(data_dir, item["id"], error="not_allowed")
             return
-        update_id = item.get("update_id", 0)
-        original_text = event.text or ""
-        preview = html.escape(original_text[:200] + ("\u2026" if len(original_text) > 200 else ""))
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("\u25b6\ufe0f Replay request", callback_data=f"recovery_replay:{update_id}"),
-            InlineKeyboardButton("\u2716 Discard", callback_data=f"recovery_discard:{update_id}"),
-        ]])
+        bot_msg = _BotMessage(bot, chat_id)
+        prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
+        user_id = event.user.id
+        trust = _trust_tier(event.user)
         try:
-            await bot.send_message(
-                chat_id,
-                "<i>Your previous request was interrupted by a restart:</i>\n\n"
-                f"{preview}\n\n"
-                "Would you like to replay it or discard?",
-                parse_mode=ParseMode.HTML,
-                reply_markup=keyboard,
-            )
-        except Exception:
-            # Notice never reached the user — do NOT move to pending_recovery.
-            # Re-raise so worker_loop marks the item failed (not done).
-            # The user never saw buttons; the item must not look like it
-            # completed successfully.
-            log.exception("Failed to send recovery notice for chat %d", chat_id)
+            async with _chat_lock(chat_id, worker_item=item):
+                session = _load(chat_id)
+                if session.approval_mode == "on":
+                    await request_approval(
+                        chat_id, prompt, image_paths, list(event.attachments),
+                        bot_msg, request_user_id=user_id, trust_tier=trust,
+                    )
+                else:
+                    await execute_request(
+                        chat_id, prompt, image_paths, bot_msg,
+                        request_user_id=user_id, trust_tier=trust,
+                    )
+        except work_queue.LeaveClaimed:
             raise
-        # Notice delivered — transition to pending_recovery.
-        # Worker_loop skips completion (PendingRecovery).
-        data_dir = _cfg().data_dir
-        work_queue.mark_pending_recovery(data_dir, item["id"])
-        raise work_queue.PendingRecovery(item["id"])
+        return
 
     if isinstance(event, (InboundCommand, InboundCallback)):
         log.info("Worker recovered orphaned %s for chat %d (update %s)",
@@ -2792,7 +3122,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             detail = f"/{event.command}" if isinstance(event, InboundCommand) else "a button action"
             await bot.send_message(
                 chat_id,
-                f"<i>Your {detail} was interrupted by a restart and could not be replayed.</i>",
+                _msg.recovery_orphaned_command(detail),
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -2816,6 +3146,7 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
         log.info("Public mode: applying default rate limits (5/min, 30/hr)")
     _rate_limiter = RateLimiter(per_minute=per_minute, per_hour=per_hour)
 
+    # Sequential update processing; live runs are worker-owned so /cancel is delivered promptly.
     app = Application.builder().token(config.telegram_token).build()
     _bot_instance = app.bot
     app.add_handler(CommandHandler("start", cmd_start))
@@ -2834,6 +3165,7 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     app.add_handler(CommandHandler("send", cmd_send))
     app.add_handler(CommandHandler("id", cmd_id))
     app.add_handler(CommandHandler("doctor", cmd_doctor))
+    app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("project", cmd_project))
     app.add_handler(CommandHandler("policy", cmd_policy))
     app.add_handler(CommandHandler("model", cmd_model))
@@ -2874,7 +3206,7 @@ async def _global_error_handler(update: object, context: ContextTypes.DEFAULT_TY
         try:
             await context.bot.send_message(
                 update.effective_chat.id,
-                "Something went wrong processing your request. Please try again.",
+                _msg.generic_error_try_again(),
             )
         except Exception:
             pass

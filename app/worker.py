@@ -1,20 +1,15 @@
 """Async worker loop for processing durable work items.
 
-In single-worker mode (current default), the inline handler path
-(handler → _dedup_update → _chat_lock with claim_next) processes
-requests synchronously.  The worker loop is an *additional* path
-that drains any items left in the queue — for example, items that
-were enqueued but not claimed because the handler returned early,
-or items recovered after a crash.
+Fresh plain-message execution is worker-owned: handlers call
+record_and_admit_message() and return; this loop claims and dispatches
+items via worker_dispatch (execute_request/request_approval). No
+inline provider execution. Recovered items (dispatch_mode='recovery')
+get a recovery notice and move to pending_recovery.
 
-In future multi-worker mode, each worker process runs this loop as
-the primary processing path: the webhook handler writes the update
-and returns 200 immediately, and workers pull from the durable queue.
-
-The worker loop is cooperative: it runs as an asyncio task alongside
-the bot's event loop.  It does not compete with inline handlers for
-the same work items because ``claim_next_any`` uses ``BEGIN IMMEDIATE``
-to guarantee atomic claiming.
+The loop runs as an asyncio task alongside the bot's event loop.
+claim_next_any uses backend-specific serialization (e.g. BEGIN IMMEDIATE
+on SQLite, advisory lock on Postgres) so only one worker claims a given
+item.
 """
 
 import asyncio

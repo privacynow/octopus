@@ -44,7 +44,7 @@ def test_architecture_deployment_section_matches_current_runtime_contract():
 def test_status_current_snapshot_matches_current_phase_and_runtime():
     """STATUS Current Snapshot must reflect Phase 15 + Local Runtime, not old Postgres-first wording."""
     repo = Path(__file__).resolve().parent.parent
-    text = (repo / "docs" / "STATUS-commercial-polish.md").read_text()
+    text = (repo / "docs" / "status.md").read_text()
     snapshot = _section(text, "Current Snapshot")
     assert "Phases 1-14 are sealed as shipped." in snapshot
     assert "Phase 15 is the active roadmap phase" in snapshot
@@ -58,7 +58,7 @@ def test_status_current_snapshot_matches_current_phase_and_runtime():
 def test_status_historical_focus_intro_mentions_phase_15_not_phase_14():
     """Historical Execution Focus intro should point readers at the current roadmap phase."""
     repo = Path(__file__).resolve().parent.parent
-    text = (repo / "docs" / "STATUS-commercial-polish.md").read_text()
+    text = (repo / "docs" / "status.md").read_text()
     historical = _section(text, "Historical Execution Focus")
     assert "Phase 15 is in progress" in historical
     assert "Phase 13 is complete and the next numbered phase is Phase 14" not in historical

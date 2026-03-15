@@ -3,7 +3,7 @@
 This document is the master roadmap for the finished product shape, the order
 in which it should be built, and the historical decisions that still matter.
 It is not the build log. Current implementation status lives in
-[STATUS-commercial-polish.md](STATUS-commercial-polish.md). Runtime
+[status.md](status.md). Runtime
 boundaries, contracts, and storage authority live in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -18,10 +18,10 @@ Use this document for four different questions:
 
 ## How To Use This Plan
 
-- `PLAN-commercial-polish.md`
+- `plan.md`
   Product vision, ordered roadmap, sealed history, lessons learned, and
   decision record.
-- `STATUS-commercial-polish.md`
+- `status.md`
   Phase-by-phase shipped/current status mirror and implementation log.
 - `ARCHITECTURE.md`
   Source of truth for runtime boundaries, queue/storage authority, and
@@ -296,12 +296,12 @@ benign outcome.
 - `completed_at` is terminal-only (`done` or `failed`); it is not an
   interruption or recovery timestamp.
 
-**Transport schema (versioned, migration deferred)**
+**Transport schema (versioned across both supported backends)**
 
-- `transport.db` has a versioned schema. The current build expects the current schema/layout.
-- No migration system is implemented yet; upgrade/cutover strategy is deferred to the Postgres/runtime phases.
+- SQLite `transport.db` has a versioned schema. The current build expects the current supported schema/layout and may apply the narrow in-place migrations explicitly owned by the SQLite transport implementation.
+- Postgres runtime storage uses SQL migrations under `sql/postgres/` and is bootstrapped/updated via the tooling flow.
 - If an existing DB has an unsupported schema version or layout, the app fails fast with a neutral error (e.g. "Unsupported transport.db schema/layout for this build"). The app does not mutate existing DBs before validating them.
-- Review priority: correctness and repository invariants first; full upgrade-path engineering is not a release criterion yet. The codebase leaves a clean seam for future migrations.
+- Review priority: correctness and repository invariants first; migration breadth is secondary to preserving the transport-store contract and clean backend seams.
 
 ### 5. Workflow ownership and engineering discipline
 
@@ -572,9 +572,9 @@ The docs should have distinct jobs:
 
 - `README.md`
   User-facing product entry point.
-- `STATUS-commercial-polish.md`
+- `status.md`
   Build log and current implementation status.
-- `PLAN-commercial-polish.md`
+- `plan.md`
   Product vision, roadmap, and durable lessons and decisions.
 - `ARCHITECTURE.md`
   Contracts, components, and runtime model.
@@ -729,7 +729,7 @@ Library choice: [python-statemachine](https://pypi.org/project/python-statemachi
 Make Postgres the only supported runtime backend after cutover. Phase 12 is a
 contract-preserving backend replacement and environment/bootstrap phase, not a
 queue redesign phase and not a CI/CD phase. Implementation complete; see
-[STATUS-commercial-polish.md](STATUS-commercial-polish.md).
+[status.md](status.md).
 
 **What Phase 12 is solving.**
 
@@ -1359,7 +1359,7 @@ Execution rule:
   - code implemented through existing contracts
   - realistic tests added or migrated
   - relevant targeted suites passing
-  - `STATUS-commercial-polish.md` updated accurately
+  - `status.md` updated accurately
 - Do not mark the pre-Phase-13 gate complete until the gate checklist at the
   end of this section is satisfied.
 
@@ -1888,7 +1888,7 @@ Implementation rules (carry these literally into execution guidance):
     justification
 
 6. Do not overclaim.
-- `STATUS-commercial-polish.md` must only move when code and tests prove the
+- `status.md` must only move when code and tests prove the
   runtime behavior.
 - Bucket E is not done because a few small fixes landed; the full audit,
   simplification pass, and verification envelope must be complete.
@@ -1930,7 +1930,7 @@ Required outcomes:
 - No misleading doctor/provider-health distinction
 - No misleading startup/update/rebuild guidance
 - No obviously confusing no-op or denial state left in the primary path
-- `STATUS-commercial-polish.md` and `README.md` reflect the real current
+- `status.md` and `README.md` reflect the real current
   Bucket E state and do not preserve stale “Current / Next” pointers from
   earlier bucket stages
 
@@ -2091,7 +2091,7 @@ Recommended implementation sequence:
    share the same authoritative seam.
 6. Move/rationalize tests only after the owning seam is clear.
 7. Run the real verification envelope.
-8. Update `STATUS-commercial-polish.md` only after the runtime behavior and
+8. Update `status.md` only after the runtime behavior and
    tests are confirmed.
 
 Anti-patterns forbidden in this milestone:
@@ -2139,7 +2139,7 @@ Do not start Phase 13 until all of the following are true:
   would clearly unlock the next need.
 - The current product is stable enough that webhook/multi-process work solves a
   real problem rather than an architectural desire.
-- `STATUS-commercial-polish.md` truthfully reports the pre-Phase-13 execution
+- `status.md` truthfully reports the pre-Phase-13 execution
   program as complete.
 
 ### Remaining-Phase Execution Discipline
@@ -2162,7 +2162,7 @@ These rules apply to every remaining phase below. They are not optional.
 - Tests must prove the user/operator contract through the real boundary, not
   only helper behavior.
 - Rendering and wording are product correctness, not decorative polish.
-- Update `STATUS-commercial-polish.md` only after code and tests confirm the
+- Update `status.md` only after code and tests confirm the
   behavior.
 
 ### Phase 13 - Storage Backend Abstraction And Local Runtime Mode
@@ -2884,20 +2884,71 @@ Non-deliverables:
 Problem statement:
 
 - The runtime is now centered on worker-owned execution and queue-owned
-  admission, but the transport seam is still only partially explicit:
-  inbound Telegram payloads are normalized into `Inbound*` dataclasses, while
-  outbound behavior still hangs off Telegram-shaped message/query/bot objects
-  and test doubles.
-- The current tests prove many worker-path contracts, but there is still no
-  single project-owned simulator that:
-  - injects inbound events over time
-  - runs the real worker loop
-  - records one ordered user-visible output log
-  - exercises the true request → long-running execution → `/cancel` path
-- The next architecture step should therefore treat transport abstraction as
-  both:
+  admission, and Slice 5 has already shipped an initial transport foundation:
+  - `app/transports/` owns `InboundEnvelope`, `ConversationIO`,
+    `EditableMessageHandle`, and `TransportCapabilities`
+  - fresh plain-message admission now crosses a project-owned boundary via
+    `InboundEnvelope` -> `admit_fresh_message(...)`
+  - worker-owned outbound output now uses the Telegram adapter over
+    `ConversationIO`
+  - the simulator now provides one ordered **text** output log over the
+    current fake Telegram surface
+- That foundation is intentionally partial, not the end-state:
+  - handler-owned replies and callback UI still use PTB-shaped message/query
+    objects directly
+  - the simulator is still a handler-level harness (`handle_message` / `cmd_*`
+    injection), not a transport-ingress harness
+  - callback injection is still missing as a first-class simulator capability
+- Slice 5 therefore remains both:
   - product architecture for future transports
   - test infrastructure for realistic simulated-transport E2E-style coverage
+
+Current shipped foundation:
+
+1. **Project-owned transport types and ports**
+- `app/transport.py` remains the owner of normalized inbound event types
+  (`InboundMessage`, `InboundCommand`, `InboundCallback`)
+- `app/transports/types.py` adds `InboundEnvelope`
+- `app/transports/ports.py` adds:
+  - `ConversationIO`
+  - `EditableMessageHandle`
+  - `TransportCapabilities`
+
+2. **Production use today**
+- Fresh plain-message ingress now builds `InboundEnvelope` in
+  `handle_message()` and passes it through `app/transports/admission.py`
+- Worker-owned output and worker-owned status edits use
+  `TelegramConversationIO`
+- Handler-owned output is **not** fully ported yet:
+  - help/welcome replies still use PTB message/chat methods
+  - command/callback replies still use PTB message/query methods
+
+3. **Simulator use today**
+- `tests/support/conversation_simulator.py` is a handler-level runtime harness
+- It injects through `handle_message()` / `cmd_*`
+- It runs the real worker loop
+- It exposes one ordered **text** output log that currently includes:
+  - `reply_text`
+  - `edit_text`
+  - `chat.send_message`
+  - `reply_photo` / `reply_document` captions or placeholders
+  - bot `send_message` / `send_photo` / `send_document`
+  - bot message `edit_text`
+  - callback `answer`
+  - callback `edit_message_text`
+- It explicitly does **not** include markup-only edits
+  (`edit_message_reply_markup`)
+- It does **not** yet drive ingress through `InboundEnvelope`
+- It does **not** yet expose callback injection as a first-class simulator API
+
+Remaining architecture gap for full Slice 5 completion:
+
+- unify handler-owned outbound behavior behind `ConversationIO`
+- move from direct handler injection toward a transport-level delivery harness
+  without making PTB internals the contract
+- add callback injection on the simulator surface
+- keep the project-owned transport port small and capability-driven while
+  making it the primary runtime abstraction instead of a worker-only helper
 
 Contracts in this slice:
 
@@ -2933,32 +2984,33 @@ Contracts in this slice:
 Source of truth:
 
 - `app/transport.py` remains the owner of normalized inbound event types.
-- New transport-port modules own the outbound conversation contract and any
-  transport-neutral envelope wrapper added in this slice.
+- Transport-port modules under `app/transports/` own the outbound conversation
+  contract and the transport-neutral envelope wrapper shipped in this slice.
 - Telegram adapter code remains the owner of PTB-specific normalization and
   PTB-specific send/edit/callback wiring.
-- The simulator is another adapter over that same project-owned transport
-  port, not a fake PTB dispatcher.
+- The current simulator is a handler-level runtime harness; the full Slice 5
+  target is a simulator that sits on the project-owned transport contract
+  rather than behaving like a fake PTB dispatcher.
 
 Required implementation shape:
 
-- Add a small transport-core seam, for example:
+- Preserve and extend the shipped transport-core seam:
   - `InboundEnvelope`
   - `ConversationIO`
   - `EditableMessageHandle`
   - `TransportCapabilities`
 - Reuse the existing `InboundMessage`, `InboundCommand`, and `InboundCallback`
   types rather than creating a second inbound event family.
-- Factor Telegram outbound behavior behind that port so handler-owned output
-  and worker-owned output share the same project-owned contract.
-- Replace the ad hoc `_BotMessage`-style special casing with the same
-  transport-owned output abstraction the handler path uses.
+- Complete the Telegram adapter migration so handler-owned output and
+  worker-owned output share the same project-owned outbound contract.
+- Remove remaining ad hoc `_BotMessage`-style special casing in favor of the
+  transport-owned output abstraction the handler path uses too.
 - Keep Telegram-specific concerns such as callback payload encoding in the
   Telegram adapter layer.
 - Build a simulator that:
-  - injects inbound events
+  - injects inbound events through a project-owned delivery surface
   - starts/stops the real worker loop
-  - records ordered sends/edits/actions in one log
+  - records ordered text sends/edits/actions in one log
   - supports waiting on conditions such as “provider started” or “text X
     appeared”
 - Do not make PTB `Application` internals the primary simulator target.
@@ -2992,6 +3044,8 @@ Tests required for Slice 5:
 - Simulator regression: recovered stale work with
   `dispatch_mode='recovery'` shows replay/discard recovery UX and never
   auto-runs as fresh work
+- Handler/worker parity regressions proving the final port migration did not
+  split user-visible behavior between PTB-direct and port-owned paths
 
 Non-deliverables:
 
@@ -3026,16 +3080,22 @@ Done when:
   worker-path cancel ingress, anti-fan-out under spam, recovery routing,
   two-stage UX ordering, no hidden inline-path masking, and partial-output
   cancel. Test-only slice, no production code changes.
-- Slice 5 ships a small project-owned transport/output port plus a simulator
-  that can drive the real worker-owned runtime through a realistic fake
-  transport. Telegram remains one adapter over that port; future transports
-  can implement the same contract later without forcing PTB internals into the
-  business-logic core. **Done (partial):** Proof-hardening (credential suite,
-  queued-cancel contract/Postgres, comments), transport types/ports, admission
-  seam (InboundEnvelope in production ingress), Telegram adapter, and canonical
-  E2E tests in place. Simulator is a handler-level harness (inject via
-  handle_message/cmd_*; ordered output log; no transport-level ingress or
-  callback injection yet). See STATUS-commercial-polish.md and ARCHITECTURE.md.
+- Slice 5 end-state ships a small project-owned transport/output port plus a
+  simulator that can drive the real worker-owned runtime through a realistic
+  fake transport. Telegram remains one adapter over that port; future
+  transports can implement the same contract later without forcing PTB
+  internals into the business-logic core.
+- **Current checkpoint (shipped foundation, not end-state):**
+  - proof-hardening is complete (credential suite, queued-cancel contract and
+    Postgres regression, stale comments)
+  - transport types/ports are in place
+  - fresh plain-message admission crosses the `InboundEnvelope` boundary
+  - worker-owned outbound output uses the Telegram adapter over
+    `ConversationIO`
+  - canonical simulator E2E coverage exists
+  - simulator remains a handler-level harness
+  - handler-owned outbound behavior is not yet fully unified behind the port
+  - transport-level ingress and callback injection are not yet complete
 - New implementation work for Phase 15 continues to extend the current owners
   instead of building shadow abstractions around them.
 
@@ -3289,7 +3349,7 @@ A roadmap phase is only complete when:
 
 - the shipped behavior exists in code
 - the relevant contract and regression tests exist
-- [STATUS-commercial-polish.md](STATUS-commercial-polish.md) reflects the new
+- [status.md](status.md) reflects the new
   phase state
 - [ARCHITECTURE.md](ARCHITECTURE.md) matches the resulting runtime authority
   and boundary decisions

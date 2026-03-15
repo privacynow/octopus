@@ -18,6 +18,23 @@ runtime state in SQLite by default (Local Runtime), and sends results back to th
 Use Docker for the bot. **Local Runtime** is the default: the bot uses SQLite (no Postgres required).  
 Optional: use Postgres by setting `BOT_DATABASE_URL` and running the Postgres stack.
 
+## Runtime Model
+
+The current runtime is **worker-owned** for normal chat requests:
+
+- fresh plain messages are admitted durably, then executed by the background worker
+- approval preflight for those requests follows the same durable worker-owned lane
+- credential setup replies stay inline and **off queue**
+- `/cancel` can stop:
+  - a live running worker-owned request
+  - an admitted-but-not-yet-running queued request
+  - credential setup or other pending request state when applicable
+
+This is the same Local Runtime whether the backend is:
+
+- **SQLite** in `BOT_DATA_DIR` (default)
+- **Postgres** via `BOT_DATABASE_URL` (supported alternate backend)
+
 ## What You Need
 
 - Docker and Docker Compose
@@ -139,21 +156,15 @@ Upload files and ask:
 
 Turn on approval mode and the bot shows you a plan before doing anything.
 
-```text
-                    You send a request
-                           |
-                           v
-                     Bot drafts plan
-                           |
-                           v
-                 You review in Telegram
-                    /approve  /reject
-                       |          |
-                       v          v
-              Bot executes task   Nothing runs
-                    |
-                    v
-              You get the result
+```mermaid
+flowchart TD
+    R["You send a request"] --> P["Bot drafts plan"]
+    P --> T["You review in Telegram"]
+    T --> A["/approve"]
+    T --> J["/reject"]
+    A --> E["Bot executes task"]
+    E --> G["You get the result"]
+    J --> N["Nothing runs"]
 ```
 
 Use `/approval on` to enable this. Use `/approve` or `/reject` (or the inline
@@ -196,7 +207,7 @@ to see the full output whenever you need it.
 | `/approval on\|off\|status` | Change or inspect approval mode |
 | `/approve` | Approve the current pending plan |
 | `/reject` | Reject the current pending plan |
-| `/cancel` | Cancel a running task, credential setup, or a pending request |
+| `/cancel` | Cancel a running task, a queued admitted task, credential setup, or another pending request |
 | `/doctor` | Run the full app health check |
 
 ### Output and session
@@ -289,5 +300,5 @@ The README intentionally keeps one Docker-first path.
 For deeper details, use:
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): runtime, storage, bootstrap, and testing contracts
-- [docs/PLAN-commercial-polish.md](docs/PLAN-commercial-polish.md): product definition, roadmap, and design decisions
-- [docs/STATUS-commercial-polish.md](docs/STATUS-commercial-polish.md): current shipped state and progress
+- [docs/plan.md](docs/plan.md): product definition, roadmap, and design decisions
+- [docs/status.md](docs/status.md): current shipped state and progress

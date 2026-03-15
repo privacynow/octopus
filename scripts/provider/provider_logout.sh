@@ -15,7 +15,7 @@ provider=$(get_bot_provider)
 check_provider_image "$provider" >/dev/null
 
 echo "Clearing provider auth state from bot-home volume (no Postgres required)..."
-docker compose --profile bot --env-file .env.bot run --rm bot-provider sh -c '
+docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot --env-file .env.bot run --rm bot-provider sh -c '
   removed=
   for d in /home/bot/.config/Claude /home/bot/.config/claude /home/bot/.config/Codex /home/bot/.config/codex /home/bot/.config/openai /home/bot/.local/share/Claude /home/bot/.local/share/codex; do
     if [ -d "$d" ] || [ -f "$d" ]; then

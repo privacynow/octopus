@@ -156,7 +156,7 @@ If you want the bot to check itself from Telegram, use `/doctor`.
 If a technical helper wants to run the full health check locally, use:
 
 ```bash
-docker compose --profile bot --env-file .env.bot run --rm bot python -m app.main --doctor
+docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot --env-file .env.bot run --rm bot python -m app.main --doctor
 ```
 
 ### The bot still will not start

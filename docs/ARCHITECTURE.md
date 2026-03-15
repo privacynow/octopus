@@ -1381,7 +1381,8 @@ debugging and tests.
 - **Primary operational model:** Dockerized bot is the main operator path.
   `./scripts/app/guided_start.sh` is the main zero-to-running path for SQLite Local
   Runtime. `./scripts/db/dev_up_postgres.sh` exists for the alternate Postgres
-  backend.
+  backend. The canonical Compose entrypoints live under
+  `infra/compose/docker-compose.yml` and `infra/compose/docker-compose.e2e.yml`.
 - **Supported bot image:** The supported Docker path uses a **real provider-enabled
   image** (includes the chosen Claude or Codex CLI). Build it with
   `./scripts/provider/build_bot_image.sh`; the script selects the image target from

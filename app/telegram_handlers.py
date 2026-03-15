@@ -471,6 +471,7 @@ def _command_handler(fn):
     import functools
     @functools.wraps(fn)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        log.info("_command_handler wrapper called for %s update_id=%d", fn.__name__, update.update_id)
         event = normalize_command(update, context)
         payload = serialize_inbound(event) if event else "{}"
         if _dedup_update(update, kind="command", payload=payload):
@@ -1871,6 +1872,7 @@ async def cmd_skills(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 @_command_handler
 async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    log.info("cmd_cancel invoked for chat_id=%d, _LIVE_CANCEL keys=%s", event.chat_id, list(_LIVE_CANCEL.keys()))
     if await _public_guard(event, update):
         return
     chat_id = event.chat_id
@@ -3137,7 +3139,7 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
         log.info("Public mode: applying default rate limits (5/min, 30/hr)")
     _rate_limiter = RateLimiter(per_minute=per_minute, per_hour=per_hour)
 
-    app = Application.builder().token(config.telegram_token).build()
+    app = Application.builder().token(config.telegram_token).concurrent_updates(True).build()
     _bot_instance = app.bot
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))

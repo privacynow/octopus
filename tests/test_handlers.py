@@ -405,9 +405,22 @@ def test_bucket_b_command_registration_parity():
                         (getattr(h, "command", None),) if getattr(h, "command", None) else ()
                     )
                     registered.update(commands)
-        required = {"start", "help", "settings", "project", "session"}
+        required = {"start", "help", "settings", "project", "session", "cancel"}
         missing = required - registered
         assert not missing, f"Bucket B main commands must be registered; missing: {missing}"
+
+
+def test_build_application_enables_concurrent_updates_for_live_cancel():
+    """build_application must enable concurrent update dispatch so /cancel can interrupt live work."""
+    with fresh_env() as (_, cfg, prov):
+        import app.telegram_handlers as th
+
+        app = th.build_application(cfg, prov)
+        max_updates = getattr(app.update_processor, "max_concurrent_updates", 1)
+        assert max_updates > 1, (
+            "Dispatcher must allow overlapping updates; otherwise /cancel is serialized behind "
+            "the long-running handler it is supposed to interrupt"
+        )
 
 
 async def test_first_run_welcome():

@@ -1,27 +1,36 @@
 # Architecture
 
-This document describes the bot in terms of contracts, runtime boundaries, and
-core components. It is not a feature changelog. Current implementation status
+This document explains the current system shape: the main components, the
+boundaries between them, the key data types, and the rules changes must
+preserve. It is architecture, not a changelog. Current implementation status
 lives in [status.md](status.md).
 
-For end-user usage, start with [README.md](../README.md).
+For setup and day-to-day use, start with [README.md](../README.md).
 
-Current shipped baseline: **Phase 15 Slice 1** still runs in **Local Runtime**.
-The default path is **SQLite** (leave `BOT_DATABASE_URL` unset); **Postgres**
-is a supported alternate backend for the same local runtime when
-`BOT_DATABASE_URL` is set. **Shared Runtime** remains deferred to later
-roadmap phases.
+Current shipped baseline: **Phase 15 Slice 1** runs in **Local Runtime**.
+The normal deployment is SQLite-backed with `BOT_DATABASE_URL` unset.
+Postgres is a supported alternate backend for the same runtime contract when
+`BOT_DATABASE_URL` is set. Shared Runtime is not part of the current product
+surface.
 
-Fresh plain-message execution and approval preflight now use a
-**worker-owned** execution lane backed by the durable work queue. Credential
-setup replies stay inline and off-queue. Some callback-driven execution paths
-(approve/retry/replay) still use the same provider/result contracts inline and
-remain candidates for later worker-path consolidation.
+If you only remember four things, remember these:
 
-- **Runtime matrix:** local + sqlite = default; local + postgres = supported; shared = deferred/out of scope.
-- **Backend seam:** `app/runtime_backend.py` is the only backend selector; `storage.py` and `work_queue.py` are backend-neutral facades. Implementations: `storage_sqlite`, `storage_postgres`, `work_queue_sqlite`, `work_queue_postgres`.
-- **Contract suites:** `tests/contracts/test_session_store_contract.py` and `tests/contracts/test_transport_store_contract.py` run against both SQLite and Postgres and define backend-neutral behavior.
-- **E2E:** Primary gate is `test_compose_sqlite_local_runtime_primary` (Docker bot, no Postgres). Bounded Postgres coverage: bootstrap/doctor and bot startup with Postgres tooling.
+- normal chat requests are admitted durably and executed by the worker
+- credential-setup replies stay inline and off-queue
+- running work is cancelled through the worker-owned live registry
+- queued fresh work can be cancelled through the durable queue before claim
+
+Quick orientation:
+
+- **Runtime matrix:** Local Runtime with SQLite is the default. Local Runtime
+  with Postgres is supported. Shared Runtime is future work.
+- **Backend seam:** `app/runtime_backend.py` chooses the backend.
+  `storage.py` and `work_queue.py` stay backend-neutral.
+- **Contract suites:** `tests/contracts/test_session_store_contract.py` and
+  `tests/contracts/test_transport_store_contract.py` define backend-neutral
+  behavior.
+- **Primary E2E gate:** `test_compose_sqlite_local_runtime_primary` verifies
+  the main Docker path.
 
 ---
 
@@ -57,22 +66,11 @@ flowchart LR
 
 ---
 
-## System Contract
+## What The Bot Owns
 
-Telegram Agent Bot provides a Telegram-native control surface for a local
-coding agent.
+Telegram Agent Bot is a Telegram interface for a local coding agent.
 
-The system contract is:
-
-1. Telegram is the user interface.
-2. Claude Code or Codex is the execution backend.
-3. The bot resolves the effective execution context before invoking the
-   provider.
-4. The bot owns safety, capability layering, output adaptation, and durable
-   state.
-
-The product is therefore more than "chatting with a CLI." It is a runtime that
-adds:
+It is responsible for more than passing text to a CLI. It also owns:
 
 - approval and retry workflows
 - skill and credential management
@@ -86,12 +84,20 @@ adds:
 - Telegram-safe rendering and progressive disclosure for long responses
 - operator visibility and health reporting
 
+In plain terms:
+
+1. Telegram is the user interface.
+2. Claude Code or Codex is the execution backend.
+3. The bot resolves one authoritative execution context before invoking the provider.
+4. The bot stores the state needed to make approval, retry, recovery, and output behavior consistent.
+
 ---
 
-## Runtime Boundaries
+## Main Boundaries
 
-The codebase is organized around these hard boundaries. Data and control
-flow respect these layers; business logic does not skip across them.
+The runtime is easiest to reason about if you treat it as eight ownership
+boundaries. Each one owns a distinct kind of decision. Code should not skip
+across those ownership lines.
 
 ```mermaid
 flowchart TB
@@ -114,8 +120,8 @@ flowchart TB
 
 ### 1. Transport boundary
 
-Input arrives as Telegram updates and is normalized into inbound transport
-types before business logic runs.
+This boundary turns Telegram-shaped input into project-owned inbound types
+before business logic runs.
 
 Primary module: `app/transport.py`
 
@@ -125,7 +131,7 @@ Inbound types:
 - `InboundCommand` — slash command with parsed args
 - `InboundCallback` — inline keyboard callback
 
-Contract:
+This boundary guarantees:
 
 - transport normalization extracts user, chat, command, callback, text,
   and attachments into frozen dataclasses
@@ -138,7 +144,7 @@ Contract:
   any optional import/export tooling added later will depend on the same
   shape stability
 
-**Transport contract and adapter map**
+**Transport seams**
 
 The current transport architecture has two project-owned seams:
 
@@ -148,10 +154,10 @@ The current transport architecture has two project-owned seams:
   `InboundEnvelope`, `ConversationIO`, `EditableMessageHandle`,
   `TransportCapabilities`, the admission seam, and the Telegram outbound adapter
 
-The important current limitation is explicit: the transport port is only
-partially adopted. Fresh plain-message admission uses `InboundEnvelope`;
-worker-owned outbound output uses `ConversationIO`; handler-owned replies and
-callback handling still call PTB-shaped objects directly.
+The current limitation is explicit: transport abstraction is only partially
+adopted. Fresh plain-message admission uses `InboundEnvelope`; worker-owned
+outbound output uses `ConversationIO`; handler-owned replies and callback
+handling still use PTB-shaped objects directly.
 
 ```mermaid
 flowchart LR
@@ -198,9 +204,9 @@ flowchart LR
   - still normalize and execute through Telegram/PTB-shaped handler entrypoints
   - command dedupe/enqueue remains handler-owned
   - callback answer/edit behavior remains handler-owned
-  - some provider-starting follow-up paths still remain inline today:
-    approval approve, retry, and recovery replay use the same provider/result
-    contracts without yet going through the worker-owned fresh-message lane
+  - some provider-starting follow-up paths still remain inline:
+    approval approve, retry, and recovery replay do not yet use the worker-owned
+    fresh-message lane
 - Worker-owned outbound path:
   - `worker_dispatch()` uses `TelegramConversationIO`
   - progress, final replies, recovery notices, and worker-owned edits go
@@ -260,9 +266,8 @@ Canonical simulator coverage in `tests/test_simulator_e2e.py` proves:
 All inbound updates are journaled through a durable work queue before
 provider-starting work is processed. Fresh plain-message execution is admitted
 through the queue and executed from the worker-owned path; recovered stale work
-is routed through explicit recovery handling. This replaces in-memory-only
-duplicate-delivery handling and ad hoc per-chat locking as the primary
-transport authority for fresh provider work.
+is routed through explicit recovery handling. This is the main delivery and
+admission authority for fresh provider work.
 
 Primary modules:
 
@@ -285,17 +290,14 @@ Tables:
 - `work_items` — processable units derived from updates, including durable
   `dispatch_mode` routing metadata (`fresh` or `recovery`)
 
-**Transport workflow (library-backed)**
+**Transport workflow**
 
-Transition legality is owned by `TransportRecoveryMachine` (python-statemachine).
-The repository owns: SQL, idempotency, compare-and-update, and the
-repository-level outcome `already_handled` (row missing or no longer in
-source state after a failed update). The machine is pure: no SQL or I/O
-inside validators or actions. The adapter `run_transport_event(model, event_name, **kwargs)`
-runs the machine, catches `TransitionNotAllowed` and domain exceptions
-(`OtherClaimedForChat`, `BlockedReplay`, `NotStaleClaim`), and returns
-`TransitionResult`. Narrow APIs: `discard_recovery(item_id)` for user
-discard; replay and supersede are separate operations.
+`TransportRecoveryMachine` owns transition legality. The repository owns SQL,
+idempotency, compare-and-update, and the repository-level outcome
+`already_handled` (row missing or no longer in source state after a failed
+update). The machine stays pure: no SQL or I/O in validators or actions.
+`run_transport_event(...)` executes the machine and maps validation outcomes to
+`TransitionResult`.
 
 Work-item state machine:
 
@@ -327,7 +329,7 @@ Control-flow exceptions:
 - `ReclaimBlocked` — replay attempted but another item for the same chat
   is already claimed
 
-Contract:
+What this boundary guarantees:
 
 - duplicate `update_id` delivery is `transport idempotency` (journaled, not
   reprocessed)
@@ -355,11 +357,11 @@ Contract:
 - multiple polling processes for the same token are detected and warned
   about, not supported
 
-**Transport invariants (runtime contract)**
+**Transport invariants**
 
-These are the authoritative runtime invariants. They are enforced by DB
-checks in the current schema and by a single shared row validator in the
-repository. Invalid state is never normalized into a benign outcome.
+These are the runtime invariants. DB checks and the shared row validator enforce
+them. Invalid state is surfaced as corruption, not normalized into a benign
+outcome.
 
 - `work_items.state` must be one of: `queued`, `claimed`, `pending_recovery`, `done`, `failed`.
 - `work_items.dispatch_mode` must be one of: `fresh`, `recovery`.
@@ -380,7 +382,7 @@ repository. Invalid state is never normalized into a benign outcome.
 
 - SQLite `transport.db` has a versioned schema and local validation/migration
   for supported layouts
-- Postgres uses `sql/postgres/` migrations for the same durable transport
+- Postgres uses `app/db/migrations/postgres/` migrations for the same durable transport
   contract
 - Both backends must satisfy the same transport-store contract suites
 - Unsupported schema/layout fails fast with a neutral error
@@ -403,7 +405,7 @@ Current implementations:
 
 `app/storage.py` is the backend-neutral session-store owner across both.
 
-Contract:
+This boundary guarantees:
 
 - runtime orchestration operates on typed session objects
 - handler and request logic should not mutate raw dict session state
@@ -411,7 +413,7 @@ Contract:
   model profile) belong here
 - authorization policy does not belong here; trust tier is resolved per request
 
-**Project and settings UX contract**
+**Project and settings UX**
 
 Project binding and session settings are part of the same durable chat-scoped
 session contract. The current authoritative fields are:
@@ -452,7 +454,7 @@ Preferred inline-callback shape:
   work (for example project selection/clear) instead of introducing a second
   project-specific callback subsystem.
 
-Contract:
+Rules for this boundary:
 
 - `/settings` is a discoverability surface over these existing
   fields and mutations, not a second configuration system.
@@ -461,9 +463,8 @@ Contract:
   apply reset/invalidation rules, and `_save(...)`.
 - Project and settings UI must not bypass the typed session boundary or create
   raw-dict mutation paths.
-- No additional workflow state machine belongs here. This surface is
-  synchronous session mutation; the existing Phase 11 workflow families remain:
-  transport/recovery and pending approval/retry.
+- No additional workflow state machine belongs here. This is synchronous
+  session mutation, not a second workflow engine.
 
 Reset and invalidation rules:
 
@@ -491,7 +492,7 @@ There is one authoritative resolved execution context per request.
 
 Primary module: `app/execution_context.py`
 
-Contract:
+This boundary guarantees:
 
 - all context-sensitive behavior derives from the same resolved object
 - context hash is computed in one place only
@@ -505,8 +506,8 @@ Contract:
 
 ### 5. Request-flow boundary
 
-Request orchestration is pure business logic, independent of Telegram
-transport details.
+Request orchestration is business logic, independent of Telegram transport
+details.
 
 Primary modules:
 
@@ -517,7 +518,7 @@ Primary modules:
 - `app/workflows/pending_request.py` — pending approval/retry workflow graph
   and transition legality (library)
 
-Contract:
+This boundary guarantees:
 
 - `check_credential_satisfaction` receives the resolved active_skills list,
   not the raw session
@@ -546,7 +547,7 @@ Primary modules:
 - `app/providers/claude.py`
 - `app/providers/codex.py`
 
-Contract:
+This boundary guarantees:
 
 - providers do not resolve session or project state
 - provider contexts are already resolved before invocation
@@ -556,7 +557,7 @@ Contract:
 
 ### 7. Capability boundary
 
-Skills, credentials, provider config fragments, and the managed store are a
+Skills, credentials, provider config fragments, and the managed store are the
 capability layer on top of raw provider execution.
 
 Primary modules:
@@ -566,7 +567,7 @@ Primary modules:
 - `app/registry.py` — remote artifact download and digest verification
 - `app/skill_commands.py` — Telegram commands for skill management
 
-Contract:
+This boundary guarantees:
 
 - skill resolution is deterministic: custom > managed > built-in
 - managed skills are immutable content-addressed objects behind refs
@@ -586,7 +587,7 @@ Primary modules:
 - `app/progress.py` — normalized progress event family and shared HTML
   renderer
 
-**Progress contract (implemented):**
+**Progress contract**
 
 Both providers map raw CLI events to a shared `ProgressEvent` family:
 
@@ -610,7 +611,7 @@ call `render_progress(event)` — they never construct display HTML directly.
 - Internal events (thread IDs, session metadata) are suppressed at the
   mapping layer — `_map_event` returns `None` and the event is never rendered
 
-**Response contract:**
+**Response contract**
 
 - compact/full response presentation is a rendering concern
 - long responses use progressive disclosure: expandable blockquote (≤ 4000
@@ -816,13 +817,12 @@ flowchart TD
 
 ---
 
-## Core Data Contracts
+## Key Data Types
 
 ### SessionState
 
-Runtime representation of a chat session. The current shipped adapter stores it
-as JSON in `sessions.db`; the post-migration runtime keeps the same typed
-contract while moving authority to Postgres.
+Runtime representation of a chat session. It is stored as typed session data in
+the session store.
 
 It owns:
 
@@ -892,13 +892,13 @@ Rendered to Telegram HTML by the shared `render()` function in `progress.py`.
 
 ### Transport workflow types
 
-**TransportWorkflowModel** (mutable): Built from a work_items row plus guard
-inputs (worker_id, requesting_worker_id, has_other_claimed_for_chat, is_stale).
-The machine reads/writes `state`; validators/conditions use the guard fields;
-actions set `disposition`. No SQL or I/O in model methods.
+**TransportWorkflowModel** (mutable): built from a `work_items` row plus guard
+inputs (`worker_id`, `requesting_worker_id`, `has_other_claimed_for_chat`,
+`is_stale`). The machine reads and writes `state`; validators use the guard
+fields; actions set `disposition`. No SQL or I/O lives here.
 
 **TransitionResult**: `allowed`, `new_state`, `disposition`, `reason`. Returned
-by `run_transport_event()`. Repository uses it to decide whether to commit
+by `run_transport_event()`. The repository uses it to decide whether to commit
 and what to return.
 
 **TransportDisposition**: Outcome classification (ok, already_claimed_by_worker,
@@ -912,10 +912,10 @@ TransitionResult): `OtherClaimedForChat`, `BlockedReplay`, `NotStaleClaim`.
 
 ### Pending-request workflow types
 
-**PendingRequestWorkflowModel** (mutable): Built from stored pending state and a
+**PendingRequestWorkflowModel** (mutable): built from stored pending state and a
 validation classification result (`ok`, `expired`, `context_changed`). The
 machine reads and writes `state`; actions set the resulting disposition. No SQL
-or I/O in model methods.
+or I/O lives here.
 
 **PendingRequestTransitionResult**: `allowed`, `new_state`, `disposition`,
 `reason`. Returned by `run_pending_request_event()`. Handlers and request flow
@@ -931,12 +931,9 @@ message.
 
 ### Durable storage
 
-The shipped implementation uses backend-neutral facades with two concrete local
-runtime backends. By default, authority lives in the SQLite-backed
-`sessions.db` and `transport.db`. When `BOT_DATABASE_URL` is set, the same
-session, transport-payload, and execution-context contracts are backed by
-Postgres. Phase 11 already extracted workflow ownership, so both backends share
-the same transition legality and orchestration rules.
+The runtime uses backend-neutral facades with two local-runtime backends.
+By default, authority lives in SQLite-backed `sessions.db` and `transport.db`.
+When `BOT_DATABASE_URL` is set, the same contracts are backed by Postgres.
 
 **Current shipped `sessions.db`** — chat session state:
 
@@ -959,15 +956,10 @@ the same transition legality and orchestration rules.
 
 ### Why this split exists
 
-Session state benefits from atomic updates, indexed queries, schema evolution.
-
-Files and artifacts benefit from filesystem semantics, direct provider access,
-operator inspectability.
-
-Transport data has a different retention policy and lifecycle than sessions —
-it tracks ephemeral update delivery, not long-lived chat state. That
-separation remains after the Postgres cutover even though the backing store
-changes.
+- Session state needs atomic updates, indexed queries, and schema evolution.
+- Files and artifacts benefit from filesystem semantics and direct provider access.
+- Transport data has a different lifecycle from chat session state: it tracks
+  update delivery and runnable work, not long-lived conversation state.
 
 ### Response history and progressive disclosure
 
@@ -1013,7 +1005,7 @@ The registry is a source of managed artifacts:
 
 ---
 
-## Request Lifecycle Contracts
+## Main Request Flows
 
 ### Normal request
 
@@ -1117,15 +1109,15 @@ Credential setup is conversational state, not a hidden side effect.
 
 Scaling path now has two explicit tiers:
 
-- **Local Runtime**: the shipped mode today; single-machine authority, simpler
+- **Local Runtime**: single-machine authority, simpler
   deployment, SQLite by default, Postgres optional, and no shared
   queue-authority requirement.
-- **Shared Runtime**: later webhook ingress plus shared Postgres queue
+- **Shared Runtime**: webhook ingress plus shared Postgres queue
   authority plus worker loop as primary processing path.
 
-### Workflow ownership (Phase 11 shipped shape)
+### Workflow ownership
 
-The Phase 11 workflow extraction is now in place for both workflow families:
+Both workflow families already have explicit owners:
 
 - `TransportRecoveryMachine` in `app/workflows/transport_recovery.py`
 - `PendingRequestMachine` in `app/workflows/pending_request.py`
@@ -1242,9 +1234,9 @@ summaries, stale pending and setup visibility.
 
 ## Testing Architecture
 
-The test suite is organized around contracts, not only features.
+The test suite is organized around contracts, not just features.
 
-### Four-layer model (current)
+### Four-layer model
 
 1. Pure or owner suites
    - workflow machines, execution context, request-flow rules, providers,
@@ -1288,22 +1280,22 @@ The current transport architecture deliberately separates three concerns:
    - command, callback, and immediate reply behavior still sits directly on the
      Telegram/PTB surface
 
-This means the simulator is currently best understood as a **handler-level
-runtime harness**:
+That means the simulator is best understood as a **handler-level runtime
+harness**:
 
 - it exercises the real queue, worker loop, and provider path
 - it does not simulate PTB dispatcher internals
 - it does not yet simulate transport ingress by constructing and delivering
   `InboundEnvelope` objects end-to-end
 
-The remaining architectural gap is therefore narrow and explicit:
+The remaining architectural gap is narrow and explicit:
 
 - unify handler-owned outbound messaging behind `ConversationIO`
 - add first-class callback injection to the simulator
 - optionally move from direct handler injection to a transport-level delivery
   harness without making PTB internals the primary contract
 
-### Current Postgres test harness
+### Postgres test harness
 
 The Postgres integration harness is intentionally separate from app runtime
 configuration.
@@ -1321,7 +1313,7 @@ configuration.
 
 ### Owner suites and cross-cutting tests
 
-The owner-suite model from Phase 10 still stands:
+The suite structure aims for one owner suite per contract:
 
 - one primary owner suite per contract
 - `test_invariants.py` only for genuinely cross-cutting rules
@@ -1367,32 +1359,17 @@ Current owner families:
 
 ## Deployment and dependencies
 
-All runtime dependencies are declared in **`requirements.txt`** (including
-`python-telegram-bot`, `python-statemachine`, `cryptography`, etc.). The bot
-must run with a Python environment that has those packages installed.
-
-- **New installs:** `./setup.sh` calls `./scripts/bootstrap.sh`, which creates
-  `.venv` and runs `pip install -r requirements.txt`. The app is then run as
-  `.venv/bin/python -m app.main <instance>` (via `scripts/run.sh` or the
-  systemd service).
-- **After git pull (resumed / updated deployments):** Run
-  `./scripts/bootstrap.sh` to refresh the venv from `requirements.txt`, then
-  restart the bot. If this is skipped and the repo added a new dependency, the
-  bot can fail at startup with `ModuleNotFoundError`.
-- **Bootstrap script:** `scripts/bootstrap.sh` installs from `requirements.txt`
-  every time it runs (creating or updating the venv), then runs a quick import
-  check so missing dependencies fail immediately instead of at runtime.
+The bot’s Python dependencies live in **`requirements.txt`**. The normal
+runtime path is Docker, and the same dependency set also supports host-side
+debugging and tests.
 - **Current runtime contract:** Local Runtime is the supported deployment mode.
   Leave `BOT_DATABASE_URL` unset for SQLite (default), or set it to a
   Postgres DSN to use Postgres as the backend for the same product/runtime
   contract. The app validates backend compatibility at startup.
 - **Optional Postgres workflows:** explicit repo-owned DB commands
-  (`scripts/db_bootstrap.sh`, `scripts/db_update.sh`, `scripts/db_doctor.sh`)
+  (`scripts/db/db_bootstrap.sh`, `scripts/db/db_update.sh`, `scripts/db/db_doctor.sh`)
   prepare and verify Postgres before the bot starts when `BOT_DATABASE_URL` is
   set.
-- **Roadmap direction after the current local-runtime baseline:** keep Local
-  Runtime as the primary operator path and add Shared Runtime later for
-  persist-first ingress and multi-process workers.
 - **Environment identity:** Each running bot environment has its own database,
   config, Telegram token, and app instance identity. Side-by-side dev/staging
   environments use separate databases, regardless of whether the environment is
@@ -1401,31 +1378,29 @@ must run with a Python environment that has those packages installed.
   1. infrastructure provides the runtime substrate for the selected mode
   2. repo-owned DB/runtime commands apply schema and validate compatibility
   3. the app validates and runs; it does not create the DB, role, or schema at startup
-- **Primary operational model:** Dockerized bot is the primary operator path.
-  `./scripts/guided_start.sh` is the main zero-to-running path for SQLite Local
-  Runtime; `./scripts/dev_up_postgres.sh` is the optional Postgres bootstrap
-  path.
+- **Primary operational model:** Dockerized bot is the main operator path.
+  `./scripts/app/guided_start.sh` is the main zero-to-running path for SQLite Local
+  Runtime. `./scripts/db/dev_up_postgres.sh` exists for the alternate Postgres
+  backend. The canonical Compose entrypoints live under
+  `infra/compose/docker-compose.yml` and `infra/compose/docker-compose.e2e.yml`.
 - **Supported bot image:** The supported Docker path uses a **real provider-enabled
   image** (includes the chosen Claude or Codex CLI). Build it with
-  `./scripts/build_bot_image.sh`; the script selects the image target from
+  `./scripts/provider/build_bot_image.sh`; the script selects the image target from
   `BOT_PROVIDER` so operators don’t choose Docker targets manually. Built from
-  `Dockerfile.bot` (shared base + provider-specific stage). A **stub-provider
-  image** (`Dockerfile.runnable`) exists only for **test/dev smoke** (e.g. E2E
+  `infra/docker/Dockerfile.bot` (shared base + provider-specific stage). A **stub-provider
+  image** (`infra/docker/Dockerfile.runnable`) exists only for **test/dev smoke** (e.g. E2E
   when the real CLI is unavailable) and is not the supported runtime.
-- **Provider authentication contract (current direction):** Docker-first
-  operation keeps the real provider CLI inside the image, but **auth state is
-  not baked into the image**. The product direction is:
+- **Provider authentication contract:** Docker-first operation keeps the real
+  provider CLI inside the image, but **auth state is not baked into the image**:
   1. a guided repo-owned provider-login step runs **inside the same bot image**
   2. login state is persisted in a dedicated **bot-home Docker volume**
   3. the runtime bot service mounts that same volume
   4. startup and `/doctor` validate not only binary presence but provider
      runtime/auth health before the bot is treated as ready
   This keeps the product Docker-first while preserving the subscription-style
-  CLI login model for Claude Code and Codex. Advanced non-interactive modes
-  such as API-key, Bedrock, or Vertex auth remain possible, but they are not
-  the primary product-facing contract.
-- **Provider-login ownership:** The intended supported onboarding flow is one
-  uniform repo-owned command (for example `scripts/provider_login.sh`) that
+  CLI login model for Claude Code and Codex.
+- **Provider-login ownership:** The supported onboarding flow is one
+  uniform repo-owned command (for example `scripts/provider/provider_login.sh`) that
   reads `BOT_PROVIDER`, launches the provider-specific login flow in-container,
   then verifies provider health using the same image + volume pair that the
   runtime bot will use. Operators should not need to know provider-specific
@@ -1437,11 +1412,9 @@ must run with a Python environment that has those packages installed.
   order. Login/setup and runtime use the same image and volume.
 - **Host-run bot:** Still supported as a secondary fallback/debug path with the
   same Local Runtime contract above the storage boundary.
-- **Later environments:** staging and production may choose:
-  - Local Runtime for simpler single-machine deployments
-  - Shared Runtime for more operationally demanding deployments
-  while keeping explicit bootstrap/update/doctor contracts for the selected
-  mode.
+- **Later environments:** staging and production may choose Local Runtime or a
+  future Shared Runtime while keeping explicit bootstrap/update/doctor
+  contracts for the selected mode.
 
 See [README.md](../README.md) for Get Started and "After updating (git pull)".
 
@@ -1471,9 +1444,9 @@ Changing these should trigger both code review and invariant test updates.
 
 ---
 
-## Rebuild Guidance
+## Execution Order Constraints
 
-If rebuilding the bot from scratch, preserve this order of responsibility:
+If you are reworking the runtime, preserve this order:
 
 1. normalize transport (inbound types)
 2. journal updates and enforce transport idempotency (durable work queue)
@@ -1493,7 +1466,7 @@ If rebuilding the bot from scratch, preserve this order of responsibility:
 13. save raw response to ring buffer
 14. deliver directed artifacts using resolved allowed roots
 
-That order is more important than the exact module names.
+That order matters more than the exact module names.
 
 The single most important architectural rule: once `resolve_execution_context`
 produces a `ResolvedExecutionContext`, all downstream code reads execution-scope

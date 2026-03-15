@@ -13,6 +13,7 @@ from tests.support.handler_support import (
     FakeProvider,
     FakeUpdate,
     FakeUser,
+    drain_one_worker_item,
     has_markup_removal,
     last_reply,
     last_run_context,
@@ -172,6 +173,7 @@ async def test_handler_store_update_propagates():
 
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat_user, regular, "go")
+            await drain_one_worker_item(data_dir)
             assert STORE_V1 in last_run_context(prov).system_prompt
             prov.run_calls.clear()
 
@@ -184,6 +186,7 @@ async def test_handler_store_update_propagates():
 
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat_user, regular, "go again")
+            await drain_one_worker_item(data_dir)
             ctx = last_run_context(prov)
             assert STORE_V2 in ctx.system_prompt
             assert STORE_V1 not in ctx.system_prompt
@@ -279,6 +282,7 @@ async def test_smoke_store_lifecycle():
             await send_command(th.cmd_skills, chat, admin, "/skills add helper", ["add", "helper"])
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go")
+            await drain_one_worker_item(data_dir)
             assert STORE_V1 in last_run_context(prov).system_prompt
             prov.run_calls.clear()
 
@@ -287,6 +291,7 @@ async def test_smoke_store_lifecycle():
 
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, admin, "go again")
+            await drain_one_worker_item(data_dir)
             assert STORE_V1 not in last_run_context(prov).system_prompt
         finally:
             cleanup()

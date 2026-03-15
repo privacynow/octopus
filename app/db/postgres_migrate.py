@@ -6,8 +6,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-# SQL files live in repo sql/postgres/; names 0001_*.sql, 0002_*.sql, etc.
-_SQL_DIR = Path(__file__).resolve().parent.parent.parent / "sql" / "postgres"
+# SQL files live in app/db/migrations/postgres/; names 0001_*.sql, 0002_*.sql, etc.
+_SQL_DIR = Path(__file__).resolve().parent / "migrations" / "postgres"
 _VERSION_RE = re.compile(r"^(\d+)_(.+)\.sql$")
 
 
@@ -84,7 +84,7 @@ def run_update(conn: Any) -> list[str]:
     if max_applied is None:
         return [
             "Schema or schema_migrations table missing. Run DB bootstrap first "
-            "(scripts/db_bootstrap.sh or python -m app.db.cli bootstrap)."
+            "(scripts/db/db_bootstrap.sh or python -m app.db.cli bootstrap)."
         ]
     for version, path in _sql_files_sorted():
         if version <= max_applied:
@@ -112,6 +112,6 @@ def run_update(conn: Any) -> list[str]:
 
 
 def current_schema_version() -> int:
-    """Return the latest schema version number (highest 000N in sql/postgres)."""
+    """Return the latest schema version number (highest 000N in app/db/migrations/postgres)."""
     files = _sql_files_sorted()
     return files[-1][0] if files else 0

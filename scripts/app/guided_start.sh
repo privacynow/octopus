@@ -2,16 +2,24 @@
 # Single guided path: build, provider login (if needed), then start the bot. Local Runtime (SQLite) by default.
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
 # shellcheck source=scripts/lib_env.sh
-. "$(dirname "$0")/lib_env.sh"
+. "$REPO_DIR/scripts/lib_env.sh"
 
 echo "=== Guided setup and start (Local Runtime) ==="
 
 # 1. .env.bot
 check_env_bot_required
 env_provider=$(get_bot_provider)
+
+# 1b. If using Postgres, ensure DB is up and migrated first
+if grep -qE '^\s*BOT_DATABASE_URL=.*postgres' .env.bot 2>/dev/null; then
+  if ! ./scripts/db/dev_up_postgres.sh; then
+    echo "Postgres setup failed. Fix the issue above, then run ./scripts/app/guided_start.sh again." >&2
+    exit 1
+  fi
+fi
 
 # 2. Ensure provider image exists and is not stale
 echo "Step 1/3: Bot image for $env_provider..."
@@ -49,10 +57,10 @@ print(int(dt.timestamp()))
 " 2>/dev/null)
     get_mtime() { case "$(uname -s)" in Darwin) stat -f %m "$1" 2>/dev/null ;; *) stat -c %Y "$1" 2>/dev/null ;; esac; }
     file_ts=0
-    for f in Dockerfile.bot requirements.txt; do
+    for f in infra/docker/Dockerfile.bot requirements.txt; do
       [ -f "$f" ] && t=$(get_mtime "$f") && [ -n "$t" ] && [ "$t" -gt "$file_ts" ] && file_ts=$t
     done
-    for dir in app scripts sql skills; do
+    for dir in app scripts infra/docker; do
       [ -d "$dir" ] && while IFS= read -r f; do
         t=$(get_mtime "$f") && [ -n "$t" ] && [ "$t" -gt "$file_ts" ] && file_ts=$t
       done < <(find "$dir" -type f 2>/dev/null)
@@ -65,7 +73,7 @@ print(int(dt.timestamp()))
   fi
 fi
 if [ "$need_build" -eq 1 ]; then
-  ./scripts/build_bot_image.sh "$env_provider"
+  ./scripts/provider/build_bot_image.sh "$env_provider"
 else
   echo "Image telegram-agent-bot:$env_provider already present and up to date."
 fi
@@ -73,14 +81,14 @@ fi
 # 3. Provider auth: check, run login if needed, then re-check
 echo ""
 echo "Step 2/3: Provider auth..."
-if ./scripts/provider_status.sh >/dev/null 2>&1; then
+if ./scripts/provider/provider_status.sh >/dev/null 2>&1; then
   echo "Provider already authenticated."
 else
   echo "Provider not authenticated. Running one-time interactive login..."
-  ./scripts/provider_login.sh "$env_provider"
+  ./scripts/provider/provider_login.sh "$env_provider"
   echo "Verifying provider auth..."
-  if ! ./scripts/provider_status.sh; then
-    echo "Provider health check still failed after login (see above). Check your subscription or re-run provider_login.sh." >&2
+  if ! ./scripts/provider/provider_status.sh; then
+    echo "Provider health check still failed after login (see above). Check your subscription or re-run ./scripts/provider/provider_login.sh." >&2
     exit 1
   fi
 fi
@@ -88,16 +96,17 @@ fi
 # 4. Start bot and verify it stayed up
 echo ""
 echo "Step 3/3: Starting bot (background service)..."
-docker compose --profile bot --env-file .env.bot up -d bot
+docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot --env-file .env.bot up -d bot
 
 echo "Waiting a few seconds to confirm the bot stayed up..."
 sleep 5
-if docker compose --profile bot ps -a --format '{{.Status}}' bot 2>/dev/null | grep -q Exited; then
+if docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot ps -a --format '{{.Status}}' bot 2>/dev/null | grep -q Exited; then
   echo "Bot failed to start (container exited). Last logs:" >&2
-  docker compose --profile bot logs --tail=40 bot >&2
+  docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot logs --tail=40 bot >&2
   exit 1
 fi
 
 echo ""
 echo "Bot started. Message it in Telegram to use it."
-echo "Logs: docker compose --profile bot logs -f bot   Stop: docker compose --profile bot stop bot"
+echo "Logs: docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot logs -f bot"
+echo "Stop: docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot stop bot"

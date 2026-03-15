@@ -85,8 +85,13 @@ def _worker_id() -> str:
 
 
 def _compose(ctx: dict[str, object], *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+    cmd = ["docker", "compose"]
+    project_dir = ctx.get("project_dir")
+    if project_dir:
+        cmd.extend(["--project-directory", str(project_dir)])
+    cmd.extend([*ctx["compose_files"], *args])
     return subprocess.run(
-        ["docker", "compose", *ctx["compose_files"], *args],
+        cmd,
         cwd=ctx.get("cwd", REPO_ROOT),
         env=ctx["env"],
         capture_output=True,
@@ -204,11 +209,12 @@ def compose_ctx(e2e_skip, tmp_path_factory):
     ctx = {
         "project": project,
         "compose_files": [
-            "-f", os.path.join(REPO_ROOT, "docker-compose.yml"),
-            "-f", os.path.join(REPO_ROOT, "docker-compose.e2e.yml"),
+            "-f", os.path.join(REPO_ROOT, "infra/compose/docker-compose.yml"),
+            "-f", os.path.join(REPO_ROOT, "infra/compose/docker-compose.e2e.yml"),
             "-f", str(generated_override),
         ],
         "cwd": REPO_ROOT,
+        "project_dir": REPO_ROOT,
         "env": {**os.environ, "COMPOSE_PROJECT_NAME": project},
         "env_file": env_file,
         "artifacts_dir": artifacts_dir,
@@ -302,7 +308,7 @@ def _build_bot_image(ctx: dict[str, object]) -> None:
         log_file.flush()
         try:
             r = subprocess.run(
-                ["docker", "build", "-f", "Dockerfile.bot", "--build-arg", "BOT_PROVIDER=claude",
+                ["docker", "build", "-f", "infra/docker/Dockerfile.bot", "--build-arg", "BOT_PROVIDER=claude",
                  "-t", str(ctx["bot_image"]), "."],
                 cwd=REPO_ROOT,
                 timeout=_DOCKER_BUILD_TIMEOUT,
@@ -355,10 +361,12 @@ def test_compose_postgres_up_without_env_bot(e2e_skip, tmp_path):
     This uses a temp copied Compose stack with no .env.bot at all, proving that
     postgres-only tooling does not depend on bot runtime config.
     """
-    compose_base = tmp_path / "docker-compose.yml"
-    compose_e2e = tmp_path / "docker-compose.e2e.yml"
-    shutil.copy2(os.path.join(REPO_ROOT, "docker-compose.yml"), compose_base)
-    shutil.copy2(os.path.join(REPO_ROOT, "docker-compose.e2e.yml"), compose_e2e)
+    compose_dir = tmp_path / "infra" / "compose"
+    compose_dir.mkdir(parents=True, exist_ok=True)
+    compose_base = compose_dir / "docker-compose.yml"
+    compose_e2e = compose_dir / "docker-compose.e2e.yml"
+    shutil.copy2(os.path.join(REPO_ROOT, "infra/compose/docker-compose.yml"), compose_base)
+    shutil.copy2(os.path.join(REPO_ROOT, "infra/compose/docker-compose.e2e.yml"), compose_e2e)
     env = {
         **os.environ,
         "COMPOSE_PROJECT_NAME": f"telegram-agent-bot-e2e-clean-{_worker_id()}-{uuid.uuid4().hex[:8]}",
@@ -366,6 +374,7 @@ def test_compose_postgres_up_without_env_bot(e2e_skip, tmp_path):
     cleanup_ctx = {
         "compose_files": ["-f", str(compose_base), "-f", str(compose_e2e)],
         "cwd": tmp_path,
+        "project_dir": tmp_path,
         "env": env,
         "artifacts_dir": tmp_path,
     }
@@ -374,6 +383,8 @@ def test_compose_postgres_up_without_env_bot(e2e_skip, tmp_path):
             [
                 "docker",
                 "compose",
+                "--project-directory",
+                str(tmp_path),
                 "-f",
                 str(compose_base),
                 "-f",
@@ -467,7 +478,7 @@ def test_compose_sqlite_local_runtime_primary(bot_image_built):
     stderr = _run_bot_foreground_and_capture(bot_image_built, timeout_seconds=50)
     if "Bot starting (long-poll)" in stderr or "Bot starting (webhook)" in stderr:
         return
-    if "Provider not authenticated or unavailable." in stderr and "Run ./scripts/provider_login.sh" in stderr:
+    if "Provider not authenticated or unavailable." in stderr and "Run ./scripts/provider/provider_login.sh" in stderr:
         return
     pytest.fail(
         "Bot (SQLite Local Runtime) did not reach startup or emit provider-auth failure. Stderr:\n" + stderr
@@ -486,7 +497,7 @@ def test_compose_bot_startup_with_postgres(compose_ctx_postgres_bot):
     stderr = _run_bot_foreground_and_capture(ctx, timeout_seconds=50)
     if "Bot starting (long-poll)" in stderr or "Bot starting (webhook)" in stderr:
         return
-    if "Provider not authenticated or unavailable." in stderr and "Run ./scripts/provider_login.sh" in stderr:
+    if "Provider not authenticated or unavailable." in stderr and "Run ./scripts/provider/provider_login.sh" in stderr:
         return
     pytest.fail(
         "Bot (Postgres backend) did not reach startup or emit provider-auth failure. Stderr:\n" + stderr

@@ -114,7 +114,11 @@ def main() -> None:
         if errors:
             for e in errors:
                 print(f"  FAIL: {e}", file=sys.stderr)
-            print("Run: docker compose --profile tools run --rm db-bootstrap (or db-update). See README.", file=sys.stderr)
+            print(
+                "Run: docker compose --project-directory . -f infra/compose/docker-compose.yml "
+                "--profile tools run --rm db-bootstrap (or db-update). See README.",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
     if args.doctor:
@@ -126,7 +130,7 @@ def main() -> None:
         print("Provider not authenticated or unavailable.", file=sys.stderr)
         for e in runtime_errors:
             print(f"  {e}", file=sys.stderr)
-        print("Run ./scripts/provider_login.sh to authenticate, or check your subscription.", file=sys.stderr)
+        print("Run ./scripts/provider/provider_login.sh to authenticate, or check your subscription.", file=sys.stderr)
         sys.exit(1)
 
     ensure_data_dirs(config.data_dir, database_url=config.database_url or "")

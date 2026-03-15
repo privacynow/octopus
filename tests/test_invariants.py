@@ -95,10 +95,13 @@ def test_registry_digest_mismatch_leaves_no_residue():
                 tf.add(item, arcname=item.name)
 
         handler = http.server.SimpleHTTPRequestHandler
-        server = http.server.HTTPServer(
-            ("127.0.0.1", 0),
-            lambda *args, directory=tmp, **kwargs: handler(*args, directory=directory, **kwargs),
-        )
+        try:
+            server = http.server.HTTPServer(
+                ("127.0.0.1", 0),
+                lambda *args, directory=tmp, **kwargs: handler(*args, directory=directory, **kwargs),
+            )
+        except PermissionError as exc:
+            pytest.skip(f"Local HTTPServer bind not permitted in this environment: {exc}")
         port = server.server_address[1]
         threading.Thread(target=server.serve_forever, daemon=True).start()
 

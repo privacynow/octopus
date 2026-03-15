@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install Claude CLI into the container. Used by Dockerfile.bot when BOT_PROVIDER=claude.
+# Install Claude CLI into the container. Used by infra/docker/Dockerfile.bot when BOT_PROVIDER=claude.
 # Official method: install script from Claude (see https://claude.ai). Set CLAUDE_INSTALL_URL
 # if the default is unavailable. Requires network.
 set -euo pipefail

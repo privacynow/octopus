@@ -13,6 +13,7 @@ from tests.support.handler_support import (
     FakeProvider,
     FakeUpdate,
     FakeUser,
+    drain_one_worker_item,
     last_run_call,
     load_session_disk,
     make_config,
@@ -38,6 +39,7 @@ async def test_codex_context_hash_invalidation():
         import app.telegram_handlers as th
 
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         assert prov.run_calls[0]["provider_state"].get("thread_id") is None
@@ -65,6 +67,7 @@ async def test_codex_script_staging():
         import app.telegram_handlers as th
 
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         ctx = prov.run_calls[0]["context"]
@@ -137,6 +140,7 @@ async def test_codex_failed_resume_clears_thread():
             FakeUpdate(message=FakeMessage(chat=chat, text="continue working"), user=user, chat=chat),
             FakeContext(),
         )
+        await drain_one_worker_item(data_dir)
 
         session = load_session_disk(data_dir, 12345, prov)
         assert session["provider_state"].get("thread_id") is None
@@ -162,6 +166,7 @@ async def test_codex_timed_out_resume_preserves_thread():
             FakeUpdate(message=FakeMessage(chat=chat, text="continue working"), user=user, chat=chat),
             FakeContext(),
         )
+        await drain_one_worker_item(data_dir)
 
         session = load_session_disk(data_dir, 12345, prov)
         assert session["provider_state"].get("thread_id") == "thread-abc"
@@ -186,6 +191,7 @@ async def test_codex_new_exec_failure_preserves_no_thread():
             FakeUpdate(message=FakeMessage(chat=chat, text="do something"), user=user, chat=chat),
             FakeContext(),
         )
+        await drain_one_worker_item(data_dir)
 
         session = load_session_disk(data_dir, 12345, prov)
         assert session["provider_state"].get("thread_id") is None
@@ -222,11 +228,17 @@ async def test_codex_error_text_is_html_escaped():
             FakeUpdate(message=msg, user=user, chat=chat),
             FakeContext(),
         )
+        await drain_one_worker_item(data_dir)
 
-        status_msg = msg.reply_messages[0]
-        edits = [reply for reply in status_msg.replies if "edit_text" in reply]
-        assert edits
-        assert "&lt;MODEL&gt;" in edits[-1]["edit_text"]
+        # Provider was called and returned error (returncode=2). Worker sends via bot;
+        # final error is shown via progress.update (edit_text). Escaping must produce &lt;MODEL&gt;.
+        assert len(prov.run_calls) == 1
+        all_bot_text = " ".join(
+            (m.get("text") or m.get("edit_text") or "") for m in th._bot_instance.sent_messages
+        )
+        assert "&lt;MODEL&gt;" in all_bot_text, (
+            "Codex error text must be HTML-escaped so <MODEL> appears as &lt;MODEL&gt; in user-visible output"
+        )
 
 
 async def test_codex_boot_id_clears_stale_thread():
@@ -253,6 +265,7 @@ async def test_codex_boot_id_clears_stale_thread():
             FakeUpdate(message=FakeMessage(chat=chat, text="hello"), user=user, chat=chat),
             FakeContext(),
         )
+        await drain_one_worker_item(data_dir)
 
         call = last_run_call(prov)
         assert call["provider_state"].get("thread_id") is None
@@ -279,6 +292,7 @@ async def test_codex_same_boot_preserves_thread():
             FakeUpdate(message=FakeMessage(chat=chat, text="hello"), user=user, chat=chat),
             FakeContext(),
         )
+        await drain_one_worker_item(data_dir)
 
         call = last_run_call(prov)
         assert call["provider_state"].get("thread_id") == "my-thread"
@@ -303,6 +317,7 @@ async def test_scripts_dir_in_run_context():
             FakeUpdate(message=FakeMessage(chat=chat, text="use github"), user=user, chat=chat),
             FakeContext(),
         )
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         ctx = prov.run_calls[0]["context"]
@@ -347,6 +362,7 @@ async def test_context_hash_role_sensitivity():
         user = FakeUser(42)
 
         await th.handle_message(FakeUpdate(message=FakeMessage(chat=chat, text="hello"), user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
         assert len(prov.run_calls) == 1
 
         session = load_session_disk(data_dir, 12345, prov)
@@ -362,6 +378,7 @@ async def test_context_hash_role_sensitivity():
             FakeUpdate(message=FakeMessage(chat=chat, text="check security"), user=user, chat=chat),
             FakeContext(),
         )
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 2
         assert prov.run_calls[1]["provider_state"].get("thread_id") is None

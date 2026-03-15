@@ -8,6 +8,8 @@ Current as of 2026-03-15. Tracks progress against [plan.md](plan.md).
 >
 > **Documentation consolidation (2026-03-15).** The canonical roadmap and shipped-state docs are now `docs/plan.md` and `docs/status.md`. References across README, architecture, plan, status, and the doc-summary test were updated to the new filenames. Legacy one-off Phase 13 and worker-cancel impact memos were removed after their still-relevant contract material was folded into `ARCHITECTURE.md`, `plan.md`, and this status log, so the product/runtime story now lives in one architecture doc, one plan, one status log, and the README.
 >
+> **Documentation audience cleanup (2026-03-15).** `ARCHITECTURE.md` was simplified so it reads as a system description instead of a partial implementation diary: boundaries, interfaces, diagrams, request flows, deployment model, and simulator limits are still fully documented, but the wording is plainer and the historical narrative was trimmed back. `README.md` was refocused on the first-time, non-technical operator path: guided setup, Telegram usage, approval flow, common commands, and plain-language troubleshooting. `plan.md` was corrected to reflect the real shipped baseline: Phases 13 and 14 are sealed, Phase 15 is active, and older "before Phase 13" sections are explicitly marked as historical decision record rather than live instruction.
+>
 > **Phase 14 (first slice, complete) — operator health clarity and recovery discoverability.** (1) **Provider-only health:** `provider_status.sh` success output now states explicitly that success does **not** prove the bot can start and points to the full app health command. (2) **Three health surfaces:** README presents a short operator model: (1) provider only — `provider_status.sh`; (2) Postgres/schema only — `db-doctor`; (3) full app health — `python -m app.main --doctor` or in-chat `/doctor`. Local Runtime default and Postgres optional unchanged. (3) **In-bot:** `/doctor` in main help reads as “run full app health check (DB, config, Telegram)”; `HELP_APPROVAL` adds one line that retry/recovery happens via in-chat buttons when a request cannot continue normally. (4) **Parity:** provider_status.sh, README operator section, `/doctor` help line, and HELP_APPROVAL express the same product meaning. (5) **Tests:** test_operator_scripts (provider-only, success ≠ readiness, points to full health); test_readme_operator (three surfaces, SQLite default, no Postgres-only); test_handlers (/start and /help include full /doctor wording, /help approval mentions retry/recovery; /help still does not advertise /retry). Phase 14 first slice complete.
 >
 > **Phase 14 (second slice, complete) — Telegram-path discoverability and dead-end clarity.** (1) **Main help:** `/start` and `/help` now include a trust-aware "Chat options" line (e.g. /settings · /session · /model · /project for trusted users; /project omitted for public) and a recovery hint ("Interrupted? Use Run again or Skip on the status message."). (2) **Dead-end/no-op:** `user_messages`: `nothing_to_cancel` now ends with "No action needed."; `trust_command_not_available_public` points to "Use /help to see available commands."; `approval_no_pending_approve` and `approval_no_pending_reject` give a next step truthful in both approval-mode states ("No pending request to approve/reject. Send a message to get a new plan."). Follow-up: removed misleading "Turn on approval" wording when there is no pending request (handlers do not branch on approval on/off); tests tightened to reject that wording and handler-level tests pin canonical no-pending messages. (3) **No workflow/FSM change:** all changes stay in existing handler/session/message seams. (4) **Tests:** test_user_messages (nothing_to_cancel no-action-needed, trust_command /help, approval no-pending must not say "turn on approval", must say send message/plan); test_handlers (help includes "Chat options:" and recovery hint; /retry still not advertised; public/trusted boundaries unchanged); test_handlers_approval (test_approve_no_pending_shows_canonical_message, test_reject_no_pending_shows_canonical_message). test_handlers, test_handlers_approval, test_user_messages, test_request_flow all pass. Phase 14 second slice complete.
@@ -205,13 +207,14 @@ Current as of 2026-03-15. Tracks progress against [plan.md](plan.md).
   - Shared Runtime remains deferred to Phases 18-19
 - Dockerized bot is the primary supported operational model.
 - Compose is the canonical operator surface:
-  - `./scripts/guided_start.sh` is the main SQLite-first zero-to-running path
-  - `./scripts/dev_up_postgres.sh` plus `BOT_DATABASE_URL` is the optional
+  - `./scripts/app/guided_start.sh` is the main SQLite-first zero-to-running path
+  - `./scripts/db/dev_up_postgres.sh` plus `BOT_DATABASE_URL` is the optional
     Postgres bootstrap path
   - `db-bootstrap`, `db-update`, and `db-doctor` remain explicit repo-owned
     Postgres workflows
-- The **supported bot image** is a **real provider-enabled image** (includes the chosen Claude or Codex CLI). Built via repo-owned script from `BOT_PROVIDER` (e.g. `./scripts/build_bot_image.sh`); operators do not choose Docker targets manually. The stub-provider image (`Dockerfile.runnable`) exists only for **test/dev smoke** (e.g. E2E when real provider is not available) and is not the supported runtime.
-- Zero-to-running: clone → create `.env.bot` → `./scripts/guided_start.sh`.
+  - Compose entrypoints now live under `infra/compose/`
+- The **supported bot image** is a **real provider-enabled image** (includes the chosen Claude or Codex CLI). Built via repo-owned script from `BOT_PROVIDER` (e.g. `./scripts/provider/build_bot_image.sh`); operators do not choose Docker targets manually. The stub-provider image (`infra/docker/Dockerfile.runnable`) exists only for **test/dev smoke** (e.g. E2E when real provider is not available) and is not the supported runtime.
+- Zero-to-running: clone → create `.env.bot` → `./scripts/app/guided_start.sh`.
   Optional Postgres adds the Postgres bootstrap/update/doctor step before bot
   startup.
 - Host-run remains available as a secondary fallback/debug path.
@@ -282,7 +285,7 @@ Bounded audit of Docker/operator and Telegram surfaces. Classifications: **disco
 | First run | guided_start 4-step flow and README Quick Start align. dev_up ends with “To run the bot” + guided_start hint. | — |
 | Provider login | provider_login.sh requires .env.bot, checks image, clear “build first” message. | — |
 | Provider status | Script prints “Provider auth and runtime only (no DB/Telegram checks)”; comment says “For full app health use … app.main --doctor”. Operator may still treat provider_status success as “all good”. | **operator trap** |
-| Provider logout | Clear; “Done. Run ./scripts/provider_login.sh to authenticate again.” | — |
+| Provider logout | Clear; “Done. Run ./scripts/provider/provider_login.sh to authenticate again.” | — |
 | Update after pull | README: db-update, build, up -d bot; guided_start rebuilds when rev/files changed. | — |
 | Doctor | Three distinct things: (1) db_doctor = Postgres/schema only, (2) provider_status = provider auth only, (3) app --doctor / in-chat /doctor = full. README and provider_status mention full doctor but distinction could be clearer. | **discoverability** / **operator trap** |
 | Stale image / rebuild | guided_start rev + mtime; build_bot_image suggests guided_start. | — |
@@ -324,12 +327,12 @@ Executed 2026-03-13. Scope: Docker/runtime only; no user-facing polish, no Phase
 
 | Milestone | Delivered |
 |-----------|-----------|
-| **A1. Supported runnable image** | **Real** provider-enabled image: `Dockerfile.bot` (base + provider install via `scripts/install_provider_claude.sh`, `scripts/install_provider_codex.sh`). `./scripts/build_bot_image.sh` selects target from `BOT_PROVIDER`. Stub image (`Dockerfile.runnable`) and `bot-stub` Compose service (profile `stub`) for **test/dev-only** (E2E_USE_STUB_IMAGE=1). |
-| **A2. Clean zero-to-running path** | Flow: clone → Postgres → bootstrap → doctor → `.env.bot` → **./scripts/build_bot_image.sh** → start bot container. One README path; build complexity in script and deeper docs. E2E: bootstrap/doctor/update; `test_compose_bot_image_has_provider` (real image has provider binary); `test_compose_bot_startup_validates_schema` (real image); `test_compose_bot_stub_smoke` (test-only). |
-| **A3. Docker config and onboarding simplification** | One `.env.bot` path. Config errors mention `.env.bot` and `./scripts/build_bot_image.sh`. DB CLI message for missing `BOT_DATABASE_URL` points to Docker vs host-run. |
+| **A1. Supported runnable image** | **Real** provider-enabled image: `infra/docker/Dockerfile.bot` (base + provider install via `scripts/provider/install_provider_claude.sh`, `scripts/provider/install_provider_codex.sh`). `./scripts/provider/build_bot_image.sh` selects target from `BOT_PROVIDER`. Stub image (`infra/docker/Dockerfile.runnable`) and `bot-stub` Compose service (profile `stub`) for **test/dev-only** (E2E_USE_STUB_IMAGE=1). |
+| **A2. Clean zero-to-running path** | Flow: clone → create `.env.bot` → `./scripts/app/guided_start.sh`. Optional Postgres adds `./scripts/db/dev_up_postgres.sh` before bot startup. Compose entrypoints live under `infra/compose/`. E2E: bootstrap/doctor/update; `test_compose_bot_image_has_provider` (real image has provider binary); `test_compose_bot_startup_validates_schema` (real image); `test_compose_bot_stub_smoke` (test-only). |
+| **A3. Docker config and onboarding simplification** | One `.env.bot` path. Config errors mention `.env.bot` and `./scripts/provider/build_bot_image.sh`. DB CLI message for missing `BOT_DATABASE_URL` points to Docker vs host-run. |
 | **A4. Docker usability hardening** | Stabilization; docs truthful (supported = real provider image; stub = test-only). |
 
-Artifacts: `Dockerfile.bot`, `scripts/build_bot_image.sh`, `scripts/install_provider_claude.sh`, `scripts/install_provider_codex.sh`; `Dockerfile.runnable` and `bot-stub` (profile stub) for test/dev-only; E2E and config tests.
+Artifacts: `infra/docker/Dockerfile.bot`, `scripts/provider/build_bot_image.sh`, `scripts/provider/install_provider_claude.sh`, `scripts/provider/install_provider_codex.sh`; `infra/docker/Dockerfile.runnable` and `bot-stub` (profile stub) for test/dev-only; E2E and config tests.
 
 ---
 
@@ -358,7 +361,7 @@ structured errors.
 
 ## Test Suite
 
-Canonical full-suite runner: `./scripts/test_all.sh` (runs `pytest` + `test_setup.sh`)
+Canonical full-suite runner: `./scripts/test/test_all.sh` (runs `pytest` + `test_setup.sh`)
 
 Framework: **pytest** with pytest-asyncio (auto mode). Config in `pyproject.toml`.
 Default: **4 workers** (`addopts = "-v -n 4"`). Full suite runs on Linux and

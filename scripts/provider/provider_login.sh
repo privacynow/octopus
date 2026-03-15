@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Guided provider CLI login: interactive auth, then verify with --provider-health only.
 # Reads BOT_PROVIDER from .env.bot; uses same image and bot-home volume as the bot.
-# Run after: ./scripts/build_bot_image.sh and with .env.bot created.
+# Run after: ./scripts/provider/build_bot_image.sh and with .env.bot created.
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
 # shellcheck source=scripts/lib_env.sh
-. "$(dirname "$0")/lib_env.sh"
+. "$REPO_DIR/scripts/lib_env.sh"
 
 check_env_bot_required
 if [ -n "${1:-}" ]; then
@@ -26,4 +26,4 @@ fi
 
 # Image selection uses BOT_PROVIDER at Compose parse time (--env-file and shell). Pass it so we run the correct image.
 echo "Provider login (BOT_PROVIDER=$provider). Uses same image and bot-home volume as the bot (no Postgres required)."
-BOT_PROVIDER="$provider" docker compose --profile bot --env-file .env.bot run --rm -e "BOT_PROVIDER=$provider" bot-provider sh /app/scripts/container_provider_login.sh
+BOT_PROVIDER="$provider" docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot --env-file .env.bot run --rm -e "BOT_PROVIDER=$provider" bot-provider sh /app/scripts/provider/container_provider_login.sh

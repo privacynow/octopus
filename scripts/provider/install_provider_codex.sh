@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install Codex CLI into the container. Used by Dockerfile.bot when BOT_PROVIDER=codex.
+# Install Codex CLI into the container. Used by infra/docker/Dockerfile.bot when BOT_PROVIDER=codex.
 # Uses npm @openai/codex (Node 18+). May require network.
 set -euo pipefail
 apt-get update

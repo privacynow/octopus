@@ -2,13 +2,13 @@
 
 This document describes the bot in terms of contracts, runtime boundaries, and
 core components. It is not a feature changelog. Current implementation status
-lives in [STATUS-commercial-polish.md](STATUS-commercial-polish.md).
+lives in [status.md](status.md).
 
 For end-user usage, start with [README.md](../README.md).
 
-Current runtime baseline: **Local Runtime** is the supported mode. The default
-path is **SQLite** (leave `BOT_DATABASE_URL` unset); **Postgres** is a
-supported alternate backend for the same local runtime when
+Current shipped baseline: **Phase 15 Slice 1** still runs in **Local Runtime**.
+The default path is **SQLite** (leave `BOT_DATABASE_URL` unset); **Postgres**
+is a supported alternate backend for the same local runtime when
 `BOT_DATABASE_URL` is set. **Shared Runtime** remains deferred to later
 roadmap phases.
 
@@ -18,7 +18,7 @@ setup replies stay inline and off-queue. Some callback-driven execution paths
 (approve/retry/replay) still use the same provider/result contracts inline and
 remain candidates for later worker-path consolidation.
 
-- **Runtime matrix:** local + sqlite = default; local + postgres = supported; shared = rejected.
+- **Runtime matrix:** local + sqlite = default; local + postgres = supported; shared = deferred/out of scope.
 - **Backend seam:** `app/runtime_backend.py` is the only backend selector; `storage.py` and `work_queue.py` are backend-neutral facades. Implementations: `storage_sqlite`, `storage_postgres`, `work_queue_sqlite`, `work_queue_postgres`.
 - **Contract suites:** `tests/contracts/test_session_store_contract.py` and `tests/contracts/test_transport_store_contract.py` run against both SQLite and Postgres and define backend-neutral behavior.
 - **E2E:** Primary gate is `test_compose_sqlite_local_runtime_primary` (Docker bot, no Postgres). Bounded Postgres coverage: bootstrap/doctor and bot startup with Postgres tooling.
@@ -27,42 +27,32 @@ remain candidates for later worker-path consolidation.
 
 ## System context (high-level)
 
-```
-  +--------+                    +------------------------------------------+
-  | User   |  Telegram API     | Bot process                              |
-  |(client)|<=================>|                                          |
-  +--------+  updates / send    |  +-------------+  +-------------------+  |
-                               |  | transport   |  | work_queue        |  |
-                               |  | (normalize) |->| (journal, admit,  |  |
-                               |  |             |  |  claim/recover)   |  |
-                               |  +-------------+  +-------------------+  |
-                               |         |                  |           |
-                               |         v                  v           |
-                               |  +-------------+  +-------------------+  |
-                               |  | handlers    |  | worker_loop       |  |
-                               |  | (routing,    |  | (drain queued     |  |
-                               |  |  Telegram   |  |  work)            |  |
-                               |  +-------------+  +-------------------+  |
-                               |         |                  |              |
-                               |         +------------------+              |
-                               |         v     v                           |
-                               |  request_flow, execution_context,         |
-                               |  session_state, skills                    |
-                               |         |                                 |
-                               |         v                                 |
-                               |  +-------------+  +-------------------+     |
-                               |  | providers   |  | progress /       |     |
-                               |  | (Claude,    |->| formatting /      |     |
-                               |  |  Codex)     |  | summarize         |     |
-                               |  +------+------+  +-------------------+     |
-                               +--------|-----------------------------------+
-                                        |
-                                        v
-                               +-------------------+
-                               | Execution backend |
-                               | (Claude Code /   |
-                               |  Codex process)  |
-                               +-------------------+
+```mermaid
+flowchart LR
+    U["User client"] <--> TG["Telegram API"]
+
+    subgraph BOT["Bot process"]
+        IO["bot ingress / egress"]
+        T["transport<br/>normalize inbound"]
+        WQ["work_queue<br/>journal, admit, claim, recover"]
+        H["handlers<br/>routing and Telegram UI"]
+        WL["worker_loop<br/>drain queued work"]
+        CORE["request_flow<br/>execution_context<br/>session_state<br/>skills"]
+        P["providers<br/>Claude / Codex"]
+        OUT["progress / formatting / summarize"]
+
+        IO --> T
+        IO --> H
+        T --> WQ
+        WQ --> WL
+        H --> CORE
+        WL --> CORE
+        CORE --> P
+        P --> OUT
+    end
+
+    TG <--> IO
+    P --> EB["Execution backend<br/>Claude Code / Codex process"]
 ```
 
 ---
@@ -103,20 +93,23 @@ adds:
 The codebase is organized around these hard boundaries. Data and control
 flow respect these layers; business logic does not skip across them.
 
-```
-  +----------------+  +----------------+  +----------------+  +----------------+
-  | 1. Transport    |  | 2. Work queue  |  | 3. Session     |  | 4. Execution   |
-  |    boundary     |  |    boundary    |  |    boundary    |  |    context     |
-  | Normalize       |->| Journal, claim,|  | Durable        |  | One resolved   |
-  | inbound types   |  | workflow       |  | chat-scoped    |  | context/request|
-  +----------------+  +----------------+  +----------------+  +----------------+
-  +----------------+  +----------------+  +----------------+  +----------------+
-  | 5. Request flow |  | 6. Provider    |  | 7. Capability  |  | 8. Rendering   |
-  |    boundary     |  |    boundary    |  |    boundary    |  |    boundary    |
-  | Validation,     |  | Protocol,      |  | Skills, store,|  | Progress,      |
-  | credentials,    |  | run/preflight  |  | registry       |  | format, raw    |
-  | pending         |  | ProgressEvent  |  |                |  |                |
-  +----------------+  +----------------+  +----------------+  +----------------+
+```mermaid
+flowchart TB
+    subgraph ROW1[" "]
+        direction LR
+        B1["1. Transport boundary<br/>Normalize inbound types"]
+        B2["2. Work-queue boundary<br/>Journal, claim, workflow"]
+        B3["3. Session boundary<br/>Durable chat-scoped state"]
+        B4["4. Execution-context boundary<br/>One resolved context per request"]
+    end
+
+    subgraph ROW2[" "]
+        direction LR
+        B5["5. Request-flow boundary<br/>Validation, credentials, pending state"]
+        B6["6. Provider boundary<br/>Protocol, run/preflight, ProgressEvent"]
+        B7["7. Capability boundary<br/>Skills, store, registry"]
+        B8["8. Rendering boundary<br/>Progress, format, raw"]
+    end
 ```
 
 ### 1. Transport boundary
@@ -141,25 +134,126 @@ Contract:
 - `serialize_inbound()` / `deserialize_inbound()` round-trip events to JSON
   for durable storage in the work queue
 - serialized inbound payload shapes are part of the runtime cutover contract
-  and must remain stable across the current SQLite runtime and the later
-  Postgres cutover; any optional import tool added later will depend on the
-  same shape stability
+  and must remain stable across the supported SQLite and Postgres backends;
+  any optional import/export tooling added later will depend on the same
+  shape stability
 
-**Transport port and adapter**
+**Transport contract and adapter map**
 
-A project-owned transport port exists in `app/transports/` (types, ports,
-admission seam, Telegram adapter). Outbound behavior is behind `ConversationIO`;
-Telegram is one adapter over that contract. Handler-owned and worker-owned
-output use the same project-owned outbound interface. Production ingress
-builds `InboundEnvelope` and uses the admission seam. A handler-level
-simulator (`tests/support/conversation_simulator.py`) injects events via
-handle_message/cmd_* directly, runs the real worker, and exposes one ordered
-output log (reply_text, edit_text, chat.send_message, media, bot sends/edits,
-callback answer, callback edit_message_text; markup-only edits not included). It does not yet drive ingress through the transport port or
-provide callback injection. Canonical E2E tests in `tests/test_simulator_e2e.py`
-prove the cancel path (exact durable-work shape), cancel-before-claim,
-second-message busy (zero runnable, exact chat_busy shape), credential off-queue,
-and recovery notice.
+The current transport architecture has two project-owned seams:
+
+- `app/transport.py` owns normalized inbound event types and
+  `serialize_inbound()` / `deserialize_inbound()`
+- `app/transports/` owns the incremental transport-port work:
+  `InboundEnvelope`, `ConversationIO`, `EditableMessageHandle`,
+  `TransportCapabilities`, the admission seam, and the Telegram outbound adapter
+
+The important current limitation is explicit: the transport port is only
+partially adopted. Fresh plain-message admission uses `InboundEnvelope`;
+worker-owned outbound output uses `ConversationIO`; handler-owned replies and
+callback handling still call PTB-shaped objects directly.
+
+```mermaid
+flowchart LR
+    TG["Telegram Update (PTB)"] --> N["normalize_* in app.transport"]
+    N --> HM["handle_message"]
+    HM --> ENV["InboundEnvelope<br/>fresh plain messages only"]
+    ENV --> ADM["admit_fresh_message"]
+    ADM --> WQ["work_queue facade"]
+    WQ --> WL["worker_loop / worker_dispatch"]
+    WL --> CIO["TelegramConversationIO<br/>ConversationIO"]
+    CIO --> BOT["Telegram Bot API"]
+
+    TG --> HC["command/callback handlers"]
+    HC --> PTB["Direct PTB reply/send/query APIs"]
+```
+
+**Project-owned transport interfaces**
+
+- `InboundEnvelope`
+  - fields: `transport`, `update_id`, `conversation_id`, `actor_id`,
+    `received_at`, `event`
+  - `event` reuses `InboundMessage`, `InboundCommand`, or `InboundCallback`
+  - current use: authoritative admission type for fresh plain-message ingress
+- `ConversationIO`
+  - methods: `send_text`, `send_photo`, `send_document`, `send_action`,
+    `answer_action`
+  - current use: worker-owned outbound send path
+- `EditableMessageHandle`
+  - methods: `edit_text`, `edit_reply_markup`
+  - current use: worker-owned status/progress edits
+- `TransportCapabilities`
+  - capability flags for edit, answer, and media support
+  - current use: adapter contract surface for future transport expansion
+
+**Current handler vs worker split**
+
+- Fresh plain-message ingress:
+  - `handle_message()` normalizes via `app.transport`
+  - credential/setup replies are handled inline and off-queue
+  - ordinary fresh plain messages are wrapped in `InboundEnvelope`
+  - `app/transports/admission.py` calls the durable queue through
+    `record_and_admit_message()`
+- Commands and callbacks:
+  - still normalize and execute through Telegram/PTB-shaped handler entrypoints
+  - command dedupe/enqueue remains handler-owned
+  - callback answer/edit behavior remains handler-owned
+  - some provider-starting follow-up paths still remain inline today:
+    approval approve, retry, and recovery replay use the same provider/result
+    contracts without yet going through the worker-owned fresh-message lane
+- Worker-owned outbound path:
+  - `worker_dispatch()` uses `TelegramConversationIO`
+  - progress, final replies, recovery notices, and worker-owned edits go
+    through the project-owned outbound port
+- Handler-owned outbound path:
+  - welcome/help/command/callback replies still use direct PTB message/chat/query
+    methods
+
+**Current simulator architecture**
+
+The simulator is a handler-level harness, not a transport-ingress adapter.
+
+```mermaid
+sequenceDiagram
+    participant T as Test
+    participant S as ConversationSimulator
+    participant H as telegram_handlers
+    participant Q as work_queue
+    participant W as worker_loop
+    participant O as Ordered text output log
+
+    T->>S: inject_message_async() / inject_command_async()
+    S->>H: direct handle_message() / cmd_* call with FakeUpdate
+    H->>Q: admit / dedupe / enqueue
+    W->>Q: claim fresh or recovery work
+    H-->>O: handler replies, callback answers, callback text edits
+    W-->>O: worker sends and status edits
+```
+
+Current simulator contract (`tests/support/conversation_simulator.py`):
+
+- runs the real worker loop
+- injects via `handle_message()` / `cmd_*` directly
+- exposes one ordered **text** output log covering:
+  - `reply_text`
+  - `edit_text`
+  - `chat.send_message`
+  - `reply_photo` / `reply_document` captions or placeholders
+  - bot `send_message` / `send_photo` / `send_document`
+  - bot message `edit_text`
+  - callback `answer`
+  - callback `edit_message_text`
+- does **not** include markup-only edits (`edit_message_reply_markup`)
+- does **not** yet drive ingress through `InboundEnvelope`
+- does **not** yet provide callback injection as a first-class simulator API
+
+Canonical simulator coverage in `tests/test_simulator_e2e.py` proves:
+
+- message -> long-running worker-owned execution -> `/cancel`
+- cancel before worker claim
+- second-message busy / anti-fan-out
+- credential reply stays off queue
+- recovery notice path does not call the provider
 
 ### 2. Work-queue boundary
 
@@ -177,9 +271,13 @@ Primary modules:
 - `app/workflows/transport_recovery.py` — workflow graph and transition legality (library)
 - `app/workflows/results.py` — `TransitionResult`, `TransportDisposition`, domain exceptions
 
-Current implementation storage: `transport.db` (separate from `sessions.db`
-— different lifecycle and retention). After migration, equivalent runtime
-authority moves to Postgres.
+Current implementations:
+
+- Local Runtime default: SQLite `transport.db`
+- Local Runtime alternate backend: Postgres `bot_runtime.updates` and
+  `bot_runtime.work_items`
+
+`app/work_queue.py` is the backend-neutral contract owner across both.
 
 Tables:
 
@@ -199,27 +297,18 @@ runs the machine, catches `TransitionNotAllowed` and domain exceptions
 `TransitionResult`. Narrow APIs: `discard_recovery(item_id)` for user
 discard; replay and supersede are separate operations.
 
-Work-item state machine (ASCII):
+Work-item state machine:
 
-```
-                    +------------------+
-                    |                  |
-                    v                  |
-  +------+  claim_inline/claim_worker  +--------+  complete   +------+
-  |queued| -------------------------->|claimed | ----------> | done |
-  +------+                             +--------+     fail    +------+
-       ^                                    |    ----------> +------+
-       |                                    |                 |failed|
-       | recover_stale_claim                 | move_to_       +------+
-       | (guard: is_stale)                   | pending_recovery
-       |                                    v
-       |                             +------------------+
-       |                             | pending_recovery |
-       |                             +------------------+
-       |                                    |
-       |         reclaim_for_replay          |  discard_recovery
-       |         (guard: !other_claimed)     |  supersede_recovery
-       +------------------------------------+  ----------> done
+```mermaid
+stateDiagram-v2
+    queued --> claimed: claim_inline / claim_worker
+    claimed --> done: complete
+    claimed --> failed: fail
+    claimed --> pending_recovery: move_to_pending_recovery
+    claimed --> queued: recover_stale_claim [is_stale]
+    pending_recovery --> claimed: reclaim_for_replay [!other_claimed]
+    pending_recovery --> done: discard_recovery
+    pending_recovery --> done: supersede_recovery
 ```
 
 Events (machine methods): `claim_inline`, `claim_worker`, `complete`, `fail`,
@@ -287,9 +376,14 @@ repository. Invalid state is never normalized into a benign outcome.
 - The machine owns legal transitions; the repository owns races, idempotency, and `already_handled`.
 - `completed_at` is set only when a work item reaches a terminal state (`done` or `failed`); it is not set on `move_to_pending_recovery`.
 
-**Transport schema (versioned, migration deferred)**
+**Transport schema and backend contract**
 
-- `transport.db` has a versioned schema; the current build expects the current schema/layout. Unsupported schema/layout fails fast with a neutral error. Migration/upgrade path is deferred to the Postgres/runtime phases.
+- SQLite `transport.db` has a versioned schema and local validation/migration
+  for supported layouts
+- Postgres uses `sql/postgres/` migrations for the same durable transport
+  contract
+- Both backends must satisfy the same transport-store contract suites
+- Unsupported schema/layout fails fast with a neutral error
 
 ### 3. Session boundary
 
@@ -302,8 +396,12 @@ Primary modules:
 - `app/storage.py` — current session-store adapter, session listing, upload
   paths
 
-Current implementation storage: `sessions.db` (WAL mode, schema-versioned).
-After migration, equivalent runtime authority moves to Postgres.
+Current implementations:
+
+- Local Runtime default: SQLite `sessions.db` (WAL mode, schema-versioned)
+- Local Runtime alternate backend: Postgres `bot_runtime.sessions`
+
+`app/storage.py` is the backend-neutral session-store owner across both.
 
 Contract:
 
@@ -526,50 +624,39 @@ call `render_progress(event)` — they never construct display HTML directly.
 
 ## Component Map
 
-```
-Telegram updates
-  |
-  v
-transport.py            Normalize InboundMessage / Command / Callback; serialize_inbound for queue
-  |
-  v
-work_queue.py           Journal update_id, admit fresh work, claim/recover (uses workflow for transition)
-  |
-  +---> workflows/transport_recovery.py   TransportRecoveryMachine, run_transport_event (pure)
-  |     workflows/results.py              TransitionResult, TransportDisposition, domain exceptions
-  |
-  +----(handler admission / setup)----+----(worker drain / claim)----+
-  |                                   |                               |
-  v                                   v                               v
-telegram_handlers.py               worker.py                     worker_dispatch
-skill_commands.py
-  |
-  +-----------------+-------------------+
-  |                 |                   |
-  v                 v                   v
-request_flow.py   doctor.py         ratelimit.py
-approvals.py
-workflows/pending_request.py    PendingRequestMachine, run_pending_request_event (pure)
-  |
-  v
-execution_context.py    Resolve context, hash, model, trust tier
-  |
-  +-----------------+
-  |                 |
-  v                 v
-skills.py         session_state.py / storage.py
-store.py
-registry.py
-  |
-  v
-providers/base.py       Protocol: run, run_preflight, check_health
-providers/claude.py     emit ProgressEvent --> progress.py render()
-providers/codex.py      emit ProgressEvent --> progress.py render()
-  |
-  v
-formatting.py           md_to_telegram_html, split_html, tables
-summarize.py            Ring buffer, compact mode, /raw
-progress.py             ProgressEvent family, shared render()
+```mermaid
+flowchart TD
+    UPD["Telegram updates"]
+    TR["app/transport.py<br/>Normalize InboundMessage / Command / Callback<br/>serialize_inbound for queue"]
+    WQ["app/work_queue.py<br/>Journal update_id, admit fresh work, claim/recover"]
+    WF["app/workflows/transport_recovery.py<br/>TransportRecoveryMachine, run_transport_event"]
+    WFR["app/workflows/results.py<br/>TransitionResult, TransportDisposition, domain exceptions"]
+    TH["app/telegram_handlers.py<br/>app/skill_commands.py"]
+    WK["app/worker.py"]
+    WD["worker_dispatch"]
+    RF["request_flow.py / approvals.py<br/>workflows/pending_request.py"]
+    DOC["doctor.py"]
+    RL["ratelimit.py"]
+    EC["execution_context.py<br/>Resolve context, hash, model, trust tier"]
+    SS["session_state.py / storage.py"]
+    SK["skills.py / store.py / registry.py"]
+    PB["providers/base.py<br/>Protocol: run, run_preflight, check_health"]
+    PC["providers/claude.py / providers/codex.py"]
+    REND["progress.py / formatting.py / summarize.py"]
+
+    UPD --> TR --> WQ
+    WQ --> WF
+    WQ --> WFR
+    WQ --> TH
+    WQ --> WK --> WD
+    TH --> RF
+    TH --> DOC
+    TH --> RL
+    WD --> RF
+    RF --> EC
+    EC --> SS
+    EC --> SK
+    RF --> PB --> PC --> REND
 ```
 
 Ownership:
@@ -595,150 +682,136 @@ Ownership:
 
 ### End-to-end: normal message (worker-owned fresh execution)
 
-```
-  User          Telegram        transport    work_queue      handlers         worker_loop     request_flow    execution_context   provider
-    |               |               |             |               |                   |                |              |
-    |-- message --->|               |             |               |                   |                |              |
-    |               |-- update ----->|             |               |                   |                |              |
-    |               |               | normalize  |               |                   |                |              |
-    |               |               | InboundMsg  |               |                   |                |              |
-    |               |               |------------>| record_and_   |                   |                |              |
-    |               |               |             | admit_message()                   |                |              |
-    |               |               |             | (updates +     |                   |                |              |
-    |               |               |             |  work_items)   |                   |                |              |
-    |               |               |             |<-------------| return promptly     |                |              |
-    |               |               |             |               |------------------->| claim_next_any |              |
-    |               |               |             |               |                   | worker_dispatch |              |
-    |               |               |             |               |                   | _chat_lock()    |              |
-    |               |               |             |               |                   | load session    |              |
-    |               |               |             |               |                   | resolve_execution_context()     |
-    |               |               |             |               |                   |-------------------------------->|
-    |               |               |             |               |                   | check_credential / validate_pending
-    |               |               |             |               |                   |<---------------|              |
-    |               |               |             |               |                   | execute_request()/request_approval()
-    |               |               |             |               |                   |--------------------------------->| run()
-    |               |               |             |               |                   |                |------------->|
-    |               |               |             |               |                   |                | ProgressEvent|
-    |               |               |             |               |<------------------------------------ render()     |
-    |               |               |             |               |<------------------ complete_work_item()           |
-    |               |<-------------- bot send/edit from worker-owned path -----------|                |              |
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant T as Telegram
+    participant TR as transport
+    participant WQ as work_queue
+    participant H as handlers
+    participant WL as worker_loop
+    participant RF as request_flow
+    participant EC as execution_context
+    participant P as provider
+
+    U->>T: message
+    T->>TR: update
+    TR->>WQ: normalize + record_and_admit_message()
+    WQ-->>H: admission outcome
+    H-->>T: return promptly
+    WL->>WQ: claim_next_any()
+    WL->>RF: worker_dispatch()
+    RF->>EC: resolve_execution_context()
+    EC-->>RF: resolved context
+    RF->>P: execute_request() / request_approval()
+    P-->>RF: ProgressEvent / result
+    RF->>WQ: complete_work_item()
+    RF-->>T: worker-owned send / edit
 ```
 
 ### Admission vs worker execution
 
-```
-  HANDLER ADMISSION PATH
-  ---------------------
-  handle_message()
-       |
-       +--> credential setup active for owning user?
-       |      |
-       |      +--> record_update() only + inline setup handling (no work item)
-       |
-       +--> record_and_admit_message()
-              |
-              +--> duplicate  -> return
-              +--> busy       -> visible busy/coalesced reply
-              +--> admitted   -> return promptly
+```mermaid
+flowchart TD
+    subgraph HANDLER["Handler admission path"]
+        HM["handle_message()"]
+        CS{"credential setup active<br/>for owning user?"}
+        RU["record_update() only<br/>inline setup handling<br/>no work item"]
+        ADM["record_and_admit_message()"]
+        DUP["duplicate -> return"]
+        BUSY["busy -> visible busy/coalesced reply"]
+        OK["admitted -> return promptly"]
 
-  WORKER EXECUTION PATH
-  --------------------
-  worker_loop()
-       |
-       v
-  claim_next_any(worker_id)  -->  select queued runnable work, then
-                                  run_transport_event(claim_worker) + UPDATE
-       |
-       v
-  worker_dispatch(kind, event, item)
-       |
-       +--> dispatch_mode='recovery' -> recovery notice + pending_recovery
-       |
-       +--> dispatch_mode='fresh'    -> request_approval / execute_request
-                                        under _chat_lock and _LIVE_CANCEL
-       |
-       v
-  complete_work_item() or LeaveClaimed / PendingRecovery
+        HM --> CS
+        CS -- Yes --> RU
+        CS -- No --> ADM
+        ADM --> DUP
+        ADM --> BUSY
+        ADM --> OK
+    end
+
+    subgraph WORKER["Worker execution path"]
+        LOOP["worker_loop()"]
+        CLAIM["claim_next_any(worker_id)"]
+        DISP["worker_dispatch(kind, event, item)"]
+        REC["dispatch_mode='recovery'<br/>recovery notice + pending_recovery"]
+        FRESH["dispatch_mode='fresh'<br/>request_approval / execute_request<br/>under _chat_lock and _LIVE_CANCEL"]
+        TERM["complete_work_item()<br/>or LeaveClaimed / PendingRecovery"]
+
+        LOOP --> CLAIM --> DISP
+        DISP --> REC
+        DISP --> FRESH
+        REC --> TERM
+        FRESH --> TERM
+    end
 ```
 
 ### Recovery: pending_recovery and replay/discard/supersede
 
-```
-  Item in 'claimed'  -->  (interrupt / crash notice)  -->  mark_pending_recovery()
-       |
-       v
-  pending_recovery  -->  User sees [Replay] [Discard]
-       |
-       +-- reclaim_for_replay(item_id, worker_id)  -->  run_transport_event(reclaim_for_replay)
-       |        (guard: no other item for chat claimed)       |
-       |        success: state=claimed; dispatch again        v
-       |        blocked: ReclaimBlocked                        claimed
-       |
-       +-- discard_recovery(item_id)  -->  run_transport_event(discard_recovery)  -->  done
-       |
-       +-- supersede_pending_recovery(chat_id)  -->  (fresh message path)
-                run_transport_event(supersede_recovery) per item  -->  done
+```mermaid
+flowchart TD
+    C["claimed item"] --> INT["interrupt / crash notice"]
+    INT --> PR["mark_pending_recovery()"]
+    PR --> UX["pending_recovery<br/>User sees Replay / Discard"]
+    UX --> RR["reclaim_for_replay(item_id, worker_id)<br/>guard: no other item for chat claimed"]
+    RR --> RT["run_transport_event(reclaim_for_replay)"]
+    RT --> RC["state = claimed; dispatch again"]
+    UX --> DR["discard_recovery(item_id)"]
+    DR --> DD["run_transport_event(discard_recovery) -> done"]
+    UX --> SR["supersede_pending_recovery(chat_id)<br/>fresh message path"]
+    SR --> SD["run_transport_event(supersede_recovery) per item -> done"]
 ```
 
 ### Crash recovery: stale claims
 
-```
-  Startup
-     |
-     v
-  recover_stale_claims(current_worker_id, max_age_seconds)
-     |
-     v
-  For each work_items WHERE state='claimed':
-     compute is_stale (worker_id != current_worker OR claimed_at too old)
-     if is_stale:
-        run_transport_event(model, "recover_stale_claim")  -->  allowed
-        UPDATE work_items
-          SET state='queued', worker_id=NULL, claimed_at=NULL,
-              dispatch_mode='recovery'
-     |
-     v
-  Worker loop claims the requeued item and routes it to recovery UX first.
+```mermaid
+flowchart TD
+    ST["Startup"] --> RSC["recover_stale_claims(current_worker_id, max_age_seconds)"]
+    RSC --> EACH["For each work_items row where state = 'claimed'"]
+    EACH --> STALE{"is_stale?<br/>worker_id != current_worker<br/>or claimed_at too old"}
+    STALE -- Yes --> EVT["run_transport_event(model, 'recover_stale_claim')"]
+    EVT --> UPD["UPDATE work_items<br/>state='queued'<br/>worker_id=NULL<br/>claimed_at=NULL<br/>dispatch_mode='recovery'"]
+    STALE -- No --> NEXT["leave row unchanged"]
+    UPD --> CLAIM["Worker loop claims requeued item"]
+    CLAIM --> RECUX["Route to recovery UX first"]
 ```
 
 ### Data flow: where data lives
 
-```
-  +------------------+     +------------------+     +------------------+
-  |   transport.db   |     |   sessions.db    |     |   Filesystem     |
-  +------------------+     +------------------+     +------------------+
-  | updates          |     | session rows     |     | uploads/{chat_id}|
-  |  update_id PK    |     |  chat_id PK      |     | raw/{chat_id}    |
-  |  chat_id,payload |     |  provider, JSON  |     | credentials (enc)|
-  | work_items       |     |  has_pending,    |     | store: objects/  |
-  |  id, state,      |     |  project_id, etc |     |   refs/, custom/ |
-  |  dispatch_mode,  |     +------------------+     +------------------+
-  |  worker_id,      |
-  |  claimed_at,     |
-  |  completed_at   |
-  +------------------+
+```mermaid
+flowchart LR
+    TDB["transport.db<br/>updates: update_id, chat_id, payload<br/>work_items: id, state, dispatch_mode, worker_id, claimed_at, completed_at"]
+    SDB["sessions.db<br/>session rows: chat_id, provider, JSON, has_pending, project_id, ..."]
+    FS["Filesystem<br/>uploads/{chat_id}<br/>raw/{chat_id}<br/>credentials (enc)<br/>store: objects / refs / custom"]
 
-  Normalized inbound (JSON) is stored in updates.payload and work_items
-  (kind/payload or equivalent). Session state is typed in memory
-  (SessionState) and persisted as JSON in sessions.db. Execution
-  context is resolved per request from session + config and never
-  stored raw.
+    TDB --- SDB
+    SDB --- FS
 ```
 
 ### Storage layout (shipped implementation)
 
-```
-  data_dir/
-  ├── transport.db          # WAL; updates + work_items; separate lifecycle
-  ├── sessions.db           # WAL; chat session state, schema version
-  ├── uploads/
-  │   └── {chat_id}/        # Inbound files per chat
-  ├── raw/
-  │   └── {chat_id}/        # Ring buffer for /raw and expand/collapse
-  └── (store root)/
-      ├── objects/         # Content-addressed skill objects
-      ├── refs/            # Refs pointing to objects
-      └── custom/          # User-override skills
+```mermaid
+flowchart TD
+    ROOT["data_dir/"]
+    TDB2["transport.db<br/>WAL; updates + work_items; separate lifecycle"]
+    SDB2["sessions.db<br/>WAL; chat session state, schema version"]
+    UP["uploads/"]
+    UPCHAT["{chat_id}/<br/>Inbound files per chat"]
+    RAW["raw/"]
+    RAWCHAT["{chat_id}/<br/>Ring buffer for /raw and expand/collapse"]
+    STORE["store root"]
+    OBJ["objects/<br/>Content-addressed skill objects"]
+    REFS["refs/<br/>Refs pointing to objects"]
+    CUS["custom/<br/>User-override skills"]
+
+    ROOT --> TDB2
+    ROOT --> SDB2
+    ROOT --> UP --> UPCHAT
+    ROOT --> RAW --> RAWCHAT
+    ROOT --> STORE
+    STORE --> OBJ
+    STORE --> REFS
+    STORE --> CUS
 ```
 
 ---
@@ -944,12 +1017,23 @@ The registry is a source of managed artifacts:
 
 ### Normal request
 
-```
-  normalize → authorize → session/setup special-case
-       → journal+admit fresh work → worker claim
-       → resolve context → credentials → provider context
-       → invoke provider → persist session → format/send
-       → save raw → deliver artifacts
+```mermaid
+flowchart LR
+    N["normalize"]
+    A["authorize"]
+    S["session/setup special-case"]
+    J["journal + admit fresh work"]
+    C["worker claim"]
+    X["resolve context"]
+    CR["credentials"]
+    PC["provider context"]
+    INV["invoke provider"]
+    PS["persist session"]
+    FS["format / send"]
+    RAW["save raw"]
+    ART["deliver artifacts"]
+
+    N --> A --> S --> J --> C --> X --> CR --> PC --> INV --> PS --> FS --> RAW --> ART
 ```
 
 Steps in order:
@@ -972,28 +1056,27 @@ Steps in order:
 
 ### Approval request
 
-```
-  User sends message (approval_mode=on)
-       |
-       v
-  resolve_execution_context → build preflight context
-       |
-       v
-  provider.run_preflight() (read-only) → build_preflight_prompt()
-       |
-       v
-  store PendingApproval (trust_tier, context_hash, prompt, etc.)
-       |
-       v
-  render plan + [Approve] [Reject] buttons
-       |
-  User clicks Approve → classify_pending_validation() → PendingRequestMachine
-       |                  |
-       |                  +-- executed    → execute_request
-       |                  +-- expired     → clear pending, show expiry message
-       |                  +-- invalidated → clear pending, show stale-context message
-       |
-  User clicks Reject  → PendingRequestMachine.reject → clear pending, reply
+```mermaid
+flowchart TD
+    M["User sends message<br/>approval_mode = on"]
+    RC["resolve_execution_context<br/>build preflight context"]
+    PF["provider.run_preflight()<br/>build_preflight_prompt()"]
+    PA["store PendingApproval<br/>trust_tier, context_hash, prompt, ..."]
+    PLAN["render plan + Approve / Reject buttons"]
+    APR["User clicks Approve"]
+    VAL["classify_pending_validation()<br/>PendingRequestMachine"]
+    EXE["executed -> execute_request"]
+    EXP["expired -> clear pending<br/>show expiry message"]
+    INV2["invalidated -> clear pending<br/>show stale-context message"]
+    REJ["User clicks Reject"]
+    CLR["PendingRequestMachine.reject<br/>clear pending, reply"]
+
+    M --> RC --> PF --> PA --> PLAN
+    PLAN --> APR --> VAL
+    VAL --> EXE
+    VAL --> EXP
+    VAL --> INV2
+    PLAN --> REJ --> CLR
 ```
 
 Approval succeeds only if: pending exists, not expired, context hash matches
@@ -1189,22 +1272,36 @@ The test suite is organized around contracts, not only features.
      prove provider + execution path where possible), or the stub image for
      test/dev-only smoke
 
-### Transport-simulator direction
+### Transport and simulator architecture
 
-Current tests fake Telegram by duck-typing PTB-like payload and bot objects.
-That is enough for owner and integration suites, but it is not yet a
-project-owned delivery simulator.
+The current transport architecture deliberately separates three concerns:
 
-The next intended testing seam is a simulator over a project-owned transport
-port that can:
+1. **Inbound normalization**
+   - `app/transport.py` owns Telegram-to-domain normalization into frozen
+     inbound event types
+2. **Durable admission and worker execution**
+   - fresh plain-message admission is expressed through `InboundEnvelope`
+     and the admission seam
+   - worker-owned provider execution and worker-owned outbound output use the
+     project-owned transport port
+3. **Handler-owned Telegram UI**
+   - command, callback, and immediate reply behavior still sits directly on the
+     Telegram/PTB surface
 
-- inject normalized inbound events over time
-- run the real worker loop
-- record one ordered user-visible output log across send/edit/status flows
-- prove canonical request → long-running execution → `/cancel` behavior
+This means the simulator is currently best understood as a **handler-level
+runtime harness**:
 
-PTB should remain just one adapter boundary. The primary realism target is the
-runtime contract, not PTB dispatcher internals.
+- it exercises the real queue, worker loop, and provider path
+- it does not simulate PTB dispatcher internals
+- it does not yet simulate transport ingress by constructing and delivering
+  `InboundEnvelope` objects end-to-end
+
+The remaining architectural gap is therefore narrow and explicit:
+
+- unify handler-owned outbound messaging behind `ConversationIO`
+- add first-class callback injection to the simulator
+- optionally move from direct handler injection to a transport-level delivery
+  harness without making PTB internals the primary contract
 
 ### Current Postgres test harness
 

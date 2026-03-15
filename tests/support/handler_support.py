@@ -1,5 +1,12 @@
-"""Shared fakes and helpers for handler integration tests."""
+"""Shared fakes and helpers for handler integration tests.
 
+Worker-owned test model (authoritative):
+- Handler-only: handle_message() / send_text() only; assert no provider run, dedup/busy/rejection.
+- Single execution: handle_message() then await drain_one_worker_item(data_dir); assert prov.run_calls, session, _bot_instance.sent_messages.
+- Real concurrency: async with running_worker(data_dir): admit via handle_message(), use provider gates, /cancel; assert on bot-side log.
+"""
+
+import asyncio
 import contextlib
 import tempfile
 from pathlib import Path
@@ -29,6 +36,7 @@ def reset_handler_test_runtime() -> None:
     _th._bot_instance = None
     _th._pending_work_items.clear()
     _th.CHAT_LOCKS.clear()
+    _th._LIVE_CANCEL.clear()
     try:
         _th._current_update_id.set(None)
     except LookupError:
@@ -135,6 +143,7 @@ class FakeChat:
 
     async def send_message(self, text=None, **kwargs):
         self.sent_messages.append({"text": text, **kwargs})
+        _append_simulator_output_log("send", text or "")
         return FakeMessage(chat=self, text=text)
 
 
@@ -151,6 +160,7 @@ class FakeMessage:
 
     async def reply_text(self, text, **kwargs):
         self.replies.append({"text": text, **kwargs})
+        _append_simulator_output_log("reply", text)
         return FakeMessage(chat=self.chat, text=text)
 
     async def delete(self):
@@ -158,12 +168,15 @@ class FakeMessage:
 
     async def edit_text(self, text, **kwargs):
         self.replies.append({"edit_text": text, **kwargs})
+        _append_simulator_output_log("edit", text)
 
     async def reply_photo(self, **kwargs):
         self.replies.append({"photo": True, **kwargs})
+        _append_simulator_output_log("reply", kwargs.get("caption") or "[photo]")
 
     async def reply_document(self, **kwargs):
         self.replies.append({"document": True, **kwargs})
+        _append_simulator_output_log("reply", kwargs.get("caption") or "[document]")
 
     async def edit_message_reply_markup(self, **kwargs):
         self.replies.append({"edit_reply_markup": True, **kwargs})
@@ -185,6 +198,7 @@ class FakeUpdate:
         self.effective_user = user or FakeUser()
         self.effective_chat = chat or (message.chat if message else FakeChat())
         self.effective_message = message or FakeMessage(chat=self.effective_chat, user=self.effective_user)
+        self.message = message  # PTB CommandHandler/MessageHandler check update.message
         self.callback_query = callback_query
 
 
@@ -209,12 +223,15 @@ class FakeCallbackQuery:
 
     async def answer(self, text=None, show_alert=False):
         self.answers.append({"text": text, "show_alert": show_alert})
+        _append_simulator_output_log("answer", text or "[answer]")
 
     async def edit_message_reply_markup(self, reply_markup=None):
         self.message.replies.append({"edit_reply_markup": True, "reply_markup": reply_markup})
+        # Markup-only edits are not appended to the simulator output log (user-visible log is text-only for callbacks).
 
     async def edit_message_text(self, text, **kwargs):
         self.message.replies.append({"edit_text": text, **kwargs})
+        _append_simulator_output_log("edit", text)
 
 
 class FakeContext:
@@ -286,6 +303,61 @@ def set_bot_instance(bot_instance) -> None:
     _th._bot_instance = bot_instance
 
 
+def _append_simulator_output_log(kind: str, text: str) -> None:
+    """When the bot has _output_log (simulator), append one user-visible output for a single ordered stream."""
+    bot = getattr(_th, "_bot_instance", None)
+    if bot is not None and getattr(bot, "_output_log", None) is not None:
+        bot._output_log.append({"type": kind, "text": text})
+
+
+class _MinimalFakeSentMessage:
+    """Fake message returned by MinimalFakeBot.send_message. Edits append to bot.sent_messages in order."""
+
+    def __init__(self, bot: "MinimalFakeBot", chat_id: int):
+        self._bot = bot
+        self._chat_id = chat_id
+
+    async def edit_text(self, text, **kwargs):
+        self._bot.sent_messages.append({"edit_text": text, **kwargs})
+        _append_simulator_output_log("edit", text)
+
+    async def edit_message_reply_markup(self, reply_markup=None, **kwargs):
+        self._bot.sent_messages.append({"edit_reply_markup": True, "reply_markup": reply_markup, **kwargs})
+
+    async def reply_text(self, text, **kwargs):
+        return await self._bot.send_message(self._chat_id, text, **kwargs)
+
+
+class MinimalFakeBot:
+    """Minimal bot for worker_dispatch. send_message + edit_text/edit_reply_markup all append to sent_messages in order.
+
+    When _output_log is set (e.g. by ConversationSimulator), sends and edits also append there
+    so one ordered user-visible output stream is available for tests.
+    """
+
+    def __init__(self):
+        self.sent_messages = []
+        self._output_log = None  # Set by ConversationSimulator for single ordered log
+
+    async def send_message(self, chat_id, text, **kwargs):
+        self.sent_messages.append({"chat_id": chat_id, "text": text, **kwargs})
+        _append_simulator_output_log("send", text)
+        return _MinimalFakeSentMessage(self, chat_id)
+
+    async def send_chat_action(self, chat_id, action):
+        pass
+
+    async def send_document(self, chat_id, document, **kwargs):
+        self.sent_messages.append({"chat_id": chat_id, "document": document, **kwargs})
+        _append_simulator_output_log("send", kwargs.get("caption") or "[document]")
+        return _MinimalFakeSentMessage(self, chat_id)
+
+    async def send_photo(self, chat_id, photo, **kwargs):
+        self.sent_messages.append({"chat_id": chat_id, "photo": photo, **kwargs})
+        _append_simulator_output_log("send", kwargs.get("caption") or "[photo]")
+        return _MinimalFakeSentMessage(self, chat_id)
+
+
 def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
     """Set handler runtime globals for tests. Call reset_handler_test_runtime() first if reusing."""
     reset_handler_test_runtime()
@@ -296,7 +368,7 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
         per_minute=config.rate_limit_per_minute,
         per_hour=config.rate_limit_per_hour,
     )
-    _th._bot_instance = bot_instance
+    _th._bot_instance = bot_instance if bot_instance is not None else MinimalFakeBot()
 
 
 def load_session_disk(data_dir, chat_id, provider):
@@ -324,6 +396,85 @@ async def send_text(chat, user, text):
     upd = FakeUpdate(message=msg, user=user, chat=chat)
     await _th.handle_message(upd, FakeContext())
     return msg
+
+
+async def drain_one_worker_item(data_dir: Path) -> bool:
+    """Claim and dispatch one work item via the real worker path (for integration tests).
+
+    Use after send_text when the test needs the provider to run. Returns True if
+    an item was drained, False if queue was empty.
+    """
+    from app.transport import deserialize_inbound
+    from app.workflows.results import TransportStateCorruption
+
+    boot_id = _th._boot_id
+    item = _work_queue.claim_next_any(data_dir, boot_id)
+    if item is None:
+        return False
+    item_id = item["id"]
+    kind = item.get("kind", "message")
+    payload = item.get("payload", "{}")
+    try:
+        event = deserialize_inbound(kind, payload)
+    except Exception:
+        _work_queue.fail_work_item(data_dir, item_id, error="deserialize_error")
+        return True
+    try:
+        await _th.worker_dispatch(kind, event, item)
+        _work_queue.complete_work_item(data_dir, item_id)
+    except _work_queue.PendingRecovery:
+        pass
+    except _work_queue.LeaveClaimed:
+        pass
+    except TransportStateCorruption:
+        raise
+    except Exception:
+        _work_queue.fail_work_item(data_dir, item_id, error="drain_exception")
+    return True
+
+
+@contextlib.asynccontextmanager
+async def running_worker(data_dir: Path, *, poll_interval: float = 0.01):
+    """Start the real worker loop in the background; stop cleanly on exit.
+
+    Use for tests that need real concurrency (cancel while run active, busy while run active).
+    Yields (task, stop_event). Worker uses _th.worker_dispatch.
+    """
+    from app.worker import start_worker_task
+
+    task, stop_event = start_worker_task(
+        data_dir, _th._boot_id, _th.worker_dispatch, poll_interval=poll_interval
+    )
+    try:
+        yield task, stop_event
+    finally:
+        stop_event.set()
+        try:
+            await asyncio.wait_for(task, timeout=2.0)
+        except asyncio.CancelledError:
+            pass
+        except asyncio.TimeoutError:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
+def bot_texts(bot) -> list[str]:
+    """All text from bot.sent_messages: send text and edit_text in order."""
+    out = []
+    for m in getattr(bot, "sent_messages", []):
+        t = m.get("text") or m.get("edit_text")
+        if t:
+            out.append(t)
+    return out
+
+
+def last_bot_text(bot, default: str = "") -> str:
+    """Last text in bot.sent_messages (send or edit)."""
+    texts = bot_texts(bot)
+    return texts[-1] if texts else default
 
 
 def last_reply(msg):

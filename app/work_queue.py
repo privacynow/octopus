@@ -20,6 +20,7 @@ __all__ = [
     "LeaveClaimed",
     "PendingRecovery",
     "ReclaimBlocked",
+    "cancel_queued_fresh_for_chat",
     "close_all_transport_db",
     "close_transport_db",
     "claim_for_update",
@@ -32,11 +33,13 @@ __all__ = [
     "get_latest_pending_recovery",
     "get_pending_recovery_for_update",
     "get_update_payload",
+    "get_work_items_for_chat",
     "has_claimed_for_chat",
     "has_queued_or_claimed",
     "mark_pending_recovery",
     "purge_old",
     "reclaim_for_replay",
+    "record_and_admit_message",
     "record_and_enqueue",
     "record_update",
     "recover_stale_claims",
@@ -55,6 +58,21 @@ def close_transport_db(data_dir: Path) -> None:
 
 def close_all_transport_db() -> None:
     _store().close_all_transport_db()
+
+
+def record_and_admit_message(
+    data_dir: Path,
+    update_id: int,
+    chat_id: int,
+    user_id: int,
+    kind: str,
+    payload: str = "{}",
+) -> tuple[str, str | None]:
+    """Record update and admit or reject for provider work. Returns (status, item_id).
+    status: 'duplicate' | 'admitted' | 'busy'. item_id set when admitted or busy."""
+    return _store().record_and_admit_message(
+        data_dir, update_id, chat_id, user_id, kind, payload,
+    )
 
 
 def record_and_enqueue(
@@ -115,6 +133,11 @@ def fail_work_item(data_dir: Path, item_id: str, error: str) -> None:
     _store().fail_work_item(data_dir, item_id, error)
 
 
+def cancel_queued_fresh_for_chat(data_dir: Path, chat_id: int) -> bool:
+    """If this chat has a queued fresh item, mark it failed with error='cancelled'. Returns True if one was cancelled."""
+    return _store().cancel_queued_fresh_for_chat(data_dir, chat_id)
+
+
 def has_claimed_for_chat(data_dir: Path, chat_id: int) -> bool:
     return _store().has_claimed_for_chat(data_dir, chat_id)
 
@@ -125,6 +148,11 @@ def has_queued_or_claimed(data_dir: Path, chat_id: int) -> bool:
 
 def get_update_payload(data_dir: Path, update_id: int) -> str | None:
     return _store().get_update_payload(data_dir, update_id)
+
+
+def get_work_items_for_chat(data_dir: Path, chat_id: int) -> list[dict[str, Any]]:
+    """Return work items for chat: id, update_id, state, error, dispatch_mode, kind. Read-only; for contract/test assertion."""
+    return _store().get_work_items_for_chat(data_dir, chat_id)
 
 
 def mark_pending_recovery(data_dir: Path, item_id: str) -> None:

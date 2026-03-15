@@ -53,6 +53,20 @@ class PostgresTransportStore:
                 conn, update_id, chat_id, user_id, kind, payload, worker_id=worker_id,
             )
 
+    def record_and_admit_message(
+        self,
+        data_dir: Path,
+        update_id: int,
+        chat_id: int,
+        user_id: int,
+        kind: str,
+        payload: str = "{}",
+    ) -> tuple[str, str | None]:
+        with self._conn() as conn:
+            return work_queue_pg.record_and_admit_message(
+                conn, update_id, chat_id, user_id, kind, payload,
+            )
+
     def record_update(
         self,
         data_dir: Path,
@@ -102,6 +116,10 @@ class PostgresTransportStore:
         with self._conn() as conn:
             work_queue_pg.fail_work_item(conn, item_id, error)
 
+    def cancel_queued_fresh_for_chat(self, data_dir: Path, chat_id: int) -> bool:
+        with self._conn() as conn:
+            return work_queue_pg.cancel_queued_fresh_for_chat(conn, chat_id)
+
     def has_claimed_for_chat(self, data_dir: Path, chat_id: int) -> bool:
         with self._conn() as conn:
             return work_queue_pg.has_claimed_for_chat(conn, chat_id)
@@ -113,6 +131,10 @@ class PostgresTransportStore:
     def get_update_payload(self, data_dir: Path, update_id: int) -> str | None:
         with self._conn() as conn:
             return work_queue_pg.get_update_payload(conn, update_id)
+
+    def get_work_items_for_chat(self, data_dir: Path, chat_id: int) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            return work_queue_pg.get_work_items_for_chat(conn, chat_id)
 
     def mark_pending_recovery(self, data_dir: Path, item_id: str) -> None:
         with self._conn() as conn:

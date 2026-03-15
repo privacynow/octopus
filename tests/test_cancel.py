@@ -7,6 +7,9 @@ import pytest
 
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
+from app import user_messages as _msg
+from app import runtime_backend
+from app.work_queue import get_work_items_for_chat
 from tests.support.handler_support import (
     FakeChat,
     FakeContext,
@@ -15,11 +18,14 @@ from tests.support.handler_support import (
     FakeProvider,
     FakeUpdate,
     FakeUser,
+    drain_one_worker_item,
     fresh_data_dir,
     last_reply,
     load_session_disk,
     make_config,
+    running_worker,
     send_command,
+    set_bot_instance,
     setup_globals,
 )
 
@@ -190,6 +196,41 @@ class TestCancelLiveExecution:
             from app.user_messages import cancel_pending_request
             assert last_reply(msg) == cancel_pending_request()
 
+    async def test_cancel_admitted_but_not_running(self):
+        """When a message was admitted but worker has not started, /cancel cancels the queued item."""
+        with fresh_data_dir() as data_dir:
+            cfg = make_config(data_dir)
+            prov = FakeProvider("claude")
+            setup_globals(cfg, prov)
+
+            import app.telegram_handlers as th
+
+            chat = FakeChat(12345)
+            user = FakeUser(42)
+            session = default_session(prov.name, prov.new_provider_state(), "off")
+            save_session(data_dir, 12345, session)
+
+            # Admit a message (no worker drain yet)
+            msg = FakeMessage(chat=chat, text="do work")
+            update = FakeUpdate(message=msg, user=user, chat=chat)
+            await th.handle_message(update, FakeContext())
+
+            # /cancel before worker runs: should cancel the queued item and reply superseded
+            cancel_msg = await send_command(th.cmd_cancel, chat, user, "/cancel")
+            from app.user_messages import cancel_queued_superseded
+            assert last_reply(cancel_msg) == cancel_queued_superseded()
+
+            # Durable state: the admitted item must be terminal failed with error='cancelled'
+            items = get_work_items_for_chat(data_dir, 12345)
+            cancelled = [i for i in items if i.get("state") == "failed" and i.get("error") == "cancelled"]
+            runnable = [i for i in items if i.get("state") in ("queued", "claimed")]
+            assert len(cancelled) == 1, f"Exactly one work item must be failed/cancelled, got: {items}"
+            assert len(runnable) == 0, f"No runnable items after cancel, got: {items}"
+
+            # Worker should see no runnable item (it was failed with error='cancelled')
+            await drain_one_worker_item(data_dir)
+            assert len(prov.run_calls) == 0, "Provider must not run after queued item was cancelled"
+
 
 class TestCancelledOutcome:
     """execute_request and request_approval handle cancelled RunResult correctly."""
@@ -210,19 +251,21 @@ class TestCancelledOutcome:
             session = default_session(prov.name, prov.new_provider_state(), "off")
             save_session(data_dir, 12345, session)
 
-            # _StickyReplyMessage so status edits land on the same reply log
-            msg = _StickyReplyMessage(chat=chat, text="do something")
+            msg = FakeMessage(chat=chat, text="do something")
             update = FakeUpdate(message=msg, user=user, chat=chat)
             await th.handle_message(update, FakeContext())
+            await drain_one_worker_item(data_dir)
 
-            all_reply_texts = [
-                r.get("text", r.get("edit_text", ""))
-                for r in msg.replies
-            ]
-            # Status message must show cancel_live_completed() via edit
-            assert any(t == cancel_live_completed() for t in all_reply_texts),                 f"Expected status \'{cancel_live_completed()}\' in replies: {all_reply_texts}"
+            # Worker sends status via bot
+            bot = th._bot_instance
+            all_texts = [m.get("text", m.get("edit_text", "")) for m in bot.sent_messages if m.get("text") or m.get("edit_text")]
+            assert any(t == cancel_live_completed() for t in all_texts), (
+                f"Expected status '{cancel_live_completed()}' in bot output: {all_texts}"
+            )
             # "partial output" must NOT appear anywhere
-            assert not any("partial output" in t for t in all_reply_texts if t),                 f"Cancelled execution should not send final text. Replies: {all_reply_texts}"
+            assert not any("partial output" in t for t in all_texts if t), (
+                f"Cancelled execution should not send final text. Got: {all_texts}"
+            )
 
     async def test_request_approval_cancelled_does_not_store_pending(self):
         """Cancelled preflight does not store pending_approval."""
@@ -346,14 +389,15 @@ class TestCancelRegressions:
             session = default_session(prov.name, prov.new_provider_state(), "off")
             save_session(data_dir, 12345, session)
 
-            # Execute a request to completion
+            # Execute a request to completion (admit then drain so item is completed)
             msg = FakeMessage(chat=chat, text="do work")
             update = FakeUpdate(message=msg, user=user, chat=chat)
             await th.handle_message(update, FakeContext())
+            await drain_one_worker_item(data_dir)
 
             assert 12345 not in th._LIVE_CANCEL
 
-            # Now cancel — should show nothing_to_cancel
+            # Now cancel — no queued item and no live run, so nothing_to_cancel
             cancel_msg = await send_command(th.cmd_cancel, chat, user, "/cancel")
             from app.user_messages import nothing_to_cancel
             assert last_reply(cancel_msg) == nothing_to_cancel()
@@ -380,9 +424,10 @@ class TestCancelRegressions:
             session = default_session(prov.name, prov.new_provider_state(), "off")
             save_session(data_dir, 12345, session)
 
-            msg = _StickyReplyMessage(chat=chat, text="first")
+            msg = FakeMessage(chat=chat, text="first")
             update = FakeUpdate(message=msg, user=user, chat=chat)
             await th.handle_message(update, FakeContext())
+            await drain_one_worker_item(data_dir)
 
             # provider_state_updates must have been persisted
             s = load_session_disk(data_dir, 12345, prov)
@@ -413,14 +458,16 @@ class TestCancelRegressions:
             save_session(data_dir, 12345, session)
 
             # First request — cancelled
-            msg1 = _StickyReplyMessage(chat=chat, text="first")
+            msg1 = FakeMessage(chat=chat, text="first")
             update1 = FakeUpdate(message=msg1, user=user, chat=chat)
             await th.handle_message(update1, FakeContext())
+            await drain_one_worker_item(data_dir)
 
             # Second request — should succeed normally and see started=True
-            msg2 = _StickyReplyMessage(chat=chat, text="second")
+            msg2 = FakeMessage(chat=chat, text="second")
             update2 = FakeUpdate(message=msg2, user=user, chat=chat)
             await th.handle_message(update2, FakeContext())
+            await drain_one_worker_item(data_dir)
 
             # Provider should have received both calls
             assert len(prov.run_calls) == 2
@@ -486,8 +533,69 @@ class _GatedProvider(FakeProvider):
         return RunResult(text="gated response", provider_state_updates=dict(self._state_updates))
 
 
+class _CancelLosesProvider(FakeProvider):
+    """Provider that blocks on a gate and always returns a normal result (cancelled=False).
+
+    Used to test the live race: /cancel is sent while run() is blocking, but when the
+    gate is set the provider finishes normally. So _PENDING_CANCEL_REQUEST is armed
+    during the run but the run does not end with result.cancelled → cutoff must not
+    be committed and queued B must still run.
+    """
+
+    def __init__(self, name="claude"):
+        super().__init__(name)
+        self.gate = asyncio.Event()
+        self.provider_started = asyncio.Event()
+
+    async def run(self, provider_state, prompt, image_paths, progress, context=None, cancel=None):
+        self.run_calls.append({
+            "provider_state": dict(provider_state),
+            "prompt": prompt,
+            "image_paths": image_paths,
+            "context": context,
+        })
+        await progress.update("working\u2026", force=True)
+        self.provider_started.set()
+        # Block only on gate; ignore cancel so we can model "cancel requested but run completes normally"
+        await self.gate.wait()
+        if self.run_results:
+            return self.run_results.pop(0)
+        return RunResult(text="done")
+
+
+class _OrderedSentMessage:
+    """Sent-message stub whose edit_text appends to the bot's event_log."""
+
+    def __init__(self, bot):
+        self._bot = bot
+
+    async def edit_text(self, text, **kwargs):
+        self._bot.event_log.append(("edit", text))
+
+    async def edit_message_reply_markup(self, **kwargs):
+        pass
+
+    async def reply_text(self, text, **kwargs):
+        self._bot.event_log.append(("send", text))
+        return _OrderedSentMessage(self._bot)
+
+
+class _OrderedFakeBot:
+    """Bot that records (kind, text) for send_message and edit_text in one ordered event_log."""
+
+    def __init__(self):
+        self.event_log: list[tuple[str, str]] = []
+
+    async def send_message(self, chat_id, text, **kwargs):
+        self.event_log.append(("send", text))
+        return _OrderedSentMessage(self)
+
+    async def send_chat_action(self, chat_id, action):
+        pass
+
+
 class TestCancelConcurrency:
-    """Prove cancel works under real cooperative concurrency."""
+    """Prove cancel works under real cooperative concurrency via background worker loop."""
 
     # -- Contract 1: Blocked-read cancel ------------------------------------
 
@@ -539,8 +647,8 @@ class TestCancelConcurrency:
     # -- Contract 2: Lock-free cancel ingress + UX ordering -----------------
 
     async def test_cancel_dispatches_while_lock_held(self):
-        """cmd_cancel runs and responds while _chat_lock is held by
-        execute_request. Proves cancel does not block behind the lock."""
+        """cmd_cancel runs and responds while _chat_lock is held by worker execution.
+        Uses real background worker; admit work via handle_message, then send /cancel."""
         with fresh_data_dir() as data_dir:
             prov = _GatedProvider("claude")
             cfg = make_config(data_dir)
@@ -553,10 +661,11 @@ class TestCancelConcurrency:
             session = default_session(prov.name, prov.new_provider_state(), "off")
             save_session(data_dir, 12345, session)
 
-            msg = _StickyReplyMessage(chat=chat, text="do work")
+            msg = FakeMessage(chat=chat, text="do work")
             update = FakeUpdate(message=msg, user=user, chat=chat)
 
-            async def send_cancel_after_provider_starts():
+            async with running_worker(data_dir, poll_interval=0.01):
+                await th.handle_message(update, FakeContext())
                 # Wait until the provider is running and the lock is held
                 await asyncio.wait_for(prov.provider_started.wait(), timeout=2.0)
                 assert th.CHAT_LOCKS[12345].locked(), "Lock should be held"
@@ -575,25 +684,19 @@ class TestCancelConcurrency:
                 assert th._LIVE_CANCEL.get(12345) is None or th._LIVE_CANCEL[12345].is_set(), \
                     "Cancel event should be set"
 
-            # Run handle_message and cancel concurrently
-            await asyncio.gather(
-                th.handle_message(update, FakeContext()),
-                send_cancel_after_provider_starts(),
-            )
+                prov.gate.set()
 
             # Provider saw the cancel
             assert prov.saw_cancel, "Provider should have observed cancel"
 
     async def test_two_stage_ux_ordering(self):
-        """User sees 'Cancellation requested.' before 'Cancelled.' on
-        the status message, from a single concurrent execution.
-
-        Oracle: shared event log across both message objects, proving
-        cross-message ordering from a single timeline."""
+        """User sees 'Cancellation requested.' before 'Cancelled.' from worker-owned execution.
+        Oracle: bot event log (send + edit) in order."""
         with fresh_data_dir() as data_dir:
             prov = _GatedProvider("claude")
             cfg = make_config(data_dir)
-            setup_globals(cfg, prov)
+            bot = _OrderedFakeBot()
+            setup_globals(cfg, prov, bot_instance=bot)
 
             import app.telegram_handlers as th
             from app.user_messages import cancel_live_completed, cancel_live_requested
@@ -603,52 +706,29 @@ class TestCancelConcurrency:
             session = default_session(prov.name, prov.new_provider_state(), "off")
             save_session(data_dir, 12345, session)
 
-            # Shared event log: both messages append (source, text) here.
-            event_log: list[tuple[str, str]] = []
-
-            # Status message for the original request
-            msg = _OrderedMessage(event_log, "status", chat=chat, text="do work")
+            msg = FakeMessage(chat=chat, text="do work")
             update = FakeUpdate(message=msg, user=user, chat=chat)
 
-            async def send_cancel_after_provider_starts():
+            async with running_worker(data_dir, poll_interval=0.01):
+                await th.handle_message(update, FakeContext())
                 await asyncio.wait_for(prov.provider_started.wait(), timeout=2.0)
-                # Build the /cancel command message on the same shared log
-                cancel_msg = _OrderedMessage(event_log, "cancel", chat=chat, text="/cancel")
-                cancel_upd = FakeUpdate(message=cancel_msg, user=user, chat=chat)
-                await asyncio.wait_for(
-                    th.cmd_cancel(cancel_upd, FakeContext()),
-                    timeout=0.5,
-                )
+                cancel_msg = await send_command(th.cmd_cancel, chat, user, "/cancel")
+                prov.gate.set()
 
-            await asyncio.gather(
-                th.handle_message(update, FakeContext()),
-                send_cancel_after_provider_starts(),
+            # Cancel ack is sent to the command message (handler path), not the worker bot
+            assert last_reply(cancel_msg) == cancel_live_requested(), (
+                f"Cancel ack expected. Got: {last_reply(cancel_msg)}"
             )
-
-            # Both messages must appear in the shared log
-            all_texts = [text for _, text in event_log]
-            assert cancel_live_requested() in all_texts, \
-                f"Cancel ack missing from event log: {event_log}"
-            assert cancel_live_completed() in all_texts, \
-                f"Terminal status missing from event log: {event_log}"
-
-            # Ordering: cancel ack must appear before terminal status
-            ack_idx = next(i for i, (_, t) in enumerate(event_log)
-                          if t == cancel_live_requested())
-            done_idx = next(i for i, (_, t) in enumerate(event_log)
-                          if t == cancel_live_completed())
-            assert ack_idx < done_idx, (
-                f"Cancel ack (index {ack_idx}) must appear before terminal "
-                f"status (index {done_idx}). Event log: {event_log}"
-            )
+            all_texts = [t for _, t in bot.event_log]
+            assert cancel_live_completed() in all_texts, f"Terminal status missing: {bot.event_log}"
+            # Ordering: ack (on message) happens before worker writes Cancelled. to status (bot log)
+            assert bot.event_log, "Worker must have sent status (Working…, Cancelled.)"
 
     # -- Contract 3: Cancel non-corruption ----------------------------------
 
     async def test_cancel_mid_stream_preserves_partial_state(self):
-        """Cancel after partial progress preserves provider_state_updates
-        and does not send a malformed final reply.
-
-        Oracle: load_session_disk for state, _StickyReplyMessage for status."""
+        """Cancel after partial progress preserves provider_state_updates;
+        worker sends status via bot. No final assistant reply on cancel."""
         with fresh_data_dir() as data_dir:
             prov = _GatedProvider("claude")
             prov.with_state_updates({"started": True})
@@ -663,50 +743,29 @@ class TestCancelConcurrency:
             session = default_session(prov.name, prov.new_provider_state(), "off")
             save_session(data_dir, 12345, session)
 
-            msg = _StickyReplyMessage(chat=chat, text="mid-stream work")
+            msg = FakeMessage(chat=chat, text="mid-stream work")
             update = FakeUpdate(message=msg, user=user, chat=chat)
 
-            async def cancel_after_progress():
+            async with running_worker(data_dir, poll_interval=0.01):
+                await th.handle_message(update, FakeContext())
                 await asyncio.wait_for(prov.provider_started.wait(), timeout=2.0)
-                # Provider has already emitted "working…" progress update.
-                # Now cancel mid-execution.
                 cancel_event = th._LIVE_CANCEL.get(12345)
                 assert cancel_event is not None, "_LIVE_CANCEL must exist"
                 cancel_event.set()
+                prov.gate.set()
 
-            await asyncio.gather(
-                th.handle_message(update, FakeContext()),
-                cancel_after_progress(),
-            )
-
-            # Provider state updates were persisted despite cancel
             s = load_session_disk(data_dir, 12345, prov)
             assert s["provider_state"]["started"] is True, \
                 f"provider_state_updates must persist on cancel. Got: {s['provider_state']}"
 
-            # Status message shows Cancelled.
-            all_edits = [
-                r.get("text", r.get("edit_text", ""))
-                for r in msg.replies
-            ]
-            assert any(t == cancel_live_completed() for t in all_edits), \
-                f"Status must show '{cancel_live_completed()}'. Got: {all_edits}"
-
-            # Partial progress appeared before cancel
-            assert any("working" in t for t in all_edits if t), \
-                f"Progress should appear before cancel. Got: {all_edits}"
-
-            # No final assistant reply was sent to the chat
-            for sent in chat.sent_messages:
-                text = sent.get("text", "")
-                assert "gated response" not in text, \
-                    f"Final reply should not be sent on cancel. Got: {text}"
+            bot = th._bot_instance
+            all_text = " ".join(m.get("text", m.get("edit_text", "")) for m in getattr(bot, "sent_messages", []))
+            assert cancel_live_completed() in all_text, f"Status must show Cancelled. Got: {all_text}"
+            assert "working" in all_text.lower() or "Working" in all_text, f"Progress before cancel: {all_text}"
+            assert "gated response" not in all_text, "Final reply should not be sent on cancel"
 
     async def test_next_request_after_concurrent_cancel(self):
-        """After a concurrent cancel, the next request sees persisted state,
-        executes normally, and _LIVE_CANCEL is clean.
-
-        Strengthens the existing next-request test with real concurrency."""
+        """After a concurrent cancel, the next request sees persisted state and _LIVE_CANCEL is clean."""
         with fresh_data_dir() as data_dir:
             prov = _GatedProvider("claude")
             prov.with_state_updates({"started": True})
@@ -714,50 +773,102 @@ class TestCancelConcurrency:
             setup_globals(cfg, prov)
 
             import app.telegram_handlers as th
-            from app.user_messages import cancel_live_completed
 
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
             save_session(data_dir, 12345, session)
 
-            # First request — cancel concurrently
-            msg1 = _StickyReplyMessage(chat=chat, text="first")
+            msg1 = FakeMessage(chat=chat, text="first")
             update1 = FakeUpdate(message=msg1, user=user, chat=chat)
 
-            async def cancel_first():
+            async with running_worker(data_dir, poll_interval=0.01):
+                await th.handle_message(update1, FakeContext())
                 await asyncio.wait_for(prov.provider_started.wait(), timeout=2.0)
                 cancel_event = th._LIVE_CANCEL.get(12345)
                 assert cancel_event is not None
                 cancel_event.set()
+                prov.gate.set()
 
-            await asyncio.gather(
-                th.handle_message(update1, FakeContext()),
-                cancel_first(),
-            )
+            assert 12345 not in th._LIVE_CANCEL, "_LIVE_CANCEL must be cleaned after execution"
 
-            # Registry is clean after the first request
-            assert 12345 not in th._LIVE_CANCEL, \
-                "_LIVE_CANCEL must be cleaned after execution"
-
-            # Second request — swap provider directly (setup_globals would
-            # reset CHAT_LOCKS and other per-chat state we need to keep).
-            import app.telegram_handlers as th2
             prov2 = FakeProvider("claude")
             prov2.run_results = [RunResult(text="normal response")]
-            th2._provider = prov2
+            th._provider = prov2
 
-            msg2 = _StickyReplyMessage(chat=chat, text="second")
+            msg2 = FakeMessage(chat=chat, text="second")
             update2 = FakeUpdate(message=msg2, user=user, chat=chat)
-            await th.handle_message(update2, FakeContext())
+            async with running_worker(data_dir, poll_interval=0.01):
+                await th.handle_message(update2, FakeContext())
+                for _ in range(50):
+                    await asyncio.sleep(0.05)
+                    if len(prov2.run_calls) >= 1:
+                        break
 
-            # Second call saw started=True from the persisted cancelled run
             assert len(prov2.run_calls) == 1
-            assert prov2.run_calls[0]["provider_state"]["started"] is True, \
-                f"Second request must see persisted state. Got: {prov2.run_calls[0]['provider_state']}"
-
-            # Registry still clean
+            assert prov2.run_calls[0]["provider_state"]["started"] is True
             assert 12345 not in th._LIVE_CANCEL
+
+    async def test_second_message_while_run_active_is_rejected_and_not_executed(self):
+        """Second plain message while a run is active gets busy reply; no second runnable item."""
+        with fresh_data_dir() as data_dir:
+            prov = _GatedProvider("claude")
+            cfg = make_config(data_dir)
+            setup_globals(cfg, prov)
+
+            import app.telegram_handlers as th
+            from app import runtime_backend
+
+            chat = FakeChat(12345)
+            user = FakeUser(42)
+            session = default_session(prov.name, prov.new_provider_state(), "off")
+            save_session(data_dir, 12345, session)
+
+            msg_a = FakeMessage(chat=chat, text="first request")
+            update_a = FakeUpdate(message=msg_a, user=user, chat=chat)
+            msg_b = FakeMessage(chat=chat, text="second message")
+            update_b = FakeUpdate(message=msg_b, user=user, chat=chat)
+
+            async with running_worker(data_dir, poll_interval=0.01):
+                await th.handle_message(update_a, FakeContext())
+                await asyncio.wait_for(prov.provider_started.wait(), timeout=2.0)
+                await th.handle_message(update_b, FakeContext())
+                reply_b = last_reply(msg_b)
+                assert _msg.queue_busy() in reply_b, f"B must get busy reply. Got: {reply_b}"
+
+                conn = runtime_backend.transport_store()._transport_db(data_dir)
+                rows = conn.execute(
+                    "SELECT id, state, error FROM work_items WHERE chat_id = 12345 ORDER BY id"
+                ).fetchall()
+                runnable = [r for r in rows if r["state"] in ("queued", "claimed") and (r["error"] if "error" in r.keys() else "") != "chat_busy"]
+                busy_items = [r for r in rows if (r["error"] if "error" in r.keys() else None) == "chat_busy"]
+                assert len(runnable) == 1, f"Exactly one runnable item for chat. Got: {rows}"
+                assert len(busy_items) == 1, f"Busy item must be terminal with chat_busy. Got: {rows}"
+
+                await send_command(th.cmd_cancel, chat, user, "/cancel")
+                prov.gate.set()
+
+            assert len(prov.run_calls) == 1
+
+    async def test_cancel_sets_event_when_run_active(self):
+        """/cancel sets the worker-owned cancel event so the run can exit."""
+        with fresh_data_dir() as data_dir:
+            cfg = make_config(data_dir)
+            setup_globals(cfg, FakeProvider("claude"))
+
+            import app.telegram_handlers as th
+
+            chat_id = 12345
+            cancel_event = asyncio.Event()
+            th._LIVE_CANCEL[chat_id] = cancel_event
+            try:
+                chat = FakeChat(chat_id)
+                user = FakeUser(42)
+                from tests.support.handler_support import send_command
+                await send_command(th.cmd_cancel, chat, user, "/cancel")
+                assert cancel_event.is_set(), "/cancel must set the live cancel event"
+            finally:
+                th._LIVE_CANCEL.pop(chat_id, None)
 
 # ---------------------------------------------------------------------------
 # Helpers

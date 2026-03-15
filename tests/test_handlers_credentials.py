@@ -9,6 +9,7 @@ from app.providers.base import RunResult
 from app.skills import derive_encryption_key, load_user_credentials, save_user_credential
 from app.storage import default_session, ensure_data_dirs, save_session
 import app.telegram_handlers as _th
+from app import runtime_backend
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
@@ -17,6 +18,9 @@ from tests.support.handler_support import (
     FakeProvider,
     FakeUpdate,
     FakeUser,
+    MinimalFakeBot,
+    bot_texts,
+    drain_one_worker_item,
     get_callback_data_values,
     has_markup_removal,
     last_reply,
@@ -28,6 +32,8 @@ from tests.support.handler_support import (
     send_text,
     setup_globals,
     fresh_data_dir,
+    running_worker,
+    set_bot_instance,
 )
 
 MARKER_ALPHA = "SKILL_ALPHA_e7f3"
@@ -78,6 +84,7 @@ async def test_credential_capture():
 
             msg3 = FakeMessage(chat=chat, text="list my repos")
             await _th.handle_message(FakeUpdate(message=msg3, user=user, chat=chat), FakeContext())
+            await drain_one_worker_item(data_dir)
             assert len(prov.run_calls) == 1
             ctx = prov.run_calls[0]["context"]
             assert "GITHUB_TOKEN" in ctx.credential_env
@@ -136,6 +143,50 @@ async def test_credential_validation_failure():
             key = derive_encryption_key(cfg.telegram_token)
             creds = load_user_credentials(data_dir, 42, key)
             assert not creds.get("github-integration", {}).get("GITHUB_TOKEN")
+        finally:
+            _th.validate_credential = original_validate
+
+
+async def test_credential_reply_while_worker_alive_no_provider_run():
+    """Credential-setup reply with real worker running: no work item created, provider never runs (regression for worker-claim race)."""
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        session = default_session("claude", prov.new_provider_state(), "off")
+        session["awaiting_skill_setup"] = {
+            "user_id": 42,
+            "skill": "test-skill",
+            "remaining": [{"key": "TOKEN", "prompt": "Enter token", "help_url": None, "validate": None}],
+        }
+        save_session(data_dir, 12345, session)
+
+        from tests.support.handler_support import MinimalFakeBot
+        set_bot_instance(MinimalFakeBot())
+
+        async def fake_validate(req, value):
+            return (True, "")
+
+        original_validate = _th.validate_credential
+        _th.validate_credential = fake_validate
+        try:
+            chat = FakeChat(12345)
+            user = FakeUser(42)
+            secret_msg = FakeMessage(chat=chat, text="my-secret-token")
+            upd = FakeUpdate(message=secret_msg, user=user, chat=chat)
+            credential_update_id = upd.update_id
+
+            async with running_worker(data_dir):
+                await _th.handle_message(upd, FakeContext())
+                await asyncio.sleep(0.05)
+
+            assert len(prov.run_calls) == 0, "Credential reply must not be run as provider work"
+            conn = runtime_backend.transport_store()._transport_db(data_dir)
+            row = conn.execute(
+                "SELECT 1 FROM work_items WHERE update_id = ?", (credential_update_id,)
+            ).fetchone()
+            assert row is None, "Credential message must not create a work item (record_update only)"
         finally:
             _th.validate_credential = original_validate
 
@@ -216,6 +267,7 @@ async def test_credential_env_in_context():
         chat = FakeChat(12345)
         user = FakeUser(42)
         await _th.handle_message(FakeUpdate(message=FakeMessage(chat=chat, text="list repos"), user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         ctx = prov.run_calls[0]["context"]
@@ -228,16 +280,19 @@ async def test_missing_creds_block_execution():
         cfg = make_config(data_dir, default_skills=("github-integration",))
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
+        set_bot_instance(MinimalFakeBot())
 
         chat = FakeChat(12345)
         msg = FakeMessage(chat=chat, text="list repos")
         user = FakeUser(42)
         await _th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 0
         session = load_session_disk(data_dir, 12345, prov)
         assert session.get("awaiting_skill_setup") is not None
-        assert "needs setup" in " ".join(r.get("text", "") for r in msg.replies).lower()
+        out = " ".join(bot_texts(_th._bot_instance)).lower()
+        assert "needs setup" in out
 
 
 async def test_skills_add_defers_activation():
@@ -379,7 +434,9 @@ async def test_cross_user_credential_isolation():
             alice = FakeUser(uid=100, username="alice")
             bob = FakeUser(uid=200, username="bob")
 
+            set_bot_instance(MinimalFakeBot())
             await _th.handle_message(FakeUpdate(message=FakeMessage(chat=chat, text="list my repos"), user=alice, chat=chat), FakeContext())
+            await drain_one_worker_item(data_dir)
             assert len(prov.preflight_calls) == 1
 
             session = load_session_disk(data_dir, 12345, prov)
@@ -390,6 +447,7 @@ async def test_cross_user_credential_isolation():
             update = FakeUpdate(user=bob, chat=chat, callback_query=query)
             update.effective_message = cb_msg
             await _th.handle_callback(update, FakeContext())
+            await drain_one_worker_item(data_dir)
 
             assert len(prov.run_calls) == 1
             ctx = prov.run_calls[0]["context"]
@@ -481,15 +539,18 @@ async def test_group_check_cred_satisfaction_no_overwrite():
         }
         save_session(data_dir, 12345, session)
 
+        set_bot_instance(MinimalFakeBot())
         msg = FakeMessage(chat=chat, text="list repos please")
         await _th.handle_message(FakeUpdate(message=msg, user=bob, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 0
         session = load_session_disk(data_dir, 12345, prov)
         setup = session.get("awaiting_skill_setup")
         assert setup is not None
         assert setup["user_id"] == 100
-        assert "wait" in " ".join(r.get("text", "") for r in msg.replies).lower()
+        out = " ".join(bot_texts(_th._bot_instance)).lower()
+        assert "wait" in out
 
 
 async def test_cross_user_skills_remove_blocked():
@@ -749,9 +810,12 @@ async def test_handler_provider_context_has_skill_and_creds():
             session["active_skills"] = ["alpha"]
             save_session(data_dir, 1001, session)
 
+            set_bot_instance(MinimalFakeBot())
             prov.run_results = [RunResult(text="done")]
             await send_text(chat, alice, "do something")
+            await drain_one_worker_item(data_dir)
             ctx = last_run_context(prov)
+            assert ctx is not None
             assert MARKER_ALPHA in ctx.system_prompt
             assert ctx.credential_env.get("ALPHA_TOKEN") == "tok-123"
     finally:
@@ -789,9 +853,12 @@ async def test_handler_second_skill_changes_prompt():
             assert "alpha" in session.get("active_skills", [])
             assert "beta" in session.get("active_skills", [])
 
+            set_bot_instance(MinimalFakeBot())
             prov.run_results = [RunResult(text="done")]
             await send_text(chat, alice, "go")
+            await drain_one_worker_item(data_dir)
             ctx = last_run_context(prov)
+            assert ctx is not None
             assert MARKER_ALPHA in ctx.system_prompt
             assert MARKER_BETA in ctx.system_prompt
             assert ctx.credential_env.get("ALPHA_TOKEN") == "tok-123"
@@ -830,9 +897,12 @@ async def test_handler_skills_remove_drops_cred_env():
             assert "alpha" not in session.get("active_skills", [])
             assert "beta" in session.get("active_skills", [])
 
+            set_bot_instance(MinimalFakeBot())
             prov.run_results = [RunResult(text="done")]
             await send_text(chat, alice, "go")
+            await drain_one_worker_item(data_dir)
             ctx = last_run_context(prov)
+            assert ctx is not None
             assert MARKER_ALPHA not in ctx.system_prompt
             assert MARKER_BETA in ctx.system_prompt
             assert ctx.credential_env.get("ALPHA_TOKEN") is None
@@ -971,9 +1041,12 @@ async def test_smoke_credentialed_skill_flow():
                 await _th.handle_message(FakeUpdate(message=secret_msg, user=alice, chat=chat), FakeContext())
                 assert secret_msg.deleted
 
+                set_bot_instance(MinimalFakeBot())
                 prov.run_results = [RunResult(text="done")]
                 await send_text(chat, alice, "go")
+                await drain_one_worker_item(data_dir)
                 ctx = last_run_context(prov)
+                assert ctx is not None
                 assert MARKER_ALPHA in ctx.system_prompt
                 assert ctx.credential_env.get("ALPHA_TOKEN") == "my-secret"
             finally:

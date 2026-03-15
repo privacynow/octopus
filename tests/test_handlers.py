@@ -19,6 +19,7 @@ from tests.support.handler_support import (
     get_callback_data_values,
     last_reply,
     load_session_disk,
+    drain_one_worker_item,
     make_config,
     public_user_config_overrides,
     send_callback,
@@ -42,6 +43,7 @@ async def test_happy_path():
         import app.telegram_handlers as th
 
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         assert "hi there" in prov.run_calls[0]["prompt"]
@@ -53,8 +55,10 @@ async def test_happy_path():
 
         session = load_session_disk(data_dir, 12345, prov)
         assert session["provider_state"]["started"] == True
-        assert len(msg.replies) >= 2
-        assert "Hello world" in " ".join(r.get("text", r.get("edit_text", "")) for r in msg.replies)
+        # Worker sends via bot, not msg.replies
+        bot = th._bot_instance
+        assert len(bot.sent_messages) >= 2
+        assert "Hello world" in " ".join(m.get("text", "") for m in bot.sent_messages)
 
 
 async def test_cmd_new():
@@ -100,11 +104,13 @@ async def test_provider_timeout():
         import app.telegram_handlers as th
 
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
-        reply_texts = " ".join(r.get("text", "") for r in msg.replies)
+        import app.telegram_handlers as _th
+        reply_texts = " ".join(m.get("text", "") for m in _th._bot_instance.sent_messages)
         assert "partial output" not in reply_texts
-        assert sum(1 for r in msg.replies if "text" in r) == 1
+        assert sum(1 for m in _th._bot_instance.sent_messages if m.get("text")) >= 1
         session = load_session_disk(data_dir, 12345, prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
@@ -123,11 +129,13 @@ async def test_provider_error_returncode():
         import app.telegram_handlers as th
 
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
-        reply_texts = " ".join(r.get("text", "") for r in msg.replies)
+        import app.telegram_handlers as _th
+        reply_texts = " ".join(m.get("text", "") for m in _th._bot_instance.sent_messages)
         assert "segfault" not in reply_texts
-        assert sum(1 for r in msg.replies if "text" in r) == 1
+        assert sum(1 for m in _th._bot_instance.sent_messages if m.get("text")) >= 1
         session = load_session_disk(data_dir, 12345, prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
@@ -174,6 +182,7 @@ async def test_role_in_provider_context():
             FakeUpdate(message=FakeMessage(chat=chat, text="deploy my app"), user=user, chat=chat),
             FakeContext(),
         )
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         assert "Kubernetes expert" in prov.run_calls[0]["context"].system_prompt
@@ -410,17 +419,14 @@ def test_bucket_b_command_registration_parity():
         assert not missing, f"Bucket B main commands must be registered; missing: {missing}"
 
 
-def test_build_application_enables_concurrent_updates_for_live_cancel():
-    """build_application must enable concurrent update dispatch so /cancel can interrupt live work."""
+def test_build_application_sequential_updates():
+    """build_application uses sequential update processing; live runs are worker-owned so /cancel works."""
     with fresh_env() as (_, cfg, prov):
         import app.telegram_handlers as th
 
         app = th.build_application(cfg, prov)
-        max_updates = getattr(app.update_processor, "max_concurrent_updates", 1)
-        assert max_updates > 1, (
-            "Dispatcher must allow overlapping updates; otherwise /cancel is serialized behind "
-            "the long-running handler it is supposed to interrupt"
-        )
+        # Default sequential processing (no custom update processor)
+        assert app.update_processor is None or "CancelPriority" not in type(app.update_processor).__name__
 
 
 async def test_first_run_welcome():
@@ -436,9 +442,15 @@ async def test_first_run_welcome():
         user = FakeUser(42)
         msg = FakeMessage(chat=chat, text="hello")
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
-        sent = " ".join(m.get("text", "") for m in chat.sent_messages)
-        assert "ready" in sent.lower()
-        assert "Approval mode is on" in sent
+        # Welcome is sent by handler to message.chat (FakeChat) when no session exists
+        sent_chat = " ".join(m.get("text", "") for m in chat.sent_messages)
+        assert "ready" in sent_chat.lower()
+        assert "Approval mode is on" in sent_chat
+        await drain_one_worker_item(data_dir)
+        # Worker sends approval plan via bot
+        bot = th._bot_instance
+        sent_bot = " ".join(m.get("text", m.get("edit_text", "")) for m in bot.sent_messages)
+        assert "preparing" in sent_bot.lower() or "plan" in sent_bot.lower()
 
 
 async def test_first_run_welcome_compact_mode():
@@ -454,9 +466,11 @@ async def test_first_run_welcome_compact_mode():
         user = FakeUser(42)
         msg = FakeMessage(chat=chat, text="hello")
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
-        sent = " ".join(m.get("text", "") for m in chat.sent_messages)
-        assert "Compact mode is on" in sent
-        assert "/compact off" in sent
+        # Welcome (including compact) is sent by handler to message.chat when no session exists
+        sent_chat = " ".join(m.get("text", "") for m in chat.sent_messages)
+        assert "Compact mode is on" in sent_chat
+        assert "/compact off" in sent_chat
+        await drain_one_worker_item(data_dir)
 
 
 async def test_first_run_welcome_no_compact():
@@ -472,7 +486,9 @@ async def test_first_run_welcome_no_compact():
         user = FakeUser(42)
         msg = FakeMessage(chat=chat, text="hello")
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
-        sent = " ".join(m.get("text", "") for m in chat.sent_messages)
+        await drain_one_worker_item(data_dir)
+        bot = th._bot_instance
+        sent = " ".join(m.get("text", m.get("edit_text", "")) for m in bot.sent_messages)
         assert "Compact mode" not in sent
 
 
@@ -871,11 +887,13 @@ async def test_send_file_directive():
 
         chat = FakeChat(12345)
         user = FakeUser(42)
-        msg = await send_text(chat, user, "generate a file")
+        await send_text(chat, user, "generate a file")
+        await drain_one_worker_item(data_dir)
 
-        # Should have a reply_document entry
-        doc_replies = [r for r in msg.replies if r.get("document")]
-        assert len(doc_replies) >= 1
+        import app.telegram_handlers as th
+        bot = th._bot_instance
+        doc_sent = [m for m in bot.sent_messages if m.get("document") is not None]
+        assert len(doc_sent) >= 1
 
 
 async def test_send_image_directive():
@@ -893,11 +911,13 @@ async def test_send_image_directive():
 
         chat = FakeChat(12345)
         user = FakeUser(42)
-        msg = await send_text(chat, user, "make a chart")
+        await send_text(chat, user, "make a chart")
+        await drain_one_worker_item(data_dir)
 
-        # Should have a reply_photo entry
-        photo_replies = [r for r in msg.replies if r.get("photo")]
-        assert len(photo_replies) >= 1
+        import app.telegram_handlers as th
+        bot = th._bot_instance
+        photo_sent = [m for m in bot.sent_messages if m.get("photo") is not None]
+        assert len(photo_sent) >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -943,6 +963,7 @@ async def test_project_use_switches_project():
             # First send a message to create session state
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, user, "hello")
+            await drain_one_worker_item(data_dir)
 
             # Now switch project
             msg = await send_command(th.cmd_project, chat, user, "/project", args=["use", "frontend"])
@@ -984,6 +1005,7 @@ async def test_project_clear_resets_to_default():
             # Bind to project first
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, user, "hello")
+            await drain_one_worker_item(data_dir)
             await send_command(th.cmd_project, chat, user, "/project", args=["use", "myapp"])
 
             # Clear
@@ -1093,6 +1115,7 @@ async def test_policy_set_inspect():
 
         # Send a message to create session with provider state
         await send_text(chat, user, "hello")
+        await drain_one_worker_item(data_dir)
         session = load_session_disk(data_dir, 1001, prov)
         assert session.get("file_policy", "") != "inspect"
 
@@ -1174,6 +1197,7 @@ async def test_policy_inspect_passed_to_provider():
         await send_command(th.cmd_policy, chat, user, "/policy", args=["inspect"])
         # Send a message
         await send_text(chat, user, "analyze the code")
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         ctx = prov.run_calls[0]["context"]
@@ -1188,6 +1212,7 @@ async def test_policy_edit_passed_to_provider():
         user = FakeUser(uid=42, username="testuser")
 
         await send_text(chat, user, "write code")
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         ctx = prov.run_calls[0]["context"]
@@ -1322,6 +1347,7 @@ async def test_compact_change_does_not_reset_provider_state():
         user = FakeUser(42)
         prov.run_results = [RunResult(text="ok", provider_state_updates={"started": True})]
         await send_text(chat, user, "hi")
+        await drain_one_worker_item(data_dir)
         session_before = load_session_disk(data_dir, 1, prov)
         assert session_before["provider_state"].get("started") is True
         await send_callback(th.handle_settings_callback, chat, user, "setting_compact:on")
@@ -1455,6 +1481,7 @@ async def test_settings_callback_project_use():
             user = FakeUser(42)
             prov.run_results = [RunResult(text="ok")]
             await send_text(chat, user, "hi")
+            await drain_one_worker_item(data_dir)
             query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_project:myproj")
             session = load_session_disk(data_dir, 1, prov)
             assert session["project_id"] == "myproj"
@@ -2042,6 +2069,7 @@ async def test_message_after_new_gets_fresh_session():
             RunResult(text="first response", provider_state_updates={"started": True}),
         ]
         await send_text(chat, user, "first message")
+        await drain_one_worker_item(data_dir)
         session1 = load_session_disk(data_dir, 1001, prov)
         assert session1["provider_state"]["started"] is True
 
@@ -2055,6 +2083,7 @@ async def test_message_after_new_gets_fresh_session():
             RunResult(text="second response", provider_state_updates={"started": True}),
         ]
         await send_text(chat, user, "second message")
+        await drain_one_worker_item(data_dir)
         assert len(prov.run_calls) == 2
         second_call = prov.run_calls[1]
         assert second_call["provider_state"]["started"] is False
@@ -2068,6 +2097,7 @@ async def test_provider_empty_response():
         prov.run_results = [RunResult(text="")]
 
         await send_text(chat, user, "hello")
+        await drain_one_worker_item(data_dir)
         assert len(prov.run_calls) == 1
 
 

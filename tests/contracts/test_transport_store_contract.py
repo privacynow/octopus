@@ -10,6 +10,8 @@ import pytest
 from app.work_queue import (
     record_update,
     get_update_payload,
+    get_work_items_for_chat,
+    record_and_admit_message,
     record_and_enqueue,
     enqueue_work_item,
     claim_for_update,
@@ -17,6 +19,7 @@ from app.work_queue import (
     claim_next_any,
     complete_work_item,
     fail_work_item,
+    cancel_queued_fresh_for_chat,
     has_claimed_for_chat,
     has_queued_or_claimed,
     mark_pending_recovery,
@@ -267,3 +270,26 @@ def test_has_queued_or_claimed_true_after_enqueue(backend_and_data_dir):
     record_update(data_dir, 901, chat_id=1, user_id=42, kind="message")
     enqueue_work_item(data_dir, chat_id=1, update_id=901)
     assert has_queued_or_claimed(data_dir, 1) is True
+
+
+# --- cancel_queued_fresh_for_chat (durable state across backends) ---
+
+def test_cancel_queued_fresh_for_chat_terminal_state(backend_and_data_dir):
+    """cancel_queued_fresh_for_chat: returns True, targeted item is failed/cancelled, no fresh runnable remains."""
+    backend, data_dir = backend_and_data_dir
+    chat_id = 99
+    status, item_id = record_and_admit_message(
+        data_dir, update_id=5001, chat_id=chat_id, user_id=42, kind="message", payload="{}"
+    )
+    assert status == "admitted"
+    assert item_id is not None
+
+    ok = cancel_queued_fresh_for_chat(data_dir, chat_id)
+    assert ok is True
+
+    items = get_work_items_for_chat(data_dir, chat_id)
+    cancelled = [i for i in items if i.get("state") == "failed" and i.get("error") == "cancelled"]
+    runnable = [i for i in items if i.get("state") in ("queued", "claimed")]
+    assert len(cancelled) == 1, f"Exactly one item must be failed/cancelled, got: {items}"
+    assert len(runnable) == 0, f"No runnable items after cancel, got: {items}"
+    assert has_queued_or_claimed(data_dir, chat_id) is False

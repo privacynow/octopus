@@ -471,8 +471,8 @@ def generic_error_try_again() -> str:
 
 
 def queue_busy() -> str:
-    """When user's request is queued because another is in progress. Do not tell them to try again — it will run next."""
-    return "Another request is already running. Yours is queued and will run next."
+    """When user's message is rejected because another request is already in progress."""
+    return "Another request is already running. This message was not started. Wait for it to finish or use /cancel."
 
 
 def callback_wrong_user() -> str:
@@ -512,5 +512,10 @@ def cancel_live_requested() -> str:
 def cancel_live_completed() -> str:
     """Status message update when live execution is cancelled."""
     return "Cancelled."
+
+
+def cancel_queued_superseded() -> str:
+    """When a queued plain message is dropped because /cancel was processed (no later run)."""
+    return "This request was superseded by a cancellation."
 
 

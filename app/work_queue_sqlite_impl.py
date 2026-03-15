@@ -25,7 +25,12 @@ from app.workflows.transport_recovery import (
 
 log = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 2
+
+class _DuplicateUpdate(Exception):
+    """Signals duplicate update_id in record_and_admit_message (rollback and return duplicate, None)."""
+
+
+_SCHEMA_VERSION = 3
 
 _CREATE_SQL = """\
 CREATE TABLE IF NOT EXISTS updates (
@@ -40,18 +45,20 @@ CREATE TABLE IF NOT EXISTS updates (
 CREATE INDEX IF NOT EXISTS idx_updates_chat ON updates (chat_id, received_at);
 
 CREATE TABLE IF NOT EXISTS work_items (
-    id          TEXT    PRIMARY KEY,
-    chat_id     INTEGER NOT NULL,
-    update_id   INTEGER NOT NULL UNIQUE REFERENCES updates(update_id),
-    state       TEXT    NOT NULL DEFAULT 'queued',
-    worker_id   TEXT,
-    claimed_at  TEXT,
-    completed_at TEXT,
-    error       TEXT,
-    created_at  TEXT    NOT NULL,
+    id             TEXT    PRIMARY KEY,
+    chat_id        INTEGER NOT NULL,
+    update_id      INTEGER NOT NULL UNIQUE REFERENCES updates(update_id),
+    state          TEXT    NOT NULL DEFAULT 'queued',
+    worker_id      TEXT,
+    claimed_at     TEXT,
+    completed_at   TEXT,
+    error          TEXT,
+    created_at     TEXT    NOT NULL,
+    dispatch_mode  TEXT    NOT NULL DEFAULT 'fresh',
     CHECK (state IN ('queued','claimed','pending_recovery','done','failed')),
     CHECK (state != 'claimed' OR worker_id IS NOT NULL),
-    CHECK (state != 'claimed' OR claimed_at IS NOT NULL)
+    CHECK (state != 'claimed' OR claimed_at IS NOT NULL),
+    CHECK (dispatch_mode IN ('fresh', 'recovery'))
 );
 CREATE INDEX IF NOT EXISTS idx_work_items_state ON work_items (state, chat_id);
 CREATE INDEX IF NOT EXISTS idx_work_items_chat  ON work_items (chat_id, state);
@@ -67,7 +74,7 @@ _UNSUPPORTED_SCHEMA_MSG = "Unsupported transport.db schema/layout for this build
 _EXPECTED_TABLES = ("updates", "work_items", "meta")
 _EXPECTED_COLUMNS: dict[str, set[str]] = {
     "updates": {"update_id", "chat_id", "user_id", "kind", "payload", "received_at", "state"},
-    "work_items": {"id", "chat_id", "update_id", "state", "worker_id", "claimed_at", "completed_at", "error", "created_at"},
+    "work_items": {"id", "chat_id", "update_id", "state", "worker_id", "claimed_at", "completed_at", "error", "created_at", "dispatch_mode"},
     "meta": {"key", "value"},
 }
 _REQUIRED_INDEX = "idx_one_claimed_per_chat"
@@ -80,6 +87,15 @@ def _create_new_transport_db(conn: sqlite3.Connection) -> None:
         "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
         (str(_SCHEMA_VERSION),),
     )
+    conn.commit()
+
+
+def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """Migrate transport DB from schema version 2 to 3: add dispatch_mode to work_items."""
+    conn.execute(
+        "ALTER TABLE work_items ADD COLUMN dispatch_mode TEXT NOT NULL DEFAULT 'fresh'"
+    )
+    conn.execute("UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(_SCHEMA_VERSION),))
     conn.commit()
 
 
@@ -150,6 +166,20 @@ def _validate_existing_transport_db(conn: sqlite3.Connection) -> None:
         raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
 
 
+def _ensure_schema_version(conn: sqlite3.Connection) -> None:
+    """If DB is at schema version 2, migrate to 3 (add dispatch_mode). Then validate."""
+    row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+    if row is None:
+        raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
+    try:
+        stored = int(row[0])
+    except (TypeError, ValueError):
+        raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
+    if stored == 2:
+        _migrate_v2_to_v3(conn)
+    _validate_existing_transport_db(conn)
+
+
 @contextmanager
 def _write_tx(conn: sqlite3.Connection, immediate: bool = True):
     """Single transaction wrapper for all mutating repository entry points."""
@@ -203,7 +233,8 @@ def _load_work_item_by_chat_update(
 
 def _assert_no_invalid_rows_for_chat(conn: sqlite3.Connection, chat_id: int) -> None:
     rows = conn.execute(
-        "SELECT id, state, worker_id, claimed_at FROM work_items WHERE chat_id = ?", (chat_id,)
+        "SELECT id, state, worker_id, claimed_at, dispatch_mode FROM work_items WHERE chat_id = ?",
+        (chat_id,),
     ).fetchall()
     claimed = 0
     for row in rows:
@@ -257,7 +288,7 @@ def _claim_queued_item(
         _validate_work_item_row(out, item_id)
         return out
     re_read = conn.execute(
-        "SELECT state, worker_id, claimed_at FROM work_items WHERE id = ?", (item_id,)
+        "SELECT state, worker_id, claimed_at, dispatch_mode FROM work_items WHERE id = ?", (item_id,)
     ).fetchone()
     if re_read is None:
         return None
@@ -310,7 +341,7 @@ def _apply_transport_event(
     if cursor.rowcount > 0:
         return ApplyResult.success
     re_read = conn.execute(
-        "SELECT state, worker_id, claimed_at FROM work_items WHERE id = ?", (item_id,)
+        "SELECT state, worker_id, claimed_at, dispatch_mode FROM work_items WHERE id = ?", (item_id,)
     ).fetchone()
     if re_read is None:
         return ApplyResult.already_handled
@@ -361,7 +392,7 @@ def _apply_claim_event(
         _validate_work_item_row(r, item_id)
         return r
     re_read = conn.execute(
-        "SELECT state, worker_id, claimed_at FROM work_items WHERE id = ?", (item_id,)
+        "SELECT state, worker_id, claimed_at, dispatch_mode FROM work_items WHERE id = ?", (item_id,)
     ).fetchone()
     if re_read is None:
         return None
@@ -401,8 +432,8 @@ def _insert_initial_work_item(
         if result.allowed:
             conn.execute(
                 "INSERT INTO work_items "
-                "(id, chat_id, update_id, state, worker_id, claimed_at, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(id, chat_id, update_id, state, worker_id, claimed_at, created_at, dispatch_mode) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'fresh')",
                 (item_id, chat_id, update_id, result.new_state, worker_id, created_at, created_at),
             )
             return item_id
@@ -411,8 +442,8 @@ def _insert_initial_work_item(
             f"{result.disposition} — {result.reason}"
         )
     conn.execute(
-        "INSERT INTO work_items (id, chat_id, update_id, state, created_at) "
-        "VALUES (?, ?, ?, 'queued', ?)",
+        "INSERT INTO work_items (id, chat_id, update_id, state, created_at, dispatch_mode) "
+        "VALUES (?, ?, ?, 'queued', ?, 'fresh')",
         (item_id, chat_id, update_id, created_at),
     )
     return item_id
@@ -453,6 +484,44 @@ def record_and_enqueue(
     except sqlite3.IntegrityError as exc:
         if "updates.update_id" in str(exc):
             return False, None
+        raise
+
+
+def record_and_admit_message(
+    conn: sqlite3.Connection,
+    update_id: int,
+    chat_id: int,
+    user_id: int,
+    kind: str,
+    payload: str = "{}",
+) -> tuple[str, str | None]:
+    """Record update and admit or reject for provider work. Returns (status, item_id).
+    status: 'duplicate' | 'admitted' | 'busy'. item_id set when admitted or busy."""
+    now = datetime.now(timezone.utc).isoformat()
+    item_id = uuid.uuid4().hex
+    try:
+        with _write_tx(conn):
+            conn.execute(
+                "INSERT INTO updates (update_id, chat_id, user_id, kind, payload, received_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (update_id, chat_id, user_id, kind, payload, now),
+            )
+            if has_fresh_queued_or_claimed(conn, chat_id):
+                conn.execute(
+                    "INSERT INTO work_items (id, chat_id, update_id, state, error, created_at, dispatch_mode) "
+                    "VALUES (?, ?, ?, 'failed', 'chat_busy', ?, 'fresh')",
+                    (item_id, chat_id, update_id, now),
+                )
+                return ("busy", item_id)
+            conn.execute(
+                "INSERT INTO work_items (id, chat_id, update_id, state, created_at, dispatch_mode) "
+                "VALUES (?, ?, ?, 'queued', ?, 'fresh')",
+                (item_id, chat_id, update_id, now),
+            )
+            return ("admitted", item_id)
+    except sqlite3.IntegrityError as exc:
+        if "updates.update_id" in str(exc) or "UNIQUE" in str(exc):
+            raise _DuplicateUpdate from exc
         raise
 
 
@@ -630,7 +699,7 @@ def complete_work_item(conn: sqlite3.Connection, item_id: str) -> None:
         if cursor.rowcount > 0:
             return
         re_read = conn.execute(
-            "SELECT state, worker_id, claimed_at FROM work_items WHERE id = ?", (item_id,)
+            "SELECT state, worker_id, claimed_at, dispatch_mode FROM work_items WHERE id = ?", (item_id,)
         ).fetchone()
         if re_read is None:
             return
@@ -670,7 +739,7 @@ def fail_work_item(conn: sqlite3.Connection, item_id: str, error: str) -> None:
         if cursor.rowcount > 0:
             return
         re_read = conn.execute(
-            "SELECT state, worker_id, claimed_at FROM work_items WHERE id = ?", (item_id,)
+            "SELECT state, worker_id, claimed_at, dispatch_mode FROM work_items WHERE id = ?", (item_id,)
         ).fetchone()
         if re_read is None:
             return
@@ -700,6 +769,47 @@ def has_queued_or_claimed(conn: sqlite3.Connection, chat_id: int) -> bool:
         (chat_id,),
     ).fetchone()
     return row is not None
+
+
+def has_fresh_queued_or_claimed(conn: sqlite3.Connection, chat_id: int) -> bool:
+    """True if this chat has any work item in queued or claimed state with dispatch_mode='fresh'."""
+    _assert_no_invalid_rows_for_chat(conn, chat_id)
+    row = conn.execute(
+        "SELECT 1 FROM work_items WHERE chat_id = ? AND state IN ('queued', 'claimed') "
+        "AND dispatch_mode = 'fresh' LIMIT 1",
+        (chat_id,),
+    ).fetchone()
+    return row is not None
+
+
+def cancel_queued_fresh_for_chat(conn: sqlite3.Connection, chat_id: int) -> bool:
+    """If this chat has a queued fresh item, mark it failed with error='cancelled'. Returns True if one was cancelled."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _write_tx(conn):
+        row = conn.execute(
+            "SELECT id FROM work_items WHERE chat_id = ? AND state = 'queued' AND dispatch_mode = 'fresh' "
+            "ORDER BY created_at ASC LIMIT 1",
+            (chat_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        item_id = row["id"]
+        cur = conn.execute(
+            "UPDATE work_items SET state = 'failed', completed_at = ?, error = 'cancelled' WHERE id = ? AND state = 'queued'",
+            (now, item_id),
+        )
+        return cur.rowcount > 0
+
+
+def get_work_items_for_chat(conn: sqlite3.Connection, chat_id: int) -> list[dict[str, Any]]:
+    """Return work items for chat with id, update_id, state, error, dispatch_mode, kind. Read-only."""
+    rows = conn.execute(
+        "SELECT w.id, w.update_id, w.state, w.error, w.dispatch_mode, u.kind "
+        "FROM work_items w JOIN updates u ON w.update_id = u.update_id "
+        "WHERE w.chat_id = ? ORDER BY w.created_at ASC",
+        (chat_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_update_payload(conn: sqlite3.Connection, update_id: int) -> str | None:
@@ -849,7 +959,7 @@ def recover_stale_claims(
     now = datetime.now(timezone.utc)
     with _write_tx(conn):
         rows = conn.execute(
-            "SELECT id, state, worker_id, claimed_at FROM work_items WHERE state = 'claimed'"
+            "SELECT id, state, worker_id, claimed_at, dispatch_mode FROM work_items WHERE state = 'claimed'"
         ).fetchall()
         requeued = 0
         for row in rows:
@@ -876,7 +986,7 @@ def recover_stale_claims(
                     )
                 new_state = result.new_state
                 cursor = conn.execute(
-                    "UPDATE work_items SET state = ?, worker_id = NULL, claimed_at = NULL "
+                    "UPDATE work_items SET state = ?, worker_id = NULL, claimed_at = NULL, dispatch_mode = 'recovery' "
                     "WHERE id = ? AND state = 'claimed' AND worker_id = ? AND claimed_at = ?",
                     (new_state, r["id"], r["worker_id"], r["claimed_at"]),
                 )
@@ -884,7 +994,7 @@ def recover_stale_claims(
                     requeued += 1
                     continue
                 re_read = conn.execute(
-                    "SELECT state, worker_id, claimed_at FROM work_items WHERE id = ?",
+                    "SELECT state, worker_id, claimed_at, dispatch_mode FROM work_items WHERE id = ?",
                     (r["id"],),
                 ).fetchone()
                 if re_read is None:

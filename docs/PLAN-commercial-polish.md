@@ -2320,10 +2320,12 @@ Required workstreams and sequencing:
    this phase and remains the behavioral reference for how Phase 15 should be
    executed: extend existing config, execution-context, handler, and test
    owners instead of building a parallel subsystem.
-2. **Slice 2 — Live cancellation of running work** is the next required
-   workstream. It adds user-visible cancellation of active provider execution
-   and approval preflight without changing transport states, queue ownership,
-   or durable workflow families.
+2. **Slice 2 — Worker-owned live execution and cancellation** is the next
+   required workstream. It moves fresh provider-starting work off the Telegram
+   update handler path and makes the worker-owned execution lane the only owner
+   of active provider runs. User-visible live cancel must be built on that
+   ownership model; PTB dispatcher concurrency tricks are not an acceptable
+   design.
 3. **Slice 3 — Claude progress usability** follows Slice 2. It improves Claude
    progress structure by reusing the existing shared progress event family and
    renderer rather than adding a Claude-only rendering path.
@@ -2338,9 +2340,14 @@ Implementation rules:
   the authoritative seam.
 - This phase is explicitly about enhancing the current architecture, not
   building parallel capability systems. That means:
-  - reuse current handler and callback ingress
+  - reuse current handler and callback ingress as thin normalization/enqueue
+    owners, not as the owner of long-running provider execution
   - reuse current provider protocol and result types
-  - reuse the existing work queue and `_chat_lock` ownership model
+  - reuse the existing work queue as the primary owner of both fresh and
+    recovered provider-starting work
+  - reuse `_chat_lock` as the per-chat execution guard inside the worker-owned
+    path, not as a reason to keep provider execution inline in Telegram update
+    handlers
   - reuse the existing shared progress event family and renderer
   - enhance existing tests before creating a shadow suite
 - Do not force weak reuse when the concept genuinely needs a new local helper
@@ -2352,34 +2359,89 @@ Implementation rules:
 - Do not move progress or cancel orchestration into `request_flow.py`. That
   module remains pure business logic with no Telegram transport, progress, or
   subprocess ownership.
-- Do not add durable state, transport states, or a new FSM for live
-  cancellation in this phase. Cancellation of a running subprocess is a live
-  execution control problem, not a new durable workflow family.
+- Do not add a speculative new FSM or a second durable cancellation model for
+  live cancellation in this phase. Small durable metadata that distinguishes
+  fresh live work from replay/recovery work is allowed if it is required to
+  make the worker-owned path correct and testable.
 - Do not change the `ProgressSink` protocol to carry cancellation semantics.
   Keep rendering and control separate even when they are used together in the
   same execution path.
+- Do not rely on PTB `concurrent_updates`, custom update-processor tricks, or
+  direct handler concurrency as the production live-cancel mechanism.
+- Treat any existing cancel-priority processor, cutoff-map, or direct-handler
+  overlap experiment as rejected scaffolding, not as a partial delivery target
+  to harden.
 - Do not invent Claude progress semantics that the raw stream does not prove.
   If the stream does not clearly prove a `ToolFinish` or `CommandFinish`, do
   not synthesize one.
 
-#### Slice 2 — Live Cancellation Of Running Work
+#### Slice 2 — Worker-Owned Live Execution And Cancellation
 
 Problem statement:
 
-- `/cancel` currently clears pending approval/retry or credential setup only.
-- When a provider subprocess is actively running, `/cancel` cannot interrupt it
-  because the current command path acquires `_chat_lock` and waits behind the
-  very execution it is trying to stop.
+- Historically, `/cancel` only cleared pending approval/retry or credential
+  setup.
+- When a provider subprocess is actively running inside a Telegram update
+  handler, the dispatcher is blocked behind that live execution. PTB-level
+  concurrency workarounds either leave `/cancel` serialized and ineffective or
+  reopen broad update fan-out that can burn tokens and queue unintended runs.
+- The correct fix is to move provider-starting live work off the Telegram
+  update handler path and onto the existing durable worker-owned execution
+  lane, then make `/cancel` signal that worker-owned run.
+
+Current implementation status:
+
+- The core worker-owned redesign is now the active runtime shape for fresh
+  plain-message execution and approval preflight:
+  - fresh provider-starting messages are admitted durably with
+    `record_and_admit_message()`
+  - recovered stale claims are durably requeued with
+    `dispatch_mode='recovery'`
+  - the worker-owned path is the owner of fresh execution for those request
+    types
+  - `/cancel` can signal a live worker-owned run through `_LIVE_CANCEL`
+  - `/cancel` can also cancel an admitted-but-not-yet-running fresh queued
+    item through the durable queue
+  - credential-setup replies are handled inline after `record_update()` only
+    and are not enqueued as provider work
+  - Postgres fresh admission is serialized per chat with an advisory lock
+- Remaining work in this family is now:
+  - proof-hardening for the new queue/cancel/credential invariants
+  - completing worker-path ownership expansion where callback-driven execution
+    is still inline
+  - extracting a project-owned transport/output port plus simulator so the
+    real worker-owned path can be exercised through a realistic fake transport
+    instead of ad hoc PTB-shaped doubles
 
 Contracts in this slice:
 
-1. **Live cancel ingress contract**
-- `/cancel` during a live provider run must request cancellation immediately
-  rather than queueing behind `_chat_lock`.
+1. **Worker-owned execution contract**
+- Telegram update handlers for provider-starting work must normalize input,
+  persist/enqueue work, send any immediate UX response, and return promptly.
+- The only place that may call live provider execution owners such as
+  `execute_request()` or `request_approval()` for fresh work is the worker-owned
+  execution path.
+- Fresh live work and recovered/replay work must be explicitly distinguished.
+  They must not continue to share an ambiguous single dispatch meaning.
+- That distinction must be durable. Recovered stale claims must carry explicit
+  recovery routing metadata on the authoritative work item so restart recovery
+  can never silently auto-run old provider work as if it were fresh.
+
+2. **Live cancel ingress contract**
+- `/cancel` during a worker-owned live provider run must request cancellation
+  immediately without requiring PTB dispatcher concurrency.
 - `/cancel` when there is no live run must preserve the current pending/setup
   and no-op behavior exactly.
+- Fresh provider-starting message admission must be atomic at the durable queue
+  boundary. If the chat already has fresh provider work in `queued` or
+  `claimed`, the next fresh message must not be admitted as another runnable
+  provider item.
+- A second plain message while a live run is active, or while fresh provider
+  work is already queued for that chat, must not later reach the provider
+  accidentally. The shipped product policy in this phase is reject/coalesce,
+  not “busy now, run later” and not “queue another provider run behind it”.
 
-2. **Provider cancel outcome contract**
+3. **Provider cancel outcome contract**
 - Provider execution gains a typed, user-initiated cancel outcome distinct from:
   - timeout
   - typed resume failure
@@ -2388,12 +2450,17 @@ Contracts in this slice:
 
 Source of truth:
 
-- `_chat_lock` in `app/telegram_handlers.py` remains the owner of per-chat
-  serialization and work-item completion.
 - `work_queue` remains the owner of durable work-item lifecycle.
-- `execute_request()`, `request_approval()`, and replay execution in
-  `handle_recovery_callback()` remain the owners of terminal user-visible live
-  execution outcome.
+- The transport-store schema remains the owner of durable routing metadata for
+  fresh versus recovered work and of atomic per-chat fresh-work admission.
+- `worker_loop()` in `app/worker.py` and worker dispatch remain the owners of
+  pulling fresh and recovered work from the durable queue.
+- `_chat_lock` remains the owner of per-chat execution serialization, but now
+  inside the worker-owned execution path rather than as justification for
+  keeping provider execution inline in Telegram update handlers.
+- `execute_request()`, `request_approval()`, and replay execution remain the
+  owners of terminal user-visible live execution outcome, but they must be
+  entered from the worker-owned path for fresh work as well.
 - `RunResult` in `app/providers/base.py` remains the provider outcome type.
 - Provider subprocess lifecycle remains owned inside `app/providers/claude.py`
   and `app/providers/codex.py`.
@@ -2404,12 +2471,44 @@ Required implementation shape:
 - Extend the provider `run()` and `run_preflight()` contract to accept a
   separate cancel signal or execution-control object. Do **not** attach
   cancellation semantics to the `ProgressSink` protocol.
-- In `app/telegram_handlers.py`, add a small private live-execution registry
-  keyed by `chat_id`. Use it only for process-local cancellation signaling and
-  cleanup. It must not become a second durable state model.
-- Register the live execution record before the provider call and clear it in a
-  `finally` block on every exit path.
-- `/cancel` must use a fast path **outside** `_chat_lock`:
+- Add durable dispatch metadata to the work-item contract, with an explicit
+  column such as `dispatch_mode` whose shipped values in this phase are
+  `fresh` and `recovery`.
+- Make fresh provider-starting work worker-owned rather than inline:
+  - Telegram message/approval/retry ingress writes durable work and returns
+    quickly
+  - worker dispatch must be able to tell “fresh live execution” from
+    “recovered stale execution that needs recovery UX”
+- Move every provider-starting entry point onto the worker-owned path:
+  - fresh plain-message execution
+  - approval preflight
+  - approve-to-execute and retry-allow execution
+  - replay/recovery execution
+- Keep the required durable fresh-versus-recovered routing metadata on the
+  authoritative work-item/dispatch contract rather than inventing a
+  Telegram-only side channel.
+- `recover_stale_claims()` must durably requeue stale claimed message work as
+  recovery work, not as plain fresh queued work:
+  - `state = 'queued'`
+  - `worker_id = NULL`
+  - `claimed_at = NULL`
+  - `dispatch_mode = 'recovery'`
+- Add an atomic durable admission API for fresh provider-starting messages.
+  The admission decision must happen in one store transaction:
+  - `duplicate` if the update already exists
+  - `busy` if the chat already has fresh provider work in `queued` or
+    `claimed`
+  - `admitted` only if a new fresh work item was durably recorded
+- The handler busy decision must be based on that durable admission API, not on
+  `_LIVE_CANCEL`. `_LIVE_CANCEL` is too late for admission control because it
+  only exists after provider execution/preflight actually starts.
+- Add a small private live-execution registry keyed by `chat_id` in the
+  worker-owned execution layer. Use it only for process-local cancellation
+  signaling and cleanup. It must not become a second durable state model.
+- Register the live execution record immediately before the provider call and
+  clear it in a `finally` block on every exit path.
+- `/cancel` must use a fast path that only checks the worker-owned live
+  registry:
   - if a live execution exists, set the cancel signal immediately and return a
     user-facing cancellation-requested message
   - if no live execution exists, fall through to the current locked path for
@@ -2420,6 +2519,17 @@ Required implementation shape:
   - do not send the final result text
   - do not raise `LeaveClaimed`
   - let the work item complete normally
+- Remove any hidden production code path that drains worker execution inline
+  from `handle_message` for tests. Shared handler tests must drive the real
+  worker-owned path explicitly rather than relying on a secret alternate
+  runtime mode.
+- Do not use PTB dispatcher concurrency, custom update processors, cutoff maps,
+  or direct handler overlap as the production mechanism for dropping queued
+  work. Enforce the one-live-run-per-chat policy explicitly in the worker-owned
+  design.
+- Busy/coalesced user messaging must be truthful. Do not say a request is
+  “queued and will run next” unless a bounded queue policy was deliberately
+  implemented and covered by tests.
 - Provider state must not be destructively reset on user cancel. Only typed
   resume failure continues to justify provider-state reset.
 - Provider cancellation must not depend on “the next stdout line.” The provider
@@ -2432,7 +2542,16 @@ Affected code paths:
 - `app/providers/claude.py`
 - `app/providers/codex.py`
 - `app/telegram_handlers.py`
+- `app/worker.py`
+- `app/work_queue.py`
+- `app/work_queue_sqlite_impl.py`
+- `app/work_queue_pg.py`
+- `app/work_queue_sqlite.py`
+- `app/work_queue_postgres.py`
+- `app/db/postgres_migrate.py`
+- `app/main.py`
 - `app/user_messages.py`
+- `tests/support/handler_support.py`
 
 Failure-path rules:
 
@@ -2445,15 +2564,25 @@ Failure-path rules:
 
 Required invariants:
 
-- `/cancel` during live execution does not wait behind `_chat_lock`
+- `/cancel` during live execution does not depend on PTB dispatcher
+  concurrency and does not wait behind a long-running Telegram update handler
 - `/cancel` during pending approval/retry still behaves exactly as before
 - `/cancel` with no live execution and no pending/setup still shows the current
   nothing-to-cancel behavior
+- stale recovered message work never auto-runs as fresh provider work after
+  restart; it always routes to recovery UX first
+- no chat can accumulate more than one fresh provider-starting work item in
+  `queued` or `claimed` at a time
+- a second plain message during a live run, or while fresh provider work is
+  already queued for that chat, does not accidentally reach the provider later
+- fresh live work and stale recovered work take the correct distinct paths
 - cancelled execution does not leave the work item in `claimed`
 - cancelled execution does not send the final assistant reply
 - cancelled execution does not corrupt provider state; the next request works
   normally
 - live execution registry entries are always cleaned up
+- shared tests do not rely on hidden inline execution paths in production code
+- busy replies accurately describe rejection/coalescing behavior
 
 Tests required for Slice 2:
 
@@ -2461,16 +2590,43 @@ Tests required for Slice 2:
   `RunResult.cancelled=True` within bounded time
 - Contract test: cancel signal set during Codex execution returns
   `RunResult.cancelled=True` within bounded time
-- Handler integration: `/cancel` during live execution updates the status
+- Transport-store contract: stale claimed work recovered on restart returns to
+  `queued` with durable `dispatch_mode='recovery'`
+- Transport-store contract: fresh provider-starting message admission is atomic
+  and returns `duplicate`, `busy`, or `admitted` correctly
+- Transport-store contract: `busy` admission does not leave a second fresh
+  queued provider item for the same chat
+- Worker-path integration: fresh plain message is executed from the worker-owned
+  path, not inline in the Telegram handler
+- Worker-path integration: recovered stale message work sends replay/discard
+  notice and does not call the provider
+- Worker-path integration: `/cancel` during live execution updates the status
   message to cancelled and final result text is not sent
-- Handler integration: `/cancel` during approval preflight has the same
-  semantics
+- Worker-path integration: `/cancel` during approval preflight has the same
+  semantics on the worker-owned path
+- Transport-store/Postgres regression: two real connections racing
+  `record_and_admit_message()` for the same chat yield exactly one `admitted`
+  and one `busy`, with only one fresh runnable item remaining
+- Credential regression: while a real background worker is alive, a
+  credential-setup reply from the owning user is handled inline, creates no
+  provider work item, and never reaches the provider
+- Queue cancel regression: `/cancel` before worker claim moves the admitted
+  fresh item to terminal `failed/cancelled` state and provider call count
+  remains zero after worker drain
 - Handler integration: `/cancel` with no live execution preserves the current
   no-op behavior
+- Fan-out regression: while a live run is active, or while fresh work is
+  already durably queued for that chat, additional plain messages do not
+  increase provider call count and do not create another runnable fresh work
+  item for that chat
+- Distinction regression: fresh live work does not go through recovery-notice
+  UX; recovered stale work still does
 - Adjacent regression: cancelled execution does not corrupt provider state; the
   next request succeeds normally
 - Cleanup regression: the live cancel registry entry is removed on both
   cancellation and ordinary completion
+- Shared-handler regression: tests no longer depend on hidden inline worker
+  execution inside `handle_message`
 
 #### Slice 3 — Claude Progress Usability
 
@@ -2557,28 +2713,33 @@ Non-deliverables for Slice 2 and Slice 3:
 
 - no new transport states
 - no new FSM or new workflow library
-- no new durable state for live cancellation
+- no second durable cancellation system beyond the required durable
+  `dispatch_mode`/fresh-vs-recovered routing metadata
 - no new progress event family if the current one is sufficient
 - no Claude-specific Telegram rendering path
 - no parallel provider-progress system
 - no Codex provider behavior changes unless a shared invariant is found broken
+- no deferring durable recovery routing, atomic fresh admission, or removal of
+  hidden inline test execution from the shipped design
 
-#### Slice 4 — Cancel Concurrency Verification
+#### Slice 4 — Worker-Path Cancellation Verification
 
 Problem statement:
 
-- Slices 2 and 3 shipped the cancel mechanism and progress improvements, but
-  the test suite proves contracts in isolation only.  No test exercises the
-  actual cooperative concurrency that makes `/cancel` work: one coroutine
-  blocked in `execute_request` while a second coroutine runs `cmd_cancel` on
-  the same event loop.
+- Slice 2 moved fresh live execution onto the worker-owned path and Slice 3
+  improved progress rendering, but the test suite must now prove the real
+  worker-path concurrency and anti-fan-out contracts rather than direct handler
+  overlap or PTB dispatcher tricks.
+- The suite must also prove that durable recovery routing and atomic fresh
+  admission work under the real worker-owned design, not just in narrow unit
+  tests.
 - The readline/cancel race inside `_consume_stream` and `consume_stdout` is
   tested with pre-set events and fake processes whose `readline()` returns
   immediately.  Neither proves the race resolves correctly when `readline()`
   is actually blocked on a real file descriptor.
-- The two-stage UX ("Cancellation requested." then "Cancelled." on the
-  status message) is asserted in separate tests but never proven to happen
-  in the correct order from a single concurrent execution.
+- The anti-fan-out rule needs a real worker-path proof: while one run is live,
+  extra messages and `/cancel` must not result in multiple provider executions
+  unless an explicit bounded queue policy says so.
 
 This is a test-only slice.  No production code changes.
 
@@ -2587,22 +2748,29 @@ Contracts being verified (not changed):
 1. **readline/cancel race contract** — `asyncio.wait` with
    `FIRST_COMPLETED` resolves promptly when the cancel event fires while
    `readline()` is blocked on a real subprocess pipe.
-2. **Lock-free cancel ingress contract** — `cmd_cancel` completes and
-   delivers the user-facing ack while `_chat_lock` is held by
-   `execute_request`.
-3. **Two-stage UX ordering contract** — "Cancellation requested." is
-   delivered before "Cancelled." appears on the status message, from a
-   single concurrent execution.
+2. **Worker-path cancel ingress contract** — `/cancel` completes and delivers
+   the user-facing ack while a worker-owned live execution is active.
+3. **Anti-fan-out contract** — a second plain message during a live run does
+   not later execute accidentally.
+4. **Two-stage UX ordering contract** — "Cancellation requested." is delivered
+   before "Cancelled." appears on the status message, from a single real
+   worker-owned execution.
+5. **Recovery routing contract** — recovered stale claimed message work is
+   surfaced as replay/discard recovery, not auto-replayed as fresh work.
+6. **No hidden inline-path contract** — shared handler tests exercise the real
+   worker-owned path and do not rely on production-only switches that run the
+   provider inline from `handle_message`.
 
 Source of truth:
 
-- `_LIVE_CANCEL` in `app/telegram_handlers.py` is the in-memory cancel
-  registry.
+- the worker-owned live-execution registry (initially `_LIVE_CANCEL` or its
+  successor owner seam) is the in-memory cancel registry.
 - `_chat_lock` in `app/telegram_handlers.py` is the per-chat serialization
-  owner.
+  owner for worker-owned execution.
 - `_consume_stream` in `app/providers/claude.py` and `consume_stdout` in
   `app/providers/codex.py` own the readline/cancel race.
-- `cmd_cancel` in `app/telegram_handlers.py` owns the cancel fast path.
+- `worker_loop()` in `app/worker.py` owns the fresh-live-work execution lane.
+- `cmd_cancel` in `app/telegram_handlers.py` owns the live-cancel command path.
 
 Required tests:
 
@@ -2618,39 +2786,63 @@ Required tests:
    - Run the same test shape for Codex `_run_cmd` with a blocking
      subprocess and injected cancel event.
 
-2. **Lock-free cancel dispatch.**
+2. **Worker-path cancel dispatch.**
    - Use a `FakeProvider` whose `run()` awaits a gate event before
-     returning, so `execute_request` holds `_chat_lock` for a controlled
-     duration.
-   - Use `asyncio.gather` to run `handle_message` (which acquires the
-     lock and blocks in `run()`) and a helper that sends `/cancel` then
-     sets the gate.
-   - Assert `cmd_cancel` delivered "Cancellation requested." before
-     `handle_message` returned.
+     returning, so worker-owned execution holds the live registry and
+     `_chat_lock` for a controlled duration.
+   - Start fresh work through the real worker-owned path, not direct
+     overlapping handler calls.
+   - Send `/cancel` through the ordinary command path while the worker-owned
+     run is active.
    - Assert the cancel event was set and `run()` saw it.
-   - Assert `handle_message` completed with the cancelled outcome (status
-     message shows "Cancelled.", no final text sent).
-   - Use `_StickyReplyMessage` for the status-message oracle.
+   - Assert the user-facing "Cancellation requested." ack arrived before the
+     worker-owned run completed.
+   - Assert the live run ended with the cancelled outcome (status message
+     shows "Cancelled.", no final text sent).
 
-3. **Two-stage UX ordering.**
+3. **Anti-fan-out under spam.**
+   - While a worker-owned run is active, send one or more additional plain
+     messages to the same chat.
+   - Assert those extra messages do not increase provider call count.
+   - Assert the user gets the expected busy/coalesced response and no later
+     accidental provider execution occurs after cancellation/completion.
+
+4. **Recovery routing under restart.**
+   - Create a claimed stale message item and recover it through the durable
+     store.
+   - Assert the recovered item returns to `queued` with durable
+     `dispatch_mode='recovery'`.
+   - Dispatch it through the real worker-owned path.
+   - Assert the provider is not called.
+   - Assert replay/discard notice is sent and the item moves to
+     `pending_recovery`.
+
+5. **Two-stage UX ordering.**
    - From the same test as (2), collect all user-visible messages in
-     delivery order.
+     delivery order from the worker-owned path.
    - Assert "Cancellation requested." appears strictly before "Cancelled."
      in the sequence.
    - Assert no other cancel-related text appears between them.
 
-4. **Cancel mid-stream (partial output).**
+6. **Cancel mid-stream (partial output).**
    - Spawn a subprocess that emits a few lines of JSON then blocks.
    - Set cancel after partial output has been consumed.
    - Assert accumulated text contains the partial output.
    - Assert `RunResult.cancelled` is True.
    - Assert no text corruption (partial line, truncated JSON).
 
-5. **Adjacent: cancel does not interfere with non-cancel paths.**
+7. **Adjacent: cancel does not interfere with non-cancel paths.**
    - After the concurrency cancel test completes, send a new message
      to the same chat.
    - Assert the new request executes normally (not cancelled).
    - Assert `_LIVE_CANCEL` is clean for that chat.
+
+8. **No hidden inline-path proof.**
+   - Shared handler tests that need full execution must explicitly drain the
+     worker path rather than depending on production code that secretly runs
+     provider work inline from `handle_message`.
+   - Assert no shared test harness switch is required to make handler tests see
+     provider execution.
 
 Failure-path coverage:
 
@@ -2660,7 +2852,7 @@ Failure-path coverage:
   after a fast-exiting subprocess.
 - Double `/cancel` during a single execution: the event is already set,
   `cmd_cancel` replies "Cancellation requested." again idempotently.
-  Existing test covers this; concurrency test (2) can optionally send
+  Existing test covers this; worker-path test (2) can optionally send
   two `/cancel` commands.
 
 Implementation rules:
@@ -2671,39 +2863,179 @@ Implementation rules:
   external binary dependencies.
 - All concurrency tests have explicit timeouts via `asyncio.wait_for`
   so a broken race fails fast (2–5s) rather than hanging.
-- Tests go in `tests/test_cancel.py` as a new `TestCancelConcurrency`
-  class.
+- Tests live in `tests/test_cancel.py` plus adjacent worker-path suites if a
+  given contract is more naturally owned there; do not force a fake “single
+  class” boundary if it weakens worker-path realism.
+- Recovery-routing tests belong in the existing recovery/work-item integration
+  suites, not in a dispatcher-only micro-suite that ignores the durable store.
 - No production code changes in this slice.  If a test reveals a bug,
-  the fix goes in a subsequent slice with its own preamble.
+  the fix goes in a subsequent Slice 2 follow-up under the worker-owned
+  execution design, not via PTB dispatcher-concurrency hacks.
 
 Non-deliverables:
 
 - No cross-process or durable cancel testing (cancel is in-memory by
   design; restart recovery is already tested elsewhere).
-- No worker-path cancel test (worker calls `execute_request` the same
-  way; the cancel event is registered by `execute_request` itself).
-- No Telegram network I/O or real PTB dispatcher in these tests.
+- No PTB dispatcher-concurrency proof-by-direct-handler-overlap.
+- No Telegram network I/O beyond the existing test doubles.
+
+#### Slice 5 — Transport Port And Simulator
+
+Problem statement:
+
+- The runtime is now centered on worker-owned execution and queue-owned
+  admission, but the transport seam is still only partially explicit:
+  inbound Telegram payloads are normalized into `Inbound*` dataclasses, while
+  outbound behavior still hangs off Telegram-shaped message/query/bot objects
+  and test doubles.
+- The current tests prove many worker-path contracts, but there is still no
+  single project-owned simulator that:
+  - injects inbound events over time
+  - runs the real worker loop
+  - records one ordered user-visible output log
+  - exercises the true request → long-running execution → `/cancel` path
+- The next architecture step should therefore treat transport abstraction as
+  both:
+  - product architecture for future transports
+  - test infrastructure for realistic simulated-transport E2E-style coverage
+
+Contracts in this slice:
+
+1. **Project-owned transport contract**
+- The runtime owns a transport-neutral inbound envelope around the existing
+  `InboundMessage` / `InboundCommand` / `InboundCallback` family.
+- The runtime also owns a transport-neutral outbound conversation port for:
+  - sending text
+  - sending files/images
+  - editing status messages
+  - answering user actions
+  - exposing capabilities and one ordered user-visible event stream in tests
+- Telegram becomes one adapter implementation of that contract, not the
+  contract itself.
+
+2. **Simulator contract**
+- A project-owned simulator must be able to inject inbound events over time,
+  run the real worker loop, and expose one ordered output log without using
+  PTB internals as the primary realism target.
+- The canonical simulated-transport cancel test must prove the real
+  production path:
+  - message admitted
+  - worker-owned long-running provider starts
+  - `/cancel` arrives during the run
+  - ordering and terminal state are correct
+
+3. **Future-transport contract**
+- The transport port must be small and capability-driven so future adapters
+  such as Slack, SMS, WhatsApp, iMessage, or email could implement it later.
+- This slice does **not** implement those adapters now. It only defines and
+  proves the shared contract.
+
+Source of truth:
+
+- `app/transport.py` remains the owner of normalized inbound event types.
+- New transport-port modules own the outbound conversation contract and any
+  transport-neutral envelope wrapper added in this slice.
+- Telegram adapter code remains the owner of PTB-specific normalization and
+  PTB-specific send/edit/callback wiring.
+- The simulator is another adapter over that same project-owned transport
+  port, not a fake PTB dispatcher.
+
+Required implementation shape:
+
+- Add a small transport-core seam, for example:
+  - `InboundEnvelope`
+  - `ConversationIO`
+  - `EditableMessageHandle`
+  - `TransportCapabilities`
+- Reuse the existing `InboundMessage`, `InboundCommand`, and `InboundCallback`
+  types rather than creating a second inbound event family.
+- Factor Telegram outbound behavior behind that port so handler-owned output
+  and worker-owned output share the same project-owned contract.
+- Replace the ad hoc `_BotMessage`-style special casing with the same
+  transport-owned output abstraction the handler path uses.
+- Keep Telegram-specific concerns such as callback payload encoding in the
+  Telegram adapter layer.
+- Build a simulator that:
+  - injects inbound events
+  - starts/stops the real worker loop
+  - records ordered sends/edits/actions in one log
+  - supports waiting on conditions such as “provider started” or “text X
+    appeared”
+- Do not make PTB `Application` internals the primary simulator target.
+- Do not build a giant generic omni-channel framework; only extract the
+  contract needed by today’s runtime and tests.
+
+Affected code paths:
+
+- `app/transport.py`
+- `app/telegram_handlers.py`
+- `app/worker.py`
+- new transport-port module(s) under `app/`
+- `tests/support/handler_support.py`
+- new simulator support module(s) under `tests/support/`
+
+Tests required for Slice 5:
+
+- Simulator E2E-ish test: message → long-running provider → `/cancel` through
+  the real worker-owned path, with one ordered output log proving:
+  - cancellation ack appears
+  - cancelled terminal status appears later
+  - provider call count is 1
+  - queue state and `_LIVE_CANCEL` cleanup are correct
+- Simulator regression: cancel before worker claim produces the queued-cancel
+  terminal state and provider call count remains 0
+- Simulator regression: second fresh message while one run is admitted/active
+  gets the busy/coalesced response and never becomes a second runnable fresh
+  item
+- Simulator regression: credential-setup reply while a worker is alive stays
+  off the queue and never reaches the provider
+- Simulator regression: recovered stale work with
+  `dispatch_mode='recovery'` shows replay/discard recovery UX and never
+  auto-runs as fresh work
+
+Non-deliverables:
+
+- No additional transport adapter implementations yet
+- No PTB-dispatcher realism-for-its-own-sake harness
+- No second inbound event family or second worker queue
+- No transport-specific business-logic fork for Telegram versus simulator
 
 Tests required for Phase 15 generally:
 
 - Real handler/request-flow tests
+- Real transport-store contract tests for fresh admission and recovery routing
 - Contract tests for user-visible behavior and opt-in policy
 - Regression tests for public/trust restrictions and execution-context
   invalidation
-- Slice 2 provider and handler cancel tests
+- Slice 2 provider, transport-store, worker-path, and handler cancel tests
 - Slice 3 Claude trace and progress contract tests
 
 Done when:
 
-- Slice 2 ships live cancellation of active provider execution and approval
-  preflight without introducing new durable state, queue states, or a parallel
-  cancellation system.
+- Slice 2 ships worker-owned live execution and live cancellation of active
+  provider execution and approval preflight without introducing a second
+  cancellation system or unsafe PTB update concurrency, and without leaving
+  dispatcher-concurrency or cutoff-map experiments in the shipped path.
+- Slice 2 also ships durable `dispatch_mode` routing for recovered stale work,
+  atomic per-chat fresh-work admission, truthful busy/coalesced messaging, and
+  no hidden production code path that runs provider execution inline for tests.
 - Slice 3 ships richer Claude progress by reusing the existing shared progress
   event family and renderer without degrading text delivery or Codex behavior.
-- Slice 4 proves the cancel mechanism works under real cooperative concurrency:
-  readline/cancel race with real subprocesses, lock-free dispatch, two-stage
-  UX ordering, and partial-output cancel.  Test-only slice, no production
-  code changes.
+- Slice 4 proves the cancel mechanism works under real worker-owned
+  cooperative concurrency: readline/cancel race with real subprocesses,
+  worker-path cancel ingress, anti-fan-out under spam, recovery routing,
+  two-stage UX ordering, no hidden inline-path masking, and partial-output
+  cancel. Test-only slice, no production code changes.
+- Slice 5 ships a small project-owned transport/output port plus a simulator
+  that can drive the real worker-owned runtime through a realistic fake
+  transport. Telegram remains one adapter over that port; future transports
+  can implement the same contract later without forcing PTB internals into the
+  business-logic core. **Done (partial):** Proof-hardening (credential suite,
+  queued-cancel contract/Postgres, comments), transport types/ports, admission
+  seam (InboundEnvelope in production ingress), Telegram adapter, and canonical
+  E2E tests in place. Simulator is a handler-level harness (inject via
+  handle_message/cmd_*; ordered output log; no transport-level ingress or
+  callback injection yet). See STATUS-commercial-polish.md and ARCHITECTURE.md.
 - New implementation work for Phase 15 continues to extend the current owners
   instead of building shadow abstractions around them.
 

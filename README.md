@@ -32,7 +32,7 @@ use. The standard setup is one guided script.
 
 2. **Create `.env.bot`**
 
-   Minimal example:
+   Minimal private example:
 
    ```bash
    TELEGRAM_BOT_TOKEN=<from @BotFather>
@@ -42,6 +42,17 @@ use. The standard setup is one guided script.
 
    `BOT_ALLOWED_USERS` should be your own Telegram user ID so the bot starts in
    a simple private mode.
+
+   If you prefer an open bot for local testing, this is also valid:
+
+   ```bash
+   TELEGRAM_BOT_TOKEN=<from @BotFather>
+   BOT_PROVIDER=codex
+   BOT_ALLOW_OPEN=1
+   ```
+
+   Leave `BOT_WORKING_DIR` unset unless you actually need it. If you do set it
+   for the Docker path, use `/home/bot`, not your host home directory.
 
 3. **Run the guided setup**
 

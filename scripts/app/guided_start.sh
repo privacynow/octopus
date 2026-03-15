@@ -96,16 +96,17 @@ fi
 # 4. Start bot and verify it stayed up
 echo ""
 echo "Step 3/3: Starting bot (background service)..."
-docker compose --profile bot --env-file .env.bot up -d bot
+docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot --env-file .env.bot up -d bot
 
 echo "Waiting a few seconds to confirm the bot stayed up..."
 sleep 5
-if docker compose --profile bot ps -a --format '{{.Status}}' bot 2>/dev/null | grep -q Exited; then
+if docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot ps -a --format '{{.Status}}' bot 2>/dev/null | grep -q Exited; then
   echo "Bot failed to start (container exited). Last logs:" >&2
-  docker compose --profile bot logs --tail=40 bot >&2
+  docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot logs --tail=40 bot >&2
   exit 1
 fi
 
 echo ""
 echo "Bot started. Message it in Telegram to use it."
-echo "Logs: docker compose --profile bot logs -f bot   Stop: docker compose --profile bot stop bot"
+echo "Logs: docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot logs -f bot"
+echo "Stop: docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot stop bot"

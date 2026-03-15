@@ -114,7 +114,11 @@ def main() -> None:
         if errors:
             for e in errors:
                 print(f"  FAIL: {e}", file=sys.stderr)
-            print("Run: docker compose --profile tools run --rm db-bootstrap (or db-update). See README.", file=sys.stderr)
+            print(
+                "Run: docker compose --project-directory . -f infra/compose/docker-compose.yml "
+                "--profile tools run --rm db-bootstrap (or db-update). See README.",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
     if args.doctor:

@@ -9,6 +9,8 @@ import tempfile
 import threading
 from pathlib import Path
 
+import pytest
+
 from app.registry import RegistrySkill, fetch_index, search_index, download_artifact
 from app.store import hash_directory
 
@@ -27,7 +29,13 @@ def _make_skill_tarball(skill_dir: Path, tarball_path: Path) -> None:
 def _serve_dir(directory: str) -> tuple[http.server.HTTPServer, str]:
     """Start a simple HTTP server serving files from directory. Returns (server, base_url)."""
     handler = http.server.SimpleHTTPRequestHandler
-    server = http.server.HTTPServer(("127.0.0.1", 0), lambda *args, directory=directory, **kwargs: handler(*args, directory=directory, **kwargs))
+    try:
+        server = http.server.HTTPServer(
+            ("127.0.0.1", 0),
+            lambda *args, directory=directory, **kwargs: handler(*args, directory=directory, **kwargs),
+        )
+    except PermissionError as exc:
+        pytest.skip(f"Local HTTPServer bind not permitted in this environment: {exc}")
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

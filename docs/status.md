@@ -212,6 +212,7 @@ Current as of 2026-03-15. Tracks progress against [plan.md](plan.md).
     Postgres bootstrap path
   - `db-bootstrap`, `db-update`, and `db-doctor` remain explicit repo-owned
     Postgres workflows
+  - Compose entrypoints now live under `infra/compose/`
 - The **supported bot image** is a **real provider-enabled image** (includes the chosen Claude or Codex CLI). Built via repo-owned script from `BOT_PROVIDER` (e.g. `./scripts/provider/build_bot_image.sh`); operators do not choose Docker targets manually. The stub-provider image (`infra/docker/Dockerfile.runnable`) exists only for **test/dev smoke** (e.g. E2E when real provider is not available) and is not the supported runtime.
 - Zero-to-running: clone → create `.env.bot` → `./scripts/app/guided_start.sh`.
   Optional Postgres adds the Postgres bootstrap/update/doctor step before bot
@@ -327,7 +328,7 @@ Executed 2026-03-13. Scope: Docker/runtime only; no user-facing polish, no Phase
 | Milestone | Delivered |
 |-----------|-----------|
 | **A1. Supported runnable image** | **Real** provider-enabled image: `infra/docker/Dockerfile.bot` (base + provider install via `scripts/provider/install_provider_claude.sh`, `scripts/provider/install_provider_codex.sh`). `./scripts/provider/build_bot_image.sh` selects target from `BOT_PROVIDER`. Stub image (`infra/docker/Dockerfile.runnable`) and `bot-stub` Compose service (profile `stub`) for **test/dev-only** (E2E_USE_STUB_IMAGE=1). |
-| **A2. Clean zero-to-running path** | Flow: clone → Postgres → bootstrap → doctor → `.env.bot` → **./scripts/provider/build_bot_image.sh** → start bot container. One README path; build complexity in script and deeper docs. E2E: bootstrap/doctor/update; `test_compose_bot_image_has_provider` (real image has provider binary); `test_compose_bot_startup_validates_schema` (real image); `test_compose_bot_stub_smoke` (test-only). |
+| **A2. Clean zero-to-running path** | Flow: clone → create `.env.bot` → `./scripts/app/guided_start.sh`. Optional Postgres adds `./scripts/db/dev_up_postgres.sh` before bot startup. Compose entrypoints live under `infra/compose/`. E2E: bootstrap/doctor/update; `test_compose_bot_image_has_provider` (real image has provider binary); `test_compose_bot_startup_validates_schema` (real image); `test_compose_bot_stub_smoke` (test-only). |
 | **A3. Docker config and onboarding simplification** | One `.env.bot` path. Config errors mention `.env.bot` and `./scripts/provider/build_bot_image.sh`. DB CLI message for missing `BOT_DATABASE_URL` points to Docker vs host-run. |
 | **A4. Docker usability hardening** | Stabilization; docs truthful (supported = real provider image; stub = test-only). |
 

@@ -9,7 +9,10 @@ before they can get started.
 from pathlib import Path
 
 # Canonical Compose ordering: --env-file must come before run (Phase 14 follow-up).
-_VALID_FULL_APP_DOCTOR = "docker compose --profile bot --env-file .env.bot run --rm bot python -m app.main --doctor"
+_VALID_FULL_APP_DOCTOR = (
+    "docker compose --project-directory . -f infra/compose/docker-compose.yml "
+    "--profile bot --env-file .env.bot run --rm bot python -m app.main --doctor"
+)
 _INVALID_ORDERING = "run --rm --env-file .env.bot"
 
 

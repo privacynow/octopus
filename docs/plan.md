@@ -133,9 +133,9 @@ The product is complete when these capability areas are in place.
 ## Roadmap Rules
 
 - The roadmap is one strict execution order, not priority buckets.
-- Phases 1-12 are sealed as shipped history.
-- New roadmap work begins at Phase 13.
-- The roadmap after Phase 12 is now split by **capability tier**, not by
+- Phases 1-14 are sealed as shipped history.
+- Phase 15 is the active roadmap phase.
+- From Phase 13 onward, the roadmap is split by **capability tier**, not by
   database ideology:
   - **local/product track first**: backend-neutral product work plus a
     first-class Local Runtime mode
@@ -145,10 +145,9 @@ The product is complete when these capability areas are in place.
   uniqueness.
 - `content dedup` means optional suppression of identical consecutive
   messages. It is not part of the core transport contract.
-- **Current shipped state:** Phase 12 runtime is Postgres-only.
-- **Roadmap direction after Phase 12:** restore a first-class **Local Runtime**
-  mode, with SQLite as the default backend for both Docker and host
-  deployments, behind backend-neutral storage/runtime contracts.
+- **Current shipped state:** Local Runtime is the supported deployment mode,
+  with SQLite as the default backend and Postgres as a supported alternate
+  backend under the same product contract.
 - Shared Postgres queue authority is no longer the immediate universal next
   step; it is deferred to the end of the roadmap as an advanced
   **Shared Runtime** capability tier.
@@ -173,9 +172,9 @@ This is the authoritative phase sequence.
 | 10 | Structural hardening, invariants, and test ownership | Sealed / shipped |
 | 11 | Workflow ownership extraction | Sealed / shipped |
 | 12 | Postgres runtime cutover | Sealed / shipped |
-| 13 | Storage backend abstraction and Local Runtime mode | Remaining |
-| 14 | Product polish on local foundations | Remaining |
-| 15 | Behavior extensions | Remaining |
+| 13 | Storage backend abstraction and Local Runtime mode | Sealed / shipped |
+| 14 | Product polish on local foundations | Sealed / shipped |
+| 15 | Behavior extensions | In progress |
 | 16 | Registry trust and governance | Remaining |
 | 17 | Usage accounting, quotas, and billing | Remaining |
 | 18 | Shared Runtime: Postgres queue authority in webhook mode | Remaining |
@@ -183,10 +182,9 @@ This is the authoritative phase sequence.
 
 ---
 
-## Sealed Phases 1-12
+## Sealed Phases 1-14
 
-Phases 1-12 are shipped and sealed. They stay here as historical reference,
-but the active roadmap begins at Phase 13.
+Phases 1-14 are shipped and sealed. They stay here as historical reference.
 
 | Phase | Historical source | What shipped | Lasting lesson |
 |------:|-------------------|--------------|----------------|
@@ -202,6 +200,8 @@ but the active roadmap begins at Phase 13.
 | 10 | Former Phase H plus later hardening/testing work | Invariants, owner suites, execution-context hardening, and test isolation. | Confidence comes from explicit ownership and invariant tests, not from ever-growing overflow suites. |
 | 11 | Phase 11 (this plan) | Workflow ownership extraction: transport and pending_request state machines (python-statemachine), single claim and single insert paths, repository-owned CAS and idempotency, versioned transport schema (validate-only for existing DBs), impossible rejections fatal, chat integrity, strict replay/supersede/recover helpers. | Extract workflow ownership before database migration so the new backend does not inherit open-coded transition logic. Library owns graph and guards; repository owns SQL and already_handled. |
 | 12 | Phase 12 (this plan) | Postgres runtime cutover: Postgres-backed session and transport stores shipped, `BOT_DATABASE_URL` required at startup, validate-only runtime startup, explicit DB bootstrap/update/doctor commands, Postgres integration suites, and Compose-based tooling/E2E layer. | Split runtime ownership cleanly: infrastructure provides the database, repo-owned commands bootstrap/update/doctor it, and the app validates then runs. |
+| 13 | Phase 13 (this plan) | Storage backend abstraction and Local Runtime mode: SQLite became the default backend, Postgres stayed supported through the same storage and transport contracts, and startup/E2E/docs shifted to a SQLite-first local path. | Backend abstraction is valuable only when the product contract stays the same above the storage seam. |
+| 14 | Phase 14 (this plan) | Product polish on local foundations: operator health clarity, dead-end command fixes, command-specific actionability, command/callback parity, and help/discoverability hardening. | Product polish matters most when it removes dead ends and makes the main path obvious. |
 
 The archived roles/skills docs remain as historical appendices for now, but
 their product-level content is already absorbed here under Phases 3-5.
@@ -584,13 +584,18 @@ blurring the audience.
 
 ---
 
-## Remaining Phases
+## Detailed Phase Specifications
 
-These phases are the active roadmap. Every still-relevant deferred or future
-item belongs somewhere in this ordered sequence. Phase 12 is sealed. The next
-numbered infrastructure phase is Phase 13, but work should not start there
-immediately: the required pre-Phase-13 execution program below must be
-completed first.
+The remaining sections preserve the detailed specification for later-phase
+work. Phase 11 and Phase 12 remain here because their contracts still shape
+everything that follows. Phase 13 and Phase 14 are now shipped but stay here
+as design reference. Phase 15 is the active phase. Phases 16-19 are still
+future roadmap work.
+
+Where a subsection says "before Phase 13" or similar, read it as archived
+decision record from the point in time when that gate was active. Those
+sections are kept because they explain why the current roadmap looks the way it
+does, not because they are still live instructions.
 
 ### Phase 11 - Workflow Ownership Extraction (Sealed)
 
@@ -1675,7 +1680,7 @@ Done when:
 - Interrupted runs, approval flows, and long-running tasks feel understandable
   rather than “system-like.”
 
-#### Milestone E - Usability Hardening Before Phase 13
+#### Milestone E - Usability Hardening Before Phase 13 (historical, shipped)
 
 Objective:
 
@@ -2128,7 +2133,7 @@ Done when:
 - At that point, and only at that point, should work move to
   **Phase 13 - Storage backend abstraction and Local Runtime mode**.
 
-#### Gate Before Phase 13
+#### Gate Before Phase 13 (historical)
 
 Do not start Phase 13 until all of the following are true:
 

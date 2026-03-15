@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Tests for setup.sh — validates the wizard flow and generated configs.
+# Tests for scripts/host/setup_instance.sh — validates the wizard flow and generated configs.
 # Uses a mock validate_token to avoid real credentials and live API calls.
+# Runs under a writable XDG_CONFIG_HOME so we never write to real ~/.config.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CONFIG_DIR="$HOME/.config/telegram-agent-bot"
+# Writable temp config root; setup_instance.sh will use XDG_CONFIG_HOME/telegram-agent-bot
+TEST_XDG_ROOT=""
+CONFIG_DIR=""
 PASS=0
 FAIL=0
 
@@ -35,17 +38,27 @@ check_contains() {
 }
 
 cleanup() {
-    rm -f "$CONFIG_DIR/test-setup-"*.env
-    rm -f "$REPO_DIR/.setup-test-patched.sh"
+    rm -f "$CONFIG_DIR/test-setup-"*.env 2>/dev/null || true
+    rm -f "$REPO_DIR/scripts/host/.setup-test-patched.sh"
     # Stop any test services we may have started
     systemctl --user stop "telegram-agent-bot@test-setup-launch.service" 2>/dev/null || true
     systemctl --user disable "telegram-agent-bot@test-setup-launch.service" 2>/dev/null || true
 }
-trap cleanup EXIT
+on_exit() {
+    cleanup
+    [ -n "$TEST_XDG_ROOT" ] && [ -d "$TEST_XDG_ROOT" ] && rm -rf "$TEST_XDG_ROOT"
+}
+trap on_exit EXIT
 
-# --- Create patched setup.sh with mock validate_token ---
-# Place it inside the repo so REPO_DIR resolves correctly.
-PATCHED_SETUP="$REPO_DIR/.setup-test-patched.sh"
+# Create writable temp config root and export for setup script
+TEST_XDG_ROOT="$(mktemp -d)"
+export XDG_CONFIG_HOME="$TEST_XDG_ROOT/xdg-config"
+mkdir -p "$XDG_CONFIG_HOME"
+CONFIG_DIR="$XDG_CONFIG_HOME/telegram-agent-bot"
+
+# --- Create patched setup_instance.sh with mock validate_token ---
+# Place it under scripts/host so REPO_DIR inside the script resolves to repo root.
+PATCHED_SETUP="$REPO_DIR/scripts/host/.setup-test-patched.sh"
 
 sed '/^validate_token() {$/,/^}$/c\
 validate_token() {\
@@ -59,7 +72,7 @@ validate_token() {\
     else\
         echo "REJECTED"\
     fi\
-}' "$REPO_DIR/setup.sh" > "$PATCHED_SETUP"
+}' "$REPO_DIR/scripts/host/setup_instance.sh" > "$PATCHED_SETUP"
 chmod +x "$PATCHED_SETUP"
 
 # Also define the mock for direct unit tests
@@ -112,10 +125,10 @@ validate_token() {\
     else\
         echo "REJECTED"\
     fi\
-}' "$REPO_DIR/setup.sh" > "$PATCHED_SETUP"
+}' "$REPO_DIR/scripts/host/setup_instance.sh" > "$PATCHED_SETUP"
 chmod +x "$PATCHED_SETUP"
 
-output=$(echo -e "$FAKE_TOKEN\nclaude\nclaude-opus-4-6\n@alice,@bob\n\n\nn" | "$PATCHED_SETUP" test-setup-claude 2>&1)
+output=$(echo -e "$FAKE_TOKEN\nclaude\nclaude-opus-4-6\n@alice,@bob\n\n\nn" | env XDG_CONFIG_HOME="$XDG_CONFIG_HOME" "$PATCHED_SETUP" test-setup-claude 2>&1)
 
 check_contains "wizard shows BotFather link" "$output" "https://t.me/BotFather"
 check_contains "wizard shows step-by-step" "$output" "/newbot"
@@ -131,7 +144,7 @@ check_contains "summary shows timeout" "$output" "Timeout:        3600s"
 
 # Decline launch shows manual steps
 check_contains "shows manual launch" "$output" "Manual launch"
-check_contains "shows doctor command" "$output" "doctor.sh test-setup-claude"
+check_contains "shows doctor command" "$output" "doctor.sh"
 
 # Verify generated config
 ENV_FILE="$CONFIG_DIR/test-setup-claude.env"
@@ -156,7 +169,7 @@ echo
 echo "=== Wizard: codex instance ==="
 
 # Input: token, provider, model, allowed users, decline launch
-output=$(echo -e "$FAKE_TOKEN\ncodex\ngpt-5.4\n123456789\n\n\nn" | "$PATCHED_SETUP" test-setup-codex 2>&1)
+output=$(echo -e "$FAKE_TOKEN\ncodex\ngpt-5.4\n123456789\n\n\nn" | env XDG_CONFIG_HOME="$XDG_CONFIG_HOME" "$PATCHED_SETUP" test-setup-codex 2>&1)
 
 ENV_FILE="$CONFIG_DIR/test-setup-codex.env"
 check "codex config created" "$(test -f "$ENV_FILE" && echo yes)" "yes"
@@ -175,7 +188,7 @@ echo "=== Wizard: existing config is not overwritten ==="
 
 echo "# canary" >> "$CONFIG_DIR/test-setup-codex.env"
 # Pipe "n" to decline launch/restart prompt
-output=$(echo -e "n" | "$PATCHED_SETUP" test-setup-codex 2>&1)
+output=$(echo -e "n" | env XDG_CONFIG_HOME="$XDG_CONFIG_HOME" "$PATCHED_SETUP" test-setup-codex 2>&1)
 check_contains "skips existing config" "$output" "already exists"
 check_contains "shows existing config summary" "$output" "Current configuration"
 check_contains "shows existing provider" "$output" "Provider:"
@@ -186,7 +199,7 @@ echo "=== Wizard: claude defaults model when blank ==="
 
 rm -f "$CONFIG_DIR/test-setup-default.env"
 # Input: token, provider, blank model (defaults), allowed users, decline launch
-output=$(echo -e "$FAKE_TOKEN\nclaude\n\n@user\n\n\nn" | "$PATCHED_SETUP" test-setup-default 2>&1)
+output=$(echo -e "$FAKE_TOKEN\nclaude\n\n@user\n\n\nn" | env XDG_CONFIG_HOME="$XDG_CONFIG_HOME" "$PATCHED_SETUP" test-setup-default 2>&1)
 
 ENV_FILE="$CONFIG_DIR/test-setup-default.env"
 model_val=$(grep "^BOT_MODEL=" "$ENV_FILE" | cut -d= -f2)
@@ -197,7 +210,7 @@ echo "=== Wizard: blank allowed users is ok ==="
 
 rm -f "$CONFIG_DIR/test-setup-nouser.env"
 # Input: token, provider, blank model, blank users, decline launch
-output=$(echo -e "$FAKE_TOKEN\nclaude\n\n\n\n\nn" | "$PATCHED_SETUP" test-setup-nouser 2>&1)
+output=$(echo -e "$FAKE_TOKEN\nclaude\n\n\n\n\nn" | env XDG_CONFIG_HOME="$XDG_CONFIG_HOME" "$PATCHED_SETUP" test-setup-nouser 2>&1)
 
 ENV_FILE="$CONFIG_DIR/test-setup-nouser.env"
 # When blank, the line keeps the inline comment from .env.example — just check no real value was set
@@ -212,7 +225,7 @@ echo "=== Wizard: accept launch ==="
 
 rm -f "$CONFIG_DIR/test-setup-launch.env"
 # Input: token, provider, model, allowed users, accept launch
-output=$(echo -e "$FAKE_TOKEN\nclaude\nclaude-opus-4-6\n@testuser\n\n\ny" | "$PATCHED_SETUP" test-setup-launch 2>&1) || true
+output=$(echo -e "$FAKE_TOKEN\nclaude\nclaude-opus-4-6\n@testuser\n\n\ny" | env XDG_CONFIG_HOME="$XDG_CONFIG_HOME" "$PATCHED_SETUP" test-setup-launch 2>&1) || true
 
 check_contains "runs health check" "$output" "health check"
 # Systemd may not be available in test env — script should degrade gracefully.
@@ -221,9 +234,9 @@ check_contains "runs health check" "$output" "health check"
 #   2. Systemd present, health check passes → attempts systemd install
 #   3. Systemd present, health check fails → shows manual launch with run.sh
 if echo "$output" | grep -qF "systemd user services are not available"; then
-    check_contains "shows fallback run command" "$output" "run.sh"
+    check_contains "shows fallback run command" "$output" "scripts/app/run.sh"
 elif echo "$output" | grep -qF "Health check failed"; then
-    check_contains "health failure shows manual launch" "$output" "run.sh"
+    check_contains "health failure shows manual launch" "$output" "scripts/app/run.sh"
 else
     check_contains "attempts systemd install" "$output" "systemd"
 fi

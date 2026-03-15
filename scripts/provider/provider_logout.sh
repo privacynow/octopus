@@ -5,10 +5,10 @@
 # Providers may store auth in other paths; if logout seems ineffective, re-login or check provider docs.
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
 # shellcheck source=scripts/lib_env.sh
-. "$(dirname "$0")/lib_env.sh"
+. "$REPO_DIR/scripts/lib_env.sh"
 
 check_env_bot_required
 provider=$(get_bot_provider)
@@ -30,4 +30,4 @@ docker compose --profile bot --env-file .env.bot run --rm bot-provider sh -c '
   fi
 '
 
-echo "Done. Run ./scripts/provider_login.sh to authenticate again."
+echo "Done. Run ./scripts/provider/provider_login.sh to authenticate again."

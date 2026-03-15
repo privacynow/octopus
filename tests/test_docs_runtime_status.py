@@ -36,8 +36,8 @@ def test_architecture_deployment_section_matches_current_runtime_contract():
     assert "Current runtime contract" in deployment
     assert "Local Runtime is the supported deployment mode" in deployment
     assert "BOT_DATABASE_URL" in deployment
-    assert "./scripts/guided_start.sh" in deployment
-    assert "./scripts/dev_up_postgres.sh" in deployment
+    assert "./scripts/app/guided_start.sh" in deployment
+    assert "./scripts/db/dev_up_postgres.sh" in deployment
     assert "Phase 12 runtime (shipped today)" not in deployment
 
 
@@ -51,7 +51,7 @@ def test_status_current_snapshot_matches_current_phase_and_runtime():
     assert "Local Runtime" in snapshot
     assert "SQLite is the default backend" in snapshot
     assert "Postgres is a supported alternate backend" in snapshot
-    assert "./scripts/guided_start.sh" in snapshot
+    assert "./scripts/app/guided_start.sh" in snapshot
     assert "Phase 12 is complete: the **shipped runtime today** uses Postgres" not in snapshot
 
 

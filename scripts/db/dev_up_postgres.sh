@@ -3,7 +3,7 @@
 # For default Local Runtime (SQLite) you do not need this script.
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
 
 echo "Starting Postgres..."
@@ -36,9 +36,11 @@ elif echo "$update_out" | grep -q "Schema or schema_migrations table missing"; t
   echo "Running DB doctor..."
   docker compose --profile tools run --rm db-doctor
 else
-  echo "DB update failed." >&2
+  echo "This does not look like a fresh database. The error was:" >&2
   echo "$update_out" >&2
+  echo "rerun ./scripts/db/dev_up_postgres.sh after fixing the issue." >&2
   exit 1
 fi
 
 echo "Postgres stack ready. Set BOT_DATABASE_URL=postgresql://bot:bot@postgres:5432/bot in .env.bot to use it."
+echo "To run the bot: ./scripts/app/guided_start.sh"

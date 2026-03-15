@@ -14,7 +14,7 @@ We want three things:
 
 | Actor | Analogy | What they do |
 |-------|---------|--------------|
-| **Platform operator** | Apple | Runs the bot, maintains the runtime, configures instances via `setup.sh` |
+| **Platform operator** | Apple | Runs the bot, maintains the runtime, configures instances via `scripts/host/setup_instance.sh` |
 | **Skill publisher** | App developer | Creates skills — writes instructions, declares dependencies, publishes to catalog |
 | **Skill user** | App Store customer | Browses available skills, toggles them on/off via Telegram, provides their own credentials when prompted |
 
@@ -102,7 +102,7 @@ Lifted from the gateway architecture: `.env` files are good for flat operational
 - **`.env`**: `BOT_ROLE` (short role description or empty), `BOT_SKILLS` (comma-separated defaults for new chats). Keeps simple cases simple. **Important**: `BOT_ROLE` requires correct round-tripping through write and read. Without quoting, `load_dotenv_file()` strips everything after `#` (a role like `Senior C# engineer` becomes `Senior C`). The current `load_dotenv_file()` strips surrounding quotes but does NOT unescape `\"` or `\\`.
   **Contract**: `set_env_value()` double-quotes the value and **rejects** roles containing `"` or `\`, directing the operator to use `role.md` instead. No escaping logic needed — `load_dotenv_file()` only needs to strip surrounding quotes, which it already does. The test invariant (§8.5 #7) validates that values containing `#` and whitespace round-trip correctly, and that `"` and `\` are rejected at write time. For roles that are too complex for a one-liner, use `role.md` (see below).
 
-**Separation of concerns**: `BOT_ROLE` in `.env` is the *instance default* — set by the platform operator via `setup.sh`. The `/role` Telegram command sets a *chat-local override* stored in the session JSON. It does NOT write to `.env`. This means a skill user can customize the role for their conversation without mutating operator-owned instance defaults. New chats still start with the operator's `BOT_ROLE`.
+**Separation of concerns**: `BOT_ROLE` in `.env` is the *instance default* — set by the platform operator via `scripts/host/setup_instance.sh`. The `/role` Telegram command sets a *chat-local override* stored in the session JSON. It does NOT write to `.env`. This means a skill user can customize the role for their conversation without mutating operator-owned instance defaults. New chats still start with the operator's `BOT_ROLE`.
 - **`role.md` file** (optional): For roles that need more than a one-liner, the operator can place a markdown file at `~/.config/telegram-agent-bot/<instance>.role.md`. If present, it overrides `BOT_ROLE`. This is the recommended path for rich role descriptions — no quoting issues, supports multi-line markdown, mirrors the gateway's `prompt_file` pattern.
 
 ### D6: Codex delivery uses prompt prefix (not filesystem artifacts)
@@ -434,7 +434,7 @@ Each user sets up their own credentials, even on a shared bot. User A's GitHub t
 > Role reset to instance default.
 ```
 
-### 6.2 Platform operator — setup.sh
+### 6.2 Platform operator — setup_instance.sh
 
 After provider and model selection, the wizard adds role and skill steps.
 
@@ -879,7 +879,7 @@ Tested on codex-cli 0.111.0. Results:
 
 The foundation. Covers the most common use cases without touching tool integration or credential complexity.
 
-**Scope**: `skill.md` format, built-in catalog, `/skills` and `/role` Telegram commands, `setup.sh` wizard integration, per-chat skill state, hot-loading, prompt injection for both providers.
+**Scope**: `skill.md` format, built-in catalog, `/skills` and `/role` Telegram commands, `scripts/host/setup_instance.sh` wizard integration, per-chat skill state, hot-loading, prompt injection for both providers.
 
 | Step | What | Files |
 |------|------|-------|
@@ -895,7 +895,7 @@ The foundation. Covers the most common use cases without touching tool integrati
 | 10 | Implement `/skills` command (list/add/remove/clear) | `app/telegram_handlers.py` |
 | 11 | Implement `/role` command (view/set/clear) — chat-local override, does not write to `.env` | `app/telegram_handlers.py` |
 | 12 | Update `/help` text, add skill/role display to `/session` | `app/telegram_handlers.py` |
-| 13 | Add role/skill prompts to `setup.sh` new-instance and edit flows; `set_env_value()` rejects `"` and `\` in BOT_ROLE | `setup.sh` |
+| 13 | Add role/skill prompts to `setup_instance.sh` new-instance and edit flows; `set_env_value()` rejects `"` and `\` in BOT_ROLE | `scripts/host/setup_instance.sh` |
 | 14 | Update `.env.example` with `BOT_ROLE` and `BOT_SKILLS` | `.env.example` |
 | 15 | Tests: §8.5 invariants first, then skill engine, config loading, context hash, provider command building, Codex thread invalidation, preflight `PreflightContext`, pending request identity and staleness | `tests/test_skills.py` (new), `tests/test_high_risk.py` |
 
@@ -1115,7 +1115,7 @@ Questions raised during design, now closed with decisions.
 | `app/providers/claude.py` | Read `context.system_prompt` → `--append-system-prompt`; `context.extra_dirs`; `context.credential_env` into subprocess env (populated in Phase 2) |
 | `app/providers/codex.py` | Prepend `context.system_prompt` to prompt; `context.extra_dirs`; `context.credential_env` into subprocess env (populated in Phase 2); reset `thread_id` on skill/role change (D2) |
 | `app/telegram_handlers.py` | Add `/skills`, `/role` handlers; build `RunContext` in `execute_request()`, `PreflightContext` in `request_approval()`; `retry_allow` validates base context, derives execution context with approved dirs, clears Codex `thread_id` when dirs added; update `/help`, `/session` |
-| `setup.sh` | Add role/skill prompts to new + existing instance flows; `set_env_value()` double-quotes `BOT_ROLE` and rejects `"` / `\` |
+| `scripts/host/setup_instance.sh` | Add role/skill prompts to new + existing instance flows; `set_env_value()` double-quotes `BOT_ROLE` and rejects `"` / `\` |
 | `.env.example` | Add `BOT_ROLE` and `BOT_SKILLS` |
 | `tests/test_skills.py` | NEW — skill engine tests |
 | `tests/test_high_risk.py` | Add skill injection tests for both providers, Codex thread reset on skill/role change, preflight `PreflightContext` |

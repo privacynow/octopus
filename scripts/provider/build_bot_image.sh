@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Build the supported bot image for the chosen provider (real Claude or Codex CLI).
 # Reads BOT_PROVIDER from .env.bot if present, or use first argument: claude | codex.
-# Usage: ./scripts/build_bot_image.sh [claude|codex]
+# Usage: ./scripts/provider/build_bot_image.sh [claude|codex]
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
 
 provider=""
@@ -27,7 +27,7 @@ case "$provider" in
 esac
 
 echo "Building bot image for provider: $provider"
-docker build -f Dockerfile.bot --build-arg BOT_PROVIDER="$provider" -t "telegram-agent-bot:$provider" "$REPO_DIR"
+docker build -f infra/docker/Dockerfile.bot --build-arg BOT_PROVIDER="$provider" -t "telegram-agent-bot:$provider" "$REPO_DIR"
 # Record repo rev so guided_start can detect pulls/deletions and force rebuild
 git rev-parse HEAD 2>/dev/null > "$REPO_DIR/.bot-image-build-rev" || true
-echo "Done. Start the bot with: docker compose --profile bot --env-file .env.bot up -d bot  (or ./scripts/guided_start.sh)"
+echo "Done. Start the bot with: docker compose --profile bot --env-file .env.bot up -d bot  (or ./scripts/app/guided_start.sh)"

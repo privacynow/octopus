@@ -127,19 +127,19 @@ DOCKER_IMAGE_INSPECT_EXIT=0
 export DOCKER_IMAGE_INSPECT_EXIT
 rm -f "$RECORD_DOCKER_ARGS" "$RECORD_DOCKER_ENV"
 export PATH="$MOCK_BIN:$PATH"
-"$REPO_DIR/scripts/provider_login.sh" codex >/dev/null 2>&1
+"$REPO_DIR/scripts/provider/provider_login.sh" codex >/dev/null 2>&1
 docker_args="$(cat "$RECORD_DOCKER_ARGS" 2>/dev/null || true)"
 docker_env="$(cat "$RECORD_DOCKER_ENV" 2>/dev/null || true)"
 check_contains "compose run with profile and env-file" "$docker_args" "compose --profile bot --env-file .env.bot run --rm"
 check_contains "override BOT_PROVIDER=codex in argv" "$docker_args" "BOT_PROVIDER=codex"
 check_contains "shell env BOT_PROVIDER=codex for image selection" "$docker_env" "BOT_PROVIDER=codex"
-check_contains "service and command" "$docker_args" "bot-provider sh /app/scripts/container_provider_login.sh"
+check_contains "service and command" "$docker_args" "bot-provider sh /app/scripts/provider/container_provider_login.sh"
 
 echo
 echo "=== provider_login.sh: fallback to .env.bot when no arg (image exists) ==="
 setup_env_bot "codex"
 rm -f "$RECORD_DOCKER_ARGS"
-"$REPO_DIR/scripts/provider_login.sh" >/dev/null 2>&1
+"$REPO_DIR/scripts/provider/provider_login.sh" >/dev/null 2>&1
 docker_args="$(cat "$RECORD_DOCKER_ARGS" 2>/dev/null || true)"
 check_contains "fallback BOT_PROVIDER=codex from .env.bot" "$docker_args" "BOT_PROVIDER=codex"
 
@@ -149,7 +149,7 @@ setup_env_bot "codex"
 DOCKER_IMAGE_INSPECT_EXIT=1
 export DOCKER_IMAGE_INSPECT_EXIT
 set +e
-stderr="$("$REPO_DIR/scripts/provider_login.sh" codex 2>&1)"
+stderr="$("$REPO_DIR/scripts/provider/provider_login.sh" codex 2>&1)"
 exit_code=$?
 set -e
 check_exit "exit non-zero when image missing" "$exit_code" "1"
@@ -167,7 +167,7 @@ chmod +x "$MOCK_BIN/python"
 rm -f "$RECORD_CODEX_ARGS"
 stderr_file="$TEST_DIR/doctor_stderr"
 set +e
-PATH="$MOCK_BIN:$PATH" BOT_PROVIDER=codex bash "$REPO_DIR/scripts/container_provider_login.sh" 2> "$stderr_file"
+PATH="$MOCK_BIN:$PATH" BOT_PROVIDER=codex bash "$REPO_DIR/scripts/provider/container_provider_login.sh" 2> "$stderr_file"
 exit_code=$?
 set -e
 stderr="$(cat "$stderr_file")"
@@ -181,14 +181,14 @@ echo "=== container_provider_login.sh: codex path runs codex --login ==="
 printf '#!/bin/sh\nexit 0\n' > "$MOCK_BIN/python"
 chmod +x "$MOCK_BIN/python"
 rm -f "$RECORD_CODEX_ARGS" "$RECORD_CLAUDE_ARGS"
-PATH="$MOCK_BIN:$PATH" BOT_PROVIDER=codex bash "$REPO_DIR/scripts/container_provider_login.sh" >/dev/null 2>&1
+PATH="$MOCK_BIN:$PATH" BOT_PROVIDER=codex bash "$REPO_DIR/scripts/provider/container_provider_login.sh" >/dev/null 2>&1
 codex_args="$(cat "$RECORD_CODEX_ARGS" 2>/dev/null || true)"
 check_contains "codex invoked with --login" "$codex_args" "--login"
 
 echo
 echo "=== container_provider_login.sh: claude path runs claude ==="
 rm -f "$RECORD_CODEX_ARGS" "$RECORD_CLAUDE_ARGS"
-PATH="$MOCK_BIN:$PATH" BOT_PROVIDER=claude bash "$REPO_DIR/scripts/container_provider_login.sh" >/dev/null 2>&1
+PATH="$MOCK_BIN:$PATH" BOT_PROVIDER=claude bash "$REPO_DIR/scripts/provider/container_provider_login.sh" >/dev/null 2>&1
 claude_args="$(cat "$RECORD_CLAUDE_ARGS" 2>/dev/null || true)"
 check_contains "claude invoked" "$claude_args" "claude"
 
@@ -198,7 +198,7 @@ setup_env_bot "codex"
 DOCKER_IMAGE_INSPECT_EXIT=0
 export DOCKER_IMAGE_INSPECT_EXIT
 rm -f "$RECORD_DOCKER_ARGS"
-"$REPO_DIR/scripts/provider_status.sh" >/dev/null 2>&1
+"$REPO_DIR/scripts/provider/provider_status.sh" >/dev/null 2>&1
 docker_args="$(cat "$RECORD_DOCKER_ARGS" 2>/dev/null || true)"
 check_contains "compose run with profile and env-file" "$docker_args" "compose --profile bot --env-file .env.bot run --rm"
 check_contains "bot-provider service (provider-only)" "$docker_args" "bot-provider"
@@ -208,7 +208,7 @@ setup_env_bot "codex"
 DOCKER_IMAGE_INSPECT_EXIT=1
 export DOCKER_IMAGE_INSPECT_EXIT
 set +e
-stderr="$("$REPO_DIR/scripts/provider_status.sh" 2>&1)"
+stderr="$("$REPO_DIR/scripts/provider/provider_status.sh" 2>&1)"
 exit_code=$?
 set -e
 check_exit "exit non-zero when image missing" "$exit_code" "1"
@@ -221,7 +221,7 @@ DOCKER_IMAGE_INSPECT_EXIT=0
 export DOCKER_IMAGE_INSPECT_EXIT
 setup_env_bot "codex"
 rm -f "$RECORD_DOCKER_ARGS"
-"$REPO_DIR/scripts/provider_logout.sh" >/dev/null 2>&1
+"$REPO_DIR/scripts/provider/provider_logout.sh" >/dev/null 2>&1
 docker_args="$(cat "$RECORD_DOCKER_ARGS" 2>/dev/null || true)"
 check_contains "compose run with profile and env-file" "$docker_args" "compose --profile bot --env-file .env.bot run --rm"
 check_contains "sh -c" "$docker_args" "sh -c"
@@ -231,7 +231,7 @@ echo "=== provider_logout.sh: fails with rebuild message when image missing ==="
 DOCKER_IMAGE_INSPECT_EXIT=1
 export DOCKER_IMAGE_INSPECT_EXIT
 set +e
-stderr="$("$REPO_DIR/scripts/provider_logout.sh" 2>&1)"
+stderr="$("$REPO_DIR/scripts/provider/provider_logout.sh" 2>&1)"
 exit_code=$?
 set -e
 check_exit "exit non-zero when image missing" "$exit_code" "1"

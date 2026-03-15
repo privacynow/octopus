@@ -22,6 +22,7 @@ from tests.support.handler_support import (
     FakeProvider,
     FakeUpdate,
     FakeUser,
+    drain_one_worker_item,
     make_config,
     setup_globals,
     fresh_data_dir,
@@ -517,5 +518,6 @@ async def test_handle_message_caption_reaches_provider():
         upd = FakeUpdate(message=msg, user=user, chat=chat)
 
         await th.handle_message(upd, FakeContext())
+        await drain_one_worker_item(data_dir)
         assert len(prov.run_calls) == 1
         assert "describe this image" in prov.run_calls[0]["prompt"]

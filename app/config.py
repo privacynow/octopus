@@ -401,7 +401,7 @@ def validate_config(config: BotConfig) -> list[str]:
     if config.provider_name in {"claude", "codex"} and not shutil.which(binary):
         errors.append(
             f"Provider binary '{binary}' not found in PATH. "
-            f"Install the {binary} CLI, or build the bot image with ./scripts/build_bot_image.sh {config.provider_name}."
+            f"Install the {binary} CLI, or build the bot image with ./scripts/provider/build_bot_image.sh {config.provider_name}."
         )
 
     for d in config.extra_dirs:

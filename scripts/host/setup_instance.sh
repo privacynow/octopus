@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Friendly setup wrapper.
-# Usage: ./setup.sh [instance_name]
+# Friendly setup wrapper for host-run (non-Docker) instances.
+# Usage: ./scripts/host/setup_instance.sh [instance_name]
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 INSTANCE="${1:-}"
-CONFIG_DIR="$HOME/.config/telegram-agent-bot"
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+CONFIG_DIR="$XDG_CONFIG_HOME/telegram-agent-bot"
 
 # --- helpers ---
 
@@ -95,12 +96,12 @@ install_systemd() {
     if ! has_systemd_user; then
         echo "systemd user services are not available on this system."
         echo "You can run the bot directly instead:"
-        echo "  ./scripts/run.sh $instance"
+        echo "  ./scripts/app/run.sh $instance"
         return 1
     fi
-    mkdir -p "$HOME/.config/systemd/user"
-    sed "s|REPO_DIR|$repo_dir|g" "$repo_dir/deploy/telegram-agent-bot@.service" \
-        > "$HOME/.config/systemd/user/telegram-agent-bot@.service"
+    mkdir -p "$XDG_CONFIG_HOME/systemd/user"
+    sed "s|REPO_DIR|$repo_dir|g" "$repo_dir/infra/systemd/telegram-agent-bot@.service" \
+        > "$XDG_CONFIG_HOME/systemd/user/telegram-agent-bot@.service"
     systemctl --user daemon-reload
     systemctl --user enable --now "telegram-agent-bot@${instance}.service"
 }
@@ -123,7 +124,7 @@ ENV_FILE="$CONFIG_DIR/$INSTANCE.env"
 BOTNAME=""
 
 # Step 1: bootstrap (stdin closed so pip doesn't eat our interactive input)
-BOT_SETUP_RUNNING=1 "$REPO_DIR/scripts/bootstrap.sh" < /dev/null
+BOT_SETUP_RUNNING=1 "$REPO_DIR/scripts/app/bootstrap.sh" < /dev/null
 
 # Step 2: create instance env if needed
 mkdir -p "$CONFIG_DIR"
@@ -169,7 +170,7 @@ if [ -f "$ENV_FILE" ]; then
         if [[ "$LAUNCH" =~ ^[Yy]$ ]]; then
             echo
             echo "Running health check..."
-            if "$REPO_DIR/scripts/doctor.sh" "$INSTANCE"; then
+            if "$REPO_DIR/scripts/app/doctor.sh" "$INSTANCE"; then
                 echo
                 echo "Installing systemd service..."
                 if install_systemd "$REPO_DIR" "$INSTANCE"; then
@@ -334,7 +335,7 @@ else
     if [[ "$LAUNCH" =~ ^[Yy]$ ]]; then
         echo
         echo "Running health check..."
-        if "$REPO_DIR/scripts/doctor.sh" "$INSTANCE"; then
+        if "$REPO_DIR/scripts/app/doctor.sh" "$INSTANCE"; then
             echo
             echo "Installing systemd service..."
             if install_systemd "$REPO_DIR" "$INSTANCE"; then
@@ -350,18 +351,18 @@ else
         else
             echo
             echo "Health check failed. Fix the issues above, then launch manually:"
-            echo "  ./scripts/run.sh $INSTANCE"
+            echo "  ./scripts/app/run.sh $INSTANCE"
         fi
     else
         echo
         echo "=== Manual launch ==="
-        echo "  ./scripts/doctor.sh $INSTANCE"
-        echo "  ./scripts/run.sh $INSTANCE"
+        echo "  ./scripts/app/doctor.sh $INSTANCE"
+        echo "  ./scripts/app/run.sh $INSTANCE"
         echo
         echo "Or as a systemd service:"
-        echo "  mkdir -p ~/.config/systemd/user"
-        echo "  sed \"s|REPO_DIR|$REPO_DIR|g\" deploy/telegram-agent-bot@.service \\"
-        echo "    > ~/.config/systemd/user/telegram-agent-bot@.service"
+        echo "  mkdir -p $XDG_CONFIG_HOME/systemd/user"
+        echo "  sed \"s|REPO_DIR|$REPO_DIR|g\" infra/systemd/telegram-agent-bot@.service \\"
+        echo "    > $XDG_CONFIG_HOME/systemd/user/telegram-agent-bot@.service"
         echo "  systemctl --user daemon-reload"
         echo "  systemctl --user enable --now telegram-agent-bot@$INSTANCE.service"
     fi

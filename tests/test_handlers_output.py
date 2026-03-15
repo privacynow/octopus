@@ -7,6 +7,7 @@ from tests.support.handler_support import (
     FakeChat,
     FakeProvider,
     FakeUser,
+    drain_one_worker_item,
     last_reply,
     load_session_disk,
     make_config,
@@ -60,6 +61,7 @@ async def test_raw_retrieves_response():
 
         prov.run_results = [RunResult(text="This is the full response text.")]
         await send_text(chat, user, "hello")
+        await drain_one_worker_item(data_dir)
 
         import app.telegram_handlers as th
 
@@ -71,6 +73,8 @@ async def test_raw_retrieves_response():
 
 
 async def test_e2e_table_in_provider_response():
+    import app.telegram_handlers as th
+
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
@@ -91,8 +95,10 @@ async def test_e2e_table_in_provider_response():
         chat = FakeChat(1)
         user = FakeUser(42)
         msg = await send_text(chat, user, "show scores")
+        await drain_one_worker_item(data_dir)
 
-        all_replies = " ".join(r.get("text", "") for r in msg.replies)
+        # Worker sends via bot
+        all_replies = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
         assert "<pre>" in all_replies
         assert "Alice" in all_replies
         assert "---|---" not in all_replies
@@ -100,6 +106,8 @@ async def test_e2e_table_in_provider_response():
 
 async def test_e2e_compact_mode_uses_blockquote():
     """Compact mode should use expandable blockquote for long responses."""
+    import app.telegram_handlers as th
+
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
@@ -116,12 +124,14 @@ async def test_e2e_compact_mode_uses_blockquote():
         user = FakeUser(42)
 
         msg = await send_text(chat, user, "analyze this")
+        await drain_one_worker_item(data_dir)
 
-        all_replies = " ".join(r.get("text", "") for r in msg.replies)
+        # Worker sends via bot
+        all_replies = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
         # Should contain expandable blockquote or a "Show full" button
         has_blockquote = "blockquote" in all_replies
         has_expand_button = any(
-            r.get("reply_markup") is not None for r in msg.replies
+            m.get("reply_markup") is not None for m in th._bot_instance.sent_messages
         )
         assert has_blockquote or has_expand_button, (
             f"Expected blockquote or expand button, got: {all_replies[:200]}"
@@ -134,6 +144,8 @@ async def test_e2e_compact_mode_uses_blockquote():
 
 
 async def test_e2e_compact_off_no_summarize():
+    import app.telegram_handlers as th
+
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
@@ -148,18 +160,20 @@ async def test_e2e_compact_off_no_summarize():
         chat = FakeChat(1)
         user = FakeUser(42)
         msg = await send_text(chat, user, "do something")
+        await drain_one_worker_item(data_dir)
 
-        all_replies = " ".join(r.get("text", "") for r in msg.replies)
+        all_replies = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
         assert "Full verbose response" in all_replies
         assert "/raw for full" not in all_replies
 
-        import app.telegram_handlers as th
         msg2 = await send_command(th.cmd_raw, chat, user, "/raw")
         assert "Full verbose response" in last_reply(msg2)
 
 
 async def test_e2e_compact_mode_short_response_no_blockquote():
     """Compact mode should not use blockquote for short responses (<800 chars)."""
+    import app.telegram_handlers as th
+
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
@@ -175,8 +189,9 @@ async def test_e2e_compact_mode_short_response_no_blockquote():
         chat = FakeChat(1)
         user = FakeUser(42)
         msg = await send_text(chat, user, "what is the answer")
+        await drain_one_worker_item(data_dir)
 
-        all_replies = " ".join(r.get("text", "") for r in msg.replies)
+        all_replies = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
         assert "42" in all_replies
         assert "blockquote" not in all_replies
 
@@ -216,6 +231,7 @@ async def test_compact_mode_injects_summary_first_instruction():
         chat = FakeChat(1)
         user = FakeUser(42)
         await send_text(chat, user, "explain something")
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         ctx = prov.run_calls[0]["context"]
@@ -238,6 +254,7 @@ async def test_compact_off_no_summary_first_instruction():
         chat = FakeChat(1)
         user = FakeUser(42)
         await send_text(chat, user, "explain something")
+        await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         ctx = prov.run_calls[0]["context"]
@@ -261,6 +278,8 @@ def _button_path_response() -> str:
 
 async def test_compact_long_response_shows_expand_button():
     """Compact mode with long response should show 'Show full answer' button."""
+    import app.telegram_handlers as th
+
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
@@ -275,11 +294,12 @@ async def test_compact_long_response_shows_expand_button():
         chat = FakeChat(1)
         user = FakeUser(42)
         msg = await send_text(chat, user, "analyze this")
+        await drain_one_worker_item(data_dir)
 
-        # Must have taken the button path, not blockquote
+        # Must have taken the button path, not blockquote (worker sends via bot)
         expand_markup = None
-        for r in msg.replies:
-            rm = r.get("reply_markup")
+        for m in th._bot_instance.sent_messages:
+            rm = m.get("reply_markup")
             if rm is not None:
                 expand_markup = rm
                 break
@@ -292,14 +312,16 @@ async def test_compact_long_response_shows_expand_button():
         assert button.text == "Show full answer"
         assert button.callback_data.startswith("expand:")
 
-        # The reply text should show "truncated" indicator
-        for r in msg.replies:
-            if r.get("reply_markup") is not None:
-                assert "truncated" in r.get("text", "").lower()
+        # The reply text should show "truncated" indicator (worker sends via bot)
+        for m in th._bot_instance.sent_messages:
+            if m.get("reply_markup") is not None:
+                assert "truncated" in m.get("text", "").lower()
 
 
 async def test_expand_callback_shows_full_response():
     """Expand callback loads raw text and shows it (new messages for long content)."""
+    import app.telegram_handlers as th
+
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("codex")
@@ -314,11 +336,12 @@ async def test_expand_callback_shows_full_response():
         chat = FakeChat(1)
         user = FakeUser(42)
         msg = await send_text(chat, user, "analyze this")
+        await drain_one_worker_item(data_dir)
 
-        # Get expand callback data
+        # Get expand callback data (worker sends via bot)
         cb_data = None
-        for r in msg.replies:
-            rm = r.get("reply_markup")
+        for m in th._bot_instance.sent_messages:
+            rm = m.get("reply_markup")
             if rm is not None:
                 cb_data = rm.inline_keyboard[0][0].callback_data
                 break

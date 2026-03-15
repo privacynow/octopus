@@ -299,7 +299,7 @@ benign outcome.
 **Transport schema (versioned across both supported backends)**
 
 - SQLite `transport.db` has a versioned schema. The current build expects the current supported schema/layout and may apply the narrow in-place migrations explicitly owned by the SQLite transport implementation.
-- Postgres runtime storage uses SQL migrations under `sql/postgres/` and is bootstrapped/updated via the tooling flow.
+- Postgres runtime storage uses SQL migrations under `app/db/migrations/postgres/` and is bootstrapped/updated via the tooling flow.
 - If an existing DB has an unsupported schema version or layout, the app fails fast with a neutral error (e.g. "Unsupported transport.db schema/layout for this build"). The app does not mutate existing DBs before validating them.
 - Review priority: correctness and repository invariants first; migration breadth is secondary to preserving the transport-store contract and clean backend seams.
 
@@ -1023,8 +1023,8 @@ must document the underlying steps clearly first.
   `bot_runtime`) so the runtime tables are clearly separated from any future
   analytics, billing, or registry tables.
 - Keep repo-owned SQL files such as:
-  - `sql/postgres/0001_runtime.sql`
-  - `sql/postgres/0002_...sql` for later additive changes
+  - `app/db/migrations/postgres/0001_runtime.sql`
+  - `app/db/migrations/postgres/0002_...sql` for later additive changes
 - Track applied versions in a dedicated schema-migrations table instead of a
   generic `meta` row.
 
@@ -1412,7 +1412,7 @@ Tests required:
   - DB bootstrap succeeds
   - DB doctor succeeds
 - Bot image and runtime: the supported image is real provider-enabled (built
-  from `Dockerfile.bot` via build script). Tests should prove the image
+  from `infra/docker/Dockerfile.bot` via build script). Tests should prove the image
   contains the selected provider and can reach a real request execution path,
   not only startup.
 - Provider auth and persistence:
@@ -1907,15 +1907,15 @@ Audit and fix the current primary user and operator journeys end to end.
 Required audit surfaces:
 
 - Docker/operator path:
-  - `scripts/dev_up.sh`
-  - `scripts/guided_start.sh`
-  - `scripts/build_bot_image.sh`
-  - `scripts/provider_login.sh`
-  - `scripts/provider_status.sh`
-  - `scripts/provider_logout.sh`
-  - `scripts/db_bootstrap.sh`
-  - `scripts/db_update.sh`
-  - `scripts/db_doctor.sh`
+  - `scripts/app/dev_up.sh`
+  - `scripts/app/guided_start.sh`
+  - `scripts/provider/build_bot_image.sh`
+  - `scripts/provider/provider_login.sh`
+  - `scripts/provider/provider_status.sh`
+  - `scripts/provider/provider_logout.sh`
+  - `scripts/db/db_bootstrap.sh`
+  - `scripts/db/db_update.sh`
+  - `scripts/db/db_doctor.sh`
   - `README.md`
 - Telegram path:
   - `/start`

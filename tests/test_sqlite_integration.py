@@ -36,6 +36,7 @@ from tests.support.handler_support import (
     load_session_disk,
     make_config,
     send_command,
+    drain_one_worker_item,
     send_text,
     setup_globals,
     fresh_data_dir,
@@ -59,6 +60,7 @@ async def test_handler_roundtrip_through_sqlite():
         assert session_exists(data_dir, 7001) is False
 
         await send_text(chat, user, "hello")
+        await drain_one_worker_item(data_dir)
 
         # Session now exists in SQLite
         assert session_exists(data_dir, 7001) is True
@@ -122,6 +124,7 @@ async def test_migration_then_handler_message():
             chat = FakeChat(8001)
             user = FakeUser(1)
             await send_text(chat, user, "after migration")
+            await drain_one_worker_item(data_dir)
 
             # Verify merged state: role from migration, session_id preserved
             session = load_session_disk(data_dir, 8001, prov)
@@ -264,6 +267,7 @@ async def test_multiple_chats_save_independently():
         for chat, user in zip(chats, users):
             prov.run_results = [RunResult(text=f"reply to chat {chat.id}")]
             await send_text(chat, user, f"hello from {chat.id}")
+            await drain_one_worker_item(data_dir)
 
         # All three sessions exist
         sessions = list_sessions(data_dir)
@@ -328,9 +332,11 @@ async def test_fresh_db_no_json_artifacts():
     with fresh_env() as (data_dir, cfg, prov):
         prov.run_results = [RunResult(text="first reply")]
         await send_text(FakeChat(2001), FakeUser(1), "first message")
+        await drain_one_worker_item(data_dir)
 
         prov.run_results = [RunResult(text="second reply")]
         await send_text(FakeChat(2002), FakeUser(2), "second message")
+        await drain_one_worker_item(data_dir)
 
         # No session JSON artifacts (raw/ dir is conversation history, not sessions)
         assert (data_dir / "sessions").exists() is False

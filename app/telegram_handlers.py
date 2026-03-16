@@ -460,7 +460,7 @@ def is_allowed(user) -> bool:
     if inbound is None:
         return False
     override = work_queue.get_user_access(cfg.data_dir, inbound.id)
-    return access.is_allowed_user_with_override(cfg, user, override)
+    return access.is_allowed_user_with_override(cfg, inbound, override)
 
 
 def is_admin(user) -> bool:

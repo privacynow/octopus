@@ -8,11 +8,12 @@ import logging
 import os
 import secrets
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.registry_service.store import RegistryStore
@@ -751,6 +752,7 @@ def ui_shell(request: Request) -> str:
               <textarea id="detail-message-text" placeholder="Add a follow-up message to this conversation."></textarea>
             </label>
             <div class="toolbar">
+              <button id="detail-export-button" class="secondary" type="button">Export</button>
               <button id="detail-send-button" type="button">Send</button>
               <button id="detail-cancel-button" class="danger" type="button">Cancel conversation</button>
             </div>
@@ -1291,6 +1293,33 @@ def ui_shell(request: Request) -> str:
         await loadBootstrap();
       }}
 
+      async function exportConversation() {{
+        if (!currentConversationId) return;
+        const url = '/v1/ui/conversations/' + encodeURIComponent(currentConversationId) + '/export';
+        try {{
+          const response = await fetch(url, {{
+            headers: authHeaders(),
+          }});
+          if (!response.ok) {{
+            console.error('Export failed', response.status);
+            setStatus('Export failed.');
+            return;
+          }}
+          const blob = await response.blob();
+          const link = document.createElement('a');
+          const objectUrl = URL.createObjectURL(blob);
+          link.href = objectUrl;
+          link.download = 'conversation-' + currentConversationId + '.md';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(objectUrl);
+        }} catch (error) {{
+          console.error('Export error', error);
+          setStatus('Export failed.');
+        }}
+      }}
+
       async function submitDelegationAction(conversationId, eventId, action) {{
         delegationActionState[eventId] = action;
         delete delegationActionError[eventId];
@@ -1321,6 +1350,7 @@ def ui_shell(request: Request) -> str:
       document.getElementById("new-conversation-button").addEventListener("click", () => toggleNewConversationForm(true));
       document.getElementById("cancel-new-conversation-button").addEventListener("click", () => toggleNewConversationForm(false));
       document.getElementById("start-conversation-button").addEventListener("click", createConversation);
+      document.getElementById("detail-export-button").addEventListener("click", exportConversation);
       document.getElementById("detail-send-button").addEventListener("click", sendDetailMessage);
       document.getElementById("detail-cancel-button").addEventListener("click", cancelConversation);
       document.getElementById("detail-back-button").addEventListener("click", clearConversationDetail);
@@ -1433,6 +1463,42 @@ def ui_get_conversation_timeline(
     store: RegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     return {"events": store.get_conversation_timeline(conversation_id)}
+
+
+@app.get("/v1/ui/conversations/{conversation_id}/export")
+def ui_export_conversation(
+    conversation_id: str,
+    _: None = Depends(require_ui_token),
+    store: RegistryStore = Depends(get_store),
+) -> Response:
+    try:
+        conv = store.get_conversation(conversation_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    events = store.get_conversation_timeline(conversation_id)
+
+    lines = [
+        f"# Conversation: {conv['title'] or conversation_id}",
+        f"Exported: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
+        f"Status: {conv['status']}",
+        f"Bot: {conv.get('target_display_name') or conv.get('target_agent_id', '')}",
+        f"Created: {conv['created_at']}",
+        "",
+    ]
+    for event in events:
+        lines.append(f"## [{event['created_at']}] {event['kind']}")
+        body = (event.get("body") or "").strip()
+        if body:
+            lines.append(body)
+        lines.append("")
+
+    content = "\n".join(lines)
+    filename = f'conversation-{conversation_id}.md'
+    return Response(
+        content=content,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/v1/ui/conversations/{conversation_id}/messages")

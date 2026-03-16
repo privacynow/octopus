@@ -26,6 +26,7 @@ from telegram.ext import (
     filters,
 )
 
+from app import access
 from app import user_messages as _msg
 from app.approvals import (
     build_preflight_prompt,
@@ -97,7 +98,6 @@ from app import work_queue
 from app.workflows.results import TransportStateCorruption
 from app.transport import (
     InboundAttachment,
-    InboundUser,
     normalize_callback,
     normalize_command,
     normalize_message,
@@ -447,35 +447,13 @@ async def _progress_timeline_callback(conversation_ref: str, routed_task_id: str
 
 # -- Auth ------------------------------------------------------------------
 
-def _to_inbound_user(user) -> InboundUser | None:
-    """Coerce a raw Telegram user or InboundUser to InboundUser."""
-    if user is None:
-        return None
-    if isinstance(user, InboundUser):
-        return user
-    return normalize_user(user)
-
-
 def is_allowed(user) -> bool:
-    u = _to_inbound_user(user)
-    if u is None:
-        return False
-    cfg = _cfg()
-    # Open mode admits everyone (public users get restricted at execution layer)
-    if cfg.allow_open:
-        return True
-    if not cfg.allowed_user_ids and not cfg.allowed_usernames:
-        return False
-    return u.id in cfg.allowed_user_ids or u.username in cfg.allowed_usernames
+    return access.is_allowed_user(_cfg(), user)
 
 
 def is_admin(user) -> bool:
     """Check if user is an admin (can install/uninstall/update store skills)."""
-    u = _to_inbound_user(user)
-    if u is None:
-        return False
-    cfg = _cfg()
-    return u.id in cfg.admin_user_ids or u.username in cfg.admin_usernames
+    return access.is_admin_user(_cfg(), user)
 
 
 def is_public_user(user) -> bool:
@@ -485,21 +463,12 @@ def is_public_user(user) -> bool:
     any allowed-user set.  Returns False if allow_open is off (the user
     wouldn't have passed is_allowed at all).
     """
-    u = _to_inbound_user(user)
-    if u is None:
-        return False
-    cfg = _cfg()
-    if not cfg.allow_open:
-        return False
-    # If there are no allowed lists, everyone is public
-    if not cfg.allowed_user_ids and not cfg.allowed_usernames:
-        return True
-    return u.id not in cfg.allowed_user_ids and u.username not in cfg.allowed_usernames
+    return access.is_public_user(_cfg(), user)
 
 
 def _trust_tier(user) -> str:
     """Resolve the trust tier for a user: 'trusted' or 'public'."""
-    return "public" if is_public_user(user) else "trusted"
+    return access.trust_tier(_cfg(), user)
 
 
 async def _public_guard(event, update: Update) -> bool:
@@ -2643,7 +2612,7 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
       recovered item, not the callback's update.
     """
     query = update.callback_query
-    user = _to_inbound_user(update.effective_user)
+    user = access.to_inbound_user(update.effective_user)
     if user is None or not is_allowed(user):
         await query.answer(_msg.trust_not_authorized(), show_alert=True)
         return
@@ -2812,7 +2781,11 @@ async def handle_recovery_action(
 
     # Execute through _chat_lock with worker_item (lock-only, no claiming).
     prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
-    trust = "trusted" if getattr(event, "source", "telegram") == "registry" else _trust_tier(event.user)
+    trust = factory.trust_tier_for_source(
+        getattr(event, "source", "telegram"),
+        event.user,
+        config=_cfg(),
+    )
     try:
         async with _chat_lock(chat_id, message=message, worker_item=item):
             session = _load(chat_id)
@@ -3359,7 +3332,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             return
         prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
         user_id = event.user.id
-        trust = factory.trust_tier_for_source(source, event.user)
+        trust = factory.trust_tier_for_source(source, event.user, config=_cfg())
         await bot_msg.bind(title=title, config=_cfg())
         await bot_msg.on_message_received(event.text)
         try:

@@ -58,17 +58,21 @@ def test_factory_registry_ref_produces_registry_surface():
 
 
 def test_factory_trust_tier_registry_source_is_trusted():
-    tier = factory.trust_tier_for_source("registry", user=None)
-    assert tier == "trusted"
+    tmp, cfg = _setup_runtime()
+    try:
+        tier = factory.trust_tier_for_source("registry", user=None, config=cfg)
+        assert tier == "trusted"
+    finally:
+        tmp.cleanup()
 
 
 def test_factory_trust_tier_telegram_source_uses_user_tier():
     tmp, cfg = _setup_runtime(allow_open=True, allowed_user_ids=frozenset())
     try:
-        del cfg
         tier = factory.trust_tier_for_source(
             "telegram",
             user=FakeUser(uid=999, username="stranger"),
+            config=cfg,
         )
         assert tier == "public"
     finally:

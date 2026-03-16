@@ -34,6 +34,14 @@ from app.approvals import (
 )
 from app.config import BotConfig
 from app.formatting import extract_send_directives, md_to_telegram_html, split_html, trim_text
+from app.identity import (
+    parse_actor_key,
+    parse_conversation_key,
+    telegram_actor_key,
+    telegram_conversation_key,
+    telegram_event_id,
+    telegram_numeric_id,
+)
 from app.execution_context import ResolvedExecutionContext, resolve_execution_context
 from app.providers.base import Provider
 from app.request_flow import (
@@ -114,13 +122,13 @@ from app.transport import (
 
 log = logging.getLogger(__name__)
 
-CHAT_LOCKS: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+CHAT_LOCKS: dict[int | str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 # Worker-owned live execution: chat_id -> cancel Event for the active provider run.
 # Populated by worker_dispatch when it starts execute_request/request_approval;
 # /cancel sets the event so the running provider can exit. Busy/admission gating
 # is done at the store (record_and_admit_message), not via this registry.
-_LIVE_CANCEL: dict[int, asyncio.Event] = {}
+_LIVE_CANCEL: dict[int | str, asyncio.Event] = {}
 
 
 def _run_result_was_interrupted(returncode: int) -> bool:
@@ -209,7 +217,7 @@ class ClaimBlocked(Exception):
 
 
 @contextlib.asynccontextmanager
-async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int | None = None,
+async def _chat_lock(chat_id: int | str, *, message=None, query=None, update_id: int | None = None,
                      worker_item: dict | None = None, supersede_recovery: bool = False):
     """Acquire the per-chat lock with visible queued feedback.
 
@@ -241,6 +249,7 @@ async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int |
     # In-memory lock is the primary contention signal.  The durable check
     # only matters on restart recovery (lock not held but stale work items exist).
     data_dir = _cfg().data_dir
+    conversation_key = _conversation_key(chat_id)
     is_busy = lock.locked()
     if is_busy:
         sent_feedback = True
@@ -253,7 +262,7 @@ async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int |
     async with lock:
         # Worker path: item already claimed externally; supersede any pending_recovery for this chat.
         if worker_item is not None:
-            work_queue.supersede_pending_recovery(data_dir, chat_id)
+            work_queue.supersede_pending_recovery(data_dir, conversation_key)
             try:
                 yield sent_feedback
             except work_queue.LeaveClaimed:
@@ -264,11 +273,20 @@ async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int |
         try:
             effective_update_id = update_id if update_id is not None else _current_update_id.get()
             if effective_update_id is not None:
-                item = work_queue.claim_for_update(data_dir, chat_id, effective_update_id, _boot_id)
+                item = work_queue.claim_for_update(
+                    data_dir,
+                    conversation_key,
+                    _event_key(effective_update_id),
+                    _boot_id,
+                )
             else:
-                item = work_queue.claim_next(data_dir, chat_id, _boot_id)
+                item = work_queue.claim_next(data_dir, conversation_key, _boot_id)
         except TransportStateCorruption as e:
-            log.exception("Transport state corruption in claim path for chat %s: %s", chat_id, e)
+            log.exception(
+                "Transport state corruption in claim path for conversation %s: %s",
+                conversation_key,
+                e,
+            )
             if message is not None:
                 await message.reply_text(
                     f"<i>{_msg.generic_error_try_again()}</i>",
@@ -282,16 +300,16 @@ async def _chat_lock(chat_id: int, *, message=None, query=None, update_id: int |
         # claimed outside the lock), the handler must not run.  The work item
         # stays queued for worker_loop to pick up after its current item.
         if item is None and effective_update_id is not None:
-            if work_queue.has_claimed_for_chat(data_dir, chat_id):
-                raise ClaimBlocked(chat_id)
+            if work_queue.has_claimed_for_chat(data_dir, conversation_key):
+                raise ClaimBlocked(conversation_key)
 
         item_id = item["id"] if item else None
-        claimed_update_id = item["update_id"] if item else None
+        claimed_update_id = telegram_numeric_id(item["event_id"]) if item else None
         # Fresh message supersedes any pending_recovery for this chat.
         # Only handle_message passes supersede_recovery=True; commands
         # like /approval and /new must NOT supersede recovery items.
         if item_id and supersede_recovery:
-            work_queue.supersede_pending_recovery(data_dir, chat_id)
+            work_queue.supersede_pending_recovery(data_dir, conversation_key)
         try:
             yield sent_feedback
         except work_queue.LeaveClaimed:
@@ -343,7 +361,12 @@ def _dedup_update(update: Update, kind: str = "unknown", payload: str = "{}") ->
     user_id = update.effective_user.id if update.effective_user else 0
     data_dir = _cfg().data_dir
     is_new, item_id = work_queue.record_and_enqueue(
-        data_dir, uid, chat_id, user_id, kind, payload=payload,
+        data_dir,
+        _event_key(uid),
+        _conversation_key(chat_id),
+        _actor_key(user_id),
+        kind,
+        payload=payload,
         worker_id=_boot_id,
     )
     if not is_new:
@@ -378,6 +401,31 @@ def _prov() -> Provider:
 
 def _encryption_key() -> bytes:
     return derive_encryption_key(_cfg().telegram_token)
+
+
+def _conversation_key(chat_id: int | str) -> str:
+    return parse_conversation_key(chat_id)
+
+
+def _actor_key(user_id: int | str) -> str:
+    if isinstance(user_id, str):
+        return parse_actor_key(user_id)
+    return telegram_actor_key(user_id)
+
+
+def _event_key(update_id: int | str) -> str:
+    if isinstance(update_id, str):
+        return update_id if ":" in update_id or not update_id.isdigit() else telegram_event_id(update_id)
+    return telegram_event_id(update_id)
+
+
+def _telegram_chat_id(chat_id: int | str) -> int:
+    if isinstance(chat_id, int):
+        return chat_id
+    numeric = telegram_numeric_id(chat_id)
+    if numeric is None:
+        raise RuntimeError(f"Telegram API requires a Telegram conversation key, got {chat_id!r}")
+    return numeric
 
 
 def _approval_mode_source(session: SessionState) -> str:
@@ -810,7 +858,7 @@ def _apply_compact_change(chat_id: int, session: SessionState, value: bool) -> N
 
 # -- Helpers ---------------------------------------------------------------
 
-def _allowed_roots(chat_id: int, resolved: ResolvedExecutionContext | None = None) -> list[Path]:
+def _allowed_roots(chat_id: int | str, resolved: ResolvedExecutionContext | None = None) -> list[Path]:
     """Return path roots this chat is allowed to access.
 
     Uses the resolved execution context for working_dir and extra_dirs,
@@ -824,7 +872,7 @@ def _allowed_roots(chat_id: int, resolved: ResolvedExecutionContext | None = Non
     else:
         roots = [cfg.working_dir]
         roots.extend(cfg.extra_dirs)
-    roots.append(chat_upload_dir(cfg.data_dir, chat_id))
+    roots.append(chat_upload_dir(cfg.data_dir, _conversation_key(chat_id)))
     return [r.resolve() for r in roots]
 
 
@@ -1101,7 +1149,7 @@ async def _heartbeat(progress, content_started: asyncio.Event) -> None:
 def _load(chat_id: int) -> SessionState:
     cfg = _cfg()
     raw = load_session(
-        cfg.data_dir, chat_id, _prov().name,
+        cfg.data_dir, _conversation_key(chat_id), _prov().name,
         _prov().new_provider_state, cfg.approval_mode,
         cfg.role, cfg.default_skills,
     )
@@ -1113,13 +1161,13 @@ def _load(chat_id: int) -> SessionState:
 
 
 def _save(chat_id: int, session: SessionState) -> None:
-    save_session(_cfg().data_dir, chat_id, session_to_dict(session))
+    save_session(_cfg().data_dir, _conversation_key(chat_id), session_to_dict(session))
 
 
 # -- Credential helpers ----------------------------------------------------
 
 async def _check_credential_satisfaction(
-    chat_id: int, user_id: int, session: SessionState, message,
+    chat_id: int | str, user_id: int | str, session: SessionState, message,
     resolved: ResolvedExecutionContext | None = None,
 ) -> dict[str, str] | None:
     """Check credentials for active skills. Returns credential_env if satisfied, None if not.
@@ -1132,7 +1180,7 @@ async def _check_credential_satisfaction(
     """
     active_skills = resolved.active_skills if resolved else session.active_skills
     result = check_credential_satisfaction(
-        active_skills, session, user_id, _cfg().data_dir, _encryption_key(),
+        active_skills, session, _actor_key(user_id), _cfg().data_dir, _encryption_key(),
     )
     if result.satisfied:
         return result.credential_env
@@ -1156,12 +1204,12 @@ async def _check_credential_satisfaction(
 # -- Core execution --------------------------------------------------------
 
 async def execute_request(
-    chat_id: int,
+    chat_id: int | str,
     prompt: str,
     image_paths: list[str],
     message,
     extra_dirs: list[str] | None = None,
-    request_user_id: int = 0,
+    request_user_id: int | str = "",
     skip_permissions: bool = False,
     trust_tier: str = "trusted",
 ) -> RequestExecutionOutcome:
@@ -1181,12 +1229,16 @@ async def execute_request(
 
     # Always include the chat-specific upload dir (not the shared uploads tree)
     # plus resolved extra_dirs from execution context and any denial dirs from retries
-    upload_dir = str(chat_upload_dir(cfg.data_dir, chat_id))
+    upload_dir = str(chat_upload_dir(cfg.data_dir, _conversation_key(chat_id)))
     all_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs) + (extra_dirs or [])
 
     # Stage Codex scripts before building context so scripts_dir is in extra_dirs
     if prov.name == "codex":
-        scripts_dir = stage_codex_scripts(cfg.data_dir, chat_id, resolved.active_skills)
+        scripts_dir = stage_codex_scripts(
+            cfg.data_dir,
+            _conversation_key(chat_id),
+            resolved.active_skills,
+        )
         if scripts_dir:
             all_extra_dirs.append(str(scripts_dir))
 
@@ -1376,7 +1428,7 @@ async def execute_request(
 
     # Save raw response to ring buffer for /raw retrieval
     from app.summarize import load_raw_by_slot
-    slot = save_raw(cfg.data_dir, chat_id, prompt, cleaned_reply)
+    slot = save_raw(cfg.data_dir, _conversation_key(chat_id), prompt, cleaned_reply)
 
     # Compact mode: use expandable blockquote or inline expand for long responses
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
@@ -1395,12 +1447,12 @@ async def execute_request(
 
 
 async def request_approval(
-    chat_id: int,
+    chat_id: int | str,
     prompt: str,
     image_paths: list[str],
     attachments: list[Attachment],
     message,
-    request_user_id: int = 0,
+    request_user_id: int | str = "",
     trust_tier: str = "trusted",
 ) -> None:
     cfg = _cfg()
@@ -1422,7 +1474,7 @@ async def request_approval(
         return
 
     # Build preflight context (include config extra_dirs + upload dir)
-    upload_dir = str(chat_upload_dir(cfg.data_dir, chat_id))
+    upload_dir = str(chat_upload_dir(cfg.data_dir, _conversation_key(chat_id)))
     preflight_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs)
     preflight_context = build_preflight_context(
         resolved.role, resolved.active_skills, preflight_extra_dirs,
@@ -1439,7 +1491,7 @@ async def request_approval(
     if getattr(message, "capabilities", None) and getattr(message.capabilities, "surface_name", "") == "registry":
         conversation_ref = getattr(message, "conversation_ref", "")
     elif cfg.agent_mode == "registry":
-        conversation_ref = telegram_conversation_ref(cfg, chat_id)
+        conversation_ref = telegram_conversation_ref(cfg, _telegram_chat_id(chat_id))
     timeline_cb = None
     surface_name = getattr(getattr(message, "capabilities", None), "surface_name", "telegram")
     if conversation_ref and surface_name != "registry":
@@ -1502,7 +1554,7 @@ async def request_approval(
     ]])
     await progress.update(_msg.approval_required(), force=True)
     plan_text = plan_result.text or "[empty plan]"
-    save_raw(cfg.data_dir, chat_id, prompt, plan_text, kind="approval")
+    save_raw(cfg.data_dir, _conversation_key(chat_id), prompt, plan_text, kind="approval")
     await send_formatted_reply(
         message,
         "**Approval plan:**\n\n" + plan_text,
@@ -1811,7 +1863,7 @@ async def cmd_new(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         old_session = _load(chat_id)
         user_id = event.user.id
-        if foreign_skill_setup(old_session, user_id):
+        if foreign_skill_setup(old_session, _actor_key(user_id)):
             await update.effective_message.reply_text(
                 foreign_setup_message(old_session.awaiting_skill_setup),
             )
@@ -1825,7 +1877,7 @@ async def cmd_new(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             session.approval_mode_explicit = True
         _save(chat_id, session)
         # Clean up any staged Codex scripts for this chat
-        cleanup_codex_scripts(cfg.data_dir, chat_id)
+        cleanup_codex_scripts(cfg.data_dir, _conversation_key(chat_id))
     await update.effective_message.reply_text(f"Fresh {prov.name} conversation started.")
 
 
@@ -2136,7 +2188,7 @@ async def cmd_export(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     chat_id = event.chat_id
     cfg = _cfg()
 
-    history = export_chat_history(cfg.data_dir, chat_id)
+    history = export_chat_history(cfg.data_dir, _conversation_key(chat_id))
     if not history:
         await update.effective_message.reply_text(_msg.no_conversation_to_export())
         return
@@ -2180,7 +2232,7 @@ async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if sub != "sessions":
         await update.effective_message.reply_text(
-            "Usage: /admin sessions [chat_id]")
+            "Usage: /admin sessions [conversation_key]")
         return
 
     cfg = _cfg()
@@ -2195,22 +2247,21 @@ async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
     for s in sessions:
         s["active_skills"] = filter_resolvable_skills(s["active_skills"])
 
-    # Detail view for a specific chat
+    # Detail view for a specific conversation
     if len(args) >= 2:
-        try:
-            target_id = int(args[1])
-        except ValueError:
-            await update.effective_message.reply_text("Invalid chat ID.")
+        target_key = parse_conversation_key(args[1])
+        if not target_key:
+            await update.effective_message.reply_text("Invalid conversation key.")
             return
-        match = next((s for s in sessions if s["chat_id"] == target_id), None)
+        match = next((s for s in sessions if s["conversation_key"] == target_key), None)
         if not match:
             await update.effective_message.reply_text(
-                f"No session found for chat {target_id}.")
+                f"No session found for conversation {target_key}.")
             return
         skills = match["active_skills"]
         skill_list = ", ".join(skills) if skills else "none"
         lines = [
-            f"<b>Session {target_id}</b>",
+            f"<b>Session {html.escape(target_key)}</b>",
             f"Provider: {html.escape(match['provider'])}",
             f"Approval: {html.escape(match['approval_mode'])}",
             f"Skills ({len(skills)}): {html.escape(skill_list)}",
@@ -2244,7 +2295,7 @@ async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
         for sk, count in top:
             lines.append(f"  {html.escape(sk)}: {count}")
     lines.append("")
-    lines.append(f"Most recent: chat {sessions[0]['chat_id']}")
+    lines.append(f"Most recent: {html.escape(sessions[0]['conversation_key'])}")
     if sessions[0]["updated_at"]:
         lines.append(f"  updated {sessions[0]['updated_at'][:19]}")
 
@@ -2311,10 +2362,10 @@ async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def cancel_chat_operation(
-    chat_id: int,
+    chat_id: int | str,
     message,
     *,
-    actor_user_id: int = 0,
+    actor_user_id: int | str = "",
     allow_admin_override: bool = False,
     update_id: int | None = None,
 ) -> None:
@@ -2326,7 +2377,7 @@ async def cancel_chat_operation(
         return
 
     # Admitted but not yet running: cancel queued fresh item so the worker won't run it.
-    if work_queue.cancel_queued_fresh_for_chat(_cfg().data_dir, chat_id):
+    if work_queue.cancel_queued_fresh_for_chat(_cfg().data_dir, _conversation_key(chat_id)):
         await message.reply_text(_msg.cancel_queued_superseded())
         return
 
@@ -2335,7 +2386,7 @@ async def cancel_chat_operation(
 
         setup = session.awaiting_skill_setup
         if setup:
-            if setup.user_id == actor_user_id or allow_admin_override:
+            if setup.user_id == _actor_key(actor_user_id) or allow_admin_override:
                 session.awaiting_skill_setup = None
                 _save(chat_id, session)
                 await message.reply_text(_msg.credential_setup_cancelled())
@@ -2359,12 +2410,12 @@ async def cancel_chat_operation(
 async def cmd_clear_credentials(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await _public_guard(event, update):
         return
-    user_id = event.user.id
+    user_id = telegram_numeric_id(_actor_key(event.user.id)) or 0
     args = event.args
     skill_name = args[0] if args else None
 
     cfg = _cfg()
-    stored = list_user_credential_skills(cfg.data_dir, user_id)
+    stored = list_user_credential_skills(cfg.data_dir, _actor_key(user_id))
 
     if skill_name:
         if skill_name not in stored:
@@ -2402,7 +2453,7 @@ async def _execute_clear_credentials(
     """Shared logic for clearing credentials after confirmation."""
     cfg = _cfg()
     key = _encryption_key()
-    removed = delete_user_credentials(cfg.data_dir, user_id, key, skill_name)
+    removed = delete_user_credentials(cfg.data_dir, _actor_key(user_id), key, skill_name)
 
     # Clear in-progress setup even if no credentials were saved yet
     setup_cleared = False
@@ -2411,7 +2462,7 @@ async def _execute_clear_credentials(
             await query.answer()
         session = _load(chat_id)
         setup = session.awaiting_skill_setup
-        if setup and setup.user_id == user_id:
+        if setup and setup.user_id == _actor_key(user_id):
             if skill_name is None or setup.skill == skill_name:
                 session.awaiting_skill_setup = None
                 setup_cleared = True
@@ -2440,7 +2491,7 @@ async def _execute_clear_credentials(
 @_callback_handler
 async def handle_clear_cred_callback(event, query) -> None:
     chat_id = event.chat_id
-    clicker_id = event.user.id
+    clicker_id = telegram_numeric_id(_actor_key(event.user.id)) or 0
 
     # All callback data encodes the initiating user: clear_cred_<action>:<uid>[:<skill>]
     # Reject if a different user clicks the button.
@@ -2518,7 +2569,7 @@ async def cmd_raw(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.effective_message.reply_text("Usage: /raw [N] — N is the Nth most recent response (default: 1)")
             return
 
-    raw_text = load_raw(cfg.data_dir, chat_id, n)
+    raw_text = load_raw(cfg.data_dir, _conversation_key(chat_id), n)
     if raw_text is None:
         await update.effective_message.reply_text("No stored responses found.")
         return
@@ -2666,7 +2717,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     payload = serialize_inbound(msg)
 
     cfg = _cfg()
-    if not session_exists(cfg.data_dir, chat_id):
+    if not session_exists(cfg.data_dir, _conversation_key(chat_id)):
         welcome = "I'm ready. Send me a message or type /help to see what I can do."
         if cfg.approval_mode == "on":
             welcome += "\nApproval mode is on \u2014 I'll show a plan before acting."
@@ -2678,16 +2729,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     data_dir = cfg.data_dir
     session = _load(chat_id)
     setup = session.awaiting_skill_setup
-    if setup and setup.user_id == user_id:
+    if setup and setup.user_id == _actor_key(user_id):
         # Credential setup: record update for dedupe only; handle inline. No work item so worker
         # never sees this message as provider work (avoids race and secret-leak path).
-        if not work_queue.record_update(data_dir, uid, chat_id, user_id, "message", payload=payload):
+        if not work_queue.record_update(
+            data_dir,
+            _event_key(uid),
+            _conversation_key(chat_id),
+            _actor_key(user_id),
+            "message",
+            payload=payload,
+        ):
             return  # duplicate update_id
         try:
             async with _chat_lock(chat_id, message=message, update_id=uid, supersede_recovery=True):
                 session = _load(chat_id)
                 setup = session.awaiting_skill_setup
-                if not setup or setup.user_id != user_id:
+                if not setup or setup.user_id != _actor_key(user_id):
                     return
                 await message.chat.send_action(ChatAction.TYPING)
                 req = setup.remaining[0]
@@ -2743,9 +2801,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     envelope = InboundEnvelope(
         transport="telegram",
-        update_id=uid,
-        conversation_id=chat_id,
-        actor_id=user_id,
+        event_id=_event_key(uid),
+        conversation_key=_conversation_key(chat_id),
+        actor_key=_actor_key(user_id),
         received_at=datetime.now(timezone.utc),
         event=msg,
     )
@@ -2865,7 +2923,11 @@ async def handle_recovery_action(
     data_dir = cfg.data_dir
 
     try:
-        recovery_item = work_queue.get_pending_recovery_for_update(data_dir, chat_id, update_id)
+        recovery_item = work_queue.get_pending_recovery_for_update(
+            data_dir,
+            _conversation_key(chat_id),
+            _event_key(update_id),
+        )
     except TransportStateCorruption as e:
         log.exception("Transport state corruption in recovery callback for chat %s: %s", chat_id, e)
         await answer_action(_msg.recovery_error_try_again(), show_alert=True)
@@ -2940,7 +3002,7 @@ async def handle_recovery_action(
 
     # Retrieve original payload and deserialize.
     from app.transport import deserialize_inbound, InboundMessage
-    payload_str = item.get("payload") or work_queue.get_update_payload(data_dir, update_id)
+    payload_str = item.get("payload") or work_queue.get_update_payload(data_dir, _event_key(update_id))
     if not payload_str:
         work_queue.fail_work_item(data_dir, item["id"], error="payload_missing")
         try:
@@ -3052,7 +3114,7 @@ async def handle_expand_callback(event, query) -> None:
 
     from app.summarize import load_raw_by_slot
     cfg = _cfg()
-    raw_text = load_raw_by_slot(cfg.data_dir, target_chat, slot)
+    raw_text = load_raw_by_slot(cfg.data_dir, _conversation_key(target_chat), slot)
     if raw_text is None:
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.edit_text(
@@ -3103,7 +3165,7 @@ async def handle_collapse_callback(event, query) -> None:
 
     from app.summarize import load_raw_by_slot
     cfg = _cfg()
-    raw_text = load_raw_by_slot(cfg.data_dir, target_chat, slot)
+    raw_text = load_raw_by_slot(cfg.data_dir, _conversation_key(target_chat), slot)
     if raw_text is None:
         await query.edit_message_reply_markup(reply_markup=None)
         return
@@ -3482,38 +3544,44 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 @_command_handler
 async def cmd_allowuser(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin: add a user to the allowed list. Usage: /allowuser <user_id> [reason]."""
+    """Admin: add a user to the allowed list. Usage: /allowuser <actor_key|user_id> [reason]."""
     del context
     if not is_admin(event.user):
         await update.effective_message.reply_text("This command requires admin access.")
         return
-    if not event.args or not event.args[0].isdigit():
-        await update.effective_message.reply_text("Usage: /allowuser <user_id> [reason]")
+    if not event.args:
+        await update.effective_message.reply_text("Usage: /allowuser <actor_key|user_id> [reason]")
         return
-    user_id = int(event.args[0])
+    actor_key = parse_actor_key(event.args[0])
+    if not actor_key:
+        await update.effective_message.reply_text("Usage: /allowuser <actor_key|user_id> [reason]")
+        return
     reason = " ".join(event.args[1:])
-    granted_by = event.user.id if event.user else 0
+    granted_by = _actor_key(event.user.id if event.user else 0)
     cfg = _cfg()
-    work_queue.set_user_access(cfg.data_dir, user_id, "allowed", reason, granted_by)
-    await update.effective_message.reply_text(f"User {user_id} added to allowed list.")
+    work_queue.set_user_access(cfg.data_dir, actor_key, "allowed", reason, granted_by)
+    await update.effective_message.reply_text(f"Actor {actor_key} added to allowed list.")
 
 
 @_command_handler
 async def cmd_blockuser(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin: block a user. Usage: /blockuser <user_id> [reason]."""
+    """Admin: block a user. Usage: /blockuser <actor_key|user_id> [reason]."""
     del context
     if not is_admin(event.user):
         await update.effective_message.reply_text("This command requires admin access.")
         return
-    if not event.args or not event.args[0].isdigit():
-        await update.effective_message.reply_text("Usage: /blockuser <user_id> [reason]")
+    if not event.args:
+        await update.effective_message.reply_text("Usage: /blockuser <actor_key|user_id> [reason]")
         return
-    user_id = int(event.args[0])
+    actor_key = parse_actor_key(event.args[0])
+    if not actor_key:
+        await update.effective_message.reply_text("Usage: /blockuser <actor_key|user_id> [reason]")
+        return
     reason = " ".join(event.args[1:])
-    granted_by = event.user.id if event.user else 0
+    granted_by = _actor_key(event.user.id if event.user else 0)
     cfg = _cfg()
-    work_queue.set_user_access(cfg.data_dir, user_id, "blocked", reason, granted_by)
-    await update.effective_message.reply_text(f"User {user_id} blocked.")
+    work_queue.set_user_access(cfg.data_dir, actor_key, "blocked", reason, granted_by)
+    await update.effective_message.reply_text(f"Actor {actor_key} blocked.")
 
 
 @_command_handler
@@ -3532,7 +3600,7 @@ async def cmd_listaccess(event, update: Update, context: ContextTypes.DEFAULT_TY
     for row in rows:
         status = "✅ allowed" if row["access"] == "allowed" else "🚫 blocked"
         reason = f" — {html.escape(row['reason'])}" if row["reason"] else ""
-        lines.append(f"• <code>{row['user_id']}</code> {status}{reason}")
+        lines.append(f"• <code>{row['actor_key']}</code> {status}{reason}")
     await update.effective_message.reply_text(
         "\n".join(lines),
         parse_mode=ParseMode.HTML,
@@ -3551,19 +3619,26 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
     """
     from app.transport import InboundMessage, InboundCommand, InboundCallback
 
-    chat_id = item.get("chat_id", 0)
-    if not chat_id or not _bot_instance:
-        log.warning("Worker dispatch: no chat_id or bot for item %s", item.get("id"))
-        return
-
     bot = _bot_instance
     cfg = _cfg()
     data_dir = cfg.data_dir
 
     if isinstance(event, InboundMessage):
         source = getattr(event, "source", "telegram")
+        conversation_key = str(item.get("conversation_key") or getattr(event, "conversation_key", ""))
+        chat_id = telegram_numeric_id(conversation_key) if source == "telegram" else None
+        runtime_chat = chat_id if chat_id is not None else conversation_key
+        if source == "telegram" and (chat_id is None or bot is None):
+            log.warning(
+                "Worker dispatch: telegram item %s missing chat/bot (conversation_key=%s)",
+                item.get("id"),
+                conversation_key,
+            )
+            return
         conversation_ref = event.conversation_ref or (
-            telegram_conversation_ref(_cfg(), chat_id) if source == "telegram" else f"registry:{chat_id}"
+            telegram_conversation_ref(_cfg(), chat_id)
+            if source == "telegram" and chat_id is not None
+            else conversation_key
         )
         routed_task_id = getattr(event, "routed_task_id", "")
         title = summarize_text(event.text) or "Conversation"
@@ -3571,7 +3646,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             conversation_ref,
             config=_cfg(),
             bot=bot,
-            chat_id=chat_id,
+            conversation_key=conversation_key,
             source=source,
             routed_task_id=routed_task_id,
             output_log=getattr(bot, "_output_log", None),
@@ -3582,7 +3657,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             if source == "telegram" and not is_allowed(event.user):
                 work_queue.fail_work_item(data_dir, item["id"], error="not_allowed")
                 return
-            update_id = item.get("update_id", 0)
+            update_id = telegram_numeric_id(str(item.get("event_id") or "")) or 0
             original_text = event.text or ""
             preview = html.escape(original_text[:200] + ("\u2026" if len(original_text) > 200 else ""))
             await bot_msg.bind(title=title, config=_cfg())
@@ -3606,17 +3681,17 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
         await bot_msg.bind(title=title, config=_cfg())
         await bot_msg.on_message_received(event.text)
         try:
-            async with _chat_lock(chat_id, worker_item=item):
-                session = _load(chat_id)
+            async with _chat_lock(runtime_chat, worker_item=item):
+                session = _load(runtime_chat)
                 outcome = None
                 if not routed_task_id and not getattr(event, "skip_approval", False) and session.approval_mode == "on":
                     await request_approval(
-                        chat_id, prompt, image_paths, list(event.attachments),
+                        runtime_chat, prompt, image_paths, list(event.attachments),
                         bot_msg, request_user_id=user_id, trust_tier=trust,
                     )
                 else:
                     outcome = await execute_request(
-                        chat_id, prompt, image_paths, bot_msg,
+                        runtime_chat, prompt, image_paths, bot_msg,
                         request_user_id=user_id, trust_tier=trust,
                     )
         except work_queue.LeaveClaimed:
@@ -3624,7 +3699,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
         if outcome is not None:
             await bot_msg.on_outcome(outcome)
             if getattr(event, "skip_approval", False) and source == "registry":
-                session_after = _load(chat_id)
+                session_after = _load(runtime_chat)
                 delegation = session_after.pending_delegation
                 if (
                     delegation is not None
@@ -3632,7 +3707,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
                     and delegation.status in {"completed", "partial_failed"}
                 ):
                     session_after.pending_delegation = None
-                    _save(chat_id, session_after)
+                    _save(runtime_chat, session_after)
         if routed_task_id:
             client = registry_client(_cfg())
             if client is not None and outcome is not None:
@@ -3660,15 +3735,19 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             try:
                 work_queue.record_usage(
                     data_dir,
-                    chat_id=chat_id,
+                    conversation_key=conversation_key,
                     work_item_id=item["id"],
-                    provider=cfg.provider,
+                    provider=cfg.provider_name,
                     prompt_tokens=outcome.prompt_tokens,
                     completion_tokens=outcome.completion_tokens,
                     cost_usd=outcome.cost_usd,
                 )
             except Exception:
-                log.warning("Failed to record usage for chat %d", chat_id, exc_info=True)
+                log.warning(
+                    "Failed to record usage for conversation %s",
+                    conversation_key,
+                    exc_info=True,
+                )
             if conversation_ref and (
                 outcome.prompt_tokens > 0 or outcome.completion_tokens > 0
             ):
@@ -3683,17 +3762,25 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
                             "prompt_tokens": outcome.prompt_tokens,
                             "completion_tokens": outcome.completion_tokens,
                             "cost_usd": outcome.cost_usd,
-                            "provider": cfg.provider,
+                            "provider": cfg.provider_name,
                         },
                     )
                 except Exception:
                     log.debug("Failed to publish usage timeline event", exc_info=True)
-        _maybe_fire_webhook(cfg, chat_id, conversation_ref, outcome)
+        _maybe_fire_webhook(cfg, chat_id or 0, conversation_ref, outcome)
         return
 
     if isinstance(event, (InboundCommand, InboundCallback)):
-        log.info("Worker recovered orphaned %s for chat %d (update %s)",
-                 kind, chat_id, item.get("update_id"))
+        conversation_key = str(item.get("conversation_key", ""))
+        chat_id = telegram_numeric_id(conversation_key)
+        log.info(
+            "Worker recovered orphaned %s for conversation %s (event %s)",
+            kind,
+            conversation_key,
+            item.get("event_id"),
+        )
+        if chat_id is None or bot is None:
+            return
         try:
             detail = f"/{event.command}" if isinstance(event, InboundCommand) else "a button action"
             await bot.send_message(

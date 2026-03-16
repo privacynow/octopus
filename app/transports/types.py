@@ -14,9 +14,9 @@ class InboundEnvelope:
     """Normalized inbound delivery: one update with conversation and actor identity."""
 
     transport: str
-    update_id: int
-    conversation_id: int | str
-    actor_id: int
+    event_id: str
+    conversation_key: str
+    actor_key: str
     received_at: datetime
     event: InboundMessage | InboundCommand | InboundCallback
     conversation_ref: str = ""

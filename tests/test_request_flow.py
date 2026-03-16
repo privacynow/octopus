@@ -39,6 +39,7 @@ from app.execution_context import (
     ResolvedExecutionContext,
     resolve_execution_context,
 )
+from app.identity import telegram_actor_key, telegram_conversation_key
 from app.providers.base import RunResult
 from app.request_flow import extra_dirs_from_denials as _extra_dirs_from_denials
 from app.session_state import (
@@ -428,16 +429,22 @@ async def test_execute_request_public_user_gets_inspect_policy():
 
         # Prime session with skills and edit policy (trusted-user settings)
         from app.storage import load_session, save_session
-        session = load_session(data_dir, chat.id, prov.name, prov.new_provider_state, "off")
+        session = load_session(
+            data_dir,
+            telegram_conversation_key(chat.id),
+            prov.name,
+            prov.new_provider_state,
+            "off",
+        )
         session["file_policy"] = "edit"
         session["active_skills"] = ["some-skill"]
-        save_session(data_dir, chat.id, session)
+        save_session(data_dir, telegram_conversation_key(chat.id), session)
 
         # Execute as public
         msg = FakeMessage(chat=chat, text="hello")
         await th.execute_request(
             chat.id, "test prompt", [], msg,
-            request_user_id=999, trust_tier="public",
+            request_user_id=telegram_actor_key(999), trust_tier="public",
         )
 
         # Provider should have been called with public restrictions
@@ -460,14 +467,20 @@ async def test_execute_request_trusted_user_gets_edit_policy():
         chat = FakeChat(12345)
 
         from app.storage import load_session, save_session
-        session = load_session(data_dir, chat.id, prov.name, prov.new_provider_state, "off")
+        session = load_session(
+            data_dir,
+            telegram_conversation_key(chat.id),
+            prov.name,
+            prov.new_provider_state,
+            "off",
+        )
         session["file_policy"] = "edit"
-        save_session(data_dir, chat.id, session)
+        save_session(data_dir, telegram_conversation_key(chat.id), session)
 
         msg = FakeMessage(chat=chat, text="hello")
         await th.execute_request(
             chat.id, "test prompt", [], msg,
-            request_user_id=42, trust_tier="trusted",
+            request_user_id=telegram_actor_key(42), trust_tier="trusted",
         )
 
         assert len(prov.run_calls) == 1
@@ -526,7 +539,7 @@ async def test_approval_round_trip_preserves_public_trust_tier():
     """PendingApproval stores trust_tier; approve_pending passes it to execute_request."""
     # Verify trust_tier round-trips through serialization
     pending = PendingApproval(
-        request_user_id=999,
+        request_user_id=telegram_actor_key(999),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -547,7 +560,7 @@ async def test_approval_round_trip_preserves_public_trust_tier():
 async def test_pending_retry_preserves_trust_tier():
     """PendingRetry stores trust_tier through serialization round-trip."""
     pending = PendingRetry(
-        request_user_id=999,
+        request_user_id=telegram_actor_key(999),
         prompt="test",
         image_paths=[],
         context_hash="abc123",
@@ -589,7 +602,7 @@ def test_validate_pending_respects_stored_trust_tier():
 
     # Create a pending approval with the public hash and trust_tier
     pending = PendingApproval(
-        request_user_id=999,
+        request_user_id=telegram_actor_key(999),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -610,7 +623,7 @@ def test_validate_pending_detects_real_context_change():
     session = SessionState(provider="claude", provider_state={}, approval_mode="on")
 
     pending = PendingApproval(
-        request_user_id=42,
+        request_user_id=telegram_actor_key(42),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -633,7 +646,7 @@ def test_classify_pending_validation_returns_ok_expired_context_changed():
 
     # ok: fresh, matching context
     pending_ok = PendingApproval(
-        request_user_id=42,
+        request_user_id=telegram_actor_key(42),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -645,7 +658,7 @@ def test_classify_pending_validation_returns_ok_expired_context_changed():
 
     # expired: old created_at
     pending_expired = PendingApproval(
-        request_user_id=42,
+        request_user_id=telegram_actor_key(42),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -657,7 +670,7 @@ def test_classify_pending_validation_returns_ok_expired_context_changed():
 
     # context_changed: hash mismatch
     pending_stale = PendingApproval(
-        request_user_id=42,
+        request_user_id=telegram_actor_key(42),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -679,7 +692,7 @@ def test_classify_pending_validation_accepts_iso_created_at():
         datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
     ).isoformat()
     pending = PendingApproval(
-        request_user_id=42,
+        request_user_id=telegram_actor_key(42),
         prompt="test",
         image_paths=[],
         attachment_dicts=[],
@@ -708,7 +721,7 @@ def test_credential_check_uses_resolved_skills_not_session():
         result = check_credential_satisfaction(
             active_skills=[],  # resolved: public user gets no skills
             session=session,
-            user_id=999,
+            user_id=telegram_actor_key(999),
             data_dir=data_dir,
             encryption_key=b"test-key-1234567",
         )
@@ -727,7 +740,7 @@ def test_credential_check_with_resolved_skills():
         result = check_credential_satisfaction(
             active_skills=["nonexistent-skill"],
             session=session,
-            user_id=42,
+            user_id=telegram_actor_key(42),
             data_dir=data_dir,
             encryption_key=b"test-key-1234567",
         )

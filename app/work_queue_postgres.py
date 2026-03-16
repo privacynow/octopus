@@ -40,9 +40,9 @@ class PostgresTransportStore:
     def record_and_enqueue(
         self,
         data_dir: Path,
-        update_id: int,
-        chat_id: int,
-        user_id: int,
+        event_id: str,
+        conversation_key: str,
+        actor_key: str,
         kind: str,
         payload: str = "{}",
         *,
@@ -50,59 +50,59 @@ class PostgresTransportStore:
     ) -> tuple[bool, str | None]:
         with self._conn() as conn:
             return work_queue_pg.record_and_enqueue(
-                conn, update_id, chat_id, user_id, kind, payload, worker_id=worker_id,
+                conn, event_id, conversation_key, actor_key, kind, payload, worker_id=worker_id,
             )
 
     def record_and_admit_message(
         self,
         data_dir: Path,
-        update_id: int,
-        chat_id: int,
-        user_id: int,
+        event_id: str,
+        conversation_key: str,
+        actor_key: str,
         kind: str,
         payload: str = "{}",
     ) -> tuple[str, str | None]:
         with self._conn() as conn:
             return work_queue_pg.record_and_admit_message(
-                conn, update_id, chat_id, user_id, kind, payload,
+                conn, event_id, conversation_key, actor_key, kind, payload,
             )
 
     def record_update(
         self,
         data_dir: Path,
-        update_id: int,
-        chat_id: int,
-        user_id: int,
+        event_id: str,
+        conversation_key: str,
+        actor_key: str,
         kind: str,
         payload: str = "{}",
     ) -> bool:
         with self._conn() as conn:
-            return work_queue_pg.record_update(conn, update_id, chat_id, user_id, kind, payload)
+            return work_queue_pg.record_update(conn, event_id, conversation_key, actor_key, kind, payload)
 
     def enqueue_work_item(
         self,
         data_dir: Path,
-        chat_id: int,
-        update_id: int,
+        conversation_key: str,
+        event_id: str,
         *,
         worker_id: str | None = None,
     ) -> str:
         with self._conn() as conn:
-            return work_queue_pg.enqueue_work_item(conn, chat_id, update_id, worker_id=worker_id)
+            return work_queue_pg.enqueue_work_item(conn, conversation_key, event_id, worker_id=worker_id)
 
-    def update_payload(self, data_dir: Path, update_id: int, payload: str) -> None:
+    def update_payload(self, data_dir: Path, event_id: str, payload: str) -> None:
         with self._conn() as conn:
-            work_queue_pg.update_payload(conn, update_id, payload)
+            work_queue_pg.update_payload(conn, event_id, payload)
 
     def claim_for_update(
-        self, data_dir: Path, chat_id: int, update_id: int, worker_id: str,
+        self, data_dir: Path, conversation_key: str, event_id: str, worker_id: str,
     ) -> dict[str, Any] | None:
         with self._conn() as conn:
-            return work_queue_pg.claim_for_update(conn, chat_id, update_id, worker_id)
+            return work_queue_pg.claim_for_update(conn, conversation_key, event_id, worker_id)
 
-    def claim_next(self, data_dir: Path, chat_id: int, worker_id: str) -> dict[str, Any] | None:
+    def claim_next(self, data_dir: Path, conversation_key: str, worker_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
-            return work_queue_pg.claim_next(conn, chat_id, worker_id)
+            return work_queue_pg.claim_next(conn, conversation_key, worker_id)
 
     def claim_next_any(self, data_dir: Path, worker_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
@@ -116,43 +116,43 @@ class PostgresTransportStore:
         with self._conn() as conn:
             work_queue_pg.fail_work_item(conn, item_id, error)
 
-    def cancel_queued_fresh_for_chat(self, data_dir: Path, chat_id: int) -> bool:
+    def cancel_queued_fresh_for_chat(self, data_dir: Path, conversation_key: str) -> bool:
         with self._conn() as conn:
-            return work_queue_pg.cancel_queued_fresh_for_chat(conn, chat_id)
+            return work_queue_pg.cancel_queued_fresh_for_chat(conn, conversation_key)
 
-    def has_claimed_for_chat(self, data_dir: Path, chat_id: int) -> bool:
+    def has_claimed_for_chat(self, data_dir: Path, conversation_key: str) -> bool:
         with self._conn() as conn:
-            return work_queue_pg.has_claimed_for_chat(conn, chat_id)
+            return work_queue_pg.has_claimed_for_chat(conn, conversation_key)
 
-    def has_queued_or_claimed(self, data_dir: Path, chat_id: int) -> bool:
+    def has_queued_or_claimed(self, data_dir: Path, conversation_key: str) -> bool:
         with self._conn() as conn:
-            return work_queue_pg.has_queued_or_claimed(conn, chat_id)
+            return work_queue_pg.has_queued_or_claimed(conn, conversation_key)
 
-    def get_update_payload(self, data_dir: Path, update_id: int) -> str | None:
+    def get_update_payload(self, data_dir: Path, event_id: str) -> str | None:
         with self._conn() as conn:
-            return work_queue_pg.get_update_payload(conn, update_id)
+            return work_queue_pg.get_update_payload(conn, event_id)
 
-    def get_work_items_for_chat(self, data_dir: Path, chat_id: int) -> list[dict[str, Any]]:
+    def get_work_items_for_chat(self, data_dir: Path, conversation_key: str) -> list[dict[str, Any]]:
         with self._conn() as conn:
-            return work_queue_pg.get_work_items_for_chat(conn, chat_id)
+            return work_queue_pg.get_work_items_for_chat(conn, conversation_key)
 
     def mark_pending_recovery(self, data_dir: Path, item_id: str) -> None:
         with self._conn() as conn:
             work_queue_pg.mark_pending_recovery(conn, item_id)
 
     def get_pending_recovery_for_update(
-        self, data_dir: Path, chat_id: int, update_id: int,
+        self, data_dir: Path, conversation_key: str, event_id: str,
     ) -> dict[str, Any] | None:
         with self._conn() as conn:
-            return work_queue_pg.get_pending_recovery_for_update(conn, chat_id, update_id)
+            return work_queue_pg.get_pending_recovery_for_update(conn, conversation_key, event_id)
 
-    def get_latest_pending_recovery(self, data_dir: Path, chat_id: int) -> dict[str, Any] | None:
+    def get_latest_pending_recovery(self, data_dir: Path, conversation_key: str) -> dict[str, Any] | None:
         with self._conn() as conn:
-            return work_queue_pg.get_latest_pending_recovery(conn, chat_id)
+            return work_queue_pg.get_latest_pending_recovery(conn, conversation_key)
 
-    def supersede_pending_recovery(self, data_dir: Path, chat_id: int) -> int:
+    def supersede_pending_recovery(self, data_dir: Path, conversation_key: str) -> int:
         with self._conn() as conn:
-            return work_queue_pg.supersede_pending_recovery(conn, chat_id)
+            return work_queue_pg.supersede_pending_recovery(conn, conversation_key)
 
     def discard_recovery(self, data_dir: Path, item_id: str) -> DiscardResult:
         with self._conn() as conn:
@@ -174,20 +174,20 @@ class PostgresTransportStore:
         with self._conn() as conn:
             return work_queue_pg.purge_old(conn, older_than_hours)
 
-    def get_user_access(self, data_dir: Path, user_id: int) -> str | None:
+    def get_user_access(self, data_dir: Path, actor_key: str) -> str | None:
         with self._conn() as conn:
-            return work_queue_pg.get_user_access_override(conn, user_id)
+            return work_queue_pg.get_user_access_override(conn, actor_key)
 
     def set_user_access(
         self,
         data_dir: Path,
-        user_id: int,
+        actor_key: str,
         access: str,
         reason: str = "",
-        granted_by: int = 0,
+        granted_by: str = "",
     ) -> None:
         with self._conn() as conn:
-            work_queue_pg.set_user_access(conn, user_id, access, reason, granted_by)
+            work_queue_pg.set_user_access(conn, actor_key, access, reason, granted_by)
 
     def list_user_access(self, data_dir: Path) -> list[dict]:
         with self._conn() as conn:
@@ -197,7 +197,7 @@ class PostgresTransportStore:
         self,
         data_dir: Path,
         *,
-        chat_id: int,
+        conversation_key: str,
         work_item_id: str,
         provider: str,
         prompt_tokens: int,
@@ -207,7 +207,7 @@ class PostgresTransportStore:
         with self._conn() as conn:
             work_queue_pg.record_usage(
                 conn,
-                chat_id=chat_id,
+                conversation_key=conversation_key,
                 work_item_id=work_item_id,
                 provider=provider,
                 prompt_tokens=prompt_tokens,

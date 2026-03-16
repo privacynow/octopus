@@ -23,6 +23,7 @@ from pathlib import Path
 
 from app.providers.base import RunResult
 from app.storage import close_db, ensure_data_dirs
+from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeChat,
     FakeMessage,
@@ -1000,7 +1001,7 @@ async def test_normalization_persists_to_disk():
 
             # Read from SQLite — should have empty active_skills
             from app.storage import load_session
-            raw = load_session(data_dir, 1001, "claude", prov.new_provider_state, "off")
+            raw = load_session(data_dir, telegram_conversation_key(1001), "claude", prov.new_provider_state, "off")
             assert raw.get("active_skills", []) == []
         finally:
             cleanup()

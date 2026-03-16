@@ -40,7 +40,7 @@ def test_load_dotenv_missing_file():
 
 def test_parse_allowed_users():
     ids, names = parse_allowed_users("123,456,@alice,bob")
-    assert ids == {123, 456}
+    assert ids == {"tg:123", "tg:456"}
     assert names == {"alice", "bob"}
 
 def test_parse_allowed_users_empty():

@@ -43,15 +43,26 @@ def _get_max_applied_version(conn: Any) -> int | None:
     except Exception as e:
         sqlstate = getattr(e, "sqlstate", None)
         if sqlstate in _MISSING_OBJECT_SQLSTATES:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             return None
         raise
 
 
 def run_bootstrap(conn: Any) -> list[str]:
     """Apply all SQL files in order and record versions in the same transaction per file.
-    One transaction per migration: SQL + version insert commit together. Stop at first error."""
+    One transaction per migration: SQL + version insert commit together. Stop at first error.
+
+    If schema_migrations already exists, bootstrap behaves idempotently and only
+    applies versions that have not been recorded yet.
+    """
     errors: list[str] = []
+    max_applied = _get_max_applied_version(conn)
     for version, path in _sql_files_sorted():
+        if max_applied is not None and version <= max_applied:
+            continue
         try:
             sql = path.read_text()
             with conn.cursor() as cur:

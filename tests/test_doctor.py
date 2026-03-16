@@ -7,6 +7,7 @@ from app.doctor import collect_doctor_report, scan_stale_delegations
 from app.storage import default_session, save_session
 from tests.support.config_support import make_config
 from tests.support.handler_support import FakeProvider
+from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 
 
 async def test_doctor_warns_when_registry_degraded(tmp_path: Path):
@@ -149,7 +150,7 @@ async def test_doctor_warns_stale_pending_delegation(tmp_path: Path):
             }
         ],
     }
-    save_session(tmp_path, 1001, session)
+    save_session(tmp_path, telegram_conversation_key(1001), session)
 
     assert scan_stale_delegations(
         tmp_path,
@@ -189,7 +190,7 @@ async def test_doctor_stale_pending_delegation_accepts_iso_timestamp(tmp_path: P
             }
         ],
     }
-    save_session(tmp_path, 1002, session)
+    save_session(tmp_path, telegram_conversation_key(1002), session)
 
     assert scan_stale_delegations(
         tmp_path,

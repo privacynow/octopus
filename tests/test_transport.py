@@ -3,6 +3,7 @@
 import tempfile
 from pathlib import Path
 
+from app.identity import telegram_actor_key, telegram_conversation_key
 from app.transport import (
     InboundAttachment,
     InboundCallback,
@@ -39,7 +40,7 @@ def test_normalize_user_basic():
     user = FakeUser(uid=42, username="Alice")
     result = normalize_user(user)
     assert isinstance(result, InboundUser)
-    assert result.id == 42
+    assert result.id == telegram_actor_key(42)
     assert result.username == "alice"
 
 
@@ -47,7 +48,7 @@ def test_normalize_user_no_username():
     user = FakeUser(uid=99, username=None)
     user.username = None
     result = normalize_user(user)
-    assert result.id == 99
+    assert result.id == telegram_actor_key(99)
     assert result.username == ""
 
 
@@ -78,7 +79,7 @@ def test_normalize_command_basic():
     result = normalize_command(upd, ctx)
     assert isinstance(result, InboundCommand)
     assert result.chat_id == 12345
-    assert result.user.id == 42
+    assert result.user.id == telegram_actor_key(42)
     assert result.command == "help"
     assert result.args == ("skills", "approval")
 
@@ -132,7 +133,7 @@ def test_normalize_callback_basic():
     result = normalize_callback(upd)
     assert isinstance(result, InboundCallback)
     assert result.chat_id == 555
-    assert result.user.id == 77
+    assert result.user.id == telegram_actor_key(77)
     assert result.data == "approval_approve"
 
 
@@ -187,7 +188,7 @@ async def test_normalize_message_text():
         result = await normalize_message(upd, FakeContext(), data_dir)
         assert isinstance(result, InboundMessage)
         assert result.chat_id == 100
-        assert result.user.id == 50
+        assert result.user.id == telegram_actor_key(50)
         assert result.user.username == "dave"
         assert result.text == "hello world"
         assert result.attachments == ()
@@ -264,8 +265,8 @@ def test_inbound_attachment_frozen():
 def test_inbound_message_skip_approval_round_trips():
     payload = serialize_inbound(
         InboundMessage(
-            user=InboundUser(id=7, username="registry"),
-            chat_id=42,
+            user=InboundUser(id="reg:7", username="registry"),
+            conversation_key="registry:conv-1",
             text="resume work",
             source="registry",
             conversation_ref="registry:conv-1",
@@ -286,8 +287,8 @@ def test_inbound_message_skip_approval_round_trips():
 def test_inbound_message_skip_approval_defaults_false():
     payload = serialize_inbound(
         InboundMessage(
-            user=InboundUser(id=8, username="telegram"),
-            chat_id=99,
+            user=InboundUser(id=telegram_actor_key(8), username="telegram"),
+            conversation_key=telegram_conversation_key(99),
             text="normal message",
         )
     )
@@ -302,7 +303,7 @@ def test_inbound_message_skip_approval_defaults_false():
 
 
 def test_inbound_user_frozen():
-    u = InboundUser(id=42, username="test")
+    u = InboundUser(id=telegram_actor_key(42), username="test")
     try:
         u.id = 99
         assert False, "should be frozen"
@@ -350,14 +351,22 @@ async def test_message_attachments_are_tuple():
 
 def test_command_default_args_are_tuple():
     """Default args on InboundCommand is an empty tuple, not a mutable list."""
-    cmd = InboundCommand(user=InboundUser(id=1), chat_id=1, command="start")
+    cmd = InboundCommand(
+        user=InboundUser(id=telegram_actor_key(1)),
+        conversation_key=telegram_conversation_key(1),
+        command="start",
+    )
     assert isinstance(cmd.args, tuple)
     assert cmd.args == ()
 
 
 def test_message_default_attachments_are_tuple():
     """Default attachments on InboundMessage is an empty tuple, not a mutable list."""
-    msg = InboundMessage(user=InboundUser(id=1), chat_id=1, text="hi")
+    msg = InboundMessage(
+        user=InboundUser(id=telegram_actor_key(1)),
+        conversation_key=telegram_conversation_key(1),
+        text="hi",
+    )
     assert isinstance(msg.attachments, tuple)
     assert msg.attachments == ()
 
@@ -391,7 +400,7 @@ async def test_handlers_receive_normalized_user():
             await th.cmd_session(upd, FakeContext())
 
             assert isinstance(received_users[0], InboundUser)
-            assert received_users[0].id == 42
+            assert received_users[0].id == telegram_actor_key(42)
         finally:
             th.is_allowed = original_is_allowed
 
@@ -409,14 +418,14 @@ async def test_callback_handler_uses_normalized_data():
 
         session = default_session("claude", prov.new_provider_state(), "on")
         session["pending_approval"] = {
-            "request_user_id": 42,
+            "request_user_id": telegram_actor_key(42),
             "prompt": "test prompt",
             "image_paths": [],
             "attachment_dicts": [],
             "context_hash": "",
             "created_at": time.time(),
         }
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -427,7 +436,7 @@ async def test_callback_handler_uses_normalized_data():
         await th.handle_callback(upd, FakeContext())
 
         from tests.support.handler_support import load_session_disk
-        saved = load_session_disk(data_dir, 12345, prov)
+        saved = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert saved.get("pending_approval") is None and saved.get("pending_retry") is None
 
 

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.providers.base import RunResult
 from app.storage import close_db, ensure_data_dirs, load_session, save_session, default_session
+from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
@@ -444,7 +445,7 @@ async def test_skill_add_callback_confirm():
             assert "activated" in reply_text.lower()
 
             # Skill should be in session
-            session = load_session_disk(data_dir, 1001, prov)
+            session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
             assert "helper" in session.get("active_skills", [])
         finally:
             cleanup()
@@ -475,7 +476,7 @@ async def test_skill_add_callback_cancel():
             assert "cancelled" in reply_text.lower()
 
             # Skill should NOT be in session
-            session = load_session_disk(data_dir, 1001, prov)
+            session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
             assert "helper" not in session.get("active_skills", [])
         finally:
             cleanup()

@@ -7,7 +7,8 @@ import pytest
 
 from app import runtime_backend
 from app import work_queue
-from app.agents.bridge import registry_chat_id
+from app.agents.bridge import conversation_key_for_ref
+from app.identity import telegram_conversation_key, telegram_actor_key, telegram_event_id
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
 from app import user_messages as _msg
@@ -25,6 +26,22 @@ from tests.support.handler_support import (
     make_config,
 )
 from tests.support.conversation_simulator import ConversationSimulator
+
+
+def _conv(value):
+    return telegram_conversation_key(value)
+
+
+def _actor(value):
+    return telegram_actor_key(value)
+
+
+def _event(value):
+    return telegram_event_id(value)
+
+
+def _reg_conv(conversation_ref: str) -> str:
+    return conversation_key_for_ref(conversation_ref)
 
 
 class _GatedProvider(FakeProvider):
@@ -73,7 +90,7 @@ async def test_canonical_message_long_run_cancel():
         sim = ConversationSimulator(data_dir, cfg, prov)
 
         session = default_session(prov.name, prov.new_provider_state(), "off")
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, _conv(12345), session)
 
         msg_upd = await sim.inject_message_async(12345, 42, "hello")
         message_update_id = msg_upd.update_id
@@ -99,9 +116,9 @@ async def test_canonical_message_long_run_cancel():
         assert 12345 not in th._LIVE_CANCEL
 
         # Exact durable-work shape: one terminal item for the message, one for the /cancel command
-        items = work_queue.get_work_items_for_chat(data_dir, 12345)
-        message_items = [i for i in items if i.get("update_id") == message_update_id and i.get("kind") == "message"]
-        command_items = [i for i in items if i.get("update_id") == cancel_update_id and i.get("kind") == "command"]
+        items = work_queue.get_work_items_for_chat(data_dir, _conv(12345))
+        message_items = [i for i in items if i.get("event_id") == _event(message_update_id) and i.get("kind") == "message"]
+        command_items = [i for i in items if i.get("event_id") == _event(cancel_update_id) and i.get("kind") == "command"]
         runnable = [i for i in items if i.get("state") in ("queued", "claimed")]
 
         assert len(message_items) == 1, f"expected exactly one work item for message update {message_update_id}, got: {items}"
@@ -124,7 +141,7 @@ async def test_simulator_cancel_before_worker_claim():
         sim = ConversationSimulator(data_dir, cfg, prov)
 
         session = default_session(prov.name, prov.new_provider_state(), "off")
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, _conv(12345), session)
 
         msg_upd = await sim.inject_message_async(12345, 42, "work")
         cancel_upd = await sim.inject_command_async(12345, 42, "/cancel")
@@ -133,8 +150,8 @@ async def test_simulator_cancel_before_worker_claim():
         await sim.drain_one()
         assert len(prov.run_calls) == 0
 
-        items = work_queue.get_work_items_for_chat(data_dir, 12345)
-        message_cancelled = [i for i in items if i.get("update_id") == msg_upd.update_id and i.get("kind") == "message" and i.get("state") == "failed" and i.get("error") == "cancelled"]
+        items = work_queue.get_work_items_for_chat(data_dir, _conv(12345))
+        message_cancelled = [i for i in items if i.get("event_id") == _event(msg_upd.update_id) and i.get("kind") == "message" and i.get("state") == "failed" and i.get("error") == "cancelled"]
         assert len(message_cancelled) == 1, f"expected exactly one failed/cancelled message item, got: {items}"
 
 
@@ -149,7 +166,7 @@ async def test_simulator_second_message_busy_no_fan_out():
         sim = ConversationSimulator(data_dir, cfg, prov)
 
         session = default_session(prov.name, prov.new_provider_state(), "off")
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, _conv(12345), session)
 
         await sim.inject_message_async(12345, 42, "first")
 
@@ -161,9 +178,9 @@ async def test_simulator_second_message_busy_no_fan_out():
 
         assert len(prov.run_calls) == 1
 
-        items = work_queue.get_work_items_for_chat(data_dir, 12345)
+        items = work_queue.get_work_items_for_chat(data_dir, _conv(12345))
         runnable = [i for i in items if i.get("state") in ("queued", "claimed")]
-        second_busy = [i for i in items if i.get("update_id") == msg_second_upd.update_id and i.get("kind") == "message" and i.get("state") == "failed" and i.get("error") == "chat_busy"]
+        second_busy = [i for i in items if i.get("event_id") == _event(msg_second_upd.update_id) and i.get("kind") == "message" and i.get("state") == "failed" and i.get("error") == "chat_busy"]
         assert len(runnable) == 0, f"zero runnable items after completion (anti-fan-out), got: {items}"
         assert len(second_busy) == 1, f"expected exactly one failed/chat_busy item for second message update {msg_second_upd.update_id}, got: {items}"
 
@@ -184,7 +201,7 @@ async def test_simulator_credential_reply_while_worker_alive():
             "skill": "test-skill",
             "remaining": [{"key": "TOKEN", "prompt": "Enter token", "help_url": None, "validate": None}],
         }
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, _conv(12345), session)
 
         async def fake_validate(req, value):
             return (True, "")
@@ -198,7 +215,7 @@ async def test_simulator_credential_reply_while_worker_alive():
             th.validate_credential = original
 
         assert len(prov.run_calls) == 0
-        session_after = load_session_disk(data_dir, 12345, prov)
+        session_after = load_session_disk(data_dir, _conv(12345), prov)
         assert session_after.get("awaiting_skill_setup") is None
 
 
@@ -214,17 +231,17 @@ async def test_simulator_recovery_notice_no_provider_call():
         sim = ConversationSimulator(data_dir, cfg, prov)
 
         session = default_session(prov.name, prov.new_provider_state(), "off")
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, _conv(12345), session)
 
         wq.record_update(
-            data_dir, 9001, 12345, 42, "message",
-            payload='{"user_id": 42, "username": "", "chat_id": 12345, "text": "recovered"}',
+            data_dir, _event(9001), _conv(12345), _actor(42), "message",
+            payload='{"actor_key": "tg:42", "username": "", "conversation_key": "tg:12345", "text": "recovered"}',
         )
         conn = runtime_backend.transport_store()._transport_db(data_dir)
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
-            "INSERT INTO work_items (id, chat_id, update_id, state, created_at, dispatch_mode) VALUES (?, ?, ?, 'queued', ?, 'recovery')",
-            ("recovery-item-1", 12345, 9001, now),
+            "INSERT INTO work_items (id, conversation_key, event_id, state, created_at, dispatch_mode) VALUES (?, ?, ?, 'queued', ?, 'recovery')",
+            ("recovery-item-1", _conv(12345), _event(9001), now),
         )
         conn.commit()
 
@@ -232,7 +249,7 @@ async def test_simulator_recovery_notice_no_provider_call():
 
         assert any("recovery" in t.lower() or _msg.recovery_notice_intro() in t for t in sim.get_output_log())
         assert len(prov.run_calls) == 0
-        latest = wq.get_latest_pending_recovery(data_dir, 12345)
+        latest = wq.get_latest_pending_recovery(data_dir, _conv(12345))
         assert latest is not None
 
 
@@ -278,7 +295,7 @@ async def test_simulator_registry_message_runs_through_registry_surface_output()
         sim = ConversationSimulator(data_dir, cfg, prov)
 
         conversation_ref = "registry:sim-conv-1"
-        chat_id = registry_chat_id(conversation_ref)
+        chat_id = _reg_conv(conversation_ref)
         session = default_session(prov.name, prov.new_provider_state(), "off")
         save_session(data_dir, chat_id, session)
 

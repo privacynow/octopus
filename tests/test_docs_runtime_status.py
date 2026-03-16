@@ -48,7 +48,7 @@ def test_status_current_snapshot_matches_current_phase_and_runtime():
     snapshot = _section(text, "Current Snapshot")
     assert "Phases 1-15 are sealed as shipped." in snapshot
     assert "Phase 20 is the shipped product baseline." in snapshot
-    assert "Phases 16-19 remain on the roadmap and are deferred beyond Phase 20." in snapshot
+    assert "Phases 16-19 are sealed historic artifacts" in snapshot
     assert "Local Runtime" in snapshot
     assert "SQLite is the default backend" in snapshot
     assert "Postgres is a supported alternate backend" in snapshot
@@ -63,5 +63,5 @@ def test_status_historical_focus_intro_mentions_phase_20():
     text = (repo / "docs" / "status.md").read_text()
     historical = _section(text, "Historical Execution Focus")
     assert "Phase 20 is complete" in historical
-    assert "Phases 16-19 remain\ndeferred beyond it" in historical or "Phases 16-19 remain deferred beyond it" in historical
+    assert "Phases 16-19 are sealed" in historical
     assert "Phase 15 is in progress" not in historical

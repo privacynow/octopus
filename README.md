@@ -1,6 +1,7 @@
 # Telegram Agent Bot
 
-Talk to Claude Code or Codex from Telegram.
+Talk to Claude Code or Codex from Telegram, with an optional shared registry UI
+for multi-bot coordination.
 
 This bot lets you:
 
@@ -8,9 +9,13 @@ This bot lets you:
 - review a plan before anything runs
 - upload files and get files back
 - add skills and credentials when needed
+- run one bot or many specialist bots from one checkout
+- keep private bots visible in a shared registry UI without exposing them publicly
 
 You do **not** need to set up a database or choose a storage backend for normal
-use. The standard setup is one guided script.
+use. The standard setup is one guided script. Registry-backed mode is the
+default guided path; standalone remains available in the wizard if you want one
+private bot with no registry.
 
 **Repo:** [github.com/privacynow/octopus](https://github.com/privacynow/octopus)
 
@@ -20,6 +25,7 @@ use. The standard setup is one guided script.
 - a Telegram bot token from `@BotFather`
 - one provider: `claude` or `codex`
 - your Telegram user ID for `BOT_ALLOWED_USERS`
+- for the multi-bot path: a local or hosted registry URL and enrollment token
 
 ## First-Time Setup
 
@@ -30,29 +36,14 @@ use. The standard setup is one guided script.
    cd ~/telegram-agent-bot
    ```
 
-2. **Create `.env.bot`**
-
-   Minimal private example:
+2. **Start the local registry (recommended default)**
 
    ```bash
-   TELEGRAM_BOT_TOKEN=<from @BotFather>
-   BOT_PROVIDER=claude
-   BOT_ALLOWED_USERS=123456789
+   ./scripts/registry/start.sh
    ```
 
-   `BOT_ALLOWED_USERS` should be your own Telegram user ID so the bot starts in
-   a simple private mode.
-
-   If you prefer an open bot for local testing, this is also valid:
-
-   ```bash
-   TELEGRAM_BOT_TOKEN=<from @BotFather>
-   BOT_PROVIDER=codex
-   BOT_ALLOW_OPEN=1
-   ```
-
-   Leave `BOT_WORKING_DIR` unset unless you actually need it. If you do set it
-   for the Docker path, use `/home/bot`, not your host home directory.
+   This starts the shared bot directory and UI for same-host Docker use. The
+   script creates `.env.registry` the first time and prints the local UI URL.
 
 3. **Run the guided setup**
 
@@ -60,8 +51,22 @@ use. The standard setup is one guided script.
    ./scripts/app/guided_start.sh
    ```
 
-   The script builds what it needs, walks you through provider login if needed,
-   and starts the bot.
+   The script creates the bot config if needed, asks for the Telegram token and
+   the rest of the normal settings on one line each, walks you through provider
+   login if needed, and starts the bot.
+
+   For a second or third bot from the same checkout, give it an instance name:
+
+   ```bash
+   ./scripts/app/guided_start.sh reviewer
+   ./scripts/app/guided_start.sh developer
+   ```
+
+   Those create `.env.bot.reviewer`, `.env.bot.developer`, and separate Docker
+   projects automatically. The default no-argument path still uses `.env.bot`.
+
+   Leave `BOT_WORKING_DIR` unset unless you actually need it. If you do set it
+   for the Docker path, use `/home/bot`, not your host home directory.
 
 4. **Message the bot in Telegram**
 
@@ -164,6 +169,11 @@ provider.
 
 If you want the bot to check itself from Telegram, use `/doctor`.
 
+If the bot is configured for registry mode but the registry is unavailable, the
+bot still starts in degraded standalone operation. Telegram continues to work,
+but discovery, delegation, and registry UI sync stay unavailable until the
+registry comes back.
+
 If a technical helper wants to run the full health check locally, use:
 
 ```bash
@@ -176,7 +186,8 @@ Try these in order:
 
 1. Run `./scripts/app/guided_start.sh` again
 2. If it asks for provider login, complete that step
-3. Run `/doctor` in Telegram or the full app health command above
+3. If you are using registry mode, check `./scripts/registry/logs.sh`
+4. Run `/doctor` in Telegram or the full app health command above
 
 ### `claude` or `codex` not found
 

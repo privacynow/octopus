@@ -15,10 +15,12 @@ class InboundEnvelope:
 
     transport: str
     update_id: int
-    conversation_id: int
+    conversation_id: int | str
     actor_id: int
     received_at: datetime
     event: InboundMessage | InboundCommand | InboundCallback
+    conversation_ref: str = ""
+    surface_binding_id: str = ""
 
     @property
     def kind(self) -> str:

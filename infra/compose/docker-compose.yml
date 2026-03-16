@@ -3,6 +3,7 @@
 
 volumes:
   bot-home:
+  registry-data:
 
 services:
   postgres:
@@ -64,11 +65,14 @@ services:
     image: telegram-agent-bot:${BOT_PROVIDER:-claude}
     profiles:
       - bot
-    env_file: .env.bot
+    env_file:
+      - ${BOT_ENV_FILE:-.env.bot}
     environment:
       BOT_DATA_DIR: /home/bot/data
     volumes:
       - bot-home:/home/bot
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: ["python", "-m", "app.main", "--provider-health"]
 
   # Bot service (Local Runtime default: SQLite in BOT_DATA_DIR, no Postgres).
@@ -79,12 +83,31 @@ services:
     image: telegram-agent-bot:${BOT_PROVIDER:-claude}
     profiles:
       - bot
-    env_file: .env.bot
+    env_file:
+      - ${BOT_ENV_FILE:-.env.bot}
     environment:
       BOT_DATA_DIR: /home/bot/data
     volumes:
       - bot-home:/home/bot
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: ["python", "-m", "app.main"]
+
+  registry:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile
+    profiles:
+      - registry
+    environment:
+      REGISTRY_DB_PATH: /data/registry.sqlite3
+      REGISTRY_ENROLL_TOKEN: ${REGISTRY_ENROLL_TOKEN:-dev-enroll-token}
+      REGISTRY_UI_TOKEN: ${REGISTRY_UI_TOKEN:-dev-ui-token}
+    volumes:
+      - registry-data:/data
+    ports:
+      - "${REGISTRY_PORT:-8787}:8787"
+    command: ["uvicorn", "app.registry_service.app:app", "--host", "0.0.0.0", "--port", "8787"]
 
   # TEST/DEV ONLY: stub-provider image for E2E when real provider unavailable (E2E_USE_STUB_IMAGE=1).
   bot-stub:

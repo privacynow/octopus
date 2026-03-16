@@ -115,3 +115,17 @@ When writing a bug report for this repo:
   unresolved contract has its own repro and test.
 - Update the status doc only after the code and tests confirm runtime
   behavior.
+- **Transport facade parity rule.** Every new method added to
+  `app/work_queue.py` must land in the same commit as: (a) a
+  `work_queue_pg.py` conn-based implementation, (b) a
+  `PostgresTransportStore` wrapper in `work_queue_postgres.py`, (c) a
+  Postgres migration if the method touches a new table, and (d) a
+  contract test case in `tests/contracts/test_transport_store_contract.py`.
+  If Postgres support is genuinely impossible in the same slice, do not
+  add the method to the facade or `__all__` until it is — a SQLite-only
+  shortcut in the facade is not acceptable.
+- **Storage layer boundary rule.** `app/access.py` and every other
+  leaf/policy module must not import `sqlite3`, `work_queue`, or
+  `runtime_backend`. Storage lookups belong at the handler integration
+  point (e.g., `is_allowed()` in `telegram_handlers.py`), not in
+  policy helpers that are supposed to be backend-neutral.

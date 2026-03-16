@@ -67,6 +67,151 @@ async def test_happy_path():
         assert "Hello world" in " ".join(m.get("text", "") for m in bot.sent_messages)
 
 
+async def test_help_and_start_include_discover_in_registry_mode():
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            agent_mode="registry",
+            agent_registry_url="http://registry.test",
+            agent_registry_enroll_token="enroll-secret",
+        )
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+
+        help_msg = await send_command(th.cmd_help, chat, user, "/help")
+        start_msg = await send_command(th.cmd_start, chat, user, "/start")
+
+        assert "/discover" in help_msg.replies[0]["text"]
+        assert "/discover" in start_msg.replies[0]["text"]
+
+
+async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, _cfg, prov):
+        import app.telegram_handlers as th
+        from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+
+        seen_queries: list[object] = []
+
+        class FakeRegistryClient:
+            async def search(self, query):
+                seen_queries.append(query)
+                return [
+                    {
+                        "agent_id": "agent-2",
+                        "display_name": "Dev Bot",
+                        "slug": "dev-bot",
+                        "role": "developer",
+                        "skills": ["python", "testing"],
+                        "tags": ["backend"],
+                        "description": "Builds backend features.",
+                        "connectivity_state": "connected",
+                        "current_capacity": 0,
+                        "max_capacity": 2,
+                    }
+                ]
+
+        save_agent_runtime_state(
+            data_dir,
+            AgentRuntimeState(
+                agent_id="self-agent",
+                agent_token="agent-token",
+                connectivity_state="connected",
+            ),
+        )
+        monkeypatch.setattr(th, "registry_client", lambda config: FakeRegistryClient())
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_discover,
+            chat,
+            user,
+            "/discover role:developer skill:python tag:backend schema review",
+            args=["role:developer", "skill:python", "tag:backend", "schema", "review"],
+        )
+
+        assert seen_queries
+        query = seen_queries[0]
+        assert query.role == "developer"
+        assert query.skills == ("python",)
+        assert query.tags == ("backend",)
+        assert query.free_text == "schema review"
+        assert query.exclude_agent_ids == ("self-agent",)
+        reply = msg.replies[0]["text"]
+        assert "Dev Bot" in reply
+        assert "developer" in reply
+        assert "python, testing" in reply
+        assert "Builds backend features." in reply
+
+
+async def test_discover_standalone_reports_unavailable():
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, agent_mode="standalone")
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_discover,
+            chat,
+            user,
+            "/discover role:developer",
+            args=["role:developer"],
+        )
+
+        assert "standalone mode" in msg.replies[0]["text"]
+
+
+async def test_discover_degraded_reports_registry_connectivity():
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, _cfg, prov):
+        import app.telegram_handlers as th
+        from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+
+        save_agent_runtime_state(
+            data_dir,
+            AgentRuntimeState(
+                agent_id="self-agent",
+                agent_token="agent-token",
+                connectivity_state="degraded",
+                last_error="registry unavailable",
+            ),
+        )
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_discover,
+            chat,
+            user,
+            "/discover role:developer",
+            args=["role:developer"],
+        )
+
+        reply = msg.replies[0]["text"]
+        assert "registry connectivity is degraded" in reply.lower()
+        assert "registry unavailable" in reply
+
+
 async def test_registry_surface_input_respects_approval_mode():
     with fresh_env(
         config_overrides={
@@ -642,36 +787,36 @@ async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch)
             "agent_registry_url": "http://registry.test",
             "agent_registry_enroll_token": "enroll-secret",
         }
-    ) as (_, cfg, prov):
-        import app.telegram_handlers as th
+        ) as (_, cfg, prov):
+            import app.telegram_handlers as th
 
-        published: list[dict[str, object]] = []
+            published: list[dict[str, object]] = []
 
-        async def fake_bind_conversation(*args, **kwargs):
-            return None
+            async def fake_bind_conversation(*args, **kwargs):
+                return None
 
-        async def fake_publish_timeline_event(config, **kwargs):
-            del config
-            published.append(kwargs)
+            async def fake_publish_timeline_event(config, **kwargs):
+                del config
+                published.append(kwargs)
 
-        monkeypatch.setattr(th, "bind_conversation", fake_bind_conversation)
-        monkeypatch.setattr(th, "publish_timeline_event", fake_publish_timeline_event)
+            monkeypatch.setattr("app.transports.registry_adapter.bind_conversation", fake_bind_conversation)
+            monkeypatch.setattr("app.transports.registry_adapter.publish_timeline_event", fake_publish_timeline_event)
 
-        event = InboundMessage(
-            user=InboundUser(id=42, username="registry-ui"),
-            chat_id=registry_chat_id("registry-conv-2"),
-            text="resume later",
-            source="registry",
-            conversation_ref="registry-conv-2",
-        )
-        item = {"id": "registry-item-4", "chat_id": event.chat_id, "update_id": 8123, "dispatch_mode": "recovery"}
+            event = InboundMessage(
+                user=InboundUser(id=42, username="registry-ui"),
+                chat_id=registry_chat_id("registry-conv-2"),
+                text="resume later",
+                source="registry",
+                conversation_ref="registry-conv-2",
+            )
+            item = {"id": "registry-item-4", "chat_id": event.chat_id, "update_id": 8123, "dispatch_mode": "recovery"}
 
-        with pytest.raises(work_queue.PendingRecovery):
-            await th.worker_dispatch("message", event, item)
+            with pytest.raises(work_queue.PendingRecovery):
+                await th.worker_dispatch("message", event, item)
 
-        assert published
-        assert published[0]["kind"] == "recovery_notice"
-        assert published[0]["metadata"]["update_id"] == 8123
+            assert published
+            assert published[0]["kind"] == "recovery_notice"
+            assert published[0]["metadata"]["update_id"] == 8123
 
 
 async def test_cmd_new():

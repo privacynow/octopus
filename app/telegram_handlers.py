@@ -59,16 +59,16 @@ from app.session_state import (
 )
 from app.agents.bridge import (
     bind_conversation,
-    conversation_surface_name,
     publish_timeline_event,
     registry_client,
     summarize_text,
     telegram_conversation_ref,
 )
-from app.agents.types import RoutedTaskResult
+from app.agents.client import RegistryClientError
+from app.agents.state import load_agent_runtime_state
+from app.agents.types import AgentDiscoveryQuery, RoutedTaskResult
+from app.transports import factory
 from app.transports.admission import admit_fresh_message
-from app.transports.registry_adapter import RegistryConversationIO
-from app.transports.telegram_adapter import TelegramConversationIO
 from app.transports.types import InboundEnvelope
 from app.skills import (
     build_run_context, build_preflight_context,
@@ -1510,6 +1510,8 @@ def _help_command_lines(user) -> list[str]:
     ]
     if _cfg().model_profiles:
         lines.append("/model — switch model profile (fast/balanced/best)")
+    if _cfg().agent_mode == "registry":
+        lines.append("/discover — find available specialist bots by role, skill, or tag")
     if not is_public_user(user):
         lines.append("/policy inspect|edit — set file access policy")
     lines.extend([
@@ -1836,6 +1838,135 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "\n".join(parts), parse_mode=ParseMode.HTML)
     else:
         await update.effective_message.reply_text("\u2705 All checks passed.")
+
+
+def _discover_usage() -> str:
+    return (
+        "Usage: /discover <query> [role:<role>] [skill:<skill>] [tag:<tag>] [state:<connected|degraded|standalone|offline>]\n"
+        "Example: <code>/discover role:developer skill:python tag:backend schema review</code>"
+    )
+
+
+def _parse_discovery_query(
+    args: tuple[str, ...],
+    *,
+    exclude_agent_id: str = "",
+) -> tuple[AgentDiscoveryQuery | None, str | None]:
+    role = ""
+    skills: list[str] = []
+    tags: list[str] = []
+    required_state = "connected"
+    free_text_parts: list[str] = []
+    for token in args:
+        key = ""
+        value = ""
+        if ":" in token:
+            key, value = token.split(":", 1)
+        elif "=" in token:
+            key, value = token.split("=", 1)
+        else:
+            free_text_parts.append(token)
+            continue
+        key = key.strip().lower()
+        value = value.strip()
+        if not value:
+            free_text_parts.append(token)
+            continue
+        if key == "role":
+            role = value
+        elif key in {"skill", "skills"}:
+            skills.extend(part.strip() for part in value.split(",") if part.strip())
+        elif key in {"tag", "tags"}:
+            tags.extend(part.strip() for part in value.split(",") if part.strip())
+        elif key == "state":
+            required_state = value.lower()
+        else:
+            free_text_parts.append(token)
+    if required_state not in {"connected", "degraded", "standalone", "offline"}:
+        return None, _discover_usage()
+    if not role and not skills and not tags and not free_text_parts:
+        return None, _discover_usage()
+    return (
+        AgentDiscoveryQuery(
+            role=role,
+            skills=tuple(skills),
+            tags=tuple(tags),
+            free_text=" ".join(free_text_parts).strip(),
+            exclude_agent_ids=(exclude_agent_id,) if exclude_agent_id else (),
+            required_state=required_state,
+        ),
+        None,
+    )
+
+
+def _format_discovery_results(agents: list[dict[str, Any]]) -> str:
+    if not agents:
+        return "No matching agents found."
+    lines = ["<b>Matching agents</b>"]
+    for agent in agents[:8]:
+        display_name = html.escape(
+            agent.get("display_name") or agent.get("slug") or agent.get("agent_id") or "Unnamed agent"
+        )
+        role = html.escape(agent.get("role") or "(unspecified)")
+        state = html.escape(agent.get("connectivity_state") or "unknown")
+        current_capacity = int(agent.get("current_capacity", 0) or 0)
+        max_capacity = int(agent.get("max_capacity", 1) or 1)
+        lines.append(f"\n<b>{display_name}</b> — <code>{role}</code>")
+        lines.append(
+            f"State: <code>{state}</code> · Capacity: <code>{current_capacity}/{max_capacity}</code>"
+        )
+        skills = [str(skill) for skill in agent.get("skills", []) if skill]
+        if skills:
+            lines.append(f"Skills: <code>{html.escape(', '.join(skills))}</code>")
+        tags = [str(tag) for tag in agent.get("tags", []) if tag]
+        if tags:
+            lines.append(f"Tags: <code>{html.escape(', '.join(tags))}</code>")
+        description = str(agent.get("description", "") or "").strip()
+        if description:
+            lines.append(html.escape(description))
+    if len(agents) > 8:
+        lines.append(f"\nShowing first {8} of {len(agents)} matches.")
+    return "\n".join(lines)
+
+
+@_command_handler
+async def cmd_discover(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    del context
+    cfg = _cfg()
+    if cfg.agent_mode == "standalone":
+        await update.effective_message.reply_text(
+            "Agent discovery is unavailable in standalone mode.",
+        )
+        return
+    state = load_agent_runtime_state(cfg.data_dir)
+    if state.connectivity_state != "connected":
+        detail = f" Last registry error: {state.last_error}" if state.last_error else ""
+        await update.effective_message.reply_text(
+            "Agent discovery is unavailable because registry connectivity is degraded." + detail
+        )
+        return
+    query, error = _parse_discovery_query(event.args, exclude_agent_id=state.agent_id)
+    if error is not None or query is None:
+        await update.effective_message.reply_text(error or _discover_usage(), parse_mode=ParseMode.HTML)
+        return
+    client = registry_client(cfg)
+    if client is None:
+        await update.effective_message.reply_text(
+            "Agent discovery is unavailable because this bot has not finished registry enrollment."
+        )
+        return
+    try:
+        agents = await client.search(query)
+    except RegistryClientError as exc:
+        await update.effective_message.reply_text(
+            f"Agent discovery failed: {html.escape(str(exc))}",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    await update.effective_message.reply_text(
+        _format_discovery_results(agents),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 
@@ -3165,10 +3296,6 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await msg.reply_text(_msg.policy_usage())
 
-
-# Worker path uses the transport adapter; handler path uses PTB message directly.
-_BotMessage = TelegramConversationIO
-
 _bot_instance = None  # Set by build_application
 
 
@@ -3196,55 +3323,33 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             telegram_conversation_ref(_cfg(), chat_id) if source == "telegram" else f"registry:{chat_id}"
         )
         routed_task_id = getattr(event, "routed_task_id", "")
-        conversation_surface = conversation_surface_name(conversation_ref) if source == "registry" else source
+        title = summarize_text(event.text) or "Conversation"
+        bot_msg = factory.create_outbound_surface(
+            conversation_ref,
+            config=_cfg(),
+            bot=bot,
+            chat_id=chat_id,
+            source=source,
+            routed_task_id=routed_task_id,
+            output_log=getattr(bot, "_output_log", None),
+        )
 
         # Recovered item: send notice and move to pending_recovery.
         if item.get("dispatch_mode") == "recovery":
-            if source == "registry":
-                await bind_conversation(
-                    _cfg(),
-                    conversation_ref=conversation_ref,
-                    title=summarize_text(event.text) or "Recovered registry conversation",
-                    origin_surface=conversation_surface,
-                    external_id=str(chat_id) if conversation_surface == "telegram" else conversation_ref,
-                )
-                await publish_timeline_event(
-                    _cfg(),
-                    conversation_ref=conversation_ref,
-                    kind="recovery_notice",
-                    title="Interrupted work needs replay",
-                    body=_msg.recovery_notice_prompt(),
-                    metadata={
-                        **({"routed_task_id": routed_task_id} if routed_task_id else {}),
-                        "update_id": item.get("update_id", 0),
-                    },
-                )
-                work_queue.mark_pending_recovery(data_dir, item["id"])
-                raise work_queue.PendingRecovery(item["id"])
-            log.info("Worker sending recovery notice for chat %d (update %s)",
-                     chat_id, item.get("update_id"))
-            if not is_allowed(event.user):
+            if source == "telegram" and not is_allowed(event.user):
                 work_queue.fail_work_item(data_dir, item["id"], error="not_allowed")
                 return
             update_id = item.get("update_id", 0)
             original_text = event.text or ""
             preview = html.escape(original_text[:200] + ("\u2026" if len(original_text) > 200 else ""))
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("\u25b6\ufe0f " + _msg.recovery_button_run_again(), callback_data=f"recovery_replay:{update_id}"),
-                InlineKeyboardButton("\u2716 " + _msg.recovery_button_skip(), callback_data=f"recovery_discard:{update_id}"),
-            ]])
-            try:
-                await bot.send_message(
-                    chat_id,
-                    f"<i>{_msg.recovery_notice_intro()}</i>\n\n"
-                    f"{preview}\n\n"
-                    f"{_msg.recovery_notice_prompt()}",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=keyboard,
-                )
-            except Exception:
-                log.exception("Failed to send recovery notice for chat %d", chat_id)
-                raise
+            await bot_msg.bind(title=title, config=_cfg())
+            await bot_msg.send_recovery_notice(
+                preview=preview,
+                prompt=_msg.recovery_notice_prompt(),
+                run_again_label=_msg.recovery_button_run_again(),
+                skip_label=_msg.recovery_button_skip(),
+                update_id=update_id,
+            )
             work_queue.mark_pending_recovery(data_dir, item["id"])
             raise work_queue.PendingRecovery(item["id"])
 
@@ -3252,33 +3357,11 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
         if source == "telegram" and not is_allowed(event.user):
             work_queue.fail_work_item(data_dir, item["id"], error="not_allowed")
             return
-        if conversation_surface == "registry":
-            bot_msg = RegistryConversationIO(
-                _cfg(),
-                conversation_ref=conversation_ref,
-                routed_task_id=routed_task_id,
-                title=summarize_text(event.text) or "Registry conversation",
-            )
-        else:
-            bot_msg = _BotMessage(bot, chat_id) if source == "telegram" else TelegramConversationIO(bot, chat_id)
         prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
         user_id = event.user.id
-        trust = "trusted" if source == "registry" else _trust_tier(event.user)
-        await bind_conversation(
-            _cfg(),
-            conversation_ref=conversation_ref,
-            title=summarize_text(event.text) or "Conversation",
-            origin_surface=conversation_surface,
-            external_id=str(chat_id) if conversation_surface == "telegram" else conversation_ref,
-        )
-        if source == "telegram":
-            await publish_timeline_event(
-                _cfg(),
-                conversation_ref=conversation_ref,
-                kind="surface_input",
-                title="Telegram message",
-                body=event.text,
-            )
+        trust = factory.trust_tier_for_source(source, event.user)
+        await bot_msg.bind(title=title, config=_cfg())
+        await bot_msg.on_message_received(event.text)
         try:
             async with _chat_lock(chat_id, worker_item=item):
                 session = _load(chat_id)
@@ -3318,16 +3401,8 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
                         routed_task_id,
                         exc_info=True,
                     )
-        elif conversation_surface == "telegram" and outcome is not None:
-            body = outcome.reply_text or outcome.error_text
-            if body:
-                await publish_timeline_event(
-                    _cfg(),
-                    conversation_ref=conversation_ref,
-                    kind="result" if outcome.status.startswith("completed") else "error",
-                    title="Bot result" if outcome.status.startswith("completed") else "Bot error",
-                    body=body,
-                )
+        elif outcome is not None:
+            await bot_msg.on_outcome(outcome)
         return
 
     if isinstance(event, (InboundCommand, InboundCallback)):
@@ -3380,6 +3455,7 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     app.add_handler(CommandHandler("send", cmd_send))
     app.add_handler(CommandHandler("id", cmd_id))
     app.add_handler(CommandHandler("doctor", cmd_doctor))
+    app.add_handler(CommandHandler("discover", cmd_discover))
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("project", cmd_project))
     app.add_handler(CommandHandler("policy", cmd_policy))

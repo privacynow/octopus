@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from app.agents.bridge import publish_timeline_event
+from app.agents.bridge import bind_conversation, publish_timeline_event
 from app.config import BotConfig
 from app.transports.ports import (
     InteractionSurface,
@@ -26,6 +26,7 @@ class RegistryEditableHandle(SurfaceEditableHandle):
     async def edit_text(self, text: str, **kwargs: Any) -> None:
         del kwargs
         self._conversation.last_status_text = text
+        self._conversation._append_output("edit", html.unescape(text))
         await publish_timeline_event(
             self._conversation.config,
             conversation_ref=self._conversation.conversation_ref,
@@ -49,6 +50,7 @@ class RegistryConversationIO(InteractionSurface):
         conversation_ref: str,
         routed_task_id: str = "",
         title: str = "",
+        output_log: list[dict[str, str]] | None = None,
     ) -> None:
         self.config = config
         self.conversation_ref = conversation_ref
@@ -56,6 +58,7 @@ class RegistryConversationIO(InteractionSurface):
         self.title = title or "Registry conversation"
         self.sent_messages: list[str] = []
         self.last_status_text = ""
+        self._output_log = output_log
         self.chat = _RegistryChatShim(self)
 
     @property
@@ -74,10 +77,16 @@ class RegistryConversationIO(InteractionSurface):
     def _metadata(self) -> dict[str, Any]:
         return {"routed_task_id": self.routed_task_id} if self.routed_task_id else {}
 
+    def _append_output(self, kind: str, text: str) -> None:
+        if self._output_log is None:
+            return
+        self._output_log.append({"type": kind, "text": text})
+
     async def send_text(self, text: str, **kwargs: Any) -> SurfaceEditableHandle:
         del kwargs
         event_id = uuid.uuid4().hex
         self.sent_messages.append(text)
+        self._append_output("send", text)
         await publish_timeline_event(
             self.config,
             conversation_ref=self.conversation_ref,
@@ -91,6 +100,7 @@ class RegistryConversationIO(InteractionSurface):
 
     async def send_photo(self, photo: Path | str | bytes, **kwargs: Any) -> None:
         caption = kwargs.get("caption", "[photo]")
+        self._append_output("send", caption)
         await publish_timeline_event(
             self.config,
             conversation_ref=self.conversation_ref,
@@ -102,6 +112,7 @@ class RegistryConversationIO(InteractionSurface):
 
     async def send_document(self, document: Path | str | bytes, **kwargs: Any) -> None:
         caption = kwargs.get("caption", "[document]")
+        self._append_output("send", caption)
         await publish_timeline_event(
             self.config,
             conversation_ref=self.conversation_ref,
@@ -123,6 +134,7 @@ class RegistryConversationIO(InteractionSurface):
 
     async def answer_action(self, text: str | None = None, show_alert: bool = False) -> None:
         detail = text or ("alert" if show_alert else "ack")
+        self._append_output("answer", detail)
         await publish_timeline_event(
             self.config,
             conversation_ref=self.conversation_ref,
@@ -147,6 +159,48 @@ class RegistryConversationIO(InteractionSurface):
         del binding
         return None
 
+    async def bind(self, *, title: str, config: Any) -> None:
+        del config
+        self.title = title or self.title
+        await bind_conversation(
+            self.config,
+            conversation_ref=self.conversation_ref,
+            title=self.title,
+            origin_surface="registry",
+            external_id=self.conversation_ref,
+        )
+
+    async def on_message_received(self, text: str) -> None:
+        del text
+        return None
+
+    async def on_outcome(self, outcome: Any) -> None:
+        del outcome
+        return None
+
+    async def send_recovery_notice(
+        self,
+        *,
+        preview: str,
+        prompt: str,
+        run_again_label: str,
+        skip_label: str,
+        update_id: int,
+    ) -> None:
+        del preview, run_again_label, skip_label
+        self._append_output("send", prompt)
+        await publish_timeline_event(
+            self.config,
+            conversation_ref=self.conversation_ref,
+            kind="recovery_notice",
+            title="Interrupted work needs replay",
+            body=prompt,
+            metadata={
+                **self._metadata(),
+                "update_id": update_id,
+            },
+        )
+
     async def reply_text(self, text: str, **kwargs: Any) -> SurfaceEditableHandle:
         return await self.send_text(text, **kwargs)
 
@@ -162,6 +216,7 @@ class RegistryConversationIO(InteractionSurface):
     async def edit_text(self, text: str, **kwargs: Any) -> None:
         del kwargs
         self.last_status_text = text
+        self._append_output("edit", html.unescape(text))
         await publish_timeline_event(
             self.config,
             conversation_ref=self.conversation_ref,

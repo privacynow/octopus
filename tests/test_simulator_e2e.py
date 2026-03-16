@@ -7,6 +7,7 @@ import pytest
 
 from app import runtime_backend
 from app import work_queue
+from app.agents.bridge import registry_chat_id
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
 from app import user_messages as _msg
@@ -262,3 +263,35 @@ async def test_simulator_callback_edit_message_text_in_output_log():
 
         out = sim.get_output_log()
         assert "Skill activation cancelled." in out, f"callback edit_message_text must appear in output log, got: {out}"
+
+
+@pytest.mark.asyncio
+async def test_simulator_registry_message_runs_through_registry_surface_output():
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            agent_mode="registry",
+            agent_registry_url="http://registry.test",
+            agent_registry_enroll_token="enroll-secret",
+        )
+        prov = FakeProvider("claude")
+        sim = ConversationSimulator(data_dir, cfg, prov)
+
+        conversation_ref = "registry:sim-conv-1"
+        chat_id = registry_chat_id(conversation_ref)
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        save_session(data_dir, chat_id, session)
+
+        async with sim.running_worker():
+            injected = await sim.inject_registry_message_async(
+                conversation_ref,
+                "build a plan",
+                "registry-ui:sim-user",
+            )
+            assert injected["status"] == "admitted"
+            await sim.wait_for_text("default response")
+
+        assert len(prov.run_calls) == 1
+        assert prov.run_calls[0]["prompt"] == "build a plan"
+        assert "default response" in sim.get_output_log_merged()
+        assert sim._bot.sent_messages == []

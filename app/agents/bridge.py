@@ -38,6 +38,21 @@ def registry_actor_id(actor_ref: str) -> int:
     return _stable_int(f"registry-actor:{actor_ref}")
 
 
+def conversation_surface_name(conversation_ref: str) -> str:
+    if conversation_ref.startswith("telegram:"):
+        return "telegram"
+    return "registry"
+
+
+def local_chat_id_for_conversation(conversation_ref: str) -> int:
+    if conversation_surface_name(conversation_ref) == "telegram":
+        try:
+            return int(conversation_ref.rsplit(":", 1)[1])
+        except (IndexError, ValueError):
+            return registry_chat_id(conversation_ref)
+    return registry_chat_id(conversation_ref)
+
+
 def agent_identity(config: BotConfig) -> str:
     state = load_agent_runtime_state(config.data_dir)
     return state.agent_id or config.agent_slug or config.instance
@@ -117,7 +132,7 @@ def build_registry_message_delivery(
     delivery_id: str,
     routed_task_id: str = "",
 ) -> tuple[int, int, int, str]:
-    chat_id = registry_chat_id(conversation_ref)
+    chat_id = local_chat_id_for_conversation(conversation_ref)
     user_id = registry_actor_id(actor_ref)
     update_id = registry_update_id(delivery_id)
     payload = serialize_inbound(

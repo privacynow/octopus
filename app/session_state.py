@@ -89,6 +89,7 @@ class PendingDelegation:
     title: str = ""
     resume_instruction: str = ""
     tasks: list[DelegatedTask] = field(default_factory=list)
+    status: str = ""  # valid values: "", submitted, completed, partial_failed
     created_at: float = field(default_factory=time.time)
 
 

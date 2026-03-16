@@ -26,6 +26,20 @@ def _ensure_json(value: Any) -> str:
     return json.dumps(value)
 
 
+def _conversation_status_for_event(kind: str, current_status: str = "") -> str:
+    if kind in {"started", "progress"}:
+        if current_status == "cancelling":
+            return "cancelling"
+        return "running"
+    if kind == "completed":
+        return "completed"
+    if kind == "failed":
+        return "failed"
+    if kind == "control":
+        return "cancelling"
+    return current_status or "open"
+
+
 class RegistryStore:
     """Explicit SQLite store for agent registration, routing, and UI read models."""
 
@@ -281,6 +295,19 @@ class RegistryStore:
             if row is None:
                 raise PermissionError("Unknown agent token")
             for event in events:
+                conversation_id = event["conversation_id"]
+                conversation = conn.execute(
+                    """
+                    SELECT status, target_agent_id
+                    FROM conversations
+                    WHERE conversation_id = ?
+                    """,
+                    (conversation_id,),
+                ).fetchone()
+                if conversation is None:
+                    raise PermissionError(f"Unknown conversation: {conversation_id}")
+                if conversation["target_agent_id"] != row["agent_id"]:
+                    raise PermissionError(f"Conversation does not belong to agent: {conversation_id}")
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO timeline_events (
@@ -290,7 +317,7 @@ class RegistryStore:
                     """,
                     (
                         event["event_id"],
-                        event["conversation_id"],
+                        conversation_id,
                         event.get("metadata", {}).get("routed_task_id", ""),
                         row["agent_id"],
                         event["kind"],
@@ -300,6 +327,18 @@ class RegistryStore:
                         event.get("progress"),
                         _ensure_json(event.get("metadata", {})),
                         event["created_at"],
+                    ),
+                )
+                conn.execute(
+                    """
+                    UPDATE conversations
+                    SET updated_at = ?, status = ?
+                    WHERE conversation_id = ?
+                    """,
+                    (
+                        event["created_at"],
+                        _conversation_status_for_event(event["kind"], conversation["status"]),
+                        conversation_id,
                     ),
                 )
             return {"accepted": len(events)}
@@ -671,6 +710,14 @@ class RegistryStore:
             metadata=metadata or {},
         )
         with self._connect() as conn:
+            conversation = conn.execute(
+                """
+                SELECT status
+                FROM conversations
+                WHERE conversation_id = ?
+                """,
+                (conversation_id,),
+            ).fetchone()
             conn.execute(
                 """
                 INSERT OR REPLACE INTO timeline_events (
@@ -690,14 +737,32 @@ class RegistryStore:
                     event.created_at,
                 ),
             )
+            if conversation is not None:
+                conn.execute(
+                    """
+                    UPDATE conversations
+                    SET updated_at = ?, status = ?
+                    WHERE conversation_id = ?
+                    """,
+                    (
+                        event.created_at,
+                        _conversation_status_for_event(kind, conversation["status"]),
+                        conversation_id,
+                    ),
+                )
 
     def list_conversations(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT c.*, a.display_name AS target_name
+                SELECT
+                    c.*,
+                    a.display_name AS target_name,
+                    COUNT(t.event_id) AS timeline_event_count
                 FROM conversations c
                 LEFT JOIN agents a ON a.agent_id = c.target_agent_id
+                LEFT JOIN timeline_events t ON t.conversation_id = c.conversation_id
+                GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_surface, c.status, c.created_at, c.updated_at, a.display_name
                 ORDER BY c.updated_at DESC
                 """
             ).fetchall()
@@ -710,6 +775,7 @@ class RegistryStore:
                 "status": row["status"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
+                "timeline_event_count": int(row["timeline_event_count"] or 0),
             }
             for row in rows
         ]
@@ -718,16 +784,47 @@ class RegistryStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT c.*, a.display_name AS target_name
+                SELECT
+                    c.*,
+                    a.display_name AS target_name,
+                    COUNT(t.event_id) AS timeline_event_count
                 FROM conversations c
                 LEFT JOIN agents a ON a.agent_id = c.target_agent_id
+                LEFT JOIN timeline_events t ON t.conversation_id = c.conversation_id
                 WHERE c.conversation_id = ?
+                GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_surface, c.status, c.created_at, c.updated_at, a.display_name
                 """,
                 (conversation_id,),
             ).fetchone()
+            task_rows = conn.execute(
+                """
+                SELECT t.*, origin.display_name AS origin_name, target.display_name AS target_name
+                FROM routed_tasks t
+                LEFT JOIN agents origin ON origin.agent_id = t.origin_agent_id
+                LEFT JOIN agents target ON target.agent_id = t.target_agent_id
+                WHERE t.parent_conversation_id = ?
+                ORDER BY t.updated_at DESC
+                """,
+                (conversation_id,),
+            ).fetchall()
         if row is None:
             raise KeyError(conversation_id)
-        tasks = [task for task in self.list_tasks() if task["parent_conversation_id"] == conversation_id]
+        tasks = [
+            {
+                "routed_task_id": task["routed_task_id"],
+                "parent_conversation_id": task["parent_conversation_id"],
+                "origin_agent_id": task["origin_agent_id"],
+                "origin_display_name": task["origin_name"] or "",
+                "target_agent_id": task["target_agent_id"],
+                "target_display_name": task["target_name"] or "",
+                "title": task["title"],
+                "status": task["status"],
+                "summary": task["summary"],
+                "created_at": task["created_at"],
+                "updated_at": task["updated_at"],
+            }
+            for task in task_rows
+        ]
         return {
             "conversation_id": row["conversation_id"],
             "target_agent_id": row["target_agent_id"],
@@ -736,6 +833,7 @@ class RegistryStore:
             "status": row["status"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
+            "timeline_event_count": int(row["timeline_event_count"] or 0),
             "linked_routed_tasks": tasks,
         }
 
@@ -794,6 +892,7 @@ class RegistryStore:
             kind="surface_action",
             payload={
                 "conversation_id": conversation_id,
+                "conversation_ref": conversation_id,
                 "action": action,
                 "payload": action_payload,
                 "surface": "registry",

@@ -22,13 +22,17 @@ Docker build: output is written to artifacts_dir/docker-build.log; use pytest -s
 pre-build notice; check the log file for build progress/details.
 """
 
+import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
 import uuid
 from pathlib import Path
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 import pytest
 
@@ -146,6 +150,8 @@ def _compose_down(ctx: dict[str, object], name: str = "teardown") -> tuple[subpr
         "--profile",
         "tools",
         "--profile",
+        "registry",
+        "--profile",
         "bot",
         "--profile",
         "stub",
@@ -167,6 +173,65 @@ def _compose_down(ctx: dict[str, object], name: str = "teardown") -> tuple[subpr
     log_text = "\n".join(body).strip()
     log_path.write_text(log_text + ("\n" if log_text else ""), encoding="utf-8")
     return r, log_path
+
+
+def _free_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _registry_ui_ctx(ctx: dict[str, object]) -> dict[str, object]:
+    derived = dict(ctx)
+    registry_port = _free_local_port()
+    derived["registry_port"] = registry_port
+    derived["env"] = {
+        **ctx["env"],
+        "REGISTRY_PORT": str(registry_port),
+        "REGISTRY_ENROLL_TOKEN": "dev-enroll-token",
+        "REGISTRY_UI_TOKEN": "dev-ui-token",
+    }
+    return derived
+
+
+def _registry_url(ctx: dict[str, object]) -> str:
+    return f"http://127.0.0.1:{ctx['registry_port']}"
+
+
+def _http_json(
+    method: str,
+    url: str,
+    *,
+    token: str = "",
+    payload: dict[str, object] | None = None,
+    timeout: int = 5,
+) -> dict[str, object]:
+    body = None
+    headers: dict[str, str] = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib_request.Request(url, data=body, headers=headers, method=method)
+    with urllib_request.urlopen(req, timeout=timeout) as response:
+        data = response.read().decode("utf-8")
+    return json.loads(data or "{}")
+
+
+def _wait_for_registry_ready(ctx: dict[str, object], timeout_seconds: int = 30) -> None:
+    deadline = time.time() + timeout_seconds
+    last_error = "registry not ready"
+    url = _registry_url(ctx)
+    while time.time() < deadline:
+        try:
+            health = _http_json("GET", f"{url}/healthz", timeout=2)
+            if health.get("ok") is True:
+                return
+        except Exception as exc:
+            last_error = str(exc)
+        time.sleep(1)
+    _fail_with_logs(ctx, "registry-not-ready", f"Registry did not become ready: {last_error}", "registry")
 
 
 @pytest.fixture(scope="module")
@@ -535,3 +600,328 @@ def test_compose_bot_stub_smoke(postgres_up):
             proc.communicate(timeout=2)
     if b"Bot starting (long-poll)" not in (err or b"") and b"Bot starting (webhook)" not in (err or b""):
         pytest.fail(f"Stub image did not reach run_polling: stderr={err!r}")
+
+
+def test_compose_registry_ui_conversation_detail(postgres_up):
+    """Registry UI can create a conversation and receive a bot-published started event.
+
+    Uses the real Compose-hosted registry service plus the production registry
+    client and RegistryConversationIO on the host. This keeps the E2E focused on
+    M7's contract: UI-created work, polled delivery, and surface-owned timeline
+    publication, without depending on Telegram startup or provider auth.
+    """
+    import asyncio
+
+    from app.agents.client import AgentRegistryClient
+    from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+    from app.agents.types import AgentCard
+    from app.transports.registry_adapter import RegistryConversationIO
+    from tests.support.config_support import make_config
+
+    ctx = _registry_ui_ctx(postgres_up)
+    registry_up = _compose(ctx, "--profile", "registry", "up", "-d", "registry")
+    assert registry_up.returncode == 0, (registry_up.stdout, registry_up.stderr)
+    _wait_for_registry_ready(ctx)
+    base_url = _registry_url(ctx)
+
+    async def _exercise_registry_flow() -> str:
+        enroll_client = AgentRegistryClient(base_url)
+        requested = AgentCard(
+            display_name="Registry E2E Bot",
+            slug="registry-e2e-bot",
+            role="product",
+            skills=("planning",),
+            provider="claude",
+            mode="registry",
+            connectivity_state="connected",
+            surface_capabilities=("registry",),
+            version="e2e",
+        )
+        enrolled = await enroll_client.enroll(requested, "dev-enroll-token")
+        agent_id = str(enrolled["agent_id"])
+        agent_token = str(enrolled["agent_token"])
+        cfg = make_config(
+            data_dir=Path(ctx["artifacts_dir"]) / "registry-e2e-agent",
+            agent_mode="registry",
+            agent_registry_url=base_url,
+            agent_registry_enroll_token="dev-enroll-token",
+            agent_display_name="Registry E2E Bot",
+            agent_slug=str(enrolled["slug"]),
+        )
+        save_agent_runtime_state(
+            cfg.data_dir,
+            AgentRuntimeState(
+                agent_id=agent_id,
+                agent_token=agent_token,
+                connectivity_state="connected",
+            ),
+        )
+        client = AgentRegistryClient(base_url, agent_token=agent_token)
+        registered = AgentCard(
+            agent_id=agent_id,
+            display_name="Registry E2E Bot",
+            slug=str(enrolled["slug"]),
+            role="product",
+            skills=("planning",),
+            provider="claude",
+            mode="registry",
+            connectivity_state="connected",
+            surface_capabilities=("registry",),
+            version="e2e",
+        )
+        await client.register(
+            registered,
+            connectivity_state="connected",
+            current_capacity=0,
+            max_capacity=1,
+        )
+
+        conversation = _http_json(
+            "POST",
+            f"{base_url}/v1/ui/conversations",
+            token="dev-ui-token",
+            payload={
+                "target_agent_id": agent_id,
+                "title": "Registry UI E2E",
+                "message_text": "Start this from the registry UI.",
+            },
+        )
+        conversation_id = str(conversation["conversation_id"])
+
+        deliveries = await client.poll(cursor="0", limit=20, wait_seconds=0)
+        assert deliveries["deliveries"], deliveries
+        delivery = deliveries["deliveries"][0]
+        assert delivery["kind"] == "surface_input"
+        surface = RegistryConversationIO(cfg, conversation_ref=conversation_id)
+        await surface.bind(title="Registry UI E2E", config=cfg)
+        await client.ack([delivery["delivery_id"]], classification="accepted")
+        return conversation_id
+
+    conversation_id = asyncio.run(_exercise_registry_flow())
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        timeline = _http_json(
+            "GET",
+            f"{base_url}/v1/ui/conversations/{conversation_id}/timeline",
+            token="dev-ui-token",
+        )
+        if any(event.get("kind") == "started" for event in timeline.get("events", [])):
+            return
+        time.sleep(1)
+
+    _fail_with_logs(
+        ctx,
+        "registry-ui-timeline-timeout",
+        f"Registry UI conversation did not receive a started event for {conversation_id}.",
+        "registry",
+    )
+
+
+def test_compose_registry_ui_delegation_flow(postgres_up):
+    """Registry UI can approve delegation and receive the parent completion flow."""
+    import asyncio
+
+    from app.agents.client import AgentRegistryClient
+    from app.agents.delivery import handle_registry_delivery
+    from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+    from app.agents.types import AgentCard, RoutedTaskResult
+    from app.providers.base import RunResult
+    from tests.support.config_support import make_config
+    from tests.support.handler_support import FakeProvider, drain_one_worker_item, setup_globals
+
+    ctx = _registry_ui_ctx(postgres_up)
+    registry_up = _compose(ctx, "--profile", "registry", "up", "-d", "registry")
+    assert registry_up.returncode == 0, (registry_up.stdout, registry_up.stderr)
+    _wait_for_registry_ready(ctx)
+    base_url = _registry_url(ctx)
+
+    async def _exercise_registry_flow() -> str:
+        enroll_client = AgentRegistryClient(base_url)
+        requested_parent = AgentCard(
+            display_name="Registry Parent Bot",
+            slug="registry-parent-bot",
+            role="product",
+            skills=("planning", "delegation"),
+            provider="claude",
+            mode="registry",
+            connectivity_state="connected",
+            surface_capabilities=("registry",),
+            version="e2e",
+        )
+        requested_child = AgentCard(
+            display_name="Registry Child Bot",
+            slug="registry-child-bot",
+            role="developer",
+            skills=("implementation",),
+            provider="claude",
+            mode="registry",
+            connectivity_state="connected",
+            surface_capabilities=("registry",),
+            version="e2e",
+        )
+        enrolled_parent = await enroll_client.enroll(requested_parent, "dev-enroll-token")
+        enrolled_child = await enroll_client.enroll(requested_child, "dev-enroll-token")
+
+        parent_id = str(enrolled_parent["agent_id"])
+        parent_token = str(enrolled_parent["agent_token"])
+        child_id = str(enrolled_child["agent_id"])
+        child_token = str(enrolled_child["agent_token"])
+
+        cfg = make_config(
+            data_dir=Path(ctx["artifacts_dir"]) / "registry-e2e-parent",
+            agent_mode="registry",
+            agent_registry_url=base_url,
+            agent_registry_enroll_token="dev-enroll-token",
+            agent_display_name="Registry Parent Bot",
+            agent_slug=str(enrolled_parent["slug"]),
+            approval_mode="off",
+        )
+        save_agent_runtime_state(
+            cfg.data_dir,
+            AgentRuntimeState(
+                agent_id=parent_id,
+                agent_token=parent_token,
+                connectivity_state="connected",
+            ),
+        )
+        parent_client = AgentRegistryClient(base_url, agent_token=parent_token)
+        child_client = AgentRegistryClient(base_url, agent_token=child_token)
+        await parent_client.register(
+            AgentCard(
+                agent_id=parent_id,
+                display_name="Registry Parent Bot",
+                slug=str(enrolled_parent["slug"]),
+                role="product",
+                skills=("planning", "delegation"),
+                provider="claude",
+                mode="registry",
+                connectivity_state="connected",
+                surface_capabilities=("registry",),
+                version="e2e",
+            ),
+            connectivity_state="connected",
+            current_capacity=0,
+            max_capacity=1,
+        )
+        await child_client.register(
+            AgentCard(
+                agent_id=child_id,
+                display_name="Registry Child Bot",
+                slug=str(enrolled_child["slug"]),
+                role="developer",
+                skills=("implementation",),
+                provider="claude",
+                mode="registry",
+                connectivity_state="connected",
+                surface_capabilities=("registry",),
+                version="e2e",
+            ),
+            connectivity_state="connected",
+            current_capacity=0,
+            max_capacity=1,
+        )
+
+        provider = FakeProvider("claude")
+        provider.run_results = [
+            RunResult(
+                text="",
+                delegation_title="Registry UI delegation",
+                delegation_resume_instruction="Synthesize the child result and answer the user.",
+                delegation_tasks=[
+                    {
+                        "routed_task_id": "child-task-e2e",
+                        "title": "Implement the feature",
+                        "target_agent_id": child_id,
+                        "instructions": "Build the feature and report back.",
+                    }
+                ],
+            ),
+            RunResult(text="Final parent answer from delegation."),
+        ]
+        setup_globals(cfg, provider)
+
+        conversation = _http_json(
+            "POST",
+            f"{base_url}/v1/ui/conversations",
+            token="dev-ui-token",
+            payload={
+                "target_agent_id": parent_id,
+                "title": "Registry UI delegation flow",
+                "message_text": "Delegate this work and finish it.",
+            },
+        )
+        conversation_id = str(conversation["conversation_id"])
+
+        initial_poll = await parent_client.poll(cursor="0", limit=20, wait_seconds=0)
+        initial_delivery = initial_poll["deliveries"][0]
+        assert initial_delivery["kind"] == "surface_input"
+        assert await handle_registry_delivery(cfg, initial_delivery) == "accepted"
+        await parent_client.ack([initial_delivery["delivery_id"]], classification="accepted")
+        assert await drain_one_worker_item(cfg.data_dir) is True
+
+        approval_deadline = time.time() + 30
+        while time.time() < approval_deadline:
+            timeline = _http_json(
+                "GET",
+                f"{base_url}/v1/ui/conversations/{conversation_id}/timeline",
+                token="dev-ui-token",
+            )
+            if any(event.get("kind") == "delegation_proposed" for event in timeline.get("events", [])):
+                break
+            time.sleep(1)
+        else:
+            raise AssertionError("delegation_proposed event did not appear in the registry timeline")
+
+        _http_json(
+            "POST",
+            f"{base_url}/v1/ui/conversations/{conversation_id}/actions",
+            token="dev-ui-token",
+            payload={"action": "approve_delegation"},
+        )
+
+        approve_poll = await parent_client.poll(cursor=initial_poll["next_cursor"], limit=20, wait_seconds=0)
+        approve_delivery = next(item for item in approve_poll["deliveries"] if item["kind"] == "surface_action")
+        assert await handle_registry_delivery(cfg, approve_delivery) == "accepted"
+        await parent_client.ack([approve_delivery["delivery_id"]], classification="accepted")
+
+        child_poll = await child_client.poll(cursor="0", limit=20, wait_seconds=0)
+        child_delivery = next(item for item in child_poll["deliveries"] if item["kind"] == "routed_task")
+        await child_client.ack([child_delivery["delivery_id"]], classification="accepted")
+        await child_client.routed_task_result(
+            "child-task-e2e",
+            RoutedTaskResult(
+                routed_task_id="child-task-e2e",
+                status="completed",
+                summary="Child task complete",
+                full_text="Child bot completed the delegated task.",
+            ),
+        )
+
+        routed_result_poll = await parent_client.poll(cursor=approve_poll["next_cursor"], limit=20, wait_seconds=0)
+        routed_result_delivery = next(item for item in routed_result_poll["deliveries"] if item["kind"] == "routed_result")
+        assert await handle_registry_delivery(cfg, routed_result_delivery) == "accepted"
+        await parent_client.ack([routed_result_delivery["delivery_id"]], classification="accepted")
+        assert await drain_one_worker_item(cfg.data_dir) is True
+        return conversation_id
+
+    conversation_id = asyncio.run(_exercise_registry_flow())
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        timeline = _http_json(
+            "GET",
+            f"{base_url}/v1/ui/conversations/{conversation_id}/timeline",
+            token="dev-ui-token",
+        )
+        bodies = [event.get("body", "") for event in timeline.get("events", [])]
+        if any("All delegated tasks completed." in body for body in bodies) and any(
+            "Final parent answer from delegation." in body for body in bodies
+        ):
+            return
+        time.sleep(1)
+
+    _fail_with_logs(
+        ctx,
+        "registry-ui-delegation-timeout",
+        f"Registry UI delegation flow did not complete for conversation {conversation_id}.",
+        "registry",
+    )

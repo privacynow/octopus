@@ -65,7 +65,7 @@ async def test_execute_request_proposes_delegation_and_persists_pending_delegati
         )
 
 
-async def test_delegation_approve_submits_tasks_and_updates_session(monkeypatch):
+async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_session(monkeypatch):
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
@@ -83,7 +83,7 @@ async def test_delegation_approve_submits_tasks_and_updates_session(monkeypatch)
                 submitted.append(request)
                 return {"ok": True}
 
-        monkeypatch.setattr(th, "registry_client", lambda cfg: FakeRegistryClient())
+        monkeypatch.setattr("app.agents.delegation.registry_client", lambda cfg: FakeRegistryClient())
         save_agent_runtime_state(
             data_dir,
             AgentRuntimeState(
@@ -121,12 +121,13 @@ async def test_delegation_approve_submits_tasks_and_updates_session(monkeypatch)
         assert submitted[0].target_agent_id == "developer-1"
         assert submitted[0].instructions == "Build the feature end to end."
         assert pending is not None
+        assert pending["status"] == "submitted"
         assert pending["tasks"][0]["status"] == "submitted"
         assert "Delegation approved. 1 request(s) sent to specialist bots." in last_reply(msg)
         assert query.answered is True
 
 
-async def test_delegation_cancel_clears_session_and_does_not_submit(monkeypatch):
+async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_submit(monkeypatch):
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
@@ -144,7 +145,7 @@ async def test_delegation_cancel_clears_session_and_does_not_submit(monkeypatch)
                 called.append(request)
                 return {"ok": True}
 
-        monkeypatch.setattr(th, "registry_client", lambda cfg: FakeRegistryClient())
+        monkeypatch.setattr("app.agents.delegation.registry_client", lambda cfg: FakeRegistryClient())
 
         chat = FakeChat()
         user = FakeUser()
@@ -191,7 +192,7 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
                 called.append(request)
                 return {"ok": True}
 
-        monkeypatch.setattr(th, "registry_client", lambda cfg: FakeRegistryClient())
+        monkeypatch.setattr("app.agents.delegation.registry_client", lambda cfg: FakeRegistryClient())
         save_agent_runtime_state(
             data_dir,
             AgentRuntimeState(

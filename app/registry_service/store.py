@@ -14,7 +14,7 @@ from typing import Any
 from app.agents.types import AgentCard, TimelineEvent, to_wire
 
 _OFFLINE_AFTER_SECONDS = 60
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _BASE_SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -168,6 +168,32 @@ class RegistryStore:
             """
         )
 
+    def _migrate_v2_timeline_fts(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS timeline_fts
+            USING fts5(body, content=timeline_events, content_rowid=seq);
+
+            CREATE TRIGGER IF NOT EXISTS tl_ai AFTER INSERT ON timeline_events BEGIN
+              INSERT INTO timeline_fts(rowid, body) VALUES (new.seq, new.body);
+            END;
+            CREATE TRIGGER IF NOT EXISTS tl_ad AFTER DELETE ON timeline_events BEGIN
+              INSERT INTO timeline_fts(timeline_fts, rowid, body) VALUES ('delete', old.seq, old.body);
+            END;
+            CREATE TRIGGER IF NOT EXISTS tl_au AFTER UPDATE ON timeline_events BEGIN
+              INSERT INTO timeline_fts(timeline_fts, rowid, body) VALUES ('delete', old.seq, old.body);
+              INSERT INTO timeline_fts(rowid, body) VALUES (new.seq, new.body);
+            END;
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO timeline_fts(rowid, body)
+            SELECT seq, body FROM timeline_events
+            WHERE body IS NOT NULL AND body != ''
+            """
+        )
+
     def _run_migrations(self, conn: sqlite3.Connection) -> None:
         current = self._current_schema_version(conn)
         if current > _SCHEMA_VERSION:
@@ -177,6 +203,11 @@ class RegistryStore:
         if current < 1:
             self._migrate_v1(conn)
             self._set_schema_version(conn, 1)
+            conn.commit()
+            current = 1
+        if current < 2:
+            self._migrate_v2_timeline_fts(conn)
+            self._set_schema_version(conn, 2)
             conn.commit()
 
     def _ensure_unique_slug(self, conn: sqlite3.Connection, requested: str) -> str:
@@ -908,6 +939,24 @@ class RegistryStore:
             }
             for row in rows
         ]
+
+    def search_conversations(self, q: str, limit: int = 20) -> list[dict[str, Any]]:
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT DISTINCT te.conversation_id,
+                           snippet(timeline_fts, 0, '<b>', '</b>', '…', 32) AS snippet
+                    FROM timeline_fts
+                    JOIN timeline_events te ON te.seq = timeline_fts.rowid
+                    WHERE timeline_fts MATCH ?
+                    LIMIT ?
+                    """,
+                    (q, limit),
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        return [{"conversation_id": row["conversation_id"], "snippet": row["snippet"]} for row in rows]
 
     def add_conversation_message(self, conversation_id: str, text: str) -> dict[str, Any]:
         conversation = self.get_conversation(conversation_id)

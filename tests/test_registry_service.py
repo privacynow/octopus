@@ -313,6 +313,64 @@ def test_ui_bootstrap_includes_timeline_event_count(monkeypatch, tmp_path: Path)
     assert conversations[0]["timeline_event_count"] == 2
 
 
+def test_ui_search_returns_matching_conversations(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    _, token = _enroll_and_register(client, "Search Bot", "search-bot")
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": "conv-search-1",
+            "title": "Searchable conversation",
+            "origin_surface": "registry",
+            "external_id": "conv-search-1",
+        },
+    )
+    assert bind.status_code == 200
+    publish = client.post(
+        "/v1/agents/timeline",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-search-1",
+                    "conversation_id": "conv-search-1",
+                    "kind": "progress",
+                    "title": "Working…",
+                    "body": "Reviewing quarterly roadmap risks",
+                    "created_at": "2026-03-16T00:00:00+00:00",
+                }
+            ]
+        },
+    )
+    assert publish.status_code == 200
+
+    search = client.get(
+        "/v1/ui/search",
+        params={"q": "roadmap"},
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert search.status_code == 200
+    assert search.json()["results"] == [
+        {"conversation_id": "conv-search-1", "snippet": "Reviewing quarterly <b>roadmap</b> risks"}
+    ]
+
+
+def test_ui_search_returns_empty_results_for_malformed_query(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.get(
+        "/v1/ui/search",
+        params={"q": "\"bad"},
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"results": []}
+
+
 def test_ui_create_conversation_creates_delivery(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -525,7 +583,7 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
     assert any(item["kind"] == "routed_result" for item in origin_deliveries)
 
 
-def test_registry_store_migrations_are_idempotent_and_add_skills_override(tmp_path: Path):
+def test_registry_store_migrations_are_idempotent_and_add_skills_override_and_timeline_fts(tmp_path: Path):
     db_path = tmp_path / "registry.sqlite3"
     conn = sqlite3.connect(db_path)
     conn.execute(
@@ -541,7 +599,7 @@ def test_registry_store_migrations_are_idempotent_and_add_skills_override(tmp_pa
 
     conn = sqlite3.connect(db_path)
     version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-    assert version == "1"
+    assert version == "2"
     tables = {
         row[0]
         for row in conn.execute(
@@ -549,4 +607,17 @@ def test_registry_store_migrations_are_idempotent_and_add_skills_override(tmp_pa
         ).fetchall()
     }
     assert "skills_override" in tables
+    triggers = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'"
+        ).fetchall()
+    }
+    assert "tl_ai" in triggers
+    assert "tl_ad" in triggers
+    assert "tl_au" in triggers
+    fts_row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='timeline_fts'"
+    ).fetchone()
+    assert fts_row is not None
     conn.close()

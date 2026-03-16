@@ -10,6 +10,7 @@ import pytest
 from app.work_queue import (
     record_update,
     get_update_payload,
+    get_user_access,
     get_work_items_for_chat,
     record_and_admit_message,
     record_and_enqueue,
@@ -22,9 +23,11 @@ from app.work_queue import (
     cancel_queued_fresh_for_chat,
     has_claimed_for_chat,
     has_queued_or_claimed,
+    list_user_access,
     mark_pending_recovery,
     get_latest_pending_recovery,
     get_pending_recovery_for_update,
+    set_user_access,
     supersede_pending_recovery,
     discard_recovery,
     reclaim_for_replay,
@@ -293,3 +296,27 @@ def test_cancel_queued_fresh_for_chat_terminal_state(backend_and_data_dir):
     assert len(cancelled) == 1, f"Exactly one item must be failed/cancelled, got: {items}"
     assert len(runnable) == 0, f"No runnable items after cancel, got: {items}"
     assert has_queued_or_claimed(data_dir, chat_id) is False
+
+
+def test_user_access_no_row_returns_none(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    assert get_user_access(data_dir, user_id=99999) is None
+
+
+def test_user_access_set_and_get_round_trip(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    set_user_access(data_dir, user_id=100, access="blocked", reason="test", granted_by=1)
+    assert get_user_access(data_dir, user_id=100) == "blocked"
+    set_user_access(data_dir, user_id=100, access="allowed", reason="reversed", granted_by=1)
+    assert get_user_access(data_dir, user_id=100) == "allowed"
+
+
+def test_user_access_list_covers_all_rows(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    set_user_access(data_dir, user_id=200, access="allowed", reason="a", granted_by=1)
+    set_user_access(data_dir, user_id=201, access="blocked", reason="b", granted_by=1)
+    rows = list_user_access(data_dir)
+    user_ids = {row["user_id"] for row in rows}
+    assert 200 in user_ids
+    assert 201 in user_ids
+    assert all(row["access"] in ("allowed", "blocked") for row in rows)

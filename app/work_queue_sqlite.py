@@ -224,6 +224,12 @@ class SQLiteTransportStore:
         return work_queue_sqlite_impl.purge_old(conn, older_than_hours)
 
     def get_user_access(self, data_dir: Path, user_id: int) -> str | None:
+        if data_dir in self._connections:
+            return work_queue_sqlite_impl.get_user_access_override(
+                self._connections[data_dir], user_id
+            )
+        if not (data_dir / "transport.db").exists():
+            return None
         conn = self._transport_db(data_dir)
         return work_queue_sqlite_impl.get_user_access_override(conn, user_id)
 

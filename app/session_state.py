@@ -74,7 +74,8 @@ class DelegatedTask:
     routed_task_id: str
     title: str = ""
     target_agent_id: str = ""
-    status: str = "pending"
+    instructions: str = ""
+    status: str = "proposed"  # valid values: proposed, submitted, completed, failed
     summary: str = ""
     full_text: str = ""
     follow_up_questions: list[str] = field(default_factory=list)

@@ -52,6 +52,8 @@ from app.workflows.pending_request import (
     run_pending_request_event,
 )
 from app.session_state import (
+    DelegatedTask,
+    PendingDelegation,
     PendingApproval,
     PendingRetry,
     SessionState,
@@ -66,8 +68,9 @@ from app.agents.bridge import (
     telegram_conversation_ref,
 )
 from app.agents.client import RegistryClientError
+from app.agents.orchestration import build_delegation_plan
 from app.agents.state import load_agent_runtime_state
-from app.agents.types import AgentDiscoveryQuery, RoutedTaskResult
+from app.agents.types import AgentDiscoveryQuery, RoutedTaskRequest, RoutedTaskResult
 from app.transports import factory
 from app.transports.admission import admit_fresh_message
 from app.transports.types import InboundEnvelope
@@ -916,6 +919,57 @@ async def send_directed_artifacts(
         await send_path_to_chat(message, allowed_path, force_image=(dtype == "IMAGE"))
 
 
+def _delegation_keyboard(chat_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("\u25b6\ufe0f Approve delegation", callback_data=f"delegation_approve:{chat_id}"),
+        InlineKeyboardButton("\u2716 Cancel", callback_data=f"delegation_cancel:{chat_id}"),
+    ]])
+
+
+def _format_delegation_plan_message(delegation: PendingDelegation) -> str:
+    lines = [
+        "<b>Delegation plan</b>",
+        "",
+        "I'd like to delegate the following to specialist bots:",
+        "",
+    ]
+    for index, task in enumerate(delegation.tasks, start=1):
+        lines.extend([
+            f"<b>{index}. {html.escape(task.title or task.routed_task_id)}</b>",
+            f"\u2192 {html.escape(task.target_agent_id or 'unassigned')}",
+            "",
+        ])
+    lines.append("Approve to send these requests, or cancel to continue without delegation.")
+    return "\n".join(lines)
+
+
+async def _propose_delegation_plan(
+    chat_id: int,
+    message,
+    session: SessionState,
+    *,
+    conversation_ref: str,
+    result,
+) -> RequestExecutionOutcome:
+    title = result.delegation_title.strip() or summarize_text(result.text) or "Delegation plan"
+    delegation = build_delegation_plan(
+        conversation_ref,
+        title,
+        result.delegation_resume_instruction,
+        list(result.delegation_tasks),
+    )
+    session.pending_delegation = delegation
+    _save(chat_id, session)
+
+    send_plan = getattr(message, "send_text", None) or getattr(message, "reply_text")
+    await send_plan(
+        _format_delegation_plan_message(delegation),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_delegation_keyboard(chat_id),
+    )
+    return RequestExecutionOutcome(status="delegation_proposed")
+
+
 async def keep_typing(chat) -> None:
     try:
         while True:
@@ -1023,7 +1077,7 @@ async def execute_request(
     request_user_id: int = 0,
     skip_permissions: bool = False,
     trust_tier: str = "trusted",
-) -> None:
+) -> RequestExecutionOutcome:
     cfg = _cfg()
     prov = _prov()
     session = _load(chat_id)
@@ -1212,6 +1266,17 @@ async def execute_request(
             status="completed_with_denials",
             reply_text=cleaned_reply,
             denials=tuple(result.denials),
+        )
+
+    if result.delegation_tasks:
+        await progress.update("Delegation plan ready.", force=True)
+        session = _load(chat_id)
+        return await _propose_delegation_plan(
+            chat_id,
+            message,
+            session,
+            conversation_ref=conversation_ref or telegram_conversation_ref(cfg, chat_id),
+            result=result,
         )
 
     await progress.update(_msg.progress_completed(), force=True)
@@ -1456,6 +1521,83 @@ async def retry_allow_pending(chat_id: int, message) -> None:
         skip_permissions=True,
         trust_tier=trust_tier,
     )
+
+
+def _parse_delegation_callback(data: str) -> tuple[str, int] | None:
+    parts = (data or "").split(":", 1)
+    if len(parts) != 2:
+        return None
+    try:
+        return parts[0], int(parts[1])
+    except ValueError:
+        return None
+
+
+async def _handle_delegation_approve(chat_id: int, query) -> None:
+    cfg = _cfg()
+    state = load_agent_runtime_state(cfg.data_dir)
+    if state.connectivity_state != "connected":
+        detail = f" Last error: {state.last_error}" if state.last_error else ""
+        await query.edit_message_text(
+            "Delegation is unavailable because registry connectivity is degraded."
+            " The request was not sent." + detail,
+            reply_markup=_delegation_keyboard(chat_id),
+        )
+        return
+
+    session = _load(chat_id)
+    delegation = session.pending_delegation
+    if delegation is None or not any(task.status == "proposed" for task in delegation.tasks):
+        await query.edit_message_text("Nothing to approve.")
+        return
+
+    client = registry_client(cfg)
+    if client is None:
+        await query.edit_message_text(
+            "Delegation unavailable: registry not enrolled.",
+            reply_markup=_delegation_keyboard(chat_id),
+        )
+        return
+
+    origin_agent_id = state.agent_id or ""
+    submitted_ids: list[str] = []
+    try:
+        for task in delegation.tasks:
+            if task.status != "proposed":
+                continue
+            request = RoutedTaskRequest(
+                routed_task_id=task.routed_task_id,
+                parent_conversation_id=delegation.conversation_ref,
+                origin_agent_id=origin_agent_id,
+                target_agent_id=task.target_agent_id,
+                title=task.title,
+                instructions=task.instructions,
+            )
+            await client.submit_routed_task(request)
+            task.status = "submitted"
+            submitted_ids.append(task.routed_task_id)
+    except Exception as exc:
+        _save(chat_id, session)
+        await query.edit_message_text(
+            f"Delegation submission failed after {len(submitted_ids)} request(s)."
+            f" {html.escape(str(exc))}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=_delegation_keyboard(chat_id),
+        )
+        return
+
+    _save(chat_id, session)
+    await query.edit_message_text(
+        f"Delegation approved. {len(submitted_ids)} request(s) sent to specialist bots."
+        " I'll continue when results arrive."
+    )
+
+
+async def _handle_delegation_cancel(chat_id: int, query) -> None:
+    session = _load(chat_id)
+    session.pending_delegation = None
+    _save(chat_id, session)
+    await query.edit_message_text("Delegation cancelled. No requests were sent.")
 
 
 # -- Command handlers ------------------------------------------------------
@@ -2600,6 +2742,23 @@ async def handle_callback(event, query) -> None:
             await retry_allow_pending(chat_id, query.message)
 
 
+@_callback_handler
+async def handle_delegation_callback(event, query) -> None:
+    parsed = _parse_delegation_callback(event.data)
+    if parsed is None:
+        return
+    action, chat_id = parsed
+
+    async with _chat_lock(chat_id, query=query) as already_answered:
+        if not already_answered:
+            await query.answer()
+        if action == "delegation_approve":
+            await _handle_delegation_approve(chat_id, query)
+            return
+        if action == "delegation_cancel":
+            await _handle_delegation_cancel(chat_id, query)
+
+
 # -- Recovery replay/discard callback handler --------------------------------
 
 
@@ -3436,6 +3595,7 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     app.add_handler(CommandHandler("export", cmd_export))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CallbackQueryHandler(handle_callback, pattern=r"^(retry_|approval_)"))
+    app.add_handler(CallbackQueryHandler(handle_delegation_callback, pattern=r"^delegation_"))
     app.add_handler(CallbackQueryHandler(handle_recovery_callback, pattern=r"^recovery_"))
     app.add_handler(CallbackQueryHandler(handle_settings_callback, pattern=r"^setting_"))
     app.add_handler(CallbackQueryHandler(handle_expand_callback, pattern=r"^expand:"))

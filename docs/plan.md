@@ -3204,30 +3204,16 @@ Registry outage behavior:
 
 ##### M1 — Shared Conversation Core and Surface Refactor
 
-**Status: Complete — the shared surface contract is now closed at the worker
-dispatch boundary via a factory-owned surface selection rule.**
+**Status: Complete.**
 
-Delivered:
-- `ConversationRef`, `SurfaceBinding`, `SurfaceEvent`, `TimelineEvent` types
-  (`app/agents/types.py`)
-- `InteractionSurface`, `SurfaceCapabilities`, `SurfaceEditableHandle`,
-  `ConversationIO` port abstractions (`app/transports/ports.py`)
-- `RegistryConversationIO` as `InteractionSurface` implementation
-  (`app/transports/registry_adapter.py`)
-- `TelegramConversationIO` now implements the same surface-owned bind/input/
-  outcome/recovery hooks as the registry adapter
-- `app/access.py` is now the leaf-level owner for config-driven user
-  normalization, allow/admin/public classification, and trust-tier
-  resolution; handlers keep thin wrappers for the existing public API
-- `app/transports/factory.py` is now the single owner for:
-  - `conversation_surface_name(conversation_ref)`
-  - `create_outbound_surface(...)`
-  - source-aware `trust_tier_for_source(..., config=...)`, backed by
-    `app/access.py` instead of importing the handler layer
-- `worker_dispatch` and `app/agents/delivery.py` now depend on the factory
-  and `InteractionSurface`, not on concrete adapter classes
-- `ConversationSimulator` can inject registry-surface messages through the
-  same durable worker boundary via `inject_registry_message_async(...)`
+Outcome:
+- Shared conversation and surface concepts are now part of the runtime
+  contract rather than Telegram-only implementation detail.
+- Surface selection is owned by the transport factory at the dispatch
+  boundary.
+- Registry and Telegram flows share the same worker-owned orchestration path.
+- Simulator coverage includes registry-surface flows through the durable worker
+  boundary.
 
 Acceptance criteria (complete):
 - [x] Telegram behavior is preserved after adapter migration
@@ -3242,16 +3228,11 @@ Acceptance criteria (complete):
 
 **Status: Complete.**
 
-Delivered:
-- `.env.bot.<instance>` convention for same-checkout multi-bot deployments
-- Instance-aware bot scripts (`start_instance.sh`, `stop_instance.sh`,
-  `logs_instance.sh`)
-- Registry lifecycle scripts (`scripts/registry/start.sh`, `stop.sh`,
-  `logs.sh`)
-- Single-line interactive `guided_start.sh` with registry-first defaults,
-  inline default values, bot display name prompt with slug derivation, and
-  explicit standalone support
-- Docker-safe working-dir guidance
+Outcome:
+- One checkout can run multiple bot instances with per-instance env files.
+- Registry-backed setup is the default operator path, with explicit standalone
+  support.
+- Repo-owned bot and registry scripts provide the primary operational surface.
 
 Acceptance criteria (complete):
 - [x] One checkout can run product/dev/test-writer/reviewer bots
@@ -3264,17 +3245,11 @@ Acceptance criteria (complete):
 
 **Status: Complete.**
 
-Delivered:
-- FastAPI registry service (`app/registry_service/app.py`)
-- SQLite-backed registry store with WAL mode (`app/registry_service/store.py`)
-- Full bot-facing API: enroll, register, heartbeat, timeline publish,
-  discovery search, routed-task create/status/result, poll, ack, deregister
-- Full UI-facing API: bootstrap, bot directory, conversation CRUD, conversation
-  timeline, conversation actions (approve/reject/cancel), task board
-- Delivery queue with state machine: queued → leased → acked/dead_letter/queued
-- Slug collision handling, cursor-based poll, offline detection
-- Vanilla HTML/CSS/JS UI shell (`/ui` endpoint)
-- Deployment-issued bearer tokens for both bot and UI auth; no login/password
+Outcome:
+- The registry now provides the public control plane for enrollment,
+  presence, discovery, routed delivery, and operator visibility.
+- Bots and humans both have first-class APIs.
+- Registry UI exists as a richer alternate client surface.
 
 Acceptance criteria (complete):
 - [x] Bots can enroll, register, heartbeat, and poll
@@ -3288,38 +3263,15 @@ Acceptance criteria (complete):
 
 **Status: Complete, including safety-gap hardening.**
 
-Delivered:
-- Bot-side registry client (`app/agents/client.py`): full async HTTP, all
-  endpoints, bearer auth, injectable for tests
-- Agent runtime (`app/agents/runtime.py`): enrollment → registration →
-  heartbeat + poll loop, durable state persistence, degraded/connected/
-  standalone state transitions, per-delivery exception isolation, runtime
-  survival on unexpected poll errors
-- Delivery dispatch (`app/agents/delivery.py`): routes surface_input,
-  routed_task, surface_action (approve/reject/cancel/retry/recovery),
-  control, and routed_result delivery kinds
-- Delivery bridge (`app/agents/bridge.py`): converts registry deliveries into
-  local `work_queue.record_and_admit_message` calls; returns `retry_later`
-  on chat-busy (not silently acked); binds conversation refs; publishes
-  timeline events
-- Registry surface integration (`app/transports/registry_adapter.py`):
-  `RegistryConversationIO` implements `InteractionSurface`; translates all
-  outbound operations to timeline events; declares correct capabilities
-- `worker_dispatch` integration (`app/telegram_handlers.py`): single dispatch
-  path with polymorphic surface selection; routed task result reporting wrapped
-  so registry-unreachable at result time does not mark completed work as failed
-- Registry store: conversation binding, leased poll delivery state machine,
-  routed_result return delivery to origin agent
-
-Safety gaps fixed after initial slice:
-- `busy → retry_later`: chat-busy deliveries return `retry_later`, not
-  silently acked and dropped (was: message lost permanently)
-- Result reporting isolation: `routed_task_result()` failure is caught and
-  logged; completed local work is not marked failed if registry unreachable
-- Per-delivery poll isolation: bad delivery handler exceptions reject only
-  that delivery; remaining batch continues
-- Runtime survival: unexpected poll errors are caught and logged; background
-  runtime task does not die permanently on one bad cycle
+Outcome:
+- Polling, delivery dispatch, and routed-task execution all enter the same
+  local worker/state-machine path as Telegram messages.
+- Registry-side deliveries cover input, actions, control, routed work, and
+  routed results.
+- Safety hardening is part of the milestone definition: busy deliveries retry,
+  report failures do not corrupt completed work, bad deliveries do not poison
+  the whole batch, and the background runtime survives unexpected handler
+  errors.
 
 Acceptance criteria (complete):
 - [x] Bots do not need public APIs
@@ -3334,67 +3286,15 @@ Acceptance criteria (complete):
 
 ##### M1 Closure Gate — Required Before Remaining M5 Work
 
-**Status: Complete. This gate was used to finish the M1 refactor without
-leaving factory-free surface branching inside orchestration code.**
+**Status: Complete.**
 
-Rationale: M1 was left partial while M2–M4 and partial M5 were built on top of
-its incomplete foundation. The result is five surface-conditional forks
-(`source == "registry"`, `conversation_surface == "telegram"`, etc.) inside
-`worker_dispatch` after the dispatch point. These forks contradict the Phase 20
-architecture principle "No surface-specific orchestration forks." Every
-additional M5 slice adds more code on top of these forks, increasing the
-migration cost and risk. This gate closes M1 before that cost compounds further.
-
-Scope:
-
-**Code quality cleanup (prerequisite, must go first):**
-- Delete `_BotMessage = TelegramConversationIO` alias and its stale comment from
-  `app/telegram_handlers.py`; the alias is now unused (the dead ternary at the
-  dispatch point was already cleaned up)
-- Add `skip_approval` serialization round-trip tests to `test_transport.py`:
-  one positive test (`skip_approval=True` survives `serialize_inbound` →
-  `deserialize_inbound`) and one negative test (default `False` also round-trips,
-  proving a normal Telegram message can never accidentally carry `skip_approval=True`)
-
-**Surface fork elimination in `worker_dispatch`:**
-- Eliminate `conversation_surface` as a local variable; derive surface identity
-  once at the `bot_msg` dispatch point and encode it in the surface object
-- Move the Telegram-specific input timeline event (`if source == "telegram":
-  await publish_timeline_event(... kind="surface_input" ...)`) into
-  `TelegramConversationIO` via a new `on_message_received(text)` method on
-  `InteractionSurface`; `RegistryConversationIO.on_message_received` is a no-op
-  (the event was published at admit time in `bridge.py`)
-- Move the Telegram-specific result timeline event (`elif conversation_surface
-  == "telegram" and outcome is not None: await publish_timeline_event(...)`)
-  into `TelegramConversationIO` via a new `on_outcome(outcome)` method on
-  `InteractionSurface`; `RegistryConversationIO.on_outcome` is a no-op (the
-  registry receives the result via `routed_task_result`)
-- Move `bind_conversation` call with surface-specific `origin_surface` and
-  `external_id` arguments into a `bind(title, config)` method on
-  `InteractionSurface`; `TelegramConversationIO.bind` uses `origin_surface=
-  "telegram"` and `external_id=str(chat_id)`; `RegistryConversationIO.bind`
-  uses `origin_surface="registry"` and `external_id=conversation_ref`
-- Create `bot_msg` before the `dispatch_mode == "recovery"` check (currently it
-  is created after), so the recovery path can also call surface methods
-- Move the recovery notice send logic into a `send_recovery_notice(preview,
-  prompt, run_again_label, skip_label, update_id)` method on
-  `InteractionSurface`; `TelegramConversationIO.send_recovery_notice` sends the
-  inline keyboard message via PTB; `RegistryConversationIO.send_recovery_notice`
-  publishes the timeline event
-- After all forks are moved into the surface: delete `conversation_surface` as a
-  local variable and remove `conversation_surface_name` from the imports used by
-  `worker_dispatch` (it will still be used in `delivery.py`)
-
-**Simulator upgrade:**
-- Add `inject_registry_message_async(conversation_ref, text, actor_ref,
-  skip_approval=False)` to `ConversationSimulator` that calls
-  `build_registry_message_delivery`, passes the serialized payload through
-  `work_queue.record_and_admit_message`, and drains via the real worker
-- The output log must capture `RegistryConversationIO.sent_messages` alongside
-  the existing Telegram output
-- At least one simulator test exercises a registry-surface message through
-  `inject_registry_message_async` and asserts the provider was called and the
-  output was captured via `RegistryConversationIO`
+Purpose:
+- Finish the M1 refactor before deeper M5 work by removing remaining
+  post-dispatch surface forks from orchestration code.
+- Keep surface selection, trust semantics, and adapter construction owned by
+  the transport factory rather than by handlers.
+- Ensure simulator coverage proves registry-surface traffic through the real
+  durable worker path.
 
 Acceptance criteria (complete):
 - [x] `grep -n "conversation_surface" app/telegram_handlers.py` returns zero
@@ -3411,90 +3311,17 @@ Acceptance criteria (complete):
 
 ##### M5 — Product-Bot Discovery and Delegation
 
-**Status: In progress — Phase 1 complete (discovery + result continuation);
-Phase 2 (delegation plan UX + routed task submission) not started.**
-
-###### M5 Phase 1 — Delivered
-
-- Parent-side delegation state is durable in bot-local session state:
-  `PendingDelegation` and `DelegatedTask` live in `SessionState`, not in the
-  registry
-- `routed_result` deliveries update the parent bot's local delegation state
-  and emit deterministic `delegated_result` timeline events
-- When all expected child results are present, the parent bot admits a
-  synthetic continuation message back through the normal local work queue so
-  orchestration resumes through the same worker-owned execution path
-- Synthetic continuation is tagged `skip_approval=True` to bypass re-approval
-  of the same parent orchestration step after async child results arrive
-- Parent continuations follow the bound conversation surface: Telegram parent
-  conversations resume on Telegram, not on the registry surface
-- Busy parent chats return `retry_later`; delegated-result state is preserved
-  and retried instead of being dropped
-- `/discover` is live: Telegram can search the registry by role/skills/tags/
-  free text via `AgentDiscoveryQuery`, render matching agents to the user, and
-  report standalone/degraded states truthfully
-
-###### M5 Phase 2 — Next Slice: Delegation Plan UX and Routed Task Submission
-
-This is the current work frontier.
-
-**What must be built:**
-
-1. **Delegation plan builder** — a pure function in `app/agents/orchestration.py`
-   that takes a list of `(target_agent_id, title, instructions)` tuples and the
-   current `conversation_ref`, and returns a `PendingDelegation` with one
-   `DelegatedTask` per target. This is called by the provider when it decides
-   to delegate during execution.
-
-2. **Delegation plan presentation** — when the provider instructs the bot to
-   propose a delegation, the bot persists the `PendingDelegation` in session
-   state (status: `proposed`), then sends the user an inline keyboard showing
-   the proposed sub-tasks and two buttons: "Approve delegation" and "Cancel".
-   The message body lists each task title and target agent name. No fan-out
-   happens yet.
-
-3. **Delegation approval callback handler** — `delegation_approve:<chat_id>` and
-   `delegation_cancel:<chat_id>` callbacks. On approve: guard that
-   `connectivity_state == "connected"` at callback time; call
-   `client.submit_routed_task()` for each `DelegatedTask` in the
-   `PendingDelegation`; update each task status to `submitted`; update
-   `PendingDelegation` in session; reply confirming fan-out. On cancel: clear
-   `PendingDelegation` from session; reply confirming cancellation.
-
-4. **Routed task submission** — `client.submit_routed_task(RoutedTaskRequest)`
-   already exists. The callback handler constructs one `RoutedTaskRequest` per
-   `DelegatedTask` with: `routed_task_id` from `DelegatedTask.routed_task_id`,
-   `parent_conversation_id` from `PendingDelegation.conversation_ref`,
-   `origin_agent_id` from `state.agent_id`, `target_agent_id` from
-   `DelegatedTask.target_agent_id`, and `instructions` from
-   `DelegatedTask.instructions` (new field on `DelegatedTask`).
-
-5. **Degraded-mode guard** — the delegation approval callback must check
-   `connectivity_state` before submitting. If degraded at callback time, reply
-   with a clear error ("Delegation is unavailable because registry connectivity
-   is degraded. The request was not sent.") and do not clear the
-   `PendingDelegation` so the user can retry.
-
-**What already exists and must not be duplicated:**
-- `PendingDelegation`, `DelegatedTask` — `app/session_state.py`
-- `RoutedTaskRequest` — `app/agents/types.py`
-- `client.submit_routed_task()` — `app/agents/client.py`
-- `registry_client()` — `app/agents/bridge.py`
-- `build_resume_prompt()`, `delegation_ready_to_resume()` — `app/agents/orchestration.py`
-- The result-handling path in `app/agents/delivery.py` (already waits for all
-  child results and admits the continuation)
-- Degraded-mode state read: `load_agent_runtime_state(cfg.data_dir).connectivity_state`
+**Status: Complete.**
 
 Scope:
-- Delegation plan builder function (orchestration.py)
-- Delegation plan Telegram UX (inline keyboard with approve/cancel)
-- Delegation approval + cancellation callback handlers
-- Routed task submission on approval (one API call per task)
-- Degraded-mode guard in callback, with truthful user message and no data loss
-- `DelegatedTask` gains `instructions: str` field; serialization round-trips
-- Tests: plan builder pure-function test; approve callback submits tasks and
-  updates session; cancel callback clears delegation and does not submit;
-  degraded-mode callback blocks submission and preserves delegation state
+- Telegram can discover candidate specialist bots through the registry using
+  structured capability search.
+- Parent-side delegation state is durable in bot-local session state and child
+  results resume orchestration through the same worker-owned path.
+- Delegation uses an explicit user-facing plan and approval step before any
+  routed work is submitted.
+- Approved plans submit routed tasks through the registry and preserve retry
+  semantics when registry connectivity is degraded.
 
 Role patterns (metadata only, not hardcoded logic):
 - product, requirements, developer, test-writer, reviewer, tester
@@ -3502,12 +3329,12 @@ Role patterns (metadata only, not hardcoded logic):
 
 Acceptance criteria:
 - [x] Product bot can search for specialist bots by role and skills
-- [ ] Discovery results presented before delegation (not automatic)
-- [ ] Delegation requires explicit user approval before fan-out
-- [ ] Delegated work routes through registry and executes through the same
+- [x] Discovery results presented before delegation (not automatic)
+- [x] Delegation requires explicit user approval before fan-out
+- [x] Delegated work routes through registry and executes through the same
       local worker-owned runtime on the target bot
 - [x] Parent bot resumes orchestration after receiving child results
-- [ ] Degraded mode blocks delegation and tells the user why
+- [x] Degraded mode blocks delegation and tells the user why
 
 ---
 

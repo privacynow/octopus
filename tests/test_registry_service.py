@@ -179,7 +179,7 @@ def test_registry_ui_conversation_routes_surface_input_to_polled_bot(monkeypatch
             "message_text": "Please refine this PRD.",
         },
     )
-    assert create.status_code == 200
+    assert create.status_code == 201
     conversation_id = create.json()["conversation_id"]
 
     poll = client.get(
@@ -438,6 +438,91 @@ def test_ui_export_conversation_returns_markdown_and_missing_conversation_404(mo
     assert missing.json()["detail"] == "Conversation not found"
 
 
+def test_create_conversation_api_success(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, _ = _enroll_and_register(client, "API Bot", "api-bot")
+    response = client.post(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={
+            "target_agent_id": agent_id,
+            "title": "Programmatic trigger",
+            "message_text": "Run the nightly report",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["conversation_id"]
+    assert payload["target_agent_id"] == agent_id
+    assert payload["title"] == "Programmatic trigger"
+
+
+def test_create_conversation_api_missing_fields(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={},
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_conversation_api_unknown_agent(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={
+            "target_agent_id": "does-not-exist",
+            "message_text": "Run the nightly report",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Unknown agent: does-not-exist"}
+
+
+def test_create_conversation_api_empty_message(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, _ = _enroll_and_register(client, "API Bot", "api-bot-empty-message")
+    response = client.post(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={
+            "target_agent_id": agent_id,
+            "message_text": "",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_conversation_api_unauthorized(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/ui/conversations",
+        json={
+            "target_agent_id": "any-agent",
+            "message_text": "Run the nightly report",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid UI token"}
+
+
 def test_ui_create_conversation_creates_delivery(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -452,7 +537,7 @@ def test_ui_create_conversation_creates_delivery(monkeypatch, tmp_path: Path):
             "message_text": "Start from the registry UI.",
         },
     )
-    assert create.status_code == 200
+    assert create.status_code == 201
     conversation_id = create.json()["conversation_id"]
 
     poll = client.get(
@@ -482,7 +567,7 @@ def test_ui_action_delivery_includes_conversation_ref(monkeypatch, tmp_path: Pat
             "message_text": "Start this from the registry UI.",
         },
     )
-    assert create.status_code == 200
+    assert create.status_code == 201
     conversation_id = create.json()["conversation_id"]
 
     action = client.post(
@@ -518,7 +603,7 @@ def test_cancel_conversation_marks_status_cancelling_and_late_progress_does_not_
             "message_text": "Start this task.",
         },
     )
-    assert create.status_code == 200
+    assert create.status_code == 201
     conversation_id = create.json()["conversation_id"]
 
     cancel = client.post(

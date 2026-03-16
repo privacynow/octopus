@@ -10,9 +10,9 @@ Current shipped baseline: **Phase 20** runs in **Local Runtime**. The product
 now includes the multi-agent registry surfaces while execution still stays
 bot-local. The normal deployment is SQLite-backed with `BOT_DATABASE_URL`
 unset. Postgres is a supported alternate backend for the same runtime contract
-when `BOT_DATABASE_URL` is set. The registry service has its own backend seam:
-SQLite by default via `REGISTRY_DB_PATH`, or Postgres via
-`REGISTRY_DATABASE_URL`. Shared Runtime is not part of the current product
+when `BOT_DATABASE_URL` is set. The registry service has its own backend
+interface and selector: SQLite by default via `REGISTRY_DB_PATH`, or Postgres
+via `REGISTRY_DATABASE_URL`. Shared Runtime is not part of the current product
 surface.
 
 If you only remember four things, remember these:
@@ -28,17 +28,28 @@ Quick orientation:
 
 - **Runtime matrix:** Local Runtime with SQLite is the default. Local Runtime
   with Postgres is supported. Shared Runtime is future work.
-- **Bot backend seam:** `app/runtime_backend.py` chooses the session and
-  transport backend. `storage.py` and `work_queue.py` stay backend-neutral.
-- **Registry backend seam:** `app/registry_service/backend.py` chooses the
-  registry store backend. `app/registry_service/store_base.py` defines the
-  control-plane contract.
+- **Bot backend interface and selector:** `app/runtime_backend.py` chooses the
+  session and transport implementations. `storage.py` and `work_queue.py` stay
+  backend-neutral.
+- **Registry backend interface and selector:**
+  `app/registry_service/backend.py` chooses the registry store
+  implementation. `app/registry_service/store_base.py` defines the
+  control-plane interface and contract.
 - **Contract suites:** backend-neutral behavior is pinned by
   `tests/contracts/test_session_store_contract.py`,
   `tests/contracts/test_transport_store_contract.py`, and
   `tests/contracts/test_registry_store_contract.py`.
 - **Primary E2E gate:** `tests/e2e/test_compose_flows.py` verifies the main
   Docker operator path.
+
+Terminology used in this document:
+
+- **component** = a concrete part of the system
+- **boundary** = an ownership line between kinds of decisions
+- **interface** = the API shape other code depends on
+- **implementation** = a concrete SQLite, Postgres, Telegram, or provider-specific realization
+- **contract** = the behavior and invariants that must remain true
+- **seam** = used only when emphasizing a deliberate replacement point for testing or backend swapping
 
 ---
 
@@ -182,7 +193,7 @@ flowchart TB
 - serialized inbound payload JSON is a stable runtime contract across the
   supported backends
 - fresh plain-message admission and worker-owned outbound output already use
-  the project-owned transport seams
+  the project-owned transport interfaces
 - command and callback entrypoints still have some PTB-direct behavior; that
   limitation is explicit, not hidden
 
@@ -580,7 +591,7 @@ flowchart LR
 - global skills overrides
 - UI-facing search, export, and usage-summary views
 
-### Backend seams
+### Backend interfaces and implementations
 
 Bot runtime backends:
 
@@ -745,7 +756,7 @@ extra dirs, project binding, or effective model.
 
 ### Backend parity and contract testing
 
-The codebase has three backend-neutral persistence seams:
+The codebase has three backend-neutral persistence interfaces:
 
 - **session store**
   - facade: `app/storage.py`
@@ -760,9 +771,9 @@ The codebase has three backend-neutral persistence seams:
   - backends: `RegistrySQLiteStore`, `RegistryPostgresStore`
   - contract suite: `tests/contracts/test_registry_store_contract.py`
 
-New persistence behavior belongs behind these seams. New facade or contract
-methods must land with both backend implementations and matching contract-test
-coverage in the same change.
+New persistence behavior belongs behind these interfaces. New facade or
+contract methods must land with both backend implementations and matching
+contract-test coverage in the same change.
 
 ## Reference Appendix
 

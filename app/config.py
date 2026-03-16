@@ -1,14 +1,20 @@
 """Configuration loading, validation, and fail-fast checks."""
 
+import logging
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass
+from enum import StrEnum
+from urllib.parse import urlparse
 
 from app.session_state import ProjectBinding, field
 from pathlib import Path
 
 from dotenv import dotenv_values
+
+log = logging.getLogger(__name__)
 
 
 def load_dotenv_file(path: Path) -> dict[str, str]:
@@ -25,6 +31,13 @@ def load_dotenv_file(path: Path) -> dict[str, str]:
 
 def env_path_for_instance(instance: str) -> Path:
     return Path.home() / ".config" / "telegram-agent-bot" / f"{instance}.env"
+
+
+def derive_agent_slug(raw: str, *, fallback: str = "agent") -> str:
+    """Derive a stable, human-safe slug from a display name or instance id."""
+    value = (raw or "").strip().lower()
+    value = re.sub(r"[^a-z0-9]+", "-", value).strip("-")
+    return value or fallback
 
 
 def parse_allowed_users(raw: str) -> tuple[set[int], set[str]]:
@@ -44,6 +57,41 @@ def parse_allowed_users(raw: str) -> tuple[set[int], set[str]]:
         else:
             usernames.add(normalized.lower())
     return ids, usernames
+
+
+class ProviderName(StrEnum):
+    CLAUDE = "claude"
+    CODEX = "codex"
+
+
+class BotMode(StrEnum):
+    POLL = "poll"
+    WEBHOOK = "webhook"
+
+
+class AgentMode(StrEnum):
+    REGISTRY = "registry"
+    STANDALONE = "standalone"
+
+
+class RuntimeMode(StrEnum):
+    LOCAL = "local"
+    SHARED = "shared"
+
+
+class FilePolicy(StrEnum):
+    INSPECT = "inspect"
+    EDIT = "edit"
+
+
+def _has_valid_http_url(raw: str) -> bool:
+    parsed = urlparse(raw)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _has_valid_postgres_url(raw: str) -> bool:
+    parsed = urlparse(raw)
+    return (parsed.scheme == "postgresql" or parsed.scheme.startswith("postgresql+")) and bool(parsed.netloc)
 
 
 @dataclass(frozen=True)
@@ -87,6 +135,7 @@ class BotConfig:
     webhook_listen: str
     webhook_port: int
     webhook_secret: str
+    completion_webhook_url: str
     # Projects — optional named working directories
     projects: tuple[ProjectBinding, ...]  # parsed from BOT_PROJECTS
     # Model profiles — stable user-facing tier names mapped to provider model IDs
@@ -97,6 +146,17 @@ class BotConfig:
     public_model_profiles: frozenset[str]  # allowed profiles for public users (empty = all)
     # Skill registry
     registry_url: str  # URL to a JSON skill registry index (empty = disabled)
+    # Agent/registry runtime
+    agent_mode: str  # "registry" (default via setup) | "standalone"
+    agent_display_name: str
+    agent_slug: str
+    agent_role: str
+    agent_tags: tuple[str, ...]
+    agent_description: str
+    agent_skills: tuple[str, ...]
+    agent_registry_url: str
+    agent_registry_enroll_token: str
+    agent_poll_interval_seconds: float
     # Runtime (Phase 13). local = only supported mode; shared = rejected until Phase 18.
     runtime_mode: str  # BOT_RUNTIME_MODE: "local" (default) | "shared" (rejected)
     # Postgres optional for local runtime. Empty = SQLite (default); set = Postgres as store backend.
@@ -225,6 +285,23 @@ def load_config(instance: str | None = None) -> BotConfig:
         s.strip() for s in default_skills_raw.split(",") if s.strip()
     )
 
+    agent_display_name = get("BOT_AGENT_DISPLAY_NAME", instance).strip() or instance
+    agent_registry_url = get("BOT_AGENT_REGISTRY_URL").strip()
+    raw_agent_mode = get("BOT_AGENT_MODE", "").strip().lower()
+    agent_mode = raw_agent_mode or ("registry" if agent_registry_url else "standalone")
+    agent_role = get("BOT_AGENT_ROLE").strip()
+    agent_tags = tuple(
+        s.strip() for s in get("BOT_AGENT_TAGS").split(",") if s.strip()
+    )
+    raw_agent_skills = get("BOT_AGENT_SKILLS").strip()
+    agent_skills = tuple(
+        s.strip() for s in raw_agent_skills.split(",") if s.strip()
+    ) if raw_agent_skills else default_skills
+    agent_slug = derive_agent_slug(
+        get("BOT_AGENT_SLUG").strip() or agent_display_name,
+        fallback=derive_agent_slug(instance, fallback="agent"),
+    )
+
     raw_users = get("BOT_ALLOWED_USERS")
     user_ids, usernames = parse_allowed_users(raw_users)
 
@@ -275,6 +352,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         webhook_listen=get("BOT_WEBHOOK_LISTEN", "127.0.0.1"),
         webhook_port=get_int("BOT_WEBHOOK_PORT", "8443"),
         webhook_secret=get("BOT_WEBHOOK_SECRET"),
+        completion_webhook_url=get("BOT_COMPLETION_WEBHOOK_URL").strip(),
         projects=_parse_projects(get("BOT_PROJECTS")),
         model_profiles=_parse_model_profiles(get("BOT_MODEL_PROFILES")),
         default_model_profile=get("BOT_DEFAULT_PROFILE"),
@@ -283,6 +361,16 @@ def load_config(instance: str | None = None) -> BotConfig:
             s.strip() for s in get("BOT_PUBLIC_MODEL_PROFILES").split(",") if s.strip()
         ),
         registry_url=get("BOT_REGISTRY_URL"),
+        agent_mode=agent_mode,
+        agent_display_name=agent_display_name,
+        agent_slug=agent_slug,
+        agent_role=agent_role,
+        agent_tags=agent_tags,
+        agent_description=get("BOT_AGENT_DESCRIPTION").strip(),
+        agent_skills=agent_skills,
+        agent_registry_url=agent_registry_url,
+        agent_registry_enroll_token=get("BOT_AGENT_REGISTRY_ENROLL_TOKEN").strip(),
+        agent_poll_interval_seconds=max(1.0, get_float("BOT_AGENT_POLL_INTERVAL_SECONDS", "5.0")),
         runtime_mode=get("BOT_RUNTIME_MODE", "local").strip().lower() or "local",
         database_url=get("BOT_DATABASE_URL", "").strip(),
         db_pool_min_size=max(0, get_int("BOT_DB_POOL_MIN_SIZE", "1")),
@@ -359,12 +447,23 @@ def load_config_provider_health() -> BotConfig:
         webhook_listen="127.0.0.1",
         webhook_port=8443,
         webhook_secret="",
+        completion_webhook_url="",
         projects=(),
         model_profiles={},
         default_model_profile="",
         public_working_dir="",
         public_model_profiles=frozenset(),
         registry_url="",
+        agent_mode="standalone",
+        agent_display_name=instance,
+        agent_slug=derive_agent_slug(instance, fallback="agent"),
+        agent_role="",
+        agent_tags=(),
+        agent_description="",
+        agent_skills=(),
+        agent_registry_url="",
+        agent_registry_enroll_token="",
+        agent_poll_interval_seconds=5.0,
         runtime_mode="local",
         database_url="",
         db_pool_min_size=1,
@@ -382,7 +481,7 @@ def validate_config(config: BotConfig) -> list[str]:
             "TELEGRAM_BOT_TOKEN is not set. Get a token from @BotFather and set it in .env.bot (or your env file)."
         )
 
-    if config.provider_name not in {"claude", "codex"}:
+    if config.provider_name not in ProviderName._value2member_map_:
         errors.append(
             f"BOT_PROVIDER must be 'claude' or 'codex', got '{config.provider_name}'. "
             "Set BOT_PROVIDER=claude or BOT_PROVIDER=codex in .env.bot."
@@ -416,32 +515,48 @@ def validate_config(config: BotConfig) -> list[str]:
     if config.codex_full_auto and config.codex_dangerous:
         errors.append("CODEX_FULL_AUTO and CODEX_DANGEROUS cannot both be set")
 
-    if config.bot_mode not in {"poll", "webhook"}:
+    if config.bot_mode not in BotMode._value2member_map_:
         errors.append(
             f"BOT_MODE must be 'poll' or 'webhook', got '{config.bot_mode}'"
         )
 
-    if config.runtime_mode == "shared":
+    if config.agent_mode not in AgentMode._value2member_map_:
+        errors.append(
+            f"BOT_AGENT_MODE must be 'registry' or 'standalone', got '{config.agent_mode}'"
+        )
+
+    if config.agent_registry_url and not _has_valid_http_url(config.agent_registry_url):
+        errors.append(
+            "BOT_AGENT_REGISTRY_URL must be a valid http:// or https:// URL when set"
+        )
+
+    if config.agent_poll_interval_seconds <= 0:
+        errors.append("BOT_AGENT_POLL_INTERVAL_SECONDS must be greater than 0")
+
+    if config.runtime_mode == RuntimeMode.SHARED.value:
         errors.append(
             "BOT_RUNTIME_MODE=shared is not supported until Phase 18. "
             "Use BOT_RUNTIME_MODE=local (default) for Local Runtime."
         )
-    elif config.runtime_mode != "local":
+    elif config.runtime_mode != RuntimeMode.LOCAL.value:
         errors.append(
             f"BOT_RUNTIME_MODE must be 'local' or 'shared', got '{config.runtime_mode}'. "
             "Only 'local' is supported in Phase 13."
         )
 
-    if config.bot_mode == "webhook":
+    if config.bot_mode == BotMode.WEBHOOK.value:
         if not config.webhook_url:
             errors.append("BOT_WEBHOOK_URL is required when BOT_MODE=webhook")
 
-    if config.database_url and not (
-        config.database_url.startswith("postgresql://")
-        or config.database_url.startswith("postgresql+")
-    ):
+    if config.completion_webhook_url and not _has_valid_http_url(config.completion_webhook_url):
+        log.warning(
+            "BOT_COMPLETION_WEBHOOK_URL is set but not a valid http:// or https:// URL: %s",
+            config.completion_webhook_url,
+        )
+
+    if config.database_url and not _has_valid_postgres_url(config.database_url):
         errors.append(
-            "BOT_DATABASE_URL must be a postgresql:// connection string when set"
+            "BOT_DATABASE_URL must be a valid postgresql:// connection string when set"
         )
 
     seen_project_names: set[str] = set()
@@ -451,7 +566,7 @@ def validate_config(config: BotConfig) -> list[str]:
         seen_project_names.add(proj.name)
         if not Path(proj.root_dir).is_dir():
             errors.append(f"Project '{proj.name}' root dir does not exist: {proj.root_dir}")
-        if proj.file_policy and proj.file_policy not in ("inspect", "edit"):
+        if proj.file_policy and proj.file_policy not in FilePolicy._value2member_map_:
             errors.append(f"Project '{proj.name}' has invalid file_policy: '{proj.file_policy}'")
         if proj.model_profile:
             if not config.model_profiles:

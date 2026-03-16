@@ -65,3 +65,17 @@ def test_readme_avoids_operator_only_setup_clutter():
     assert "db-bootstrap" not in text and "db-update" not in text and "db-doctor" not in text, (
         "README should not send first-time users through Postgres-specific tooling"
     )
+
+
+def test_readme_documents_botfather_verification_and_registry_ui():
+    """README should show the prerequisite token flow, verification step, and UI section."""
+    repo = Path(__file__).resolve().parent.parent
+    readme = repo / "README.md"
+    text = readme.read_text()
+    assert "Create your Telegram bot token" in text
+    assert "@BotFather" in text
+    assert "Verify it's working" in text
+    assert "What files are in my working directory?" in text
+    assert "Registry UI" in text
+    assert "docs/registry-ui-screenshot.png" in text
+    assert "REGISTRY_UI_TOKEN" in text

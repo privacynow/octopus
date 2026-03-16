@@ -156,7 +156,8 @@ class SQLiteSessionStore:
                 saved = json.loads(row[0])
                 for key in (
                     "active_skills", "role", "pending_approval", "pending_retry",
-                    "awaiting_skill_setup", "compact_mode", "project_id", "file_policy",
+                    "awaiting_skill_setup", "pending_delegation",
+                    "compact_mode", "project_id", "file_policy",
                     "model_profile", "created_at", "updated_at",
                 ):
                     if key in saved:

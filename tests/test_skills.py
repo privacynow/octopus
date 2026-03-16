@@ -1187,6 +1187,31 @@ def test_malformed_requires_yaml_resilience():
     assert _parse_requires_yaml("") == []
 
 
+def test_requires_yaml_typed_parsing_ignores_bad_entries_and_coerces_strings():
+    reqs = _parse_requires_yaml(
+        """
+credentials:
+  - not_a_mapping
+  - key: API_KEY
+    prompt: 123
+    help_url: 456
+    validate:
+      url: https://example.com/check
+      expect_status: 204
+"""
+    )
+    assert len(reqs) == 1
+    assert reqs[0].key == "API_KEY"
+    assert reqs[0].prompt == "123"
+    assert reqs[0].help_url == "456"
+    assert reqs[0].validate == {
+        "url": "https://example.com/check",
+        "method": "GET",
+        "header": "",
+        "expect_status": "204",
+    }
+
+
 # =====================================================================
 # Catalog uses directory name, not frontmatter name
 # =====================================================================

@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import contextvars
+import dataclasses
 import html
 import logging
 import re
@@ -25,6 +26,7 @@ from telegram.ext import (
     filters,
 )
 
+from app import access
 from app import user_messages as _msg
 from app.approvals import (
     build_preflight_prompt,
@@ -50,14 +52,31 @@ from app.workflows.pending_request import (
     run_pending_request_event,
 )
 from app.session_state import (
+    DelegatedTask,
+    PendingDelegation,
     PendingApproval,
     PendingRetry,
     SessionState,
     session_from_dict,
     session_to_dict,
 )
+from app.agents.bridge import (
+    bind_conversation,
+    publish_timeline_event,
+    registry_client,
+    summarize_text,
+    telegram_conversation_ref,
+)
+from app.agents.client import RegistryClientError
+from app.agents.delegation import (
+    handle_delegation_approve as handle_surface_delegation_approve,
+    handle_delegation_cancel as handle_surface_delegation_cancel,
+)
+from app.agents.orchestration import build_delegation_plan
+from app.agents.state import load_agent_runtime_state
+from app.agents.types import AgentDiscoveryQuery, RoutedTaskResult, TimelineEvent
+from app.transports import factory
 from app.transports.admission import admit_fresh_message
-from app.transports.telegram_adapter import TelegramConversationIO
 from app.transports.types import InboundEnvelope
 from app.skills import (
     build_run_context, build_preflight_context,
@@ -86,7 +105,6 @@ from app import work_queue
 from app.workflows.results import TransportStateCorruption
 from app.transport import (
     InboundAttachment,
-    InboundUser,
     normalize_callback,
     normalize_command,
     normalize_message,
@@ -376,12 +394,13 @@ Attachment = InboundAttachment
 # -- TelegramProgress (rate-limited HTML editor) ---------------------------
 
 class TelegramProgress:
-    def __init__(self, message, config: BotConfig) -> None:
+    def __init__(self, message, config: BotConfig, *, timeline_callback=None) -> None:
         self.message = message
         self.last_text = ""
         self.last_update = 0.0
         self._interval = config.stream_update_interval_seconds
         self._content_delivered = False
+        self._timeline_callback = timeline_callback
 
     async def update(self, html_text: str, *, force: bool = False) -> None:
         html_text = trim_text(html_text, 3500)
@@ -406,39 +425,72 @@ class TelegramProgress:
         self.last_update = now
         if cs and cs.is_set():
             self._content_delivered = True
+        if self._timeline_callback is not None:
+            try:
+                await self._timeline_callback(html_text, force=force)
+            except Exception as exc:
+                log.debug("registry timeline callback failed: %s", exc)
+
+
+@dataclasses.dataclass(frozen=True)
+class RequestExecutionOutcome:
+    status: str
+    reply_text: str = ""
+    error_text: str = ""
+    denials: tuple[dict[str, Any], ...] = ()
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+
+
+async def _progress_timeline_callback(conversation_ref: str, routed_task_id: str, html_text: str, *, force: bool = False) -> None:
+    del force
+    await publish_timeline_event(
+        _cfg(),
+        conversation_ref=conversation_ref,
+        kind="progress",
+        title="Progress",
+        body=html_text,
+        metadata={"routed_task_id": routed_task_id} if routed_task_id else {},
+    )
+
+
+def _maybe_fire_webhook(cfg: BotConfig, chat_id: int, conversation_ref: str, outcome: RequestExecutionOutcome | None) -> None:
+    """Schedule a non-blocking completion webhook for terminal outcomes."""
+    if not cfg.completion_webhook_url:
+        return
+    if outcome is None or outcome.status == "delegation_proposed":
+        return
+    from app.webhook import fire_completion_webhook
+
+    summary = (outcome.reply_text or outcome.error_text or "")[:200]
+    completed_at = datetime.now(timezone.utc).isoformat()
+    asyncio.create_task(
+        fire_completion_webhook(
+            cfg.completion_webhook_url,
+            chat_id=chat_id,
+            conversation_ref=conversation_ref,
+            status=outcome.status,
+            summary=summary,
+            completed_at=completed_at,
+        )
+    )
 
 
 # -- Auth ------------------------------------------------------------------
 
-def _to_inbound_user(user) -> InboundUser | None:
-    """Coerce a raw Telegram user or InboundUser to InboundUser."""
-    if user is None:
-        return None
-    if isinstance(user, InboundUser):
-        return user
-    return normalize_user(user)
-
-
 def is_allowed(user) -> bool:
-    u = _to_inbound_user(user)
-    if u is None:
-        return False
     cfg = _cfg()
-    # Open mode admits everyone (public users get restricted at execution layer)
-    if cfg.allow_open:
-        return True
-    if not cfg.allowed_user_ids and not cfg.allowed_usernames:
+    inbound = access.to_inbound_user(user)
+    if inbound is None:
         return False
-    return u.id in cfg.allowed_user_ids or u.username in cfg.allowed_usernames
+    override = work_queue.get_user_access(cfg.data_dir, inbound.id)
+    return access.is_allowed_user_with_override(cfg, inbound, override)
 
 
 def is_admin(user) -> bool:
     """Check if user is an admin (can install/uninstall/update store skills)."""
-    u = _to_inbound_user(user)
-    if u is None:
-        return False
-    cfg = _cfg()
-    return u.id in cfg.admin_user_ids or u.username in cfg.admin_usernames
+    return access.is_admin_user(_cfg(), user)
 
 
 def is_public_user(user) -> bool:
@@ -448,21 +500,12 @@ def is_public_user(user) -> bool:
     any allowed-user set.  Returns False if allow_open is off (the user
     wouldn't have passed is_allowed at all).
     """
-    u = _to_inbound_user(user)
-    if u is None:
-        return False
-    cfg = _cfg()
-    if not cfg.allow_open:
-        return False
-    # If there are no allowed lists, everyone is public
-    if not cfg.allowed_user_ids and not cfg.allowed_usernames:
-        return True
-    return u.id not in cfg.allowed_user_ids and u.username not in cfg.allowed_usernames
+    return access.is_public_user(_cfg(), user)
 
 
 def _trust_tier(user) -> str:
     """Resolve the trust tier for a user: 'trusted' or 'public'."""
-    return "public" if is_public_user(user) else "trusted"
+    return access.trust_tier(_cfg(), user)
 
 
 async def _public_guard(event, update: Update) -> bool:
@@ -813,6 +856,17 @@ async def send_formatted_reply(message, text: str) -> None:
             await message.reply_text(plain[:4096])
 
 
+async def _edit_or_reply_text(message, text: str, **kwargs) -> None:
+    caps = getattr(message, "capabilities", None)
+    if getattr(caps, "surface_name", "") == "telegram":
+        await message.reply_text(text, **kwargs)
+        return
+    if hasattr(message, "edit_text"):
+        await message.edit_text(text, **kwargs)
+        return
+    await message.reply_text(text, **kwargs)
+
+
 def _extract_summary(text: str, max_lines: int = 4) -> tuple[str, str]:
     """Split text into a short summary (first few lines) and the rest."""
     lines = text.split("\n")
@@ -897,6 +951,110 @@ async def send_directed_artifacts(
             await message.reply_text(f"[Cannot send: {raw_path}]")
             continue
         await send_path_to_chat(message, allowed_path, force_image=(dtype == "IMAGE"))
+
+
+def _delegation_keyboard(chat_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("\u25b6\ufe0f Approve delegation", callback_data=f"delegation_approve:{chat_id}"),
+        InlineKeyboardButton("\u2716 Cancel", callback_data=f"delegation_cancel:{chat_id}"),
+    ]])
+
+
+def _format_delegation_plan_message(delegation: PendingDelegation) -> str:
+    lines = [
+        "<b>Delegation plan</b>",
+        "",
+        "I'd like to delegate the following to specialist bots:",
+        "",
+    ]
+    for index, task in enumerate(delegation.tasks, start=1):
+        lines.extend([
+            f"<b>{index}. {html.escape(task.title or task.routed_task_id)}</b>",
+            f"\u2192 {html.escape(task.target_agent_id or 'unassigned')}",
+            "",
+        ])
+    lines.append("Approve to send these requests, or cancel to continue without delegation.")
+    return "\n".join(lines)
+
+
+class _DelegationCallbackEditableHandle:
+    async def edit_text(self, text: str, **kwargs: Any) -> None:
+        del text, kwargs
+        return None
+
+    async def edit_reply_markup(self, reply_markup: Any = None, **kwargs: Any) -> None:
+        del reply_markup, kwargs
+        return None
+
+
+class _DelegationCallbackSurface:
+    def __init__(self, query) -> None:
+        self._query = query
+
+    async def send_text(self, text: str, **kwargs: Any) -> _DelegationCallbackEditableHandle:
+        await self._query.edit_message_text(text, **kwargs)
+        return _DelegationCallbackEditableHandle()
+
+
+async def _publish_delegation_proposed_event(message, delegation: PendingDelegation) -> None:
+    body = "\n".join(
+        [
+            "Delegation plan:",
+            *[
+                f"{index}. {task.title or task.routed_task_id} -> {task.target_agent_id or 'unassigned'}"
+                for index, task in enumerate(delegation.tasks, start=1)
+            ],
+        ]
+    )
+    event = TimelineEvent(
+        event_id=f"delegation-proposed:{delegation.conversation_ref}:{int(delegation.created_at * 1000)}",
+        conversation_id=delegation.conversation_ref,
+        kind="delegation_proposed",
+        title="Delegation plan proposed",
+        body=body,
+        status=delegation.status,
+    )
+    publisher = getattr(message, "publish_timeline", None)
+    if callable(publisher):
+        await publisher(event)
+        return
+    await publish_timeline_event(
+        _cfg(),
+        conversation_ref=delegation.conversation_ref,
+        kind=event.kind,
+        title=event.title,
+        body=event.body,
+        status=event.status,
+        event_id=event.event_id,
+    )
+
+
+async def _propose_delegation_plan(
+    chat_id: int,
+    message,
+    session: SessionState,
+    *,
+    conversation_ref: str,
+    result,
+) -> RequestExecutionOutcome:
+    title = result.delegation_title.strip() or summarize_text(result.text) or "Delegation plan"
+    delegation = build_delegation_plan(
+        conversation_ref,
+        title,
+        result.delegation_resume_instruction,
+        list(result.delegation_tasks),
+    )
+    session.pending_delegation = delegation
+    _save(chat_id, session)
+    await _publish_delegation_proposed_event(message, delegation)
+
+    send_plan = getattr(message, "send_text", None) or getattr(message, "reply_text")
+    await send_plan(
+        _format_delegation_plan_message(delegation),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_delegation_keyboard(chat_id),
+    )
+    return RequestExecutionOutcome(status="delegation_proposed")
 
 
 async def keep_typing(chat) -> None:
@@ -1006,7 +1164,7 @@ async def execute_request(
     request_user_id: int = 0,
     skip_permissions: bool = False,
     trust_tier: str = "trusted",
-) -> None:
+) -> RequestExecutionOutcome:
     cfg = _cfg()
     prov = _prov()
     session = _load(chat_id)
@@ -1076,8 +1234,23 @@ async def execute_request(
 
     is_resume = bool(session.provider_state.get("thread_id") or session.provider_state.get("started"))
     label = _msg.progress_resuming() if is_resume else _msg.progress_working()
+    conversation_ref = ""
+    routed_task_id = ""
+    if getattr(message, "capabilities", None) and getattr(message.capabilities, "surface_name", "") == "registry":
+        conversation_ref = getattr(message, "conversation_ref", "")
+        routed_task_id = getattr(message, "routed_task_id", "")
+    elif cfg.agent_mode == "registry":
+        conversation_ref = telegram_conversation_ref(cfg, chat_id)
+
+    timeline_cb = None
+    surface_name = getattr(getattr(message, "capabilities", None), "surface_name", "telegram")
+    if conversation_ref and surface_name != "registry":
+        timeline_cb = lambda html_text, force=False: _progress_timeline_callback(
+            conversation_ref, routed_task_id, html_text, force=force
+        )
+
     status_msg = await message.reply_text(label)
-    progress = TelegramProgress(status_msg, cfg)
+    progress = TelegramProgress(status_msg, cfg, timeline_callback=timeline_cb)
     content_started = asyncio.Event()
     progress.content_started = content_started  # providers set this when real text arrives
     typing_task = asyncio.create_task(keep_typing(message.chat))
@@ -1099,7 +1272,7 @@ async def execute_request(
         session.provider_state.update(result.provider_state_updates)
         _save(chat_id, session)
         await progress.update(_msg.cancel_live_completed(), force=True)
-        return
+        return RequestExecutionOutcome(status="cancelled")
 
     if _run_result_was_interrupted(result.returncode):
         log.info("%s interrupted for chat %d (rc=%s); leaving work item claimed",
@@ -1135,14 +1308,14 @@ async def execute_request(
 
     if result.timed_out:
         await progress.update(_msg.progress_request_timed_out(cfg.timeout_seconds), force=True)
-        return
+        return RequestExecutionOutcome(status="timed_out")
 
     if result.returncode != 0:
         error_text = await _format_provider_error(result.text, result.returncode)
         if result.resume_failed:
             error_text += _msg.progress_session_not_resumed()
         await progress.update(error_text, force=True)
-        return
+        return RequestExecutionOutcome(status="failed", error_text=error_text)
 
     # Claude denial/retry flow — show denials BEFORE output so the user
     # understands the result is partial before reading it.
@@ -1177,7 +1350,25 @@ async def execute_request(
         if cleaned_reply.strip():
             await send_formatted_reply(message, cleaned_reply)
             await send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
-        return
+        return RequestExecutionOutcome(
+            status="completed_with_denials",
+            reply_text=cleaned_reply,
+            denials=tuple(result.denials),
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            cost_usd=result.cost_usd,
+        )
+
+    if result.delegation_tasks:
+        await progress.update("Delegation plan ready.", force=True)
+        session = _load(chat_id)
+        return await _propose_delegation_plan(
+            chat_id,
+            message,
+            session,
+            conversation_ref=conversation_ref or telegram_conversation_ref(cfg, chat_id),
+            result=result,
+        )
 
     await progress.update(_msg.progress_completed(), force=True)
 
@@ -1194,6 +1385,13 @@ async def execute_request(
     else:
         await send_formatted_reply(message, cleaned_reply)
     await send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
+    return RequestExecutionOutcome(
+        status="completed",
+        reply_text=cleaned_reply,
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        cost_usd=result.cost_usd,
+    )
 
 
 async def request_approval(
@@ -1237,7 +1435,18 @@ async def request_approval(
     context_hash = resolved.context_hash
 
     status_msg = await message.reply_text(_msg.approval_preparing())
-    progress = TelegramProgress(status_msg, cfg)
+    conversation_ref = ""
+    if getattr(message, "capabilities", None) and getattr(message.capabilities, "surface_name", "") == "registry":
+        conversation_ref = getattr(message, "conversation_ref", "")
+    elif cfg.agent_mode == "registry":
+        conversation_ref = telegram_conversation_ref(cfg, chat_id)
+    timeline_cb = None
+    surface_name = getattr(getattr(message, "capabilities", None), "surface_name", "telegram")
+    if conversation_ref and surface_name != "registry":
+        timeline_cb = lambda html_text, force=False: _progress_timeline_callback(
+            conversation_ref, "", html_text, force=force
+        )
+    progress = TelegramProgress(status_msg, cfg, timeline_callback=timeline_cb)
     content_started = asyncio.Event()
     progress.content_started = content_started
     typing_task = asyncio.create_task(keep_typing(message.chat))
@@ -1360,6 +1569,87 @@ async def reject_pending(chat_id: int, message) -> None:
     await message.reply_text(_msg.approval_rejected())
 
 
+async def retry_skip_pending(chat_id: int, message) -> None:
+    session = _load(chat_id)
+    session.clear_pending()
+    _save(chat_id, session)
+    await _edit_or_reply_text(message, _msg.retry_skip_confirmation())
+
+
+async def retry_allow_pending(chat_id: int, message) -> None:
+    session = _load(chat_id)
+    pending = session.pending_retry
+    if not pending:
+        await _edit_or_reply_text(message, _msg.retry_nothing_pending())
+        return
+
+    classification = classify_pending_validation(pending, session, _cfg(), _prov().name)
+    event_name = (
+        "approve_execute" if classification == "ok"
+        else "expire" if classification == "expired"
+        else "invalidate_stale"
+    )
+    model = PendingRequestWorkflowModel(state="pending_retry", validation_result=classification)
+    result = run_pending_request_event(model, event_name, validation_result=classification)
+
+    if not result.allowed or result.disposition != PendingRequestDisposition.executed:
+        session.clear_pending()
+        _save(chat_id, session)
+        error = validate_pending(pending, session, _cfg(), _prov().name)
+        await _edit_or_reply_text(message, error or _msg.approval_request_no_longer_valid())
+        return
+
+    prompt = pending.prompt
+    denials = pending.denials or []
+    request_user_id = pending.request_user_id
+    trust_tier = getattr(pending, "trust_tier", "trusted")
+    session.clear_pending()
+
+    denial_dirs = extra_dirs_from_denials(denials)
+
+    if denial_dirs and _prov().name == "codex":
+        session.provider_state["thread_id"] = None
+
+    _save(chat_id, session)
+
+    await execute_request(
+        chat_id, prompt, pending.image_paths,
+        message, denial_dirs,
+        request_user_id=request_user_id,
+        skip_permissions=True,
+        trust_tier=trust_tier,
+    )
+
+
+def _parse_delegation_callback(data: str) -> tuple[str, int] | None:
+    parts = (data or "").split(":", 1)
+    if len(parts) != 2:
+        return None
+    try:
+        return parts[0], int(parts[1])
+    except ValueError:
+        return None
+
+
+async def _handle_delegation_approve(chat_id: int, query) -> None:
+    conversation_ref = telegram_conversation_ref(_cfg(), chat_id)
+    await handle_surface_delegation_approve(
+        chat_id,
+        conversation_ref,
+        _DelegationCallbackSurface(query),
+        retry_markup=_delegation_keyboard(chat_id),
+    )
+
+
+async def _handle_delegation_cancel(chat_id: int, query) -> None:
+    conversation_ref = telegram_conversation_ref(_cfg(), chat_id)
+    await handle_surface_delegation_cancel(
+        chat_id,
+        conversation_ref,
+        _DelegationCallbackSurface(query),
+    )
+
+
 # -- Command handlers ------------------------------------------------------
 
 def _help_command_lines(user) -> list[str]:
@@ -1381,6 +1671,8 @@ def _help_command_lines(user) -> list[str]:
     ]
     if _cfg().model_profiles:
         lines.append("/model — switch model profile (fast/balanced/best)")
+    if _cfg().agent_mode == "registry":
+        lines.append("/discover — find available specialist bots by role, skill, or tag")
     if not is_public_user(user):
         lines.append("/policy inspect|edit — set file access policy")
     lines.extend([
@@ -1709,6 +2001,135 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.effective_message.reply_text("\u2705 All checks passed.")
 
 
+def _discover_usage() -> str:
+    return (
+        "Usage: /discover <query> [role:<role>] [skill:<skill>] [tag:<tag>] [state:<connected|degraded|standalone|offline>]\n"
+        "Example: <code>/discover role:developer skill:python tag:backend schema review</code>"
+    )
+
+
+def _parse_discovery_query(
+    args: tuple[str, ...],
+    *,
+    exclude_agent_id: str = "",
+) -> tuple[AgentDiscoveryQuery | None, str | None]:
+    role = ""
+    skills: list[str] = []
+    tags: list[str] = []
+    required_state = "connected"
+    free_text_parts: list[str] = []
+    for token in args:
+        key = ""
+        value = ""
+        if ":" in token:
+            key, value = token.split(":", 1)
+        elif "=" in token:
+            key, value = token.split("=", 1)
+        else:
+            free_text_parts.append(token)
+            continue
+        key = key.strip().lower()
+        value = value.strip()
+        if not value:
+            free_text_parts.append(token)
+            continue
+        if key == "role":
+            role = value
+        elif key in {"skill", "skills"}:
+            skills.extend(part.strip() for part in value.split(",") if part.strip())
+        elif key in {"tag", "tags"}:
+            tags.extend(part.strip() for part in value.split(",") if part.strip())
+        elif key == "state":
+            required_state = value.lower()
+        else:
+            free_text_parts.append(token)
+    if required_state not in {"connected", "degraded", "standalone", "offline"}:
+        return None, _discover_usage()
+    if not role and not skills and not tags and not free_text_parts:
+        return None, _discover_usage()
+    return (
+        AgentDiscoveryQuery(
+            role=role,
+            skills=tuple(skills),
+            tags=tuple(tags),
+            free_text=" ".join(free_text_parts).strip(),
+            exclude_agent_ids=(exclude_agent_id,) if exclude_agent_id else (),
+            required_state=required_state,
+        ),
+        None,
+    )
+
+
+def _format_discovery_results(agents: list[dict[str, Any]]) -> str:
+    if not agents:
+        return "No matching agents found."
+    lines = ["<b>Matching agents</b>"]
+    for agent in agents[:8]:
+        display_name = html.escape(
+            agent.get("display_name") or agent.get("slug") or agent.get("agent_id") or "Unnamed agent"
+        )
+        role = html.escape(agent.get("role") or "(unspecified)")
+        state = html.escape(agent.get("connectivity_state") or "unknown")
+        current_capacity = int(agent.get("current_capacity", 0) or 0)
+        max_capacity = int(agent.get("max_capacity", 1) or 1)
+        lines.append(f"\n<b>{display_name}</b> — <code>{role}</code>")
+        lines.append(
+            f"State: <code>{state}</code> · Capacity: <code>{current_capacity}/{max_capacity}</code>"
+        )
+        skills = [str(skill) for skill in agent.get("skills", []) if skill]
+        if skills:
+            lines.append(f"Skills: <code>{html.escape(', '.join(skills))}</code>")
+        tags = [str(tag) for tag in agent.get("tags", []) if tag]
+        if tags:
+            lines.append(f"Tags: <code>{html.escape(', '.join(tags))}</code>")
+        description = str(agent.get("description", "") or "").strip()
+        if description:
+            lines.append(html.escape(description))
+    if len(agents) > 8:
+        lines.append(f"\nShowing first {8} of {len(agents)} matches.")
+    return "\n".join(lines)
+
+
+@_command_handler
+async def cmd_discover(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    del context
+    cfg = _cfg()
+    if cfg.agent_mode == "standalone":
+        await update.effective_message.reply_text(
+            "Agent discovery is unavailable in standalone mode.",
+        )
+        return
+    state = load_agent_runtime_state(cfg.data_dir)
+    if state.connectivity_state != "connected":
+        detail = f" Last registry error: {state.last_error}" if state.last_error else ""
+        await update.effective_message.reply_text(
+            "Agent discovery is unavailable because registry connectivity is degraded." + detail
+        )
+        return
+    query, error = _parse_discovery_query(event.args, exclude_agent_id=state.agent_id)
+    if error is not None or query is None:
+        await update.effective_message.reply_text(error or _discover_usage(), parse_mode=ParseMode.HTML)
+        return
+    client = registry_client(cfg)
+    if client is None:
+        await update.effective_message.reply_text(
+            "Agent discovery is unavailable because this bot has not finished registry enrollment."
+        )
+        return
+    try:
+        agents = await client.search(query)
+    except RegistryClientError as exc:
+        await update.effective_message.reply_text(
+            f"Agent discovery failed: {html.escape(str(exc))}",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    await update.effective_message.reply_text(
+        _format_discovery_results(agents),
+        parse_mode=ParseMode.HTML,
+    )
+
+
 
 @_command_handler
 async def cmd_export(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1880,33 +2301,47 @@ async def cmd_skills(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await _public_guard(event, update):
         return
-    chat_id = event.chat_id
-    user_id = event.user.id
+    await cancel_chat_operation(
+        event.chat_id,
+        update.effective_message,
+        actor_user_id=event.user.id,
+        allow_admin_override=is_admin(event.user),
+        update_id=update.update_id,
+    )
 
+
+async def cancel_chat_operation(
+    chat_id: int,
+    message,
+    *,
+    actor_user_id: int = 0,
+    allow_admin_override: bool = False,
+    update_id: int | None = None,
+) -> None:
     # Worker-owned live run: set cancel event so the running execute_request/request_approval sees it.
     cancel_event = _LIVE_CANCEL.get(chat_id)
     if cancel_event is not None:
         cancel_event.set()
-        await update.effective_message.reply_text(_msg.cancel_live_requested())
+        await message.reply_text(_msg.cancel_live_requested())
         return
 
     # Admitted but not yet running: cancel queued fresh item so the worker won't run it.
     if work_queue.cancel_queued_fresh_for_chat(_cfg().data_dir, chat_id):
-        await update.effective_message.reply_text(_msg.cancel_queued_superseded())
+        await message.reply_text(_msg.cancel_queued_superseded())
         return
 
-    async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
+    async with _chat_lock(chat_id, message=message, update_id=update_id):
         session = _load(chat_id)
 
         setup = session.awaiting_skill_setup
         if setup:
-            if setup.user_id == user_id or is_admin(event.user):
+            if setup.user_id == actor_user_id or allow_admin_override:
                 session.awaiting_skill_setup = None
                 _save(chat_id, session)
-                await update.effective_message.reply_text(_msg.credential_setup_cancelled())
+                await message.reply_text(_msg.credential_setup_cancelled())
                 return
             else:
-                await update.effective_message.reply_text(
+                await message.reply_text(
                     _msg.credential_setup_another_user_in_progress(),
                 )
                 return
@@ -1914,10 +2349,10 @@ async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if session.has_pending:
             session.clear_pending()
             _save(chat_id, session)
-            await update.effective_message.reply_text(_msg.cancel_pending_request())
+            await message.reply_text(_msg.cancel_pending_request())
             return
 
-    await update.effective_message.reply_text(_msg.nothing_to_cancel())
+    await message.reply_text(_msg.nothing_to_cancel())
 
 
 @_command_handler
@@ -2348,58 +2783,30 @@ async def handle_callback(event, query) -> None:
             return
 
         if event.data == "retry_skip":
-            session = _load(chat_id)
-            session.clear_pending()
-            _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
-            await query.message.edit_text(_msg.retry_skip_confirmation())
+            await retry_skip_pending(chat_id, query.message)
             return
 
         if event.data == "retry_allow":
-            session = _load(chat_id)
-            pending = session.pending_retry
-            if not pending:
-                await query.message.edit_text(_msg.retry_nothing_pending())
-                return
-
-            classification = classify_pending_validation(pending, session, _cfg(), _prov().name)
-            event_name = (
-                "approve_execute" if classification == "ok"
-                else "expire" if classification == "expired"
-                else "invalidate_stale"
-            )
-            model = PendingRequestWorkflowModel(state="pending_retry", validation_result=classification)
-            result = run_pending_request_event(model, event_name, validation_result=classification)
-
-            if not result.allowed or result.disposition != PendingRequestDisposition.executed:
-                session.clear_pending()
-                _save(chat_id, session)
-                await query.edit_message_reply_markup(reply_markup=None)
-                error = validate_pending(pending, session, _cfg(), _prov().name)
-                await query.message.edit_text(error or _msg.approval_request_no_longer_valid())
-                return
-
-            prompt = pending.prompt
-            denials = pending.denials or []
-            request_user_id = pending.request_user_id
-            trust_tier = getattr(pending, "trust_tier", "trusted")
-            session.clear_pending()
-
-            denial_dirs = extra_dirs_from_denials(denials)
-
-            if denial_dirs and _prov().name == "codex":
-                session.provider_state["thread_id"] = None
-
-            _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
+            await retry_allow_pending(chat_id, query.message)
 
-            await execute_request(
-                chat_id, prompt, pending.image_paths,
-                query.message, denial_dirs,
-                request_user_id=request_user_id,
-                skip_permissions=True,
-                trust_tier=trust_tier,
-            )
+
+@_callback_handler
+async def handle_delegation_callback(event, query) -> None:
+    parsed = _parse_delegation_callback(event.data)
+    if parsed is None:
+        return
+    action, chat_id = parsed
+
+    async with _chat_lock(chat_id, query=query) as already_answered:
+        if not already_answered:
+            await query.answer()
+        if action == "delegation_approve":
+            await _handle_delegation_approve(chat_id, query)
+            return
+        if action == "delegation_cancel":
+            await _handle_delegation_cancel(chat_id, query)
 
 
 # -- Recovery replay/discard callback handler --------------------------------
@@ -2414,7 +2821,7 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
       recovered item, not the callback's update.
     """
     query = update.callback_query
-    user = _to_inbound_user(update.effective_user)
+    user = access.to_inbound_user(update.effective_user)
     if user is None or not is_allowed(user):
         await query.answer(_msg.trust_not_authorized(), show_alert=True)
         return
@@ -2432,18 +2839,41 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
         return
 
     chat_id = update.effective_chat.id
-    data_dir = _cfg().data_dir
+    await handle_recovery_action(
+        chat_id,
+        action,
+        update_id,
+        query.message,
+        answer_action=query.answer,
+    )
+
+
+async def handle_recovery_action(
+    chat_id: int,
+    action: str,
+    update_id: int,
+    message,
+    *,
+    answer_action=None,
+) -> None:
+    if answer_action is None:
+        async def answer_action(text=None, show_alert=False):
+            del text, show_alert
+            return None
+
+    cfg = _cfg()
+    data_dir = cfg.data_dir
 
     try:
         recovery_item = work_queue.get_pending_recovery_for_update(data_dir, chat_id, update_id)
     except TransportStateCorruption as e:
         log.exception("Transport state corruption in recovery callback for chat %s: %s", chat_id, e)
-        await query.answer(_msg.recovery_error_try_again(), show_alert=True)
+        await answer_action(_msg.recovery_error_try_again(), show_alert=True)
         return
 
     if recovery_item is None:
         # Already handled (double-click, superseded, etc.) — idempotent.
-        await query.answer(_msg.recovery_already_handled())
+        await answer_action(_msg.recovery_already_handled())
         return
 
     # -- Discard path --
@@ -2452,17 +2882,18 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
             discard_outcome = work_queue.discard_recovery(data_dir, recovery_item["id"])
         except TransportStateCorruption as e:
             log.exception("Transport state corruption on discard for item %s: %s", recovery_item["id"], e)
-            await query.answer(_msg.recovery_error_try_again(), show_alert=True)
+            await answer_action(_msg.recovery_error_try_again(), show_alert=True)
             return
         if discard_outcome == work_queue.DiscardResult.already_handled:
-            await query.answer(_msg.recovery_already_handled())
+            await answer_action(_msg.recovery_already_handled())
             return
         if discard_outcome == work_queue.DiscardResult.corruption:
-            await query.answer(_msg.recovery_error_discard_try_again())
+            await answer_action(_msg.recovery_error_discard_try_again())
             return
-        await query.answer(_msg.recovery_discarded_confirm())
+        await answer_action(_msg.recovery_discarded_confirm())
         try:
-            await query.edit_message_text(
+            await _edit_or_reply_text(
+                message,
                 _msg.recovery_discarded_edit(),
                 parse_mode=ParseMode.HTML,
             )
@@ -2472,22 +2903,23 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
 
     # -- Replay path --
     if action != "recovery_replay":
-        await query.answer(_msg.recovery_unknown_action())
+        await answer_action(_msg.recovery_unknown_action())
         return
 
-    await query.answer(_msg.recovery_replaying_toast())
+    await answer_action(_msg.recovery_replaying_toast())
 
     # Reclaim the item for replay execution.
     try:
         item = work_queue.reclaim_for_replay(data_dir, recovery_item["id"], _boot_id)
     except TransportStateCorruption as e:
         log.exception("Transport state corruption on reclaim for item %s: %s", recovery_item["id"], e)
-        await query.answer(_msg.recovery_error_try_again(), show_alert=True)
+        await answer_action(_msg.recovery_error_try_again(), show_alert=True)
         return
     except work_queue.ReclaimBlocked:
         # Another request is in progress — item is still pending_recovery.
         try:
-            await query.edit_message_text(
+            await _edit_or_reply_text(
+                message,
                 _msg.recovery_blocked_replay_edit(),
                 parse_mode=ParseMode.HTML,
             )
@@ -2497,7 +2929,8 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
     if item is None:
         # Race: already handled between our check and reclaim.
         try:
-            await query.edit_message_text(
+            await _edit_or_reply_text(
+                message,
                 _msg.recovery_already_handled_edit(),
                 parse_mode=ParseMode.HTML,
             )
@@ -2511,7 +2944,8 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
     if not payload_str:
         work_queue.fail_work_item(data_dir, item["id"], error="payload_missing")
         try:
-            await query.edit_message_text(
+            await _edit_or_reply_text(
+                message,
                 _msg.recovery_payload_missing_edit(),
                 parse_mode=ParseMode.HTML,
             )
@@ -2524,7 +2958,8 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
     except Exception:
         work_queue.fail_work_item(data_dir, item["id"], error="deserialize_error")
         try:
-            await query.edit_message_text(
+            await _edit_or_reply_text(
+                message,
                 _msg.recovery_replay_failed_edit(),
                 parse_mode=ParseMode.HTML,
             )
@@ -2535,7 +2970,8 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
     if not isinstance(event, InboundMessage):
         work_queue.fail_work_item(data_dir, item["id"], error="not_message")
         try:
-            await query.edit_message_text(
+            await _edit_or_reply_text(
+                message,
                 _msg.recovery_replay_failed_edit(),
                 parse_mode=ParseMode.HTML,
             )
@@ -2545,7 +2981,8 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
 
     # Update the notice to show replay is in progress.
     try:
-        await query.edit_message_text(
+        await _edit_or_reply_text(
+            message,
             _msg.recovery_replaying_edit(),
             parse_mode=ParseMode.HTML,
         )
@@ -2554,12 +2991,15 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
 
     # Execute through _chat_lock with worker_item (lock-only, no claiming).
     prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
-    trust = _trust_tier(event.user)
-    message = _BotMessage(_bot_instance, chat_id)
+    trust = factory.trust_tier_for_source(
+        getattr(event, "source", "telegram"),
+        event.user,
+        config=_cfg(),
+    )
     try:
         async with _chat_lock(chat_id, message=message, worker_item=item):
             session = _load(chat_id)
-            if session.approval_mode == "on":
+            if not getattr(event, "routed_task_id", "") and session.approval_mode == "on":
                 await request_approval(
                     chat_id, prompt, image_paths, list(event.attachments),
                     message, request_user_id=event.user.id, trust_tier=trust,
@@ -2578,7 +3018,11 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
         log.exception("Replay failed for chat %d", chat_id)
         work_queue.fail_work_item(data_dir, item["id"], error="replay_failed")
         try:
-            await _bot_instance.send_message(chat_id, _msg.recovery_replay_failed_message())
+            await _edit_or_reply_text(
+                message,
+                _msg.recovery_replay_failed_edit(),
+                parse_mode=ParseMode.HTML,
+            )
         except Exception:
             pass
 
@@ -3036,8 +3480,63 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await msg.reply_text(_msg.policy_usage())
 
 
-# Worker path uses the transport adapter; handler path uses PTB message directly.
-_BotMessage = TelegramConversationIO
+@_command_handler
+async def cmd_allowuser(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin: add a user to the allowed list. Usage: /allowuser <user_id> [reason]."""
+    del context
+    if not is_admin(event.user):
+        await update.effective_message.reply_text("This command requires admin access.")
+        return
+    if not event.args or not event.args[0].isdigit():
+        await update.effective_message.reply_text("Usage: /allowuser <user_id> [reason]")
+        return
+    user_id = int(event.args[0])
+    reason = " ".join(event.args[1:])
+    granted_by = event.user.id if event.user else 0
+    cfg = _cfg()
+    work_queue.set_user_access(cfg.data_dir, user_id, "allowed", reason, granted_by)
+    await update.effective_message.reply_text(f"User {user_id} added to allowed list.")
+
+
+@_command_handler
+async def cmd_blockuser(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin: block a user. Usage: /blockuser <user_id> [reason]."""
+    del context
+    if not is_admin(event.user):
+        await update.effective_message.reply_text("This command requires admin access.")
+        return
+    if not event.args or not event.args[0].isdigit():
+        await update.effective_message.reply_text("Usage: /blockuser <user_id> [reason]")
+        return
+    user_id = int(event.args[0])
+    reason = " ".join(event.args[1:])
+    granted_by = event.user.id if event.user else 0
+    cfg = _cfg()
+    work_queue.set_user_access(cfg.data_dir, user_id, "blocked", reason, granted_by)
+    await update.effective_message.reply_text(f"User {user_id} blocked.")
+
+
+@_command_handler
+async def cmd_listaccess(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin: list all configured DB-backed access overrides."""
+    del context
+    if not is_admin(event.user):
+        await update.effective_message.reply_text("This command requires admin access.")
+        return
+    cfg = _cfg()
+    rows = work_queue.list_user_access(cfg.data_dir)
+    if not rows:
+        await update.effective_message.reply_text("No access overrides set.")
+        return
+    lines = ["<b>Access overrides</b>"]
+    for row in rows:
+        status = "✅ allowed" if row["access"] == "allowed" else "🚫 blocked"
+        reason = f" — {html.escape(row['reason'])}" if row["reason"] else ""
+        lines.append(f"• <code>{row['user_id']}</code> {status}{reason}")
+    await update.effective_message.reply_text(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+    )
 
 _bot_instance = None  # Set by build_application
 
@@ -3058,61 +3557,138 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
         return
 
     bot = _bot_instance
-    data_dir = _cfg().data_dir
+    cfg = _cfg()
+    data_dir = cfg.data_dir
 
     if isinstance(event, InboundMessage):
+        source = getattr(event, "source", "telegram")
+        conversation_ref = event.conversation_ref or (
+            telegram_conversation_ref(_cfg(), chat_id) if source == "telegram" else f"registry:{chat_id}"
+        )
+        routed_task_id = getattr(event, "routed_task_id", "")
+        title = summarize_text(event.text) or "Conversation"
+        bot_msg = factory.create_outbound_surface(
+            conversation_ref,
+            config=_cfg(),
+            bot=bot,
+            chat_id=chat_id,
+            source=source,
+            routed_task_id=routed_task_id,
+            output_log=getattr(bot, "_output_log", None),
+        )
+
         # Recovered item: send notice and move to pending_recovery.
         if item.get("dispatch_mode") == "recovery":
-            log.info("Worker sending recovery notice for chat %d (update %s)",
-                     chat_id, item.get("update_id"))
-            if not is_allowed(event.user):
+            if source == "telegram" and not is_allowed(event.user):
                 work_queue.fail_work_item(data_dir, item["id"], error="not_allowed")
                 return
             update_id = item.get("update_id", 0)
             original_text = event.text or ""
             preview = html.escape(original_text[:200] + ("\u2026" if len(original_text) > 200 else ""))
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("\u25b6\ufe0f " + _msg.recovery_button_run_again(), callback_data=f"recovery_replay:{update_id}"),
-                InlineKeyboardButton("\u2716 " + _msg.recovery_button_skip(), callback_data=f"recovery_discard:{update_id}"),
-            ]])
-            try:
-                await bot.send_message(
-                    chat_id,
-                    f"<i>{_msg.recovery_notice_intro()}</i>\n\n"
-                    f"{preview}\n\n"
-                    f"{_msg.recovery_notice_prompt()}",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=keyboard,
-                )
-            except Exception:
-                log.exception("Failed to send recovery notice for chat %d", chat_id)
-                raise
+            await bot_msg.bind(title=title, config=_cfg())
+            await bot_msg.send_recovery_notice(
+                preview=preview,
+                prompt=_msg.recovery_notice_prompt(),
+                run_again_label=_msg.recovery_button_run_again(),
+                skip_label=_msg.recovery_button_skip(),
+                update_id=update_id,
+            )
             work_queue.mark_pending_recovery(data_dir, item["id"])
             raise work_queue.PendingRecovery(item["id"])
 
         # Fresh message: run provider (execute_request/request_approval register _LIVE_CANCEL).
-        if not is_allowed(event.user):
+        if source == "telegram" and not is_allowed(event.user):
             work_queue.fail_work_item(data_dir, item["id"], error="not_allowed")
             return
-        bot_msg = _BotMessage(bot, chat_id)
         prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
         user_id = event.user.id
-        trust = _trust_tier(event.user)
+        trust = factory.trust_tier_for_source(source, event.user, config=_cfg())
+        await bot_msg.bind(title=title, config=_cfg())
+        await bot_msg.on_message_received(event.text)
         try:
             async with _chat_lock(chat_id, worker_item=item):
                 session = _load(chat_id)
-                if session.approval_mode == "on":
+                outcome = None
+                if not routed_task_id and not getattr(event, "skip_approval", False) and session.approval_mode == "on":
                     await request_approval(
                         chat_id, prompt, image_paths, list(event.attachments),
                         bot_msg, request_user_id=user_id, trust_tier=trust,
                     )
                 else:
-                    await execute_request(
+                    outcome = await execute_request(
                         chat_id, prompt, image_paths, bot_msg,
                         request_user_id=user_id, trust_tier=trust,
                     )
         except work_queue.LeaveClaimed:
             raise
+        if outcome is not None:
+            await bot_msg.on_outcome(outcome)
+            if getattr(event, "skip_approval", False) and source == "registry":
+                session_after = _load(chat_id)
+                delegation = session_after.pending_delegation
+                if (
+                    delegation is not None
+                    and delegation.conversation_ref == conversation_ref
+                    and delegation.status in {"completed", "partial_failed"}
+                ):
+                    session_after.pending_delegation = None
+                    _save(chat_id, session_after)
+        if routed_task_id:
+            client = registry_client(_cfg())
+            if client is not None and outcome is not None:
+                full_text = outcome.reply_text or html.unescape(getattr(bot_msg, "last_status_text", ""))
+                result_status = "completed" if outcome.status in {"completed", "completed_with_denials"} else outcome.status
+                try:
+                    await client.routed_task_result(
+                        routed_task_id,
+                        RoutedTaskResult(
+                            routed_task_id=routed_task_id,
+                            status=result_status,
+                            summary=summarize_text(full_text or outcome.error_text or result_status),
+                            full_text=full_text or outcome.error_text,
+                            artifacts=(),
+                            follow_up_questions=(),
+                        ),
+                    )
+                except Exception:
+                    log.warning(
+                        "Failed to report routed task result for %s",
+                        routed_task_id,
+                        exc_info=True,
+                    )
+        if outcome is not None and outcome.status in {"completed", "completed_with_denials"}:
+            try:
+                work_queue.record_usage(
+                    data_dir,
+                    chat_id=chat_id,
+                    work_item_id=item["id"],
+                    provider=cfg.provider,
+                    prompt_tokens=outcome.prompt_tokens,
+                    completion_tokens=outcome.completion_tokens,
+                    cost_usd=outcome.cost_usd,
+                )
+            except Exception:
+                log.warning("Failed to record usage for chat %d", chat_id, exc_info=True)
+            if conversation_ref and (
+                outcome.prompt_tokens > 0 or outcome.completion_tokens > 0
+            ):
+                try:
+                    await publish_timeline_event(
+                        cfg,
+                        conversation_ref=conversation_ref,
+                        kind="usage",
+                        title="Token usage",
+                        body="",
+                        metadata={
+                            "prompt_tokens": outcome.prompt_tokens,
+                            "completion_tokens": outcome.completion_tokens,
+                            "cost_usd": outcome.cost_usd,
+                            "provider": cfg.provider,
+                        },
+                    )
+                except Exception:
+                    log.debug("Failed to publish usage timeline event", exc_info=True)
+        _maybe_fire_webhook(cfg, chat_id, conversation_ref, outcome)
         return
 
     if isinstance(event, (InboundCommand, InboundCallback)):
@@ -3165,13 +3741,18 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     app.add_handler(CommandHandler("send", cmd_send))
     app.add_handler(CommandHandler("id", cmd_id))
     app.add_handler(CommandHandler("doctor", cmd_doctor))
+    app.add_handler(CommandHandler("discover", cmd_discover))
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("project", cmd_project))
     app.add_handler(CommandHandler("policy", cmd_policy))
     app.add_handler(CommandHandler("model", cmd_model))
+    app.add_handler(CommandHandler("allowuser", cmd_allowuser))
+    app.add_handler(CommandHandler("blockuser", cmd_blockuser))
+    app.add_handler(CommandHandler("listaccess", cmd_listaccess))
     app.add_handler(CommandHandler("export", cmd_export))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CallbackQueryHandler(handle_callback, pattern=r"^(retry_|approval_)"))
+    app.add_handler(CallbackQueryHandler(handle_delegation_callback, pattern=r"^delegation_"))
     app.add_handler(CallbackQueryHandler(handle_recovery_callback, pattern=r"^recovery_"))
     app.add_handler(CallbackQueryHandler(handle_settings_callback, pattern=r"^setting_"))
     app.add_handler(CallbackQueryHandler(handle_expand_callback, pattern=r"^expand:"))

@@ -190,6 +190,16 @@ def test_validate_config_database_url_must_be_postgres():
     assert not any("BOT_DATABASE_URL" in e for e in errors_ok)
 
 
+def test_validate_config_rejects_malformed_registry_url():
+    errors = validate_config(make_config(agent_registry_url="http://"))
+    assert any("BOT_AGENT_REGISTRY_URL" in e and "valid http" in e for e in errors)
+
+
+def test_validate_config_rejects_malformed_postgres_url():
+    errors = validate_config(make_config(database_url="postgresql://"))
+    assert any("BOT_DATABASE_URL" in e and "valid postgresql" in e for e in errors)
+
+
 def test_validate_config_webhook_mode_with_url():
     errors = validate_config(make_config(
         bot_mode="webhook",
@@ -202,6 +212,11 @@ def test_validate_config_poll_mode_no_webhook_errors():
     errors = validate_config(make_config(bot_mode="poll", webhook_url=""))
     webhook_errors = [e for e in errors if "webhook" in e.lower()]
     assert webhook_errors == []
+
+
+def test_validate_config_completion_webhook_url_is_non_fatal_when_malformed():
+    errors = validate_config(make_config(completion_webhook_url="http://"))
+    assert not any("COMPLETION_WEBHOOK" in e for e in errors)
 
 def test_config_defaults_to_poll():
     cfg = make_config()
@@ -320,6 +335,21 @@ def test_load_config_reads_webhook_env_vars():
         assert cfg.webhook_listen == "0.0.0.0"
         assert cfg.webhook_port == 9443
         assert cfg.webhook_secret == "s3cret"
+    finally:
+        os.unlink(env_path)
+
+
+def test_load_config_reads_completion_webhook_url():
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write("TELEGRAM_BOT_TOKEN=tok\n")
+        f.write("BOT_PROVIDER=claude\n")
+        f.write("BOT_ALLOW_OPEN=1\n")
+        f.write("BOT_COMPLETION_WEBHOOK_URL=https://hooks.example.com/completed\n")
+        env_path = f.name
+    try:
+        with patch("app.config.env_path_for_instance", return_value=Path(env_path)):
+            cfg = load_config("test-webhook")
+        assert cfg.completion_webhook_url == "https://hooks.example.com/completed"
     finally:
         os.unlink(env_path)
 

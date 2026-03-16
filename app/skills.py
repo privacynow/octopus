@@ -6,10 +6,12 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import frontmatter
 import yaml
 from cryptography.fernet import Fernet, InvalidToken
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
 from app.providers.base import PreflightContext, RunContext
 
@@ -33,6 +35,65 @@ class SkillRequirement:
     prompt: str
     help_url: str | None = None
     validate: dict | None = None
+
+
+class _SkillValidateSpecModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    url: str = ""
+    method: str = "GET"
+    header: str = ""
+    expect_status: str = "200"
+
+    @field_validator("url", "method", "header", "expect_status", mode="before")
+    @classmethod
+    def _stringify(cls, value: Any) -> str:
+        return "" if value is None else str(value)
+
+
+class _SkillRequirementModel(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    key: str = ""
+    prompt: str = ""
+    help_url: str | None = None
+    validation_spec: _SkillValidateSpecModel | None = Field(default=None, alias="validate")
+
+    @field_validator("key", "prompt", mode="before")
+    @classmethod
+    def _required_strings(cls, value: Any) -> str:
+        return "" if value is None else str(value)
+
+    @field_validator("help_url", mode="before")
+    @classmethod
+    def _optional_string(cls, value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        return str(value)
+
+
+class _RequiresDocumentModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    credentials: list[_SkillRequirementModel] = Field(default_factory=list)
+
+    @field_validator("credentials", mode="before")
+    @classmethod
+    def _normalize_credentials(cls, value: Any) -> list[_SkillRequirementModel]:
+        if not isinstance(value, list):
+            return []
+        parsed: list[_SkillRequirementModel] = []
+        for item in value:
+            try:
+                parsed.append(_SKILL_REQUIREMENT_ADAPTER.validate_python(item))
+            except ValidationError:
+                continue
+        return parsed
+
+
+_SKILL_REQUIREMENT_ADAPTER = TypeAdapter(_SkillRequirementModel)
+_REQUIRES_DOCUMENT_ADAPTER = TypeAdapter(_RequiresDocumentModel)
+_PROVIDER_DOCUMENT_ADAPTER = TypeAdapter(dict[str, Any])
 
 
 # ---------------------------------------------------------------------------
@@ -119,30 +180,22 @@ def _parse_requires_yaml(text: str) -> list[SkillRequirement]:
         return []
     try:
         data = yaml.safe_load(text)
-    except yaml.YAMLError:
-        return []
-    if not isinstance(data, dict):
-        return []
-    credentials = data.get("credentials", [])
-    if not isinstance(credentials, list):
+        doc = _REQUIRES_DOCUMENT_ADAPTER.validate_python(data or {})
+    except (yaml.YAMLError, ValidationError):
         return []
     requirements: list[SkillRequirement] = []
-    for item in credentials:
-        if not isinstance(item, dict):
+    for item in doc.credentials:
+        if not item.key:
             continue
-        key = item.get("key", "")
-        if not key:
-            continue
-        validate = item.get("validate")
-        if isinstance(validate, dict):
-            # Normalize all values to strings for consistency
-            validate = {k: str(v) for k, v in validate.items()}
-        else:
-            validate = None
+        validate = (
+            item.validation_spec.model_dump(mode="python")
+            if item.validation_spec
+            else None
+        )
         requirements.append(SkillRequirement(
-            key=str(key),
-            prompt=str(item.get("prompt", "")),
-            help_url=item.get("help_url") or None,
+            key=item.key,
+            prompt=item.prompt,
+            help_url=item.help_url,
             validate=validate,
         ))
     return requirements
@@ -581,9 +634,9 @@ def load_provider_yaml(name: str, provider: str) -> dict:
         return {}
     try:
         data = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
-    except yaml.YAMLError:
+        return _PROVIDER_DOCUMENT_ADAPTER.validate_python(data or {})
+    except (yaml.YAMLError, ValidationError):
         return {}
-    return data if isinstance(data, dict) else {}
 
 
 def build_provider_config(

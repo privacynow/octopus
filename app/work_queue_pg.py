@@ -926,3 +926,94 @@ def purge_old(conn, older_than_hours: int = 24) -> int:
         if deleted_items or deleted_updates:
             log.info("Purged %d work items and %d updates", deleted_items, deleted_updates)
         return deleted_items
+
+
+def get_user_access_override(conn, user_id: int) -> str | None:
+    """Return 'allowed', 'blocked', or None when no override exists."""
+    with _cur(conn) as cur:
+        cur.execute(
+            "SELECT access FROM bot_runtime.user_access WHERE user_id = %s",
+            (user_id,),
+        )
+        row = cur.fetchone()
+    return row["access"] if row else None
+
+
+def set_user_access(
+    conn,
+    user_id: int,
+    access: str,
+    reason: str,
+    granted_by: int,
+) -> None:
+    """Upsert a user access override row."""
+    now = datetime.now(timezone.utc)
+    with _write_tx(conn):
+        with _cur(conn) as cur:
+            cur.execute(
+                """INSERT INTO bot_runtime.user_access
+                       (user_id, access, reason, granted_by, granted_at)
+                   VALUES (%s, %s, %s, %s, %s)
+                   ON CONFLICT (user_id) DO UPDATE SET
+                       access = EXCLUDED.access,
+                       reason = EXCLUDED.reason,
+                       granted_by = EXCLUDED.granted_by,
+                       granted_at = EXCLUDED.granted_at""",
+                (user_id, access, reason, granted_by, now),
+            )
+
+
+def list_user_access(conn) -> list[dict]:
+    """Return all user access overrides ordered by most recent grant first."""
+    with _cur(conn) as cur:
+        cur.execute(
+            "SELECT user_id, access, reason, granted_by, granted_at "
+            "FROM bot_runtime.user_access ORDER BY granted_at DESC"
+        )
+        rows = cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+def record_usage(
+    conn,
+    *,
+    chat_id: int,
+    work_item_id: str,
+    provider: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cost_usd: float,
+) -> None:
+    with _write_tx(conn):
+        with _cur(conn) as cur:
+            cur.execute(
+                f"""INSERT INTO {_SCHEMA}.usage_log (
+                       chat_id, work_item_id, provider, prompt_tokens,
+                       completion_tokens, cost_usd, recorded_at
+                   ) VALUES (%s, %s, %s, %s, %s, %s, NOW() AT TIME ZONE 'utc')""",
+                (
+                    chat_id,
+                    work_item_id,
+                    provider,
+                    prompt_tokens,
+                    completion_tokens,
+                    cost_usd,
+                ),
+            )
+
+
+def get_usage_since(conn, *, since_epoch: float) -> list[dict]:
+    since_dt = datetime.fromtimestamp(since_epoch, tz=timezone.utc)
+    with _cur(conn) as cur:
+        cur.execute(
+            f"""SELECT
+                   chat_id, work_item_id, provider, prompt_tokens,
+                   completion_tokens, cost_usd,
+                   EXTRACT(EPOCH FROM recorded_at)::double precision AS recorded_at
+               FROM {_SCHEMA}.usage_log
+               WHERE recorded_at >= %s
+               ORDER BY recorded_at""",
+            (since_dt,),
+        )
+        rows = cur.fetchall()
+    return [dict(row) for row in rows]

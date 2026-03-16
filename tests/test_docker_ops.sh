@@ -186,6 +186,31 @@ codex_args="$(cat "$RECORD_CODEX_ARGS" 2>/dev/null || true)"
 check_contains "codex invoked with --login" "$codex_args" "--login"
 
 echo
+echo "=== container_provider_login.sh: non-zero provider exit still reaches health check ==="
+cat > "$MOCK_BIN/codex" << 'MOCK_CODEX_FAIL'
+#!/bin/sh
+echo "codex $*" >> "${RECORD_CODEX_ARGS:?}"
+exit 7
+MOCK_CODEX_FAIL
+chmod +x "$MOCK_BIN/codex"
+printf '#!/bin/sh\nexit 0\n' > "$MOCK_BIN/python"
+chmod +x "$MOCK_BIN/python"
+rm -f "$RECORD_CODEX_ARGS"
+set +e
+stdout="$(PATH="$MOCK_BIN:$PATH" BOT_PROVIDER=codex bash "$REPO_DIR/scripts/provider/container_provider_login.sh" 2>&1)"
+exit_code=$?
+set -e
+check_exit "script continues after non-zero provider exit when health check succeeds" "$exit_code" "0"
+check_contains "warns about provider exit code" "$stdout" "exit code 7"
+check_contains "still runs health success path" "$stdout" "Provider login and health check succeeded."
+cat > "$MOCK_BIN/codex" << 'MOCK_CODEX'
+#!/bin/sh
+echo "codex $*" >> "${RECORD_CODEX_ARGS:?}"
+exit 0
+MOCK_CODEX
+chmod +x "$MOCK_BIN/codex"
+
+echo
 echo "=== container_provider_login.sh: claude path runs claude ==="
 rm -f "$RECORD_CODEX_ARGS" "$RECORD_CLAUDE_ARGS"
 PATH="$MOCK_BIN:$PATH" BOT_PROVIDER=claude bash "$REPO_DIR/scripts/provider/container_provider_login.sh" >/dev/null 2>&1

@@ -4,6 +4,50 @@ Fix contracts, not call sites. Audit equivalent paths before coding.
 Test invariants, not just scenarios. Treat failure paths as first-class.
 Use resolved context as the only authority.
 
+## Pluggable Subsystem Architecture (Port + Factory Rule)
+
+Every pluggable subsystem in every project follows the same pattern. There are no
+exceptions and no shortcuts.
+
+### The Pattern
+
+```
+ports.py (or interface.py)    ← abstract port / ABC
+<name>_impl.py                ← concrete implementation(s)
+factory.py                    ← factory function: decides which impl to construct
+```
+
+**Orchestration code imports only the port and the factory. It never imports a
+concrete implementation class.**
+
+This applies universally: conversation surfaces, storage backends, AI providers,
+notification channels, payment gateways, email senders, SMS transports — every
+pluggable category. Adding a new implementation means adding a new concrete file and
+a factory branch. No existing orchestration code is touched.
+
+### Why This Matters
+
+Projects that branch on type strings or import concrete classes in orchestration code
+accumulate structural debt that compounds: every new implementation requires
+auditing and editing every branching site. This creates drift, missed paths, and
+bugs that only appear in production when a new surface or backend is exercised.
+
+The factory is the single decision point. It owns: which class to construct, which
+parameters to pass, which trust semantics apply, and which capabilities to surface.
+Outside the factory, these decisions are invisible.
+
+### Verification
+
+Before merging any change to an orchestration file, answer:
+
+1. Does this file import any concrete adapter/implementation class? If yes, move the
+   construction to the factory and import only the port.
+2. Does this file branch on a type string (e.g. `if source == "registry":`,
+   `if ref.startswith("telegram:"):`)?  If yes, move the branch to the factory and
+   call a factory method that returns the right answer.
+
+If both answers are "no," the change is consistent with this rule.
+
 ## Core Principles
 
 - **Build once, reuse everywhere.** Search for existing modules,

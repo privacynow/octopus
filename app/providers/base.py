@@ -15,6 +15,12 @@ class RunResult:
     provider_state_updates: dict[str, Any] = field(default_factory=dict)
     denials: list[dict[str, Any]] = field(default_factory=list)
     cancelled: bool = False
+    delegation_title: str = ""
+    delegation_resume_instruction: str = ""
+    delegation_tasks: list[dict[str, str]] = field(default_factory=list)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
 
 
 @dataclass

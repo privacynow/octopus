@@ -408,11 +408,15 @@ class ClaudeProvider:
 
         final_text = result_data.get("result", accumulated) or accumulated
         denials = result_data.get("permission_denials", [])
+        usage = result_data.get("usage", {})
 
         return RunResult(
             text=final_text,
             denials=denials,
             provider_state_updates={"started": True},
+            prompt_tokens=usage.get("input_tokens", 0),
+            completion_tokens=usage.get("output_tokens", 0),
+            cost_usd=float(result_data.get("total_cost_usd") or 0.0),
         )
 
     async def run_preflight(
@@ -456,4 +460,10 @@ class ClaudeProvider:
             )
 
         final_text = result_data.get("result", accumulated) or accumulated
-        return RunResult(text=final_text)
+        usage = result_data.get("usage", {})
+        return RunResult(
+            text=final_text,
+            prompt_tokens=usage.get("input_tokens", 0),
+            completion_tokens=usage.get("output_tokens", 0),
+            cost_usd=float(result_data.get("total_cost_usd") or 0.0),
+        )

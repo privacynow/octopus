@@ -10,10 +10,13 @@ import pytest
 from app.work_queue import (
     record_update,
     get_update_payload,
+    get_user_access,
     get_work_items_for_chat,
     record_and_admit_message,
     record_and_enqueue,
+    record_usage,
     enqueue_work_item,
+    get_usage_since,
     claim_for_update,
     claim_next,
     claim_next_any,
@@ -22,9 +25,11 @@ from app.work_queue import (
     cancel_queued_fresh_for_chat,
     has_claimed_for_chat,
     has_queued_or_claimed,
+    list_user_access,
     mark_pending_recovery,
     get_latest_pending_recovery,
     get_pending_recovery_for_update,
+    set_user_access,
     supersede_pending_recovery,
     discard_recovery,
     reclaim_for_replay,
@@ -293,3 +298,107 @@ def test_cancel_queued_fresh_for_chat_terminal_state(backend_and_data_dir):
     assert len(cancelled) == 1, f"Exactly one item must be failed/cancelled, got: {items}"
     assert len(runnable) == 0, f"No runnable items after cancel, got: {items}"
     assert has_queued_or_claimed(data_dir, chat_id) is False
+
+
+def test_user_access_no_row_returns_none(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    assert get_user_access(data_dir, user_id=99999) is None
+
+
+def test_user_access_set_and_get_round_trip(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    set_user_access(data_dir, user_id=100, access="blocked", reason="test", granted_by=1)
+    assert get_user_access(data_dir, user_id=100) == "blocked"
+    set_user_access(data_dir, user_id=100, access="allowed", reason="reversed", granted_by=1)
+    assert get_user_access(data_dir, user_id=100) == "allowed"
+
+
+def test_user_access_list_covers_all_rows(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    set_user_access(data_dir, user_id=200, access="allowed", reason="a", granted_by=1)
+    set_user_access(data_dir, user_id=201, access="blocked", reason="b", granted_by=1)
+    rows = list_user_access(data_dir)
+    user_ids = {row["user_id"] for row in rows}
+    assert 200 in user_ids
+    assert 201 in user_ids
+    assert all(row["access"] in ("allowed", "blocked") for row in rows)
+
+
+def test_record_usage_and_retrieve(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    record_usage(
+        data_dir,
+        chat_id=1,
+        work_item_id="work-1",
+        provider="claude",
+        prompt_tokens=123,
+        completion_tokens=45,
+        cost_usd=0.0123,
+    )
+
+    rows = get_usage_since(data_dir, since_epoch=0.0)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["chat_id"] == 1
+    assert row["work_item_id"] == "work-1"
+    assert row["provider"] == "claude"
+    assert row["prompt_tokens"] == 123
+    assert row["completion_tokens"] == 45
+    assert row["cost_usd"] == pytest.approx(0.0123)
+    assert isinstance(row["recorded_at"], float)
+    assert row["recorded_at"] > 0
+
+
+def test_get_usage_since_filters_by_time(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    record_usage(
+        data_dir,
+        chat_id=1,
+        work_item_id="work-a",
+        provider="claude",
+        prompt_tokens=1,
+        completion_tokens=2,
+        cost_usd=0.0,
+    )
+    time.sleep(0.02)
+    threshold = time.time()
+    time.sleep(0.02)
+    record_usage(
+        data_dir,
+        chat_id=2,
+        work_item_id="work-b",
+        provider="codex",
+        prompt_tokens=3,
+        completion_tokens=4,
+        cost_usd=0.0,
+    )
+
+    rows = get_usage_since(data_dir, since_epoch=threshold)
+
+    assert len(rows) == 1
+    assert rows[0]["work_item_id"] == "work-b"
+
+
+def test_record_usage_zero_tokens_persists(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    record_usage(
+        data_dir,
+        chat_id=5,
+        work_item_id="work-zero",
+        provider="codex",
+        prompt_tokens=0,
+        completion_tokens=0,
+        cost_usd=0.0,
+    )
+
+    rows = get_usage_since(data_dir, since_epoch=0.0)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["chat_id"] == 5
+    assert row["work_item_id"] == "work-zero"
+    assert row["provider"] == "codex"
+    assert row["prompt_tokens"] == 0
+    assert row["completion_tokens"] == 0
+    assert row["cost_usd"] == pytest.approx(0.0)

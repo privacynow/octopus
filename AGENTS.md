@@ -12,6 +12,51 @@ For high-risk work, open the matching local skill before changing code:
 - `docs/codex-skills/invariant-test-builder/SKILL.md`
 - `docs/codex-skills/progress-ux-audit/SKILL.md`
 
+## Pluggable Subsystem Architecture (Port + Factory Rule)
+
+This repo has three categories of pluggable subsystem: **surface** (conversation
+output transport), **storage** (session persistence), and **provider** (AI execution
+engine). Every pluggable subsystem follows the same architectural pattern without
+exception.
+
+### The Rule
+
+**No orchestration code names a specific surface, storage, or provider
+implementation.** Orchestration code (worker_dispatch, delivery, handlers) imports
+only abstract ports and calls only factory functions. It never imports
+`TelegramConversationIO`, `RegistryConversationIO`, `SqliteSessionStore`, or any
+other concrete class directly.
+
+### Required Shape for Every Pluggable Subsystem
+
+```
+app/transports/ports.py          ← abstract port: ConversationIO / InteractionSurface
+app/transports/telegram_adapter.py  ← concrete: TelegramConversationIO
+app/transports/registry_adapter.py  ← concrete: RegistryConversationIO
+app/transports/factory.py        ← factory: create_outbound_surface(conversation_ref, ...)
+```
+
+The factory is the single place that decides which implementation to construct.
+Adding a new surface (iMessage, Slack, SMS) means adding a new adapter and a branch
+inside the factory. The orchestration layer is not touched.
+
+### How To Add a New Surface
+
+1. Create `app/transports/<name>_adapter.py` implementing `InteractionSurface`.
+2. Add a branch in `app/transports/factory.py:create_outbound_surface()`.
+3. Add a branch in `app/transports/factory.py:trust_tier_for_source()` if the
+   surface has distinct trust semantics.
+4. Add factory tests: `test_factory_<name>_ref_produces_<name>_surface`.
+5. Do not touch `worker_dispatch`, `delivery.py`, or any handler.
+
+### Trust Tiers
+
+Trust determination is a factory concern, not an orchestration concern.
+`worker_dispatch` calls `factory.trust_tier_for_source(source, user, config=cfg)`.
+`factory.py` delegates to `app/access.trust_tier(config, user)`. Inline `source`
+string comparisons for trust do not belong in orchestration code — they belong in
+the factory.
+
 ## Bug Classes From Project History
 
 These patterns caused repeated bugs. Check them on every nontrivial
@@ -64,6 +109,20 @@ change.
     original message are blind to status edits. Use
     `_StickyReplyMessage` (or equivalent) when testing flows that
     create a status message and then update it via progress.
+14. **Surface-specific logic in orchestration code.** `worker_dispatch`
+    and delivery handlers must never import or branch on a specific
+    surface adapter. If you add `if conversation_ref.startswith(...):`
+    or `if source == "registry":` in an orchestration file, you have
+    violated the port+factory rule. Put the branch in the factory.
+15. **send_message bypassing send_text.** On `TelegramConversationIO`,
+    `send_message()` must delegate to `send_text()` so that the
+    `replies` list is populated and the returned handle is a
+    `TelegramEditableMessageHandle`. Tests that call `send_message`
+    and inspect `bot.messages` directly are blind to this bypass.
+16. **Silent recovery notice failure.** A new surface that inherits the
+    `InteractionSurface.send_recovery_notice()` no-op without overriding
+    it will never inform users that interrupted work needs replay. Every
+    surface with a user-facing UI channel must override it.
 
 ## Repo-Specific Bug Reports
 

@@ -132,6 +132,25 @@ class AgentRegistryClient:
             },
         )
 
+    async def sync_binding(
+        self,
+        *,
+        conversation_id: str,
+        title: str,
+        origin_surface: str,
+        external_id: str,
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            "/v1/agents/conversations/bind",
+            json_data={
+                "conversation_id": conversation_id,
+                "title": title,
+                "origin_surface": origin_surface,
+                "external_id": external_id,
+            },
+        )
+
     async def search(self, query: AgentDiscoveryQuery) -> list[dict[str, Any]]:
         result = await self._request(
             "POST",

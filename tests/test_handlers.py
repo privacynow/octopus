@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 from app.providers.base import RunContext, RunResult
+from app.transport import InboundMessage, InboundUser
 from app.storage import default_session, save_session
 from tests.support.handler_support import (
     FakeCallbackQuery,
@@ -59,6 +60,89 @@ async def test_happy_path():
         bot = th._bot_instance
         assert len(bot.sent_messages) >= 2
         assert "Hello world" in " ".join(m.get("text", "") for m in bot.sent_messages)
+
+
+async def test_registry_surface_input_respects_approval_mode():
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        event = InboundMessage(
+            user=InboundUser(id=42, username="registry-ui"),
+            chat_id=12345,
+            text="Please refine this specification.",
+            source="registry",
+            conversation_ref="registry-conv-1",
+        )
+        item = {"id": "registry-item-1", "chat_id": 12345, "update_id": 7001, "dispatch_mode": "fresh"}
+
+        await th.worker_dispatch("message", event, item)
+
+        session = load_session_disk(data_dir, 12345, prov)
+        assert len(prov.preflight_calls) == 1
+        assert len(prov.run_calls) == 0
+        assert session.get("pending_approval") is not None
+
+
+async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (_, cfg, prov):
+        import app.telegram_handlers as th
+        import app.agents.bridge as bridge
+
+        reported: list[tuple[str, object]] = []
+
+        class FakeRegistryClient:
+            async def sync_binding(self, **kwargs):
+                reported.append(("binding", kwargs))
+                return {"ok": True}
+
+            async def publish_timeline(self, events, *, checkpoint: str = ""):
+                del checkpoint
+                reported.append(("timeline", events))
+                return {"accepted": len(events)}
+
+            async def routed_task_result(self, routed_task_id, result):
+                reported.append(("result", routed_task_id, result))
+                return {"ok": True}
+
+        monkeypatch.setattr(th, "registry_client", lambda config: FakeRegistryClient())
+        monkeypatch.setattr(bridge, "registry_client", lambda config: FakeRegistryClient())
+        prov.run_results = [RunResult(text="Delegated review complete.")]
+
+        event = InboundMessage(
+            user=InboundUser(id=42, username="origin-bot"),
+            chat_id=12345,
+            text="Review the latest spec.",
+            source="registry",
+            conversation_ref="routed-task-1",
+            routed_task_id="routed-task-1",
+        )
+        item = {"id": "registry-item-2", "chat_id": 12345, "update_id": 7002, "dispatch_mode": "fresh"}
+
+        await th.worker_dispatch("message", event, item)
+
+        assert len(prov.preflight_calls) == 0
+        assert len(prov.run_calls) == 1
+        assert any(entry[0] == "binding" for entry in reported)
+        result_entries = [entry for entry in reported if entry[0] == "result"]
+        assert len(result_entries) == 1
+        _, routed_task_id, result = result_entries[0]
+        assert routed_task_id == "routed-task-1"
+        assert result.status == "completed"
+        assert "Delegated review complete." in result.full_text
 
 
 async def test_cmd_new():

@@ -44,6 +44,9 @@ class InboundMessage:
     chat_id: int
     text: str
     attachments: tuple[InboundAttachment, ...] = ()
+    source: str = "telegram"
+    conversation_ref: str = ""
+    routed_task_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,8 @@ class InboundCommand:
     chat_id: int
     command: str
     args: tuple[str, ...] = ()
+    source: str = "telegram"
+    conversation_ref: str = ""
 
 
 @dataclass(frozen=True)
@@ -61,6 +66,8 @@ class InboundCallback:
     user: InboundUser
     chat_id: int
     data: str
+    source: str = "telegram"
+    conversation_ref: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +194,9 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback) 
             "username": event.user.username,
             "chat_id": event.chat_id,
             "text": event.text,
+            "source": event.source,
+            "conversation_ref": event.conversation_ref,
+            "routed_task_id": event.routed_task_id,
             "attachments": [
                 {"path": str(a.path), "original_name": a.original_name,
                  "is_image": a.is_image, "mime_type": a.mime_type}
@@ -200,6 +210,8 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback) 
             "chat_id": event.chat_id,
             "command": event.command,
             "args": list(event.args),
+            "source": event.source,
+            "conversation_ref": event.conversation_ref,
         })
     if isinstance(event, InboundCallback):
         return json.dumps({
@@ -207,6 +219,8 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback) 
             "username": event.user.username,
             "chat_id": event.chat_id,
             "data": event.data,
+            "source": event.source,
+            "conversation_ref": event.conversation_ref,
         })
     raise TypeError(f"Unknown inbound type: {type(event)}")
 
@@ -224,10 +238,17 @@ def deserialize_inbound(kind: str, payload_json: str) -> InboundMessage | Inboun
             for a in d.get("attachments", [])
         )
         return InboundMessage(user=user, chat_id=d["chat_id"], text=d.get("text", ""),
-                              attachments=attachments)
+                              attachments=attachments,
+                              source=d.get("source", "telegram"),
+                              conversation_ref=d.get("conversation_ref", ""),
+                              routed_task_id=d.get("routed_task_id", ""))
     if kind == "command":
         return InboundCommand(user=user, chat_id=d["chat_id"],
-                              command=d["command"], args=tuple(d.get("args", [])))
+                              command=d["command"], args=tuple(d.get("args", [])),
+                              source=d.get("source", "telegram"),
+                              conversation_ref=d.get("conversation_ref", ""))
     if kind == "callback":
-        return InboundCallback(user=user, chat_id=d["chat_id"], data=d.get("data", ""))
+        return InboundCallback(user=user, chat_id=d["chat_id"], data=d.get("data", ""),
+                               source=d.get("source", "telegram"),
+                               conversation_ref=d.get("conversation_ref", ""))
     raise ValueError(f"Unknown kind: {kind}")

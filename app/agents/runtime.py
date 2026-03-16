@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from dataclasses import replace
+from typing import Awaitable, Callable
 
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.state import AgentRuntimeState, load_agent_runtime_state, save_agent_runtime_state
@@ -18,8 +18,14 @@ log = logging.getLogger(__name__)
 class AgentRuntime:
     """Maintains bot identity and heartbeat against the central registry."""
 
-    def __init__(self, config: BotConfig) -> None:
+    def __init__(
+        self,
+        config: BotConfig,
+        *,
+        delivery_handler: Callable[[dict[str, object]], Awaitable[str]] | None = None,
+    ) -> None:
         self.config = config
+        self._delivery_handler = delivery_handler
         self._state = load_agent_runtime_state(config.data_dir)
 
     @property
@@ -111,10 +117,55 @@ class AgentRuntime:
         self._mark_state("connected")
         return "connected"
 
+    async def poll_once(self) -> int:
+        if self._delivery_handler is None or self._state.connectivity_state != "connected":
+            return 0
+        client = self._client()
+        result = await client.poll(
+            cursor=self._state.poll_cursor or "0",
+            limit=20,
+            wait_seconds=0,
+        )
+        deliveries = list(result.get("deliveries", []))
+        if not deliveries:
+            self._state.poll_cursor = str(result.get("next_cursor", self._state.poll_cursor or "0"))
+            self._save_state()
+            return 0
+
+        accepted: list[str] = []
+        rejected: list[str] = []
+        retry_later: list[str] = []
+        for delivery in deliveries:
+            classification = await self._delivery_handler(delivery)
+            delivery_id = str(delivery.get("delivery_id", ""))
+            if classification == "accepted":
+                accepted.append(delivery_id)
+            elif classification == "retry_later":
+                retry_later.append(delivery_id)
+            else:
+                rejected.append(delivery_id)
+
+        if accepted:
+            await client.ack(accepted, classification="accepted")
+        if rejected:
+            await client.ack(rejected, classification="rejected")
+        if retry_later:
+            await client.ack(retry_later, classification="retry_later")
+
+        self._state.poll_cursor = str(result.get("next_cursor", self._state.poll_cursor or "0"))
+        self._save_state()
+        return len(deliveries)
+
     async def run_forever(self, stop_event: asyncio.Event) -> None:
         interval = max(1.0, self.config.agent_poll_interval_seconds)
         while not stop_event.is_set():
-            await self.sync_once()
+            state = await self.sync_once()
+            if state == "connected":
+                try:
+                    await self.poll_once()
+                except (RegistryClientError, OSError, asyncio.TimeoutError) as exc:
+                    log.warning("Agent registry poll degraded for %s: %s", self.config.instance, exc)
+                    self._mark_state("degraded", error=str(exc))
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=interval)
             except asyncio.TimeoutError:
@@ -123,8 +174,10 @@ class AgentRuntime:
 
 def start_agent_runtime_task(
     config: BotConfig,
+    *,
+    delivery_handler: Callable[[dict[str, object]], Awaitable[str]] | None = None,
 ) -> tuple[asyncio.Task[None], asyncio.Event]:
     stop_event = asyncio.Event()
-    runtime = AgentRuntime(config)
+    runtime = AgentRuntime(config, delivery_handler=delivery_handler)
     task = asyncio.create_task(runtime.run_forever(stop_event))
     return task, stop_event

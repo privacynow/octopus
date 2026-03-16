@@ -104,6 +104,18 @@ def publish_timeline(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
+@app.post("/v1/agents/conversations/bind")
+def bind_conversation(
+    payload: dict[str, Any],
+    agent_token: str = Depends(require_agent_token),
+    store: RegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    try:
+        return store.bind_conversation(agent_token, payload)
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
 @app.post("/v1/agents/discovery/search")
 def search_agents(
     payload: dict[str, Any],

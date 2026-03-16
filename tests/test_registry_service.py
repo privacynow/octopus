@@ -91,6 +91,35 @@ def test_registry_enroll_register_heartbeat_and_search(monkeypatch, tmp_path: Pa
     assert agents[0]["connectivity_state"] == "connected"
 
 
+def test_registry_bind_conversation_is_visible_in_ui(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    _, token = _enroll_and_register(client, "Dev Bot", "dev-bot")
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": "telegram:dev-bot:123",
+            "title": "Telegram chat 123",
+            "origin_surface": "telegram",
+            "external_id": "123",
+        },
+    )
+    assert bind.status_code == 200
+    assert bind.json()["conversation_id"] == "telegram:dev-bot:123"
+
+    conversations = client.get(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert conversations.status_code == 200
+    items = conversations.json()["conversations"]
+    assert len(items) == 1
+    assert items[0]["conversation_id"] == "telegram:dev-bot:123"
+    assert items[0]["title"] == "Telegram chat 123"
+
+
 def test_registry_ui_conversation_routes_surface_input_to_polled_bot(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

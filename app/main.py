@@ -9,6 +9,7 @@ from app.config import BotConfig, fail_fast, load_config, load_config_provider_h
 from app.providers.base import Provider
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
+from app.agents.delivery import handle_registry_delivery
 from app.agents.runtime import start_agent_runtime_task
 from app.storage import close_db, ensure_data_dirs
 from app.work_queue import close_transport_db, recover_stale_claims, purge_old
@@ -172,7 +173,10 @@ def main() -> None:
         _worker_task, _worker_stop = start_worker_task(
             config.data_dir, boot_id, worker_dispatch,
         )
-        _agent_task, _agent_stop = start_agent_runtime_task(config)
+        _agent_task, _agent_stop = start_agent_runtime_task(
+            config,
+            delivery_handler=lambda delivery: handle_registry_delivery(config, delivery),
+        )
 
     async def _on_post_shutdown(_app) -> None:
         if _agent_stop:

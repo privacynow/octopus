@@ -25,9 +25,16 @@ private bot with no registry.
 - a Telegram bot token from `@BotFather`
 - one provider: `claude` or `codex`
 - your Telegram user ID for `BOT_ALLOWED_USERS`
-- for the multi-bot path: a local or hosted registry URL and enrollment token
+- for the multi-bot path: a local or hosted registry URL and a registry enrollment token — auto-generated when you start a local registry (see below)
 
 ## First-Time Setup
+
+### Create your Telegram bot token
+
+1. Open Telegram, search for **@BotFather**, and tap Start
+2. Send: `/newbot`
+3. Follow the prompts and choose a display name plus a username ending in `bot`
+4. BotFather replies with your token. Copy it — you will need it during setup.
 
 1. **Clone the repo**
 
@@ -36,24 +43,18 @@ private bot with no registry.
    cd ~/telegram-agent-bot
    ```
 
-2. **Start the local registry (recommended default)**
-
-   ```bash
-   ./scripts/registry/start.sh
-   ```
-
-   This starts the shared bot directory and UI for same-host Docker use. The
-   script creates `.env.registry` the first time and prints the local UI URL.
-
-3. **Run the guided setup**
+2. **Run the guided setup**
 
    ```bash
    ./scripts/app/guided_start.sh
    ```
 
    The script creates the bot config if needed, asks for the Telegram token and
-   the rest of the normal settings on one line each, walks you through provider
-   login if needed, and starts the bot.
+   the rest of the normal settings, walks you through provider login if needed,
+   and starts the bot.
+
+   If you choose registry mode, the local registry starts automatically.
+   For manual registry management, see [Manual registry start](#manual-registry-start).
 
    For a second or third bot from the same checkout, give it an instance name:
 
@@ -65,14 +66,40 @@ private bot with no registry.
    Those create `.env.bot.reviewer`, `.env.bot.developer`, and separate Docker
    projects automatically. The default no-argument path still uses `.env.bot`.
 
-   Leave `BOT_WORKING_DIR` unset unless you actually need it. If you do set it
-   for the Docker path, use `/home/bot`, not your host home directory.
-
-4. **Message the bot in Telegram**
+3. **Message the bot in Telegram**
 
    Start with `/start`, then send a normal request such as:
 
    > Review this diff and suggest a safer refactor.
+
+### Verify it's working
+
+Open Telegram, find your bot by its username, and send:
+
+> What files are in my working directory?
+
+You should receive a response within a few seconds listing the files in the
+bot's working directory.
+
+If you are using registry mode, open [http://localhost:8787](http://localhost:8787)
+to see the bot listed as connected and the conversation appearing in real time.
+
+### Registry UI
+
+When running in registry mode, the Registry UI is available at
+`http://localhost:8787`.
+
+![Registry UI screenshot](/Users/tinker/output/bots/telegram-agent-bot/docs/registry-ui-screenshot.png)
+
+The UI shows three panels:
+
+- **Bots** — all registered bots, their connection status, and last heartbeat
+- **Conversations** — a live timeline for every conversation across all bots; click any conversation to see the full event history
+- **Routed Tasks** — delegated sub-tasks being handled by specialist bots
+
+Unlike the Telegram interface, the Registry UI lets you start conversations
+directly, approve or cancel delegation plans, and see all bot activity in one
+place without switching between Telegram chats.
 
 ## Day-To-Day Use
 
@@ -199,6 +226,22 @@ If a technical helper wants to run the full health check locally, use:
 ```bash
 docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot --env-file .env.bot run --rm bot python -m app.main --doctor
 ```
+
+### Configuration notes
+
+Leave `BOT_WORKING_DIR` unset unless you actually need it. If you do set it for
+the Docker path, use `/home/bot`, not your host home directory.
+
+### Manual registry start
+
+For advanced users who want to manage the registry directly:
+
+```bash
+./scripts/registry/start.sh
+```
+
+The script creates `.env.registry` on first run, starts the local registry UI,
+and prints the enrollment token it generated.
 
 ### The bot still will not start
 

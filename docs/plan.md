@@ -3583,11 +3583,38 @@ If the container exits with a non-zero code, print:
 equivalent banner explaining that `q` or `Ctrl-C` returns to setup once
 authentication is complete.
 
+*Implementation seam — exit code capture:*
+The script uses `set -euo pipefail`. The provider CLI may exit non-zero even
+on a clean auth session. Capture the exit code explicitly immediately after the
+CLI call, then continue unconditionally to the post-exit message and the existing
+health check. Do NOT use `|| true` to swallow the code. Pattern:
+
+```bash
+claude
+exit_code=$?
+if [ "$exit_code" -eq 0 ]; then
+  echo "✓ Claude authentication complete. Returning to setup..."
+else
+  echo "✗ Authentication may have failed (exit code $exit_code). Re-run this"
+  echo "  step if the provider health check fails in the next step."
+fi
+# fall through unconditionally to health check
+```
+
+The health check at the bottom of the script is the actual failure gate — the
+post-exit message is informational only.
+
 *Files:* `scripts/provider/container_provider_login.sh`
 
 ---
 
 **Section B — Guided Start Script (guided_start.sh)**
+
+*Pre-existing bugs to fix first:* The current `guided_start.sh` has three
+orphaned variable assignments that must be removed before adding new features:
+- Line that sets `registry_prompt=` is immediately overwritten by `registry_token=` — delete the orphaned line
+- First of two `role=` assignments captures the tags prompt result before being overwritten by `tags=` — delete the orphaned line
+- First of two `role=` assignments captures the skills prompt result before being overwritten by `skills=` — delete the orphaned line
 
 *Problem B1 — Enrollment token prompt has no hint.*
 When the user is asked "Registry enrollment token", they have no idea where to
@@ -3603,19 +3630,32 @@ the script never says so.
 If the user is connecting to a remote registry, prompt as before but add the
 hint: `(check your registry's .env.registry or admin panel)`.
 
+*Implementation seam — structural ordering:* This fix requires restructuring the
+script flow. Currently `create_env_file_if_missing` runs before
+`auto_start_local_registry_if_needed`, so the token is not yet in `.env.registry`
+when the registry URL prompt fires. The fix splits prompt collection into two
+phases: (1) collect bot name, token, provider, mode, and registry URL, write a
+minimal env file; (2) call `auto_start_local_registry_if_needed` which starts the
+registry and reads the token; (3) if local registry and token was auto-read,
+append it to the env file silently; if remote registry, prompt for the token with
+the hint. The `auto_start_local_registry_if_needed` function must also match
+`http://172.17.0.1:8787` in its case statement alongside the existing
+`host.docker.internal` and `localhost` variants.
+
 *Problem B2 — Advanced field overload.*
 12–14 interactive questions including Role, Tags, Description, and Skills confuse
 first-time users. These fields have valid advanced use cases but are not needed
 to get a working bot.
 
-*Fix B2:* Add a "quick setup / full setup" fork at the top:
+*Fix B2:* Add a "quick setup / full setup" fork at the top of prompt collection:
 ```
 Setup mode? [quick/full] (quick):
 ```
-- **quick** (default): ask only Bot name, Token, Provider, Mode. Use sensible
-  defaults for everything else. Print a note: "Advanced settings (role, tags,
+- **quick** (default): ask only Bot name, Token, Provider, Mode (4–5 questions
+  total, including registry URL if mode=registry). Write defaults: `working_dir=/home/bot`,
+  `timeout=3600`, `allow_open=1`. Print at end: "Advanced settings (role, tags,
   description, skills) can be set by editing $BOT_ENV_FILE."
-- **full**: current behavior, all 14 prompts.
+- **full**: current behavior, all prompts.
 
 *Problem B3 — `host.docker.internal` fails on Linux.*
 The default registry URL `http://host.docker.internal:8787` works on
@@ -3624,14 +3664,15 @@ macOS/Docker Desktop but is unreachable from Docker containers on Linux.
 *Fix B3:* Detect the OS at prompt time. On Linux, default to
 `http://172.17.0.1:8787` and add a comment in the generated env file:
 ```
-# On Linux, use 172.17.0.1 (Docker bridge default). On macOS/Windows use host.docker.internal.
+# Registry URL: use host.docker.internal on macOS/Windows, 172.17.0.1 on Linux.
 ```
+Detection: `if [ "$(uname -s)" = "Linux" ]; then default_registry_url="http://172.17.0.1:8787"; fi`
 
 *Problem B4 — No success summary.*
 After `./scripts/app/start_instance.sh` succeeds, the script prints minimal
 output. The user doesn't know what they have, how to use it, or what to do next.
 
-*Fix B4:* Print a boxed success summary:
+*Fix B4:* Replace the final plain-text echo block with a boxed success summary:
 ```
 ╔══════════════════════════════════════════════════════════════╗
 ║  Bot is running!                                             ║
@@ -3642,7 +3683,11 @@ output. The user doesn't know what they have, how to use it, or what to do next.
 ║  • Stop:  ./scripts/app/stop_instance.sh default             ║
 ╚══════════════════════════════════════════════════════════════╝
 ```
-The registry URL line is omitted in standalone mode.
+The registry UI line is omitted in standalone mode. The registry URL shown must
+be the actual URL from the env file, not a hardcoded localhost — read it with
+`grep -E '^\s*BOT_AGENT_REGISTRY_URL='` from `$BOT_ENV_FILE`. Box lines are
+exactly 64 characters wide (matching Section A banners). Use `printf` for the
+variable-width registry URL line to pad correctly.
 
 *Files:* `scripts/app/guided_start.sh`, `scripts/lib_env.sh` (if needed)
 
@@ -3654,11 +3699,16 @@ The registry URL line is omitted in standalone mode.
 stored in .env.registry" but never prints the actual token value. The user must
 open the file to find it.
 
-*Fix C1:* After writing `.env.registry`, extract and print the enrollment token:
+*Fix C1:* After writing `.env.registry`, extract and print the enrollment token.
+The file is already sourced via `set -a; . "$ENV_FILE"; set +a` before the
+`docker compose` call, so `$REGISTRY_ENROLL_TOKEN` is in scope. Print it:
+```bash
+echo "Enrollment token: $REGISTRY_ENROLL_TOKEN"
+echo "(also stored in $ENV_FILE — keep this file private)"
 ```
-  Enrollment token: <TOKEN VALUE>
-  (also stored in .env.registry — keep this file private)
-```
+This applies on both first-run (token just generated) and subsequent runs (token
+already in file). The existing `echo "Enrollment token is stored in $ENV_FILE."`
+line is replaced, not supplemented.
 
 *Files:* `scripts/registry/start.sh`
 
@@ -3738,12 +3788,15 @@ README. A user who reads the README has no idea the UI exists or what it looks
 like.
 
 *Fix D6:* Add a "Registry UI" section with:
-- A screenshot of the UI (or an embedded reference to one in `docs/`).
-- A one-paragraph description: what the three panels show, what makes it
-  different from the Telegram interface (real-time timeline, multi-bot view,
-  approval flow), and the URL.
+- A screenshot saved to `docs/registry-ui-screenshot.png`, taken after M9 UI
+  fixes (E1–E9) are complete so the screenshot reflects the polished state.
+  Reference it in the README as `![Registry UI](docs/registry-ui-screenshot.png)`.
+- A one-paragraph description: what the three panels show (Bots, Conversations,
+  Routed Tasks), what makes it different from Telegram (real-time timeline,
+  multi-bot view, approval flow, shareable conversation link), and the URL
+  (`http://localhost:8787` for local setups).
 
-*Files:* `README.md`
+*Files:* `README.md`, `docs/registry-ui-screenshot.png`
 
 ---
 
@@ -3777,9 +3830,16 @@ no visual affordance that any action is possible. A user looking at this UI
 cannot tell whether it is broken or intentionally a read-only board.
 
 *Fix E2:*
-- Wrap each item in a `<button>` or add `cursor: pointer` + `tabindex="0"`.
-- Add hover state: `background: rgba(255,255,255,0.05)` on hover.
-- On click, open a detail side-panel or modal showing all available fields.
+- Wrap each item in a `<button>` or add `cursor: pointer` + `tabindex="0"` +
+  `role="button"` + `onkeydown` handler for Enter/Space.
+- Add hover state to `.item` CSS:
+  ```css
+  .item { cursor: pointer; transition: background 0.15s; }
+  .item:hover { background: rgba(255, 255, 255, 0.08); }
+  ```
+- On click, open the existing detail side-panel (which already exists for
+  conversations). Wire it to bots and routed tasks as well, or at minimum extend
+  the existing conversation detail panel path for all item types.
 - All interactive elements must be keyboard-accessible (Enter/Space to activate).
 
 *Problem E3 — No loading state.*
@@ -3789,45 +3849,101 @@ this looks like an empty, broken page. There is no spinner, skeleton, or any
 indication that data is loading.
 
 *Fix E3:*
-- On initial load: show a centered spinner with "Loading..." text.
-- On poll refresh: show a subtle "Refreshing..." indicator in the header (not a
-  full spinner — don't disrupt the user while browsing).
-- Skeleton cards for the initial load are acceptable as an alternative to a spinner.
+- On page load, initialize each panel's `innerHTML` to
+  `<div class="loading-state">Loading…</div>` before the first fetch fires.
+  CSS: `.loading-state { text-align: center; padding: 2rem; color: #888; }`
+- On subsequent polls (after the first successful load), show a non-disruptive
+  "Refreshing…" badge in the header — not a full spinner — so browsing is not
+  disrupted.
+- Skeleton cards are an acceptable alternative to the loading-state div.
 
 *Problem E4 — No last-refreshed indicator.*
 The user has no way to know how fresh the data is or whether the UI is still
 connected.
 
-*Fix E4:* Add a small "Last updated: N seconds ago" line in the header or footer.
-Update it every second via `setInterval`. Color it amber if > 30 s old, red if >
-60 s old.
+*Fix E4:* Add a `<span id="last-updated">` element in the header or footer.
+Record `lastSuccessfulLoad = Date.now()` after each successful `loadBootstrap()`.
+Update the display every second via `setInterval`:
+```js
+setInterval(() => {
+  if (!lastSuccessfulLoad) return;
+  const age = Math.floor((Date.now() - lastSuccessfulLoad) / 1000);
+  const el = document.getElementById("last-updated");
+  if (!el) return;
+  el.textContent = age < 5 ? "Just updated" : `Updated ${age}s ago`;
+  el.style.color = age > 60 ? "#ef4444" : age > 30 ? "#f59e0b" : "#6b7280";
+}, 1000);
+```
+Call `clearErrorBanner()` (see E6) on each successful load so the banner
+and the age indicator are in sync.
 
 *Problem E5 — Raw API strings for status; no color coding.*
 Status values are displayed as raw strings (e.g., "connected", "degraded",
 "standalone"). There is no visual distinction between healthy, warning, and error
 states.
 
-*Fix E5:* Replace raw strings with styled badge chips:
+*Fix E5:* Replace raw strings with styled badge chips. Add CSS color variants:
+```css
+.badge-connected  { background: #22c55e; color: #fff; }
+.badge-degraded   { background: #f59e0b; color: #fff; }
+.badge-standalone { background: #6b7280; color: #fff; }
+.badge-pending    { background: #3b82f6; color: #fff; }
+.badge-failed     { background: #ef4444; color: #fff; }
+.badge-running    { background: #3b82f6; color: #fff; }
+.badge-open       { background: #22c55e; color: #fff; }
+.badge-cancelling { background: #f59e0b; color: #fff; }
+.badge-completed  { background: #6b7280; color: #fff; }
 ```
-connected   → green badge  (#22c55e background, white text)
-degraded    → amber badge  (#f59e0b)
-standalone  → muted badge  (#6b7280)
-pending     → blue badge   (#3b82f6)
-failed      → red badge    (#ef4444)
+Add a JS helper:
+```js
+function getBadgeClass(status) {
+  const s = (status || "").toLowerCase().replace(/[^a-z]/g, "");
+  const map = {
+    connected: "badge-connected", degraded: "badge-degraded",
+    standalone: "badge-standalone", pending: "badge-pending",
+    failed: "badge-failed", running: "badge-running",
+    open: "badge-open", cancelling: "badge-cancelling",
+    completed: "badge-completed",
+  };
+  return map[s] || "";
+}
 ```
-Add a `getBadge(status)` helper that returns the appropriate chip HTML.
+Replace all `<span class="badge">${escapeHtml(status)}</span>` with
+`<span class="badge ${getBadgeClass(status)}">${escapeHtml(status)}</span>`.
 
 *Problem E6 — Full-page error replacement.*
 On fetch failure, `document.body.innerHTML = rawErrorText` replaces the entire
 UI with a developer-facing error dump.
 
-*Fix E6:* Replace with an inline error banner at the top of the page:
-```html
-<div class="error-banner" role="alert">
-  ⚠ Could not refresh data. Retrying... (last error: <message>)
-</div>
+*Fix E6:* Replace `document.body.innerHTML = ...` error handling with an inline
+banner that is shown/hidden without destroying the page. JS pattern:
+```js
+function showErrorBanner(message) {
+  let banner = document.getElementById("error-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "error-banner";
+    banner.className = "error-banner";
+    banner.setAttribute("role", "alert");
+    document.body.prepend(banner);
+  }
+  banner.textContent = `⚠ Could not refresh data. Retrying… (${message})`;
+  banner.style.display = "block";
+}
+function clearErrorBanner() {
+  const banner = document.getElementById("error-banner");
+  if (banner) banner.style.display = "none";
+}
 ```
-The banner dismisses automatically when the next poll succeeds.
+CSS:
+```css
+.error-banner {
+  background: #fef2f2; border-left: 4px solid #ef4444;
+  color: #991b1b; padding: 0.75rem 1rem; margin-bottom: 1rem; display: none;
+}
+```
+Call `showErrorBanner(error.message)` on fetch failure, `clearErrorBanner()` on
+next successful fetch. Never assign to `document.body.innerHTML`.
 
 *Problem E7 — ASCII arrow in routed task display.*
 Routed tasks show source and target with ` -> ` (literal ASCII). This looks
@@ -3842,28 +3958,52 @@ Nothing yet.
 ```
 This communicates nothing useful to a new user.
 
-*Fix E8:* Replace with a helpful empty-state card per panel:
-- Bots: "No bots connected yet. Start a bot in registry mode and it will appear
-  here. Run `./scripts/app/guided_start.sh`."
-- Conversations: "No conversations yet. Send a message to your bot in Telegram
-  to start."
-- Routed Tasks: "No tasks routed yet. Delegated tasks appear here in real time."
+*Fix E8:* Replace bare "Nothing yet." with per-panel instructional empty states.
+Use a `EMPTY_STATES` map keyed by panel, rendered via `innerHTML` into a styled
+`.empty-state` div:
+```js
+const EMPTY_STATES = {
+  bots: "No bots connected yet. Start a bot in registry mode and it will appear here.<br><code>./scripts/app/guided_start.sh</code>",
+  conversations: "No conversations yet. Send a message to your bot in Telegram to start.",
+  tasks: "No routed tasks yet. Delegated tasks appear here in real time.",
+};
+```
+CSS: `.empty-state { padding: 1.5rem; text-align: center; color: #888; font-size: 0.9rem; line-height: 1.6; }`
 
 *Problem E9 — No favicon, no brand mark; tab title is default.*
 The browser tab shows "Agent Registry" with the default browser icon. On a
 desktop with many tabs this is indistinguishable.
 
 *Fix E9:*
-- Add a favicon: a simple SVG favicon using the teal accent color (`#0f766e`)
-  with an "A" or a minimal network-node glyph. Inline SVG favicon in `<head>`
-  requires no external files.
-- Set `<title>Agent Registry</title>` (already present) and ensure it is
-  specific enough to identify the instance if operators run multiple registries
-  (e.g., prepend the registry display name if it is configured).
+- Add an inline SVG favicon in `<head>` — no external files required:
+  ```html
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230f766e'/><text x='16' y='22' font-size='18' font-family='sans-serif' fill='white' text-anchor='middle'>A</text></svg>">
+  ```
+- `<title>Agent Registry</title>` is already present. If `REGISTRY_DISPLAY_NAME`
+  env var is set, prepend it: `{display_name} — Agent Registry`. This lets
+  operators with multiple registries distinguish tabs. If the env var is absent,
+  leave the title as `Agent Registry`.
 
 *Files:* `app/registry_service/app.py` (all inline HTML/CSS/JS)
 
+*Implementation note — acceptance for M9 is operator-facing:* Most of M9 lives
+in shell scripts, README, and inline frontend HTML/CSS/JS. Acceptance should be
+proven with operator-script and README contract coverage, a live registry UI
+render check, and a fresh screenshot captured from the running local registry
+after the UI polish is complete.
+
 ---
+
+**Files to change:**
+
+| File | Sections |
+|---|---|
+| `scripts/provider/container_provider_login.sh` | A1–A3 |
+| `scripts/registry/start.sh` | C1 |
+| `scripts/app/guided_start.sh` | B1–B4 (+ pre-existing bug fixes) |
+| `README.md` | D1–D6 |
+| `app/registry_service/app.py` | E1–E9 (inline HTML/CSS/JS only) |
+| `docs/registry-ui-screenshot.png` | D6 (screenshot taken after E fixes) |
 
 **Implementation order within M9:**
 
@@ -3929,6 +4069,500 @@ desktop with many tabs this is indistinguishable.
 - [ ] A favicon using the teal accent color is present; tab title is specific
       enough to identify the instance
 - [ ] Full suite passes
+
+---
+
+##### M10 — Operations, Visibility, and Platform Maturity
+
+**Why this milestone exists.**
+After M9, first-run setup is polished and the Registry UI is world-class in presentation. M10 closes the operational gap between a demo-ready bot and one that a small team can run in production without constant operator intervention. It adds the six properties that every real deployment eventually requires: security (authenticated UI), observability (cost and usage visibility), maintainability (upgrade path), discoverability (search and filter), team safety (live user access control), and data portability (export and notifications). Two additional sections cover the highest-leverage power-user features: skills management from the UI and a stabilised programmatic trigger API. None of these require changes to the provider layer or the durable workflow core.
+
+---
+
+###### A. Registry UI Authentication
+
+**Problem.**
+The Registry UI is currently unauthenticated. Any process that can reach the port can read the full conversation history, send delegation actions, and invoke control actions. `REGISTRY_UI_TOKEN` exists as a config key but is only used as a query-parameter hint in guided_start.sh's success summary. It is not enforced server-side.
+
+**Fix.**
+Introduce a minimal single-password login form. The `REGISTRY_UI_TOKEN` value becomes the password. On successful login the server issues a short-lived session cookie (`registry_session`). All `/ui` and `/v1/ui` routes check for a valid session cookie; requests without one are redirected to `/ui/login` (GET) or rejected with 401 (API routes).
+
+**Implementation seams.**
+
+- `app/registry_service/app.py` — add two routes:
+  - `GET /ui/login` — returns a styled inline HTML login form. Form POSTs to `/ui/login`.
+  - `POST /ui/login` — reads `password` from form body, compares to `REGISTRY_UI_TOKEN` using `hmac.compare_digest`. On match: set `Set-Cookie: registry_session=<token>; HttpOnly; SameSite=Strict; Path=/` (64-char random hex, stored in a module-level dict mapping token → expiry). Redirect to `/ui`. On failure: re-render login form with an error message. No username field — single shared password.
+  - `GET /ui/logout` — clears the cookie, redirects to `/ui/login`.
+- Add a `_require_auth(request)` helper that reads the `registry_session` cookie, validates it against the in-memory session store, and returns the session or raises `web.HTTPFound("/ui/login")`.
+- Call `_require_auth` at the top of every handler that serves `/ui` HTML or `/v1/ui` JSON. API routes return 401 JSON `{"error": "unauthorized"}` instead of redirecting.
+- Session expiry: 24 hours from last use. Each validated request resets the expiry. No persistent session store — restart clears sessions (acceptable for single-operator use).
+- If `REGISTRY_UI_TOKEN` is empty or not set, authentication is bypassed entirely (dev/local mode). Log a warning at startup.
+- Login form CSS: match the existing dark theme (background `#0f172a`, card `#1e293b`, teal button `#0f766e`). Single centered card, 320 px wide, input and button full-width.
+- Add a small "Logout" link to the top-right of the Registry UI nav bar (visible only when authenticated).
+
+**Files to change.**
+- `app/registry_service/app.py` — add login/logout routes, `_require_auth`, session store, nav bar logout link.
+- `scripts/registry/start.sh` — `REGISTRY_UI_TOKEN` already generated and stored in `.env.registry`. No change needed.
+- `docs/OPERATORS.md` (or equivalent) — note that restarting the registry service clears all active sessions.
+
+**What M10A does NOT include.**
+- Multi-user accounts or per-user permissions (M11+).
+- OAuth / SSO.
+- Persistent session storage across restarts.
+- Rate limiting on the login endpoint (acceptable for single-operator use; add in M11 if needed).
+
+---
+
+###### B. Cost and Usage Visibility
+
+**Problem.**
+Operators have no visibility into token usage or cost. Every provider API response includes token counts (prompt tokens, completion tokens). These are currently discarded. Operators running Claude or Codex against paid APIs cannot forecast spend or detect runaway conversations without external tooling.
+
+**Fix.**
+Capture token usage from every provider run. Accumulate usage per conversation (session) and display it in the Registry UI conversation detail view. Show a daily total in the Registry UI header.
+
+**Implementation seams.**
+
+- `app/providers/base.py` — extend `RunResult` with optional fields:
+  ```python
+  prompt_tokens: int = 0
+  completion_tokens: int = 0
+  cost_usd: float = 0.0   # 0.0 means unknown; provider fills if calculable
+  ```
+- Each provider fills these fields from the API response where available. Claude provider reads `usage.input_tokens` and `usage.output_tokens`. Codex provider reads equivalent fields if exposed. If unavailable, fields remain 0 — no guessing.
+- `app/storage.py` — add a `usage_log` table (or a JSONB column on `work_items`):
+  ```sql
+  CREATE TABLE usage_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id INTEGER NOT NULL,
+      work_item_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      prompt_tokens INTEGER NOT NULL DEFAULT 0,
+      completion_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL NOT NULL DEFAULT 0.0,
+      recorded_at REAL NOT NULL   -- Unix timestamp
+  );
+  CREATE INDEX usage_log_chat_id ON usage_log(chat_id);
+  CREATE INDEX usage_log_recorded_at ON usage_log(recorded_at);
+  ```
+- `app/worker.py` (or wherever `RunResult` is processed after a successful run) — after work item completion, if `run_result.prompt_tokens > 0`, insert a `usage_log` row.
+- `app/registry_service/app.py` — add `/v1/ui/usage` endpoint:
+  - Returns `{ "daily_total": { "prompt_tokens": N, "completion_tokens": N, "cost_usd": F }, "by_conversation": [ { "chat_id": ..., "prompt_tokens": ..., ... } ] }`.
+  - `daily_total` aggregates today's UTC rows.
+- Registry UI conversation detail panel — append a small "Usage" row below the conversation metadata: `Tokens: 1,234 in / 567 out` and `Est. cost: $0.012` (omit cost row if `cost_usd` is 0 for all rows, i.e. unknown). Format numbers with `toLocaleString()`.
+- Registry UI header — add a subtle daily token counter beside the "last updated" indicator: `Today: 12,345 tokens` (no cost figure in header to avoid alarm for operators who haven't set pricing). Load from `/v1/ui/usage` on bootstrap, refresh every 60 s.
+
+**Files to change.**
+- `app/providers/base.py` — extend `RunResult`.
+- `app/providers/claude_provider.py`, `app/providers/codex_provider.py` — populate token fields.
+- `app/storage.py` — `usage_log` table and DDL migration.
+- `app/worker.py` (or equivalent) — insert usage row after run.
+- `app/registry_service/app.py` — `/v1/ui/usage` endpoint, UI rendering.
+
+**What M10B does NOT include.**
+- Per-model pricing table (hard-code 0 cost for unknown models; operators can infer from token counts).
+- Budget alerts or hard spend caps (add in M11 if requested).
+- Historical charts or sparklines (plain numbers only in M10).
+
+---
+
+###### C. Upgrade Path
+
+**Problem.**
+There is no documented or tooled upgrade procedure. Operators who installed the bot at M5 have no safe path to M10 without risking data loss or schema breakage. SQLite schema changes added across milestones (e.g. `usage_log` in M10B, `status` column in M8) are applied only at first run via `CREATE TABLE IF NOT EXISTS` or `ALTER TABLE` sprinkled through the code. There is no migration history, no rollback procedure, and no version marker.
+
+**Fix.**
+Introduce a lightweight schema migration system and a version file. Document the upgrade procedure in a single operations guide.
+
+**Implementation seams.**
+
+- `app/storage.py` — add a `schema_version` table:
+  ```sql
+  CREATE TABLE IF NOT EXISTS schema_version (
+      version INTEGER PRIMARY KEY,
+      applied_at REAL NOT NULL
+  );
+  ```
+- Write a `migrate(conn)` function that runs numbered migration functions in order:
+  ```python
+  MIGRATIONS = [
+      (1, _migrate_v1_baseline),
+      (2, _migrate_v2_add_usage_log),
+      # ...
+  ]
+  def migrate(conn):
+      current = _current_version(conn)
+      for version, fn in MIGRATIONS:
+          if version > current:
+              fn(conn)
+              conn.execute("INSERT INTO schema_version VALUES (?, ?)", (version, time.time()))
+              conn.commit()
+  ```
+- Each `_migrate_vN_*` function is idempotent (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` via try/except on SQLite's `OperationalError: duplicate column name`).
+- Call `migrate(conn)` once at startup before any other DB access.
+- Add a `VERSION` file at the project root containing the current milestone string (e.g. `M10`). `scripts/app/guided_start.sh` reads it and prints `Bot version: M10` in the startup summary.
+- `CHANGELOG.md` — create with a section per milestone listing the user-visible changes and the schema version bumped. One sentence per change, bulleted. No internal implementation details.
+- `docs/UPGRADE.md` — document the upgrade procedure:
+  1. `git pull`
+  2. `pip install -r requirements.txt`
+  3. Restart the bot (migrations run automatically on startup).
+  4. Restart the registry service if running.
+  5. Check `journalctl -u telegram-agent-bot -n 50` for migration log lines.
+  - Note: sessions and conversations are preserved across upgrades. Usage history before M10 will show zero tokens (not backfilled).
+
+**Files to change.**
+- `app/storage.py` — `schema_version` table, `migrate()`, numbered migration functions.
+- `app/__init__.py` or startup entry point — call `migrate()` at startup.
+- `VERSION` (new file at project root).
+- `CHANGELOG.md` (new file).
+- `docs/UPGRADE.md` (new file).
+- `scripts/app/guided_start.sh` — read and print `VERSION`.
+
+**What M10C does NOT include.**
+- Rollback / downgrade support (SQLite schema rollback is destructive; document "restore from backup" instead).
+- Automated backup before migration (suggest in UPGRADE.md, do not automate in M10).
+
+---
+
+###### D. Conversation Search and Filter
+
+**Problem.**
+As conversation history grows, operators cannot find a specific conversation. The Registry UI renders all conversations in a single unsorted list. There is no way to filter by bot, by status, or by approximate date, and no way to search message content.
+
+**Fix.**
+Add a search and filter bar to the Registry UI conversations panel. Client-side filtering covers bot/status/date. Server-side SQLite FTS covers content search.
+
+**Implementation seams.**
+
+**Client-side filter (no new endpoints).**
+- Above the conversations list, render a single-line filter bar containing:
+  - A text input (`id="conv-search"`, placeholder `"Search…"`).
+  - A `<select>` for status (`all / running / done / failed`).
+  - A `<select>` for date range (`any / today / last 7 days / last 30 days`).
+- On every `input`/`change` event, filter the in-memory `state.conversations` array and re-render the list. No network request for filter changes.
+- Match logic: text input checks `conversation.title` and last message snippet (case-insensitive substring). Status select checks `conversation.status`. Date select checks `conversation.updated_at` (Unix timestamp).
+- Show a filtered count: `"Showing 3 of 47 conversations"` when a filter is active; hide when showing all.
+- Filter state is not persisted across page loads.
+
+**Server-side FTS (new endpoint for content search).**
+- SQLite FTS5 virtual table over the timeline events `body` column:
+  ```sql
+  CREATE VIRTUAL TABLE IF NOT EXISTS timeline_fts USING fts5(
+      body,
+      content=timeline_events,
+      content_rowid=id
+  );
+  ```
+- Populate on insert via trigger or explicit `INSERT INTO timeline_fts` after each `timeline_events` insert.
+- New endpoint `GET /v1/ui/search?q=<query>&limit=20` — runs `SELECT te.conversation_ref, snippet(timeline_fts, 0, '<b>', '</b>', '…', 32) FROM timeline_fts JOIN timeline_events te ON te.id = timeline_fts.rowid WHERE timeline_fts MATCH ? LIMIT ?`. Returns `[{ "conversation_ref": "...", "snippet": "..." }]`.
+- Registry UI: when the search input has 3+ characters and the user pauses typing (300 ms debounce), call `/v1/ui/search`. Highlight matched conversation entries in the list. Results replace the client-side filtered list.
+- If `q` is fewer than 3 characters, revert to client-side filtering only.
+
+**Files to change.**
+- `app/registry_service/app.py` — filter bar HTML/CSS/JS, `/v1/ui/search` endpoint, FTS table DDL, timeline insert logic.
+- `app/storage.py` — `timeline_fts` DDL in the migration path (M10D migration step).
+
+**What M10D does NOT include.**
+- Sorting (newest-first is the current order; do not add sort controls in M10).
+- Saved search / bookmarks.
+- Full-text search across work item text (limit to timeline events in M10).
+
+---
+
+###### E. Live User Access Control
+
+**Problem.**
+The `ALLOWED_USERS` config key is set once at startup and requires a bot restart to change. Operators cannot quickly block an abusive user or grant access to a new team member without downtime. There is no `/allowuser` or `/blockuser` command.
+
+**Fix.**
+Persist user access grants and blocks in SQLite. Add Telegram admin commands to modify the live list without restart.
+
+**Implementation seams.**
+
+- `app/storage.py` — new `user_access` table:
+  ```sql
+  CREATE TABLE IF NOT EXISTS user_access (
+      user_id INTEGER PRIMARY KEY,
+      access TEXT NOT NULL CHECK(access IN ('allowed', 'blocked')),
+      reason TEXT NOT NULL DEFAULT '',
+      granted_by INTEGER NOT NULL DEFAULT 0,
+      granted_at REAL NOT NULL
+  );
+  ```
+- `app/access.py` (new module) — `is_user_allowed(data_dir, user_id) -> bool`:
+  - Check `user_access` table first. If a row exists, return `access == 'allowed'`.
+  - Fall through to the existing `ALLOWED_USERS` env-var check.
+  - Result: env-var list remains the baseline; DB overrides on top.
+- `app/telegram_handlers.py` — add admin-only commands:
+  - `/allowuser <user_id> [reason]` — upserts `user_access` row with `access='allowed'`. Replies `"User 123456 added to allowed list."`.
+  - `/blockuser <user_id> [reason]` — upserts with `access='blocked'`. Replies `"User 123456 blocked."`.
+  - `/listaccess` — replies with a formatted table of all rows in `user_access`, plus the count of users in `ALLOWED_USERS` env var.
+  - These commands require the invoking user to be in `ADMIN_USERS` (existing config key). If `ADMIN_USERS` is empty, they are disabled.
+- Replace existing per-request `is_allowed_user()` call sites with `await is_user_allowed(config.data_dir, user_id)` (async wrapper that runs the sync DB check on the thread pool).
+- Registry UI `/v1/ui/access` endpoint — `GET` returns the `user_access` table as JSON (list of `{user_id, access, reason, granted_by, granted_at}`). Display as a simple table in the Registry UI admin panel (new panel tab: "Access"). No add/remove from UI in M10 — read-only display. Add/remove is Telegram-command-only in M10.
+
+**Files to change.**
+- `app/storage.py` — `user_access` table, DDL migration.
+- `app/access.py` (new) — `is_user_allowed()`.
+- `app/telegram_handlers.py` — `/allowuser`, `/blockuser`, `/listaccess` handlers.
+- `app/registry_service/app.py` — `/v1/ui/access` endpoint, "Access" panel tab.
+
+**What M10E does NOT include.**
+- Adding/removing users from the Registry UI (Telegram commands are the authoritative interface in M10).
+- Per-channel or per-skill access grants.
+- Temporary / expiring access grants.
+
+---
+
+###### F. Conversation Export
+
+**Problem.**
+There is no way to extract a conversation for archival, sharing with a colleague, or audit review. Operators must manually copy-paste from the Registry UI or read raw SQLite.
+
+**Fix.**
+Add a Markdown export from the Registry UI and a `/export` Telegram command that sends the current conversation as a file.
+
+**Implementation seams.**
+
+- `app/registry_service/app.py` — new endpoint `GET /v1/ui/conversations/<conversation_ref>/export`:
+  - Reads all timeline events for the conversation in chronological order.
+  - Renders as Markdown:
+    ```
+    # Conversation: <title>
+    Exported: <ISO date>
+
+    ## [<timestamp>] <event kind>
+    <body>
+    ```
+  - Returns `Content-Type: text/markdown`, `Content-Disposition: attachment; filename="conversation-<ref>.md"`.
+- Registry UI conversation detail panel — add an "Export" button (top-right of the panel, beside the conversation title). Button triggers `window.open('/v1/ui/conversations/<ref>/export')`.
+- `app/telegram_handlers.py` — `/export` command:
+  - Reads the current chat's timeline events via the same storage query.
+  - Renders the same Markdown format.
+  - Sends it as a Telegram document (`bot.send_document(chat_id, InputFile(io.BytesIO(content.encode()), filename="conversation.md"))`).
+  - Reply: `"Conversation exported as Markdown."` (then the document).
+  - If no events exist: `"No conversation history to export."`.
+
+**Files to change.**
+- `app/registry_service/app.py` — export endpoint, "Export" button.
+- `app/telegram_handlers.py` — `/export` command.
+
+**What M10F does NOT include.**
+- JSON or PDF export (Markdown only in M10).
+- Bulk export of all conversations.
+- Encrypted export.
+
+---
+
+###### G. Completion Notifications
+
+**Problem.**
+Long-running agent tasks can take minutes. Users or operators who do not have Telegram open miss the completion. There is no external notification mechanism: no webhook, no email.
+
+**Fix.**
+Add a configurable webhook callback that fires on conversation completion. Email fallback is out of scope for M10 (requires SMTP config, adds a dependency); document it as a future option.
+
+**Implementation seams.**
+
+- `app/config.py` — add `completion_webhook_url: str = ""`. This is the full URL the bot will POST to when a conversation reaches a terminal state.
+- `app/worker.py` (or the completion path in `worker_loop`) — after marking a work item `done`, if `config.completion_webhook_url` is set, fire a non-blocking HTTP POST:
+  ```json
+  {
+    "event": "conversation_completed",
+    "conversation_ref": "telegram:agent-id:chat-id",
+    "chat_id": 12345,
+    "status": "done",
+    "summary": "<first 200 chars of final reply>",
+    "completed_at": "<ISO timestamp>"
+  }
+  ```
+  Use `aiohttp.ClientSession` with a 5-second timeout. Log failures as warnings; do not retry; do not fail the work item if the webhook fails.
+- `scripts/app/guided_start.sh` — add an optional prompt `"Completion webhook URL (optional, press Enter to skip): "`. Write `BOT_COMPLETION_WEBHOOK_URL` to `.env` if non-empty.
+- Registry UI — in the bot status panel, show `Completion webhook: configured` or `Completion webhook: not set` based on whether the env var is present.
+
+**Files to change.**
+- `app/config.py` — `completion_webhook_url` field.
+- `app/worker.py` — fire webhook after completion.
+- `scripts/app/guided_start.sh` — optional prompt.
+- `app/registry_service/app.py` — status panel display.
+
+**What M10G does NOT include.**
+- Retry logic for failed webhook calls (log-and-forget in M10).
+- Email or SMS notifications.
+- Per-conversation webhook override (single global URL only in M10).
+- Webhook secret / HMAC signing (add in M11 if needed for security).
+
+---
+
+###### H. Skills Management from Registry UI
+
+**Problem.**
+Active skills are configured via `ACTIVE_SKILLS` in `.env` and require a restart to change. Operators cannot see which skills are currently active or toggle them without shell access.
+
+**Fix.**
+Add a read-only "Skills" panel to the Registry UI that lists all registered skills, shows which are active, and (for operators who want live toggling) exposes enable/disable actions that write through to a durable skills override table.
+
+**Implementation seams.**
+
+- `app/storage.py` — new `skills_override` table:
+  ```sql
+  CREATE TABLE IF NOT EXISTS skills_override (
+      skill_name TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
+      set_by TEXT NOT NULL DEFAULT 'ui',
+      set_at REAL NOT NULL
+  );
+  ```
+- `app/skills.py` (or wherever skills are resolved) — after resolving `ACTIVE_SKILLS` from config, apply overrides from `skills_override`: a row with `enabled=0` removes the skill from the active set even if it is in the env var; a row with `enabled=1` adds it even if it is not. The env var remains the baseline.
+- `app/registry_service/app.py`:
+  - `GET /v1/ui/skills` — returns list of all skills from the skills registry (name, description, active status, override status).
+  - `POST /v1/ui/skills/<skill_name>/enable` — upserts `skills_override` row with `enabled=1`. Returns updated skills list.
+  - `POST /v1/ui/skills/<skill_name>/disable` — upserts with `enabled=0`. Returns updated skills list.
+  - Registry UI "Skills" panel — list of skill cards showing name, description, and a toggle switch. Toggle fires the enable/disable endpoint. Active-from-env skills show a small "from config" label; overridden skills show "overridden" label. The active set reloads on next worker poll cycle (no restart required if the skills check is per-request; if cached, add a `_reload_skills()` call triggered by the API write).
+
+**Files to change.**
+- `app/storage.py` — `skills_override` table, DDL migration.
+- `app/skills.py` — apply overrides.
+- `app/registry_service/app.py` — `/v1/ui/skills` endpoints, "Skills" panel.
+
+**What M10H does NOT include.**
+- Installing new skills from the UI (requires file system write + restart).
+- Per-user or per-conversation skill assignment.
+- Skill parameter editing from the UI.
+
+---
+
+###### I. Programmatic API Trigger
+
+**Problem.**
+There is no stable, documented way to start a conversation programmatically. The `POST /v1/ui/conversations` endpoint exists internally (used by the Registry when routing surface_input deliveries) but is undocumented, unauthenticated in isolation, and its request/response shape may change. Operators who want to trigger the bot from CI, a webhook, or another service have no stable contract.
+
+**Fix.**
+Stabilise and document `POST /v1/ui/conversations` as a first-class authenticated API endpoint. Authentication reuses the `REGISTRY_UI_TOKEN` bearer token (same credential as the UI login, different transport: `Authorization: Bearer <token>` header).
+
+**Implementation seams.**
+
+- `app/registry_service/app.py` — `POST /v1/ui/conversations`:
+  - Current internal shape: `{ "conversation_ref": "...", "text": "...", "actor_ref": "...", "delivery_id": "...", "skip_approval": true }`.
+  - Stabilised public shape:
+    ```json
+    {
+      "chat_id": 12345,
+      "text": "Run the nightly report",
+      "skip_approval": false
+    }
+    ```
+    (The server constructs `conversation_ref`, `actor_ref`, and `delivery_id` internally from `chat_id` and a generated UUID.)
+  - Authentication: check `Authorization: Bearer <token>` header against `REGISTRY_UI_TOKEN`. If missing or wrong, return 401 `{"error": "unauthorized"}`. If `REGISTRY_UI_TOKEN` is empty, bypass auth (dev mode, same as the UI).
+  - Response: `{"status": "admitted", "work_item_id": "..."}` or `{"status": "duplicate"}` or `{"status": "busy"}`.
+  - Add `_require_bearer_auth(request)` helper (separate from the cookie-based `_require_auth` used by HTML routes).
+- `docs/API.md` (new file) — document the endpoint:
+  - Authentication.
+  - Request body fields (all required vs optional).
+  - Response codes and bodies.
+  - A minimal curl example:
+    ```bash
+    curl -X POST http://localhost:8787/v1/ui/conversations \
+      -H "Authorization: Bearer $REGISTRY_UI_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{"chat_id": 12345, "text": "Run the nightly report"}'
+    ```
+  - Note that `chat_id` must correspond to an existing conversation (i.e., the user has messaged the bot at least once).
+
+**Files to change.**
+- `app/registry_service/app.py` — stabilise endpoint, add bearer auth, align request shape.
+- `docs/API.md` (new file).
+
+**What M10I does NOT include.**
+- Starting a brand-new conversation with a user who has never messaged the bot (requires Telegram's `sendMessage` to a user who has not initiated contact — not allowed by Telegram's API without user initiation).
+- Batch trigger (multiple conversations in one call).
+- Webhook registration for receiving events programmatically (separate feature).
+
+---
+
+###### M10 — Files to Change
+
+| Section | File | Change type |
+|---------|------|-------------|
+| A | `app/registry_service/app.py` | Login/logout routes, session store, `_require_auth`, nav logout link |
+| B | `app/providers/base.py` | `RunResult` token fields |
+| B | `app/providers/claude_provider.py` | Populate token fields from API response |
+| B | `app/providers/codex_provider.py` | Populate token fields where available |
+| B | `app/storage.py` | `usage_log` table (M10B migration) |
+| B | `app/worker.py` | Insert usage row after run |
+| B | `app/registry_service/app.py` | `/v1/ui/usage` endpoint, conversation usage display |
+| C | `app/storage.py` | `schema_version` table, `migrate()` function, numbered migrations |
+| C | `app/__init__.py` | Call `migrate()` at startup |
+| C | `VERSION` (new) | Milestone version string |
+| C | `CHANGELOG.md` (new) | Per-milestone user-visible changes |
+| C | `docs/UPGRADE.md` (new) | Upgrade procedure |
+| C | `scripts/app/guided_start.sh` | Print `VERSION` in startup summary |
+| D | `app/registry_service/app.py` | Filter bar, `/v1/ui/search` endpoint, FTS table |
+| D | `app/storage.py` | `timeline_fts` FTS5 table (M10D migration) |
+| E | `app/storage.py` | `user_access` table (M10E migration) |
+| E | `app/access.py` (new) | `is_user_allowed()` |
+| E | `app/telegram_handlers.py` | `/allowuser`, `/blockuser`, `/listaccess` |
+| E | `app/registry_service/app.py` | `/v1/ui/access` endpoint, "Access" panel tab |
+| F | `app/registry_service/app.py` | Export endpoint, "Export" button |
+| F | `app/telegram_handlers.py` | `/export` command |
+| G | `app/config.py` | `completion_webhook_url` field |
+| G | `app/worker.py` | Fire webhook after completion |
+| G | `scripts/app/guided_start.sh` | Optional webhook URL prompt |
+| G | `app/registry_service/app.py` | Webhook status in bot status panel |
+| H | `app/storage.py` | `skills_override` table (M10H migration) |
+| H | `app/skills.py` | Apply overrides from DB |
+| H | `app/registry_service/app.py` | `/v1/ui/skills` endpoints, "Skills" panel |
+| I | `app/registry_service/app.py` | Stabilise `/v1/ui/conversations`, bearer auth |
+| I | `docs/API.md` (new) | Public API documentation |
+
+###### M10 — Implementation Order
+
+The sections are ordered by risk and dependency, not by user value:
+
+1. **C (Upgrade Path)** — implement first. The migration framework is a prerequisite for all other DB changes (B, D, E, H). Writing the `schema_version` table and `migrate()` before anything else ensures all subsequent DB changes land cleanly.
+2. **A (Authentication)** — implement second. Once migrations are in place, auth is purely additive to the registry service with no DB changes. Getting auth right early prevents accidentally shipping M10 features unauthenticated.
+3. **E (User Access Control)** — implement third. Depends on C for migration. `app/access.py` is a small, isolated module. Get the DB write path working before adding the Telegram commands.
+4. **B (Cost Visibility)** — implement fourth. Depends on C for migration. Provider changes are isolated; UI changes are additive.
+5. **D (Search and Filter)** — implement fifth. Client-side filtering has no dependencies. FTS5 depends on C.
+6. **F (Export)** — implement sixth. No DB changes, minimal surface area.
+7. **G (Webhook Notifications)** — implement seventh. Config change + one fire-and-forget HTTP call.
+8. **H (Skills Management)** — implement eighth. Depends on C for migration. Skills override logic must be tested carefully to avoid silently dropping active skills.
+9. **I (Programmatic API)** — implement last. Endpoint already exists; this is stabilisation + auth + docs. Low risk.
+
+###### M10 — What M10 Does NOT Include
+
+- Multi-user accounts or per-user permissions beyond the simple allowed/blocked access control in M10E.
+- Budget alerts, hard spend caps, or automated cost enforcement (M11+).
+- SMTP email or SMS notifications (webhook only in M10).
+- Installing new skills or editing skill parameters from the Registry UI.
+- A mobile-optimised Registry UI (responsive improvements may land but are not a gate).
+- Any changes to the provider layer, durable workflow core, or Telegram polling logic.
+- New approval flows or delegation changes (M10 is operational infrastructure, not feature additions to the conversation model).
+
+###### M10 — Acceptance Criteria
+
+- [ ] `GET /ui` redirects to `GET /ui/login` when `REGISTRY_UI_TOKEN` is set and no valid session cookie is present
+- [ ] Login with the correct `REGISTRY_UI_TOKEN` value sets a `registry_session` cookie and redirects to `/ui`
+- [ ] Login with a wrong password re-renders the login form with an error message and does not set a cookie
+- [ ] When `REGISTRY_UI_TOKEN` is not set, `GET /ui` loads without authentication (dev mode)
+- [ ] Registry UI conversation detail shows `Tokens: N in / N out` for conversations with usage data
+- [ ] Registry UI header shows a daily token total that updates every 60 s
+- [ ] Bot startup logs at least one `Applied migration vN` line the first time M10 is run; subsequent restarts log `Schema at vN, no migrations needed`
+- [ ] `CHANGELOG.md` exists and lists user-visible changes for M10 and all prior milestones
+- [ ] `docs/UPGRADE.md` exists with a numbered upgrade procedure
+- [ ] Client-side filter by status correctly hides non-matching conversations without a network request
+- [ ] `/v1/ui/search?q=hello` returns at most 20 results with HTML-highlighted snippets when "hello" appears in a timeline event body
+- [ ] `/allowuser <id>` from an admin Telegram user persists the grant to SQLite and takes effect on the next message from that user without restart
+- [ ] `/blockuser <id>` from an admin Telegram user blocks that user on the next message without restart
+- [ ] `GET /v1/ui/conversations/<ref>/export` returns a valid Markdown file download
+- [ ] `/export` in Telegram sends a `.md` file containing the conversation timeline
+- [ ] A POST to `COMPLETION_WEBHOOK_URL` fires within 5 s of conversation completion when the config key is set; webhook failure does not fail the work item
+- [ ] Skills panel in Registry UI shows each skill's name, description, active status, and override status
+- [ ] Enabling a skill via the Registry UI toggle activates it for subsequent conversations without restart
+- [ ] `POST /v1/ui/conversations` with a valid `Authorization: Bearer <token>` header and a known `chat_id` returns `{"status": "admitted", ...}`
+- [ ] `POST /v1/ui/conversations` without a valid bearer token returns 401
+- [ ] `docs/API.md` contains a working curl example that operators can copy-paste
+- [ ] Full test suite passes
 
 ---
 

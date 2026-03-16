@@ -225,46 +225,68 @@ def ui_shell(token: str = Query(default="")) -> str:
     <title>Agent Registry</title>
     <style>
       :root {{
-        --bg: #f7f3ea;
-        --fg: #1f1b16;
-        --card: #fffaf1;
-        --accent: #0f766e;
-        --muted: #756c5f;
-        --border: #d7c9b2;
+        color-scheme: dark;
+        font-family: "IBM Plex Sans", "Avenir Next", sans-serif;
+        background: #0d1321;
+        color: #f5f3ee;
+        --panel: rgba(12, 18, 33, 0.92);
+        --panel-border: rgba(230, 194, 41, 0.24);
+        --muted: rgba(245, 243, 238, 0.72);
+        --accent: #e6c229;
+        --green: #5ec57e;
+        --amber: #f2b24f;
+        --red: #ef7366;
+        --muted-state: #7f8ba8;
       }}
       * {{ box-sizing: border-box; }}
       body {{
         margin: 0;
-        font-family: "IBM Plex Sans", "Avenir Next", sans-serif;
-        color: var(--fg);
+        padding: 2rem;
         background:
-          radial-gradient(circle at top right, rgba(15,118,110,0.14), transparent 30%),
-          linear-gradient(180deg, #faf7f0 0%, var(--bg) 100%);
+          radial-gradient(circle at top right, rgba(230, 194, 41, 0.16), transparent 28%),
+          linear-gradient(180deg, #101820 0%, #0b1220 100%);
       }}
       header {{
-        padding: 24px 32px;
-        border-bottom: 1px solid var(--border);
-        background: rgba(255,250,241,0.85);
-        backdrop-filter: blur(10px);
+        display: flex;
+        flex-wrap: wrap;
+        align-items: end;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 1.5rem;
       }}
-      h1 {{ margin: 0 0 6px; font-size: 28px; }}
-      p {{ margin: 0; color: var(--muted); }}
+      h1, h2, h3 {{
+        margin: 0;
+      }}
+      .subtle {{
+        color: var(--muted);
+        font-size: 0.95rem;
+      }}
+      .status-line {{
+        min-height: 1.2rem;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }}
       main {{
         display: grid;
-        grid-template-columns: 320px 1fr 1fr;
-        gap: 16px;
-        padding: 24px 32px 32px;
+        grid-template-columns: minmax(280px, 0.95fr) minmax(320px, 1fr) minmax(360px, 1.15fr) minmax(280px, 0.95fr);
+        gap: 1rem;
       }}
       section {{
         min-height: 260px;
-        background: var(--card);
-        border: 1px solid var(--border);
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
         border-radius: 20px;
         padding: 20px;
-        box-shadow: 0 10px 24px rgba(40, 24, 8, 0.06);
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
       }}
-      h2 {{
-        margin-top: 0;
+      .panel-header {{
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 0.9rem;
+      }}
+      .panel-header h2 {{
         font-size: 14px;
         letter-spacing: 0.08em;
         text-transform: uppercase;
@@ -276,31 +298,170 @@ def ui_shell(token: str = Query(default="")) -> str:
       }}
       .item {{
         padding: 12px 14px;
-        border: 1px solid var(--border);
+        border: 1px solid rgba(255,255,255,0.08);
         border-radius: 14px;
-        background: rgba(255,255,255,0.65);
+        background: rgba(255,255,255,0.03);
+      }}
+      .item.clickable {{
+        cursor: pointer;
+        transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+      }}
+      .item.clickable:hover {{
+        transform: translateY(-1px);
+        border-color: rgba(230, 194, 41, 0.42);
+        background: rgba(255,255,255,0.05);
       }}
       .meta {{
         margin-top: 6px;
         font-size: 12px;
         color: var(--muted);
       }}
+      .meta-row {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        align-items: center;
+      }}
       .badge {{
-        display: inline-block;
-        margin-right: 6px;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.28rem;
         padding: 2px 8px;
         border-radius: 999px;
-        background: rgba(15,118,110,0.12);
-        color: var(--accent);
+        background: rgba(230, 194, 41, 0.18);
+        border: 1px solid rgba(230, 194, 41, 0.35);
         font-size: 12px;
+        color: #f5f3ee;
       }}
-      pre {{
+      .state-badge::before {{
+        content: "";
+        width: 0.5rem;
+        height: 0.5rem;
+        border-radius: 999px;
+        background: currentColor;
+      }}
+      .state-connected {{
+        color: var(--green);
+        border-color: rgba(94, 197, 126, 0.35);
+        background: rgba(94, 197, 126, 0.14);
+      }}
+      .state-degraded {{
+        color: var(--amber);
+        border-color: rgba(242, 178, 79, 0.35);
+        background: rgba(242, 178, 79, 0.14);
+      }}
+      .state-standalone {{
+        color: var(--muted-state);
+        border-color: rgba(127, 139, 168, 0.3);
+        background: rgba(127, 139, 168, 0.12);
+      }}
+      .state-offline {{
+        color: var(--red);
+        border-color: rgba(239, 115, 102, 0.35);
+        background: rgba(239, 115, 102, 0.14);
+      }}
+      .toolbar {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+        align-items: center;
+      }}
+      button, select, textarea {{
+        font: inherit;
+      }}
+      button {{
+        cursor: pointer;
+        border-radius: 0.75rem;
+        border: 1px solid rgba(230, 194, 41, 0.35);
+        background: rgba(230, 194, 41, 0.12);
+        color: #f5f3ee;
+        padding: 0.55rem 0.9rem;
+      }}
+      button.secondary {{
+        border-color: rgba(255,255,255,0.18);
+        background: rgba(255,255,255,0.06);
+      }}
+      button.danger {{
+        border-color: rgba(239, 115, 102, 0.35);
+        background: rgba(239, 115, 102, 0.12);
+      }}
+      button:disabled {{
+        opacity: 0.45;
+        cursor: not-allowed;
+      }}
+      .hidden {{
+        display: none !important;
+      }}
+      .form {{
+        display: grid;
+        gap: 0.65rem;
+        margin-bottom: 0.9rem;
+        padding: 0.8rem;
+        border-radius: 0.9rem;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.08);
+      }}
+      .form label {{
+        display: grid;
+        gap: 0.35rem;
+        font-size: 0.92rem;
+        color: var(--muted);
+      }}
+      select, textarea {{
+        width: 100%;
+        border-radius: 0.75rem;
+        border: 1px solid rgba(255,255,255,0.12);
+        background: rgba(8, 12, 22, 0.9);
+        color: #f5f3ee;
+        padding: 0.7rem 0.8rem;
+      }}
+      textarea {{
+        min-height: 7.5rem;
+        resize: vertical;
+      }}
+      .timeline {{
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        max-height: 32rem;
         overflow: auto;
-        white-space: pre-wrap;
-        font-family: "IBM Plex Mono", monospace;
-        font-size: 12px;
+        padding-right: 0.2rem;
       }}
-      @media (max-width: 980px) {{
+      .timeline-item {{
+        border-left: 3px solid rgba(230, 194, 41, 0.32);
+        padding: 0.2rem 0 0.2rem 0.8rem;
+      }}
+      .timeline-item strong {{
+        display: block;
+        margin-top: 0.25rem;
+      }}
+      .timeline-body {{
+        color: #dde4f0;
+        font-size: 0.94rem;
+        white-space: pre-wrap;
+        margin-top: 0.25rem;
+      }}
+      .timeline-controls {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+        margin-top: 0.65rem;
+      }}
+      .inline-error {{
+        color: var(--red);
+        font-size: 0.88rem;
+        margin-top: 0.35rem;
+      }}
+      .detail-actions {{
+        display: grid;
+        gap: 0.75rem;
+        margin-top: 1rem;
+      }}
+      .empty {{
+        color: var(--muted);
+        padding: 1.2rem 0.2rem;
+      }}
+      @media (max-width: 1200px) {{
         main {{
           grid-template-columns: 1fr;
         }}
@@ -309,63 +470,382 @@ def ui_shell(token: str = Query(default="")) -> str:
   </head>
   <body>
     <header>
-      <h1>Agent Registry</h1>
-      <p>Live directory, routed work board, and shared conversation view for private bots.</p>
+      <div>
+        <h1>Agent Registry</h1>
+        <div class="subtle">Live directory, routed work board, and shared conversation visibility for private bots.</div>
+      </div>
+      <div id="ui-status" class="status-line"></div>
     </header>
     <main>
       <section>
-        <h2>Bots</h2>
+        <div class="panel-header">
+          <h2>Bots</h2>
+          <span class="subtle">Live directory</span>
+        </div>
         <div id="bots" class="list"></div>
       </section>
       <section>
-        <h2>Conversations</h2>
+        <div class="panel-header">
+          <h2>Conversations</h2>
+          <button id="new-conversation-button" type="button">New conversation</button>
+        </div>
+        <div id="new-conversation-form" class="form hidden">
+          <label>
+            Target bot
+            <select id="new-conversation-target"></select>
+          </label>
+          <label>
+            Message
+            <textarea id="new-conversation-message" placeholder="Describe the work you want the bot to do."></textarea>
+          </label>
+          <div class="toolbar">
+            <button id="start-conversation-button" type="button">Start</button>
+            <button id="cancel-new-conversation-button" class="secondary" type="button">Cancel</button>
+          </div>
+        </div>
         <div id="conversations" class="list"></div>
       </section>
       <section>
-        <h2>Routed Tasks</h2>
+        <div class="panel-header">
+          <h2>Conversation Detail</h2>
+          <button id="detail-back-button" class="secondary hidden" type="button">Back to list</button>
+        </div>
+        <div id="conversation-detail-empty" class="empty">Select a conversation to inspect its timeline and send follow-up messages.</div>
+        <div id="conversation-detail" class="hidden">
+          <div id="conversation-detail-header" class="list"></div>
+          <div id="conversation-detail-timeline" class="timeline"></div>
+          <div class="detail-actions">
+            <label>
+              New message
+              <textarea id="detail-message-text" placeholder="Add a follow-up message to this conversation."></textarea>
+            </label>
+            <div class="toolbar">
+              <button id="detail-send-button" type="button">Send</button>
+              <button id="detail-cancel-button" class="danger" type="button">Cancel conversation</button>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section>
+        <div class="panel-header">
+          <h2>Routed Tasks</h2>
+          <span class="subtle">Delegated work board</span>
+        </div>
         <div id="tasks" class="list"></div>
       </section>
     </main>
     <script>
       const token = {token!r};
+      let bootstrapData = {{ bots: [], conversations: [], tasks: [] }};
+      let currentConversationId = "";
+      let currentConversationDetail = null;
+      const delegationActionState = Object.create(null);
+      const delegationActionError = Object.create(null);
+
+      function authHeaders(extra = {{}}) {{
+        return {{ Authorization: `Bearer ${{token}}`, ...extra }};
+      }}
+
+      function escapeHtml(value) {{
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }}
+
+      function formatTime(value) {{
+        if (!value) return "";
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return value;
+        return date.toLocaleString();
+      }}
+
+      function stateBadge(item) {{
+        const state = item?.connectivity_state || item?.status || "unknown";
+        const klass = ["connected", "degraded", "standalone", "offline"].includes(state)
+          ? `state-${{state}}`
+          : "state-standalone";
+        return `<span class="badge state-badge ${{klass}}">${{escapeHtml(state)}}</span>`;
+      }}
+
+      function setStatus(message) {{
+        document.getElementById("ui-status").textContent = message || "";
+      }}
+
+      function renderList(id, items, template) {{
+        document.getElementById(id).innerHTML = items.length
+          ? items.map(template).join("")
+          : '<div class="item"><div class="meta">Nothing yet.</div></div>';
+      }}
+
+      function connectedBots() {{
+        return bootstrapData.bots.filter(item => item.connectivity_state === "connected");
+      }}
+
+      function toggleNewConversationForm(open) {{
+        const form = document.getElementById("new-conversation-form");
+        form.classList.toggle("hidden", !open);
+        if (!open) {{
+          document.getElementById("new-conversation-message").value = "";
+          return;
+        }}
+        const bots = connectedBots();
+        const select = document.getElementById("new-conversation-target");
+        select.innerHTML = bots.length
+          ? bots.map(item => `<option value="${{escapeHtml(item.agent_id)}}">${{escapeHtml(item.display_name)}} (${{escapeHtml(item.role || "unassigned")}})</option>`).join("")
+          : '<option value="">No connected bots available</option>';
+        document.getElementById("start-conversation-button").disabled = bots.length === 0;
+      }}
+
+      function renderBots(items) {{
+        renderList("bots", items, item => `
+          <div class="item">
+            <strong>${{escapeHtml(item.display_name)}}</strong>
+            <div class="meta meta-row">${{stateBadge(item)}}<span>${{escapeHtml(item.role || "unassigned role")}}</span></div>
+            <div class="meta">${{escapeHtml((item.skills || []).join(", ") || "no skills declared")}}</div>
+          </div>
+        `);
+      }}
+
+      function renderConversations(items) {{
+        renderList("conversations", items, item => `
+          <div class="item clickable" data-conversation-id="${{escapeHtml(item.conversation_id)}}">
+            <strong>${{escapeHtml(item.title || item.conversation_id)}}</strong>
+            <div class="meta">${{escapeHtml(item.target_display_name || item.target_agent_id)}}</div>
+            <div class="meta meta-row">
+              <span class="badge">${{escapeHtml(item.status || "open")}}</span>
+              <span>${{escapeHtml(String(item.timeline_event_count ?? 0))}} event(s)</span>
+            </div>
+          </div>
+        `);
+        document.querySelectorAll("[data-conversation-id]").forEach(node => {{
+          node.addEventListener("click", () => loadConversationDetail(node.dataset.conversationId));
+        }});
+      }}
+
+      function renderTasks(items) {{
+        renderList("tasks", items, item => `
+          <div class="item">
+            <strong>${{escapeHtml(item.title)}}</strong>
+            <div class="meta">${{escapeHtml(item.origin_display_name || item.origin_agent_id)}} → ${{escapeHtml(item.target_display_name || item.target_agent_id)}}</div>
+            <div class="meta meta-row"><span class="badge">${{escapeHtml(item.status || "queued")}}</span><span>${{escapeHtml(item.summary || "")}}</span></div>
+          </div>
+        `);
+      }}
+
+      function clearConversationDetail() {{
+        currentConversationId = "";
+        currentConversationDetail = null;
+        document.getElementById("conversation-detail").classList.add("hidden");
+        document.getElementById("conversation-detail-empty").classList.remove("hidden");
+        document.getElementById("detail-back-button").classList.add("hidden");
+        document.getElementById("conversation-detail-header").innerHTML = "";
+        document.getElementById("conversation-detail-timeline").innerHTML = "";
+        document.getElementById("detail-message-text").value = "";
+      }}
+
+      function canRenderDelegationActions(conversation, event, index, events) {{
+        const status = conversation?.status || "open";
+        if (!["open", "running"].includes(status)) return false;
+        if ((event?.kind || "") !== "delegation_proposed") return false;
+        return index === events.length - 1;
+      }}
+
+      function renderDelegationControls(conversationId, eventId) {{
+        const pendingAction = delegationActionState[eventId] || "";
+        const error = delegationActionError[eventId] || "";
+        const approveLabel = pendingAction === "approve_delegation" ? "Pending…" : "Approve";
+        const cancelLabel = pendingAction === "cancel_delegation" ? "Pending…" : "Cancel";
+        const disabled = pendingAction ? "disabled" : "";
+        return `
+          <div class="timeline-controls">
+            <button type="button" data-delegation-action="approve_delegation" data-conversation-id="${{escapeHtml(conversationId)}}" data-event-id="${{escapeHtml(eventId)}}" ${{disabled}}>${{approveLabel}}</button>
+            <button type="button" class="secondary" data-delegation-action="cancel_delegation" data-conversation-id="${{escapeHtml(conversationId)}}" data-event-id="${{escapeHtml(eventId)}}" ${{disabled}}>${{cancelLabel}}</button>
+          </div>
+          ${{error ? `<div class="inline-error">${{escapeHtml(error)}}</div>` : ""}}
+        `;
+      }}
+
+      function renderConversationDetail(conversation, events) {{
+        currentConversationDetail = {{ conversation, events }};
+        document.getElementById("conversation-detail-empty").classList.add("hidden");
+        document.getElementById("conversation-detail").classList.remove("hidden");
+        document.getElementById("detail-back-button").classList.remove("hidden");
+        document.getElementById("conversation-detail-header").innerHTML = `
+          <div class="item">
+            <strong>${{escapeHtml(conversation.title || conversation.conversation_id)}}</strong>
+            <div class="meta">${{escapeHtml(conversation.target_display_name || conversation.target_agent_id)}}</div>
+            <div class="meta meta-row">
+              <span class="badge">${{escapeHtml(conversation.status || "open")}}</span>
+              <span>${{escapeHtml(String(conversation.timeline_event_count ?? events.length))}} event(s)</span>
+            </div>
+            <div class="meta">Created ${{escapeHtml(formatTime(conversation.created_at))}}</div>
+          </div>
+        `;
+        document.getElementById("conversation-detail-timeline").innerHTML = events.length
+          ? events.map((event, index) => `
+              <div class="timeline-item">
+                <div class="meta meta-row">
+                  <span class="badge">${{escapeHtml(event.kind || "timeline")}}</span>
+                  <span>${{escapeHtml(formatTime(event.created_at))}}</span>
+                </div>
+                <strong>${{escapeHtml(event.title || "Update")}}</strong>
+                <div class="timeline-body">${{escapeHtml(event.body || "")}}</div>
+                ${{
+                  canRenderDelegationActions(conversation, event, index, events)
+                    ? renderDelegationControls(conversation.conversation_id, event.event_id || `${{conversation.conversation_id}}:${{index}}`)
+                    : ""
+                }}
+              </div>
+            `).join("")
+          : '<div class="empty">No timeline events yet.</div>';
+        document.querySelectorAll("[data-delegation-action]").forEach(node => {{
+          node.addEventListener("click", () => submitDelegationAction(
+            node.dataset.conversationId,
+            node.dataset.eventId,
+            node.dataset.delegationAction,
+          ));
+        }});
+      }}
+
+      async function loadConversationDetail(conversationId) {{
+        currentConversationId = conversationId;
+        try {{
+          const [conversationResponse, timelineResponse] = await Promise.all([
+            fetch(`/v1/ui/conversations/${{conversationId}}`, {{ headers: authHeaders() }}),
+            fetch(`/v1/ui/conversations/${{conversationId}}/timeline`, {{ headers: authHeaders() }}),
+          ]);
+          if (!conversationResponse.ok || !timelineResponse.ok) {{
+            throw new Error("Failed to load conversation detail.");
+          }}
+          const conversation = await conversationResponse.json();
+          const timeline = await timelineResponse.json();
+          renderConversationDetail(conversation, timeline.events || []);
+        }} catch (error) {{
+          setStatus(error.message || "Failed to load conversation detail.");
+        }}
+      }}
+
       async function loadBootstrap() {{
         const response = await fetch('/v1/ui/bootstrap', {{
-          headers: {{ Authorization: `Bearer ${{token}}` }},
+          headers: authHeaders(),
         }});
         if (!response.ok) {{
           document.body.innerHTML = `<main><section><h2>Registry unavailable</h2><pre>${{await response.text()}}</pre></section></main>`;
           return;
         }}
-        const data = await response.json();
-        renderList('bots', data.bots, item => `
-          <div class="item">
-            <strong>${{item.display_name}}</strong>
-            <div class="meta"><span class="badge">${{item.connectivity_state}}</span>${{item.role || 'unassigned role'}}</div>
-            <div class="meta">${{(item.skills || []).join(', ') || 'no skills declared'}}</div>
-          </div>
-        `);
-        renderList('conversations', data.conversations, item => `
-          <div class="item">
-            <strong>${{item.title || item.conversation_id}}</strong>
-            <div class="meta">${{item.target_display_name || item.target_agent_id}}</div>
-            <div class="meta"><span class="badge">${{item.status}}</span></div>
-          </div>
-        `);
-        renderList('tasks', data.tasks, item => `
-          <div class="item">
-            <strong>${{item.title}}</strong>
-            <div class="meta">${{item.origin_display_name || item.origin_agent_id}} -> ${{item.target_display_name || item.target_agent_id}}</div>
-            <div class="meta"><span class="badge">${{item.status}}</span>${{item.summary || ''}}</div>
-          </div>
-        `);
+        bootstrapData = await response.json();
+        renderBots(bootstrapData.bots || []);
+        renderConversations(bootstrapData.conversations || []);
+        renderTasks(bootstrapData.tasks || []);
+        if (currentConversationId) {{
+          const exists = (bootstrapData.conversations || []).some(item => item.conversation_id === currentConversationId);
+          if (exists) {{
+            await loadConversationDetail(currentConversationId);
+          }} else {{
+            clearConversationDetail();
+          }}
+        }}
       }}
-      function renderList(id, items, template) {{
-        document.getElementById(id).innerHTML = items.length
-          ? items.map(template).join('')
-          : '<div class="item"><div class="meta">Nothing yet.</div></div>';
+
+      async function createConversation() {{
+        const targetAgentId = document.getElementById("new-conversation-target").value;
+        const messageText = document.getElementById("new-conversation-message").value.trim();
+        if (!targetAgentId || !messageText) {{
+          setStatus("Choose a connected bot and enter a message.");
+          return;
+        }}
+        const title = messageText.split(/\\n+/)[0].slice(0, 80) || "Registry UI conversation";
+        const response = await fetch("/v1/ui/conversations", {{
+          method: "POST",
+          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          body: JSON.stringify({{
+            target_agent_id: targetAgentId,
+            title,
+            message_text: messageText,
+          }}),
+        }});
+        if (!response.ok) {{
+          setStatus(await response.text());
+          return;
+        }}
+        const conversation = await response.json();
+        toggleNewConversationForm(false);
+        await loadBootstrap();
+        await loadConversationDetail(conversation.conversation_id);
       }}
-      loadBootstrap();
-      setInterval(loadBootstrap, 5000);
+
+      async function sendDetailMessage() {{
+        if (!currentConversationId) return;
+        const textArea = document.getElementById("detail-message-text");
+        const text = textArea.value.trim();
+        if (!text) {{
+          setStatus("Enter a follow-up message first.");
+          return;
+        }}
+        const response = await fetch(`/v1/ui/conversations/${{currentConversationId}}/messages`, {{
+          method: "POST",
+          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          body: JSON.stringify({{ text }}),
+        }});
+        if (!response.ok) {{
+          setStatus(await response.text());
+          return;
+        }}
+        textArea.value = "";
+        await loadBootstrap();
+      }}
+
+      async function cancelConversation() {{
+        if (!currentConversationId) return;
+        const response = await fetch(`/v1/ui/conversations/${{currentConversationId}}/cancel`, {{
+          method: "POST",
+          headers: authHeaders({{ "Content-Type": "application/json" }}),
+        }});
+        if (!response.ok) {{
+          setStatus(await response.text());
+          return;
+        }}
+        await loadBootstrap();
+      }}
+
+      async function submitDelegationAction(conversationId, eventId, action) {{
+        delegationActionState[eventId] = action;
+        delete delegationActionError[eventId];
+        if (currentConversationDetail && currentConversationDetail.conversation.conversation_id === conversationId) {{
+          renderConversationDetail(currentConversationDetail.conversation, currentConversationDetail.events);
+        }}
+        const response = await fetch(`/v1/ui/conversations/${{conversationId}}/actions`, {{
+          method: "POST",
+          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          body: JSON.stringify({{ action }}),
+        }});
+        if (!response.ok) {{
+          delete delegationActionState[eventId];
+          delegationActionError[eventId] = "Action failed — try again.";
+          if (currentConversationDetail && currentConversationDetail.conversation.conversation_id === conversationId) {{
+            renderConversationDetail(currentConversationDetail.conversation, currentConversationDetail.events);
+          }}
+          return;
+        }}
+        delete delegationActionState[eventId];
+        delete delegationActionError[eventId];
+        await loadBootstrap();
+      }}
+
+      document.getElementById("new-conversation-button").addEventListener("click", () => toggleNewConversationForm(true));
+      document.getElementById("cancel-new-conversation-button").addEventListener("click", () => toggleNewConversationForm(false));
+      document.getElementById("start-conversation-button").addEventListener("click", createConversation);
+      document.getElementById("detail-send-button").addEventListener("click", sendDetailMessage);
+      document.getElementById("detail-cancel-button").addEventListener("click", cancelConversation);
+      document.getElementById("detail-back-button").addEventListener("click", clearConversationDetail);
+
+      loadBootstrap().catch(error => setStatus(error.message || "Failed to load registry UI."));
+      setInterval(() => {{
+        loadBootstrap().catch(error => setStatus(error.message || "Failed to refresh registry UI."));
+      }}, 5000);
     </script>
   </body>
 </html>"""

@@ -120,6 +120,21 @@ class TelegramConversationIO(InteractionSurface):
             body=body,
         )
 
+    async def publish_timeline(self, event: Any) -> None:
+        if not self.conversation_ref or self._config is None:
+            return
+        body = getattr(event, "body", "") or getattr(event, "text", "") or ""
+        await publish_timeline_event(
+            self._config,
+            conversation_ref=self.conversation_ref,
+            kind=getattr(event, "kind", "timeline"),
+            title=getattr(event, "title", "Update"),
+            body=body,
+            status=getattr(event, "status", ""),
+            progress=getattr(event, "progress", None),
+            metadata=getattr(event, "metadata", None),
+        )
+
     async def send_recovery_notice(
         self,
         *,

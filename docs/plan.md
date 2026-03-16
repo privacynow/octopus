@@ -3362,7 +3362,7 @@ Acceptance criteria:
 
 ##### M7 — Registry UI: Conversation Timeline and Human-Initiated Work
 
-**Status: Active.**
+**Status: Complete.**
 
 Scope:
 - Bot publishes timeline events to the registry so the registry has real
@@ -3399,16 +3399,536 @@ What M7 does NOT include:
   the richer visibility surface; raw queue state stays bot-local)
 
 Acceptance criteria:
-- [ ] Bot publishes timeline events via `RegistryConversationIO` for
+- [x] Bot publishes timeline events via `RegistryConversationIO` for
       start, progress (rate-limited), and outcome
-- [ ] Timeline events appear in `GET /v1/ui/conversations/{id}/timeline`
-- [ ] Registry UI shows conversation detail with timeline on click
-- [ ] Human can start a conversation from the Registry UI targeting any
+- [x] Timeline events appear in `GET /v1/ui/conversations/{id}/timeline`
+- [x] Registry UI shows conversation detail with timeline on click
+- [x] Human can start a conversation from the Registry UI targeting any
       connected bot; bot receives and processes it
-- [ ] Auto-refresh renders new timeline events within 10 s of publication
-- [ ] Rate-limiting: at most one progress event per 5 s per conversation
-- [ ] All existing surface contracts (Telegram, degraded mode) unchanged
-- [ ] Full suite passes, including E2E
+- [x] Auto-refresh renders new timeline events within 10 s of publication
+- [x] Rate-limiting: at most one progress event per 5 s per conversation
+- [x] All existing surface contracts (Telegram, degraded mode) unchanged
+- [x] Full suite passes, including E2E
+
+---
+
+##### M8 — Registry UI Actions and Delegation Completion
+
+**Status: Complete.**
+
+Why this milestone exists:
+
+M7 adds the Registry UI conversation timeline and lets a human start work
+from the UI. But two concrete UX gaps remain before Phase 20 is complete
+from a non-technical user's perspective:
+
+1. **Approval-from-UI gap.** After M7, a user who starts a conversation
+   from the Registry UI and triggers a delegation plan cannot approve or
+   cancel that plan from the UI — they must switch to Telegram. The
+   backend action APIs (`POST /v1/ui/conversations/{id}/actions`,
+   `POST /v1/ui/conversations/{id}/cancel`) already exist. The gap is
+   entirely in the UI: no approve/cancel controls are wired to those
+   endpoints. For a user who initiated work from the Registry UI, this
+   is a broken flow with no alternative visible in the interface.
+
+2. **Delegation completion message path.** When child bots finish and
+   the parent bot receives `routed_result` deliveries, the parent
+   re-enters the worker path. The current M5 implementation does not
+   specify what final message is sent to the originating surface.
+   From the user's perspective: they approved delegation, child bots
+   ran, and nothing concludes — no final answer arrives in the Registry
+   UI or Telegram. This path must be defined, implemented, and tested.
+
+Scope:
+
+**Part 1 — Approve/cancel delegation from Registry UI**
+
+- When the conversation timeline contains a `delegation_proposed` event
+  (a delegation plan awaiting approval), render approve and cancel
+  buttons alongside it in the detail view.
+- Approve button → `POST /v1/ui/conversations/{id}/actions` with
+  `{"action": "approve_delegation"}`.
+- Cancel button → `POST /v1/ui/conversations/{id}/cancel` or
+  `{"action": "cancel_delegation"}` depending on the action contract
+  established in `store.add_conversation_action`.
+- The bot receives these as `action` deliveries via its existing poll
+  path and routes them through `handle_delegation_approve` /
+  `handle_delegation_cancel` — the same handlers Telegram callbacks use.
+- Degraded mode: if the bot is not connected, the action is queued as a
+  delivery and processed when connectivity returns. The UI shows
+  "pending" until the bot acks.
+
+**Part 2 — Delegation completion: parent bot final response**
+
+- When all delegated tasks reach `completed` or `failed` state, the
+  parent bot must send a final synthesized response to the originating
+  surface (Registry UI or Telegram).
+- The final response content: the parent bot re-runs a brief synthesis
+  prompt incorporating the child task results, or (if synthesis is too
+  expensive) sends a structured summary: "Delegation complete. N tasks
+  finished. Here are the results: …"
+- The response is sent via the originating `ConversationIO` surface —
+  Telegram sends it as a message; Registry surface publishes it as a
+  `completed` timeline event with the full result body.
+- If any tasks failed, the response says so explicitly and offers a
+  retry path.
+- Durable state: `PendingDelegation` transitions from
+  `submitted` → `completed` (all tasks done) or `partial_failed`
+  (some tasks failed). These states must be defined in
+  `app/agents/orchestration.py` and honored by the durable state
+  machine.
+
+**Part 3 — Bot side: action delivery routing**
+
+- The bot's delivery handler already routes `action` deliveries through
+  `app/agents/bridge.py`. Verify that `approve_delegation` and
+  `cancel_delegation` action kinds are routed to the correct handlers
+  with the correct `chat_id` and `conversation_ref` extracted from the
+  delivery payload.
+- The action delivery must carry the `conversation_ref` so the handler
+  can load the correct session. If this field is missing from the
+  current action delivery schema, add it.
+
+Implementation seams:
+- `app/agents/bridge.py` — route `approve_delegation` / `cancel_delegation`
+  action deliveries to `handle_delegation_approve` / `handle_delegation_cancel`
+- `app/telegram_handlers.py` — `_handle_delegation_approve` and
+  `_handle_delegation_cancel` already exist; verify they work when
+  invoked from registry delivery (not just from Telegram callback)
+- `app/agents/orchestration.py` — define `completed` and `partial_failed`
+  delegation states; add `all_tasks_terminal(delegation)` predicate
+- `app/transports/registry_adapter.py` — `on_work_complete` publishes
+  the final result as a timeline event with full body
+- `app/registry_service/app.py` (UI) — approve/cancel buttons on
+  delegation-proposed timeline events; "pending" state while awaiting
+  bot ack
+
+What M8 does NOT include:
+- Retry of individual failed child tasks from UI (deferred; requires
+  per-task action routing)
+- Push notifications when delegation completes (deferred; polling at
+  5 s is sufficient)
+- Any change to the Telegram approval/cancel flow (must remain
+  unchanged)
+
+Acceptance criteria:
+- [x] A user who starts a conversation from Registry UI and receives a
+      delegation plan can approve or cancel it from the UI without
+      switching to Telegram
+- [x] When all delegated tasks complete, the parent bot sends a final
+      result to the originating surface (Registry UI or Telegram)
+- [x] When some tasks fail, the user sees which tasks failed and a clear
+      next step
+- [x] `PendingDelegation` status transitions to `completed` or
+      `partial_failed` after all tasks reach terminal state
+- [x] Action deliveries (`approve_delegation`, `cancel_delegation`) are
+      routed to the correct handlers on the bot side and carry enough
+      context (`conversation_ref`, `chat_id`) to load the right session
+- [x] Telegram approval/cancel flow is unchanged
+- [x] Degraded mode: actions queue and process on reconnect; UI shows
+      pending state, not silent failure
+- [x] Full suite passes, including E2E
+
+---
+
+##### M9 — First-Run Polish and Registry UI World-Class UX
+
+M8 completes the multi-agent feature set. M9 is the commercial-polish pass: fix
+every friction point that prevents a first-time user from successfully bringing
+up a bot from a fresh `git clone`, and upgrade the Registry UI from a functional
+prototype to a world-class, production-quality interface.
+
+This milestone is triggered by a full first-run walkthrough that identified 17
+concrete UX failures across the setup scripts, README, and Registry UI. Each is
+addressed below.
+
+---
+
+**Section A — Provider Login Exit Confusion (critical)**
+
+*Problem:* `scripts/provider/container_provider_login.sh` launches the Claude or
+Codex CLI inside a Docker container and prints a brief instruction, but the user
+has no visual cue inside the live CLI that they must exit when authentication is
+complete. The current user experience: enter a live AI CLI session, complete the
+login flow, and then be stuck — with no reminder that "exit" is the next step.
+
+*Fix A1 — Pre-entry warning banner.*
+Before launching the provider CLI, print a clearly bordered banner:
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║  ACTION REQUIRED — INSIDE THE CLAUDE CLI                     ║
+║                                                              ║
+║  1. Run:  /login                                             ║
+║  2. Follow the browser link to authenticate.                 ║
+║  3. When done — TYPE:  /exit   (or press Ctrl-D)             ║
+║                                                              ║
+║  You MUST exit the CLI to return to setup.                   ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+*Fix A2 — Post-exit confirmation.*
+After the CLI exits, print:
+```
+✓ Claude authentication complete. Returning to setup...
+```
+If the container exits with a non-zero code, print:
+```
+✗ Authentication may have failed (exit code N). Re-run this step
+  if the provider health check fails in the next step.
+```
+
+*Fix A3 — Codex parity.*
+`codex --login` has its own exit flow. Before launching codex, print the
+equivalent banner explaining that `q` or `Ctrl-C` returns to setup once
+authentication is complete.
+
+*Files:* `scripts/provider/container_provider_login.sh`
+
+---
+
+**Section B — Guided Start Script (guided_start.sh)**
+
+*Problem B1 — Enrollment token prompt has no hint.*
+When the user is asked "Registry enrollment token", they have no idea where to
+find it. If the registry was just started locally (auto-started by
+`auto_start_local_registry_if_needed`), the token is in `.env.registry` — but
+the script never says so.
+
+*Fix B1:* After auto-starting the local registry, read the enrollment token from
+`.env.registry` automatically and skip the prompt entirely, printing:
+```
+  ✓ Enrollment token read from .env.registry (auto-configured)
+```
+If the user is connecting to a remote registry, prompt as before but add the
+hint: `(check your registry's .env.registry or admin panel)`.
+
+*Problem B2 — Advanced field overload.*
+12–14 interactive questions including Role, Tags, Description, and Skills confuse
+first-time users. These fields have valid advanced use cases but are not needed
+to get a working bot.
+
+*Fix B2:* Add a "quick setup / full setup" fork at the top:
+```
+Setup mode? [quick/full] (quick):
+```
+- **quick** (default): ask only Bot name, Token, Provider, Mode. Use sensible
+  defaults for everything else. Print a note: "Advanced settings (role, tags,
+  description, skills) can be set by editing $BOT_ENV_FILE."
+- **full**: current behavior, all 14 prompts.
+
+*Problem B3 — `host.docker.internal` fails on Linux.*
+The default registry URL `http://host.docker.internal:8787` works on
+macOS/Docker Desktop but is unreachable from Docker containers on Linux.
+
+*Fix B3:* Detect the OS at prompt time. On Linux, default to
+`http://172.17.0.1:8787` and add a comment in the generated env file:
+```
+# On Linux, use 172.17.0.1 (Docker bridge default). On macOS/Windows use host.docker.internal.
+```
+
+*Problem B4 — No success summary.*
+After `./scripts/app/start_instance.sh` succeeds, the script prints minimal
+output. The user doesn't know what they have, how to use it, or what to do next.
+
+*Fix B4:* Print a boxed success summary:
+```
+╔══════════════════════════════════════════════════════════════╗
+║  Bot is running!                                             ║
+║                                                              ║
+║  • Open Telegram and message your bot to start.              ║
+║  • Registry UI: http://localhost:8787  (if registry mode)    ║
+║  • Logs:  ./scripts/app/logs_instance.sh default             ║
+║  • Stop:  ./scripts/app/stop_instance.sh default             ║
+╚══════════════════════════════════════════════════════════════╝
+```
+The registry URL line is omitted in standalone mode.
+
+*Files:* `scripts/app/guided_start.sh`, `scripts/lib_env.sh` (if needed)
+
+---
+
+**Section C — Registry Start Script (registry/start.sh)**
+
+*Problem:* The script creates `.env.registry` and prints "Enrollment token is
+stored in .env.registry" but never prints the actual token value. The user must
+open the file to find it.
+
+*Fix C1:* After writing `.env.registry`, extract and print the enrollment token:
+```
+  Enrollment token: <TOKEN VALUE>
+  (also stored in .env.registry — keep this file private)
+```
+
+*Files:* `scripts/registry/start.sh`
+
+---
+
+**Section D — README**
+
+*Problem D1 — Redundant Step 2 and lost registry URL.*
+Step 2 says "Start the registry" with `./scripts/registry/start.sh`. But
+`guided_start.sh` already calls `auto_start_local_registry_if_needed()` which
+starts the registry automatically for localhost URLs. The README makes users do
+this manually before running guided setup — so the registry starts twice. Worse:
+the user runs Step 2, the registry URL is printed to the terminal, and then they
+immediately get buried in 12–14 `guided_start.sh` questions. By the time setup
+finishes, the URL has scrolled off or been forgotten. It is never reprinted at
+the end of setup.
+
+*Fix D1:* Collapse into one command. Replace Steps 2 and 3 with:
+```
+./scripts/app/guided_start.sh
+```
+Add a note: "If you chose registry mode, the registry starts automatically."
+Keep a separate "Manual registry start" section for advanced use.
+The success summary (Fix B4) must reprint the registry URL so it is the last
+thing the user sees — not something that scrolled past mid-setup.
+
+*Problem D2 — No BotFather link or new-bot walkthrough.*
+The README says "you need a Telegram bot token" but doesn't explain how to get
+one. First-time Telegram bot users don't know about BotFather.
+
+*Fix D2:* Add a "Create your bot token" subsection:
+```
+1. Open Telegram → search for @BotFather → tap Start
+2. Send: /newbot
+3. Follow the prompts (choose a name, choose a username ending in "bot")
+4. Copy the token BotFather gives you — you'll need it in setup
+```
+
+*Problem D3 — "What You Need" lists enrollment token as a prerequisite.*
+The prerequisites section says "Registry enrollment token (from your registry
+admin)". This makes the registry sound like an external dependency. For the
+common case (local registry), the token is auto-generated.
+
+*Fix D3:* Replace the enrollment token prerequisite with: "Registry enrollment
+token — auto-generated if you start a local registry (see below)."
+
+*Problem D4 — No "what success looks like."*
+After completing setup, the user has no reference point for whether it worked.
+
+*Fix D4:* Add a "Verify it's working" section at the end of Quick Start:
+```
+Open Telegram, find your bot (search for its username), and send:
+  What files are in my working directory?
+You should receive a response within a few seconds.
+
+If using registry mode, open http://localhost:8787 to see the bot listed
+as connected and the conversation appearing in real time.
+```
+The suggested first message must be something guaranteed to work — not
+"review this diff" (requires a diff) or "hello" (underuses the product).
+"What files are in my working directory?" exercises the full pipeline with
+no prerequisites and gives an immediate, concrete, non-trivial response.
+
+*Problem D5 — Working directory note causes confusion.*
+A note about the bot's working directory appears mid-setup in a context where
+it's confusing. New users don't know what a "working directory" means in this
+context.
+
+*Fix D5:* Move to a "Configuration" or "Troubleshooting" section at the bottom.
+In Quick Start, keep only the default (`/home/bot`) with no explanation.
+
+*Problem D6 — No Registry UI screenshot or description.*
+The Registry UI is one of the product's primary differentiators — it provides
+real-time conversation visibility, multi-bot management, and (after M7/M8)
+human-initiated work and delegation approval. It is completely invisible in the
+README. A user who reads the README has no idea the UI exists or what it looks
+like.
+
+*Fix D6:* Add a "Registry UI" section with:
+- A screenshot of the UI (or an embedded reference to one in `docs/`).
+- A one-paragraph description: what the three panels show, what makes it
+  different from the Telegram interface (real-time timeline, multi-bot view,
+  approval flow), and the URL.
+
+*Files:* `README.md`
+
+---
+
+**Section E — Registry UI**
+
+*Design direction to preserve:* The existing design is aesthetically considered
+and distinctive. The warm cream palette (`#f7f3ea`, `#fffaf1`), teal accent
+(`#0f766e`), radial gradient header highlight, backdrop blur on cards, 20px
+border-radius, and soft box shadows are coherent and polished. In a static
+screenshot the UI looks professional. All fixes below must preserve this design
+direction. The goal is to make the UI functional and complete — not to restyle it.
+
+*Problem E1 — IBM Plex Sans never loads.*
+The CSS declares `font-family: "IBM Plex Sans", ...` but no `<link>` to Google
+Fonts or a local font file exists. The UI falls back to system fonts inconsistently.
+
+*Fix E1:* Add `<link rel="preconnect" href="https://fonts.googleapis.com">` and
+the IBM Plex Sans import, OR switch to a system-font stack that looks polished on
+all platforms:
+```css
+font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+             "Helvetica Neue", Arial, sans-serif;
+```
+The system-font stack is the recommended fix: zero network dependency, loads
+instantly, matches OS conventions.
+
+*Problem E2 — No interactivity; no click targets; no hover states.*
+All items in the Bots, Conversations, and Routed Tasks panels render as static
+divs. Nothing is clickable. There are no hover states, no `cursor: pointer`,
+no visual affordance that any action is possible. A user looking at this UI
+cannot tell whether it is broken or intentionally a read-only board.
+
+*Fix E2:*
+- Wrap each item in a `<button>` or add `cursor: pointer` + `tabindex="0"`.
+- Add hover state: `background: rgba(255,255,255,0.05)` on hover.
+- On click, open a detail side-panel or modal showing all available fields.
+- All interactive elements must be keyboard-accessible (Enter/Space to activate).
+
+*Problem E3 — No loading state.*
+On initial load, the three panels immediately render "Nothing yet." before the
+first fetch resolves. On any network latency — including a healthy local server —
+this looks like an empty, broken page. There is no spinner, skeleton, or any
+indication that data is loading.
+
+*Fix E3:*
+- On initial load: show a centered spinner with "Loading..." text.
+- On poll refresh: show a subtle "Refreshing..." indicator in the header (not a
+  full spinner — don't disrupt the user while browsing).
+- Skeleton cards for the initial load are acceptable as an alternative to a spinner.
+
+*Problem E4 — No last-refreshed indicator.*
+The user has no way to know how fresh the data is or whether the UI is still
+connected.
+
+*Fix E4:* Add a small "Last updated: N seconds ago" line in the header or footer.
+Update it every second via `setInterval`. Color it amber if > 30 s old, red if >
+60 s old.
+
+*Problem E5 — Raw API strings for status; no color coding.*
+Status values are displayed as raw strings (e.g., "connected", "degraded",
+"standalone"). There is no visual distinction between healthy, warning, and error
+states.
+
+*Fix E5:* Replace raw strings with styled badge chips:
+```
+connected   → green badge  (#22c55e background, white text)
+degraded    → amber badge  (#f59e0b)
+standalone  → muted badge  (#6b7280)
+pending     → blue badge   (#3b82f6)
+failed      → red badge    (#ef4444)
+```
+Add a `getBadge(status)` helper that returns the appropriate chip HTML.
+
+*Problem E6 — Full-page error replacement.*
+On fetch failure, `document.body.innerHTML = rawErrorText` replaces the entire
+UI with a developer-facing error dump.
+
+*Fix E6:* Replace with an inline error banner at the top of the page:
+```html
+<div class="error-banner" role="alert">
+  ⚠ Could not refresh data. Retrying... (last error: <message>)
+</div>
+```
+The banner dismisses automatically when the next poll succeeds.
+
+*Problem E7 — ASCII arrow in routed task display.*
+Routed tasks show source and target with ` -> ` (literal ASCII). This looks
+unfinished.
+
+*Fix E7:* Replace with a Unicode arrow `→` or an SVG arrow icon.
+
+*Problem E8 — Empty state is bare.*
+When no bots, conversations, or tasks exist, the panel shows:
+```
+Nothing yet.
+```
+This communicates nothing useful to a new user.
+
+*Fix E8:* Replace with a helpful empty-state card per panel:
+- Bots: "No bots connected yet. Start a bot in registry mode and it will appear
+  here. Run `./scripts/app/guided_start.sh`."
+- Conversations: "No conversations yet. Send a message to your bot in Telegram
+  to start."
+- Routed Tasks: "No tasks routed yet. Delegated tasks appear here in real time."
+
+*Problem E9 — No favicon, no brand mark; tab title is default.*
+The browser tab shows "Agent Registry" with the default browser icon. On a
+desktop with many tabs this is indistinguishable.
+
+*Fix E9:*
+- Add a favicon: a simple SVG favicon using the teal accent color (`#0f766e`)
+  with an "A" or a minimal network-node glyph. Inline SVG favicon in `<head>`
+  requires no external files.
+- Set `<title>Agent Registry</title>` (already present) and ensure it is
+  specific enough to identify the instance if operators run multiple registries
+  (e.g., prepend the registry display name if it is configured).
+
+*Files:* `app/registry_service/app.py` (all inline HTML/CSS/JS)
+
+---
+
+**Implementation order within M9:**
+
+1. A1–A3: Provider login banners (highest impact, single file, quick)
+2. C1: Registry start token print (quick, single line)
+3. B1–B4: Guided start script improvements (including auto-read token, quick
+   mode, Linux default, success summary with registry URL reprinted)
+4. D1–D6: README updates (collapse steps, BotFather, verified-first-message,
+   working-dir relocation, Registry UI section with screenshot)
+5. E1–E9: Registry UI polish (largest scope, self-contained; preserve existing
+   design aesthetic throughout)
+
+**What M9 does NOT include:**
+- Registry UI real-time push (WebSocket/SSE) — deferred
+- Registry UI authentication/login — deferred
+- Telegram bot UI changes — out of scope
+- Provider login flow changes to Docker image (no Dockerfile changes needed;
+  all fixes are in shell scripts)
+
+**Acceptance criteria:**
+- [ ] A user following README Quick Start from `git clone` to first bot message
+      can complete setup without confusion, without external documentation, and
+      without needing to discover any step on their own
+- [ ] Provider login script prints an explicit banner before launching the
+      provider CLI stating what the user must do and how to exit; confirms
+      success or failure after the CLI exits
+- [ ] `guided_start.sh` quick mode asks ≤ 5 questions and works end-to-end
+      for both registry and standalone modes
+- [ ] `guided_start.sh` auto-reads the enrollment token for local registries
+      with no manual token entry; prompts with a "where to find it" hint for
+      remote registries
+- [ ] `guided_start.sh` defaults to a platform-appropriate registry URL
+      (`host.docker.internal` on macOS/Windows, `172.17.0.1` on Linux)
+- [ ] `guided_start.sh` success summary reprints the registry URL, first-
+      message suggestion, log command, and stop command as the final output
+- [ ] `./scripts/registry/start.sh` prints the enrollment token value at
+      startup alongside the note that it is stored in `.env.registry`
+- [ ] README has a BotFather walkthrough with the token creation flow fully
+      described; no external knowledge required to create a bot
+- [ ] README "verify it's working" section recommends a first message that
+      exercises the full pipeline with no prerequisites
+      ("What files are in my working directory?")
+- [ ] README has no redundant manual steps that `guided_start.sh` performs
+      automatically; registry start is a single command
+- [ ] README includes a Registry UI section describing what the UI shows and
+      includes a screenshot or visual reference
+- [ ] Registry UI uses a system-font stack; design aesthetic (cream palette,
+      teal accent, radial gradient, backdrop blur, 20px radius, box shadows)
+      is preserved
+- [ ] Registry UI items have hover states and click targets; at least a
+      basic detail view on click; keyboard-accessible
+- [ ] Registry UI shows a loading spinner on initial load; a non-disruptive
+      "Refreshing..." indicator on subsequent polls
+- [ ] Registry UI shows a "last updated N seconds ago" indicator that ages to
+      amber (> 30 s) and red (> 60 s)
+- [ ] Status values are rendered as color-coded badge chips with the correct
+      color for connected/degraded/standalone/pending/failed
+- [ ] Fetch errors show an inline dismissable banner, not a full-page
+      replacement; banner clears on next successful poll
+- [ ] Routed task arrows use Unicode `→`, not ASCII ` -> `
+- [ ] Empty states per panel have instructional text explaining how to populate
+      them, not bare "Nothing yet."
+- [ ] A favicon using the teal accent color is present; tab title is specific
+      enough to identify the instance
+- [ ] Full suite passes
 
 ---
 

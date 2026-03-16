@@ -68,9 +68,13 @@ from app.agents.bridge import (
     telegram_conversation_ref,
 )
 from app.agents.client import RegistryClientError
+from app.agents.delegation import (
+    handle_delegation_approve as handle_surface_delegation_approve,
+    handle_delegation_cancel as handle_surface_delegation_cancel,
+)
 from app.agents.orchestration import build_delegation_plan
 from app.agents.state import load_agent_runtime_state
-from app.agents.types import AgentDiscoveryQuery, RoutedTaskRequest, RoutedTaskResult
+from app.agents.types import AgentDiscoveryQuery, RoutedTaskResult, TimelineEvent
 from app.transports import factory
 from app.transports.admission import admit_fresh_message
 from app.transports.types import InboundEnvelope
@@ -943,6 +947,58 @@ def _format_delegation_plan_message(delegation: PendingDelegation) -> str:
     return "\n".join(lines)
 
 
+class _DelegationCallbackEditableHandle:
+    async def edit_text(self, text: str, **kwargs: Any) -> None:
+        del text, kwargs
+        return None
+
+    async def edit_reply_markup(self, reply_markup: Any = None, **kwargs: Any) -> None:
+        del reply_markup, kwargs
+        return None
+
+
+class _DelegationCallbackSurface:
+    def __init__(self, query) -> None:
+        self._query = query
+
+    async def send_text(self, text: str, **kwargs: Any) -> _DelegationCallbackEditableHandle:
+        await self._query.edit_message_text(text, **kwargs)
+        return _DelegationCallbackEditableHandle()
+
+
+async def _publish_delegation_proposed_event(message, delegation: PendingDelegation) -> None:
+    body = "\n".join(
+        [
+            "Delegation plan:",
+            *[
+                f"{index}. {task.title or task.routed_task_id} -> {task.target_agent_id or 'unassigned'}"
+                for index, task in enumerate(delegation.tasks, start=1)
+            ],
+        ]
+    )
+    event = TimelineEvent(
+        event_id=f"delegation-proposed:{delegation.conversation_ref}:{int(delegation.created_at * 1000)}",
+        conversation_id=delegation.conversation_ref,
+        kind="delegation_proposed",
+        title="Delegation plan proposed",
+        body=body,
+        status=delegation.status,
+    )
+    publisher = getattr(message, "publish_timeline", None)
+    if callable(publisher):
+        await publisher(event)
+        return
+    await publish_timeline_event(
+        _cfg(),
+        conversation_ref=delegation.conversation_ref,
+        kind=event.kind,
+        title=event.title,
+        body=event.body,
+        status=event.status,
+        event_id=event.event_id,
+    )
+
+
 async def _propose_delegation_plan(
     chat_id: int,
     message,
@@ -960,6 +1016,7 @@ async def _propose_delegation_plan(
     )
     session.pending_delegation = delegation
     _save(chat_id, session)
+    await _publish_delegation_proposed_event(message, delegation)
 
     send_plan = getattr(message, "send_text", None) or getattr(message, "reply_text")
     await send_plan(
@@ -1156,7 +1213,8 @@ async def execute_request(
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
 
     timeline_cb = None
-    if conversation_ref:
+    surface_name = getattr(getattr(message, "capabilities", None), "surface_name", "telegram")
+    if conversation_ref and surface_name != "registry":
         timeline_cb = lambda html_text, force=False: _progress_timeline_callback(
             conversation_ref, routed_task_id, html_text, force=force
         )
@@ -1344,7 +1402,8 @@ async def request_approval(
     elif cfg.agent_mode == "registry":
         conversation_ref = telegram_conversation_ref(cfg, chat_id)
     timeline_cb = None
-    if conversation_ref:
+    surface_name = getattr(getattr(message, "capabilities", None), "surface_name", "telegram")
+    if conversation_ref and surface_name != "registry":
         timeline_cb = lambda html_text, force=False: _progress_timeline_callback(
             conversation_ref, "", html_text, force=force
         )
@@ -1534,70 +1593,22 @@ def _parse_delegation_callback(data: str) -> tuple[str, int] | None:
 
 
 async def _handle_delegation_approve(chat_id: int, query) -> None:
-    cfg = _cfg()
-    state = load_agent_runtime_state(cfg.data_dir)
-    if state.connectivity_state != "connected":
-        detail = f" Last error: {state.last_error}" if state.last_error else ""
-        await query.edit_message_text(
-            "Delegation is unavailable because registry connectivity is degraded."
-            " The request was not sent." + detail,
-            reply_markup=_delegation_keyboard(chat_id),
-        )
-        return
-
-    session = _load(chat_id)
-    delegation = session.pending_delegation
-    if delegation is None or not any(task.status == "proposed" for task in delegation.tasks):
-        await query.edit_message_text("Nothing to approve.")
-        return
-
-    client = registry_client(cfg)
-    if client is None:
-        await query.edit_message_text(
-            "Delegation unavailable: registry not enrolled.",
-            reply_markup=_delegation_keyboard(chat_id),
-        )
-        return
-
-    origin_agent_id = state.agent_id or ""
-    submitted_ids: list[str] = []
-    try:
-        for task in delegation.tasks:
-            if task.status != "proposed":
-                continue
-            request = RoutedTaskRequest(
-                routed_task_id=task.routed_task_id,
-                parent_conversation_id=delegation.conversation_ref,
-                origin_agent_id=origin_agent_id,
-                target_agent_id=task.target_agent_id,
-                title=task.title,
-                instructions=task.instructions,
-            )
-            await client.submit_routed_task(request)
-            task.status = "submitted"
-            submitted_ids.append(task.routed_task_id)
-    except Exception as exc:
-        _save(chat_id, session)
-        await query.edit_message_text(
-            f"Delegation submission failed after {len(submitted_ids)} request(s)."
-            f" {html.escape(str(exc))}",
-            parse_mode=ParseMode.HTML,
-            reply_markup=_delegation_keyboard(chat_id),
-        )
-        return
-
-    _save(chat_id, session)
-    await query.edit_message_text(
-        f"Delegation approved. {len(submitted_ids)} request(s) sent to specialist bots."
-        " I'll continue when results arrive."
+    conversation_ref = telegram_conversation_ref(_cfg(), chat_id)
+    await handle_surface_delegation_approve(
+        chat_id,
+        conversation_ref,
+        _DelegationCallbackSurface(query),
+        retry_markup=_delegation_keyboard(chat_id),
     )
 
 
 async def _handle_delegation_cancel(chat_id: int, query) -> None:
-    session = _load(chat_id)
-    session.pending_delegation = None
-    _save(chat_id, session)
-    await query.edit_message_text("Delegation cancelled. No requests were sent.")
+    conversation_ref = telegram_conversation_ref(_cfg(), chat_id)
+    await handle_surface_delegation_cancel(
+        chat_id,
+        conversation_ref,
+        _DelegationCallbackSurface(query),
+    )
 
 
 # -- Command handlers ------------------------------------------------------
@@ -3510,6 +3521,18 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
                     )
         except work_queue.LeaveClaimed:
             raise
+        if outcome is not None:
+            await bot_msg.on_outcome(outcome)
+            if getattr(event, "skip_approval", False) and source == "registry":
+                session_after = _load(chat_id)
+                delegation = session_after.pending_delegation
+                if (
+                    delegation is not None
+                    and delegation.conversation_ref == conversation_ref
+                    and delegation.status in {"completed", "partial_failed"}
+                ):
+                    session_after.pending_delegation = None
+                    _save(chat_id, session_after)
         if routed_task_id:
             client = registry_client(_cfg())
             if client is not None and outcome is not None:
@@ -3533,8 +3556,6 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
                         routed_task_id,
                         exc_info=True,
                     )
-        elif outcome is not None:
-            await bot_msg.on_outcome(outcome)
         return
 
     if isinstance(event, (InboundCommand, InboundCallback)):

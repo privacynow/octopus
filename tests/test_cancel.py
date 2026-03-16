@@ -10,6 +10,7 @@ from app.storage import default_session, save_session
 from app import user_messages as _msg
 from app import runtime_backend
 from app.work_queue import get_work_items_for_chat
+from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeChat,
     FakeContext,
@@ -136,7 +137,7 @@ class TestCancelLiveExecution:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             # Simulate a live execution by registering a cancel event
             cancel_event = asyncio.Event()
@@ -163,7 +164,7 @@ class TestCancelLiveExecution:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             # No _LIVE_CANCEL entry — should fall through to nothing_to_cancel
             msg = await send_command(th.cmd_cancel, chat, user, "/cancel")
@@ -183,14 +184,14 @@ class TestCancelLiveExecution:
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
             session["pending_approval"] = {
-                "request_user_id": 42,
+                "request_user_id": "tg:42",
                 "prompt": "test",
                 "image_paths": [],
                 "attachment_dicts": [],
                 "context_hash": "abc",
                 "created_at": time.time(),
             }
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = await send_command(th.cmd_cancel, chat, user, "/cancel")
             from app.user_messages import cancel_pending_request
@@ -208,7 +209,7 @@ class TestCancelLiveExecution:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             # Admit a message (no worker drain yet)
             msg = FakeMessage(chat=chat, text="do work")
@@ -221,7 +222,7 @@ class TestCancelLiveExecution:
             assert last_reply(cancel_msg) == cancel_queued_superseded()
 
             # Durable state: the admitted item must be terminal failed with error='cancelled'
-            items = get_work_items_for_chat(data_dir, 12345)
+            items = get_work_items_for_chat(data_dir, telegram_conversation_key(12345))
             cancelled = [i for i in items if i.get("state") == "failed" and i.get("error") == "cancelled"]
             runnable = [i for i in items if i.get("state") in ("queued", "claimed")]
             assert len(cancelled) == 1, f"Exactly one work item must be failed/cancelled, got: {items}"
@@ -249,7 +250,7 @@ class TestCancelledOutcome:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="do something")
             update = FakeUpdate(message=msg, user=user, chat=chat)
@@ -281,14 +282,14 @@ class TestCancelledOutcome:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "on")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="plan something")
             update = FakeUpdate(message=msg, user=user, chat=chat)
             await th.handle_message(update, FakeContext())
 
             # Session should not have pending_approval stored
-            s = load_session_disk(data_dir, 12345, prov)
+            s = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
             assert s.get("pending_approval") is None
 
 
@@ -311,7 +312,7 @@ class TestCancelRegressions:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="do work")
             update = FakeUpdate(message=msg, user=user, chat=chat)
@@ -333,7 +334,7 @@ class TestCancelRegressions:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="do work")
             update = FakeUpdate(message=msg, user=user, chat=chat)
@@ -353,7 +354,7 @@ class TestCancelRegressions:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             cancel_event = asyncio.Event()
             th._LIVE_CANCEL[12345] = cancel_event
@@ -387,7 +388,7 @@ class TestCancelRegressions:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             # Execute a request to completion (admit then drain so item is completed)
             msg = FakeMessage(chat=chat, text="do work")
@@ -422,7 +423,7 @@ class TestCancelRegressions:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="first")
             update = FakeUpdate(message=msg, user=user, chat=chat)
@@ -430,7 +431,7 @@ class TestCancelRegressions:
             await drain_one_worker_item(data_dir)
 
             # provider_state_updates must have been persisted
-            s = load_session_disk(data_dir, 12345, prov)
+            s = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
             assert s["provider_state"]["started"] is True, \
                 f"Cancelled run should persist provider_state_updates. Got: {s['provider_state']}"
 
@@ -455,7 +456,7 @@ class TestCancelRegressions:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             # First request — cancelled
             msg1 = FakeMessage(chat=chat, text="first")
@@ -659,7 +660,7 @@ class TestCancelConcurrency:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="do work")
             update = FakeUpdate(message=msg, user=user, chat=chat)
@@ -704,7 +705,7 @@ class TestCancelConcurrency:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="do work")
             update = FakeUpdate(message=msg, user=user, chat=chat)
@@ -741,7 +742,7 @@ class TestCancelConcurrency:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg = FakeMessage(chat=chat, text="mid-stream work")
             update = FakeUpdate(message=msg, user=user, chat=chat)
@@ -754,7 +755,7 @@ class TestCancelConcurrency:
                 cancel_event.set()
                 prov.gate.set()
 
-            s = load_session_disk(data_dir, 12345, prov)
+            s = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
             assert s["provider_state"]["started"] is True, \
                 f"provider_state_updates must persist on cancel. Got: {s['provider_state']}"
 
@@ -777,7 +778,7 @@ class TestCancelConcurrency:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg1 = FakeMessage(chat=chat, text="first")
             update1 = FakeUpdate(message=msg1, user=user, chat=chat)
@@ -822,7 +823,7 @@ class TestCancelConcurrency:
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
-            save_session(data_dir, 12345, session)
+            save_session(data_dir, telegram_conversation_key(12345), session)
 
             msg_a = FakeMessage(chat=chat, text="first request")
             update_a = FakeUpdate(message=msg_a, user=user, chat=chat)
@@ -838,7 +839,8 @@ class TestCancelConcurrency:
 
                 conn = runtime_backend.transport_store()._transport_db(data_dir)
                 rows = conn.execute(
-                    "SELECT id, state, error FROM work_items WHERE chat_id = 12345 ORDER BY id"
+                    "SELECT id, state, error FROM work_items "
+                    "WHERE conversation_key = 'tg:12345' ORDER BY id"
                 ).fetchall()
                 runnable = [r for r in rows if r["state"] in ("queued", "claimed") and (r["error"] if "error" in r.keys() else "") != "chat_busy"]
                 busy_items = [r for r in rows if (r["error"] if "error" in r.keys() else None) == "chat_busy"]

@@ -2,6 +2,7 @@
 
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
+from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeChat,
     FakeProvider,
@@ -23,7 +24,7 @@ async def test_rate_limit_blocks_after_threshold():
         setup_globals(cfg, prov)
 
         session = default_session("claude", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
         user = FakeUser(42)
@@ -54,7 +55,7 @@ async def test_rate_limit_admin_exempt():
         setup_globals(cfg, prov)
 
         session = default_session("claude", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
         admin = FakeUser(42)
@@ -77,7 +78,7 @@ async def test_rate_limit_disabled_by_default():
         setup_globals(cfg, prov)
 
         session = default_session("claude", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
         user = FakeUser(42)
@@ -97,7 +98,7 @@ async def test_rate_limit_per_user_isolation():
         setup_globals(cfg, prov)
 
         session = default_session("claude", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
         user_a = FakeUser(100)
@@ -135,7 +136,7 @@ async def test_rate_limit_implicit_admin_not_exempt():
         setup_globals(cfg, prov)
 
         session = default_session("claude", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
         user = FakeUser(42)
@@ -166,7 +167,7 @@ async def test_rate_limit_explicit_admin_equal_to_allowed_still_exempt():
         setup_globals(cfg, prov)
 
         session = default_session("claude", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
         user = FakeUser(42)

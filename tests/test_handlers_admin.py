@@ -2,6 +2,7 @@
 
 import app.telegram_handlers as th
 from app.storage import default_session, save_session
+from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeChat,
     FakeContext,
@@ -59,11 +60,11 @@ async def test_admin_sessions_summary():
             # Create sessions
             s1 = default_session("claude", {"session_id": "a", "started": False}, "on")
             s1["active_skills"] = ["code-review"]
-            save_session(data_dir, 111, s1)
+            save_session(data_dir, telegram_conversation_key(111), s1)
 
             s2 = default_session("claude", {"session_id": "b", "started": False}, "off")
             s2["pending_approval"] = {"prompt": "test", "created_at": 0}
-            save_session(data_dir, 222, s2)
+            save_session(data_dir, telegram_conversation_key(222), s2)
 
             chat = FakeChat()
             user = FakeUser(42, "admin")
@@ -100,14 +101,14 @@ async def test_admin_sessions_detail():
 
             s = default_session("claude", {"session_id": "a", "started": False}, "on")
             s["active_skills"] = ["code-review", "deploy"]
-            save_session(data_dir, 555, s)
+            save_session(data_dir, telegram_conversation_key(555), s)
 
             chat = FakeChat()
             user = FakeUser(42, "admin")
             msg = await send_command(
                 th.cmd_admin, chat, user, "/admin sessions 555", args=["sessions", "555"])
             reply = last_reply(msg)
-            assert "Session 555" in reply
+            assert f"Session {telegram_conversation_key(555)}" in reply
             assert "claude" in reply
             assert "Skills (2)" in reply
             assert "Approval: on" in reply
@@ -129,7 +130,7 @@ async def test_admin_sessions_detail_not_found():
 
         # Need at least one session so we pass the "no sessions" check
         s = default_session("claude", {"session_id": "a", "started": False}, "on")
-        save_session(data_dir, 111, s)
+        save_session(data_dir, telegram_conversation_key(111), s)
 
         chat = FakeChat()
         user = FakeUser(42, "admin")

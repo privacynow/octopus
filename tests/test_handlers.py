@@ -7,9 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from app.agents.bridge import registry_chat_id
+from app.agents.bridge import conversation_key_for_ref
 from app.agents.state import AgentRuntimeState, save_agent_runtime_state
 from app.agents.delivery import handle_registry_delivery
+from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.providers.base import RunContext, RunResult
 from app.transport import InboundMessage, InboundUser
 from app.storage import default_session, save_session
@@ -35,6 +36,22 @@ from tests.support.handler_support import (
     send_text,
     setup_globals,
 )
+
+
+def _conv(value):
+    return telegram_conversation_key(value)
+
+
+def _actor(value):
+    return telegram_actor_key(value)
+
+
+def _event(value):
+    return telegram_event_id(value)
+
+
+def _reg_conv(conversation_ref: str) -> str:
+    return conversation_key_for_ref(conversation_ref)
 
 
 async def async_noop(*args, **kwargs):
@@ -66,7 +83,7 @@ async def test_happy_path():
         assert any("uploads" in d for d in ctx.extra_dirs)
         assert ctx.skip_permissions is False
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, _conv(12345), prov)
         assert session["provider_state"]["started"] == True
         # Worker sends via bot, not msg.replies
         bot = th._bot_instance
@@ -98,12 +115,12 @@ async def test_worker_dispatch_schedules_completion_webhook_for_terminal_outcome
         prov.run_results = [RunResult(text="Terminal reply from provider.")]
 
         event = InboundMessage(
-            user=InboundUser(id=42, username="telegram-user"),
-            chat_id=12345,
+            user=InboundUser(id=_actor(42), username="telegram-user"),
+            conversation_key=_conv(12345),
             text="Do the thing.",
             source="telegram",
         )
-        item = {"id": "webhook-item-1", "chat_id": 12345, "update_id": 7001, "dispatch_mode": "fresh"}
+        item = {"id": "webhook-item-1", "conversation_key": _conv(12345), "event_id": _event(7001), "dispatch_mode": "fresh"}
 
         await th.worker_dispatch("message", event, item)
         await asyncio.sleep(0)
@@ -156,13 +173,13 @@ async def test_worker_dispatch_skips_completion_webhook_for_delegation_proposed(
         ]
 
         event = InboundMessage(
-            user=InboundUser(id=42, username="registry-ui"),
-            chat_id=12345,
+            user=InboundUser(id=_actor(42), username="registry-ui"),
+            conversation_key=_reg_conv("registry:conv-webhook"),
             text="Delegate this work.",
             source="registry",
             conversation_ref="registry:conv-webhook",
         )
-        item = {"id": "webhook-item-2", "chat_id": 12345, "update_id": 7002, "dispatch_mode": "fresh"}
+        item = {"id": "webhook-item-2", "conversation_key": _reg_conv("registry:conv-webhook"), "event_id": _event(7002), "dispatch_mode": "fresh"}
 
         await th.worker_dispatch("message", event, item)
         await asyncio.sleep(0)
@@ -327,17 +344,17 @@ async def test_registry_surface_input_respects_approval_mode():
         import app.telegram_handlers as th
 
         event = InboundMessage(
-            user=InboundUser(id=42, username="registry-ui"),
-            chat_id=12345,
+            user=InboundUser(id=_actor(42), username="registry-ui"),
+            conversation_key=_reg_conv("registry-conv-1"),
             text="Please refine this specification.",
             source="registry",
             conversation_ref="registry-conv-1",
         )
-        item = {"id": "registry-item-1", "chat_id": 12345, "update_id": 7001, "dispatch_mode": "fresh"}
+        item = {"id": "registry-item-1", "conversation_key": _reg_conv("registry-conv-1"), "event_id": _event(7001), "dispatch_mode": "fresh"}
 
         await th.worker_dispatch("message", event, item)
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, _reg_conv("registry-conv-1"), prov)
         assert len(prov.preflight_calls) == 1
         assert len(prov.run_calls) == 0
         assert session.get("pending_approval") is not None
@@ -369,7 +386,7 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
         )
         save_session(
             data_dir,
-            registry_chat_id("registry:conv-approve"),
+            _reg_conv("registry:conv-approve"),
             {
                 **default_session(prov.name, prov.new_provider_state(), "off"),
                 "pending_delegation": {
@@ -400,7 +417,7 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
             },
         )
 
-        session_after = load_session_disk(data_dir, registry_chat_id("registry:conv-approve"), prov)
+        session_after = load_session_disk(data_dir, _reg_conv("registry:conv-approve"), prov)
         pending = session_after.get("pending_delegation")
         assert outcome == "accepted"
         assert len(submitted) == 1
@@ -419,7 +436,7 @@ async def test_cancel_delegation_from_registry_delivery():
     ) as (data_dir, cfg, prov):
         save_session(
             data_dir,
-            registry_chat_id("registry:conv-cancel"),
+            _reg_conv("registry:conv-cancel"),
             {
                 **default_session(prov.name, prov.new_provider_state(), "off"),
                 "pending_delegation": {
@@ -450,7 +467,7 @@ async def test_cancel_delegation_from_registry_delivery():
             },
         )
 
-        session_after = load_session_disk(data_dir, registry_chat_id("registry:conv-cancel"), prov)
+        session_after = load_session_disk(data_dir, _reg_conv("registry:conv-cancel"), prov)
         assert outcome == "accepted"
         assert session_after.get("pending_delegation") is None
 
@@ -492,13 +509,13 @@ async def test_delegation_proposed_event_published(monkeypatch):
         ]
 
         event = InboundMessage(
-            user=InboundUser(id=42, username="registry-ui"),
-            chat_id=12345,
+            user=InboundUser(id=_actor(42), username="registry-ui"),
+            conversation_key=_reg_conv("registry:conv-proposed"),
             text="Ship the feature.",
             source="registry",
             conversation_ref="registry:conv-proposed",
         )
-        item = {"id": "registry-item-proposed", "chat_id": 12345, "update_id": 7101, "dispatch_mode": "fresh"}
+        item = {"id": "registry-item-proposed", "conversation_key": _reg_conv("registry:conv-proposed"), "event_id": _event(7101), "dispatch_mode": "fresh"}
 
         await th.worker_dispatch("message", event, item)
 
@@ -546,14 +563,14 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
         prov.run_results = [RunResult(text="Delegated review complete.")]
 
         event = InboundMessage(
-            user=InboundUser(id=42, username="origin-bot"),
-            chat_id=12345,
+            user=InboundUser(id=_actor(42), username="origin-bot"),
+            conversation_key=_reg_conv("routed-task-1"),
             text="Review the latest spec.",
             source="registry",
             conversation_ref="routed-task-1",
             routed_task_id="routed-task-1",
         )
-        item = {"id": "registry-item-2", "chat_id": 12345, "update_id": 7002, "dispatch_mode": "fresh"}
+        item = {"id": "registry-item-2", "conversation_key": _reg_conv("routed-task-1"), "event_id": _event(7002), "dispatch_mode": "fresh"}
 
         await th.worker_dispatch("message", event, item)
 
@@ -604,14 +621,14 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
         prov.run_results = [RunResult(text="Delegated review complete.")]
 
         event = InboundMessage(
-            user=InboundUser(id=42, username="origin-bot"),
-            chat_id=12345,
+            user=InboundUser(id=_actor(42), username="origin-bot"),
+            conversation_key=_reg_conv("routed-task-2"),
             text="Review the latest spec.",
             source="registry",
             conversation_ref="routed-task-2",
             routed_task_id="routed-task-2",
         )
-        item = {"id": "registry-item-3", "chat_id": 12345, "update_id": 7003, "dispatch_mode": "fresh"}
+        item = {"id": "registry-item-3", "conversation_key": _reg_conv("routed-task-2"), "event_id": _event(7003), "dispatch_mode": "fresh"}
 
         await th.worker_dispatch("message", event, item)
 
@@ -644,7 +661,7 @@ async def test_registry_routed_result_resumes_parent_conversation_without_new_ap
                 }
             ],
         }
-        save_session(data_dir, chat_id, session)
+        save_session(data_dir, _conv(chat_id), session)
         prov.run_results = [RunResult(text="Final synthesized answer.")]
 
         outcome = await handle_registry_delivery(
@@ -667,7 +684,7 @@ async def test_registry_routed_result_resumes_parent_conversation_without_new_ap
         assert await drain_one_worker_item(data_dir) is True
         assert len(prov.run_calls) == 1
         assert "delegated developer task completed successfully" in prov.run_calls[0]["prompt"].lower()
-        session_after = load_session_disk(data_dir, chat_id, prov)
+        session_after = load_session_disk(data_dir, _conv(chat_id), prov)
         assert session_after.get("pending_approval") is None
         assert session_after.get("pending_delegation") is None
         assert any(
@@ -701,7 +718,7 @@ async def test_delegation_completion_sends_final_message_all_completed():
                 }
             ],
         }
-        save_session(data_dir, chat_id, session)
+        save_session(data_dir, _conv(chat_id), session)
         prov.run_results = [RunResult(text="Final parent answer.")]
 
         outcome = await handle_registry_delivery(
@@ -758,7 +775,7 @@ async def test_delegation_completion_sends_final_message_partial_failed():
                 },
             ],
         }
-        save_session(data_dir, chat_id, session)
+        save_session(data_dir, _conv(chat_id), session)
         prov.run_results = [RunResult(text="Final parent answer.")]
 
         first = await handle_registry_delivery(
@@ -825,7 +842,7 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
                 }
             ],
         }
-        save_session(data_dir, chat_id, session)
+        save_session(data_dir, _conv(chat_id), session)
 
         monkeypatch.setattr(
             "app.agents.delivery.work_queue.record_and_admit_message",
@@ -850,7 +867,7 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
 
         assert outcome == "retry_later"
         assert len(prov.run_calls) == 0
-        session_after = load_session_disk(data_dir, chat_id, prov)
+        session_after = load_session_disk(data_dir, _conv(chat_id), prov)
         pending = session_after.get("pending_delegation")
         assert pending is not None
         assert pending["tasks"][0]["status"] == "completed"
@@ -882,7 +899,7 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
                 }
             ],
         }
-        save_session(data_dir, chat_id, session)
+        save_session(data_dir, _conv(chat_id), session)
 
         monkeypatch.setattr(
             "app.agents.delivery.work_queue.record_and_admit_message",
@@ -910,7 +927,7 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
             "All delegated tasks completed." in message.get("text", "")
             for message in th._bot_instance.sent_messages
         )
-        session_after = load_session_disk(data_dir, chat_id, prov)
+        session_after = load_session_disk(data_dir, _conv(chat_id), prov)
         pending = session_after.get("pending_delegation")
         assert pending is not None
         assert pending["status"] == "completed"
@@ -947,7 +964,7 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
                 },
             ],
         }
-        save_session(data_dir, chat_id, session)
+        save_session(data_dir, _conv(chat_id), session)
         prov.run_results = [RunResult(text="Combined final answer.")]
 
         first_outcome = await handle_registry_delivery(
@@ -969,7 +986,7 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
         assert first_outcome == "accepted"
         assert await drain_one_worker_item(data_dir) is False
         assert len(prov.run_calls) == 0
-        mid_session = load_session_disk(data_dir, chat_id, prov)
+        mid_session = load_session_disk(data_dir, _conv(chat_id), prov)
         pending_mid = mid_session.get("pending_delegation")
         assert pending_mid is not None
         assert pending_mid["tasks"][0]["status"] == "completed"
@@ -997,7 +1014,7 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
         prompt = prov.run_calls[0]["prompt"]
         assert "Developer child result." in prompt
         assert "Reviewer child result." in prompt
-        final_session = load_session_disk(data_dir, chat_id, prov)
+        final_session = load_session_disk(data_dir, _conv(chat_id), prov)
         assert final_session.get("pending_delegation") is None
 
 
@@ -1036,7 +1053,7 @@ async def test_registry_surface_parent_resumes_through_registry_surface(monkeypa
         monkeypatch.setattr(RegistryConversationIO, "_publish_event", fake_publish_event)
 
         conversation_ref = "registry:parent-conv-1"
-        chat_id = registry_chat_id(conversation_ref)
+        chat_id = _reg_conv(conversation_ref)
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
@@ -1092,7 +1109,7 @@ async def test_registry_surface_action_retry_skip_clears_pending_retry():
         chat_id = 12345
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_retry"] = {
-            "request_user_id": 42,
+            "request_user_id": "tg:42",
             "prompt": "Retry this",
             "image_paths": [],
             "context_hash": "",
@@ -1100,7 +1117,7 @@ async def test_registry_surface_action_retry_skip_clears_pending_retry():
             "trust_tier": "trusted",
             "created_at": 0,
         }
-        save_session(data_dir, chat_id, session)
+        save_session(data_dir, _conv(chat_id), session)
 
         outcome = await handle_registry_delivery(
             cfg,
@@ -1115,7 +1132,7 @@ async def test_registry_surface_action_retry_skip_clears_pending_retry():
         )
 
         assert outcome == "accepted"
-        session_after = load_session_disk(data_dir, chat_id, prov)
+        session_after = load_session_disk(data_dir, _conv(chat_id), prov)
         assert session_after.get("pending_retry") is None
 
 
@@ -1133,7 +1150,7 @@ async def test_registry_surface_action_retry_allow_executes_request():
         chat_id = 12345
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_retry"] = {
-            "request_user_id": 42,
+            "request_user_id": "tg:42",
             "prompt": "Retry this with extra access",
             "image_paths": [],
             "context_hash": "",
@@ -1141,7 +1158,7 @@ async def test_registry_surface_action_retry_allow_executes_request():
             "trust_tier": "trusted",
             "created_at": 0,
         }
-        save_session(data_dir, chat_id, session)
+        save_session(data_dir, _conv(chat_id), session)
         prov.run_results = [RunResult(text="retry complete")]
 
         outcome = await handle_registry_delivery(
@@ -1159,7 +1176,7 @@ async def test_registry_surface_action_retry_allow_executes_request():
         assert outcome == "accepted"
         assert len(prov.run_calls) == 1
         assert prov.run_calls[0]["prompt"] == "Retry this with extra access"
-        session_after = load_session_disk(data_dir, chat_id, prov)
+        session_after = load_session_disk(data_dir, _conv(chat_id), prov)
         assert session_after.get("pending_retry") is None
 
 
@@ -1176,7 +1193,7 @@ async def test_registry_surface_action_recovery_discard_discards_pending_recover
 
         chat_id = 12345
         _, item_id = work_queue.record_and_enqueue(
-            data_dir, 600, chat_id, 42, "message",
+            data_dir, _event(600), _conv(chat_id), _actor(42), "message",
             payload='{"text": "old message"}',
         )
         conn = runtime_backend.transport_store()._transport_db(data_dir)
@@ -1219,8 +1236,8 @@ async def test_registry_surface_action_recovery_replay_executes_request():
 
         chat_id = 12345
         _, item_id = work_queue.record_and_enqueue(
-            data_dir, 601, chat_id, 42, "message",
-            payload='{"user_id": 42, "username": "alice", "chat_id": 12345, "text": "replay me", "attachments": []}',
+            data_dir, _event(601), _conv(chat_id), _actor(42), "message",
+            payload='{"actor_key": "tg:42", "username": "alice", "conversation_key": "tg:12345", "text": "replay me", "attachments": []}',
         )
         conn = runtime_backend.transport_store()._transport_db(data_dir)
         conn.execute(
@@ -1273,13 +1290,13 @@ async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch)
             monkeypatch.setattr(RegistryConversationIO, "_publish_event", fake_publish_event)
 
             event = InboundMessage(
-                user=InboundUser(id=42, username="registry-ui"),
-                chat_id=registry_chat_id("registry-conv-2"),
+                user=InboundUser(id=_actor(42), username="registry-ui"),
+                conversation_key=_reg_conv("registry-conv-2"),
                 text="resume later",
                 source="registry",
                 conversation_ref="registry-conv-2",
             )
-            item = {"id": "registry-item-4", "chat_id": event.chat_id, "update_id": 8123, "dispatch_mode": "recovery"}
+            item = {"id": "registry-item-4", "conversation_key": event.conversation_key, "event_id": _event(8123), "dispatch_mode": "recovery"}
 
             with pytest.raises(work_queue.PendingRecovery):
                 await th.worker_dispatch("message", event, item)
@@ -1297,7 +1314,7 @@ async def test_cmd_new():
 
         session = default_session("claude", {"session_id": "old-sess", "started": True}, "on")
         session["active_skills"] = ["github-integration"]
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         scripts_dir = data_dir / "scripts" / "12345" / "some-skill"
         scripts_dir.mkdir(parents=True)
@@ -1311,7 +1328,7 @@ async def test_cmd_new():
 
         await th.cmd_new(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
 
-        new_session = load_session_disk(data_dir, 12345, prov)
+        new_session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert not new_session["provider_state"].get("started")
         assert new_session["approval_mode"] == "off"
         assert not (data_dir / "scripts" / "12345").exists()
@@ -1339,7 +1356,7 @@ async def test_provider_timeout():
         reply_texts = " ".join(m.get("text", "") for m in _th._bot_instance.sent_messages)
         assert "partial output" not in reply_texts
         assert sum(1 for m in _th._bot_instance.sent_messages if m.get("text")) >= 1
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
@@ -1364,7 +1381,7 @@ async def test_provider_error_returncode():
         reply_texts = " ".join(m.get("text", "") for m in _th._bot_instance.sent_messages)
         assert "segfault" not in reply_texts
         assert sum(1 for m in _th._bot_instance.sent_messages if m.get("text")) >= 1
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
@@ -1385,12 +1402,12 @@ async def test_cmd_role():
 
         msg2 = FakeMessage(chat=chat, text="/role security auditor")
         await th.cmd_role(FakeUpdate(message=msg2, user=user, chat=chat), FakeContext(args=["security", "auditor"]))
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("role") == "security auditor"
 
         msg3 = FakeMessage(chat=chat, text="/role clear")
         await th.cmd_role(FakeUpdate(message=msg3, user=user, chat=chat), FakeContext(args=["clear"]))
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("role") == "default engineer"
         assert "default" in " ".join(r.get("text", "") for r in msg3.replies).lower()
 
@@ -1425,18 +1442,18 @@ async def test_new_preserves_default_skills():
         setup_globals(cfg, prov)
 
         key = derive_encryption_key(cfg.telegram_token)
-        save_user_credential(data_dir, 42, "github-integration", "GITHUB_TOKEN", "ghp_test", key)
+        save_user_credential(data_dir, _actor(42), "github-integration", "GITHUB_TOKEN", "ghp_test", key)
 
         session = default_session("claude", prov.new_provider_state(), "off")
         session["active_skills"] = ["github-integration", "extra-skill"]
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         import app.telegram_handlers as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
         await th.cmd_new(FakeUpdate(message=FakeMessage(chat=chat, text="/new"), user=user, chat=chat), FakeContext())
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert "github-integration" in session.get("active_skills", [])
         assert "extra-skill" not in session.get("active_skills", [])
 
@@ -1747,7 +1764,7 @@ async def test_doctor_admin_warning():
         setup_globals(cfg, prov)
 
         session = default_session("claude", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         import app.telegram_handlers as th
 
@@ -1770,7 +1787,7 @@ async def test_doctor_no_warning_explicit_admin():
         setup_globals(cfg, prov)
 
         session = default_session("claude", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         import app.telegram_handlers as th
 
@@ -1803,7 +1820,7 @@ async def test_prompt_size_warning_before_activation():
             setup_globals(cfg, prov)
 
             session = default_session("claude", prov.new_provider_state(), "off")
-            save_session(data_dir, 1, session)
+            save_session(data_dir, telegram_conversation_key(1), session)
 
             import app.telegram_handlers as th
             chat = FakeChat(1)
@@ -1817,7 +1834,7 @@ async def test_prompt_size_warning_before_activation():
             assert "8,000" in reply
             assert "Continue" in reply
 
-            session = load_session_disk(data_dir, 1, prov)
+            session = load_session_disk(data_dir, telegram_conversation_key(1), prov)
             assert "big-skill" not in session.get("active_skills", [])
         finally:
             skills_mod.CUSTOM_DIR = orig_custom_dir
@@ -1845,7 +1862,7 @@ async def test_prompt_size_no_warning_small_skill():
             setup_globals(cfg, prov)
 
             session = default_session("claude", prov.new_provider_state(), "off")
-            save_session(data_dir, 1, session)
+            save_session(data_dir, telegram_conversation_key(1), session)
 
             import app.telegram_handlers as th
             chat = FakeChat(1)
@@ -1858,7 +1875,7 @@ async def test_prompt_size_no_warning_small_skill():
             assert "activated" in reply
             assert "prompt context" not in reply
 
-            session = load_session_disk(data_dir, 1, prov)
+            session = load_session_disk(data_dir, telegram_conversation_key(1), prov)
             assert "tiny-skill" in session.get("active_skills", [])
         finally:
             skills_mod.CUSTOM_DIR = orig_custom_dir
@@ -1872,14 +1889,14 @@ async def test_doctor_stale_session_warnings():
 
         session1 = default_session("claude", prov.new_provider_state(), "off")
         session1["pending_approval"] = {"prompt": "do something", "created_at": 0}
-        save_session(data_dir, 100, session1)
+        save_session(data_dir, telegram_conversation_key(100), session1)
 
         session2 = default_session("claude", prov.new_provider_state(), "off")
-        session2["awaiting_skill_setup"] = {"user_id": 42, "skill": "test", "started_at": 0}
-        save_session(data_dir, 200, session2)
+        session2["awaiting_skill_setup"] = {"user_id": "tg:42", "skill": "test", "started_at": 0}
+        save_session(data_dir, telegram_conversation_key(200), session2)
 
         session3 = default_session("claude", prov.new_provider_state(), "off")
-        save_session(data_dir, 300, session3)
+        save_session(data_dir, telegram_conversation_key(300), session3)
 
         import app.telegram_handlers as th
         chat = FakeChat(1)
@@ -1904,7 +1921,7 @@ async def test_doctor_no_warning_explicit_admin_equal_to_allowed():
         setup_globals(cfg, prov)
 
         session = default_session("claude", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         import app.telegram_handlers as th
         chat = FakeChat(1)
@@ -1923,11 +1940,11 @@ async def test_doctor_no_stale_warning_for_fresh_sessions():
 
         session1 = default_session("claude", prov.new_provider_state(), "off")
         session1["pending_approval"] = {"prompt": "do something", "created_at": _time.time()}
-        save_session(data_dir, 100, session1)
+        save_session(data_dir, telegram_conversation_key(100), session1)
 
         session2 = default_session("claude", prov.new_provider_state(), "off")
-        session2["awaiting_skill_setup"] = {"user_id": 42, "skill": "test", "started_at": _time.time()}
-        save_session(data_dir, 200, session2)
+        session2["awaiting_skill_setup"] = {"user_id": "tg:42", "skill": "test", "started_at": _time.time()}
+        save_session(data_dir, telegram_conversation_key(200), session2)
 
         import app.telegram_handlers as th
         chat = FakeChat(1)
@@ -2201,7 +2218,7 @@ async def test_project_use_switches_project():
             assert "Provider session reset" in reply
 
             # Verify session has project_id set and provider state reset
-            session = load_session_disk(data_dir, 2001, prov)
+            session = load_session_disk(data_dir, telegram_conversation_key(2001), prov)
             assert session["project_id"] == "frontend"
             # Provider state should be fresh
             assert session["provider_state"].get("started") is not True
@@ -2241,7 +2258,7 @@ async def test_project_clear_resets_to_default():
             reply = last_reply(msg)
             assert "Project cleared" in reply
 
-            session = load_session_disk(data_dir, 3001, prov)
+            session = load_session_disk(data_dir, telegram_conversation_key(3001), prov)
             assert session.get("project_id", "") == ""
 
 
@@ -2280,13 +2297,13 @@ async def test_project_switch_invalidates_pending():
             # Create a session with a pending request
             session = default_session("claude", prov.new_provider_state(), "on")
             session["pending_approval"] = {"prompt": "do something", "created_at": 0}
-            save_session(data_dir, 5001, session)
+            save_session(data_dir, telegram_conversation_key(5001), session)
 
             # Switch project
             await send_command(th.cmd_project, chat, user, "/project", args=["use", "proj1"])
 
             # Pending should be cleared
-            session = load_session_disk(data_dir, 5001, prov)
+            session = load_session_disk(data_dir, telegram_conversation_key(5001), prov)
             assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
@@ -2344,7 +2361,7 @@ async def test_policy_set_inspect():
         # Send a message to create session with provider state
         await send_text(chat, user, "hello")
         await drain_one_worker_item(data_dir)
-        session = load_session_disk(data_dir, 1001, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
         assert session.get("file_policy", "") != "inspect"
 
         # Set inspect
@@ -2354,7 +2371,7 @@ async def test_policy_set_inspect():
         assert "reset" in reply.lower()
 
         # Verify persisted
-        session = load_session_disk(data_dir, 1001, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
         assert session.get("file_policy") == "inspect"
 
 
@@ -2372,7 +2389,7 @@ async def test_policy_set_edit():
         reply = last_reply(msg)
         assert "edit" in reply
 
-        session = load_session_disk(data_dir, 1001, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
         assert session.get("file_policy") == "edit"
 
 
@@ -2501,7 +2518,7 @@ async def test_model_command_switches_profile():
         msg = await send_command(th.cmd_model, chat, user, "/model", args=["fast"])
         reply = last_reply(msg)
         assert "fast" in reply.lower()
-        session = load_session_disk(data_dir, 1, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(1), prov)
         assert session.get("model_profile") == "fast"
 
 
@@ -2526,7 +2543,7 @@ async def test_settings_callback_model():
         chat = FakeChat(1)
         user = FakeUser(42)
         query, _ = await send_callback(th.handle_settings_callback, chat, user, "setting_model:fast")
-        session = load_session_disk(data_dir, 1, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(1), prov)
         assert session.get("model_profile") == "fast"
 
 
@@ -2538,7 +2555,7 @@ async def test_settings_callback_approval():
         chat = FakeChat(1)
         user = FakeUser(42)
         query, _ = await send_callback(th.handle_settings_callback, chat, user, "setting_approval:off")
-        session = load_session_disk(data_dir, 1, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(1), prov)
         assert session.get("approval_mode") == "off"
 
 
@@ -2550,7 +2567,7 @@ async def test_settings_callback_compact():
         chat = FakeChat(1)
         user = FakeUser(42)
         query, _ = await send_callback(th.handle_settings_callback, chat, user, "setting_compact:on")
-        session = load_session_disk(data_dir, 1, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(1), prov)
         assert session.get("compact_mode") is True
 
 
@@ -2562,7 +2579,7 @@ async def test_settings_callback_policy():
         chat = FakeChat(1)
         user = FakeUser(42)
         query, _ = await send_callback(th.handle_settings_callback, chat, user, "setting_policy:inspect")
-        session = load_session_disk(data_dir, 1, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(1), prov)
         assert session.get("file_policy") == "inspect"
 
 
@@ -2576,10 +2593,10 @@ async def test_compact_change_does_not_reset_provider_state():
         prov.run_results = [RunResult(text="ok", provider_state_updates={"started": True})]
         await send_text(chat, user, "hi")
         await drain_one_worker_item(data_dir)
-        session_before = load_session_disk(data_dir, 1, prov)
+        session_before = load_session_disk(data_dir, telegram_conversation_key(1), prov)
         assert session_before["provider_state"].get("started") is True
         await send_callback(th.handle_settings_callback, chat, user, "setting_compact:on")
-        session_after = load_session_disk(data_dir, 1, prov)
+        session_after = load_session_disk(data_dir, telegram_conversation_key(1), prov)
         assert session_after["provider_state"].get("started") is True
         assert session_after.get("compact_mode") is True
 
@@ -2711,7 +2728,7 @@ async def test_settings_callback_project_use():
             await send_text(chat, user, "hi")
             await drain_one_worker_item(data_dir)
             query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_project:myproj")
-            session = load_session_disk(data_dir, 1, prov)
+            session = load_session_disk(data_dir, telegram_conversation_key(1), prov)
             assert session["project_id"] == "myproj"
             assert session["provider_state"].get("started") is not True
             edit = cb_msg.replies[-1].get("edit_text", "")
@@ -2731,7 +2748,7 @@ async def test_settings_callback_project_clear():
             user = FakeUser(42)
             await send_command(th.cmd_project, chat, user, "/project", args=["use", "p1"])
             query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_project:clear")
-            session = load_session_disk(data_dir, 1, prov)
+            session = load_session_disk(data_dir, telegram_conversation_key(1), prov)
             assert session.get("project_id", "") == ""
             edit = cb_msg.replies[-1].get("edit_text", "")
             assert "Project cleared" in edit
@@ -2807,11 +2824,11 @@ async def test_settings_callback_project_clear_no_projects_no_mutation():
         user = FakeUser(42)
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["project_id"] = "stale_project"
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
         query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_project:clear")
         edit = cb_msg.replies[-1].get("edit_text", "")
         assert no_projects_configured() in edit
-        reloaded = load_session_disk(data_dir, 1, prov)
+        reloaded = load_session_disk(data_dir, telegram_conversation_key(1), prov)
         assert reloaded.get("project_id") == "stale_project", (
             "Callback must not mutate session when projects are disabled"
         )
@@ -2972,9 +2989,9 @@ async def test_settings_callback_project_clears_pending():
             user = FakeUser(42)
             session = default_session("claude", prov.new_provider_state(), "on")
             session["pending_approval"] = {"prompt": "do it", "created_at": 0}
-            save_session(data_dir, 1, session)
+            save_session(data_dir, telegram_conversation_key(1), session)
             await send_callback(th.handle_settings_callback, chat, user, "setting_project:proj1")
-            session = load_session_disk(data_dir, 1, prov)
+            session = load_session_disk(data_dir, telegram_conversation_key(1), prov)
             assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
@@ -3298,12 +3315,12 @@ async def test_message_after_new_gets_fresh_session():
         ]
         await send_text(chat, user, "first message")
         await drain_one_worker_item(data_dir)
-        session1 = load_session_disk(data_dir, 1001, prov)
+        session1 = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
         assert session1["provider_state"]["started"] is True
 
         # Reset
         await send_command(th.cmd_new, chat, user, "/new")
-        session2 = load_session_disk(data_dir, 1001, prov)
+        session2 = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
         assert session2["provider_state"]["started"] is False
 
         # Send another message
@@ -3750,7 +3767,7 @@ async def test_allowuser_grants_access_without_restart():
             "/allowuser 99999 incident access",
             args=["99999", "incident", "access"],
         )
-        assert last_reply(msg) == "User 99999 added to allowed list."
+        assert last_reply(msg) == "Actor tg:99999 added to allowed list."
         assert th.is_allowed(stranger) is True
 
         await send_text(chat, stranger, "hello after allow")
@@ -3778,7 +3795,7 @@ async def test_blockuser_blocks_allowed_user_without_restart():
             "/blockuser 100 abuse",
             args=["100", "abuse"],
         )
-        assert last_reply(msg) == "User 100 blocked."
+        assert last_reply(msg) == "Actor tg:100 blocked."
         assert th.is_allowed(target) is False
 
         await send_text(chat, target, "hello after block")
@@ -3826,8 +3843,7 @@ async def test_access_commands_reject_non_admin(handler_name):
         assert last_reply(msg) == "This command requires admin access."
 
 
-@pytest.mark.parametrize("args", [[], ["abc"], ["42x"]])
-async def test_allowuser_usage_hint_for_missing_or_non_numeric_arg(args):
+async def test_allowuser_usage_hint_for_missing_arg():
     import app.telegram_handlers as th
 
     with fresh_env(config_overrides={
@@ -3838,5 +3854,24 @@ async def test_allowuser_usage_hint_for_missing_or_non_numeric_arg(args):
         del data_dir, cfg, prov
         chat = FakeChat(chat_id=12345)
         admin = FakeUser(uid=1, username="admin")
-        msg = await send_command(th.cmd_allowuser, chat, admin, "/allowuser", args=args)
-        assert last_reply(msg) == "Usage: /allowuser <user_id> [reason]"
+        msg = await send_command(th.cmd_allowuser, chat, admin, "/allowuser", args=[])
+        assert last_reply(msg) == "Usage: /allowuser <actor_key|user_id> [reason]"
+
+
+@pytest.mark.parametrize(
+    ("arg", "expected_actor"),
+    [("abc", "abc"), ("42x", "42x"), ("99999", "tg:99999")],
+)
+async def test_allowuser_accepts_actor_keys_and_user_ids(arg, expected_actor):
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": False,
+        "allowed_user_ids": frozenset({1}),
+        "admin_user_ids": frozenset({1}),
+    }) as (data_dir, cfg, prov):
+        del data_dir, cfg, prov
+        chat = FakeChat(chat_id=12345)
+        admin = FakeUser(uid=1, username="admin")
+        msg = await send_command(th.cmd_allowuser, chat, admin, f"/allowuser {arg}", args=[arg])
+        assert last_reply(msg) == f"Actor {expected_actor} added to allowed list."

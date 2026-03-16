@@ -17,6 +17,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.identity import parse_actor_key
+
 
 @dataclass
 class ProjectBinding:
@@ -38,7 +40,7 @@ class ProjectBinding:
 @dataclass
 class PendingApproval:
     """A preflight approval request waiting for /approve or /reject."""
-    request_user_id: int
+    request_user_id: str
     prompt: str
     image_paths: list[str]
     attachment_dicts: list[dict[str, Any]]
@@ -50,7 +52,7 @@ class PendingApproval:
 @dataclass
 class PendingRetry:
     """A denial-retry request waiting for user grant."""
-    request_user_id: int
+    request_user_id: str
     prompt: str
     image_paths: list[str]
     context_hash: str
@@ -62,7 +64,7 @@ class PendingRetry:
 @dataclass
 class AwaitingSkillSetup:
     """Conversational credential collection state."""
-    user_id: int
+    user_id: str
     skill: str
     remaining: list[dict[str, Any]]  # [{key, prompt, help_url, validate}, ...]
     started_at: float | str = 0.0
@@ -154,6 +156,10 @@ def session_from_dict(d: dict[str, Any]) -> SessionState:
         # Filter out keys not in the dataclass to tolerate legacy extras
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
         filtered = {k: v for k, v in raw.items() if k in valid_keys}
+        if "request_user_id" in filtered:
+            filtered["request_user_id"] = parse_actor_key(filtered["request_user_id"])
+        if "user_id" in filtered:
+            filtered["user_id"] = parse_actor_key(filtered["user_id"])
         try:
             return cls(**filtered)
         except TypeError:

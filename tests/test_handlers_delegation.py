@@ -1,4 +1,5 @@
 from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+from app.identity import telegram_conversation_key
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
 from tests.support.handler_support import (
@@ -50,7 +51,7 @@ async def test_execute_request_proposes_delegation_and_persists_pending_delegati
         await send_text(chat, user, "Ship the feature.")
         assert await drain_one_worker_item(data_dir) is True
 
-        session = load_session_disk(data_dir, chat.id, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
         pending = session.get("pending_delegation")
         assert pending is not None
         assert [task["status"] for task in pending["tasks"]] == ["proposed", "proposed"]
@@ -109,11 +110,11 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
                 }
             ],
         }
-        save_session(data_dir, chat.id, session)
+        save_session(data_dir, telegram_conversation_key(chat.id), session)
 
         query, msg = await send_callback(th.handle_delegation_callback, chat, user, f"delegation_approve:{chat.id}")
 
-        session_after = load_session_disk(data_dir, chat.id, prov)
+        session_after = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
         pending = session_after.get("pending_delegation")
         assert len(submitted) == 1
         assert submitted[0].routed_task_id == "task-1"
@@ -163,11 +164,11 @@ async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_s
                 }
             ],
         }
-        save_session(data_dir, chat.id, session)
+        save_session(data_dir, telegram_conversation_key(chat.id), session)
 
         query, msg = await send_callback(th.handle_delegation_callback, chat, user, f"delegation_cancel:{chat.id}")
 
-        session_after = load_session_disk(data_dir, chat.id, prov)
+        session_after = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
         assert called == []
         assert session_after.get("pending_delegation") is None
         assert last_reply(msg) == "Delegation cancelled. No requests were sent."
@@ -219,11 +220,11 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
                 }
             ],
         }
-        save_session(data_dir, chat.id, session)
+        save_session(data_dir, telegram_conversation_key(chat.id), session)
 
         _, msg = await send_callback(th.handle_delegation_callback, chat, user, f"delegation_approve:{chat.id}")
 
-        session_after = load_session_disk(data_dir, chat.id, prov)
+        session_after = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
         pending = session_after.get("pending_delegation")
         assert called == []
         assert pending is not None
@@ -255,7 +256,7 @@ async def test_delegation_approve_no_pending_is_a_no_op():
         user = FakeUser()
         query, msg = await send_callback(th.handle_delegation_callback, chat, user, f"delegation_approve:{chat.id}")
 
-        session_after = load_session_disk(data_dir, chat.id, prov)
+        session_after = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
         assert session_after.get("pending_delegation") is None
         assert last_reply(msg) == "Nothing to approve."
         assert query.answered is True

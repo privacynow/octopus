@@ -3,12 +3,16 @@
 import asyncio
 from pathlib import Path
 
-from app.agents.bridge import admit_registry_delivery, registry_chat_id
+from app.agents.bridge import admit_registry_delivery, conversation_key_for_ref
 from app.agents.delivery import handle_registry_delivery
 from app.agents.runtime import AgentRuntime
 from app.agents.state import load_agent_runtime_state
 from app.config import derive_agent_slug
 from tests.support.config_support import make_config
+
+
+def _reg_conv(conversation_ref: str) -> str:
+    return conversation_key_for_ref(conversation_ref)
 
 
 def test_derive_agent_slug_normalizes_display_name():
@@ -405,6 +409,6 @@ async def test_handle_registry_surface_action_and_control_dispatch(monkeypatch, 
     assert approve_outcome == "accepted"
     assert control_outcome == "accepted"
     assert seen == [
-        ("approve", registry_chat_id("conv-approve"), "conv-approve"),
-        ("cancel", registry_chat_id("conv-cancel"), "conv-cancel"),
+        ("approve", _reg_conv("conv-approve"), "conv-approve"),
+        ("cancel", _reg_conv("conv-cancel"), "conv-cancel"),
     ]

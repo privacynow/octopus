@@ -32,6 +32,7 @@ from app.progress import render as render_progress
 from app.providers.codex import CodexProvider
 from app.storage import default_session, save_session
 from tests.support.config_support import make_config as _make_config
+from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
@@ -51,6 +52,18 @@ from tests.support.handler_support import (
     set_bot_instance,
     setup_globals,
 )
+
+
+def _conv(value):
+    return telegram_conversation_key(value)
+
+
+def _actor(value):
+    return telegram_actor_key(value)
+
+
+def _event(value):
+    return telegram_event_id(value)
 
 
 # Tests migrated to owner suites:
@@ -472,7 +485,7 @@ async def test_doctor_reports_prompt_weight():
     with fresh_env() as (data_dir, cfg, prov):
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["role"] = "You are a senior Python engineer specializing in async systems."
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
         user = FakeUser(42)
@@ -495,7 +508,7 @@ async def test_doctor_prompt_weight_uses_resolved_context():
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["role"] = "You are a senior engineer."
         session["active_skills"] = ["nonexistent-skill"]
-        save_session(data_dir, 2001, session)
+        save_session(data_dir, telegram_conversation_key(2001), session)
 
         chat = FakeChat(2001)
         stranger = FakeUser(uid=999, username="nobody")
@@ -616,7 +629,7 @@ async def test_contended_approval_callback_single_answer():
         from app.session_state import PendingApproval
         ctx_hash = th._resolve_context(session).context_hash
         session.pending_approval = PendingApproval(
-            request_user_id=user.id, prompt="test", image_paths=[],
+            request_user_id=_actor(user.id), prompt="test", image_paths=[],
             attachment_dicts=[], context_hash=ctx_hash,
             created_at=0, trust_tier="trusted",
         )
@@ -750,13 +763,14 @@ async def test_same_chat_overlapping_updates_complete_correctly():
         # Both work items are done (not queued)
         conn = runtime_backend.transport_store()._transport_db(data_dir)
         rows = conn.execute(
-            "SELECT update_id, state FROM work_items WHERE chat_id = 9001 "
-            "ORDER BY update_id"
+            "SELECT event_id, state FROM work_items WHERE conversation_key = ? "
+            "ORDER BY event_id",
+            (_conv(9001),),
         ).fetchall()
         assert len(rows) == 2
         for row in rows:
             assert row["state"] == "done", (
-                f"Work item for update {row['update_id']} is '{row['state']}', expected 'done'"
+                f"Work item for event {row['event_id']} is '{row['state']}', expected 'done'"
             )
 
 
@@ -797,7 +811,7 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
         "allowed_user_ids": frozenset({42}),
     }) as (data_dir, cfg, prov):
         # Create a real claimed work item in the DB (must set claimed_at for CHECK and validator).
-        _, item_id = record_and_enqueue(data_dir, 9999, 12345, 42, "message")
+        _, item_id = record_and_enqueue(data_dir, telegram_event_id(9999), telegram_conversation_key(12345), telegram_actor_key(42), "message")
         conn = runtime_backend.transport_store()._transport_db(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'claimed', worker_id = ?, claimed_at = ? WHERE id = ?",
@@ -809,12 +823,17 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
         set_bot_instance(bot)
         try:
             event = InboundMessage(
-                user=InboundUser(id=42, username="alice"),
-                chat_id=12345,
+                user=InboundUser(id=_actor(42), username="alice"),
+                conversation_key=_conv(12345),
                 text="replay this message",
                 attachments=(),
             )
-            item = {"chat_id": 12345, "update_id": 9999, "id": item_id, "dispatch_mode": "recovery"}
+            item = {
+                "conversation_key": _conv(12345),
+                "event_id": _event(9999),
+                "id": item_id,
+                "dispatch_mode": "recovery",
+            }
 
             with pytest.raises(PendingRecovery):
                 await th.worker_dispatch("message", event, item)
@@ -878,8 +897,8 @@ async def test_interrupted_message_run_stays_claimed_for_recovery():
 
         conn = runtime_backend.transport_store()._transport_db(data_dir)
         row = conn.execute(
-            "SELECT state, worker_id FROM work_items WHERE update_id = ?",
-            (upd.update_id,),
+            "SELECT state, worker_id FROM work_items WHERE event_id = ?",
+            (_event(upd.update_id),),
         ).fetchone()
         assert row["state"] == "claimed"
         assert row["worker_id"] == "test-boot"
@@ -887,8 +906,8 @@ async def test_interrupted_message_run_stays_claimed_for_recovery():
         recovered = recover_stale_claims(data_dir, current_worker_id="next-boot")
         assert recovered == 1
         row = conn.execute(
-            "SELECT state, worker_id FROM work_items WHERE update_id = ?",
-            (upd.update_id,),
+            "SELECT state, worker_id FROM work_items WHERE event_id = ?",
+            (_event(upd.update_id),),
         ).fetchone()
         assert row["state"] == "queued"
         assert row["worker_id"] is None
@@ -927,8 +946,8 @@ async def test_any_signal_treated_as_interrupted(rc):
         # Work item stays claimed
         conn = runtime_backend.transport_store()._transport_db(data_dir)
         row = conn.execute(
-            "SELECT state FROM work_items WHERE update_id = ?",
-            (upd.update_id,),
+            "SELECT state FROM work_items WHERE event_id = ?",
+            (_event(upd.update_id),),
         ).fetchone()
         assert row["state"] == "claimed"
 
@@ -1084,8 +1103,8 @@ async def test_command_exception_marks_work_item_failed():
 
         conn = runtime_backend.transport_store()._transport_db(data_dir)
         row = conn.execute(
-            "SELECT state FROM work_items WHERE update_id = ?",
-            (upd.update_id,),
+            "SELECT state FROM work_items WHERE event_id = ?",
+            (_event(upd.update_id),),
         ).fetchone()
         assert row["state"] == "failed"
 
@@ -1116,8 +1135,8 @@ async def test_callback_exception_marks_work_item_failed():
 
         conn = runtime_backend.transport_store()._transport_db(data_dir)
         row = conn.execute(
-            "SELECT state FROM work_items WHERE update_id = ?",
-            (upd.update_id,),
+            "SELECT state FROM work_items WHERE event_id = ?",
+            (_event(upd.update_id),),
         ).fetchone()
         assert row["state"] == "failed"
 
@@ -1195,8 +1214,8 @@ async def test_callback_none_event_completes_work_item():
 
         conn = runtime_backend.transport_store()._transport_db(data_dir)
         row = conn.execute(
-            "SELECT state FROM work_items WHERE update_id = ?",
-            (upd.update_id,),
+            "SELECT state FROM work_items WHERE event_id = ?",
+            (_event(upd.update_id),),
         ).fetchone()
         assert row is not None, "work item should exist"
         assert row["state"] == "done", f"expected done, got {row['state']}"
@@ -1740,12 +1759,16 @@ async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
         set_bot_instance(bot)
         try:
             event = InboundMessage(
-                user=InboundUser(id=42, username="alice"),
-                chat_id=12345,
+                user=InboundUser(id=_actor(42), username="alice"),
+                conversation_key=_conv(12345),
                 text="replay this",
                 attachments=(),
             )
-            item = {"chat_id": 12345, "update_id": 8888, "id": "replay-item"}
+            item = {
+                "conversation_key": _conv(12345),
+                "event_id": _event(8888),
+                "id": "replay-item",
+            }
 
             # Should return normally (not raise PendingRecovery)
             await th.worker_dispatch("message", event, item)
@@ -1771,12 +1794,16 @@ async def test_worker_dispatch_command_still_notifies():
         set_bot_instance(bot)
         try:
             event = InboundCommand(
-                user=InboundUser(id=42, username="alice"),
-                chat_id=12345,
+                user=InboundUser(id=_actor(42), username="alice"),
+                conversation_key=_conv(12345),
                 command="new",
                 args="",
             )
-            item = {"chat_id": 12345, "update_id": 7777, "id": "cmd-item"}
+            item = {
+                "conversation_key": _conv(12345),
+                "event_id": _event(7777),
+                "id": "cmd-item",
+            }
 
             await th.worker_dispatch("command", event, item)
 

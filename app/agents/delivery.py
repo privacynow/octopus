@@ -18,7 +18,7 @@ from app.agents.orchestration import (
 from app.agents.bridge import (
     admit_registry_delivery,
     build_registry_message_delivery,
-    local_chat_id_for_conversation,
+    conversation_key_for_ref,
     publish_timeline_event,
 )
 from app.agents.types import RoutedTaskResult
@@ -39,12 +39,12 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
     from app import telegram_handlers as th
 
     def _conversation_message(conversation_ref: str):
-        chat_id = local_chat_id_for_conversation(conversation_ref)
-        return chat_id, factory.create_outbound_surface(
+        conversation_key = conversation_key_for_ref(conversation_ref)
+        return conversation_key, factory.create_outbound_surface(
             conversation_ref,
             config=config,
             bot=th._bot_instance,
-            chat_id=chat_id,
+            conversation_key=conversation_key,
             source="registry",
         )
 
@@ -124,8 +124,8 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
         )
         if getattr(th, "_config", None) is None or getattr(th, "_provider", None) is None:
             return "retry_later"
-        chat_id = local_chat_id_for_conversation(parent_conversation_id)
-        session = th._load(chat_id)
+        conversation_key = conversation_key_for_ref(parent_conversation_id)
+        session = th._load(conversation_key)
         pending, matched = apply_routed_result(
             session.pending_delegation,
             routed_task_id=routed_task_id,
@@ -134,12 +134,12 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
         if not matched:
             return "accepted"
         session.pending_delegation = pending
-        th._save(chat_id, session)
+        th._save(conversation_key, session)
         if not delegation_ready_to_resume(pending):
             return "accepted"
         continuation_text = build_resume_prompt(pending)
         resume_delivery_id = f"delegation-resume:{parent_conversation_id}:{int(pending.created_at * 1000)}"
-        _, user_id, update_id, serialized = build_registry_message_delivery(
+        conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
             conversation_ref=parent_conversation_id,
             text=continuation_text,
             actor_ref=f"delegation-resume:{routed_task_id}",
@@ -148,9 +148,9 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
         )
         admit_status, _ = work_queue.record_and_admit_message(
             config.data_dir,
-            update_id,
-            chat_id,
-            user_id,
+            event_id,
+            conversation_key,
+            actor_key,
             "message",
             serialized,
         )
@@ -161,7 +161,7 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
                 parent_conversation_id,
                 config=config,
                 bot=th._bot_instance,
-                chat_id=chat_id,
+                conversation_key=conversation_key,
                 source="registry",
             )
             try:

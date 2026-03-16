@@ -11,6 +11,8 @@ from typing import Any
 import frontmatter
 import yaml
 from cryptography.fernet import Fernet, InvalidToken
+
+from app.identity import filesystem_component_for_key, parse_actor_key
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
 from app.providers.base import PreflightContext, RunContext
@@ -251,13 +253,14 @@ def _decrypt(encoded: str, key: bytes) -> str:
     return f.decrypt(encoded.encode()).decode()
 
 
-def _credential_file(data_dir: Path, user_id: int) -> Path:
-    return data_dir / "credentials" / f"{user_id}.json"
+def _credential_file(data_dir: Path, actor_key: str) -> Path:
+    normalized = parse_actor_key(actor_key)
+    return data_dir / "credentials" / f"{filesystem_component_for_key(normalized)}.json"
 
 
-def list_user_credential_skills(data_dir: Path, user_id: int) -> list[str]:
+def list_user_credential_skills(data_dir: Path, actor_key: str) -> list[str]:
     """Return skill names that have stored credentials (no decryption)."""
-    path = _credential_file(data_dir, user_id)
+    path = _credential_file(data_dir, actor_key)
     if not path.is_file():
         return []
     try:
@@ -269,12 +272,12 @@ def list_user_credential_skills(data_dir: Path, user_id: int) -> list[str]:
     return [k for k, v in stored.items() if isinstance(v, dict) and v]
 
 
-def load_user_credentials(data_dir: Path, user_id: int, key: bytes) -> dict[str, dict[str, str]]:
+def load_user_credentials(data_dir: Path, actor_key: str, key: bytes) -> dict[str, dict[str, str]]:
     """Load and decrypt per-user credentials.
 
     Returns ``{skill_name: {cred_key: value, ...}, ...}``.
     """
-    path = _credential_file(data_dir, user_id)
+    path = _credential_file(data_dir, actor_key)
     if not path.is_file():
         return {}
     try:
@@ -298,14 +301,14 @@ def load_user_credentials(data_dir: Path, user_id: int, key: bytes) -> dict[str,
 
 def save_user_credential(
     data_dir: Path,
-    user_id: int,
+    actor_key: str,
     skill_name: str,
     cred_key: str,
     value: str,
     key: bytes,
 ) -> None:
     """Encrypt and save a single credential for a user."""
-    path = _credential_file(data_dir, user_id)
+    path = _credential_file(data_dir, actor_key)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     stored: dict[str, dict[str, str]] = {}
@@ -325,7 +328,7 @@ def save_user_credential(
 
 def delete_user_credentials(
     data_dir: Path,
-    user_id: int,
+    actor_key: str,
     key: bytes,
     skill_name: str | None = None,
 ) -> list[str]:
@@ -335,7 +338,7 @@ def delete_user_credentials(
     Otherwise delete all credentials.
     Returns list of skill names whose credentials were removed.
     """
-    path = _credential_file(data_dir, user_id)
+    path = _credential_file(data_dir, actor_key)
     if not path.is_file():
         return []
     try:
@@ -840,15 +843,15 @@ def build_preflight_context(
 
 def stage_codex_scripts(
     data_dir: Path,
-    chat_id: int,
+    conversation_key: str,
     active_skills: list[str],
 ) -> Path | None:
-    """Stage helper scripts from codex.yaml into a chat-scoped directory.
+    """Stage helper scripts from codex.yaml into a conversation-scoped directory.
 
     Returns the scripts directory path if any scripts were staged, None otherwise.
     Syncs scripts to match active skills — removes stale, adds new.
     """
-    scripts_dir = data_dir / "scripts" / str(chat_id)
+    scripts_dir = data_dir / "scripts" / filesystem_component_for_key(conversation_key)
 
     # Collect all scripts from active skills
     all_scripts: dict[str, list[dict]] = {}  # skill_name → list of script defs
@@ -898,9 +901,9 @@ def stage_codex_scripts(
     return scripts_dir
 
 
-def cleanup_codex_scripts(data_dir: Path, chat_id: int) -> None:
-    """Remove all staged scripts for a chat (called on /new)."""
-    scripts_dir = data_dir / "scripts" / str(chat_id)
+def cleanup_codex_scripts(data_dir: Path, conversation_key: str) -> None:
+    """Remove all staged scripts for a conversation (called on /new)."""
+    scripts_dir = data_dir / "scripts" / filesystem_component_for_key(conversation_key)
     if scripts_dir.is_dir():
         shutil.rmtree(scripts_dir, ignore_errors=True)
 
@@ -968,7 +971,7 @@ def normalize_active_skills(session, save_fn=None) -> list[str]:
 
 def validate_active_skills(
     skill_names: list[str],
-    user_id: int = 0,
+    user_id: str = "",
     data_dir: Path | None = None,
     encryption_key: bytes | None = None,
 ) -> list[str]:

@@ -19,9 +19,9 @@ def admit_fresh_message(data_dir: Path, envelope: InboundEnvelope) -> tuple[str,
     payload = serialize_inbound(envelope.event)
     return work_queue.record_and_admit_message(
         data_dir,
-        envelope.update_id,
-        envelope.conversation_id,
-        envelope.actor_id,
+        envelope.event_id,
+        envelope.conversation_key,
+        envelope.actor_key,
         envelope.kind,
         payload=payload,
     )

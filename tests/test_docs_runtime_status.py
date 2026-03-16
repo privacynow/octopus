@@ -21,7 +21,7 @@ def test_architecture_preamble_states_current_local_runtime_baseline():
     text = (repo / "docs" / "ARCHITECTURE.md").read_text()
     preamble = text.split("\n---\n", 1)[0]
     assert "Current shipped baseline" in preamble
-    assert "Phase 15 Slice 1" in preamble
+    assert "Phase 20" in preamble
     assert "Local Runtime" in preamble
     assert "SQLite" in preamble and "BOT_DATABASE_URL" in preamble
     assert "Postgres" in preamble
@@ -54,6 +54,7 @@ def test_status_current_snapshot_matches_current_phase_and_runtime():
     assert "Postgres is a supported alternate backend" in snapshot
     assert "./scripts/app/guided_start.sh" in snapshot
     assert "Phase 12 is complete: the **shipped runtime today** uses Postgres" not in snapshot
+    assert "M10 is in progress" in snapshot
 
 
 def test_status_historical_focus_intro_mentions_phase_20():

@@ -102,11 +102,12 @@ Log in with `REGISTRY_UI_TOKEN` from `.env.registry`. The bare
 
 ![Registry UI screenshot](docs/registry-ui-screenshot.png)
 
-The UI shows three panels:
+The UI starts with three live lists plus a detail panel for the selected item:
 
 - **Bots** — all registered bots, their connection status, and last heartbeat
-- **Conversations** — a live timeline for every conversation across all bots; click any conversation to see the full event history
+- **Conversations** — a live timeline for every conversation across all bots
 - **Routed Tasks** — delegated sub-tasks being handled by specialist bots
+- **Detail panel** — the selected bot, conversation, or task, with drill-down actions such as follow-up messages, delegation approval, and export where supported
 
 Unlike the Telegram interface, the Registry UI lets you start conversations
 directly, approve or cancel delegation plans, and see all bot activity in one

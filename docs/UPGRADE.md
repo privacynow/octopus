@@ -8,7 +8,7 @@
 
 Notes:
 - Sessions and conversations are preserved across upgrades.
-- Usage history before M10 shows zero tokens because older runs did not record usage.
+- Bot and registry schema versions are tracked automatically and migrate in place on startup.
 - Restarting the registry service clears all active Registry UI login sessions.
 - `REGISTRY_SESSION_SECRET` (optional): if set, Registry UI login sessions
   survive service restarts. If not set, a random key is generated each time

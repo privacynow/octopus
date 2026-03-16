@@ -1,7 +1,11 @@
 # Changelog
 
 ## M10
-- Added versioned SQLite migrations for the bot and registry stores, plus an operator upgrade guide and repo version marker.
+- Added versioned bot and registry migrations, a repo version marker, and an operator upgrade guide.
+- Added Registry UI login/logout with session-backed HTML auth while keeping bearer auth for `/v1/ui/*`.
+- Added Registry UI conversation search, client-side filters, and Markdown conversation export.
+- Added live Telegram-driven access overrides with backend parity across SQLite and Postgres transport stores.
+- Added completion webhook notifications plus guided-setup support for configuring them.
 
 ## M9
 - Polished first-run setup, provider login UX, guided setup flow, and the Registry UI presentation.

@@ -2,7 +2,7 @@
 
 Current as of 2026-03-16. Tracks progress against [plan.md](plan.md).
 
-> **Phase 20 M10 in progress — operations, control-plane, and parity foundations are now mostly shipped (2026-03-16).** The current codebase has already landed most of M10's production-facing groundwork: versioned bot and registry migrations, repo versioning and upgrade docs, Registry UI login/logout with session-backed HTML auth, conversation search and client-side filters, live Telegram-driven access overrides, registry-side Markdown conversation export, outbound completion webhooks, Registry UI skills management, registry-store SQLite/Postgres parity with contract-test coverage, and a stabilized bearer-authenticated programmatic trigger API. The remaining planned M10 work is narrower: usage/cost visibility. Current milestone truth: **M1–M9 complete; M10 in progress with A, B-0, C, D, E, F, G, H, H-2, and I shipped; B remaining.**
+> **Phase 20 complete — all M10 slices shipped (2026-03-16).** M10 is fully delivered: versioned bot and registry migrations, repo versioning and upgrade docs, Registry UI login/logout with session-backed HTML auth, conversation search and client-side filters, live Telegram-driven access overrides, registry-side Markdown conversation export, outbound completion webhooks, Registry UI skills management, registry-store SQLite/Postgres parity with contract-test coverage, stabilized bearer-authenticated programmatic trigger API, and reported token usage visibility with best-effort extraction from both Claude and Codex CLIs. Current milestone truth: **M1–M10 complete. Phase 20 sealed. Phase 21 (Shared Runtime) is next.** Phases 16–19 are sealed historic artifacts; their relevant scope is captured in Phase 21 or deferred to standalone roadmaps.
 
 > **Phase 20 M10 hardening follow-up complete (2026-03-16).** The operational slices were followed by correctness cleanup instead of more feature fan-out. Request-lifecycle stale checks no longer assume pending timestamps are always epoch floats: shared UTC helpers now accept both legacy float timestamps and ISO 8601 strings. Config validation now centralizes provider/mode/file-policy values through enums and uses `urllib.parse` for registry/database URL validation. Skills parsing now uses typed Pydantic validation, `/doctor` rehydrates typed session objects instead of walking raw dicts, `app/access.py` is pure policy again, the transport facade has restored Postgres parity plus contract-test coverage for live access overrides, and the registry store now mirrors that same backend seam with SQLite and Postgres implementations behind a shared contract. Focused request-flow, config, skills, doctor, access, transport-contract, and registry-contract regressions are green.
 
@@ -228,11 +228,13 @@ Current as of 2026-03-16. Tracks progress against [plan.md](plan.md).
 
 - Phases 1-15 are sealed as shipped.
 - Phase 20 is the shipped product baseline.
-- Phases 16-19 remain on the roadmap and are deferred beyond Phase 20.
+- Phases 16-19 are sealed historic artifacts. Their relevant scope is
+  captured in Phase 21 or deferred to standalone roadmaps.
+- Phase 21 (Shared Runtime) is the next active phase.
 - The shipped runtime today is **Local Runtime**:
   - SQLite is the default backend when `BOT_DATABASE_URL` is unset
   - Postgres is a supported alternate backend when `BOT_DATABASE_URL` is set
-  - Shared Runtime remains deferred to Phases 18-19
+  - Shared Runtime (webhook ingress + multi-worker Postgres queue) is Phase 21
 - Phase 20 milestone truth today:
   - M1 shared-surface refactor is complete, including the factory-owned
     dispatch-point surface selection and registry-surface simulator path
@@ -317,9 +319,9 @@ Phase 20 complete and Phases 16-19 deferred beyond it.
 
 This section is preserved as a historical record of the Milestone E execution
 program that led into Phase 13. The current roadmap state is reflected above:
-**Phases 1-15 are sealed, Phase 20 is complete, and Phases 16-19 remain
-deferred beyond it**. Shared-runtime queue authority remains deferred to
-Phase 18.
+**Phases 1-15 are sealed, Phase 20 is complete, Phases 16-19 are sealed
+historic artifacts, and Phase 21 (Shared Runtime) is the next active
+phase**.
 
 | Milestone | Status | Scope |
 |---|---|---|

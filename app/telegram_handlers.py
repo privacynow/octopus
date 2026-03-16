@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import contextvars
+import dataclasses
 import html
 import logging
 import re
@@ -56,7 +57,16 @@ from app.session_state import (
     session_from_dict,
     session_to_dict,
 )
+from app.agents.bridge import (
+    bind_conversation,
+    publish_timeline_event,
+    registry_client,
+    summarize_text,
+    telegram_conversation_ref,
+)
+from app.agents.types import RoutedTaskResult
 from app.transports.admission import admit_fresh_message
+from app.transports.registry_adapter import RegistryConversationIO
 from app.transports.telegram_adapter import TelegramConversationIO
 from app.transports.types import InboundEnvelope
 from app.skills import (
@@ -376,12 +386,13 @@ Attachment = InboundAttachment
 # -- TelegramProgress (rate-limited HTML editor) ---------------------------
 
 class TelegramProgress:
-    def __init__(self, message, config: BotConfig) -> None:
+    def __init__(self, message, config: BotConfig, *, timeline_callback=None) -> None:
         self.message = message
         self.last_text = ""
         self.last_update = 0.0
         self._interval = config.stream_update_interval_seconds
         self._content_delivered = False
+        self._timeline_callback = timeline_callback
 
     async def update(self, html_text: str, *, force: bool = False) -> None:
         html_text = trim_text(html_text, 3500)
@@ -406,6 +417,31 @@ class TelegramProgress:
         self.last_update = now
         if cs and cs.is_set():
             self._content_delivered = True
+        if self._timeline_callback is not None:
+            try:
+                await self._timeline_callback(html_text, force=force)
+            except Exception as exc:
+                log.debug("registry timeline callback failed: %s", exc)
+
+
+@dataclasses.dataclass(frozen=True)
+class RequestExecutionOutcome:
+    status: str
+    reply_text: str = ""
+    error_text: str = ""
+    denials: tuple[dict[str, Any], ...] = ()
+
+
+async def _progress_timeline_callback(conversation_ref: str, routed_task_id: str, html_text: str, *, force: bool = False) -> None:
+    del force
+    await publish_timeline_event(
+        _cfg(),
+        conversation_ref=conversation_ref,
+        kind="progress",
+        title="Progress",
+        body=html_text,
+        metadata={"routed_task_id": routed_task_id} if routed_task_id else {},
+    )
 
 
 # -- Auth ------------------------------------------------------------------
@@ -1076,8 +1112,22 @@ async def execute_request(
 
     is_resume = bool(session.provider_state.get("thread_id") or session.provider_state.get("started"))
     label = _msg.progress_resuming() if is_resume else _msg.progress_working()
+    conversation_ref = ""
+    routed_task_id = ""
+    if getattr(message, "capabilities", None) and getattr(message.capabilities, "surface_name", "") == "registry":
+        conversation_ref = getattr(message, "conversation_ref", "")
+        routed_task_id = getattr(message, "routed_task_id", "")
+    elif cfg.agent_mode == "registry":
+        conversation_ref = telegram_conversation_ref(cfg, chat_id)
+
+    timeline_cb = None
+    if conversation_ref:
+        timeline_cb = lambda html_text, force=False: _progress_timeline_callback(
+            conversation_ref, routed_task_id, html_text, force=force
+        )
+
     status_msg = await message.reply_text(label)
-    progress = TelegramProgress(status_msg, cfg)
+    progress = TelegramProgress(status_msg, cfg, timeline_callback=timeline_cb)
     content_started = asyncio.Event()
     progress.content_started = content_started  # providers set this when real text arrives
     typing_task = asyncio.create_task(keep_typing(message.chat))
@@ -1099,7 +1149,7 @@ async def execute_request(
         session.provider_state.update(result.provider_state_updates)
         _save(chat_id, session)
         await progress.update(_msg.cancel_live_completed(), force=True)
-        return
+        return RequestExecutionOutcome(status="cancelled")
 
     if _run_result_was_interrupted(result.returncode):
         log.info("%s interrupted for chat %d (rc=%s); leaving work item claimed",
@@ -1135,14 +1185,14 @@ async def execute_request(
 
     if result.timed_out:
         await progress.update(_msg.progress_request_timed_out(cfg.timeout_seconds), force=True)
-        return
+        return RequestExecutionOutcome(status="timed_out")
 
     if result.returncode != 0:
         error_text = await _format_provider_error(result.text, result.returncode)
         if result.resume_failed:
             error_text += _msg.progress_session_not_resumed()
         await progress.update(error_text, force=True)
-        return
+        return RequestExecutionOutcome(status="failed", error_text=error_text)
 
     # Claude denial/retry flow — show denials BEFORE output so the user
     # understands the result is partial before reading it.
@@ -1177,7 +1227,11 @@ async def execute_request(
         if cleaned_reply.strip():
             await send_formatted_reply(message, cleaned_reply)
             await send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
-        return
+        return RequestExecutionOutcome(
+            status="completed_with_denials",
+            reply_text=cleaned_reply,
+            denials=tuple(result.denials),
+        )
 
     await progress.update(_msg.progress_completed(), force=True)
 
@@ -1194,6 +1248,7 @@ async def execute_request(
     else:
         await send_formatted_reply(message, cleaned_reply)
     await send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
+    return RequestExecutionOutcome(status="completed", reply_text=cleaned_reply)
 
 
 async def request_approval(
@@ -1237,7 +1292,17 @@ async def request_approval(
     context_hash = resolved.context_hash
 
     status_msg = await message.reply_text(_msg.approval_preparing())
-    progress = TelegramProgress(status_msg, cfg)
+    conversation_ref = ""
+    if getattr(message, "capabilities", None) and getattr(message.capabilities, "surface_name", "") == "registry":
+        conversation_ref = getattr(message, "conversation_ref", "")
+    elif cfg.agent_mode == "registry":
+        conversation_ref = telegram_conversation_ref(cfg, chat_id)
+    timeline_cb = None
+    if conversation_ref:
+        timeline_cb = lambda html_text, force=False: _progress_timeline_callback(
+            conversation_ref, "", html_text, force=force
+        )
+    progress = TelegramProgress(status_msg, cfg, timeline_callback=timeline_cb)
     content_started = asyncio.Event()
     progress.content_started = content_started
     typing_task = asyncio.create_task(keep_typing(message.chat))
@@ -1880,33 +1945,47 @@ async def cmd_skills(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await _public_guard(event, update):
         return
-    chat_id = event.chat_id
-    user_id = event.user.id
+    await cancel_chat_operation(
+        event.chat_id,
+        update.effective_message,
+        actor_user_id=event.user.id,
+        allow_admin_override=is_admin(event.user),
+        update_id=update.update_id,
+    )
 
+
+async def cancel_chat_operation(
+    chat_id: int,
+    message,
+    *,
+    actor_user_id: int = 0,
+    allow_admin_override: bool = False,
+    update_id: int | None = None,
+) -> None:
     # Worker-owned live run: set cancel event so the running execute_request/request_approval sees it.
     cancel_event = _LIVE_CANCEL.get(chat_id)
     if cancel_event is not None:
         cancel_event.set()
-        await update.effective_message.reply_text(_msg.cancel_live_requested())
+        await message.reply_text(_msg.cancel_live_requested())
         return
 
     # Admitted but not yet running: cancel queued fresh item so the worker won't run it.
     if work_queue.cancel_queued_fresh_for_chat(_cfg().data_dir, chat_id):
-        await update.effective_message.reply_text(_msg.cancel_queued_superseded())
+        await message.reply_text(_msg.cancel_queued_superseded())
         return
 
-    async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
+    async with _chat_lock(chat_id, message=message, update_id=update_id):
         session = _load(chat_id)
 
         setup = session.awaiting_skill_setup
         if setup:
-            if setup.user_id == user_id or is_admin(event.user):
+            if setup.user_id == actor_user_id or allow_admin_override:
                 session.awaiting_skill_setup = None
                 _save(chat_id, session)
-                await update.effective_message.reply_text(_msg.credential_setup_cancelled())
+                await message.reply_text(_msg.credential_setup_cancelled())
                 return
             else:
-                await update.effective_message.reply_text(
+                await message.reply_text(
                     _msg.credential_setup_another_user_in_progress(),
                 )
                 return
@@ -1914,10 +1993,10 @@ async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if session.has_pending:
             session.clear_pending()
             _save(chat_id, session)
-            await update.effective_message.reply_text(_msg.cancel_pending_request())
+            await message.reply_text(_msg.cancel_pending_request())
             return
 
-    await update.effective_message.reply_text(_msg.nothing_to_cancel())
+    await message.reply_text(_msg.nothing_to_cancel())
 
 
 @_command_handler
@@ -3061,8 +3140,32 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
     data_dir = _cfg().data_dir
 
     if isinstance(event, InboundMessage):
+        source = getattr(event, "source", "telegram")
+        conversation_ref = event.conversation_ref or (
+            telegram_conversation_ref(_cfg(), chat_id) if source == "telegram" else f"registry:{chat_id}"
+        )
+        routed_task_id = getattr(event, "routed_task_id", "")
+
         # Recovered item: send notice and move to pending_recovery.
         if item.get("dispatch_mode") == "recovery":
+            if source == "registry":
+                await bind_conversation(
+                    _cfg(),
+                    conversation_ref=conversation_ref,
+                    title=summarize_text(event.text) or "Recovered registry conversation",
+                    origin_surface="registry",
+                    external_id=conversation_ref,
+                )
+                await publish_timeline_event(
+                    _cfg(),
+                    conversation_ref=conversation_ref,
+                    kind="recovery_notice",
+                    title="Interrupted work needs replay",
+                    body=_msg.recovery_notice_prompt(),
+                    metadata={"routed_task_id": routed_task_id} if routed_task_id else {},
+                )
+                work_queue.mark_pending_recovery(data_dir, item["id"])
+                raise work_queue.PendingRecovery(item["id"])
             log.info("Worker sending recovery notice for chat %d (update %s)",
                      chat_id, item.get("update_id"))
             if not is_allowed(event.user):
@@ -3091,28 +3194,78 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             raise work_queue.PendingRecovery(item["id"])
 
         # Fresh message: run provider (execute_request/request_approval register _LIVE_CANCEL).
-        if not is_allowed(event.user):
+        if source == "telegram" and not is_allowed(event.user):
             work_queue.fail_work_item(data_dir, item["id"], error="not_allowed")
             return
-        bot_msg = _BotMessage(bot, chat_id)
+        if source == "registry":
+            bot_msg = RegistryConversationIO(
+                _cfg(),
+                conversation_ref=conversation_ref,
+                routed_task_id=routed_task_id,
+                title=summarize_text(event.text) or "Registry conversation",
+            )
+        else:
+            bot_msg = _BotMessage(bot, chat_id)
         prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
         user_id = event.user.id
-        trust = _trust_tier(event.user)
+        trust = "trusted" if source == "registry" else _trust_tier(event.user)
+        await bind_conversation(
+            _cfg(),
+            conversation_ref=conversation_ref,
+            title=summarize_text(event.text) or "Conversation",
+            origin_surface=source,
+            external_id=str(chat_id) if source == "telegram" else conversation_ref,
+        )
+        if source == "telegram":
+            await publish_timeline_event(
+                _cfg(),
+                conversation_ref=conversation_ref,
+                kind="surface_input",
+                title="Telegram message",
+                body=event.text,
+            )
         try:
             async with _chat_lock(chat_id, worker_item=item):
                 session = _load(chat_id)
-                if session.approval_mode == "on":
+                outcome = None
+                if not routed_task_id and session.approval_mode == "on":
                     await request_approval(
                         chat_id, prompt, image_paths, list(event.attachments),
                         bot_msg, request_user_id=user_id, trust_tier=trust,
                     )
                 else:
-                    await execute_request(
+                    outcome = await execute_request(
                         chat_id, prompt, image_paths, bot_msg,
                         request_user_id=user_id, trust_tier=trust,
                     )
         except work_queue.LeaveClaimed:
             raise
+        if routed_task_id:
+            client = registry_client(_cfg())
+            if client is not None and outcome is not None:
+                full_text = outcome.reply_text or html.unescape(getattr(bot_msg, "last_status_text", ""))
+                result_status = "completed" if outcome.status in {"completed", "completed_with_denials"} else outcome.status
+                await client.routed_task_result(
+                    routed_task_id,
+                    RoutedTaskResult(
+                        routed_task_id=routed_task_id,
+                        status=result_status,
+                        summary=summarize_text(full_text or outcome.error_text or result_status),
+                        full_text=full_text or outcome.error_text,
+                        artifacts=(),
+                        follow_up_questions=(),
+                    ),
+                )
+        elif source == "telegram" and outcome is not None:
+            body = outcome.reply_text or outcome.error_text
+            if body:
+                await publish_timeline_event(
+                    _cfg(),
+                    conversation_ref=conversation_ref,
+                    kind="result" if outcome.status.startswith("completed") else "error",
+                    title="Bot result" if outcome.status.startswith("completed") else "Bot error",
+                    body=body,
+                )
         return
 
     if isinstance(event, (InboundCommand, InboundCallback)):

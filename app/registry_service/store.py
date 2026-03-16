@@ -304,6 +304,34 @@ class RegistryStore:
                 )
             return {"accepted": len(events)}
 
+    def bind_conversation(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+        now = utcnow_iso()
+        with self._connect() as conn:
+            row = self._token_row(conn, agent_token)
+            if row is None:
+                raise PermissionError("Unknown agent token")
+            conn.execute(
+                """
+                INSERT INTO conversations (
+                    conversation_id, target_agent_id, title, origin_surface, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'open', ?, ?)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    target_agent_id = excluded.target_agent_id,
+                    title = excluded.title,
+                    origin_surface = excluded.origin_surface,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    payload["conversation_id"],
+                    row["agent_id"],
+                    payload.get("title", ""),
+                    payload.get("origin_surface", "telegram"),
+                    now,
+                    now,
+                ),
+            )
+        return self.get_conversation(payload["conversation_id"])
+
     def search_agents(self, query: dict[str, Any]) -> list[dict[str, Any]]:
         role = query.get("role", "").strip().lower()
         required_state = query.get("required_state", "connected")
@@ -414,6 +442,7 @@ class RegistryStore:
         }
 
     def poll(self, agent_token: str, *, cursor: int, limit: int) -> dict[str, Any]:
+        now = utcnow_iso()
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -430,13 +459,24 @@ class RegistryStore:
                 """,
                 (row["agent_id"], cursor, limit),
             ).fetchall()
+            delivery_ids = [item["delivery_id"] for item in deliveries]
+            if delivery_ids:
+                placeholders = ",".join("?" for _ in delivery_ids)
+                conn.execute(
+                    f"""
+                    UPDATE deliveries
+                    SET state = 'leased', leased_at = ?, updated_at = ?
+                    WHERE delivery_id IN ({placeholders})
+                    """,
+                    (now, now, *delivery_ids),
+                )
         items = [
             {
                 "cursor": str(item["seq"]),
                 "delivery_id": item["delivery_id"],
                 "kind": item["kind"],
                 "payload": json.loads(item["payload_json"]),
-                "state": item["state"],
+                "state": "leased" if item["delivery_id"] in delivery_ids else item["state"],
                 "created_at": item["created_at"],
             }
             for item in deliveries

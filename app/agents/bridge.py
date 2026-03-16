@@ -6,10 +6,7 @@ import hashlib
 import html
 import logging
 import uuid
-from pathlib import Path
 from typing import Any
-
-from telegram.constants import ParseMode
 
 from app import work_queue
 from app.agents.client import AgentRegistryClient, RegistryClientError
@@ -17,6 +14,7 @@ from app.agents.state import load_agent_runtime_state
 from app.agents.types import RoutedTaskResult, TimelineEvent
 from app.config import BotConfig
 from app.transport import InboundMessage, InboundUser, serialize_inbound
+from app.transports.factory import conversation_surface_name
 
 log = logging.getLogger(__name__)
 
@@ -36,12 +34,6 @@ def registry_update_id(delivery_id: str) -> int:
 
 def registry_actor_id(actor_ref: str) -> int:
     return _stable_int(f"registry-actor:{actor_ref}")
-
-
-def conversation_surface_name(conversation_ref: str) -> str:
-    if conversation_ref.startswith("telegram:"):
-        return "telegram"
-    return "registry"
 
 
 def local_chat_id_for_conversation(conversation_ref: str) -> int:

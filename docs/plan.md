@@ -3204,8 +3204,8 @@ Registry outage behavior:
 
 ##### M1 — Shared Conversation Core and Surface Refactor
 
-**Status: Partial — foundation types and port abstractions shipped; Telegram
-adapter and simulator migration incomplete.**
+**Status: Complete — the shared surface contract is now closed at the worker
+dispatch boundary via a factory-owned surface selection rule.**
 
 Delivered:
 - `ConversationRef`, `SurfaceBinding`, `SurfaceEvent`, `TimelineEvent` types
@@ -3214,20 +3214,22 @@ Delivered:
   `ConversationIO` port abstractions (`app/transports/ports.py`)
 - `RegistryConversationIO` as `InteractionSurface` implementation
   (`app/transports/registry_adapter.py`)
-- `worker_dispatch` selects surface polymorphically at dispatch point;
-  all downstream handler logic is surface-agnostic
+- `TelegramConversationIO` now implements the same surface-owned bind/input/
+  outcome/recovery hooks as the registry adapter
+- `app/transports/factory.py` is now the single owner for:
+  - `conversation_surface_name(conversation_ref)`
+  - `create_outbound_surface(...)`
+  - `trust_tier_for_source(...)`
+- `worker_dispatch` and `app/agents/delivery.py` now depend on the factory
+  and `InteractionSurface`, not on concrete adapter classes
+- `ConversationSimulator` can inject registry-surface messages through the
+  same durable worker boundary via `inject_registry_message_async(...)`
 
-Not yet delivered:
-- Telegram adapter not yet migrated to `ConversationIO`; handler-owned
-  command/callback paths still use PTB-direct methods
-- Simulator not yet upgraded to the shared surface contract
-- Full workflow/state-machine audit for surface-originated action parity
-
-Acceptance criteria (incomplete):
-- [ ] Telegram behavior is preserved after adapter migration
-- [ ] No surface-specific orchestration fork exists
-- [ ] Shared conversation identity is testable across both surfaces
-- [ ] Simulator continues to prove real worker-owned semantics
+Acceptance criteria (complete):
+- [x] Telegram behavior is preserved after adapter migration
+- [x] No surface-specific orchestration fork exists in worker_dispatch
+- [x] Shared conversation identity is testable across both surfaces
+- [x] Simulator covers registry-surface flows through ConversationIO
 - [x] Registry surface dispatches through same state machine as Telegram
 
 ---
@@ -3326,10 +3328,87 @@ Acceptance criteria (complete):
 
 ---
 
+##### M1 Closure Gate — Required Before Remaining M5 Work
+
+**Status: Complete. This gate was used to finish the M1 refactor without
+leaving factory-free surface branching inside orchestration code.**
+
+Rationale: M1 was left partial while M2–M4 and partial M5 were built on top of
+its incomplete foundation. The result is five surface-conditional forks
+(`source == "registry"`, `conversation_surface == "telegram"`, etc.) inside
+`worker_dispatch` after the dispatch point. These forks contradict the Phase 20
+architecture principle "No surface-specific orchestration forks." Every
+additional M5 slice adds more code on top of these forks, increasing the
+migration cost and risk. This gate closes M1 before that cost compounds further.
+
+Scope:
+
+**Code quality cleanup (prerequisite, must go first):**
+- Delete `_BotMessage = TelegramConversationIO` alias and its stale comment from
+  `app/telegram_handlers.py`; the alias is now unused (the dead ternary at the
+  dispatch point was already cleaned up)
+- Add `skip_approval` serialization round-trip tests to `test_transport.py`:
+  one positive test (`skip_approval=True` survives `serialize_inbound` →
+  `deserialize_inbound`) and one negative test (default `False` also round-trips,
+  proving a normal Telegram message can never accidentally carry `skip_approval=True`)
+
+**Surface fork elimination in `worker_dispatch`:**
+- Eliminate `conversation_surface` as a local variable; derive surface identity
+  once at the `bot_msg` dispatch point and encode it in the surface object
+- Move the Telegram-specific input timeline event (`if source == "telegram":
+  await publish_timeline_event(... kind="surface_input" ...)`) into
+  `TelegramConversationIO` via a new `on_message_received(text)` method on
+  `InteractionSurface`; `RegistryConversationIO.on_message_received` is a no-op
+  (the event was published at admit time in `bridge.py`)
+- Move the Telegram-specific result timeline event (`elif conversation_surface
+  == "telegram" and outcome is not None: await publish_timeline_event(...)`)
+  into `TelegramConversationIO` via a new `on_outcome(outcome)` method on
+  `InteractionSurface`; `RegistryConversationIO.on_outcome` is a no-op (the
+  registry receives the result via `routed_task_result`)
+- Move `bind_conversation` call with surface-specific `origin_surface` and
+  `external_id` arguments into a `bind(title, config)` method on
+  `InteractionSurface`; `TelegramConversationIO.bind` uses `origin_surface=
+  "telegram"` and `external_id=str(chat_id)`; `RegistryConversationIO.bind`
+  uses `origin_surface="registry"` and `external_id=conversation_ref`
+- Create `bot_msg` before the `dispatch_mode == "recovery"` check (currently it
+  is created after), so the recovery path can also call surface methods
+- Move the recovery notice send logic into a `send_recovery_notice(preview,
+  prompt, run_again_label, skip_label, update_id)` method on
+  `InteractionSurface`; `TelegramConversationIO.send_recovery_notice` sends the
+  inline keyboard message via PTB; `RegistryConversationIO.send_recovery_notice`
+  publishes the timeline event
+- After all forks are moved into the surface: delete `conversation_surface` as a
+  local variable and remove `conversation_surface_name` from the imports used by
+  `worker_dispatch` (it will still be used in `delivery.py`)
+
+**Simulator upgrade:**
+- Add `inject_registry_message_async(conversation_ref, text, actor_ref,
+  skip_approval=False)` to `ConversationSimulator` that calls
+  `build_registry_message_delivery`, passes the serialized payload through
+  `work_queue.record_and_admit_message`, and drains via the real worker
+- The output log must capture `RegistryConversationIO.sent_messages` alongside
+  the existing Telegram output
+- At least one simulator test exercises a registry-surface message through
+  `inject_registry_message_async` and asserts the provider was called and the
+  output was captured via `RegistryConversationIO`
+
+Acceptance criteria (complete):
+- [x] `grep -n "conversation_surface" app/telegram_handlers.py` returns zero
+      results
+- [x] `grep -n "_BotMessage" app/telegram_handlers.py` returns zero results
+- [x] `skip_approval` round-trip tests pass in `test_transport.py`
+- [x] Full suite passes: `python -m pytest -x -q`
+- [x] `test_registry_routed_result_resumes_parent_conversation_without_new_approval`
+      still passes
+- [x] `test_registry_surface_input_respects_approval_mode` still passes
+- [x] At least one simulator test exercises a registry-surface message end-to-end
+
+---
+
 ##### M5 — Product-Bot Discovery and Delegation
 
-**Status: In progress — parent-side delegated-result continuation shipped; discovery
-planner and user-facing delegation UX not started.**
+**Status: In progress — parent-side delegated-result continuation shipped; first
+capability-discovery command shipped; delegation plan UX not started.**
 
 Delivered so far:
 - Parent-side delegation state is now durable in bot-local session state:
@@ -3348,6 +3427,12 @@ Delivered so far:
   registry surface
 - Busy parent chats return `retry_later`; delegated-result state is preserved
   and retried instead of being dropped
+- First user-facing discovery slice is live via `/discover`: Telegram can now
+  build an `AgentDiscoveryQuery`, search the registry by role/skills/tags/free
+  text, and render matching agents to the user
+- Discovery is truthful about runtime state: standalone mode says discovery is
+  unavailable; degraded registry connectivity reports the degraded state rather
+  than pretending search worked
 
 Scope:
 - Capability-based agent discovery planner using `AgentDiscoveryQuery`
@@ -3395,8 +3480,7 @@ Acceptance criteria:
 - [ ] Degraded behavior is explicit, observable, and tested
 - [ ] Docs match shipped behavior end-to-end
 - [ ] Full same-host Docker multi-bot path is reproducible from guided setup
-- [ ] Simulator implements the shared surface contract
-- [ ] Telegram adapter migrated to `ConversationIO` (M1 completion)
+- [ ] Simulator implements the shared surface contract (completed in M1 Closure Gate)
 
 ---
 

@@ -13,14 +13,12 @@ from app.agents.orchestration import (
 from app.agents.bridge import (
     admit_registry_delivery,
     build_registry_message_delivery,
-    conversation_surface_name,
     local_chat_id_for_conversation,
     publish_timeline_event,
 )
 from app.agents.types import RoutedTaskResult
 from app.config import BotConfig
-from app.transports.telegram_adapter import TelegramConversationIO
-from app.transports.registry_adapter import RegistryConversationIO
+from app.transports import factory
 
 
 async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object]) -> str:
@@ -31,16 +29,17 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
     payload = delivery.get("payload", {})
     if not isinstance(payload, dict):
         return "rejected"
+    from app import telegram_handlers as th
 
     def _conversation_message(conversation_ref: str):
         chat_id = local_chat_id_for_conversation(conversation_ref)
-        if conversation_surface_name(conversation_ref) == "telegram":
-            from app import telegram_handlers as th
-
-            if th._bot_instance is None:
-                raise RuntimeError("Telegram bot instance is not initialized")
-            return chat_id, TelegramConversationIO(th._bot_instance, chat_id)
-        return chat_id, RegistryConversationIO(config, conversation_ref=conversation_ref)
+        return chat_id, factory.create_outbound_surface(
+            conversation_ref,
+            config=config,
+            bot=th._bot_instance,
+            chat_id=chat_id,
+            source="registry",
+        )
 
     if kind == "surface_action":
         conversation_ref = str(payload.get("conversation_id", ""))
@@ -50,7 +49,6 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
         if not isinstance(action_payload, dict):
             action_payload = {}
         chat_id, message = _conversation_message(conversation_ref)
-        from app import telegram_handlers as th
         action = str(payload.get("action", "")).lower()
         if action == "approve":
             await th.approve_pending(chat_id, message)
@@ -80,7 +78,6 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
         if not conversation_ref:
             return "rejected"
         chat_id, message = _conversation_message(conversation_ref)
-        from app import telegram_handlers as th
         action = str(payload.get("action", "")).lower()
         if action == "cancel":
             await th.cancel_chat_operation(chat_id, message, actor_user_id=0, allow_admin_override=True)
@@ -102,22 +99,18 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
             follow_up_questions=tuple(str(item) for item in (result.get("follow_up_questions", ()) or ()) if item),
             completed_at=str(result.get("completed_at", "") or ""),
         )
-        full_text = str(result.get("full_text", "") or "")
-        summary = str(result.get("summary", "") or "")
-        status = str(result.get("status", "") or "")
         await publish_timeline_event(
             config,
             conversation_ref=parent_conversation_id,
             kind="delegated_result",
             title="Delegated result received",
-            body=full_text or summary,
-            status=status,
+            body=routed_result.full_text or routed_result.summary,
+            status=routed_result.status,
             metadata={"routed_task_id": routed_task_id},
             event_id=f"delegated-result:{routed_task_id}",
         )
-        from app import telegram_handlers as th
         if getattr(th, "_config", None) is None or getattr(th, "_provider", None) is None:
-            return "accepted"
+            return "retry_later"
         chat_id = local_chat_id_for_conversation(parent_conversation_id)
         session = th._load(chat_id)
         pending, matched = apply_routed_result(

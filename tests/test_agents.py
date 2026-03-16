@@ -303,7 +303,7 @@ async def test_admit_registry_delivery_busy_returns_retry_later(monkeypatch, tmp
     assert outcome_task == "retry_later"
 
 
-async def test_handle_registry_routed_result_publishes_parent_timeline(monkeypatch, tmp_path: Path):
+async def test_handle_registry_routed_result_publishes_parent_timeline_before_retry_on_startup_race(monkeypatch, tmp_path: Path):
     published: list[dict[str, object]] = []
 
     async def fake_publish_timeline_event(
@@ -354,7 +354,7 @@ async def test_handle_registry_routed_result_publishes_parent_timeline(monkeypat
         },
     )
 
-    assert outcome == "accepted"
+    assert outcome == "retry_later"
     assert published == [
         {
             "conversation_ref": "conv-1",

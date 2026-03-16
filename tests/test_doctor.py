@@ -163,6 +163,42 @@ async def test_doctor_warns_stale_pending_delegation(tmp_path: Path):
     assert any("delegation plans awaiting user approval" in warning for warning in report.warnings)
 
 
+async def test_doctor_stale_pending_delegation_accepts_iso_timestamp(tmp_path: Path):
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registry_url="http://registry.test",
+        agent_registry_enroll_token="enroll-secret",
+    )
+    provider = FakeProvider()
+    session = default_session(provider.name, provider.new_provider_state(), "off")
+    session["pending_delegation"] = {
+        "conversation_ref": "telegram:agent:1002",
+        "title": "Delegation plan",
+        "resume_instruction": "Continue when done.",
+        "created_at": (
+            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
+        ).isoformat(),
+        "tasks": [
+            {
+                "routed_task_id": "task-iso",
+                "title": "Investigate issue",
+                "target_agent_id": "reviewer-1",
+                "instructions": "Check the traces.",
+                "status": "proposed",
+            }
+        ],
+    }
+    save_session(tmp_path, 1002, session)
+
+    assert scan_stale_delegations(
+        tmp_path,
+        config.provider_name,
+        provider.new_provider_state,
+        config.approval_mode,
+    ) == 1
+
+
 async def test_doctor_standalone_mode_no_registry_warnings_if_mode_is_standalone(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,

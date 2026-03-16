@@ -20,7 +20,8 @@ class SQLiteTransportStore:
         """Return (or create) a WAL-mode SQLite connection for data_dir/transport.db.
 
         For a brand-new DB (no tables), creates schema and inserts schema_version.
-        For an existing DB, validates schema/layout only; does not mutate.
+        For an existing DB, runs supported in-place migrations, then validates
+        the supported schema/layout.
         """
         if data_dir in self._connections:
             return self._connections[data_dir]

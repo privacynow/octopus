@@ -129,6 +129,7 @@ def test_registry_start_prints_enrollment_token():
     script = repo / "scripts" / "registry" / "start.sh"
     text = script.read_text()
     assert "Enrollment token:" in text
+    assert "Registry UI password:" in text
     assert "keep this file private" in text
 
 
@@ -150,6 +151,15 @@ def test_guided_start_success_summary_uses_browser_registry_ui_url():
     assert "build_registry_ui_display_url" in text
     assert "REGISTRY_UI_TOKEN" in text
     assert '/ui' in text
-    assert '?token=' in text
     assert "http://localhost:" in text
+    assert "login password" in text
     assert "print_box_wrapped_line" in text
+
+
+def test_guided_start_reads_repo_version_for_success_summary():
+    """guided_start.sh should read VERSION and show it in the final startup summary."""
+    repo = Path(__file__).resolve().parent.parent
+    script = repo / "scripts" / "app" / "guided_start.sh"
+    text = script.read_text()
+    assert 'bot_version_display="$(tr -d' in text
+    assert 'printf "║  • Bot version:' in text

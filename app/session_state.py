@@ -44,7 +44,7 @@ class PendingApproval:
     attachment_dicts: list[dict[str, Any]]
     context_hash: str
     trust_tier: str = "trusted"
-    created_at: float = field(default_factory=time.time)
+    created_at: float | str = field(default_factory=time.time)
 
 
 @dataclass
@@ -56,7 +56,7 @@ class PendingRetry:
     context_hash: str
     denials: list[dict[str, Any]]
     trust_tier: str = "trusted"
-    created_at: float = field(default_factory=time.time)
+    created_at: float | str = field(default_factory=time.time)
 
 
 @dataclass
@@ -65,7 +65,7 @@ class AwaitingSkillSetup:
     user_id: int
     skill: str
     remaining: list[dict[str, Any]]  # [{key, prompt, help_url, validate}, ...]
-    started_at: float = 0.0
+    started_at: float | str = 0.0
 
 
 @dataclass
@@ -90,7 +90,7 @@ class PendingDelegation:
     resume_instruction: str = ""
     tasks: list[DelegatedTask] = field(default_factory=list)
     status: str = ""  # valid values: "", submitted, completed, partial_failed
-    created_at: float = field(default_factory=time.time)
+    created_at: float | str = field(default_factory=time.time)
 
 
 @dataclass

@@ -14,6 +14,89 @@ from typing import Any
 from app.agents.types import AgentCard, TimelineEvent, to_wire
 
 _OFFLINE_AFTER_SECONDS = 60
+_SCHEMA_VERSION = 1
+
+_BASE_SCHEMA_SQL = """
+PRAGMA journal_mode=WAL;
+
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agents (
+    agent_id TEXT PRIMARY KEY,
+    agent_token TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL DEFAULT '',
+    skills_json TEXT NOT NULL DEFAULT '[]',
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    description TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL DEFAULT '',
+    mode TEXT NOT NULL DEFAULT 'standalone',
+    connectivity_state TEXT NOT NULL DEFAULT 'standalone',
+    current_capacity INTEGER NOT NULL DEFAULT 0,
+    max_capacity INTEGER NOT NULL DEFAULT 1,
+    surface_capabilities_json TEXT NOT NULL DEFAULT '[]',
+    version TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_heartbeat_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS deliveries (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    delivery_id TEXT NOT NULL UNIQUE,
+    target_agent_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'queued',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    leased_at TEXT,
+    acked_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS conversations (
+    conversation_id TEXT PRIMARY KEY,
+    target_agent_id TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    origin_surface TEXT NOT NULL DEFAULT 'registry',
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS routed_tasks (
+    routed_task_id TEXT PRIMARY KEY,
+    parent_conversation_id TEXT NOT NULL,
+    origin_agent_id TEXT NOT NULL,
+    target_agent_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    request_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    summary TEXT NOT NULL DEFAULT '',
+    result_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS timeline_events (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL UNIQUE,
+    conversation_id TEXT NOT NULL,
+    routed_task_id TEXT NOT NULL DEFAULT '',
+    agent_id TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT '',
+    progress INTEGER,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+"""
 
 
 def utcnow_iso() -> str:
@@ -55,84 +138,46 @@ class RegistryStore:
 
     def _init_db(self) -> None:
         with self._connect() as conn:
-            conn.executescript(
-                """
-                PRAGMA journal_mode=WAL;
+            conn.executescript(_BASE_SCHEMA_SQL)
+            self._run_migrations(conn)
 
-                CREATE TABLE IF NOT EXISTS agents (
-                    agent_id TEXT PRIMARY KEY,
-                    agent_token TEXT NOT NULL UNIQUE,
-                    display_name TEXT NOT NULL,
-                    slug TEXT NOT NULL UNIQUE,
-                    role TEXT NOT NULL DEFAULT '',
-                    skills_json TEXT NOT NULL DEFAULT '[]',
-                    tags_json TEXT NOT NULL DEFAULT '[]',
-                    description TEXT NOT NULL DEFAULT '',
-                    provider TEXT NOT NULL DEFAULT '',
-                    mode TEXT NOT NULL DEFAULT 'standalone',
-                    connectivity_state TEXT NOT NULL DEFAULT 'standalone',
-                    current_capacity INTEGER NOT NULL DEFAULT 0,
-                    max_capacity INTEGER NOT NULL DEFAULT 1,
-                    surface_capabilities_json TEXT NOT NULL DEFAULT '[]',
-                    version TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    last_heartbeat_at TEXT NOT NULL
-                );
+    def _current_schema_version(self, conn: sqlite3.Connection) -> int:
+        row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        if row is None:
+            return 0
+        try:
+            return int(row[0])
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Unsupported registry SQLite schema") from exc
 
-                CREATE TABLE IF NOT EXISTS deliveries (
-                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                    delivery_id TEXT NOT NULL UNIQUE,
-                    target_agent_id TEXT NOT NULL,
-                    kind TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    state TEXT NOT NULL DEFAULT 'queued',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    leased_at TEXT,
-                    acked_at TEXT
-                );
+    def _set_schema_version(self, conn: sqlite3.Connection, version: int) -> None:
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+            (str(version),),
+        )
 
-                CREATE TABLE IF NOT EXISTS conversations (
-                    conversation_id TEXT PRIMARY KEY,
-                    target_agent_id TEXT NOT NULL,
-                    title TEXT NOT NULL DEFAULT '',
-                    origin_surface TEXT NOT NULL DEFAULT 'registry',
-                    status TEXT NOT NULL DEFAULT 'open',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
+    def _migrate_v1(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS skills_override (
+                skill_name TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
+                set_by TEXT NOT NULL DEFAULT 'ui',
+                set_at REAL NOT NULL
+            );
+            """
+        )
 
-                CREATE TABLE IF NOT EXISTS routed_tasks (
-                    routed_task_id TEXT PRIMARY KEY,
-                    parent_conversation_id TEXT NOT NULL,
-                    origin_agent_id TEXT NOT NULL,
-                    target_agent_id TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    request_json TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'queued',
-                    summary TEXT NOT NULL DEFAULT '',
-                    result_json TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS timeline_events (
-                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                    event_id TEXT NOT NULL UNIQUE,
-                    conversation_id TEXT NOT NULL,
-                    routed_task_id TEXT NOT NULL DEFAULT '',
-                    agent_id TEXT NOT NULL DEFAULT '',
-                    kind TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    body TEXT NOT NULL DEFAULT '',
-                    status TEXT NOT NULL DEFAULT '',
-                    progress INTEGER,
-                    metadata_json TEXT NOT NULL DEFAULT '{}',
-                    created_at TEXT NOT NULL
-                );
-                """
+    def _run_migrations(self, conn: sqlite3.Connection) -> None:
+        current = self._current_schema_version(conn)
+        if current > _SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Registry DB schema version {current} is newer than supported version {_SCHEMA_VERSION}. Upgrade the registry."
             )
+        if current < 1:
+            self._migrate_v1(conn)
+            self._set_schema_version(conn, 1)
+            conn.commit()
 
     def _ensure_unique_slug(self, conn: sqlite3.Connection, requested: str) -> str:
         slug = requested

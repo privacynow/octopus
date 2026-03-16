@@ -194,7 +194,7 @@ read_registry_env_value() {
 }
 
 build_registry_ui_display_url() {
-  local registry_url="$1" browser_base="" ui_token="" registry_port=""
+  local registry_url="$1" browser_base="" registry_port=""
   if [ -z "$registry_url" ]; then
     return
   fi
@@ -205,7 +205,6 @@ build_registry_ui_display_url() {
       browser_base="http://localhost:${registry_port}"
       if [ -n "$_LOCAL_REGISTRY_ENROLL_TOKEN" ]; then
         registry_port="$(read_registry_env_value REGISTRY_PORT)"
-        ui_token="$(read_registry_env_value REGISTRY_UI_TOKEN)"
         if [ -n "$registry_port" ]; then
           browser_base="http://localhost:${registry_port}"
         fi
@@ -217,11 +216,7 @@ build_registry_ui_display_url() {
   esac
 
   browser_base="${browser_base%/}/ui"
-  if [ -n "$ui_token" ]; then
-    printf '%s?token=%s' "$browser_base" "$ui_token"
-  else
-    printf '%s' "$browser_base"
-  fi
+  printf '%s' "$browser_base"
 }
 
 print_box_wrapped_line() {
@@ -291,6 +286,7 @@ fi
 mode_display="$(grep -E '^\s*BOT_AGENT_MODE=' "$BOT_ENV_FILE" 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)"
 registry_url_display="$(grep -E '^\s*BOT_AGENT_REGISTRY_URL=' "$BOT_ENV_FILE" 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)"
 registry_ui_display="$(build_registry_ui_display_url "$registry_url_display")"
+bot_version_display="$(tr -d '\r' < "$REPO_DIR/VERSION" 2>/dev/null || true)"
 
 echo ""
 if [ "$_USED_QUICK_SETUP" -eq 1 ]; then
@@ -301,10 +297,16 @@ fi
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  Bot is running!                                            ║"
 echo "║                                                              ║"
+if [ -n "$bot_version_display" ]; then
+  printf "║  • Bot version: %-45s║\n" "$bot_version_display"
+fi
 echo "║  • Open Telegram and message your bot to start.             ║"
 if [ "$mode_display" = "registry" ] && [ -n "$registry_ui_display" ]; then
   printf "║  • Registry UI:%-46s║\n" ""
   print_box_wrapped_line "$registry_ui_display"
+  if [ -n "$_LOCAL_REGISTRY_ENROLL_TOKEN" ]; then
+    print_box_wrapped_line "Use REGISTRY_UI_TOKEN from .env.registry as the login password."
+  fi
 fi
 printf "║  • Logs:  %-48s║\n" "./scripts/app/logs_instance.sh $INSTANCE"
 printf "║  • Stop:  %-48s║\n" "./scripts/app/stop_instance.sh $INSTANCE"

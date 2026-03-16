@@ -30,7 +30,7 @@ class _DuplicateUpdate(Exception):
     """Signals duplicate update_id in record_and_admit_message (rollback and return duplicate, None)."""
 
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 5
 
 _CREATE_SQL = """\
 CREATE TABLE IF NOT EXISTS updates (
@@ -68,16 +68,41 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS usage_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    work_item_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0.0,
+    recorded_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_usage_log_chat ON usage_log(chat_id);
+CREATE INDEX IF NOT EXISTS idx_usage_log_recorded_at ON usage_log(recorded_at);
+
+CREATE TABLE IF NOT EXISTS user_access (
+    user_id INTEGER PRIMARY KEY,
+    access TEXT NOT NULL CHECK(access IN ('allowed', 'blocked')),
+    reason TEXT NOT NULL DEFAULT '',
+    granted_by INTEGER NOT NULL DEFAULT 0,
+    granted_at REAL NOT NULL
+);
 """
 
 _UNSUPPORTED_SCHEMA_MSG = "Unsupported transport.db schema/layout for this build"
-_EXPECTED_TABLES = ("updates", "work_items", "meta")
+_EXPECTED_TABLES = ("updates", "work_items", "meta", "usage_log", "user_access")
 _EXPECTED_COLUMNS: dict[str, set[str]] = {
     "updates": {"update_id", "chat_id", "user_id", "kind", "payload", "received_at", "state"},
     "work_items": {"id", "chat_id", "update_id", "state", "worker_id", "claimed_at", "completed_at", "error", "created_at", "dispatch_mode"},
     "meta": {"key", "value"},
+    "usage_log": {"id", "chat_id", "work_item_id", "provider", "prompt_tokens", "completion_tokens", "cost_usd", "recorded_at"},
+    "user_access": {"user_id", "access", "reason", "granted_by", "granted_at"},
 }
 _REQUIRED_INDEX = "idx_one_claimed_per_chat"
+
+_MIGRATIONS: tuple[tuple[int, Callable[[sqlite3.Connection], None]], ...] = ()
 
 
 def _create_new_transport_db(conn: sqlite3.Connection) -> None:
@@ -92,11 +117,62 @@ def _create_new_transport_db(conn: sqlite3.Connection) -> None:
 
 def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
     """Migrate transport DB from schema version 2 to 3: add dispatch_mode to work_items."""
-    conn.execute(
-        "ALTER TABLE work_items ADD COLUMN dispatch_mode TEXT NOT NULL DEFAULT 'fresh'"
+    try:
+        conn.execute(
+            "ALTER TABLE work_items ADD COLUMN dispatch_mode TEXT NOT NULL DEFAULT 'fresh'"
+        )
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
+
+
+def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    """Migrate transport DB from schema version 3 to 4: add usage_log table."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS usage_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            work_item_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            prompt_tokens INTEGER NOT NULL DEFAULT 0,
+            completion_tokens INTEGER NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0.0,
+            recorded_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_usage_log_chat ON usage_log(chat_id);
+        CREATE INDEX IF NOT EXISTS idx_usage_log_recorded_at ON usage_log(recorded_at);
+        """
     )
-    conn.execute("UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(_SCHEMA_VERSION),))
-    conn.commit()
+
+
+def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+    """Migrate transport DB from schema version 4 to 5: add user_access table."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS user_access (
+            user_id INTEGER PRIMARY KEY,
+            access TEXT NOT NULL CHECK(access IN ('allowed', 'blocked')),
+            reason TEXT NOT NULL DEFAULT '',
+            granted_by INTEGER NOT NULL DEFAULT 0,
+            granted_at REAL NOT NULL
+        );
+        """
+    )
+
+
+_MIGRATIONS = (
+    (3, _migrate_v2_to_v3),
+    (4, _migrate_v3_to_v4),
+    (5, _migrate_v4_to_v5),
+)
+
+
+def _set_schema_version(conn: sqlite3.Connection, version: int) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+        (str(version),),
+    )
 
 
 def _validate_existing_transport_db(conn: sqlite3.Connection) -> None:
@@ -106,7 +182,7 @@ def _validate_existing_transport_db(conn: sqlite3.Connection) -> None:
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
     }
-    if _EXPECTED_TABLES[0] not in tables or _EXPECTED_TABLES[1] not in tables or _EXPECTED_TABLES[2] not in tables:
+    if any(table not in tables for table in _EXPECTED_TABLES):
         raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
     for table in _EXPECTED_TABLES:
         cursor = conn.execute("PRAGMA table_info(" + table + ")")
@@ -166,8 +242,8 @@ def _validate_existing_transport_db(conn: sqlite3.Connection) -> None:
         raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
 
 
-def _ensure_schema_version(conn: sqlite3.Connection) -> None:
-    """If DB is at schema version 2, migrate to 3 (add dispatch_mode). Then validate."""
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    """Run supported transport DB migrations in order, then validate schema/layout."""
     row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     if row is None:
         raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
@@ -175,9 +251,20 @@ def _ensure_schema_version(conn: sqlite3.Connection) -> None:
         stored = int(row[0])
     except (TypeError, ValueError):
         raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
-    if stored == 2:
-        _migrate_v2_to_v3(conn)
+    if stored < 2 or stored > _SCHEMA_VERSION:
+        raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
+    for version, fn in _MIGRATIONS:
+        if stored < version:
+            fn(conn)
+            _set_schema_version(conn, version)
+            conn.commit()
+            stored = version
     _validate_existing_transport_db(conn)
+
+
+def _ensure_schema_version(conn: sqlite3.Connection) -> None:
+    """Backward-compatible alias for connection initialization migration flow."""
+    _run_migrations(conn)
 
 
 @contextmanager

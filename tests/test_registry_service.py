@@ -1,10 +1,12 @@
 """Tests for the FastAPI registry control-plane service."""
 
 from pathlib import Path
+import sqlite3
 
 from fastapi.testclient import TestClient
 
 from app.registry_service.app import app
+from app.registry_service.store import RegistryStore
 
 
 def _configure_registry(monkeypatch, tmp_path: Path) -> None:
@@ -118,6 +120,49 @@ def test_registry_bind_conversation_is_visible_in_ui(monkeypatch, tmp_path: Path
     assert len(items) == 1
     assert items[0]["conversation_id"] == "telegram:dev-bot:123"
     assert items[0]["title"] == "Telegram chat 123"
+
+
+def test_ui_requires_session_cookie_redirects_to_login(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/ui", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"] == "/ui/login"
+
+
+def test_ui_login_with_correct_password_sets_cookie_and_redirects(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/ui/login",
+        data={"password": "ui-secret"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/ui"
+    assert "registry_session=" in response.headers.get("set-cookie", "")
+
+
+def test_ui_login_with_wrong_password_returns_form_with_error(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.post("/ui/login", data={"password": "wrong-secret"})
+    assert response.status_code == 200
+    assert "Incorrect password." in response.text
+
+
+def test_ui_bootstrap_still_accepts_bearer_token(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.get(
+        "/v1/ui/bootstrap",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert response.status_code == 200
 
 
 def test_registry_ui_conversation_routes_surface_input_to_polled_bot(monkeypatch, tmp_path: Path):
@@ -478,3 +523,30 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
     assert origin_poll.status_code == 200
     origin_deliveries = origin_poll.json()["deliveries"]
     assert any(item["kind"] == "routed_result" for item in origin_deliveries)
+
+
+def test_registry_store_migrations_are_idempotent_and_add_skills_override(tmp_path: Path):
+    db_path = tmp_path / "registry.sqlite3"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE conversations (conversation_id TEXT PRIMARY KEY, target_agent_id TEXT NOT NULL, "
+        "title TEXT NOT NULL DEFAULT '', origin_surface TEXT NOT NULL DEFAULT 'registry', "
+        "status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+    RegistryStore(db_path)
+    RegistryStore(db_path)
+
+    conn = sqlite3.connect(db_path)
+    version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+    assert version == "1"
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+    assert "skills_override" in tables
+    conn.close()

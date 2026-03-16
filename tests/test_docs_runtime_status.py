@@ -42,12 +42,13 @@ def test_architecture_deployment_section_matches_current_runtime_contract():
 
 
 def test_status_current_snapshot_matches_current_phase_and_runtime():
-    """STATUS Current Snapshot must reflect Phase 15 + Local Runtime, not old Postgres-first wording."""
+    """STATUS Current Snapshot must reflect Phase 20 + Local Runtime, not the old Phase 15 baseline."""
     repo = Path(__file__).resolve().parent.parent
     text = (repo / "docs" / "status.md").read_text()
     snapshot = _section(text, "Current Snapshot")
-    assert "Phases 1-14 are sealed as shipped." in snapshot
-    assert "Phase 15 is the active roadmap phase" in snapshot
+    assert "Phases 1-15 are sealed as shipped." in snapshot
+    assert "Phase 20 is the active roadmap phase" in snapshot
+    assert "Phases 16-19 remain on the roadmap but are deferred behind Phase 20." in snapshot
     assert "Local Runtime" in snapshot
     assert "SQLite is the default backend" in snapshot
     assert "Postgres is a supported alternate backend" in snapshot
@@ -55,10 +56,11 @@ def test_status_current_snapshot_matches_current_phase_and_runtime():
     assert "Phase 12 is complete: the **shipped runtime today** uses Postgres" not in snapshot
 
 
-def test_status_historical_focus_intro_mentions_phase_15_not_phase_14():
-    """Historical Execution Focus intro should point readers at the current roadmap phase."""
+def test_status_historical_focus_intro_mentions_phase_20():
+    """Historical Execution Focus intro should point readers at the current Phase 20 roadmap state."""
     repo = Path(__file__).resolve().parent.parent
     text = (repo / "docs" / "status.md").read_text()
     historical = _section(text, "Historical Execution Focus")
-    assert "Phase 15 is in progress" in historical
-    assert "Phase 13 is complete and the next numbered phase is Phase 14" not in historical
+    assert "Phase 20 is in progress" in historical
+    assert "Phases 16-19 are\ndeferred behind it" in historical or "Phases 16-19 are deferred behind it" in historical
+    assert "Phase 15 is in progress" not in historical

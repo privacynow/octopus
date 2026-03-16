@@ -47,6 +47,7 @@ class InboundMessage:
     source: str = "telegram"
     conversation_ref: str = ""
     routed_task_id: str = ""
+    skip_approval: bool = False
 
 
 @dataclass(frozen=True)
@@ -197,6 +198,7 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback) 
             "source": event.source,
             "conversation_ref": event.conversation_ref,
             "routed_task_id": event.routed_task_id,
+            "skip_approval": event.skip_approval,
             "attachments": [
                 {"path": str(a.path), "original_name": a.original_name,
                  "is_image": a.is_image, "mime_type": a.mime_type}
@@ -241,7 +243,8 @@ def deserialize_inbound(kind: str, payload_json: str) -> InboundMessage | Inboun
                               attachments=attachments,
                               source=d.get("source", "telegram"),
                               conversation_ref=d.get("conversation_ref", ""),
-                              routed_task_id=d.get("routed_task_id", ""))
+                              routed_task_id=d.get("routed_task_id", ""),
+                              skip_approval=bool(d.get("skip_approval", False)))
     if kind == "command":
         return InboundCommand(user=user, chat_id=d["chat_id"],
                               command=d["command"], args=tuple(d.get("args", [])),

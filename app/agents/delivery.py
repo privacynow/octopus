@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import uuid
+
+from app import work_queue
+from app.agents.orchestration import (
+    apply_routed_result,
+    build_resume_prompt,
+    delegation_ready_to_resume,
+)
 from app.agents.bridge import (
     admit_registry_delivery,
+    build_registry_message_delivery,
     conversation_surface_name,
     local_chat_id_for_conversation,
     publish_timeline_event,
 )
+from app.agents.types import RoutedTaskResult
 from app.config import BotConfig
 from app.transports.telegram_adapter import TelegramConversationIO
 from app.transports.registry_adapter import RegistryConversationIO
@@ -78,10 +88,20 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
         return "rejected"
 
     if kind == "routed_result":
+        routed_task_id = str(payload.get("routed_task_id", ""))
         parent_conversation_id = str(payload.get("parent_conversation_id", ""))
         result = payload.get("result", {})
-        if not parent_conversation_id or not isinstance(result, dict):
+        if not parent_conversation_id or not routed_task_id or not isinstance(result, dict):
             return "rejected"
+        routed_result = RoutedTaskResult(
+            routed_task_id=routed_task_id,
+            status=str(result.get("status", "") or ""),
+            summary=str(result.get("summary", "") or ""),
+            full_text=str(result.get("full_text", "") or ""),
+            artifacts=tuple(result.get("artifacts", ()) or ()),
+            follow_up_questions=tuple(str(item) for item in (result.get("follow_up_questions", ()) or ()) if item),
+            completed_at=str(result.get("completed_at", "") or ""),
+        )
         full_text = str(result.get("full_text", "") or "")
         summary = str(result.get("summary", "") or "")
         status = str(result.get("status", "") or "")
@@ -92,8 +112,61 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
             title="Delegated result received",
             body=full_text or summary,
             status=status,
-            metadata={"routed_task_id": str(payload.get("routed_task_id", ""))},
+            metadata={"routed_task_id": routed_task_id},
+            event_id=f"delegated-result:{routed_task_id}",
         )
+        from app import telegram_handlers as th
+        if getattr(th, "_config", None) is None or getattr(th, "_provider", None) is None:
+            return "accepted"
+        chat_id = local_chat_id_for_conversation(parent_conversation_id)
+        session = th._load(chat_id)
+        pending, matched = apply_routed_result(
+            session.pending_delegation,
+            routed_task_id=routed_task_id,
+            result=routed_result,
+        )
+        if not matched:
+            return "accepted"
+        session.pending_delegation = pending
+        th._save(chat_id, session)
+        if not delegation_ready_to_resume(pending):
+            return "accepted"
+        continuation_text = build_resume_prompt(pending)
+        resume_delivery_id = f"delegation-resume:{uuid.uuid4().hex}"
+        _, user_id, update_id, serialized = build_registry_message_delivery(
+            conversation_ref=parent_conversation_id,
+            text=continuation_text,
+            actor_ref=f"delegation-resume:{routed_task_id}",
+            delivery_id=resume_delivery_id,
+            skip_approval=True,
+        )
+        admit_status, _ = work_queue.record_and_admit_message(
+            config.data_dir,
+            update_id,
+            chat_id,
+            user_id,
+            "message",
+            serialized,
+        )
+        if admit_status == "busy":
+            return "retry_later"
+        if admit_status in {"admitted", "duplicate"}:
+            session = th._load(chat_id)
+            if (
+                session.pending_delegation is not None
+                and session.pending_delegation.conversation_ref == parent_conversation_id
+            ):
+                session.pending_delegation = None
+                th._save(chat_id, session)
+            await publish_timeline_event(
+                config,
+                conversation_ref=parent_conversation_id,
+                kind="delegation_ready",
+                title="All delegated results received",
+                body=continuation_text,
+                metadata={"routed_task_id": routed_task_id},
+                event_id=f"delegation-ready:{parent_conversation_id}",
+            )
         return "accepted"
 
     return "rejected"

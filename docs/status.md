@@ -2,6 +2,8 @@
 
 Current as of 2026-03-15. Tracks progress against [plan.md](plan.md).
 
+> **Phase 20 current implementation (2026-03-15).** **Phase 20 is now the active roadmap phase.** Current milestone truth: **M1 partial**, **M2 complete**, **M3 complete**, **M4 complete**, **M5 partial**, **M6 not started**. Registry foundation is live: typed agent/conversation/routed-work models, async registry client, durable agent runtime state, FastAPI + SQLite registry service, delivery queue, discovery search, routed-task APIs, and a vanilla HTML/CSS/JS UI shell. Registry polling is wired into the same local worker/state-machine core used by Telegram; there is no parallel execution branch. Surface integration is live for registry-originated input/actions and routed tasks, including approval/reject/cancel/retry/recovery actions, chat-busy `retry_later`, routed-task result return, per-delivery poll isolation, and runtime survival on unexpected poll errors. **Latest Phase 20 slice:** parent-side delegated-result handling now persists in bot-local session state (`PendingDelegation` / `DelegatedTask`), `routed_result` updates that state, and once all child results arrive the parent bot admits a synthetic continuation message back through the normal work queue so orchestration resumes locally without inventing a registry-side shadow executor. The continuation respects the bound conversation surface and skips a second approval gate for the same parent orchestration step. Follow-up regressions now pin the two key edge cases that were previously only reasoned about: multi-child delegation does not resume after the first child result, and registry-surface parent conversations resume through `RegistryConversationIO` rather than leaking back onto Telegram. Verification for the current tree: `1169 passed, 65 skipped`.
+>
 > **Current state — Transport foundation, proof-hardening, and doc alignment in place; Phase 15 Slice 1 (per-project defaults) shipped; Phase 14 sealed; Phase 13 done.** Proof-hardening: credential owner suite migrated to drain/running_worker (no inline-execution assumptions); queued-cancel durable-state proof added for both SQLite and Postgres (contract test + Postgres regression); stale production comments updated (_LIVE_CANCEL, worker.py). Transport foundation: project-owned types and ports in `app/transports/` (InboundEnvelope, ConversationIO, EditableMessageHandle, TransportCapabilities); fresh plain-message admission uses `InboundEnvelope` in production ingress; worker-owned outbound output uses `TelegramConversationIO`; handler-owned command/callback/immediate reply paths still use direct PTB message/query/chat methods. Simulator: handler-level harness in `tests/support/conversation_simulator.py` — injects via handle_message/cmd_* directly (no transport-level InboundEnvelope ingress, no callback injection yet), runs real worker, and exposes one ordered **text** output log (`reply_text`, `edit_text`, `chat.send_message`, `reply_photo`/`reply_document` caption or placeholder, bot `send_message`/`send_photo`/`send_document` and edits, callback `answer`, callback `edit_message_text`; markup-only edits not included). Canonical E2E: `tests/test_simulator_e2e.py` covers message→long run→cancel (exact message-item + command-item durable shape), cancel before claim, second message busy (zero runnable, exact `chat_busy` shape), credential reply off-queue, and recovery notice. Documentation alignment: `ARCHITECTURE.md` now describes the shipped interfaces, component boundaries, and simulator limits as architecture; `plan.md` now separates shipped Slice 5 foundation from the remaining target state; `README.md` now reflects the worker-owned runtime model and current `/cancel` semantics. (1) **Runtime matrix:** local + sqlite = default path; local + postgres = supported path; shared = out of scope. (2) **Single backend seam:** `app/runtime_backend.py` is the only backend selector; `storage.py` and `work_queue.py` are backend-neutral facades; no facade leaks of SQLite-only internals. (3) **Contract suites:** `tests/contracts/test_session_store_contract.py` and `tests/contracts/test_transport_store_contract.py` are parameterized for both SQLite and Postgres. **Note:** Postgres parameters skip when Docker/Postgres is unavailable; on environments without Docker the contract suites only exercise SQLite. (4) **Startup/operator:** Default path is SQLite Local Runtime (no `BOT_DATABASE_URL`); Docker `bot` service does not depend on Postgres; `./scripts/app/dev_up.sh` and `./scripts/app/guided_start.sh` are SQLite-first; README documents SQLite as default, Postgres as optional; troubleshooting section no longer claims Postgres-only. (5) **E2E:** Primary gate is `test_compose_sqlite_local_runtime_primary` (Docker Local Runtime with SQLite). Bounded Postgres coverage is **real**: `test_compose_bot_startup_with_postgres` uses a dedicated override that injects `BOT_DATABASE_URL=postgresql://bot:bot@postgres:5432/bot` into the bot service so the bot actually runs against Postgres. One module-scoped `bot_image_built` fixture; no duplicate image build. (6) **Probe tests:** `test_postgres_bot_override_injects_bot_database_url` and `test_postgres_bot_override_path_writes_file` assert the Postgres override contract. (7) **Tests:** Contract suites + storage, work_queue, config, handler_runtime_isolation, sqlite/workitem integration; Postgres tests remain for supported backend. **Phase 14 sealed** (operator health clarity, dead-end command fixes, command-specific actionability, command/callback parity).
 >
 > **Documentation alignment (2026-03-14).** `ARCHITECTURE.md` was rewritten so the transport section now describes the shipped interfaces and component boundaries instead of replaying the implementation history: `InboundEnvelope` is the current admission boundary for fresh plain messages, worker-owned outbound output uses `ConversationIO` via `TelegramConversationIO`, handler-owned output is still PTB-direct, and the simulator is documented as a handler-level harness with an ordered **text** output log. `plan.md` now keeps Slice 5 as a full product/spec document by separating the shipped transport foundation from the remaining unification and simulator target. `README.md` now describes the worker-owned runtime model, SQLite-default/Postgres-alternate Local Runtime, and the real `/cancel` surface.
@@ -198,13 +200,20 @@ Current as of 2026-03-15. Tracks progress against [plan.md](plan.md).
 
 ## Current Snapshot
 
-- Phases 1-14 are sealed as shipped.
-- Phase 15 is the active roadmap phase; Slice 1 (per-project defaults and
-  inherit semantics) is shipped.
+- Phases 1-15 are sealed as shipped.
+- Phase 20 is the active roadmap phase.
+- Phases 16-19 remain on the roadmap but are deferred behind Phase 20.
 - The shipped runtime today is **Local Runtime**:
   - SQLite is the default backend when `BOT_DATABASE_URL` is unset
   - Postgres is a supported alternate backend when `BOT_DATABASE_URL` is set
   - Shared Runtime remains deferred to Phases 18-19
+- Phase 20 milestone truth today:
+  - M1 shared-surface refactor is partial
+  - M2 Docker multi-instance + registry-first wizard is complete
+  - M3 registry service/store/UI shell is complete
+  - M4 polling, delivery dispatch, routed-task execution, and safety hardening are complete
+  - M5 discovery/delegation is partially started: parent-side routed-result continuation is live; discovery planner and approval-driven delegation UX are still pending
+  - M6 hardening/E2E/docs completion is not started
 - Dockerized bot is the primary supported operational model.
 - Compose is the canonical operator surface:
   - `./scripts/app/guided_start.sh` is the main SQLite-first zero-to-running path
@@ -224,8 +233,8 @@ Current as of 2026-03-15. Tracks progress against [plan.md](plan.md).
 - The primary docs are now `README.md`, `ARCHITECTURE.md`,
   `plan.md`, and `status.md`.
 - `transport idempotency` is shipped in Phase 9.
-- `content dedup` is intentionally unshipped and remains future work in later
-  Phase 15 slices.
+- `content dedup` remains intentionally unshipped and is not part of the
+  current Phase 20 scope.
 
 ---
 
@@ -247,14 +256,16 @@ Current as of 2026-03-15. Tracks progress against [plan.md](plan.md).
 | 12 | Postgres runtime cutover | Done | M1–M9 complete. At the end of Phase 12, the shipped runtime was Postgres-only (`BOT_DATABASE_URL` required) with E2E and zero-to-running docs in place. This was later superseded by Phase 13 Local Runtime support. |
 | 13 | Storage backend abstraction and Local Runtime mode | Done | Two-backend Local Runtime: SQLite default, Postgres supported; single backend seam (runtime_backend); contract suites; SQLite-first startup/E2E; real Postgres E2E gate with BOT_DATABASE_URL override. |
 | 14 | Product polish on local foundations | Done | Operator health clarity, dead-end command fixes, command-specific actionability, command/callback parity. Phase 14 sealed. |
-| 15 | Per-project defaults and behavior extensions | In progress | Slice 1 shipped: ProjectBinding with per-project file_policy/model_profile; BOT_PROJECTS `name:/path\|policy\|profile` format; resolve_execution_context inheritance (session > project > global); `/policy inherit` and `/model inherit` clear session overrides; `setting_model:inherit` and `setting_policy:inherit` callbacks (command/callback parity); phantom profile validation and display guard; stale-override discoverability in `/model` and `/settings`. 1100 passed, 54 skipped. |
-| 16 | Registry trust and governance | Planned | Publisher signing and organizational trust policy on top of digest verification. |
-| 17 | Usage accounting, quotas, and billing | Planned | Usage recording, quota enforcement, and billing before Shared Runtime queue work. |
-| 18 | Shared Runtime: Postgres queue authority in webhook mode | Planned | Advanced deployment capability: persist-first webhook ingress and app-owned Postgres queue authority. |
-| 19 | Shared Runtime: multi-process scale and durability confidence | Planned | Multi-process workers, leases, recovery metrics, crash confidence, and shared-runtime durability. |
+| 15 | Per-project defaults and behavior extensions | Done | ProjectBinding with per-project file_policy/model_profile, inherit semantics, and command/callback parity shipped. Phase 15 is sealed history, not the active roadmap phase. |
+| 20 | Networked multi-agent platform | In progress | M2 complete, M3 complete, M4 complete, M5 partial. Registry-backed mode is the product default; bots stay private and poll the public registry. Parent-side routed-result continuation now re-enters the local work queue through the normal worker-owned path. |
+| 16 | Registry trust and governance | Planned / deferred | Publisher signing and organizational trust policy on top of digest verification. Deferred behind active Phase 20 work. |
+| 17 | Usage accounting, quotas, and billing | Planned / deferred | Usage recording, quota enforcement, and billing before Shared Runtime queue work. Deferred behind active Phase 20 work. |
+| 18 | Shared Runtime: Postgres queue authority in webhook mode | Planned / deferred | Advanced deployment capability: persist-first webhook ingress and app-owned Postgres queue authority. Deferred behind active Phase 20 work. |
+| 19 | Shared Runtime: multi-process scale and durability confidence | Planned / deferred | Multi-process workers, leases, recovery metrics, crash confidence, and shared-runtime durability. Deferred behind active Phase 20 work. |
 
 Detailed workstream sections below are preserved as historical implementation
-record. The authoritative roadmap ordering is the Phase 1-19 table above.
+record. The authoritative roadmap ordering is the Phase table above, with
+Phase 20 active and Phases 16-19 deferred behind it.
 
 ---
 
@@ -262,8 +273,9 @@ record. The authoritative roadmap ordering is the Phase 1-19 table above.
 
 This section is preserved as a historical record of the Milestone E execution
 program that led into Phase 13. The current roadmap state is reflected above:
-**Phase 14 is sealed and Phase 15 is in progress**. Shared-runtime queue
-authority remains deferred to Phase 18.
+**Phases 1-15 are sealed, Phase 20 is in progress, and Phases 16-19 are
+deferred behind it**. Shared-runtime queue authority remains deferred to
+Phase 18.
 
 | Milestone | Status | Scope |
 |---|---|---|

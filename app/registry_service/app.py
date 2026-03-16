@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.registry_service.backend import get_registry_store
@@ -30,6 +31,12 @@ class RegistrySettings:
     enroll_token: str
     ui_token: str
     display_name: str
+
+
+class CreateConversationRequest(BaseModel):
+    target_agent_id: str = Field(..., min_length=1, description="Agent ID to target")
+    title: str = Field(default="", description="Conversation title")
+    message_text: str = Field(..., min_length=1, description="Initial message text")
 
 
 def load_settings() -> RegistrySettings:
@@ -1591,16 +1598,18 @@ def ui_disable_skill(
     return {"skill_name": skill_name, "enabled": False}
 
 
-@app.post("/v1/ui/conversations")
+@app.post("/v1/ui/conversations", status_code=201)
 def ui_create_conversation(
-    payload: dict[str, Any],
+    payload: CreateConversationRequest,
     _: None = Depends(require_ui_token),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
+    if not any(agent["agent_id"] == payload.target_agent_id for agent in store.list_agents()):
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {payload.target_agent_id}")
     return store.create_conversation(
-        target_agent_id=payload["target_agent_id"],
-        title=payload.get("title", ""),
-        message_text=payload.get("message_text", ""),
+        target_agent_id=payload.target_agent_id,
+        title=payload.title,
+        message_text=payload.message_text,
     )
 
 

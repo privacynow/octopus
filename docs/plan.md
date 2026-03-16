@@ -4465,69 +4465,149 @@ Add a new rule to the "Repo-Specific Process" section:
 
 ---
 
-###### B. Cost and Usage Visibility
+###### B. Reported Token Usage Visibility
 
 **Status: Remaining.**
 
-Current reality: usage visibility is not shipped yet, and the current Claude
-and Codex CLI integrations do not expose stable token accounting in this
-codebase today. This section remains target-state guidance rather than current
-behavior.
+Current reality: usage visibility is not shipped yet. Both CLIs emit token
+usage data in their structured output, but this codebase does not yet extract,
+record, or surface it.
+
+**Verified CLI output (2026-03-16).**
+
+- **Claude CLI v2.1.7** (`--output-format stream-json`): the final `result` event
+  includes `usage.input_tokens`, `usage.output_tokens`,
+  `usage.cache_read_input_tokens`, `usage.cache_creation_input_tokens`, and
+  `total_cost_usd`. The code already captures this entire event at
+  `app/providers/claude.py:234` (`result_data = event`) but never reads the
+  `usage` or `total_cost_usd` keys.
+- **Codex CLI v0.36.0** (`--json`): emits a `token_count` event as
+  `{"id": "0", "msg": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": N, "output_tokens": N, ...}}}}`.
+  The current Codex provider parser silently ignores this event — `_map_event`
+  returns `None` for unrecognized types. Note: the `type` field is inside the
+  `msg` object, not at the top level like other Codex events.
+
+Both CLIs provide token counts. Neither provider's token data is part of a
+documented stable contract, so extraction must be best-effort with fallback to
+0 for any missing field. Cost data (`total_cost_usd`) is available from Claude
+only; Codex does not emit cost.
 
 **Problem.**
-Operators have no visibility into token usage or cost. Some provider APIs and
-CLI integrations can expose token counts, but this codebase does not yet record
-or surface them. Operators running Claude or Codex cannot forecast spend or
-detect runaway conversations from within the product today.
+Operators have no visibility into token usage. Both provider CLIs emit token
+counts, but the bot discards them. Operators cannot detect runaway
+conversations or estimate spend from within the product today.
 
 **Fix.**
-Capture token usage from every provider run. Accumulate usage per conversation (session) and display it in the Registry UI conversation detail view. Show a daily total in the Registry UI header.
+Extract token usage from every provider run on a best-effort basis. Record
+every completed run (0 means unreported, not zero usage). Accumulate per
+conversation and display reported totals in the Registry UI. Label as
+"reported" tokens — not "total" — because CLI versions without usage events
+will produce zeros.
 
 **Implementation seams.**
 
-- `app/providers/base.py` — extend `RunResult` with optional fields:
+*Layer 1 — RunResult fields.*
+
+- `app/providers/base.py` — extend `RunResult` with:
   ```python
   prompt_tokens: int = 0
   completion_tokens: int = 0
-  cost_usd: float = 0.0   # 0.0 means unknown; provider fills if calculable
+  cost_usd: float = 0.0   # 0.0 means unknown; Claude fills, Codex does not
   ```
-- Each provider fills these fields from the provider response where available.
-  If unavailable, fields remain 0 — no guessing.
-- Transport store backends — add `usage_log` recording through the same
-  backend-neutral seam used for other durable runtime data:
-  ```sql
-  CREATE TABLE usage_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      chat_id INTEGER NOT NULL,
-      work_item_id TEXT NOT NULL,
-      provider TEXT NOT NULL,
-      prompt_tokens INTEGER NOT NULL DEFAULT 0,
-      completion_tokens INTEGER NOT NULL DEFAULT 0,
-      cost_usd REAL NOT NULL DEFAULT 0.0,
-      recorded_at REAL NOT NULL   -- Unix timestamp
-  );
-  CREATE INDEX usage_log_chat_id ON usage_log(chat_id);
-  CREATE INDEX usage_log_recorded_at ON usage_log(recorded_at);
+  Default 0 means "unreported." No provider is required to fill these.
+
+*Layer 2 — Provider extraction.*
+
+- `app/providers/claude.py` — at the success return (line 412), extract from
+  `result_data`:
+  ```python
+  usage = result_data.get("usage", {})
+  return RunResult(
+      text=final_text,
+      denials=denials,
+      provider_state_updates={"started": True},
+      prompt_tokens=usage.get("input_tokens", 0),
+      completion_tokens=usage.get("output_tokens", 0),
+      cost_usd=float(result_data.get("total_cost_usd", 0.0)),
+  )
   ```
-- Request-completion path — after a successful run, if
-  `run_result.prompt_tokens > 0`, insert a `usage_log` row.
-- `app/registry_service/app.py` — add `/v1/ui/usage` endpoint:
-  - Returns `{ "daily_total": { "prompt_tokens": N, "completion_tokens": N, "cost_usd": F }, "by_conversation": [ { "chat_id": ..., "prompt_tokens": ..., ... } ] }`.
-  - `daily_total` aggregates today's UTC rows.
-- Registry UI conversation detail panel — append a small "Usage" row below the conversation metadata: `Tokens: 1,234 in / 567 out` and `Est. cost: $0.012` (omit cost row if `cost_usd` is 0 for all rows, i.e. unknown). Format numbers with `toLocaleString()`.
-- Registry UI header — add a subtle daily token counter beside the "last updated" indicator: `Today: 12,345 tokens` (no cost figure in header to avoid alarm for operators who haven't set pricing). Load from `/v1/ui/usage` on bootstrap, refresh every 60 s.
+  Also extract at the preflight success return (line 458). Field names are
+  `input_tokens` / `output_tokens` (confirmed from live CLI output).
+- `app/providers/codex.py` — in `consume_stdout()` (around line 449), before
+  the `_map_event` call, detect the `token_count` event:
+  ```python
+  msg = event.get("msg") if isinstance(event.get("msg"), dict) else {}
+  if msg.get("type") == "token_count":
+      total = msg.get("info", {}).get("total_token_usage", {})
+      usage_input = total.get("input_tokens", 0)
+      usage_output = total.get("output_tokens", 0)
+  ```
+  Store these in nonlocal variables and pass to `RunResult` at the success
+  return (line 510). The `token_count` event uses a nested `msg` structure
+  (`event["msg"]["type"]`), not the top-level `event["type"]` used by other
+  Codex events — do not route through `_map_event`.
+
+*Layer 3 — Transport store parity.*
+
+- `usage_log` table already exists in both backends (SQLite:
+  `app/work_queue_sqlite_impl.py:72`; Postgres:
+  `app/db/migrations/postgres/0003_user_access_usage_log.sql:13`).
+  No migration needed.
+- Add `record_usage` and `get_usage_since` to:
+  - `app/work_queue.py` (facade + `__all__`)
+  - `app/work_queue_sqlite.py` (store class)
+  - `app/work_queue_sqlite_impl.py` (SQLite impl)
+  - `app/work_queue_pg.py` (Postgres conn-level)
+  - `app/work_queue_postgres.py` (Postgres store wrapper)
+- `record_usage` inserts into `usage_log`. `get_usage_since(since_epoch)`
+  returns rows as dicts with `recorded_at` as a Unix float in both backends
+  (Postgres: `EXTRACT(EPOCH FROM recorded_at)`).
+- Transport facade parity rule: all five files in the same commit.
+
+*Layer 4 — Record at completion.*
+
+- Add `prompt_tokens`, `completion_tokens`, `cost_usd` to
+  `RequestExecutionOutcome` (mirrors how `_maybe_fire_webhook` reads outcome
+  fields at the `worker_dispatch` level).
+- Set them in `execute_request` from the `result` object at every return path
+  that has a `result`.
+- In `worker_dispatch`, after `outcome` is produced and `item["id"]` is
+  available, call `work_queue.record_usage(...)` for **every** completed run
+  (not just runs with tokens > 0 — a row with 0 means "unreported," which is
+  still informative for the operator). Wrap in try/except — never block
+  completion on recording failure.
+- Also publish a `usage` timeline event to the registry (via
+  `publish_timeline_event`) with token counts in metadata. This is the
+  cross-boundary transport — the registry UI reads these, not the bot runtime
+  DB.
+
+*Layer 5 — Registry UI.*
+
+- Add `GET /v1/ui/usage` endpoint that queries `timeline_events WHERE kind =
+  'usage'` for today (UTC midnight), aggregates `prompt_tokens` and
+  `completion_tokens` from `metadata_json`, and returns
+  `{ "daily_total": {...}, "by_conversation": [...] }`.
+- UI header: add `Reported today: N tokens` beside the freshness indicator.
+  Label as "reported" — not "total." Load on bootstrap, refresh every 60 s.
+- Conversation detail: show `Reported tokens: N in / N out` and
+  `Reported cost: $X.XX` (omit cost line if all cost values are 0). Format
+  with `toLocaleString()`.
 
 **Files to change.**
 - `app/providers/base.py` — extend `RunResult`.
-- `app/providers/claude.py`, `app/providers/codex.py` — populate token fields if the current integrations expose them.
-- `app/work_queue_sqlite_impl.py`, `app/work_queue_pg.py`, `app/work_queue_sqlite.py`, `app/work_queue_postgres.py`, `app/work_queue.py` — usage recording/query seam.
-- Request-completion owner (`app/worker.py` or the adjacent completion path) — insert usage row after run.
+- `app/providers/claude.py` — extract `usage` + `total_cost_usd` from `result_data`.
+- `app/providers/codex.py` — extract `token_count` event from nested `msg` object.
+- `app/work_queue.py`, `app/work_queue_sqlite.py`, `app/work_queue_sqlite_impl.py`, `app/work_queue_pg.py`, `app/work_queue_postgres.py` — usage recording/query seam.
+- `app/telegram_handlers.py` — `RequestExecutionOutcome` fields, `worker_dispatch` recording, usage timeline event publishing.
 - `app/registry_service/app.py` — `/v1/ui/usage` endpoint, UI rendering.
+- `tests/contracts/test_transport_store_contract.py` — contract tests for `record_usage`, `get_usage_since`.
+- `tests/test_registry_service.py` — test `/v1/ui/usage` endpoint.
 
 **What M10B does NOT include.**
-- Per-model pricing table (hard-code 0 cost for unknown models; operators can infer from token counts).
-- Budget alerts or hard spend caps (add in M11 if requested).
+- Per-model pricing table (Claude reports `total_cost_usd` directly; no table needed).
+- Budget alerts or hard spend caps (M11+ if requested).
 - Historical charts or sparklines (plain numbers only in M10).
+- Guaranteed-complete token accounting — CLI versions that do not emit usage events produce 0s, and the UI labels accordingly.
 
 ---
 
@@ -4835,156 +4915,48 @@ Add a read-only "Skills" panel to the Registry UI that lists all registered skil
 
 ###### H-2. Registry Store Backend Abstraction and Postgres Parity
 
-**Status: Remaining.**
+**Status: Complete.**
 
-**Problem.**
-`app/registry_service/store.py` is a single concrete class (`RegistryStore`) hardwired to SQLite with no abstract interface, no Postgres implementation, and no contract test. The B-0 "Postgres parity" fix applied only to the bot runtime transport layer (`app/work_queue.py`). The registry service was never in scope and this was not made clear. Every registry feature since Phase 20 — including M10D's FTS5 full-text search and M10H's `json_each` skills aggregation — has accumulated against a backend seam that does not exist yet. The mistake was not just that the registry remained SQLite-only; the mistake was that we kept talking about "parity" after fixing only one seam while continuing to add SQLite-specific code to another seam with no abstraction at all.
+**What shipped.**
+The registry service now mirrors the backend seam used by the bot runtime. A shared contract lives in `app/registry_service/store_base.py`; `app/registry_service/store.py` is the SQLite implementation (`RegistrySQLiteStore`); `app/registry_service/store_postgres.py` is the Postgres implementation; and `app/registry_service/backend.py` selects the backend from `REGISTRY_DATABASE_URL` or `REGISTRY_DB_PATH`. The Postgres schema is created by `app/db/migrations/postgres/0004_registry.sql`, and `tests/contracts/test_registry_store_contract.py` now enforces backend-neutral behavior across both stores.
 
-The concrete SQLite-specific features in `store.py` that cannot run on Postgres:
-- `PRAGMA journal_mode=WAL` (line 21)
-- `INSERT OR REPLACE INTO` (lines 160, 394, 627, 742, 893)
-- `INSERT OR IGNORE INTO` (line 196)
-- `CREATE VIRTUAL TABLE ... USING fts5(...)` (lines 179–180) — added in M10D
-- FTS5 triggers using `rowid` (lines 182–191) — added in M10D
-- `JOIN json_each(a.skills_json)` (line 486) — added in M10H
-- `COLLATE NOCASE` (lines 488, 545)
-
-**Fix.**
-Apply the same abstraction pattern used by the bot runtime:
-
-- **Phase 1 — truth and seam**: define the abstract contract; rename the concrete class; add the backend selector; wire `app.py` to the abstract type only.
-- **Phase 2 — Postgres registry store**: implement `RegistryPostgresStore` with idiomatic Postgres SQL for every operation.
-- **Phase 3 — migrations and bootstrapping**: add the registry Postgres schema and wire it into the bootstrap path alongside the bot runtime migration set.
-- **Phase 4 — contract tests**: parameterize against both backends exactly like the runtime contract suite.
-- **Phase 5 — stop the bleed**: enforce via `CLAUDE.md` rule that no new registry DB method may land without both implementations and a contract test.
-
-**Implementation seams.**
-
-**Phase 1 — truth and seam**
-
-- `app/registry_service/store_base.py` (new) — `AbstractRegistryStore` as a `typing.Protocol`. Declare every truly public method: the ones called from `app/registry_service/app.py` plus `SkillDisabledError`. Move `SkillDisabledError` here so `app.py` can catch it without importing a backend impl. Move the `TimelineEvent` dataclass here if it is used across both impls. Internal helpers (`_connect`, `_init_db`, `_token_row`, `_create_delivery`, `publish_ui_timeline`) are implementation details; include only those that `app.py` calls directly — grep first. No SQL, no `import sqlite3`, no `import psycopg`.
-
-- `app/registry_service/store.py` — rename `RegistryStore` → `RegistrySQLiteStore`; add `(AbstractRegistryStore)` as base. All SQLite-specific SQL stays here unchanged — this is the correct SQLite implementation and SQLite-isms belong in it. This file must not import from `store_postgres.py`.
-
-- `app/registry_service/backend.py` (new) — backend selector, mirror of `app/runtime_backend.py`. Reads `REGISTRY_DATABASE_URL` env var: if set, instantiates `RegistryPostgresStore`; otherwise instantiates `RegistrySQLiteStore` from `REGISTRY_DB_PATH`. Exposes `get_registry_store() -> AbstractRegistryStore` and `_reset_for_tests()`. Owns the singleton.
-
-- `app/registry_service/app.py` — update imports to `from app.registry_service.store_base import AbstractRegistryStore, SkillDisabledError` and `from app.registry_service.backend import get_registry_store`. Change `get_store()` to call `get_registry_store()`. Every `store: RegistryStore = Depends(get_store)` annotation becomes `store: AbstractRegistryStore = Depends(get_store)`. No endpoint logic changes.
-
-**Phase 2 — Postgres registry store**
-
-- `app/registry_service/store_postgres.py` (new) — `RegistryPostgresStore(AbstractRegistryStore)`. Use `psycopg` v3 (same library as `app/work_queue_pg.py`: `from psycopg.rows import dict_row`). Reuse `app/db/postgres.py` pool management (`get_pool`). Use `agent_registry` as the Postgres schema name (the bot runtime uses `bot_runtime`; the registry must use its own namespace to avoid table name collisions and keep the two stores independently manageable).
-
-  Every SQLite-ism must have an idiomatic Postgres equivalent — do not share SQL between the two impls:
-  - `INSERT OR REPLACE` → `INSERT ... ON CONFLICT (...) DO UPDATE SET ...`
-  - `INSERT OR IGNORE` → `INSERT ... ON CONFLICT DO NOTHING`
-  - `CREATE VIRTUAL TABLE ... USING fts5` → `tsvector` column on `timeline_events` declared as `GENERATED ALWAYS AS (to_tsvector('english', coalesce(body, ''))) STORED` with a GIN index; no separate trigger needed
-  - FTS5 `snippet(...)` call → `ts_headline('english', body, plainto_tsquery('english', %s))` — the output will not be byte-identical to SQLite FTS5 snippets; contract tests must not assert exact string equality, only that the matched conversation ID is returned and the snippet is non-empty
-  - `JOIN json_each(a.skills_json)` → `jsonb_array_elements_text(a.skills_json::jsonb)`; `skills_json` column type is `jsonb` in Postgres (not `text`)
-  - FTS search clause → `body_tsv @@ plainto_tsquery('english', %s)`
-  - `PRAGMA journal_mode=WAL` → remove; Postgres manages WAL
-  - `COLLATE NOCASE` → `lower(col)` in ORDER BY; `ILIKE` for equality tests
-  - `sqlite3.Row` → `psycopg` `dict_row` row factory (same pattern as `work_queue_pg.py`)
-  - `?` placeholders → `%s` placeholders
-
-**Phase 3 — migrations and bootstrapping**
-
-- `app/db/migrations/postgres/0004_registry.sql` (new) — `CREATE SCHEMA IF NOT EXISTS agent_registry;` followed by `CREATE TABLE IF NOT EXISTS agent_registry.<table>` for every registry table: `meta`, `agents`, `agent_tokens`, `deliveries`, `routed_tasks`, `conversations`, `timeline_events` (including the `body_tsv` generated column and GIN index), `skills_override`. Derive column names and types from `_init_db()` in `store.py`. Follow the format of `0001_runtime.sql` exactly: version header comment, idempotent DDL, named indexes.
-
-  The registry bootstrap path (wherever the Postgres migration runner is called) must apply `0004_registry.sql`. Check whether the bot runtime's `db_bootstrap` / `db_update` scripts handle this automatically by virtue of scanning `app/db/migrations/postgres/` or whether the registry service needs its own bootstrap call on startup. Fix whichever path is missing.
-
-**Phase 4 — contract tests**
-
-- `tests/contracts/test_registry_store_contract.py` (new) — parameterized `@pytest.fixture(params=["sqlite", "postgres"])` modeled exactly on `tests/contracts/test_transport_store_contract.py`. Postgres fixture skips if `TEST_REGISTRY_DATABASE_URL` is not set. Minimum 13 tests:
-  1. `test_enroll_and_register_returns_agent_id`
-  2. `test_poll_delivers_to_enrolled_agent`
-  3. `test_ack_marks_delivery_done`
-  4. `test_search_agents_by_skill`
-  5. `test_search_agents_excludes_offline`
-  6. `test_create_routed_task_and_lookup`
-  7. `test_bind_conversation_is_visible`
-  8. `test_create_conversation_delivers_surface_input`
-  9. `test_timeline_publish_and_retrieve`
-  10. `test_search_conversations_fts` — asserts matched conversation IDs and non-empty snippet; must NOT assert exact snippet text (SQLite FTS5 and Postgres `ts_headline` produce different output)
-  11. `test_skill_override_disabled_excludes_from_search` — M10H contract on both backends
-  12. `test_list_skills_aggregates_declared` — M10H contract on both backends
-  13. `test_skill_override_survives_agent_deregistration` — M10H persistence contract
-
-- `tests/test_registry_service.py` and `tests/test_registry_skills.py` — update any direct `RegistryStore(...)` instantiation to `RegistrySQLiteStore(...)`. No other test logic changes; all existing tests must pass unmodified after the rename.
-
-**Files to change.**
-- `app/registry_service/store_base.py` — new; abstract interface + shared types
-- `app/registry_service/store.py` — rename class only; no SQL changes
-- `app/registry_service/store_postgres.py` — new; Postgres impl
-- `app/registry_service/backend.py` — new; backend selector
-- `app/registry_service/app.py` — update imports and type annotations only
-- `app/db/migrations/postgres/0004_registry.sql` — new; `agent_registry` schema
-- `tests/contracts/test_registry_store_contract.py` — new; parameterized contract test
-- `tests/test_registry_service.py` — update `RegistryStore` → `RegistrySQLiteStore` import
-- `tests/test_registry_skills.py` — update `RegistryStore` → `RegistrySQLiteStore` import
-- `CLAUDE.md` — add registry store parity rule (Phase 5)
-
-**Commit discipline.**
-Three commits, not one:
-1. Phase 1 (abstraction + rename): `store_base.py` + rename + `backend.py` + `app.py` import update. All existing tests must pass at this commit with no registry logic changes.
-2. Phase 2 + 3 (Postgres impl + migration): `store_postgres.py` + `0004_registry.sql` + bootstrap wiring. No existing test regressions.
-3. Phase 4 + 5 (contract test + rule): `test_registry_store_contract.py` passing against SQLite; Postgres tests pass if `TEST_REGISTRY_DATABASE_URL` is set; `CLAUDE.md` rule added.
+**Key implementation notes.**
+- SQL stays backend-native. SQLite retains FTS5 and `json_each(...)`; Postgres uses `tsvector`/`ts_headline(...)` and `jsonb_array_elements_text(...)`.
+- Registry discovery and skills filtering now push the heavy filtering into SQL on both backends instead of broad fetch-then-filter-in-Python behavior.
+- Registry app routes depend only on `AbstractRegistryStore`; the FastAPI layer no longer imports a concrete backend class.
+- Test isolation now resets the registry backend selector and closes Postgres pools between tests.
 
 **What M10H-2 does NOT include.**
 - Any changes to bot runtime session or transport stores (done in B-0).
-- Any changes to endpoint logic, request/response shapes, or the Registry UI.
-- Migration of existing SQLite registry data to Postgres (operator responsibility).
-- Making the registry service horizontally scalable (single-writer assumption remains).
-- Shared SQL between SQLite and Postgres impls — every attempt to share SQL produces lowest-common-denominator code that is neither idiomatic SQLite nor idiomatic Postgres.
+- Automatic migration of existing SQLite registry data into Postgres.
+- Horizontal scale-out for the registry service; the control plane still assumes one writer per backing database.
+- Shared SQL across backends; each store remains idiomatic to its database.
 
 ---
 
 ###### I. Programmatic API Trigger
 
-**Status: Remaining.**
+**Status: Shipped.**
 
-**Problem.**
-There is no stable, documented way to start a conversation programmatically. The `POST /v1/ui/conversations` endpoint exists internally (used by the Registry when routing surface_input deliveries) but is undocumented, unauthenticated in isolation, and its request/response shape may change. Operators who want to trigger the bot from CI, a webhook, or another service have no stable contract.
+**What shipped.**
+`POST /v1/ui/conversations` is now a first-class, bearer-authenticated API endpoint for starting registry-surface conversations from external systems such as CI jobs, scripts, or inbound webhooks. The path remains unchanged so the Registry UI continues to use the same handler.
 
-**Fix.**
-Stabilise and document `POST /v1/ui/conversations` as a first-class authenticated API endpoint. Authentication reuses the `REGISTRY_UI_TOKEN` bearer token (same credential as the UI login, different transport: `Authorization: Bearer <token>` header).
-
-**Implementation seams.**
-
-- `app/registry_service/app.py` — `POST /v1/ui/conversations`:
-  - Current internal shape: `{ "conversation_ref": "...", "text": "...", "actor_ref": "...", "delivery_id": "...", "skip_approval": true }`.
-  - Stabilised public shape:
-    ```json
-    {
-      "chat_id": 12345,
-      "text": "Run the nightly report",
-      "skip_approval": false
-    }
-    ```
-    (The server constructs `conversation_ref`, `actor_ref`, and `delivery_id` internally from `chat_id` and a generated UUID.)
-  - Authentication: check `Authorization: Bearer <token>` header against `REGISTRY_UI_TOKEN`. If missing or wrong, return 401 `{"error": "unauthorized"}`. If `REGISTRY_UI_TOKEN` is empty, bypass auth (dev mode, same as the UI).
-  - Response: `{"status": "admitted", "work_item_id": "..."}` or `{"status": "duplicate"}` or `{"status": "busy"}`.
-  - Add `_require_bearer_auth(request)` helper (separate from the cookie-based `_require_auth` used by HTML routes).
-- `docs/API.md` (new file) — document the endpoint:
-  - Authentication.
-  - Request body fields (all required vs optional).
-  - Response codes and bodies.
-  - A minimal curl example:
-    ```bash
-    curl -X POST http://localhost:8787/v1/ui/conversations \
-      -H "Authorization: Bearer $REGISTRY_UI_TOKEN" \
-      -H "Content-Type: application/json" \
-      -d '{"chat_id": 12345, "text": "Run the nightly report"}'
-    ```
-  - Note that `chat_id` must correspond to an existing conversation (i.e., the user has messaged the bot at least once).
-
-**Files to change.**
-- `app/registry_service/app.py` — stabilise endpoint, add bearer auth, align request shape.
-- `docs/API.md` (new file).
+**Key implementation notes.**
+- Request validation is handled by a Pydantic model in `app/registry_service/app.py`:
+  - `target_agent_id`: required, non-empty
+  - `message_text`: required, non-empty
+  - `title`: optional, defaults to `""`
+- The route now returns `201 Created` on success.
+- Unknown `target_agent_id` is rejected with `404` before the store writes anything, so the API no longer creates orphaned conversations that can never be delivered.
+- `require_ui_token` already handled bearer authentication; that auth path remains the single source of truth for the endpoint.
+- `docs/API.md` now documents auth, request/response shape, errors, and a curl example.
+- The existing Registry UI JavaScript already posted `target_agent_id`, `title`, and `message_text`, so the UI kept working unchanged.
 
 **What M10I does NOT include.**
-- Starting a brand-new conversation with a user who has never messaged the bot (requires Telegram's `sendMessage` to a user who has not initiated contact — not allowed by Telegram's API without user initiation).
-- Batch trigger (multiple conversations in one call).
-- Webhook registration for receiving events programmatically (separate feature).
+- Any new URL path; `/v1/ui/conversations` remains the canonical endpoint.
+- Batch trigger support; the API creates one conversation per call.
+- Webhook registration or callback delivery; this is an ingress endpoint only.
+- Bot-side direct registry access; the API remains owned by the registry service.
 
 ---
 
@@ -4996,17 +4968,15 @@ Stabilise and document `POST /v1/ui/conversations` as a first-class authenticate
 | Shipped B-0/E | `app/access.py`, `app/work_queue.py`, `app/work_queue_sqlite.py`, `app/work_queue_sqlite_impl.py`, `app/work_queue_pg.py`, `app/work_queue_postgres.py`, `app/db/migrations/postgres/0003_user_access_usage_log.sql`, `app/telegram_handlers.py`, `tests/contracts/test_transport_store_contract.py` |
 | Shipped G | `app/config.py`, `app/webhook.py`, `app/telegram_handlers.py`, `scripts/app/guided_start.sh` |
 | Shipped H | `app/registry_service/app.py`, `app/registry_service/store.py`, `tests/test_registry_skills.py` |
+| Shipped H-2 | `app/registry_service/store_base.py`, `app/registry_service/store_postgres.py`, `app/registry_service/backend.py`, `app/registry_service/store.py` (rename), `app/registry_service/app.py` (import update), `app/db/migrations/postgres/0004_registry.sql`, `tests/contracts/test_registry_store_contract.py` |
+| Shipped I | `app/registry_service/app.py` (Pydantic model, 201, agent guard), `docs/API.md`, `tests/test_registry_service.py` |
 | Remaining B | provider adapters, transport-store usage recording, Registry UI `/v1/ui/usage`, and contract coverage |
-| Remaining H-2 | `app/registry_service/store_base.py`, `app/registry_service/store_postgres.py`, `app/registry_service/backend.py`, `app/registry_service/store.py` (rename), `app/registry_service/app.py` (import update), `app/db/migrations/postgres/0004_registry.sql`, `tests/contracts/test_registry_store_contract.py` |
-| Remaining I | stabilized `/v1/ui/conversations` contract and `docs/API.md` |
 
 ###### M10 — Remaining Implementation Order
 
 The remaining order is:
 
-1. **H-2** registry store backend abstraction and Postgres parity
-2. **B** usage and cost visibility
-3. **I** stabilized programmatic trigger API
+1. **B** usage and cost visibility
 
 ###### M10 — What M10 Does NOT Include
 
@@ -5027,8 +4997,8 @@ The remaining order is:
 - [x] Registry-side Markdown conversation export is available from the detail panel
 - [x] Completion webhook notifications can be configured and fire from terminal outcomes
 - [ ] Usage visibility lands without fabricated token or cost data
-- [ ] Registry UI can surface and safely toggle skill overrides
-- [ ] `POST /v1/ui/conversations` is stabilized and documented as a public operator API
+- [x] Registry UI can surface and safely toggle skill overrides
+- [x] `POST /v1/ui/conversations` is stabilized and documented as a public operator API
 - [ ] Full test suite passes with the remaining M10 slices in place
 
 ---

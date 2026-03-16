@@ -107,11 +107,12 @@ The UI starts with three live lists plus a detail panel for the selected item:
 - **Bots** — all registered bots, their connection status, and last heartbeat
 - **Conversations** — a live timeline for every conversation across all bots
 - **Routed Tasks** — delegated sub-tasks being handled by specialist bots
+- **Skills** — enable or disable skills across all bots from one place
 - **Detail panel** — the selected bot, conversation, or task, with drill-down actions such as follow-up messages, delegation approval, and export where supported
 
 Unlike the Telegram interface, the Registry UI lets you start conversations
-directly, approve or cancel delegation plans, and see all bot activity in one
-place without switching between Telegram chats.
+directly, approve or cancel delegation plans, manage skills, and see all bot
+activity in one place without switching between Telegram chats.
 
 ## Day-To-Day Use
 
@@ -274,10 +275,25 @@ Telegram allows a single active polling connection per bot token. If you see
 `Conflict: terminated by other getUpdates request`, another process is already
 using that token. Stop it first, then start the current instance.
 
+## Programmatic API
+
+External systems (CI, webhooks, scripts) can start conversations via the
+registry API without a browser session:
+
+```bash
+curl -X POST http://localhost:8787/v1/ui/conversations \
+  -H "Authorization: Bearer $REGISTRY_UI_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"target_agent_id": "abc123", "message_text": "Run the nightly report"}'
+```
+
+See [docs/API.md](docs/API.md) for the full request/response contract.
+
 ## Want The Technical Details?
 
 For deeper details, use:
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): runtime, storage, bootstrap, and testing contracts
+- [docs/API.md](docs/API.md): programmatic API reference
 - [docs/plan.md](docs/plan.md): product definition, roadmap, and design decisions
 - [docs/status.md](docs/status.md): current shipped state and progress

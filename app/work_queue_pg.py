@@ -926,3 +926,58 @@ def purge_old(conn, older_than_hours: int = 24) -> int:
         if deleted_items or deleted_updates:
             log.info("Purged %d work items and %d updates", deleted_items, deleted_updates)
         return deleted_items
+
+
+def get_user_access_override(conn, user_id: int) -> str | None:
+    """Return 'allowed', 'blocked', or None when no override exists."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT access FROM bot_runtime.user_access WHERE user_id = %s",
+            (user_id,),
+        )
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def set_user_access(
+    conn,
+    user_id: int,
+    access: str,
+    reason: str,
+    granted_by: int,
+) -> None:
+    """Upsert a user access override row."""
+    now = datetime.now(timezone.utc)
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO bot_runtime.user_access
+                   (user_id, access, reason, granted_by, granted_at)
+               VALUES (%s, %s, %s, %s, %s)
+               ON CONFLICT (user_id) DO UPDATE SET
+                   access = EXCLUDED.access,
+                   reason = EXCLUDED.reason,
+                   granted_by = EXCLUDED.granted_by,
+                   granted_at = EXCLUDED.granted_at""",
+            (user_id, access, reason, granted_by, now),
+        )
+    conn.commit()
+
+
+def list_user_access(conn) -> list[dict]:
+    """Return all user access overrides ordered by most recent grant first."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT user_id, access, reason, granted_by, granted_at "
+            "FROM bot_runtime.user_access ORDER BY granted_at DESC"
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "user_id": row[0],
+            "access": row[1],
+            "reason": row[2],
+            "granted_by": row[3],
+            "granted_at": row[4],
+        }
+        for row in rows
+    ]

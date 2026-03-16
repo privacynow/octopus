@@ -174,6 +174,25 @@ class PostgresTransportStore:
         with self._conn() as conn:
             return work_queue_pg.purge_old(conn, older_than_hours)
 
+    def get_user_access(self, data_dir: Path, user_id: int) -> str | None:
+        with self._conn() as conn:
+            return work_queue_pg.get_user_access_override(conn, user_id)
+
+    def set_user_access(
+        self,
+        data_dir: Path,
+        user_id: int,
+        access: str,
+        reason: str = "",
+        granted_by: int = 0,
+    ) -> None:
+        with self._conn() as conn:
+            work_queue_pg.set_user_access(conn, user_id, access, reason, granted_by)
+
+    def list_user_access(self, data_dir: Path) -> list[dict]:
+        with self._conn() as conn:
+            return work_queue_pg.list_user_access(conn)
+
     def close_transport_db(self, data_dir: Path) -> None:
         pass
 

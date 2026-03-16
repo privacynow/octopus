@@ -8,14 +8,8 @@ handler layer.
 
 from __future__ import annotations
 
-import logging
-import sqlite3
-from pathlib import Path
-
 from app.config import BotConfig
 from app.transport import InboundUser, normalize_user
-
-log = logging.getLogger(__name__)
 
 
 def to_inbound_user(user) -> InboundUser | None:
@@ -27,37 +21,13 @@ def to_inbound_user(user) -> InboundUser | None:
     return normalize_user(user)
 
 
-def _db_access_override(data_dir: Path, user_id: int) -> str | None:
-    """Return a DB access override for user_id, or None when absent/unavailable."""
-    db_path = data_dir / "transport.db"
-    if not db_path.exists():
-        return None
-    conn: sqlite3.Connection | None = None
-    try:
-        conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT access FROM user_access WHERE user_id = ?",
-            (user_id,),
-        ).fetchone()
-        return row["access"] if row else None
-    except Exception as exc:
-        log.debug("DB access override lookup failed for user %s: %s", user_id, exc)
-        return None
-    finally:
-        if conn is not None:
-            conn.close()
-
-
 def is_allowed_user(config: BotConfig, user) -> bool:
-    """Return True when the user is allowed to interact with the bot."""
+    """Config baseline — no DB lookup.
+
+    Use is_allowed_user_with_override when a live DB override is needed.
+    """
     inbound = to_inbound_user(user)
     if inbound is None:
-        return False
-    override = _db_access_override(config.data_dir, inbound.id)
-    if override == "allowed":
-        return True
-    if override == "blocked":
         return False
     if config.allow_open:
         return True
@@ -67,6 +37,22 @@ def is_allowed_user(config: BotConfig, user) -> bool:
         inbound.id in config.allowed_user_ids
         or inbound.username in config.allowed_usernames
     )
+
+
+def is_allowed_user_with_override(
+    config: BotConfig,
+    user,
+    override: str | None,
+) -> bool:
+    """Apply DB override precedence on top of the config baseline."""
+    inbound = to_inbound_user(user)
+    if inbound is None:
+        return False
+    if override == "blocked":
+        return False
+    if override == "allowed":
+        return True
+    return is_allowed_user(config, user)
 
 
 def is_admin_user(config: BotConfig, user) -> bool:

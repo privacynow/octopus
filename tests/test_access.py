@@ -1,8 +1,9 @@
-"""Access control contracts: config baseline plus DB override precedence."""
+"""Access policy contracts and SQLite DB-layer helper tests."""
 
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 from app import access
 from app.transport import InboundUser
@@ -15,85 +16,45 @@ from app.work_queue_sqlite_impl import (
 from tests.support.config_support import make_config
 
 
-def _init_user_access_db(db_path) -> None:
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        """
-        CREATE TABLE user_access (
-            user_id INTEGER PRIMARY KEY,
-            access TEXT NOT NULL CHECK(access IN ('allowed', 'blocked')),
-            reason TEXT NOT NULL DEFAULT '',
-            granted_by INTEGER NOT NULL DEFAULT 0,
-            granted_at REAL NOT NULL
-        )
-        """
-    )
-    conn.commit()
-    conn.close()
-
-
-def _insert_override(db_path, user_id: int, value: str, reason: str = "") -> None:
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        "INSERT INTO user_access (user_id, access, reason, granted_by, granted_at) VALUES (?, ?, ?, 1, 1.0)",
-        (user_id, value, reason),
-    )
-    conn.commit()
-    conn.close()
-
-
-def test_is_allowed_user_no_override_uses_config_allow(tmp_path):
-    cfg = make_config(
-        data_dir=tmp_path,
+def _config():
+    return make_config(
+        data_dir=Path("/tmp/test-access"),
         allow_open=False,
         allowed_user_ids=frozenset({100}),
         allowed_usernames=frozenset(),
     )
+
+
+def test_is_allowed_user_no_override_uses_config_allow():
+    cfg = _config()
     user = InboundUser(id=100, username="trusted")
     assert access.is_allowed_user(cfg, user) is True
 
 
-def test_is_allowed_user_no_override_uses_config_deny(tmp_path):
-    cfg = make_config(
-        data_dir=tmp_path,
-        allow_open=False,
-        allowed_user_ids=frozenset({100}),
-        allowed_usernames=frozenset(),
-    )
+def test_is_allowed_user_no_override_uses_config_deny():
+    cfg = _config()
     user = InboundUser(id=200, username="stranger")
     assert access.is_allowed_user(cfg, user) is False
 
 
-def test_is_allowed_user_block_override_wins_over_config_allow(tmp_path):
-    db_path = tmp_path / "transport.db"
-    _init_user_access_db(db_path)
-    _insert_override(db_path, 100, "blocked", "manual block")
-    cfg = make_config(
-        data_dir=tmp_path,
-        allow_open=False,
-        allowed_user_ids=frozenset({100}),
-        allowed_usernames=frozenset(),
-    )
+def test_is_allowed_user_with_override_blocked_beats_config_allow():
+    cfg = _config()
     user = InboundUser(id=100, username="trusted")
-    assert access.is_allowed_user(cfg, user) is False
+    assert access.is_allowed_user_with_override(cfg, user, "blocked") is False
 
 
-def test_is_allowed_user_allow_override_wins_over_config_deny(tmp_path):
-    db_path = tmp_path / "transport.db"
-    _init_user_access_db(db_path)
-    _insert_override(db_path, 200, "allowed", "temporary allow")
-    cfg = make_config(
-        data_dir=tmp_path,
-        allow_open=False,
-        allowed_user_ids=frozenset({100}),
-        allowed_usernames=frozenset(),
-    )
+def test_is_allowed_user_with_override_allowed_beats_config_deny():
+    cfg = _config()
     user = InboundUser(id=200, username="stranger")
-    assert access.is_allowed_user(cfg, user) is True
+    assert access.is_allowed_user_with_override(cfg, user, "allowed") is True
 
 
-def test_db_access_override_returns_none_when_transport_db_missing(tmp_path):
-    assert access._db_access_override(tmp_path, 100) is None
+def test_is_allowed_user_with_override_none_falls_through_to_config():
+    cfg = _config()
+    trusted = InboundUser(id=100, username="trusted")
+    stranger = InboundUser(id=200, username="stranger")
+    assert access.is_allowed_user_with_override(cfg, trusted, None) is True
+    assert access.is_allowed_user_with_override(cfg, stranger, None) is False
 
 
 def test_get_user_access_override_missing_returns_none():

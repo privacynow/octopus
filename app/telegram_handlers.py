@@ -455,7 +455,12 @@ async def _progress_timeline_callback(conversation_ref: str, routed_task_id: str
 # -- Auth ------------------------------------------------------------------
 
 def is_allowed(user) -> bool:
-    return access.is_allowed_user(_cfg(), user)
+    cfg = _cfg()
+    inbound = access.to_inbound_user(user)
+    if inbound is None:
+        return False
+    override = work_queue.get_user_access(cfg.data_dir, inbound.id)
+    return access.is_allowed_user_with_override(cfg, user, override)
 
 
 def is_admin(user) -> bool:

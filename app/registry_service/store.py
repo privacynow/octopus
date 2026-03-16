@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
+import time
 import uuid
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta, timezone
@@ -121,6 +122,10 @@ def _conversation_status_for_event(kind: str, current_status: str = "") -> str:
     if kind == "control":
         return "cancelling"
     return current_status or "open"
+
+
+class SkillDisabledError(RuntimeError):
+    """Raised when routing requests a skill that has been globally disabled."""
 
 
 class RegistryStore:
@@ -447,6 +452,84 @@ class RegistryStore:
             )
         return self.get_conversation(payload["conversation_id"])
 
+    def get_skill_override(self, skill_name: str) -> bool | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT enabled FROM skills_override WHERE skill_name = ?",
+                (skill_name,),
+            ).fetchone()
+        if row is None:
+            return None
+        return bool(row["enabled"])
+
+    def set_skill_override(self, skill_name: str, enabled: bool, set_by: str = "ui") -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO skills_override (skill_name, enabled, set_by, set_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(skill_name) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    set_by = excluded.set_by,
+                    set_at = excluded.set_at
+                """,
+                (skill_name, 1 if enabled else 0, set_by, time.time()),
+            )
+            conn.commit()
+
+    def list_skills(self) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            declared_rows = conn.execute(
+                """
+                SELECT je.value AS skill_name, a.slug
+                FROM agents a
+                JOIN json_each(a.skills_json) AS je
+                WHERE a.connectivity_state != 'offline'
+                ORDER BY lower(je.value), a.slug COLLATE NOCASE
+                """
+            ).fetchall()
+            override_rows = conn.execute(
+                """
+                SELECT skill_name, enabled
+                FROM skills_override
+                ORDER BY lower(skill_name)
+                """
+            ).fetchall()
+
+        merged: dict[str, dict[str, Any]] = {}
+        for row in declared_rows:
+            skill_name = row["skill_name"]
+            key = skill_name.lower()
+            item = merged.setdefault(
+                key,
+                {
+                    "skill_name": skill_name,
+                    "declared_by_agents": [],
+                    "enabled": None,
+                },
+            )
+            if row["slug"] not in item["declared_by_agents"]:
+                item["declared_by_agents"].append(row["slug"])
+        for row in override_rows:
+            skill_name = row["skill_name"]
+            key = skill_name.lower()
+            item = merged.setdefault(
+                key,
+                {
+                    "skill_name": skill_name,
+                    "declared_by_agents": [],
+                    "enabled": None,
+                },
+            )
+            item["enabled"] = bool(row["enabled"])
+        return sorted(merged.values(), key=lambda item: item["skill_name"].lower())
+
+    def _disabled_skills(self, conn: sqlite3.Connection) -> set[str]:
+        rows = conn.execute(
+            "SELECT skill_name FROM skills_override WHERE enabled = 0"
+        ).fetchall()
+        return {str(row["skill_name"]).lower() for row in rows}
+
     def search_agents(self, query: dict[str, Any]) -> list[dict[str, Any]]:
         role = query.get("role", "").strip().lower()
         required_state = query.get("required_state", "connected")
@@ -455,6 +538,10 @@ class RegistryStore:
         free_text = query.get("free_text", "").strip().lower()
         exclude = set(query.get("exclude_agent_ids", []))
         with self._connect() as conn:
+            disabled_skills = self._disabled_skills(conn)
+            # Short-circuit: if every requested skill is globally disabled, no agent can match.
+            if skills and not (skills - disabled_skills):
+                return []
             rows = conn.execute("SELECT * FROM agents ORDER BY display_name COLLATE NOCASE").fetchall()
         results: list[dict[str, Any]] = []
         for row in rows:
@@ -465,7 +552,11 @@ class RegistryStore:
                 continue
             if role and role not in agent["role"].lower():
                 continue
-            agent_skills = {s.lower() for s in agent["skills"]}
+            agent_skills = {
+                skill.lower()
+                for skill in agent["skills"]
+                if skill and skill.lower() not in disabled_skills
+            }
             if skills and not skills.issubset(agent_skills):
                 continue
             agent_tags = {s.lower() for s in agent["tags"]}
@@ -477,7 +568,7 @@ class RegistryStore:
                         agent["display_name"],
                         agent["role"],
                         agent["description"],
-                        " ".join(agent["skills"]),
+                        " ".join(sorted(agent_skills)),
                         " ".join(agent["tags"]),
                     ]
                 ).lower()
@@ -528,6 +619,9 @@ class RegistryStore:
     def create_routed_task(self, request: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
         with self._connect() as conn:
+            requested_skill = str(request.get("skill") or "").strip()
+            if requested_skill and requested_skill.lower() in self._disabled_skills(conn):
+                raise SkillDisabledError(requested_skill)
             conn.execute(
                 """
                 INSERT OR REPLACE INTO routed_tasks (

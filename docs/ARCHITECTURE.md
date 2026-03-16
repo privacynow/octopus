@@ -7,11 +7,12 @@ lives in [status.md](status.md).
 
 For setup and day-to-day use, start with [README.md](../README.md).
 
-Current shipped baseline: **Phase 15 Slice 1** runs in **Local Runtime**.
-The normal deployment is SQLite-backed with `BOT_DATABASE_URL` unset.
-Postgres is a supported alternate backend for the same runtime contract when
-`BOT_DATABASE_URL` is set. Shared Runtime is not part of the current product
-surface.
+Current shipped baseline: **Phase 20** runs in **Local Runtime**.
+The current product includes the multi-agent registry surfaces while execution
+still stays bot-local. The normal deployment is SQLite-backed with
+`BOT_DATABASE_URL` unset. Postgres is a supported alternate backend for the
+same runtime contract when `BOT_DATABASE_URL` is set. Shared Runtime is not
+part of the current product surface.
 
 If you only remember four things, remember these:
 
@@ -39,6 +40,8 @@ Quick orientation:
 ```mermaid
 flowchart LR
     U["User client"] <--> TG["Telegram API"]
+    OPS["Operator browser"] <--> REG["Registry service<br/>enrollment, discovery, routing, UI"]
+    WHK["Operator webhook endpoint"]
 
     subgraph BOT["Bot process"]
         IO["bot ingress / egress"]
@@ -49,6 +52,8 @@ flowchart LR
         CORE["request_flow<br/>execution_context<br/>session_state<br/>skills"]
         P["providers<br/>Claude / Codex"]
         OUT["progress / formatting / summarize"]
+        AR["agents/runtime<br/>enroll, heartbeat, poll, timeline"]
+        WH["webhook.py<br/>completion notify"]
 
         IO --> T
         IO --> H
@@ -58,10 +63,13 @@ flowchart LR
         WL --> CORE
         CORE --> P
         P --> OUT
+        H --> WH
     end
 
     TG <--> IO
     P --> EB["Execution backend<br/>Claude Code / Codex process"]
+    AR <-->|"heartbeat / poll"| REG
+    WH --> WHK
 ```
 
 ---
@@ -129,6 +137,24 @@ The registry loop is driven by `AgentRuntime.run_forever()`:
 - `poll_once()` runs only while the runtime is connected
 - degraded cycles use exponential backoff with full jitter before retrying
 
+```mermaid
+sequenceDiagram
+    participant AR as agents/runtime
+    participant REG as Registry service
+    participant WQ as work_queue
+
+    AR->>REG: POST /v1/agents/enroll (first boot)
+    AR->>REG: POST /v1/agents/register (heartbeat)
+
+    loop poll cycle
+        AR->>REG: GET /v1/agents/poll
+        REG-->>AR: routed_task / control deliveries
+        AR->>WQ: admit routed work items
+        AR->>REG: POST /v1/agents/ack
+        AR->>REG: POST /v1/agents/timeline (progress events)
+    end
+```
+
 Surface selection is owned by the transport factory, not orchestration code.
 `app/transports/factory.py` is the single decision point that maps a
 `conversation_ref` to an `InteractionSurface` implementation and to the right
@@ -136,18 +162,23 @@ trust semantics for the inbound source.
 
 Delegation flow:
 
-```text
-provider run
-  -> RunResult.delegation_tasks
-  -> _propose_delegation_plan(...)
-  -> PendingDelegation persisted in session state
-  -> user approves or cancels in Telegram
-  -> client.submit_routed_task(...) for each approved child task
-  -> target bot polls routed_task delivery from registry
-  -> target bot executes locally through the normal worker path
-  -> registry returns routed_result to origin bot
-  -> app/agents/delivery.py updates PendingDelegation
-  -> continuation message is admitted back through the local worker queue
+```mermaid
+flowchart TD
+    PRUN["provider run produces RunResult.delegation_tasks"]
+    PDP["agents/orchestration.py<br/>_propose_delegation_plan()"]
+    PDS["PendingDelegation persisted in session state"]
+    UX["User approves or cancels in Telegram"]
+    SUB["client.submit_routed_task()<br/>per approved child task"]
+    TPOLL["target bot polls routed_task delivery from registry"]
+    TEXEC["target bot executes locally<br/>through normal worker path"]
+    TRES["registry returns routed_result to origin bot"]
+    DDEL["agents/delivery.py<br/>updates PendingDelegation"]
+    CONT["continuation admitted back<br/>through local worker queue"]
+    CNCL["PendingDelegation cleared"]
+
+    PRUN --> PDP --> PDS --> UX
+    UX -->|"approved"| SUB --> TPOLL --> TEXEC --> TRES --> DDEL --> CONT
+    UX -->|"cancelled"| CNCL
 ```
 
 Discovery is the user-visible front door to that flow: `/discover` queries the
@@ -729,12 +760,17 @@ flowchart TD
     RF["request_flow.py / approvals.py<br/>workflows/pending_request.py"]
     DOC["doctor.py"]
     RL["ratelimit.py"]
+    AC["app/access.py<br/>user / admin / trust-tier policy"]
     EC["execution_context.py<br/>Resolve context, hash, model, trust tier"]
     SS["session_state.py / storage.py"]
     SK["skills.py / store.py / registry.py"]
     PB["providers/base.py<br/>Protocol: run, run_preflight, check_health"]
     PC["providers/claude.py / providers/codex.py"]
     REND["progress.py / formatting.py / summarize.py"]
+    WH["app/webhook.py<br/>fire_completion_webhook, circuit breaker"]
+    AREG["app/agents/runtime.py<br/>AgentRuntime, sync_once, poll_once"]
+    DEL["app/agents/delivery.py<br/>delegation result handling"]
+    ORCH["app/agents/orchestration.py<br/>propose and execute delegation plans"]
 
     UPD --> TR --> WQ
     WQ --> WF
@@ -744,11 +780,17 @@ flowchart TD
     TH --> RF
     TH --> DOC
     TH --> RL
+    TH --> AC
+    TH --> WH
+    TH --> ORCH
     WD --> RF
     RF --> EC
     EC --> SS
     EC --> SK
+    EC --> AC
     RF --> PB --> PC --> REND
+    AREG --> DEL
+    DEL --> WQ
 ```
 
 Ownership:
@@ -767,6 +809,10 @@ Ownership:
 - progress owns all user-facing progress HTML wording
 - formatting/summarize own response adaptation
 - skills/store/registry own capabilities
+- access.py owns user/admin/trust-tier policy decisions (pure, no storage imports)
+- webhook.py owns outbound completion notification with retry and circuit breaking
+- agents/runtime owns registry sync loop, poll, and timeline publication
+- agents/delivery and agents/orchestration own delegation state and child task routing
 
 ---
 
@@ -1232,6 +1278,33 @@ Only allowed users may interact. When open mode is enabled, users resolve to:
 
 - `trusted`: users in the allowed-user set
 - `public`: everyone else
+
+Authorization applies a two-layer precedence: a DB override (fetched by the
+handler at the transport boundary) takes precedence over the config baseline
+(evaluated by `app/access.py`, which is a pure policy module with no storage
+imports).
+
+```mermaid
+flowchart TD
+    REQ["Inbound request"]
+    FETCH["telegram_handlers.py<br/>fetch DB override via work_queue.get_user_access()"]
+    OVR{"override row?"}
+    BLK["override = blocked → deny"]
+    ALW["override = allowed → allow"]
+    CFG["access.is_allowed_user()<br/>config baseline: allow_open, allowed_user_ids, allowed_usernames"]
+    DENY["deny — not in allowed set"]
+    ALLOW["allow — admitted"]
+
+    REQ --> FETCH --> OVR
+    OVR -->|"blocked"| BLK
+    OVR -->|"allowed"| ALW
+    OVR -->|"none"| CFG
+    CFG -->|"matches"| ALLOW
+    CFG -->|"no match"| DENY
+```
+
+`app/access.py` must not import `sqlite3`, `work_queue`, or `runtime_backend`.
+The storage lookup belongs exclusively at the handler integration point.
 
 ### Admin authorization
 

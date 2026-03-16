@@ -16,7 +16,7 @@ from fastapi import Depends, FastAPI, Form, Header, HTTPException, Query, Reques
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.registry_service.store import RegistryStore
+from app.registry_service.store import RegistryStore, SkillDisabledError
 
 log = logging.getLogger(__name__)
 _SESSION_TTL_SECONDS = 24 * 60 * 60
@@ -272,6 +272,8 @@ def create_routed_task(
         return store.create_routed_task(payload)
     except PermissionError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except SkillDisabledError as exc:
+        raise HTTPException(status_code=409, detail="skill_disabled") from exc
 
 
 @app.get("/v1/agents/poll")
@@ -477,6 +479,9 @@ def ui_shell(request: Request) -> str:
         text-transform: uppercase;
         color: var(--muted);
       }}
+      .skills-panel {{
+        grid-column: 1 / -1;
+      }}
       .list {{
         display: grid;
         gap: 10px;
@@ -663,9 +668,43 @@ def ui_shell(request: Request) -> str:
         margin-bottom: 1rem;
         display: none;
       }}
+      .skills-table {{
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+      }}
+      .skills-table th,
+      .skills-table td {{
+        padding: 0.65rem 0.5rem;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        text-align: left;
+        vertical-align: top;
+      }}
+      .skills-table th {{
+        color: var(--muted);
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }}
+      .skill-row-disabled {{
+        opacity: 0.68;
+      }}
+      .skill-status-disabled {{
+        color: var(--red);
+      }}
+      .skill-status-overridden {{
+        color: var(--amber);
+      }}
+      .skill-empty {{
+        color: var(--muted);
+        font-style: italic;
+      }}
       @media (max-width: 1200px) {{
         main {{
           grid-template-columns: 1fr;
+        }}
+        .skills-panel {{
+          grid-column: auto;
         }}
       }}
     </style>
@@ -766,6 +805,13 @@ def ui_shell(request: Request) -> str:
         </div>
         <div id="tasks" class="list"><div class="loading-state">Loading…</div></div>
       </section>
+      <section class="skills-panel">
+        <div class="panel-header">
+          <h2>Skills</h2>
+          <span class="subtle">Global routing kill switches</span>
+        </div>
+        <div id="skills"><div class="loading-state">Loading…</div></div>
+      </section>
     </main>
     <script>
       const token = {settings.ui_token!r};
@@ -773,9 +819,11 @@ def ui_shell(request: Request) -> str:
         bots: "No bots connected yet. Start a bot in registry mode and it will appear here.<br><code>./scripts/app/guided_start.sh</code>",
         conversations: "No conversations yet. Send a message to your bot in Telegram to start.",
         tasks: "No routed tasks yet. Delegated tasks appear here in real time.",
+        skills: "No skills declared yet. Connect bots with advertised skills and they will appear here.",
       }};
       let bootstrapData = {{ bots: [], conversations: [], tasks: [] }};
       let bootstrapLoaded = false;
+      let skillsLoaded = false;
       let lastSuccessfulLoad = 0;
       let currentDetailKind = "";
       let currentDetailId = "";
@@ -1019,6 +1067,65 @@ def ui_shell(request: Request) -> str:
         }});
       }}
 
+      function renderSkills(items) {{
+        const container = document.getElementById("skills");
+        if (!container) return;
+        if (!items.length) {{
+          container.innerHTML = `<div class="empty-state">${{EMPTY_STATES.skills}}</div>`;
+          return;
+        }}
+        container.innerHTML = `
+          <table class="skills-table">
+            <thead>
+              <tr>
+                <th>Skill</th>
+                <th>Declared by</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${{
+                items.map(item => {{
+                  const disabled = item.enabled === false;
+                  const overridden = item.enabled === true;
+                  const status = disabled
+                    ? '<span class="skill-status-disabled">Disabled</span>'
+                    : overridden
+                      ? '<span class="skill-status-overridden">Enabled (overridden)</span>'
+                      : 'Enabled';
+                  const action = disabled ? 'enable' : 'disable';
+                  const actionLabel = disabled ? 'Enable' : 'Disable';
+                  const declaredBy = (item.declared_by_agents || []).length
+                    ? escapeHtml(item.declared_by_agents.join(', '))
+                    : '<span class="skill-empty">(none active)</span>';
+                  return `
+                    <tr class="${{disabled ? 'skill-row-disabled' : ''}}">
+                      <td><strong>${{escapeHtml(item.skill_name)}}</strong></td>
+                      <td>${{declaredBy}}</td>
+                      <td>${{status}}</td>
+                      <td>
+                        <button
+                          type="button"
+                          class="${{disabled ? '' : 'secondary'}}"
+                          data-skill-name="${{escapeHtml(item.skill_name)}}"
+                          data-skill-action="${{action}}"
+                        >${{actionLabel}}</button>
+                      </td>
+                    </tr>
+                  `;
+                }}).join("")
+              }}
+            </tbody>
+          </table>
+        `;
+        document.querySelectorAll("[data-skill-action]").forEach(node => {{
+          node.addEventListener("click", () => {{
+            toggleSkillOverride(node.dataset.skillName, node.dataset.skillAction === "enable");
+          }});
+        }});
+      }}
+
       function renderBotDetail(bot) {{
         currentDetailKind = "bot";
         currentDetailId = bot.agent_id || "";
@@ -1222,6 +1329,9 @@ def ui_shell(request: Request) -> str:
             renderConversations(bootstrapData.conversations || []);
           }}
           renderTasks(bootstrapData.tasks || []);
+          if (!skillsLoaded) {{
+            await loadSkills();
+          }}
           await refreshCurrentDetail();
         }} catch (error) {{
           const message = error.message || "Failed to refresh registry UI.";
@@ -1278,6 +1388,30 @@ def ui_shell(request: Request) -> str:
         }}
         textArea.value = "";
         await loadBootstrap();
+      }}
+
+      async function loadSkills() {{
+        const response = await fetch('/v1/ui/skills', {{
+          headers: authHeaders(),
+        }});
+        if (!response.ok) {{
+          throw new Error(await response.text() || "Failed to load skills.");
+        }}
+        const skills = await response.json();
+        skillsLoaded = true;
+        renderSkills(Array.isArray(skills) ? skills : []);
+      }}
+
+      async function toggleSkillOverride(skillName, enable) {{
+        const action = enable ? "enable" : "disable";
+        const response = await fetch(`/v1/ui/skills/${{encodeURIComponent(skillName)}}/${{action}}`, {{
+          method: "POST",
+          headers: authHeaders(),
+        }});
+        if (!response.ok) {{
+          setStatus(await response.text() || "Skill update failed.");
+        }}
+        await loadSkills();
       }}
 
       async function cancelConversation() {{
@@ -1429,6 +1563,31 @@ def ui_search(
     if len(q) < 3:
         return {"results": []}
     return {"results": store.search_conversations(q, min(limit, 100))}
+
+
+@app.get("/v1/ui/skills")
+def ui_skills(_: None = Depends(require_ui_token), store: RegistryStore = Depends(get_store)) -> list[dict[str, Any]]:
+    return store.list_skills()
+
+
+@app.post("/v1/ui/skills/{skill_name}/enable")
+def ui_enable_skill(
+    skill_name: str,
+    _: None = Depends(require_ui_token),
+    store: RegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    store.set_skill_override(skill_name, enabled=True)
+    return {"skill_name": skill_name, "enabled": True}
+
+
+@app.post("/v1/ui/skills/{skill_name}/disable")
+def ui_disable_skill(
+    skill_name: str,
+    _: None = Depends(require_ui_token),
+    store: RegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    store.set_skill_override(skill_name, enabled=False)
+    return {"skill_name": skill_name, "enabled": False}
 
 
 @app.post("/v1/ui/conversations")

@@ -394,13 +394,15 @@ class CodexProvider:
         final_text = ""
         draft_text = ""
         tool_calls: dict[str, dict[str, str]] = {}
+        usage_input = 0
+        usage_output = 0
 
         def append_unique(values: list[str], value: str) -> None:
             if value and value not in values:
                 values.append(value)
 
         async def consume_stdout() -> None:
-            nonlocal thread_id, final_text, draft_text
+            nonlocal thread_id, final_text, draft_text, usage_input, usage_output
             while True:
                 read_coro = proc.stdout.readline()
                 if cancel is not None:
@@ -427,6 +429,12 @@ class CodexProvider:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+
+                msg = event.get("msg")
+                if isinstance(msg, dict) and msg.get("type") == "token_count":
+                    total = msg.get("info", {}).get("total_token_usage", {})
+                    usage_input = int(total.get("input_tokens", 0) or 0)
+                    usage_output = int(total.get("output_tokens", 0) or 0)
 
                 thread_id = self._extract_thread_id(event) or thread_id
                 if self._normalize_type(event.get("type")) == "session_meta":
@@ -510,6 +518,8 @@ class CodexProvider:
         return RunResult(
             text=reply,
             provider_state_updates=state_updates,
+            prompt_tokens=usage_input,
+            completion_tokens=usage_output,
         )
 
     async def run(

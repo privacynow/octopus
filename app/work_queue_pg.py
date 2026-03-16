@@ -972,3 +972,48 @@ def list_user_access(conn) -> list[dict]:
         )
         rows = cur.fetchall()
     return [dict(row) for row in rows]
+
+
+def record_usage(
+    conn,
+    *,
+    chat_id: int,
+    work_item_id: str,
+    provider: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cost_usd: float,
+) -> None:
+    with _write_tx(conn):
+        with _cur(conn) as cur:
+            cur.execute(
+                f"""INSERT INTO {_SCHEMA}.usage_log (
+                       chat_id, work_item_id, provider, prompt_tokens,
+                       completion_tokens, cost_usd, recorded_at
+                   ) VALUES (%s, %s, %s, %s, %s, %s, NOW() AT TIME ZONE 'utc')""",
+                (
+                    chat_id,
+                    work_item_id,
+                    provider,
+                    prompt_tokens,
+                    completion_tokens,
+                    cost_usd,
+                ),
+            )
+
+
+def get_usage_since(conn, *, since_epoch: float) -> list[dict]:
+    since_dt = datetime.fromtimestamp(since_epoch, tz=timezone.utc)
+    with _cur(conn) as cur:
+        cur.execute(
+            f"""SELECT
+                   chat_id, work_item_id, provider, prompt_tokens,
+                   completion_tokens, cost_usd,
+                   EXTRACT(EPOCH FROM recorded_at)::double precision AS recorded_at
+               FROM {_SCHEMA}.usage_log
+               WHERE recorded_at >= %s
+               ORDER BY recorded_at""",
+            (since_dt,),
+        )
+        rows = cur.fetchall()
+    return [dict(row) for row in rows]

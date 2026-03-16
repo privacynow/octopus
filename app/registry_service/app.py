@@ -39,6 +39,20 @@ class CreateConversationRequest(BaseModel):
     message_text: str = Field(..., min_length=1, description="Initial message text")
 
 
+def _int_value(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _float_value(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def load_settings() -> RegistrySettings:
     db_path = Path(os.environ.get("REGISTRY_DB_PATH", "/tmp/telegram-agent-registry/registry.sqlite3"))
     enroll_token = os.environ.get("REGISTRY_ENROLL_TOKEN", "dev-enroll-token")
@@ -727,6 +741,7 @@ def ui_shell(request: Request) -> str:
       <div class="header-meta">
         <span id="refresh-indicator" class="subtle hidden">Refreshing…</span>
         <span id="last-updated" class="subtle">Waiting for first update</span>
+        <span id="daily-usage" class="subtle"></span>
         <div id="ui-status" class="status-line"></div>
         {logout_link}
       </div>
@@ -830,6 +845,7 @@ def ui_shell(request: Request) -> str:
         skills: "No skills declared yet. Connect bots with advertised skills and they will appear here.",
       }};
       let bootstrapData = {{ bots: [], conversations: [], tasks: [] }};
+      let usageSummary = {{ daily_total: {{ prompt_tokens: 0, completion_tokens: 0, cost_usd: 0 }}, by_conversation: [] }};
       let bootstrapLoaded = false;
       let skillsLoaded = false;
       let lastSuccessfulLoad = 0;
@@ -861,6 +877,19 @@ def ui_shell(request: Request) -> str:
         return date.toLocaleString();
       }}
 
+      function formatUsageCount(value) {{
+        return Number(value || 0).toLocaleString();
+      }}
+
+      function formatUsageCost(value) {{
+        return new Intl.NumberFormat(undefined, {{
+          style: "currency",
+          currency: "USD",
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 4,
+        }}).format(Number(value || 0));
+      }}
+
       function getBadgeClass(status) {{
         const s = String(status || "").toLowerCase().replace(/[^a-z]/g, "");
         const map = {{
@@ -885,6 +914,20 @@ def ui_shell(request: Request) -> str:
       function stateBadge(item) {{
         const state = item?.connectivity_state || item?.status || "unknown";
         return `<span class="badge ${{getBadgeClass(state)}}">${{escapeHtml(state)}}</span>`;
+      }}
+
+      function usageForConversation(conversationId) {{
+        return (usageSummary.by_conversation || []).find(item => item.conversation_id === conversationId) || null;
+      }}
+
+      function renderUsageHeader() {{
+        const el = document.getElementById("daily-usage");
+        if (!el) return;
+        const total = usageSummary.daily_total || {{}};
+        const tokens = Number(total.prompt_tokens || 0) + Number(total.completion_tokens || 0);
+        el.textContent = tokens > 0
+          ? `Reported today: ${{formatUsageCount(tokens)}} tokens`
+          : "";
       }}
 
       function setStatus(message) {{
@@ -1228,6 +1271,13 @@ def ui_shell(request: Request) -> str:
         currentDetailId = conversation.conversation_id || "";
         currentConversationId = conversation.conversation_id || "";
         currentConversationDetail = {{ conversation, events }};
+        const usage = usageForConversation(conversation.conversation_id);
+        const usageTokensLine = usage && (usage.prompt_tokens > 0 || usage.completion_tokens > 0)
+          ? `<div class="meta"><strong>Reported tokens:</strong> ${{formatUsageCount(usage.prompt_tokens)}} in / ${{formatUsageCount(usage.completion_tokens)}} out</div>`
+          : "";
+        const usageCostLine = usage && Number(usage.cost_usd || 0) > 0
+          ? `<div class="meta"><strong>Reported cost:</strong> ${{escapeHtml(formatUsageCost(usage.cost_usd))}}</div>`
+          : "";
         showDetailPanel("Conversation Detail");
         setConversationActionsVisible(true);
         document.getElementById("conversation-detail-header").innerHTML = `
@@ -1239,6 +1289,8 @@ def ui_shell(request: Request) -> str:
               <span>${{escapeHtml(String(conversation.timeline_event_count ?? events.length))}} event(s)</span>
             </div>
             <div class="meta">Created ${{escapeHtml(formatTime(conversation.created_at))}}</div>
+            ${{usageTokensLine}}
+            ${{usageCostLine}}
           </div>
         `;
         document.getElementById("conversation-detail-body").innerHTML = events.length
@@ -1410,6 +1462,27 @@ def ui_shell(request: Request) -> str:
         renderSkills(Array.isArray(skills) ? skills : []);
       }}
 
+      async function loadUsage() {{
+        const response = await fetch('/v1/ui/usage', {{
+          headers: authHeaders(),
+        }});
+        if (!response.ok) {{
+          throw new Error(await response.text() || "Failed to load reported usage.");
+        }}
+        const data = await response.json();
+        usageSummary = {{
+          daily_total: data.daily_total || {{ prompt_tokens: 0, completion_tokens: 0, cost_usd: 0 }},
+          by_conversation: Array.isArray(data.by_conversation) ? data.by_conversation : [],
+        }};
+        renderUsageHeader();
+        if (currentConversationDetail && currentConversationDetail.conversation) {{
+          renderConversationDetail(
+            currentConversationDetail.conversation,
+            currentConversationDetail.events || [],
+          );
+        }}
+      }}
+
       async function toggleSkillOverride(skillName, enable) {{
         const action = enable ? "enable" : "disable";
         const response = await fetch(`/v1/ui/skills/${{encodeURIComponent(skillName)}}/${{action}}`, {{
@@ -1533,6 +1606,7 @@ def ui_shell(request: Request) -> str:
         showErrorBanner(message);
         setStatus(message);
       }});
+      loadUsage().catch(() => {{}});
       setInterval(() => {{
         loadBootstrap().catch(error => {{
           const message = error.message || "Failed to refresh registry UI.";
@@ -1540,6 +1614,9 @@ def ui_shell(request: Request) -> str:
           setStatus(message);
         }});
       }}, 5000);
+      setInterval(() => {{
+        loadUsage().catch(() => {{}});
+      }}, 60000);
     </script>
   </body>
 </html>"""
@@ -1576,6 +1653,53 @@ def ui_search(
 @app.get("/v1/ui/skills")
 def ui_skills(_: None = Depends(require_ui_token), store: AbstractRegistryStore = Depends(get_store)) -> list[dict[str, Any]]:
     return store.list_skills()
+
+
+@app.get("/v1/ui/usage")
+def ui_usage(
+    _: None = Depends(require_ui_token),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    since_iso = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    ).isoformat()
+    rows = store.get_usage_summary(since_iso)
+    daily_total = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "cost_usd": 0.0,
+    }
+    by_conversation: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        metadata = row.get("metadata") or {}
+        prompt_tokens = _int_value(metadata.get("prompt_tokens"))
+        completion_tokens = _int_value(metadata.get("completion_tokens"))
+        cost_usd = _float_value(metadata.get("cost_usd"))
+        daily_total["prompt_tokens"] += prompt_tokens
+        daily_total["completion_tokens"] += completion_tokens
+        daily_total["cost_usd"] += cost_usd
+        item = by_conversation.setdefault(
+            row["conversation_id"],
+            {
+                "conversation_id": row["conversation_id"],
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cost_usd": 0.0,
+            },
+        )
+        item["prompt_tokens"] += prompt_tokens
+        item["completion_tokens"] += completion_tokens
+        item["cost_usd"] += cost_usd
+    return {
+        "daily_total": daily_total,
+        "by_conversation": sorted(
+            by_conversation.values(),
+            key=lambda item: (
+                -(item["prompt_tokens"] + item["completion_tokens"]),
+                item["conversation_id"],
+            ),
+        ),
+    }
 
 
 @app.post("/v1/ui/skills/{skill_name}/enable")

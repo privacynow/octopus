@@ -222,6 +222,44 @@ def test_timeline_publish_and_retrieve(store):
     assert events[0]["body"] == "Doing the work"
 
 
+def test_usage_summary_from_timeline(store):
+    _, agent_token = _enroll(store, "alpha-bot")
+    store.bind_conversation(
+        agent_token,
+        {
+            "conversation_id": "conv-usage",
+            "title": "Usage conversation",
+            "origin_surface": "registry",
+        },
+    )
+    store.publish_timeline(
+        agent_token,
+        [
+            {
+                "event_id": "evt-usage",
+                "conversation_id": "conv-usage",
+                "kind": "usage",
+                "title": "Token usage",
+                "body": "",
+                "metadata": {
+                    "prompt_tokens": 123,
+                    "completion_tokens": 45,
+                    "cost_usd": 0.0123,
+                    "provider": "claude",
+                },
+                "created_at": "2026-03-16T00:00:00+00:00",
+            }
+        ],
+    )
+
+    rows = store.get_usage_summary("2026-03-15T00:00:00+00:00")
+
+    assert len(rows) == 1
+    assert rows[0]["conversation_id"] == "conv-usage"
+    assert rows[0]["metadata"]["prompt_tokens"] == 123
+    assert rows[0]["metadata"]["completion_tokens"] == 45
+
+
 def test_search_conversations_fts(store):
     _, agent_token = _enroll(store, "alpha-bot")
     store.bind_conversation(

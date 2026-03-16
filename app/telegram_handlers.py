@@ -438,6 +438,9 @@ class RequestExecutionOutcome:
     reply_text: str = ""
     error_text: str = ""
     denials: tuple[dict[str, Any], ...] = ()
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
 
 
 async def _progress_timeline_callback(conversation_ref: str, routed_task_id: str, html_text: str, *, force: bool = False) -> None:
@@ -1351,6 +1354,9 @@ async def execute_request(
             status="completed_with_denials",
             reply_text=cleaned_reply,
             denials=tuple(result.denials),
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            cost_usd=result.cost_usd,
         )
 
     if result.delegation_tasks:
@@ -1379,7 +1385,13 @@ async def execute_request(
     else:
         await send_formatted_reply(message, cleaned_reply)
     await send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
-    return RequestExecutionOutcome(status="completed", reply_text=cleaned_reply)
+    return RequestExecutionOutcome(
+        status="completed",
+        reply_text=cleaned_reply,
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        cost_usd=result.cost_usd,
+    )
 
 
 async def request_approval(
@@ -2849,7 +2861,8 @@ async def handle_recovery_action(
             del text, show_alert
             return None
 
-    data_dir = _cfg().data_dir
+    cfg = _cfg()
+    data_dir = cfg.data_dir
 
     try:
         recovery_item = work_queue.get_pending_recovery_for_update(data_dir, chat_id, update_id)
@@ -3544,7 +3557,8 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
         return
 
     bot = _bot_instance
-    data_dir = _cfg().data_dir
+    cfg = _cfg()
+    data_dir = cfg.data_dir
 
     if isinstance(event, InboundMessage):
         source = getattr(event, "source", "telegram")
@@ -3642,7 +3656,39 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
                         routed_task_id,
                         exc_info=True,
                     )
-        _maybe_fire_webhook(_cfg(), chat_id, conversation_ref, outcome)
+        if outcome is not None and outcome.status in {"completed", "completed_with_denials"}:
+            try:
+                work_queue.record_usage(
+                    data_dir,
+                    chat_id=chat_id,
+                    work_item_id=item["id"],
+                    provider=cfg.provider,
+                    prompt_tokens=outcome.prompt_tokens,
+                    completion_tokens=outcome.completion_tokens,
+                    cost_usd=outcome.cost_usd,
+                )
+            except Exception:
+                log.warning("Failed to record usage for chat %d", chat_id, exc_info=True)
+            if conversation_ref and (
+                outcome.prompt_tokens > 0 or outcome.completion_tokens > 0
+            ):
+                try:
+                    await publish_timeline_event(
+                        cfg,
+                        conversation_ref=conversation_ref,
+                        kind="usage",
+                        title="Token usage",
+                        body="",
+                        metadata={
+                            "prompt_tokens": outcome.prompt_tokens,
+                            "completion_tokens": outcome.completion_tokens,
+                            "cost_usd": outcome.cost_usd,
+                            "provider": cfg.provider,
+                        },
+                    )
+                except Exception:
+                    log.debug("Failed to publish usage timeline event", exc_info=True)
+        _maybe_fire_webhook(cfg, chat_id, conversation_ref, outcome)
         return
 
     if isinstance(event, (InboundCommand, InboundCallback)):

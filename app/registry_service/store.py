@@ -1153,6 +1153,26 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             for row in rows
         ]
 
+    def get_usage_summary(self, since_iso: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT conversation_id, metadata_json, created_at
+                FROM timeline_events
+                WHERE kind = 'usage' AND created_at >= ?
+                ORDER BY created_at
+                """,
+                (since_iso,),
+            ).fetchall()
+        return [
+            {
+                "conversation_id": row["conversation_id"],
+                "metadata": decode_json_field(row["metadata_json"], {}),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
     def search_conversations(self, q: str, limit: int = 20) -> list[dict[str, Any]]:
         try:
             with self._connect() as conn:

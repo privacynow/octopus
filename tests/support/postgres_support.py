@@ -229,6 +229,19 @@ def truncate_runtime_tables(conn) -> None:
     conn.commit()
 
 
+def truncate_registry_tables(conn) -> None:
+    """Truncate registry tables in the test schema. Safe only for harness-owned DBs."""
+    with conn.cursor() as cur:
+        cur.execute("TRUNCATE TABLE agent_registry.deliveries RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE TABLE agent_registry.timeline_events RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE TABLE agent_registry.routed_tasks RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE TABLE agent_registry.conversations RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE TABLE agent_registry.agents RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE TABLE agent_registry.skills_override RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE TABLE agent_registry.meta RESTART IDENTITY CASCADE")
+    conn.commit()
+
+
 def bootstrap_test_db(conn) -> list[str]:
     """Apply full schema (run_bootstrap). Returns list of errors."""
     return run_bootstrap(conn)

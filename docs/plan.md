@@ -4795,7 +4795,7 @@ Add a configurable webhook callback that fires on conversation completion. Email
 
 ###### H. Skills Management from Registry UI
 
-**Status: Remaining.**
+**Status: Shipped.**
 
 **Problem.**
 Active skills are configured via `ACTIVE_SKILLS` in `.env` and require a restart to change. Operators cannot see which skills are currently active or toggle them without shell access.
@@ -4830,6 +4830,111 @@ Add a read-only "Skills" panel to the Registry UI that lists all registered skil
 - Installing new skills from the UI (requires file system write + restart).
 - Per-user or per-conversation skill assignment.
 - Skill parameter editing from the UI.
+
+---
+
+###### H-2. Registry Store Backend Abstraction and Postgres Parity
+
+**Status: Remaining.**
+
+**Problem.**
+`app/registry_service/store.py` is a single concrete class (`RegistryStore`) hardwired to SQLite with no abstract interface, no Postgres implementation, and no contract test. The B-0 "Postgres parity" fix applied only to the bot runtime transport layer (`app/work_queue.py`). The registry service was never in scope and this was not made clear. Every registry feature since Phase 20 — including M10D's FTS5 full-text search and M10H's `json_each` skills aggregation — has accumulated against a backend seam that does not exist yet. The mistake was not just that the registry remained SQLite-only; the mistake was that we kept talking about "parity" after fixing only one seam while continuing to add SQLite-specific code to another seam with no abstraction at all.
+
+The concrete SQLite-specific features in `store.py` that cannot run on Postgres:
+- `PRAGMA journal_mode=WAL` (line 21)
+- `INSERT OR REPLACE INTO` (lines 160, 394, 627, 742, 893)
+- `INSERT OR IGNORE INTO` (line 196)
+- `CREATE VIRTUAL TABLE ... USING fts5(...)` (lines 179–180) — added in M10D
+- FTS5 triggers using `rowid` (lines 182–191) — added in M10D
+- `JOIN json_each(a.skills_json)` (line 486) — added in M10H
+- `COLLATE NOCASE` (lines 488, 545)
+
+**Fix.**
+Apply the same abstraction pattern used by the bot runtime:
+
+- **Phase 1 — truth and seam**: define the abstract contract; rename the concrete class; add the backend selector; wire `app.py` to the abstract type only.
+- **Phase 2 — Postgres registry store**: implement `RegistryPostgresStore` with idiomatic Postgres SQL for every operation.
+- **Phase 3 — migrations and bootstrapping**: add the registry Postgres schema and wire it into the bootstrap path alongside the bot runtime migration set.
+- **Phase 4 — contract tests**: parameterize against both backends exactly like the runtime contract suite.
+- **Phase 5 — stop the bleed**: enforce via `CLAUDE.md` rule that no new registry DB method may land without both implementations and a contract test.
+
+**Implementation seams.**
+
+**Phase 1 — truth and seam**
+
+- `app/registry_service/store_base.py` (new) — `AbstractRegistryStore` as a `typing.Protocol`. Declare every truly public method: the ones called from `app/registry_service/app.py` plus `SkillDisabledError`. Move `SkillDisabledError` here so `app.py` can catch it without importing a backend impl. Move the `TimelineEvent` dataclass here if it is used across both impls. Internal helpers (`_connect`, `_init_db`, `_token_row`, `_create_delivery`, `publish_ui_timeline`) are implementation details; include only those that `app.py` calls directly — grep first. No SQL, no `import sqlite3`, no `import psycopg`.
+
+- `app/registry_service/store.py` — rename `RegistryStore` → `RegistrySQLiteStore`; add `(AbstractRegistryStore)` as base. All SQLite-specific SQL stays here unchanged — this is the correct SQLite implementation and SQLite-isms belong in it. This file must not import from `store_postgres.py`.
+
+- `app/registry_service/backend.py` (new) — backend selector, mirror of `app/runtime_backend.py`. Reads `REGISTRY_DATABASE_URL` env var: if set, instantiates `RegistryPostgresStore`; otherwise instantiates `RegistrySQLiteStore` from `REGISTRY_DB_PATH`. Exposes `get_registry_store() -> AbstractRegistryStore` and `_reset_for_tests()`. Owns the singleton.
+
+- `app/registry_service/app.py` — update imports to `from app.registry_service.store_base import AbstractRegistryStore, SkillDisabledError` and `from app.registry_service.backend import get_registry_store`. Change `get_store()` to call `get_registry_store()`. Every `store: RegistryStore = Depends(get_store)` annotation becomes `store: AbstractRegistryStore = Depends(get_store)`. No endpoint logic changes.
+
+**Phase 2 — Postgres registry store**
+
+- `app/registry_service/store_postgres.py` (new) — `RegistryPostgresStore(AbstractRegistryStore)`. Use `psycopg` v3 (same library as `app/work_queue_pg.py`: `from psycopg.rows import dict_row`). Reuse `app/db/postgres.py` pool management (`get_pool`). Use `agent_registry` as the Postgres schema name (the bot runtime uses `bot_runtime`; the registry must use its own namespace to avoid table name collisions and keep the two stores independently manageable).
+
+  Every SQLite-ism must have an idiomatic Postgres equivalent — do not share SQL between the two impls:
+  - `INSERT OR REPLACE` → `INSERT ... ON CONFLICT (...) DO UPDATE SET ...`
+  - `INSERT OR IGNORE` → `INSERT ... ON CONFLICT DO NOTHING`
+  - `CREATE VIRTUAL TABLE ... USING fts5` → `tsvector` column on `timeline_events` declared as `GENERATED ALWAYS AS (to_tsvector('english', coalesce(body, ''))) STORED` with a GIN index; no separate trigger needed
+  - FTS5 `snippet(...)` call → `ts_headline('english', body, plainto_tsquery('english', %s))` — the output will not be byte-identical to SQLite FTS5 snippets; contract tests must not assert exact string equality, only that the matched conversation ID is returned and the snippet is non-empty
+  - `JOIN json_each(a.skills_json)` → `jsonb_array_elements_text(a.skills_json::jsonb)`; `skills_json` column type is `jsonb` in Postgres (not `text`)
+  - FTS search clause → `body_tsv @@ plainto_tsquery('english', %s)`
+  - `PRAGMA journal_mode=WAL` → remove; Postgres manages WAL
+  - `COLLATE NOCASE` → `lower(col)` in ORDER BY; `ILIKE` for equality tests
+  - `sqlite3.Row` → `psycopg` `dict_row` row factory (same pattern as `work_queue_pg.py`)
+  - `?` placeholders → `%s` placeholders
+
+**Phase 3 — migrations and bootstrapping**
+
+- `app/db/migrations/postgres/0004_registry.sql` (new) — `CREATE SCHEMA IF NOT EXISTS agent_registry;` followed by `CREATE TABLE IF NOT EXISTS agent_registry.<table>` for every registry table: `meta`, `agents`, `agent_tokens`, `deliveries`, `routed_tasks`, `conversations`, `timeline_events` (including the `body_tsv` generated column and GIN index), `skills_override`. Derive column names and types from `_init_db()` in `store.py`. Follow the format of `0001_runtime.sql` exactly: version header comment, idempotent DDL, named indexes.
+
+  The registry bootstrap path (wherever the Postgres migration runner is called) must apply `0004_registry.sql`. Check whether the bot runtime's `db_bootstrap` / `db_update` scripts handle this automatically by virtue of scanning `app/db/migrations/postgres/` or whether the registry service needs its own bootstrap call on startup. Fix whichever path is missing.
+
+**Phase 4 — contract tests**
+
+- `tests/contracts/test_registry_store_contract.py` (new) — parameterized `@pytest.fixture(params=["sqlite", "postgres"])` modeled exactly on `tests/contracts/test_transport_store_contract.py`. Postgres fixture skips if `TEST_REGISTRY_DATABASE_URL` is not set. Minimum 13 tests:
+  1. `test_enroll_and_register_returns_agent_id`
+  2. `test_poll_delivers_to_enrolled_agent`
+  3. `test_ack_marks_delivery_done`
+  4. `test_search_agents_by_skill`
+  5. `test_search_agents_excludes_offline`
+  6. `test_create_routed_task_and_lookup`
+  7. `test_bind_conversation_is_visible`
+  8. `test_create_conversation_delivers_surface_input`
+  9. `test_timeline_publish_and_retrieve`
+  10. `test_search_conversations_fts` — asserts matched conversation IDs and non-empty snippet; must NOT assert exact snippet text (SQLite FTS5 and Postgres `ts_headline` produce different output)
+  11. `test_skill_override_disabled_excludes_from_search` — M10H contract on both backends
+  12. `test_list_skills_aggregates_declared` — M10H contract on both backends
+  13. `test_skill_override_survives_agent_deregistration` — M10H persistence contract
+
+- `tests/test_registry_service.py` and `tests/test_registry_skills.py` — update any direct `RegistryStore(...)` instantiation to `RegistrySQLiteStore(...)`. No other test logic changes; all existing tests must pass unmodified after the rename.
+
+**Files to change.**
+- `app/registry_service/store_base.py` — new; abstract interface + shared types
+- `app/registry_service/store.py` — rename class only; no SQL changes
+- `app/registry_service/store_postgres.py` — new; Postgres impl
+- `app/registry_service/backend.py` — new; backend selector
+- `app/registry_service/app.py` — update imports and type annotations only
+- `app/db/migrations/postgres/0004_registry.sql` — new; `agent_registry` schema
+- `tests/contracts/test_registry_store_contract.py` — new; parameterized contract test
+- `tests/test_registry_service.py` — update `RegistryStore` → `RegistrySQLiteStore` import
+- `tests/test_registry_skills.py` — update `RegistryStore` → `RegistrySQLiteStore` import
+- `CLAUDE.md` — add registry store parity rule (Phase 5)
+
+**Commit discipline.**
+Three commits, not one:
+1. Phase 1 (abstraction + rename): `store_base.py` + rename + `backend.py` + `app.py` import update. All existing tests must pass at this commit with no registry logic changes.
+2. Phase 2 + 3 (Postgres impl + migration): `store_postgres.py` + `0004_registry.sql` + bootstrap wiring. No existing test regressions.
+3. Phase 4 + 5 (contract test + rule): `test_registry_store_contract.py` passing against SQLite; Postgres tests pass if `TEST_REGISTRY_DATABASE_URL` is set; `CLAUDE.md` rule added.
+
+**What M10H-2 does NOT include.**
+- Any changes to bot runtime session or transport stores (done in B-0).
+- Any changes to endpoint logic, request/response shapes, or the Registry UI.
+- Migration of existing SQLite registry data to Postgres (operator responsibility).
+- Making the registry service horizontally scalable (single-writer assumption remains).
+- Shared SQL between SQLite and Postgres impls — every attempt to share SQL produces lowest-common-denominator code that is neither idiomatic SQLite nor idiomatic Postgres.
 
 ---
 
@@ -4890,16 +4995,17 @@ Stabilise and document `POST /v1/ui/conversations` as a first-class authenticate
 | Shipped A/C/D/F | `app/registry_service/app.py`, `app/registry_service/store.py`, `VERSION`, `CHANGELOG.md`, `docs/UPGRADE.md`, `scripts/app/guided_start.sh` |
 | Shipped B-0/E | `app/access.py`, `app/work_queue.py`, `app/work_queue_sqlite.py`, `app/work_queue_sqlite_impl.py`, `app/work_queue_pg.py`, `app/work_queue_postgres.py`, `app/db/migrations/postgres/0003_user_access_usage_log.sql`, `app/telegram_handlers.py`, `tests/contracts/test_transport_store_contract.py` |
 | Shipped G | `app/config.py`, `app/webhook.py`, `app/telegram_handlers.py`, `scripts/app/guided_start.sh` |
+| Shipped H | `app/registry_service/app.py`, `app/registry_service/store.py`, `tests/test_registry_skills.py` |
 | Remaining B | provider adapters, transport-store usage recording, Registry UI `/v1/ui/usage`, and contract coverage |
-| Remaining H | skills resolution plus Registry UI skills endpoints/panel |
+| Remaining H-2 | `app/registry_service/store_base.py`, `app/registry_service/store_postgres.py`, `app/registry_service/backend.py`, `app/registry_service/store.py` (rename), `app/registry_service/app.py` (import update), `app/db/migrations/postgres/0004_registry.sql`, `tests/contracts/test_registry_store_contract.py` |
 | Remaining I | stabilized `/v1/ui/conversations` contract and `docs/API.md` |
 
 ###### M10 — Remaining Implementation Order
 
 The remaining order is:
 
-1. **B** usage and cost visibility
-2. **H** skills management from the Registry UI
+1. **H-2** registry store backend abstraction and Postgres parity
+2. **B** usage and cost visibility
 3. **I** stabilized programmatic trigger API
 
 ###### M10 — What M10 Does NOT Include

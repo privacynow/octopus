@@ -129,3 +129,21 @@ When writing a bug report for this repo:
   `runtime_backend`. Storage lookups belong at the handler integration
   point (e.g., `is_allowed()` in `telegram_handlers.py`), not in
   policy helpers that are supposed to be backend-neutral.
+- **Registry store parity rule.** After M10H-2 lands, every new method
+  added to `app/registry_service/store_base.py` must land in the same
+  commit as: (a) a `RegistrySQLiteStore` implementation in `store.py`,
+  (b) a `RegistryPostgresStore` implementation in `store_postgres.py`,
+  (c) a Postgres migration in `app/db/migrations/postgres/` if the
+  method touches a new table, and (d) a contract test case in
+  `tests/contracts/test_registry_store_contract.py`. Until M10H-2 is
+  complete, every new registry DB method must be labelled explicitly as
+  "SQLite-only debt" in the commit message and a plan entry must exist
+  for the Postgres equivalent. Saying "we fixed parity" without
+  qualifying which seam is not acceptable.
+- **Parity scope discipline.** "Postgres parity" is always scoped to a
+  named seam: bot runtime transport store, bot runtime session store,
+  registry store. Never say parity is fixed "across the board" or
+  "system-wide" unless every named seam has a Postgres implementation,
+  a backend selector, and a passing parameterized contract test.
+  Fixing one seam while another remains SQLite-only is not parity — it
+  is one seam fixed.

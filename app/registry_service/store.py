@@ -1,4 +1,4 @@
-"""SQLite store for the central agent registry control plane."""
+"""SQLite implementation of the central agent registry store."""
 
 from __future__ import annotations
 
@@ -7,14 +7,21 @@ import secrets
 import sqlite3
 import time
 import uuid
-from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from app.agents.types import AgentCard, TimelineEvent, to_wire
+from app.agents.types import TimelineEvent
+from app.registry_service.store_base import (
+    AbstractRegistryStore,
+    SkillDisabledError,
+    conversation_status_for_event,
+    decode_json_field,
+    effective_connectivity_state,
+    ensure_json,
+    utcnow_iso,
+)
 
-_OFFLINE_AFTER_SECONDS = 60
 _SCHEMA_VERSION = 2
 
 _BASE_SCHEMA_SQL = """
@@ -98,38 +105,8 @@ CREATE TABLE IF NOT EXISTS timeline_events (
     created_at TEXT NOT NULL
 );
 """
-
-
-def utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _ensure_json(value: Any) -> str:
-    if is_dataclass(value):
-        value = asdict(value)
-    return json.dumps(value)
-
-
-def _conversation_status_for_event(kind: str, current_status: str = "") -> str:
-    if kind in {"started", "progress"}:
-        if current_status == "cancelling":
-            return "cancelling"
-        return "running"
-    if kind == "completed":
-        return "completed"
-    if kind == "failed":
-        return "failed"
-    if kind == "control":
-        return "cancelling"
-    return current_status or "open"
-
-
-class SkillDisabledError(RuntimeError):
-    """Raised when routing requests a skill that has been globally disabled."""
-
-
-class RegistryStore:
-    """Explicit SQLite store for agent registration, routing, and UI read models."""
+class RegistrySQLiteStore(AbstractRegistryStore):
+    """SQLite-backed registry store used by the FastAPI registry service."""
 
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
@@ -157,7 +134,10 @@ class RegistryStore:
 
     def _set_schema_version(self, conn: sqlite3.Connection, version: int) -> None:
         conn.execute(
-            "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+            """
+            INSERT INTO meta (key, value) VALUES ('schema_version', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
             (str(version),),
         )
 
@@ -224,31 +204,26 @@ class RegistryStore:
         return slug
 
     def _row_to_agent(self, row: sqlite3.Row) -> dict[str, Any]:
-        last_heartbeat = row["last_heartbeat_at"]
-        effective_state = row["connectivity_state"]
-        if last_heartbeat:
-            try:
-                heartbeat_dt = datetime.fromisoformat(last_heartbeat)
-                if heartbeat_dt.tzinfo is None:
-                    heartbeat_dt = heartbeat_dt.replace(tzinfo=timezone.utc)
-                if datetime.now(timezone.utc) - heartbeat_dt > timedelta(seconds=_OFFLINE_AFTER_SECONDS):
-                    effective_state = "offline"
-            except ValueError:
-                pass
+        row_keys = row.keys()
+        effective_state = (
+            row["effective_state"]
+            if "effective_state" in row_keys
+            else effective_connectivity_state(row["connectivity_state"], row["last_heartbeat_at"])
+        )
         return {
             "agent_id": row["agent_id"],
             "display_name": row["display_name"],
             "slug": row["slug"],
             "role": row["role"],
-            "skills": json.loads(row["skills_json"] or "[]"),
-            "tags": json.loads(row["tags_json"] or "[]"),
+            "skills": decode_json_field(row["skills_json"], []),
+            "tags": decode_json_field(row["tags_json"], []),
             "description": row["description"],
             "provider": row["provider"],
             "mode": row["mode"],
             "connectivity_state": effective_state,
             "current_capacity": row["current_capacity"],
             "max_capacity": row["max_capacity"],
-            "surface_capabilities": json.loads(row["surface_capabilities_json"] or "[]"),
+            "surface_capabilities": decode_json_field(row["surface_capabilities_json"], []),
             "version": row["version"],
             "last_heartbeat_at": row["last_heartbeat_at"],
             "updated_at": row["updated_at"],
@@ -259,6 +234,116 @@ class RegistryStore:
             "SELECT * FROM agents WHERE agent_token = ?",
             (token,),
         ).fetchone()
+
+    def _offline_before(self) -> str:
+        return (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+
+    def _upsert_timeline_event(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        event_id: str,
+        conversation_id: str,
+        routed_task_id: str,
+        agent_id: str,
+        kind: str,
+        title: str,
+        body: str,
+        status: str,
+        progress: int | None,
+        metadata: dict[str, Any],
+        created_at: str,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO timeline_events (
+                event_id, conversation_id, routed_task_id, agent_id, kind, title,
+                body, status, progress, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(event_id) DO UPDATE SET
+                conversation_id = excluded.conversation_id,
+                routed_task_id = excluded.routed_task_id,
+                agent_id = excluded.agent_id,
+                kind = excluded.kind,
+                title = excluded.title,
+                body = excluded.body,
+                status = excluded.status,
+                progress = excluded.progress,
+                metadata_json = excluded.metadata_json,
+                created_at = excluded.created_at
+            """,
+            (
+                event_id,
+                conversation_id,
+                routed_task_id,
+                agent_id,
+                kind,
+                title,
+                body,
+                status,
+                progress,
+                ensure_json(metadata),
+                created_at,
+            ),
+        )
+
+    def _publish_ui_timeline_conn(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        conversation_id: str,
+        title: str,
+        body: str,
+        kind: str,
+        status: str = "",
+        progress: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        event = TimelineEvent(
+            event_id=uuid.uuid4().hex,
+            conversation_id=conversation_id,
+            kind=kind,
+            title=title,
+            body=body,
+            status=status,
+            progress=progress,
+            metadata=metadata or {},
+        )
+        conversation = conn.execute(
+            """
+            SELECT status
+            FROM conversations
+            WHERE conversation_id = ?
+            """,
+            (conversation_id,),
+        ).fetchone()
+        self._upsert_timeline_event(
+            conn,
+            event_id=event.event_id,
+            conversation_id=event.conversation_id,
+            routed_task_id="",
+            agent_id="",
+            kind=event.kind,
+            title=event.title,
+            body=event.body,
+            status=event.status,
+            progress=event.progress,
+            metadata=event.metadata,
+            created_at=event.created_at,
+        )
+        if conversation is not None:
+            conn.execute(
+                """
+                UPDATE conversations
+                SET updated_at = ?, status = ?
+                WHERE conversation_id = ?
+                """,
+                (
+                    event.created_at,
+                    conversation_status_for_event(kind, conversation["status"]),
+                    conversation_id,
+                ),
+            )
 
     def enroll(self, requested_card: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
@@ -281,15 +366,15 @@ class RegistryStore:
                     requested_card.get("display_name") or slug,
                     slug,
                     requested_card.get("role", ""),
-                    _ensure_json(requested_card.get("skills", [])),
-                    _ensure_json(requested_card.get("tags", [])),
+                    ensure_json(requested_card.get("skills", [])),
+                    ensure_json(requested_card.get("tags", [])),
                     requested_card.get("description", ""),
                     requested_card.get("provider", ""),
                     requested_card.get("mode", "registry"),
                     requested_card.get("connectivity_state", "degraded"),
                     int(requested_card.get("current_capacity", 0)),
                     max(1, int(requested_card.get("max_capacity", 1))),
-                    _ensure_json(requested_card.get("surface_capabilities", [])),
+                    ensure_json(requested_card.get("surface_capabilities", [])),
                     requested_card.get("version", ""),
                     now,
                     now,
@@ -322,15 +407,15 @@ class RegistryStore:
                 (
                     card.get("display_name", row["display_name"]),
                     card.get("role", row["role"]),
-                    _ensure_json(card.get("skills", [])),
-                    _ensure_json(card.get("tags", [])),
+                    ensure_json(card.get("skills", [])),
+                    ensure_json(card.get("tags", [])),
                     card.get("description", row["description"]),
                     card.get("provider", row["provider"]),
                     card.get("mode", row["mode"]),
                     payload.get("connectivity_state", row["connectivity_state"]),
                     int(payload.get("current_capacity", 0)),
                     max(1, int(payload.get("max_capacity", 1))),
-                    _ensure_json(card.get("surface_capabilities", [])),
+                    ensure_json(card.get("surface_capabilities", [])),
                     card.get("version", row["version"]),
                     now,
                     now,
@@ -389,26 +474,19 @@ class RegistryStore:
                     raise PermissionError(f"Unknown conversation: {conversation_id}")
                 if conversation["target_agent_id"] != row["agent_id"]:
                     raise PermissionError(f"Conversation does not belong to agent: {conversation_id}")
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO timeline_events (
-                        event_id, conversation_id, routed_task_id, agent_id, kind, title,
-                        body, status, progress, metadata_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        event["event_id"],
-                        conversation_id,
-                        event.get("metadata", {}).get("routed_task_id", ""),
-                        row["agent_id"],
-                        event["kind"],
-                        event["title"],
-                        event.get("body", ""),
-                        event.get("status", ""),
-                        event.get("progress"),
-                        _ensure_json(event.get("metadata", {})),
-                        event["created_at"],
-                    ),
+                self._upsert_timeline_event(
+                    conn,
+                    event_id=event["event_id"],
+                    conversation_id=conversation_id,
+                    routed_task_id=event.get("metadata", {}).get("routed_task_id", ""),
+                    agent_id=row["agent_id"],
+                    kind=event["kind"],
+                    title=event["title"],
+                    body=event.get("body", ""),
+                    status=event.get("status", ""),
+                    progress=event.get("progress"),
+                    metadata=event.get("metadata", {}),
+                    created_at=event["created_at"],
                 )
                 conn.execute(
                     """
@@ -418,7 +496,7 @@ class RegistryStore:
                     """,
                     (
                         event["created_at"],
-                        _conversation_status_for_event(event["kind"], conversation["status"]),
+                        conversation_status_for_event(event["kind"], conversation["status"]),
                         conversation_id,
                     ),
                 )
@@ -453,16 +531,18 @@ class RegistryStore:
         return self.get_conversation(payload["conversation_id"])
 
     def get_skill_override(self, skill_name: str) -> bool | None:
+        normalized = skill_name.strip().lower()
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT enabled FROM skills_override WHERE skill_name = ?",
-                (skill_name,),
+                "SELECT enabled FROM skills_override WHERE lower(skill_name) = ?",
+                (normalized,),
             ).fetchone()
         if row is None:
             return None
         return bool(row["enabled"])
 
     def set_skill_override(self, skill_name: str, enabled: bool, set_by: str = "ui") -> None:
+        normalized = skill_name.strip().lower()
         with self._connect() as conn:
             conn.execute(
                 """
@@ -473,20 +553,35 @@ class RegistryStore:
                     set_by = excluded.set_by,
                     set_at = excluded.set_at
                 """,
-                (skill_name, 1 if enabled else 0, set_by, time.time()),
+                (normalized, 1 if enabled else 0, set_by, time.time()),
             )
             conn.commit()
 
     def list_skills(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
+            offline_before = self._offline_before()
             declared_rows = conn.execute(
                 """
-                SELECT je.value AS skill_name, a.slug
-                FROM agents a
-                JOIN json_each(a.skills_json) AS je
-                WHERE a.connectivity_state != 'offline'
-                ORDER BY lower(je.value), a.slug COLLATE NOCASE
+                WITH live_agents AS (
+                    SELECT slug, skills_json
+                    FROM agents
+                    WHERE CASE
+                        WHEN last_heartbeat_at != '' AND last_heartbeat_at < ? THEN 'offline'
+                        ELSE connectivity_state
+                    END != 'offline'
+                ),
+                declared AS (
+                    SELECT lower(je.value) AS skill_key, je.value AS skill_name, live_agents.slug
+                    FROM live_agents
+                    JOIN json_each(live_agents.skills_json) AS je
+                )
+                SELECT skill_key, MIN(skill_name) AS skill_name, GROUP_CONCAT(DISTINCT slug) AS declared_by_agents
+                FROM declared
+                GROUP BY skill_key
+                ORDER BY skill_key
                 """
+                ,
+                (offline_before,),
             ).fetchall()
             override_rows = conn.execute(
                 """
@@ -499,17 +594,18 @@ class RegistryStore:
         merged: dict[str, dict[str, Any]] = {}
         for row in declared_rows:
             skill_name = row["skill_name"]
-            key = skill_name.lower()
             item = merged.setdefault(
-                key,
+                row["skill_key"],
                 {
                     "skill_name": skill_name,
-                    "declared_by_agents": [],
+                    "declared_by_agents": sorted(
+                        str(row["declared_by_agents"]).split(",")
+                        if row["declared_by_agents"]
+                        else []
+                    ),
                     "enabled": None,
                 },
             )
-            if row["slug"] not in item["declared_by_agents"]:
-                item["declared_by_agents"].append(row["slug"])
         for row in override_rows:
             skill_name = row["skill_name"]
             key = skill_name.lower()
@@ -536,46 +632,100 @@ class RegistryStore:
         skills = {s.lower() for s in query.get("skills", []) if s}
         tags = {s.lower() for s in query.get("tags", []) if s}
         free_text = query.get("free_text", "").strip().lower()
-        exclude = set(query.get("exclude_agent_ids", []))
+        exclude = sorted(set(query.get("exclude_agent_ids", [])))
         with self._connect() as conn:
             disabled_skills = self._disabled_skills(conn)
-            # Short-circuit: if every requested skill is globally disabled, no agent can match.
-            if skills and not (skills - disabled_skills):
+            skills = skills - disabled_skills
+            if query.get("skills") and not skills:
                 return []
-            rows = conn.execute("SELECT * FROM agents ORDER BY display_name COLLATE NOCASE").fetchall()
-        results: list[dict[str, Any]] = []
-        for row in rows:
-            agent = self._row_to_agent(row)
-            if agent["agent_id"] in exclude:
-                continue
-            if required_state and agent["connectivity_state"] != required_state:
-                continue
-            if role and role not in agent["role"].lower():
-                continue
-            agent_skills = {
-                skill.lower()
-                for skill in agent["skills"]
-                if skill and skill.lower() not in disabled_skills
-            }
-            if skills and not skills.issubset(agent_skills):
-                continue
-            agent_tags = {s.lower() for s in agent["tags"]}
-            if tags and not tags.issubset(agent_tags):
-                continue
+            sql = [
+                """
+                WITH agent_rows AS (
+                    SELECT
+                        a.*,
+                        CASE
+                            WHEN a.last_heartbeat_at != '' AND a.last_heartbeat_at < ? THEN 'offline'
+                            ELSE a.connectivity_state
+                        END AS effective_state
+                    FROM agents a
+                )
+                SELECT *
+                FROM agent_rows
+                WHERE 1 = 1
+                """
+            ]
+            params: list[Any] = [self._offline_before()]
+            if exclude:
+                sql.append(f" AND agent_id NOT IN ({','.join('?' for _ in exclude)})")
+                params.extend(exclude)
+            if required_state:
+                sql.append(" AND effective_state = ?")
+                params.append(required_state)
+            if role:
+                sql.append(" AND lower(role) LIKE ?")
+                params.append(f"%{role}%")
+            for skill in sorted(skills):
+                sql.append(
+                    """
+                    AND EXISTS (
+                        SELECT 1
+                        FROM json_each(agent_rows.skills_json) AS je
+                        WHERE lower(je.value) = ?
+                    )
+                    """
+                )
+                params.append(skill)
+            for tag in sorted(tags):
+                sql.append(
+                    """
+                    AND EXISTS (
+                        SELECT 1
+                        FROM json_each(agent_rows.tags_json) AS je
+                        WHERE lower(je.value) = ?
+                    )
+                    """
+                )
+                params.append(tag)
             if free_text:
-                haystack = " ".join(
-                    [
-                        agent["display_name"],
-                        agent["role"],
-                        agent["description"],
-                        " ".join(sorted(agent_skills)),
-                        " ".join(agent["tags"]),
-                    ]
-                ).lower()
-                if free_text not in haystack:
-                    continue
-            results.append(agent)
-        return results
+                like = f"%{free_text}%"
+                skill_clause = """
+                    EXISTS (
+                        SELECT 1
+                        FROM json_each(agent_rows.skills_json) AS je
+                        WHERE lower(je.value) LIKE ?
+                    )
+                """
+                if disabled_skills:
+                    skill_clause = f"""
+                        EXISTS (
+                            SELECT 1
+                            FROM json_each(agent_rows.skills_json) AS je
+                            WHERE lower(je.value) LIKE ?
+                              AND lower(je.value) NOT IN ({','.join('?' for _ in disabled_skills)})
+                        )
+                    """
+                sql.append(
+                    f"""
+                    AND (
+                        lower(display_name) LIKE ?
+                        OR lower(role) LIKE ?
+                        OR lower(description) LIKE ?
+                        OR {skill_clause}
+                        OR EXISTS (
+                            SELECT 1
+                            FROM json_each(agent_rows.tags_json) AS je
+                            WHERE lower(je.value) LIKE ?
+                        )
+                    )
+                    """
+                )
+                params.extend([like, like, like, like])
+                if disabled_skills:
+                    params.extend(sorted(disabled_skills))
+                params.append(like)
+            sql.append(" ORDER BY lower(display_name)")
+            rows = conn.execute("".join(sql), params).fetchall()
+        return [self._row_to_agent(row) for row in rows]
 
     def create_delivery(self, *, target_agent_id: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
@@ -605,7 +755,7 @@ class RegistryStore:
             INSERT INTO deliveries (delivery_id, target_agent_id, kind, payload_json, state, created_at, updated_at)
             VALUES (?, ?, ?, ?, 'queued', ?, ?)
             """,
-            (delivery_id, target_agent_id, kind, _ensure_json(payload), now, now),
+            (delivery_id, target_agent_id, kind, ensure_json(payload), now, now),
         )
         seq = conn.execute(
             "SELECT seq FROM deliveries WHERE delivery_id = ?",
@@ -624,10 +774,19 @@ class RegistryStore:
                 raise SkillDisabledError(requested_skill)
             conn.execute(
                 """
-                INSERT OR REPLACE INTO routed_tasks (
+                INSERT INTO routed_tasks (
                     routed_task_id, parent_conversation_id, origin_agent_id, target_agent_id,
                     title, request_json, status, summary, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, 'queued', '', ?, ?)
+                ON CONFLICT(routed_task_id) DO UPDATE SET
+                    parent_conversation_id = excluded.parent_conversation_id,
+                    origin_agent_id = excluded.origin_agent_id,
+                    target_agent_id = excluded.target_agent_id,
+                    title = excluded.title,
+                    request_json = excluded.request_json,
+                    status = excluded.status,
+                    summary = excluded.summary,
+                    updated_at = excluded.updated_at
                 """,
                 (
                     request["routed_task_id"],
@@ -635,16 +794,19 @@ class RegistryStore:
                     request["origin_agent_id"],
                     request["target_agent_id"],
                     request["title"],
-                    _ensure_json(request),
+                    ensure_json(request),
                     now,
                     now,
                 ),
             )
-        delivery = self.create_delivery(
-            target_agent_id=request["target_agent_id"],
-            kind="routed_task",
-            payload=request,
-        )
+            delivery = self._create_delivery(
+                conn,
+                target_agent_id=request["target_agent_id"],
+                kind="routed_task",
+                payload=request,
+                now=now,
+                delivery_id=uuid.uuid4().hex,
+            )
         return {
             "routed_task_id": request["routed_task_id"],
             "delivery_id": delivery["delivery_id"],
@@ -684,7 +846,7 @@ class RegistryStore:
                 "cursor": str(item["seq"]),
                 "delivery_id": item["delivery_id"],
                 "kind": item["kind"],
-                "payload": json.loads(item["payload_json"]),
+                "payload": decode_json_field(item["payload_json"], {}),
                 "state": "leased" if item["delivery_id"] in delivery_ids else item["state"],
                 "created_at": item["created_at"],
             }
@@ -737,26 +899,19 @@ class RegistryStore:
                 (payload.get("status", ""), payload.get("summary", ""), now, routed_task_id),
             )
             for event in payload.get("timeline_events", []):
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO timeline_events (
-                        event_id, conversation_id, routed_task_id, agent_id, kind, title,
-                        body, status, progress, metadata_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        event["event_id"],
-                        event["conversation_id"],
-                        routed_task_id,
-                        row["agent_id"],
-                        event["kind"],
-                        event["title"],
-                        event.get("body", ""),
-                        event.get("status", ""),
-                        event.get("progress"),
-                        _ensure_json(event.get("metadata", {})),
-                        event["created_at"],
-                    ),
+                self._upsert_timeline_event(
+                    conn,
+                    event_id=event["event_id"],
+                    conversation_id=event["conversation_id"],
+                    routed_task_id=routed_task_id,
+                    agent_id=row["agent_id"],
+                    kind=event["kind"],
+                    title=event["title"],
+                    body=event.get("body", ""),
+                    status=event.get("status", ""),
+                    progress=event.get("progress"),
+                    metadata=event.get("metadata", {}),
+                    created_at=event["created_at"],
                 )
         return {"routed_task_id": routed_task_id, "status": payload.get("status", "")}
 
@@ -781,7 +936,7 @@ class RegistryStore:
                 (
                     payload.get("status", "completed"),
                     payload.get("summary", ""),
-                    _ensure_json(payload),
+                    ensure_json(payload),
                     now,
                     routed_task_id,
                 ),
@@ -818,7 +973,7 @@ class RegistryStore:
 
     def list_agents(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM agents ORDER BY display_name COLLATE NOCASE").fetchall()
+            rows = conn.execute("SELECT * FROM agents ORDER BY lower(display_name)").fetchall()
         return [self._row_to_agent(row) for row in rows]
 
     def ui_bootstrap(self) -> dict[str, Any]:
@@ -840,22 +995,26 @@ class RegistryStore:
                 """,
                 (conversation_id, target_agent_id, title, now, now),
             )
-        self.create_delivery(
-            target_agent_id=target_agent_id,
-            kind="surface_input",
-            payload={
-                "conversation_id": conversation_id,
-                "title": title,
-                "text": message_text,
-                "surface": "registry",
-            },
-        )
-        self.publish_ui_timeline(
-            conversation_id=conversation_id,
-            title="Conversation started",
-            body=message_text,
-            kind="surface_input",
-        )
+            self._create_delivery(
+                conn,
+                target_agent_id=target_agent_id,
+                kind="surface_input",
+                payload={
+                    "conversation_id": conversation_id,
+                    "title": title,
+                    "text": message_text,
+                    "surface": "registry",
+                },
+                now=now,
+                delivery_id=uuid.uuid4().hex,
+            )
+            self._publish_ui_timeline_conn(
+                conn,
+                conversation_id=conversation_id,
+                title="Conversation started",
+                body=message_text,
+                kind="surface_input",
+            )
         return self.get_conversation(conversation_id)
 
     def publish_ui_timeline(
@@ -869,57 +1028,17 @@ class RegistryStore:
         progress: int | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        event = TimelineEvent(
-            event_id=uuid.uuid4().hex,
-            conversation_id=conversation_id,
-            kind=kind,
-            title=title,
-            body=body,
-            status=status,
-            progress=progress,
-            metadata=metadata or {},
-        )
         with self._connect() as conn:
-            conversation = conn.execute(
-                """
-                SELECT status
-                FROM conversations
-                WHERE conversation_id = ?
-                """,
-                (conversation_id,),
-            ).fetchone()
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO timeline_events (
-                    event_id, conversation_id, routed_task_id, agent_id, kind, title,
-                    body, status, progress, metadata_json, created_at
-                ) VALUES (?, ?, '', '', ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    event.event_id,
-                    event.conversation_id,
-                    event.kind,
-                    event.title,
-                    event.body,
-                    event.status,
-                    event.progress,
-                    _ensure_json(event.metadata),
-                    event.created_at,
-                ),
+            self._publish_ui_timeline_conn(
+                conn,
+                conversation_id=conversation_id,
+                title=title,
+                body=body,
+                kind=kind,
+                status=status,
+                progress=progress,
+                metadata=metadata,
             )
-            if conversation is not None:
-                conn.execute(
-                    """
-                    UPDATE conversations
-                    SET updated_at = ?, status = ?
-                    WHERE conversation_id = ?
-                    """,
-                    (
-                        event.created_at,
-                        _conversation_status_for_event(kind, conversation["status"]),
-                        conversation_id,
-                    ),
-                )
 
     def list_conversations(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
@@ -1028,7 +1147,7 @@ class RegistryStore:
                 "body": row["body"],
                 "status": row["status"],
                 "progress": row["progress"],
-                "metadata": json.loads(row["metadata_json"] or "{}"),
+                "metadata": decode_json_field(row["metadata_json"], {}),
                 "created_at": row["created_at"],
             }
             for row in rows
@@ -1039,78 +1158,123 @@ class RegistryStore:
             with self._connect() as conn:
                 rows = conn.execute(
                     """
-                    SELECT DISTINCT te.conversation_id,
-                           snippet(timeline_fts, 0, '<b>', '</b>', '…', 32) AS snippet
+                    SELECT te.conversation_id,
+                           snippet(timeline_fts, 0, '<b>', '</b>', '…', 32) AS snippet,
+                           te.seq
                     FROM timeline_fts
                     JOIN timeline_events te ON te.seq = timeline_fts.rowid
                     WHERE timeline_fts MATCH ?
+                      AND te.seq = (
+                          SELECT MAX(te2.seq)
+                          FROM timeline_events te2
+                          WHERE te2.conversation_id = te.conversation_id
+                            AND te2.seq IN (
+                                SELECT rowid
+                                FROM timeline_fts
+                                WHERE timeline_fts MATCH ?
+                            )
+                      )
+                    ORDER BY te.seq DESC
                     LIMIT ?
                     """,
-                    (q, limit),
+                    (q, q, limit),
                 ).fetchall()
         except sqlite3.OperationalError:
             return []
         return [{"conversation_id": row["conversation_id"], "snippet": row["snippet"]} for row in rows]
 
     def add_conversation_message(self, conversation_id: str, text: str) -> dict[str, Any]:
-        conversation = self.get_conversation(conversation_id)
-        self.create_delivery(
-            target_agent_id=conversation["target_agent_id"],
-            kind="surface_input",
-            payload={
-                "conversation_id": conversation_id,
-                "title": conversation["title"],
-                "text": text,
-                "surface": "registry",
-            },
-        )
-        self.publish_ui_timeline(
-            conversation_id=conversation_id,
-            title="User message",
-            body=text,
-            kind="surface_input",
-        )
+        with self._connect() as conn:
+            conversation = conn.execute(
+                "SELECT target_agent_id, title FROM conversations WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if conversation is None:
+                raise KeyError(conversation_id)
+            now = utcnow_iso()
+            self._create_delivery(
+                conn,
+                target_agent_id=conversation["target_agent_id"],
+                kind="surface_input",
+                payload={
+                    "conversation_id": conversation_id,
+                    "title": conversation["title"],
+                    "text": text,
+                    "surface": "registry",
+                },
+                now=now,
+                delivery_id=uuid.uuid4().hex,
+            )
+            self._publish_ui_timeline_conn(
+                conn,
+                conversation_id=conversation_id,
+                title="User message",
+                body=text,
+                kind="surface_input",
+            )
         return {"conversation_id": conversation_id, "accepted": True}
 
     def add_conversation_action(self, conversation_id: str, action: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        conversation = self.get_conversation(conversation_id)
         action_payload = payload or {}
-        self.create_delivery(
-            target_agent_id=conversation["target_agent_id"],
-            kind="surface_action",
-            payload={
-                "conversation_id": conversation_id,
-                "conversation_ref": conversation_id,
-                "action": action,
-                "payload": action_payload,
-                "surface": "registry",
-            },
-        )
-        self.publish_ui_timeline(
-            conversation_id=conversation_id,
-            title=f"Action: {action}",
-            body=json.dumps(action_payload) if action_payload else "",
-            kind="surface_action",
-        )
+        with self._connect() as conn:
+            conversation = conn.execute(
+                "SELECT target_agent_id FROM conversations WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if conversation is None:
+                raise KeyError(conversation_id)
+            now = utcnow_iso()
+            self._create_delivery(
+                conn,
+                target_agent_id=conversation["target_agent_id"],
+                kind="surface_action",
+                payload={
+                    "conversation_id": conversation_id,
+                    "conversation_ref": conversation_id,
+                    "action": action,
+                    "payload": action_payload,
+                    "surface": "registry",
+                },
+                now=now,
+                delivery_id=uuid.uuid4().hex,
+            )
+            self._publish_ui_timeline_conn(
+                conn,
+                conversation_id=conversation_id,
+                title=f"Action: {action}",
+                body=json.dumps(action_payload) if action_payload else "",
+                kind="surface_action",
+            )
         return {"conversation_id": conversation_id, "accepted": True}
 
     def cancel_conversation(self, conversation_id: str) -> dict[str, Any]:
-        conversation = self.get_conversation(conversation_id)
-        self.create_delivery(
-            target_agent_id=conversation["target_agent_id"],
-            kind="control",
-            payload={
-                "conversation_id": conversation_id,
-                "action": "cancel",
-                "surface": "registry",
-            },
-        )
-        self.publish_ui_timeline(
-            conversation_id=conversation_id,
-            title="Cancel requested",
-            body="",
-            kind="control",
-        )
+        with self._connect() as conn:
+            conversation = conn.execute(
+                "SELECT target_agent_id FROM conversations WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if conversation is None:
+                raise KeyError(conversation_id)
+            now = utcnow_iso()
+            self._create_delivery(
+                conn,
+                target_agent_id=conversation["target_agent_id"],
+                kind="control",
+                payload={
+                    "conversation_id": conversation_id,
+                    "action": "cancel",
+                    "surface": "registry",
+                },
+                now=now,
+                delivery_id=uuid.uuid4().hex,
+            )
+            self._publish_ui_timeline_conn(
+                conn,
+                conversation_id=conversation_id,
+                title="Cancel requested",
+                body="",
+                kind="control",
+            )
         return {"conversation_id": conversation_id, "accepted": True}
 
     def list_tasks(self) -> list[dict[str, Any]]:

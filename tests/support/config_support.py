@@ -66,6 +66,7 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         webhook_listen="127.0.0.1",
         webhook_port=8443,
         webhook_secret="",
+        completion_webhook_url="",
         projects=(),
         model_profiles={},
         default_model_profile="",

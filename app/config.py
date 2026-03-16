@@ -1,5 +1,6 @@
 """Configuration loading, validation, and fail-fast checks."""
 
+import logging
 import os
 import re
 import shutil
@@ -12,6 +13,8 @@ from app.session_state import ProjectBinding, field
 from pathlib import Path
 
 from dotenv import dotenv_values
+
+log = logging.getLogger(__name__)
 
 
 def load_dotenv_file(path: Path) -> dict[str, str]:
@@ -132,6 +135,7 @@ class BotConfig:
     webhook_listen: str
     webhook_port: int
     webhook_secret: str
+    completion_webhook_url: str
     # Projects — optional named working directories
     projects: tuple[ProjectBinding, ...]  # parsed from BOT_PROJECTS
     # Model profiles — stable user-facing tier names mapped to provider model IDs
@@ -348,6 +352,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         webhook_listen=get("BOT_WEBHOOK_LISTEN", "127.0.0.1"),
         webhook_port=get_int("BOT_WEBHOOK_PORT", "8443"),
         webhook_secret=get("BOT_WEBHOOK_SECRET"),
+        completion_webhook_url=get("BOT_COMPLETION_WEBHOOK_URL").strip(),
         projects=_parse_projects(get("BOT_PROJECTS")),
         model_profiles=_parse_model_profiles(get("BOT_MODEL_PROFILES")),
         default_model_profile=get("BOT_DEFAULT_PROFILE"),
@@ -442,6 +447,7 @@ def load_config_provider_health() -> BotConfig:
         webhook_listen="127.0.0.1",
         webhook_port=8443,
         webhook_secret="",
+        completion_webhook_url="",
         projects=(),
         model_profiles={},
         default_model_profile="",
@@ -541,6 +547,12 @@ def validate_config(config: BotConfig) -> list[str]:
     if config.bot_mode == BotMode.WEBHOOK.value:
         if not config.webhook_url:
             errors.append("BOT_WEBHOOK_URL is required when BOT_MODE=webhook")
+
+    if config.completion_webhook_url and not _has_valid_http_url(config.completion_webhook_url):
+        log.warning(
+            "BOT_COMPLETION_WEBHOOK_URL is set but not a valid http:// or https:// URL: %s",
+            config.completion_webhook_url,
+        )
 
     if config.database_url and not _has_valid_postgres_url(config.database_url):
         errors.append(

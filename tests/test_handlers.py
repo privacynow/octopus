@@ -1,5 +1,6 @@
 """Core handler integration tests: happy-path routing, session lifecycle, /help, /start, /doctor, /project."""
 
+import asyncio
 import re
 import tempfile
 from pathlib import Path
@@ -71,6 +72,102 @@ async def test_happy_path():
         bot = th._bot_instance
         assert len(bot.sent_messages) >= 2
         assert "Hello world" in " ".join(m.get("text", "") for m in bot.sent_messages)
+
+
+async def test_worker_dispatch_schedules_completion_webhook_for_terminal_outcome(monkeypatch):
+    with fresh_env(
+        config_overrides={"completion_webhook_url": "https://hooks.example.com/completed"}
+    ) as (data_dir, _cfg, prov):
+        import app.telegram_handlers as th
+
+        called: list[dict[str, object]] = []
+
+        async def fake_fire(url, *, chat_id, conversation_ref, status, summary, completed_at):
+            called.append(
+                {
+                    "url": url,
+                    "chat_id": chat_id,
+                    "conversation_ref": conversation_ref,
+                    "status": status,
+                    "summary": summary,
+                    "completed_at": completed_at,
+                }
+            )
+
+        monkeypatch.setattr("app.webhook.fire_completion_webhook", fake_fire)
+        prov.run_results = [RunResult(text="Terminal reply from provider.")]
+
+        event = InboundMessage(
+            user=InboundUser(id=42, username="telegram-user"),
+            chat_id=12345,
+            text="Do the thing.",
+            source="telegram",
+        )
+        item = {"id": "webhook-item-1", "chat_id": 12345, "update_id": 7001, "dispatch_mode": "fresh"}
+
+        await th.worker_dispatch("message", event, item)
+        await asyncio.sleep(0)
+
+        assert len(called) == 1
+        assert called[0]["url"] == "https://hooks.example.com/completed"
+        assert called[0]["chat_id"] == 12345
+        assert called[0]["status"] == "completed"
+        assert "Terminal reply from provider." in str(called[0]["summary"])
+
+
+async def test_worker_dispatch_skips_completion_webhook_for_delegation_proposed(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "off",
+            "completion_webhook_url": "https://hooks.example.com/completed",
+        }
+    ) as (_data_dir, _cfg, prov):
+        import app.telegram_handlers as th
+
+        called: list[dict[str, object]] = []
+
+        async def fake_fire(url, *, chat_id, conversation_ref, status, summary, completed_at):
+            called.append(
+                {
+                    "url": url,
+                    "chat_id": chat_id,
+                    "conversation_ref": conversation_ref,
+                    "status": status,
+                    "summary": summary,
+                    "completed_at": completed_at,
+                }
+            )
+
+        monkeypatch.setattr("app.webhook.fire_completion_webhook", fake_fire)
+        prov.run_results = [
+            RunResult(
+                text="",
+                delegation_title="Delegation plan",
+                delegation_resume_instruction="Resume after child completion.",
+                delegation_tasks=[
+                    {
+                        "routed_task_id": "task-1",
+                        "title": "Delegate task",
+                        "target_agent_id": "developer-1",
+                        "instructions": "Do the delegated work.",
+                    }
+                ],
+            )
+        ]
+
+        event = InboundMessage(
+            user=InboundUser(id=42, username="registry-ui"),
+            chat_id=12345,
+            text="Delegate this work.",
+            source="registry",
+            conversation_ref="registry:conv-webhook",
+        )
+        item = {"id": "webhook-item-2", "chat_id": 12345, "update_id": 7002, "dispatch_mode": "fresh"}
+
+        await th.worker_dispatch("message", event, item)
+        await asyncio.sleep(0)
+
+        assert called == []
 
 
 async def test_help_and_start_include_discover_in_registry_mode():

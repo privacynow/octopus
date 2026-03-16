@@ -124,6 +124,51 @@ change.
     it will never inform users that interrupted work needs replay. Every
     surface with a user-facing UI channel must override it.
 
+## Engineering Principles
+
+These apply to all code changes in this repo without exception.
+
+### Extend Before Inventing
+
+Before adding a new module, function, or abstraction, find the existing
+seam that already owns that concern. Extend it. If no seam exists,
+create an interface/protocol first, then implement it — never add a
+concrete-only class that bypasses an existing abstraction boundary.
+
+### Interfaces Before Implementations
+
+Every new pluggable component (store backend, surface adapter, provider,
+ingress handler) must have a Protocol or ABC defined before the first
+concrete implementation lands. The protocol lives in its own file (e.g.
+`store_base.py`, `ports.py`). Concrete implementations import and
+satisfy the protocol. Orchestration code imports only the protocol,
+never the concrete class.
+
+### No Hand-Rolled Infrastructure
+
+Use battle-tested libraries for concerns that are not unique to this
+project: `psycopg` for Postgres connections, `psycopg_pool` for
+pooling, `pydantic` for request validation, `python-statemachine` for
+FSMs, `starlette` sessions for auth. Do not implement connection pools,
+JSON schema validators, state machines, or session middleware from
+scratch.
+
+### No Parallel Paths for the Same Concern
+
+If the transport store already owns work-item persistence, new ingress
+paths (webhook, registry delivery, future Slack adapter) must write
+through the same transport facade — not a second queue, a second table,
+or a second state machine. If the existing facade is insufficient,
+extend it.
+
+### Migration Fidelity
+
+Versioned schema migrations are historical replay steps, not normal
+code. Each migration must reference column and table names as they
+existed at that version, not as they exist in the current schema.
+Rewriting historical migrations to use current names breaks upgrade
+paths from older databases.
+
 ## Repo-Specific Bug Reports
 
 When writing a bug report for this repo:

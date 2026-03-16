@@ -5091,7 +5091,7 @@ and leaves the system in a working state.
 
 ###### M21A-0 — Surface-neutral identity generalization
 
-**Status: Not started. Prerequisite for M21A.**
+**Status: Complete. Migration fix landed as M21A-0A.**
 
 **Problem.** The durable transport layer, session store, access-override
 store, inbound event types, and attachment storage paths all assume

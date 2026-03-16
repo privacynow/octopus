@@ -147,3 +147,35 @@ When writing a bug report for this repo:
   a backend selector, and a passing parameterized contract test.
   Fixing one seam while another remains SQLite-only is not parity — it
   is one seam fixed.
+- **Extend before inventing.** Before adding a new module, function, or
+  abstraction, find the existing seam that already owns that concern.
+  Extend it. If no seam exists, create an interface/protocol first,
+  then implement it — never add a concrete-only class that bypasses an
+  existing abstraction boundary. A third copy-paste implementation is a
+  signal that the abstraction is missing; fix the abstraction, do not
+  add the copy.
+- **Interfaces before implementations.** Every new pluggable component
+  (store backend, surface adapter, provider, ingress handler) must have
+  a Protocol or ABC defined before the first concrete implementation
+  lands. The protocol lives in its own file (e.g. `store_base.py`,
+  `ports.py`). Concrete implementations import and satisfy the protocol.
+  Orchestration code imports only the protocol, never the concrete class.
+- **No hand-rolled infrastructure.** Use battle-tested libraries for
+  concerns that are not unique to this project: `psycopg` for Postgres
+  connections, `psycopg_pool` for pooling, `pydantic` for request
+  validation, `python-statemachine` for FSMs, `starlette` sessions for
+  auth. Do not implement connection pools, JSON schema validators, state
+  machines, or session middleware from scratch.
+- **No parallel paths for the same concern.** If the transport store
+  already owns work-item persistence, new ingress paths (webhook,
+  registry delivery, future Slack adapter) must write through the same
+  transport facade — not a second queue, a second table, or a second
+  state machine. If the existing facade is insufficient, extend it.
+- **Migration fidelity rule.** Versioned schema migrations are
+  historical replay steps, not normal code. Each migration must
+  reference column and table names as they existed at that version, not
+  as they exist in the current schema. Rewriting historical migrations
+  to use current names breaks upgrade paths from older databases.
+  Fresh-install schemas (`_CREATE_SQL`, initial SQL files) describe the
+  current version; migrations describe the delta from one version to
+  the next.

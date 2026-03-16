@@ -136,8 +136,17 @@ class AgentRuntime:
         rejected: list[str] = []
         retry_later: list[str] = []
         for delivery in deliveries:
-            classification = await self._delivery_handler(delivery)
             delivery_id = str(delivery.get("delivery_id", ""))
+            try:
+                classification = await self._delivery_handler(delivery)
+            except Exception:
+                log.exception(
+                    "Agent delivery handler failed for %s on %s",
+                    self.config.instance,
+                    delivery_id,
+                )
+                rejected.append(delivery_id)
+                continue
             if classification == "accepted":
                 accepted.append(delivery_id)
             elif classification == "retry_later":
@@ -166,6 +175,8 @@ class AgentRuntime:
                 except (RegistryClientError, OSError, asyncio.TimeoutError) as exc:
                     log.warning("Agent registry poll degraded for %s: %s", self.config.instance, exc)
                     self._mark_state("degraded", error=str(exc))
+                except Exception:
+                    log.exception("Unexpected registry poll failure for %s", self.config.instance)
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=interval)
             except asyncio.TimeoutError:

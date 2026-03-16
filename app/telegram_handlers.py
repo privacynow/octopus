@@ -3245,17 +3245,24 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             if client is not None and outcome is not None:
                 full_text = outcome.reply_text or html.unescape(getattr(bot_msg, "last_status_text", ""))
                 result_status = "completed" if outcome.status in {"completed", "completed_with_denials"} else outcome.status
-                await client.routed_task_result(
-                    routed_task_id,
-                    RoutedTaskResult(
-                        routed_task_id=routed_task_id,
-                        status=result_status,
-                        summary=summarize_text(full_text or outcome.error_text or result_status),
-                        full_text=full_text or outcome.error_text,
-                        artifacts=(),
-                        follow_up_questions=(),
-                    ),
-                )
+                try:
+                    await client.routed_task_result(
+                        routed_task_id,
+                        RoutedTaskResult(
+                            routed_task_id=routed_task_id,
+                            status=result_status,
+                            summary=summarize_text(full_text or outcome.error_text or result_status),
+                            full_text=full_text or outcome.error_text,
+                            artifacts=(),
+                            follow_up_questions=(),
+                        ),
+                    )
+                except Exception:
+                    log.warning(
+                        "Failed to report routed task result for %s",
+                        routed_task_id,
+                        exc_info=True,
+                    )
         elif source == "telegram" and outcome is not None:
             body = outcome.reply_text or outcome.error_text
             if body:

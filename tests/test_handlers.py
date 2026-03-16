@@ -145,6 +145,49 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
         assert "Delegated review complete." in result.full_text
 
 
+async def test_registry_routed_task_result_report_failure_does_not_escape_worker(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (_, cfg, prov):
+        import app.telegram_handlers as th
+        import app.agents.bridge as bridge
+
+        class FakeRegistryClient:
+            async def sync_binding(self, **kwargs):
+                return {"ok": True}
+
+            async def publish_timeline(self, events, *, checkpoint: str = ""):
+                del events, checkpoint
+                return {"accepted": 0}
+
+            async def routed_task_result(self, routed_task_id, result):
+                del routed_task_id, result
+                raise RuntimeError("registry unavailable")
+
+        monkeypatch.setattr(th, "registry_client", lambda config: FakeRegistryClient())
+        monkeypatch.setattr(bridge, "registry_client", lambda config: FakeRegistryClient())
+        prov.run_results = [RunResult(text="Delegated review complete.")]
+
+        event = InboundMessage(
+            user=InboundUser(id=42, username="origin-bot"),
+            chat_id=12345,
+            text="Review the latest spec.",
+            source="registry",
+            conversation_ref="routed-task-2",
+            routed_task_id="routed-task-2",
+        )
+        item = {"id": "registry-item-3", "chat_id": 12345, "update_id": 7003, "dispatch_mode": "fresh"}
+
+        await th.worker_dispatch("message", event, item)
+
+        assert len(prov.run_calls) == 1
+
+
 async def test_cmd_new():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)

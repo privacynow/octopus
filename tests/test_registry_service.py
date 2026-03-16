@@ -371,6 +371,73 @@ def test_ui_search_returns_empty_results_for_malformed_query(monkeypatch, tmp_pa
     assert response.json() == {"results": []}
 
 
+def test_ui_export_conversation_returns_markdown_and_missing_conversation_404(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    _, token = _enroll_and_register(client, "Export Bot", "export-bot")
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": "conv-export-1",
+            "title": "Exportable conversation",
+            "origin_surface": "registry",
+            "external_id": "conv-export-1",
+        },
+    )
+    assert bind.status_code == 200
+    publish = client.post(
+        "/v1/agents/timeline",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-export-1",
+                    "conversation_id": "conv-export-1",
+                    "kind": "started",
+                    "title": "Conversation started",
+                    "body": "Kick off export flow",
+                    "created_at": "2026-03-16T00:00:00+00:00",
+                },
+                {
+                    "event_id": "evt-export-2",
+                    "conversation_id": "conv-export-1",
+                    "kind": "completed",
+                    "title": "Done",
+                    "body": "Export finished",
+                    "created_at": "2026-03-16T00:00:01+00:00",
+                },
+            ]
+        },
+    )
+    assert publish.status_code == 200
+
+    export = client.get(
+        "/v1/ui/conversations/conv-export-1/export",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert export.status_code == 200
+    assert export.headers["content-type"].startswith("text/markdown")
+    assert (
+        export.headers["content-disposition"]
+        == 'attachment; filename="conversation-conv-export-1.md"'
+    )
+    assert "# Conversation: Exportable conversation" in export.text
+    assert "Status: completed" in export.text
+    assert "Bot: Export Bot" in export.text
+    assert "## [2026-03-16T00:00:00+00:00] started" in export.text
+    assert "Kick off export flow" in export.text
+    assert "## [2026-03-16T00:00:01+00:00] completed" in export.text
+
+    missing = client.get(
+        "/v1/ui/conversations/does-not-exist/export",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "Conversation not found"
+
+
 def test_ui_create_conversation_creates_delivery(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

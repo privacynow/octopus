@@ -25,7 +25,9 @@ private bot with no registry.
 - a Telegram bot token from `@BotFather`
 - one provider: `claude` or `codex`
 - your Telegram user ID for `BOT_ALLOWED_USERS`
-- for the multi-bot path: a local or hosted registry URL and a registry enrollment token — auto-generated when you start a local registry (see below)
+
+If you want the shared Registry UI or multiple bots, `guided_start.sh` can
+start a local registry for you and print the enrollment token automatically.
 
 ## First-Time Setup
 
@@ -58,15 +60,14 @@ every option interactively.
 If you choose registry mode, the local registry starts automatically.
 For manual registry management, see [Manual registry start](#manual-registry-start).
 
-For a second or third bot from the same checkout, give it an instance name:
+If you are not sure which path you want, use this rule:
 
-```bash
-./scripts/app/guided_start.sh reviewer
-./scripts/app/guided_start.sh developer
+```mermaid
+flowchart TD
+    A["Run guided_start.sh"] --> B{"One private bot or shared registry?"}
+    B --> C["Standalone mode<br/>one private bot"]
+    B --> D["Registry mode<br/>Registry UI and multi-bot coordination"]
 ```
-
-Those create `.env.bot.reviewer`, `.env.bot.developer`, and separate Docker
-projects automatically. The default no-argument path still uses `.env.bot`.
 
 ### Step 4 — Message the bot in Telegram
 
@@ -102,17 +103,19 @@ Log in with `REGISTRY_UI_TOKEN` from `.env.registry`. The bare
 
 ![Registry UI screenshot](docs/registry-ui-screenshot.png)
 
-The UI starts with three live lists plus a detail panel for the selected item:
+The UI opens as four live panels plus a detail panel for the selected item:
 
 - **Bots** — all registered bots, their connection status, and last heartbeat
-- **Conversations** — a live timeline for every conversation across all bots
+- **Conversations** — a live timeline for every conversation across all bots, with search plus status/date filters
 - **Routed Tasks** — delegated sub-tasks being handled by specialist bots
 - **Skills** — enable or disable skills across all bots from one place
-- **Detail panel** — the selected bot, conversation, or task, with drill-down actions such as follow-up messages, delegation approval, and export where supported
+- **Detail panel** — the selected bot, conversation, or task, with drill-down actions such as follow-up messages, delegation approval or cancellation, and export where supported
 
-Unlike the Telegram interface, the Registry UI lets you start conversations
-directly, approve or cancel delegation plans, manage skills, and see all bot
-activity in one place without switching between Telegram chats.
+Use the Registry UI when you want to start conversations without switching to
+Telegram, approve or cancel delegation plans, search conversation history,
+export transcripts, manage shared skills, or watch activity across multiple
+bots in one place. When the provider CLI reports usage metadata, the header
+and conversation detail view also show reported token and cost totals.
 
 ## Day-To-Day Use
 
@@ -128,14 +131,25 @@ restart the bot if needed.
 
 ## Multi-Agent Mode
 
-Registry-backed mode is the normal multi-agent setup. Set
-`BOT_AGENT_MODE=registry` to let the bot:
+Registry-backed mode is the normal multi-agent setup. In `guided_start.sh`, it
+is the default shared-bot path. It lets the bot:
 
 - register itself in the shared registry UI
 - answer `/discover` with live specialist bots
 - propose delegation plans and send approved child tasks through the registry
 
-The required registry settings are:
+For a second or third bot from the same checkout, give it an instance name:
+
+```bash
+./scripts/app/guided_start.sh reviewer
+./scripts/app/guided_start.sh developer
+```
+
+Those create `.env.bot.reviewer`, `.env.bot.developer`, and separate Docker
+projects automatically. The default no-argument path still uses `.env.bot`.
+
+Guided setup fills in the registry settings for you. If you manage the
+environment manually, the required values are:
 
 - `BOT_AGENT_REGISTRY_URL`
 - `BOT_AGENT_REGISTRY_ENROLL_TOKEN`
@@ -144,15 +158,21 @@ If registry connectivity drops, the bot keeps running in degraded standalone
 operation. Normal Telegram requests still work, but `/discover`, delegation,
 and registry UI sync stay unavailable until registry connectivity returns.
 
+### Manual registry start
+
+For advanced users who want to manage the registry directly:
+
+```bash
+./scripts/registry/start.sh
+```
+
+The script creates `.env.registry` on first run, starts the local registry UI,
+and prints the enrollment token it generated.
+
 ## Using the Bot
 
-Send a normal message:
-
-> Review this diff and suggest a safer refactor.
-
-Upload files and ask:
-
-> Summarize these logs and tell me what broke.
+Most requests are just normal messages in Telegram. The sections below cover
+the main optional behaviors: approval, files, skills, and compact mode.
 
 ### Review before execution
 
@@ -244,17 +264,6 @@ docker compose --project-directory . -f infra/compose/docker-compose.yml --profi
 
 Leave `BOT_WORKING_DIR` unset unless you actually need it. If you do set it for
 the Docker path, use `/home/bot`, not your host home directory.
-
-### Manual registry start
-
-For advanced users who want to manage the registry directly:
-
-```bash
-./scripts/registry/start.sh
-```
-
-The script creates `.env.registry` on first run, starts the local registry UI,
-and prints the enrollment token it generated.
 
 ### The bot still will not start
 

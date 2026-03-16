@@ -47,14 +47,14 @@ def test_status_current_snapshot_matches_current_phase_and_runtime():
     text = (repo / "docs" / "status.md").read_text()
     snapshot = _section(text, "Current Snapshot")
     assert "Phases 1-15 are sealed as shipped." in snapshot
-    assert "Phase 20 is the active roadmap phase" in snapshot
-    assert "Phases 16-19 remain on the roadmap but are deferred behind Phase 20." in snapshot
+    assert "Phase 20 is the shipped product baseline." in snapshot
+    assert "Phases 16-19 remain on the roadmap and are deferred beyond Phase 20." in snapshot
     assert "Local Runtime" in snapshot
     assert "SQLite is the default backend" in snapshot
     assert "Postgres is a supported alternate backend" in snapshot
     assert "./scripts/app/guided_start.sh" in snapshot
     assert "Phase 12 is complete: the **shipped runtime today** uses Postgres" not in snapshot
-    assert "M10 is in progress" in snapshot
+    assert "M10 is complete" in snapshot
 
 
 def test_status_historical_focus_intro_mentions_phase_20():
@@ -62,6 +62,6 @@ def test_status_historical_focus_intro_mentions_phase_20():
     repo = Path(__file__).resolve().parent.parent
     text = (repo / "docs" / "status.md").read_text()
     historical = _section(text, "Historical Execution Focus")
-    assert "Phase 20 is in progress" in historical
-    assert "Phases 16-19 are\ndeferred behind it" in historical or "Phases 16-19 are deferred behind it" in historical
+    assert "Phase 20 is complete" in historical
+    assert "Phases 16-19 remain\ndeferred beyond it" in historical or "Phases 16-19 remain deferred beyond it" in historical
     assert "Phase 15 is in progress" not in historical

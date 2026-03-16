@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -1152,5 +1153,48 @@ def list_user_access(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT user_id, access, reason, granted_by, granted_at "
         "FROM user_access ORDER BY granted_at DESC"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def record_usage(
+    conn: sqlite3.Connection,
+    *,
+    chat_id: int,
+    work_item_id: str,
+    provider: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cost_usd: float,
+) -> None:
+    conn.execute(
+        """INSERT INTO usage_log (
+               chat_id, work_item_id, provider, prompt_tokens,
+               completion_tokens, cost_usd, recorded_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            chat_id,
+            work_item_id,
+            provider,
+            prompt_tokens,
+            completion_tokens,
+            cost_usd,
+            time.time(),
+        ),
+    )
+    conn.commit()
+
+
+def get_usage_since(
+    conn: sqlite3.Connection, *, since_epoch: float,
+) -> list[dict]:
+    rows = conn.execute(
+        """SELECT
+               chat_id, work_item_id, provider, prompt_tokens,
+               completion_tokens, cost_usd, recorded_at
+           FROM usage_log
+           WHERE recorded_at >= ?
+           ORDER BY recorded_at""",
+        (since_epoch,),
     ).fetchall()
     return [dict(row) for row in rows]

@@ -1029,6 +1029,28 @@ class RegistryPostgresStore(AbstractRegistryStore):
             for row in rows
         ]
 
+    def get_usage_summary(self, since_iso: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"""
+                    SELECT conversation_id, metadata_json, created_at
+                    FROM {_SCHEMA}.timeline_events
+                    WHERE kind = 'usage' AND created_at >= %s
+                    ORDER BY created_at
+                    """,
+                    (since_iso,),
+                )
+                rows = cur.fetchall()
+        return [
+            {
+                "conversation_id": row["conversation_id"],
+                "metadata": decode_json_field(row["metadata_json"], {}),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
     def search_conversations(self, q: str, limit: int = 20) -> list[dict[str, Any]]:
         with self._connect() as conn:
             with _cur(conn) as cur:

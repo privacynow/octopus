@@ -247,3 +247,34 @@ class SQLiteTransportStore:
     def list_user_access(self, data_dir: Path) -> list[dict]:
         conn = self._transport_db(data_dir)
         return work_queue_sqlite_impl.list_user_access(conn)
+
+    def record_usage(
+        self,
+        data_dir: Path,
+        *,
+        chat_id: int,
+        work_item_id: str,
+        provider: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        cost_usd: float,
+    ) -> None:
+        conn = self._transport_db(data_dir)
+        work_queue_sqlite_impl.record_usage(
+            conn,
+            chat_id=chat_id,
+            work_item_id=work_item_id,
+            provider=provider,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=cost_usd,
+        )
+
+    def get_usage_since(
+        self,
+        data_dir: Path,
+        *,
+        since_epoch: float,
+    ) -> list[dict]:
+        conn = self._transport_db(data_dir)
+        return work_queue_sqlite_impl.get_usage_since(conn, since_epoch=since_epoch)

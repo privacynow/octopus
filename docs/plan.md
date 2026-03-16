@@ -4467,147 +4467,42 @@ Add a new rule to the "Repo-Specific Process" section:
 
 ###### B. Reported Token Usage Visibility
 
-**Status: Remaining.**
+**Status: Shipped.**
 
-Current reality: usage visibility is not shipped yet. Both CLIs emit token
-usage data in their structured output, but this codebase does not yet extract,
-record, or surface it.
+Reported usage visibility is now live as an operator-facing surface. The
+runtime extracts best-effort usage metadata from both provider CLIs, records
+completed runs into the transport `usage_log`, and mirrors non-zero reported
+usage into registry timeline events so the Registry UI can aggregate it
+without reaching across into the bot runtime database.
 
-**Verified CLI output (2026-03-16).**
+**Shipped behavior.**
 
-- **Claude CLI v2.1.7** (`--output-format stream-json`): the final `result` event
-  includes `usage.input_tokens`, `usage.output_tokens`,
-  `usage.cache_read_input_tokens`, `usage.cache_creation_input_tokens`, and
-  `total_cost_usd`. The code already captures this entire event at
-  `app/providers/claude.py:234` (`result_data = event`) but never reads the
-  `usage` or `total_cost_usd` keys.
-- **Codex CLI v0.36.0** (`--json`): emits a `token_count` event as
-  `{"id": "0", "msg": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": N, "output_tokens": N, ...}}}}`.
-  The current Codex provider parser silently ignores this event — `_map_event`
-  returns `None` for unrecognized types. Note: the `type` field is inside the
-  `msg` object, not at the top level like other Codex events.
+- `RunResult` now carries `prompt_tokens`, `completion_tokens`, and
+  `cost_usd`.
+- Claude reads `usage.input_tokens`, `usage.output_tokens`, and
+  `total_cost_usd` from the final `result` event when present.
+- Codex reads the nested `msg.type == "token_count"` event when present and
+  falls back to zero when the CLI version does not emit usage.
+- Transport-store parity is enforced for usage persistence:
+  `record_usage(...)` and `get_usage_since(...)` exist in the facade, SQLite
+  store, Postgres store, and contract suite.
+- Every completed run is recorded in transport usage history. A value of `0`
+  means "unreported by the provider," not "zero cost/zero tokens."
+- The registry boundary stays intact: the registry service does not query the
+  bot runtime database. Instead, the bot publishes `usage` timeline events for
+  conversations that have non-zero reported token counts.
+- The Registry UI now exposes `GET /v1/ui/usage`, shows `Reported today:
+  N tokens` in the header, and shows per-conversation reported tokens and cost
+  in conversation detail when available.
 
-Both CLIs provide token counts. Neither provider's token data is part of a
-documented stable contract, so extraction must be best-effort with fallback to
-0 for any missing field. Cost data (`total_cost_usd`) is available from Claude
-only; Codex does not emit cost.
+**Scope limits that remain intentional.**
 
-**Problem.**
-Operators have no visibility into token usage. Both provider CLIs emit token
-counts, but the bot discards them. Operators cannot detect runaway
-conversations or estimate spend from within the product today.
-
-**Fix.**
-Extract token usage from every provider run on a best-effort basis. Record
-every completed run (0 means unreported, not zero usage). Accumulate per
-conversation and display reported totals in the Registry UI. Label as
-"reported" tokens — not "total" — because CLI versions without usage events
-will produce zeros.
-
-**Implementation seams.**
-
-*Layer 1 — RunResult fields.*
-
-- `app/providers/base.py` — extend `RunResult` with:
-  ```python
-  prompt_tokens: int = 0
-  completion_tokens: int = 0
-  cost_usd: float = 0.0   # 0.0 means unknown; Claude fills, Codex does not
-  ```
-  Default 0 means "unreported." No provider is required to fill these.
-
-*Layer 2 — Provider extraction.*
-
-- `app/providers/claude.py` — at the success return (line 412), extract from
-  `result_data`:
-  ```python
-  usage = result_data.get("usage", {})
-  return RunResult(
-      text=final_text,
-      denials=denials,
-      provider_state_updates={"started": True},
-      prompt_tokens=usage.get("input_tokens", 0),
-      completion_tokens=usage.get("output_tokens", 0),
-      cost_usd=float(result_data.get("total_cost_usd", 0.0)),
-  )
-  ```
-  Also extract at the preflight success return (line 458). Field names are
-  `input_tokens` / `output_tokens` (confirmed from live CLI output).
-- `app/providers/codex.py` — in `consume_stdout()` (around line 449), before
-  the `_map_event` call, detect the `token_count` event:
-  ```python
-  msg = event.get("msg") if isinstance(event.get("msg"), dict) else {}
-  if msg.get("type") == "token_count":
-      total = msg.get("info", {}).get("total_token_usage", {})
-      usage_input = total.get("input_tokens", 0)
-      usage_output = total.get("output_tokens", 0)
-  ```
-  Store these in nonlocal variables and pass to `RunResult` at the success
-  return (line 510). The `token_count` event uses a nested `msg` structure
-  (`event["msg"]["type"]`), not the top-level `event["type"]` used by other
-  Codex events — do not route through `_map_event`.
-
-*Layer 3 — Transport store parity.*
-
-- `usage_log` table already exists in both backends (SQLite:
-  `app/work_queue_sqlite_impl.py:72`; Postgres:
-  `app/db/migrations/postgres/0003_user_access_usage_log.sql:13`).
-  No migration needed.
-- Add `record_usage` and `get_usage_since` to:
-  - `app/work_queue.py` (facade + `__all__`)
-  - `app/work_queue_sqlite.py` (store class)
-  - `app/work_queue_sqlite_impl.py` (SQLite impl)
-  - `app/work_queue_pg.py` (Postgres conn-level)
-  - `app/work_queue_postgres.py` (Postgres store wrapper)
-- `record_usage` inserts into `usage_log`. `get_usage_since(since_epoch)`
-  returns rows as dicts with `recorded_at` as a Unix float in both backends
-  (Postgres: `EXTRACT(EPOCH FROM recorded_at)`).
-- Transport facade parity rule: all five files in the same commit.
-
-*Layer 4 — Record at completion.*
-
-- Add `prompt_tokens`, `completion_tokens`, `cost_usd` to
-  `RequestExecutionOutcome` (mirrors how `_maybe_fire_webhook` reads outcome
-  fields at the `worker_dispatch` level).
-- Set them in `execute_request` from the `result` object at every return path
-  that has a `result`.
-- In `worker_dispatch`, after `outcome` is produced and `item["id"]` is
-  available, call `work_queue.record_usage(...)` for **every** completed run
-  (not just runs with tokens > 0 — a row with 0 means "unreported," which is
-  still informative for the operator). Wrap in try/except — never block
-  completion on recording failure.
-- Also publish a `usage` timeline event to the registry (via
-  `publish_timeline_event`) with token counts in metadata. This is the
-  cross-boundary transport — the registry UI reads these, not the bot runtime
-  DB.
-
-*Layer 5 — Registry UI.*
-
-- Add `GET /v1/ui/usage` endpoint that queries `timeline_events WHERE kind =
-  'usage'` for today (UTC midnight), aggregates `prompt_tokens` and
-  `completion_tokens` from `metadata_json`, and returns
-  `{ "daily_total": {...}, "by_conversation": [...] }`.
-- UI header: add `Reported today: N tokens` beside the freshness indicator.
-  Label as "reported" — not "total." Load on bootstrap, refresh every 60 s.
-- Conversation detail: show `Reported tokens: N in / N out` and
-  `Reported cost: $X.XX` (omit cost line if all cost values are 0). Format
-  with `toLocaleString()`.
-
-**Files to change.**
-- `app/providers/base.py` — extend `RunResult`.
-- `app/providers/claude.py` — extract `usage` + `total_cost_usd` from `result_data`.
-- `app/providers/codex.py` — extract `token_count` event from nested `msg` object.
-- `app/work_queue.py`, `app/work_queue_sqlite.py`, `app/work_queue_sqlite_impl.py`, `app/work_queue_pg.py`, `app/work_queue_postgres.py` — usage recording/query seam.
-- `app/telegram_handlers.py` — `RequestExecutionOutcome` fields, `worker_dispatch` recording, usage timeline event publishing.
-- `app/registry_service/app.py` — `/v1/ui/usage` endpoint, UI rendering.
-- `tests/contracts/test_transport_store_contract.py` — contract tests for `record_usage`, `get_usage_since`.
-- `tests/test_registry_service.py` — test `/v1/ui/usage` endpoint.
-
-**What M10B does NOT include.**
-- Per-model pricing table (Claude reports `total_cost_usd` directly; no table needed).
-- Budget alerts or hard spend caps (M11+ if requested).
-- Historical charts or sparklines (plain numbers only in M10).
-- Guaranteed-complete token accounting — CLI versions that do not emit usage events produce 0s, and the UI labels accordingly.
+- This is reported usage visibility, not guaranteed-complete accounting.
+  Missing CLI metadata remains `0`.
+- There is still no pricing table, budget policy, quota enforcement, or
+  historical charting in M10.
+- Claude may report `cost_usd`; Codex currently does not, so cost remains
+  best-effort as well.
 
 ---
 

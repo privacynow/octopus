@@ -1,5 +1,6 @@
 """Tests for the FastAPI registry control-plane service."""
 
+from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 
@@ -436,6 +437,68 @@ def test_ui_export_conversation_returns_markdown_and_missing_conversation_404(mo
     )
     assert missing.status_code == 404
     assert missing.json()["detail"] == "Conversation not found"
+
+
+def test_ui_usage_endpoint_returns_daily_totals(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    _, token = _enroll_and_register(client, "Usage Bot", "usage-bot")
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": "conv-usage-1",
+            "title": "Usage conversation",
+            "origin_surface": "registry",
+            "external_id": "conv-usage-1",
+        },
+    )
+    assert bind.status_code == 200
+    publish = client.post(
+        "/v1/agents/timeline",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-usage-1",
+                    "conversation_id": "conv-usage-1",
+                    "kind": "usage",
+                    "title": "Token usage",
+                    "body": "",
+                    "metadata": {
+                        "prompt_tokens": 120,
+                        "completion_tokens": 30,
+                        "cost_usd": 0.015,
+                        "provider": "claude",
+                    },
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+            ]
+        },
+    )
+    assert publish.status_code == 200
+
+    response = client.get(
+        "/v1/ui/usage",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["daily_total"] == {
+        "prompt_tokens": 120,
+        "completion_tokens": 30,
+        "cost_usd": 0.015,
+    }
+    assert payload["by_conversation"] == [
+        {
+            "conversation_id": "conv-usage-1",
+            "prompt_tokens": 120,
+            "completion_tokens": 30,
+            "cost_usd": 0.015,
+        }
+    ]
 
 
 def test_create_conversation_api_success(monkeypatch, tmp_path: Path):

@@ -145,6 +145,9 @@ class AbstractRegistryStore(Protocol):
     def search_conversations(self, q: str, limit: int = 20) -> list[dict[str, Any]]:
         """Return conversation search hits with highlighted snippets."""
 
+    def get_usage_summary(self, since_iso: str) -> list[dict[str, Any]]:
+        """Return reported usage timeline rows since the provided UTC ISO timestamp."""
+
     def add_conversation_message(self, conversation_id: str, text: str) -> dict[str, Any]:
         """Queue a follow-up surface_input for an existing conversation."""
 

@@ -43,10 +43,12 @@ __all__ = [
     "reclaim_for_replay",
     "record_and_admit_message",
     "record_and_enqueue",
+    "record_usage",
     "record_update",
     "recover_stale_claims",
     "set_user_access",
     "supersede_pending_recovery",
+    "get_usage_since",
     "update_payload",
 ]
 
@@ -169,6 +171,31 @@ def set_user_access(
 
 def list_user_access(data_dir: Path) -> list[dict]:
     return _store().list_user_access(data_dir)
+
+
+def record_usage(
+    data_dir: Path,
+    *,
+    chat_id: int,
+    work_item_id: str,
+    provider: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cost_usd: float,
+) -> None:
+    _store().record_usage(
+        data_dir,
+        chat_id=chat_id,
+        work_item_id=work_item_id,
+        provider=provider,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cost_usd=cost_usd,
+    )
+
+
+def get_usage_since(data_dir: Path, *, since_epoch: float) -> list[dict]:
+    return _store().get_usage_since(data_dir, since_epoch=since_epoch)
 
 
 def get_work_items_for_chat(data_dir: Path, chat_id: int) -> list[dict[str, Any]]:

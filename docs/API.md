@@ -664,6 +664,37 @@ Response:
 }
 ```
 
+### `GET /v1/ui/usage`
+
+Returns reported token usage aggregated from registry `usage` timeline events
+created since the current UTC midnight.
+
+Response:
+
+```json
+{
+  "daily_total": {
+    "prompt_tokens": 120,
+    "completion_tokens": 30,
+    "cost_usd": 0.015
+  },
+  "by_conversation": [
+    {
+      "conversation_id": "conv-usage-1",
+      "prompt_tokens": 120,
+      "completion_tokens": 30,
+      "cost_usd": 0.015
+    }
+  ]
+}
+```
+
+Notes:
+- this is **reported** usage, not guaranteed-complete accounting
+- conversations without usage timeline events are omitted
+- `cost_usd` is best-effort and may remain `0.0` for providers or CLI versions
+  that do not emit cost
+
 ### `GET /v1/ui/search`
 
 Query parameters:

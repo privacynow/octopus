@@ -14,7 +14,9 @@ from app.work_queue import (
     get_work_items_for_chat,
     record_and_admit_message,
     record_and_enqueue,
+    record_usage,
     enqueue_work_item,
+    get_usage_since,
     claim_for_update,
     claim_next,
     claim_next_any,
@@ -320,3 +322,83 @@ def test_user_access_list_covers_all_rows(backend_and_data_dir):
     assert 200 in user_ids
     assert 201 in user_ids
     assert all(row["access"] in ("allowed", "blocked") for row in rows)
+
+
+def test_record_usage_and_retrieve(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    record_usage(
+        data_dir,
+        chat_id=1,
+        work_item_id="work-1",
+        provider="claude",
+        prompt_tokens=123,
+        completion_tokens=45,
+        cost_usd=0.0123,
+    )
+
+    rows = get_usage_since(data_dir, since_epoch=0.0)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["chat_id"] == 1
+    assert row["work_item_id"] == "work-1"
+    assert row["provider"] == "claude"
+    assert row["prompt_tokens"] == 123
+    assert row["completion_tokens"] == 45
+    assert row["cost_usd"] == pytest.approx(0.0123)
+    assert isinstance(row["recorded_at"], float)
+    assert row["recorded_at"] > 0
+
+
+def test_get_usage_since_filters_by_time(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    record_usage(
+        data_dir,
+        chat_id=1,
+        work_item_id="work-a",
+        provider="claude",
+        prompt_tokens=1,
+        completion_tokens=2,
+        cost_usd=0.0,
+    )
+    time.sleep(0.02)
+    threshold = time.time()
+    time.sleep(0.02)
+    record_usage(
+        data_dir,
+        chat_id=2,
+        work_item_id="work-b",
+        provider="codex",
+        prompt_tokens=3,
+        completion_tokens=4,
+        cost_usd=0.0,
+    )
+
+    rows = get_usage_since(data_dir, since_epoch=threshold)
+
+    assert len(rows) == 1
+    assert rows[0]["work_item_id"] == "work-b"
+
+
+def test_record_usage_zero_tokens_persists(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    record_usage(
+        data_dir,
+        chat_id=5,
+        work_item_id="work-zero",
+        provider="codex",
+        prompt_tokens=0,
+        completion_tokens=0,
+        cost_usd=0.0,
+    )
+
+    rows = get_usage_since(data_dir, since_epoch=0.0)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["chat_id"] == 5
+    assert row["work_item_id"] == "work-zero"
+    assert row["provider"] == "codex"
+    assert row["prompt_tokens"] == 0
+    assert row["completion_tokens"] == 0
+    assert row["cost_usd"] == pytest.approx(0.0)

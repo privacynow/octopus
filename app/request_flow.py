@@ -190,7 +190,7 @@ def pending_expired(
 ) -> str | None:
     """Return an expiry message if the pending request is too old, else None."""
     created_at = pending.created_at
-    if not created_at:
+    if created_at in (None, "", 0, 0.0):
         return None
     ttl = max(3600, timeout_seconds)
     age = age_seconds(created_at, now=utc_now())

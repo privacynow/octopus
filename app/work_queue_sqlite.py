@@ -222,3 +222,22 @@ class SQLiteTransportStore:
     def purge_old(self, data_dir: Path, older_than_hours: int = 24) -> int:
         conn = self._transport_db(data_dir)
         return work_queue_sqlite_impl.purge_old(conn, older_than_hours)
+
+    def get_user_access(self, data_dir: Path, user_id: int) -> str | None:
+        conn = self._transport_db(data_dir)
+        return work_queue_sqlite_impl.get_user_access_override(conn, user_id)
+
+    def set_user_access(
+        self,
+        data_dir: Path,
+        user_id: int,
+        access: str,
+        reason: str = "",
+        granted_by: int = 0,
+    ) -> None:
+        conn = self._transport_db(data_dir)
+        work_queue_sqlite_impl.set_user_access(conn, user_id, access, reason, granted_by)
+
+    def list_user_access(self, data_dir: Path) -> list[dict]:
+        conn = self._transport_db(data_dir)
+        return work_queue_sqlite_impl.list_user_access(conn)

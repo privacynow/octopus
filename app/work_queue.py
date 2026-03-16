@@ -33,9 +33,11 @@ __all__ = [
     "get_latest_pending_recovery",
     "get_pending_recovery_for_update",
     "get_update_payload",
+    "get_user_access",
     "get_work_items_for_chat",
     "has_claimed_for_chat",
     "has_queued_or_claimed",
+    "list_user_access",
     "mark_pending_recovery",
     "purge_old",
     "reclaim_for_replay",
@@ -43,6 +45,7 @@ __all__ = [
     "record_and_enqueue",
     "record_update",
     "recover_stale_claims",
+    "set_user_access",
     "supersede_pending_recovery",
     "update_payload",
 ]
@@ -148,6 +151,24 @@ def has_queued_or_claimed(data_dir: Path, chat_id: int) -> bool:
 
 def get_update_payload(data_dir: Path, update_id: int) -> str | None:
     return _store().get_update_payload(data_dir, update_id)
+
+
+def get_user_access(data_dir: Path, user_id: int) -> str | None:
+    return _store().get_user_access(data_dir, user_id)
+
+
+def set_user_access(
+    data_dir: Path,
+    user_id: int,
+    access: str,
+    reason: str = "",
+    granted_by: int = 0,
+) -> None:
+    _store().set_user_access(data_dir, user_id, access, reason, granted_by)
+
+
+def list_user_access(data_dir: Path) -> list[dict]:
+    return _store().list_user_access(data_dir)
 
 
 def get_work_items_for_chat(data_dir: Path, chat_id: int) -> list[dict[str, Any]]:

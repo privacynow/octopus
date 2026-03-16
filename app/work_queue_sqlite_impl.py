@@ -1114,3 +1114,43 @@ def purge_old(conn: sqlite3.Connection, older_than_hours: int = 24) -> int:
         if deleted_items or deleted_updates:
             log.info("Purged %d work items and %d updates", deleted_items, deleted_updates)
         return deleted_items
+
+
+def get_user_access_override(conn: sqlite3.Connection, user_id: int) -> str | None:
+    """Return 'allowed', 'blocked', or None when no override exists for user_id."""
+    row = conn.execute(
+        "SELECT access FROM user_access WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    return row["access"] if row else None
+
+
+def set_user_access(
+    conn: sqlite3.Connection,
+    user_id: int,
+    access: str,
+    reason: str,
+    granted_by: int,
+) -> None:
+    """Upsert a user access override row."""
+    now = datetime.now(timezone.utc).timestamp()
+    conn.execute(
+        """INSERT INTO user_access (user_id, access, reason, granted_by, granted_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET
+               access=excluded.access,
+               reason=excluded.reason,
+               granted_by=excluded.granted_by,
+               granted_at=excluded.granted_at""",
+        (user_id, access, reason, granted_by, now),
+    )
+    conn.commit()
+
+
+def list_user_access(conn: sqlite3.Connection) -> list[dict]:
+    """Return all user access overrides ordered by most recent grant first."""
+    rows = conn.execute(
+        "SELECT user_id, access, reason, granted_by, granted_at "
+        "FROM user_access ORDER BY granted_at DESC"
+    ).fetchall()
+    return [dict(row) for row in rows]

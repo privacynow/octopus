@@ -4,9 +4,14 @@ import re
 import tempfile
 from pathlib import Path
 
+import pytest
+
+from app.agents.bridge import registry_chat_id
+from app.agents.delivery import handle_registry_delivery
 from app.providers.base import RunContext, RunResult
 from app.transport import InboundMessage, InboundUser
 from app.storage import default_session, save_session
+from app import work_queue
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
@@ -186,6 +191,218 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
         await th.worker_dispatch("message", event, item)
 
         assert len(prov.run_calls) == 1
+
+
+async def test_registry_surface_action_retry_skip_clears_pending_retry():
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        chat_id = 12345
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_retry"] = {
+            "request_user_id": 42,
+            "prompt": "Retry this",
+            "image_paths": [],
+            "context_hash": "",
+            "denials": [],
+            "trust_tier": "trusted",
+            "created_at": 0,
+        }
+        save_session(data_dir, chat_id, session)
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "surface_action",
+                "payload": {
+                    "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
+                    "action": "retry_skip",
+                    "payload": {},
+                },
+            },
+        )
+
+        assert outcome == "accepted"
+        session_after = load_session_disk(data_dir, chat_id, prov)
+        assert session_after.get("pending_retry") is None
+
+
+async def test_registry_surface_action_retry_allow_executes_request():
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        chat_id = 12345
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_retry"] = {
+            "request_user_id": 42,
+            "prompt": "Retry this with extra access",
+            "image_paths": [],
+            "context_hash": "",
+            "denials": [{"path": str(data_dir / "extra")}],
+            "trust_tier": "trusted",
+            "created_at": 0,
+        }
+        save_session(data_dir, chat_id, session)
+        prov.run_results = [RunResult(text="retry complete")]
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "surface_action",
+                "payload": {
+                    "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
+                    "action": "retry_allow",
+                    "payload": {},
+                },
+            },
+        )
+
+        assert outcome == "accepted"
+        assert len(prov.run_calls) == 1
+        assert prov.run_calls[0]["prompt"] == "Retry this with extra access"
+        session_after = load_session_disk(data_dir, chat_id, prov)
+        assert session_after.get("pending_retry") is None
+
+
+async def test_registry_surface_action_recovery_discard_discards_pending_recovery():
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+        import app.runtime_backend as runtime_backend
+
+        chat_id = 12345
+        _, item_id = work_queue.record_and_enqueue(
+            data_dir, 600, chat_id, 42, "message",
+            payload='{"text": "old message"}',
+        )
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn.execute(
+            "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
+            (item_id,),
+        )
+        conn.commit()
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "surface_action",
+                "payload": {
+                    "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
+                    "action": "recovery_discard",
+                    "payload": {"update_id": 600},
+                },
+            },
+        )
+
+        row = conn.execute(
+            "SELECT state, error FROM work_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        assert outcome == "accepted"
+        assert row["state"] == "done"
+        assert row["error"] == "discarded"
+
+
+async def test_registry_surface_action_recovery_replay_executes_request():
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+        import app.runtime_backend as runtime_backend
+
+        chat_id = 12345
+        _, item_id = work_queue.record_and_enqueue(
+            data_dir, 601, chat_id, 42, "message",
+            payload='{"user_id": 42, "username": "alice", "chat_id": 12345, "text": "replay me", "attachments": []}',
+        )
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn.execute(
+            "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
+            (item_id,),
+        )
+        conn.commit()
+        prov.run_results = [RunResult(text="replayed")]
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "surface_action",
+                "payload": {
+                    "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
+                    "action": "recovery_replay",
+                    "payload": {"update_id": 601},
+                },
+            },
+        )
+
+        row = conn.execute(
+            "SELECT state FROM work_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        assert outcome == "accepted"
+        assert len(prov.run_calls) == 1
+        assert prov.run_calls[0]["prompt"] == "replay me"
+        assert row["state"] == "done"
+
+
+async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (_, cfg, prov):
+        import app.telegram_handlers as th
+
+        published: list[dict[str, object]] = []
+
+        async def fake_bind_conversation(*args, **kwargs):
+            return None
+
+        async def fake_publish_timeline_event(config, **kwargs):
+            del config
+            published.append(kwargs)
+
+        monkeypatch.setattr(th, "bind_conversation", fake_bind_conversation)
+        monkeypatch.setattr(th, "publish_timeline_event", fake_publish_timeline_event)
+
+        event = InboundMessage(
+            user=InboundUser(id=42, username="registry-ui"),
+            chat_id=registry_chat_id("registry-conv-2"),
+            text="resume later",
+            source="registry",
+            conversation_ref="registry-conv-2",
+        )
+        item = {"id": "registry-item-4", "chat_id": event.chat_id, "update_id": 8123, "dispatch_mode": "recovery"}
+
+        with pytest.raises(work_queue.PendingRecovery):
+            await th.worker_dispatch("message", event, item)
+
+        assert published
+        assert published[0]["kind"] == "recovery_notice"
+        assert published[0]["metadata"]["update_id"] == 8123
 
 
 async def test_cmd_new():

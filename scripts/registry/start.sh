@@ -31,4 +31,6 @@ set +a
 
 docker compose --project-directory . -p telegram-agent-registry -f infra/compose/docker-compose.yml --profile registry up -d registry
 echo "Registry started: http://localhost:${REGISTRY_PORT:-8787}/ui?token=${REGISTRY_UI_TOKEN}"
-echo "Enrollment token is stored in $ENV_FILE."
+enroll_token_display="$(grep -E '^\s*REGISTRY_ENROLL_TOKEN=' "$ENV_FILE" | sed 's/.*=//' | tr -d '\r')"
+echo "Enrollment token: $enroll_token_display"
+echo "(also stored in $ENV_FILE — keep this file private)"

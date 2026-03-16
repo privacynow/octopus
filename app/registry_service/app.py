@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,13 +19,15 @@ class RegistrySettings:
     db_path: Path
     enroll_token: str
     ui_token: str
+    display_name: str
 
 
 def load_settings() -> RegistrySettings:
     db_path = Path(os.environ.get("REGISTRY_DB_PATH", "/tmp/telegram-agent-registry/registry.sqlite3"))
     enroll_token = os.environ.get("REGISTRY_ENROLL_TOKEN", "dev-enroll-token")
     ui_token = os.environ.get("REGISTRY_UI_TOKEN", "dev-ui-token")
-    return RegistrySettings(db_path=db_path, enroll_token=enroll_token, ui_token=ui_token)
+    display_name = os.environ.get("REGISTRY_DISPLAY_NAME", "").strip()
+    return RegistrySettings(db_path=db_path, enroll_token=enroll_token, ui_token=ui_token, display_name=display_name)
 
 
 def get_store() -> RegistryStore:
@@ -215,18 +218,23 @@ def deregister(
 
 @app.get("/ui", response_class=HTMLResponse)
 def ui_shell(token: str = Query(default="")) -> str:
-    if token != load_settings().ui_token:
+    settings = load_settings()
+    if token != settings.ui_token:
         raise HTTPException(status_code=401, detail="Invalid UI token")
+    title_text = f"{settings.display_name} — Agent Registry" if settings.display_name else "Agent Registry"
+    heading_text = settings.display_name or "Agent Registry"
     return f"""<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Agent Registry</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230f766e'/><text x='16' y='22' font-size='18' font-family='sans-serif' fill='white' text-anchor='middle'>A</text></svg>">
+    <title>{html.escape(title_text)}</title>
     <style>
       :root {{
         color-scheme: dark;
-        font-family: "IBM Plex Sans", "Avenir Next", sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                     "Helvetica Neue", Arial, sans-serif;
         background: #0d1321;
         color: #f5f3ee;
         --panel: rgba(12, 18, 33, 0.92);
@@ -266,6 +274,13 @@ def ui_shell(token: str = Query(default="")) -> str:
         color: var(--muted);
         font-size: 0.9rem;
       }}
+      .header-meta {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+        justify-content: flex-end;
+      }}
       main {{
         display: grid;
         grid-template-columns: minmax(280px, 0.95fr) minmax(320px, 1fr) minmax(360px, 1.15fr) minmax(280px, 0.95fr);
@@ -301,15 +316,19 @@ def ui_shell(token: str = Query(default="")) -> str:
         border: 1px solid rgba(255,255,255,0.08);
         border-radius: 14px;
         background: rgba(255,255,255,0.03);
-      }}
-      .item.clickable {{
         cursor: pointer;
-        transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+        transition: background 0.15s;
       }}
-      .item.clickable:hover {{
-        transform: translateY(-1px);
-        border-color: rgba(230, 194, 41, 0.42);
-        background: rgba(255,255,255,0.05);
+      .item:hover {{
+        background: rgba(255, 255, 255, 0.08);
+      }}
+      .item-button {{
+        width: 100%;
+        text-align: left;
+        color: inherit;
+        padding: 12px 14px;
+        border-color: rgba(255,255,255,0.08);
+        background: rgba(255,255,255,0.03);
       }}
       .meta {{
         margin-top: 6px;
@@ -328,38 +347,21 @@ def ui_shell(token: str = Query(default="")) -> str:
         gap: 0.28rem;
         padding: 2px 8px;
         border-radius: 999px;
-        background: rgba(230, 194, 41, 0.18);
-        border: 1px solid rgba(230, 194, 41, 0.35);
+        background: rgba(255,255,255,0.12);
+        border: 1px solid rgba(255,255,255,0.16);
         font-size: 12px;
         color: #f5f3ee;
       }}
-      .state-badge::before {{
-        content: "";
-        width: 0.5rem;
-        height: 0.5rem;
-        border-radius: 999px;
-        background: currentColor;
-      }}
-      .state-connected {{
-        color: var(--green);
-        border-color: rgba(94, 197, 126, 0.35);
-        background: rgba(94, 197, 126, 0.14);
-      }}
-      .state-degraded {{
-        color: var(--amber);
-        border-color: rgba(242, 178, 79, 0.35);
-        background: rgba(242, 178, 79, 0.14);
-      }}
-      .state-standalone {{
-        color: var(--muted-state);
-        border-color: rgba(127, 139, 168, 0.3);
-        background: rgba(127, 139, 168, 0.12);
-      }}
-      .state-offline {{
-        color: var(--red);
-        border-color: rgba(239, 115, 102, 0.35);
-        background: rgba(239, 115, 102, 0.14);
-      }}
+      .badge-connected  {{ background: #22c55e; color: #fff; border-color: transparent; }}
+      .badge-degraded   {{ background: #f59e0b; color: #fff; border-color: transparent; }}
+      .badge-standalone {{ background: #6b7280; color: #fff; border-color: transparent; }}
+      .badge-offline    {{ background: #ef4444; color: #fff; border-color: transparent; }}
+      .badge-pending    {{ background: #3b82f6; color: #fff; border-color: transparent; }}
+      .badge-failed     {{ background: #ef4444; color: #fff; border-color: transparent; }}
+      .badge-running    {{ background: #3b82f6; color: #fff; border-color: transparent; }}
+      .badge-open       {{ background: #22c55e; color: #fff; border-color: transparent; }}
+      .badge-cancelling {{ background: #f59e0b; color: #fff; border-color: transparent; }}
+      .badge-completed  {{ background: #6b7280; color: #fff; border-color: transparent; }}
       .toolbar {{
         display: flex;
         flex-wrap: wrap;
@@ -457,9 +459,39 @@ def ui_shell(token: str = Query(default="")) -> str:
         gap: 0.75rem;
         margin-top: 1rem;
       }}
+      .detail-body {{
+        display: grid;
+        gap: 0.8rem;
+      }}
+      .detail-card {{
+        padding: 0.9rem 1rem;
+        border-radius: 0.9rem;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: rgba(255,255,255,0.03);
+      }}
       .empty {{
         color: var(--muted);
         padding: 1.2rem 0.2rem;
+      }}
+      .empty-state {{
+        padding: 1.5rem;
+        text-align: center;
+        color: #888;
+        font-size: 0.9rem;
+        line-height: 1.6;
+      }}
+      .loading-state {{
+        text-align: center;
+        padding: 2rem;
+        color: #888;
+      }}
+      .error-banner {{
+        background: #fef2f2;
+        border-left: 4px solid #ef4444;
+        color: #991b1b;
+        padding: 0.75rem 1rem;
+        margin-bottom: 1rem;
+        display: none;
       }}
       @media (max-width: 1200px) {{
         main {{
@@ -469,12 +501,17 @@ def ui_shell(token: str = Query(default="")) -> str:
     </style>
   </head>
   <body>
+    <div id="error-banner" class="error-banner" role="alert"></div>
     <header>
       <div>
-        <h1>Agent Registry</h1>
+        <h1>{html.escape(heading_text)}</h1>
         <div class="subtle">Live directory, routed work board, and shared conversation visibility for private bots.</div>
       </div>
-      <div id="ui-status" class="status-line"></div>
+      <div class="header-meta">
+        <span id="refresh-indicator" class="subtle hidden">Refreshing…</span>
+        <span id="last-updated" class="subtle">Waiting for first update</span>
+        <div id="ui-status" class="status-line"></div>
+      </div>
     </header>
     <main>
       <section>
@@ -482,7 +519,7 @@ def ui_shell(token: str = Query(default="")) -> str:
           <h2>Bots</h2>
           <span class="subtle">Live directory</span>
         </div>
-        <div id="bots" class="list"></div>
+        <div id="bots" class="list"><div class="loading-state">Loading…</div></div>
       </section>
       <section>
         <div class="panel-header">
@@ -503,18 +540,20 @@ def ui_shell(token: str = Query(default="")) -> str:
             <button id="cancel-new-conversation-button" class="secondary" type="button">Cancel</button>
           </div>
         </div>
-        <div id="conversations" class="list"></div>
+        <div id="conversations" class="list"><div class="loading-state">Loading…</div></div>
       </section>
       <section>
         <div class="panel-header">
-          <h2>Conversation Detail</h2>
+          <h2 id="detail-panel-title">Conversation Detail</h2>
           <button id="detail-back-button" class="secondary hidden" type="button">Back to list</button>
         </div>
         <div id="conversation-detail-empty" class="empty">Select a conversation to inspect its timeline and send follow-up messages.</div>
         <div id="conversation-detail" class="hidden">
           <div id="conversation-detail-header" class="list"></div>
-          <div id="conversation-detail-timeline" class="timeline"></div>
-          <div class="detail-actions">
+          <div id="conversation-detail-body" class="detail-body">
+            <div id="conversation-detail-timeline" class="timeline"></div>
+          </div>
+          <div id="conversation-detail-actions" class="detail-actions">
             <label>
               New message
               <textarea id="detail-message-text" placeholder="Add a follow-up message to this conversation."></textarea>
@@ -531,12 +570,21 @@ def ui_shell(token: str = Query(default="")) -> str:
           <h2>Routed Tasks</h2>
           <span class="subtle">Delegated work board</span>
         </div>
-        <div id="tasks" class="list"></div>
+        <div id="tasks" class="list"><div class="loading-state">Loading…</div></div>
       </section>
     </main>
     <script>
       const token = {token!r};
+      const EMPTY_STATES = {{
+        bots: "No bots connected yet. Start a bot in registry mode and it will appear here.<br><code>./scripts/app/guided_start.sh</code>",
+        conversations: "No conversations yet. Send a message to your bot in Telegram to start.",
+        tasks: "No routed tasks yet. Delegated tasks appear here in real time.",
+      }};
       let bootstrapData = {{ bots: [], conversations: [], tasks: [] }};
+      let bootstrapLoaded = false;
+      let lastSuccessfulLoad = 0;
+      let currentDetailKind = "";
+      let currentDetailId = "";
       let currentConversationId = "";
       let currentConversationDetail = null;
       const delegationActionState = Object.create(null);
@@ -562,22 +610,58 @@ def ui_shell(token: str = Query(default="")) -> str:
         return date.toLocaleString();
       }}
 
+      function getBadgeClass(status) {{
+        const s = String(status || "").toLowerCase().replace(/[^a-z]/g, "");
+        const map = {{
+          connected: "badge-connected",
+          degraded: "badge-degraded",
+          standalone: "badge-standalone",
+          offline: "badge-offline",
+          pending: "badge-pending",
+          queued: "badge-pending",
+          submitted: "badge-pending",
+          failed: "badge-failed",
+          partialfailed: "badge-failed",
+          cancelled: "badge-failed",
+          running: "badge-running",
+          open: "badge-open",
+          cancelling: "badge-cancelling",
+          completed: "badge-completed",
+        }};
+        return map[s] || "";
+      }}
+
       function stateBadge(item) {{
         const state = item?.connectivity_state || item?.status || "unknown";
-        const klass = ["connected", "degraded", "standalone", "offline"].includes(state)
-          ? `state-${{state}}`
-          : "state-standalone";
-        return `<span class="badge state-badge ${{klass}}">${{escapeHtml(state)}}</span>`;
+        return `<span class="badge ${{getBadgeClass(state)}}">${{escapeHtml(state)}}</span>`;
       }}
 
       function setStatus(message) {{
         document.getElementById("ui-status").textContent = message || "";
       }}
 
-      function renderList(id, items, template) {{
+      function showErrorBanner(message) {{
+        const banner = document.getElementById("error-banner");
+        if (!banner) return;
+        banner.textContent = `⚠ Could not refresh data. Retrying… (${{message}})`;
+        banner.style.display = "block";
+      }}
+
+      function clearErrorBanner() {{
+        const banner = document.getElementById("error-banner");
+        if (banner) banner.style.display = "none";
+      }}
+
+      function setRefreshing(active) {{
+        const indicator = document.getElementById("refresh-indicator");
+        if (!indicator) return;
+        indicator.classList.toggle("hidden", !active);
+      }}
+
+      function renderList(id, items, template, emptyKey) {{
         document.getElementById(id).innerHTML = items.length
           ? items.map(template).join("")
-          : '<div class="item"><div class="meta">Nothing yet.</div></div>';
+          : `<div class="empty-state">${{EMPTY_STATES[emptyKey] || "Nothing yet."}}</div>`;
       }}
 
       function connectedBots() {{
@@ -599,27 +683,44 @@ def ui_shell(token: str = Query(default="")) -> str:
         document.getElementById("start-conversation-button").disabled = bots.length === 0;
       }}
 
+      function showDetailPanel(title) {{
+        document.getElementById("detail-panel-title").textContent = title;
+        document.getElementById("conversation-detail-empty").classList.add("hidden");
+        document.getElementById("conversation-detail").classList.remove("hidden");
+        document.getElementById("detail-back-button").classList.remove("hidden");
+      }}
+
+      function setConversationActionsVisible(visible) {{
+        document.getElementById("conversation-detail-actions").classList.toggle("hidden", !visible);
+      }}
+
       function renderBots(items) {{
         renderList("bots", items, item => `
-          <div class="item">
+          <button type="button" class="item item-button" data-bot-id="${{escapeHtml(item.agent_id)}}">
             <strong>${{escapeHtml(item.display_name)}}</strong>
             <div class="meta meta-row">${{stateBadge(item)}}<span>${{escapeHtml(item.role || "unassigned role")}}</span></div>
-            <div class="meta">${{escapeHtml((item.skills || []).join(", ") || "no skills declared")}}</div>
-          </div>
-        `);
+            <div class="meta">${{escapeHtml(item.description || (item.skills || []).join(", ") || "no skills declared")}}</div>
+          </button>
+        `, "bots");
+        document.querySelectorAll("[data-bot-id]").forEach(node => {{
+          node.addEventListener("click", () => {{
+            const bot = (bootstrapData.bots || []).find(item => item.agent_id === node.dataset.botId);
+            if (bot) renderBotDetail(bot);
+          }});
+        }});
       }}
 
       function renderConversations(items) {{
         renderList("conversations", items, item => `
-          <div class="item clickable" data-conversation-id="${{escapeHtml(item.conversation_id)}}">
+          <button type="button" class="item item-button" data-conversation-id="${{escapeHtml(item.conversation_id)}}">
             <strong>${{escapeHtml(item.title || item.conversation_id)}}</strong>
             <div class="meta">${{escapeHtml(item.target_display_name || item.target_agent_id)}}</div>
             <div class="meta meta-row">
-              <span class="badge">${{escapeHtml(item.status || "open")}}</span>
+              <span class="badge ${{getBadgeClass(item.status || "open")}}">${{escapeHtml(item.status || "open")}}</span>
               <span>${{escapeHtml(String(item.timeline_event_count ?? 0))}} event(s)</span>
             </div>
-          </div>
-        `);
+          </button>
+        `, "conversations");
         document.querySelectorAll("[data-conversation-id]").forEach(node => {{
           node.addEventListener("click", () => loadConversationDetail(node.dataset.conversationId));
         }});
@@ -627,23 +728,85 @@ def ui_shell(token: str = Query(default="")) -> str:
 
       function renderTasks(items) {{
         renderList("tasks", items, item => `
-          <div class="item">
+          <button type="button" class="item item-button" data-task-id="${{escapeHtml(item.routed_task_id)}}">
             <strong>${{escapeHtml(item.title)}}</strong>
             <div class="meta">${{escapeHtml(item.origin_display_name || item.origin_agent_id)}} → ${{escapeHtml(item.target_display_name || item.target_agent_id)}}</div>
-            <div class="meta meta-row"><span class="badge">${{escapeHtml(item.status || "queued")}}</span><span>${{escapeHtml(item.summary || "")}}</span></div>
+            <div class="meta meta-row"><span class="badge ${{getBadgeClass(item.status || "queued")}}">${{escapeHtml(item.status || "queued")}}</span><span>${{escapeHtml(item.summary || "")}}</span></div>
+          </button>
+        `, "tasks");
+        document.querySelectorAll("[data-task-id]").forEach(node => {{
+          node.addEventListener("click", () => {{
+            const task = (bootstrapData.tasks || []).find(item => item.routed_task_id === node.dataset.taskId);
+            if (task) renderTaskDetail(task);
+          }});
+        }});
+      }}
+
+      function renderBotDetail(bot) {{
+        currentDetailKind = "bot";
+        currentDetailId = bot.agent_id || "";
+        currentConversationId = "";
+        currentConversationDetail = null;
+        showDetailPanel("Bot Detail");
+        setConversationActionsVisible(false);
+        document.getElementById("conversation-detail-header").innerHTML = `
+          <div class="detail-card">
+            <strong>${{escapeHtml(bot.display_name || bot.agent_id)}}</strong>
+            <div class="meta meta-row">
+              ${{stateBadge(bot)}}
+              <span>${{escapeHtml(bot.role || "unassigned role")}}</span>
+            </div>
           </div>
-        `);
+        `;
+        document.getElementById("conversation-detail-body").innerHTML = `
+          <div class="detail-card">
+            <div class="meta"><strong>Description:</strong> ${{escapeHtml(bot.description || "No description provided.")}}</div>
+            <div class="meta"><strong>Skills:</strong> ${{escapeHtml((bot.skills || []).join(", ") || "No skills declared")}}</div>
+            <div class="meta"><strong>Tags:</strong> ${{escapeHtml((bot.tags || []).join(", ") || "No tags declared")}}</div>
+            <div class="meta"><strong>Version:</strong> ${{escapeHtml(bot.version || "unknown")}}</div>
+            <div class="meta"><strong>Last heartbeat:</strong> ${{escapeHtml(formatTime(bot.last_heartbeat_at) || "unknown")}}</div>
+          </div>
+        `;
+      }}
+
+      function renderTaskDetail(task) {{
+        currentDetailKind = "task";
+        currentDetailId = task.routed_task_id || "";
+        currentConversationId = "";
+        currentConversationDetail = null;
+        showDetailPanel("Routed Task Detail");
+        setConversationActionsVisible(false);
+        document.getElementById("conversation-detail-header").innerHTML = `
+          <div class="detail-card">
+            <strong>${{escapeHtml(task.title || task.routed_task_id)}}</strong>
+            <div class="meta meta-row">
+              <span class="badge ${{getBadgeClass(task.status || "queued")}}">${{escapeHtml(task.status || "queued")}}</span>
+              <span>${{escapeHtml(task.origin_display_name || task.origin_agent_id)}} → ${{escapeHtml(task.target_display_name || task.target_agent_id)}}</span>
+            </div>
+          </div>
+        `;
+        document.getElementById("conversation-detail-body").innerHTML = `
+          <div class="detail-card">
+            <div class="meta"><strong>Summary:</strong> ${{escapeHtml(task.summary || "No summary yet.")}}</div>
+            <div class="meta"><strong>Parent conversation:</strong> ${{escapeHtml(task.parent_conversation_id || "unknown")}}</div>
+            <div class="meta"><strong>Updated:</strong> ${{escapeHtml(formatTime(task.updated_at) || "unknown")}}</div>
+          </div>
+        `;
       }}
 
       function clearConversationDetail() {{
+        currentDetailKind = "";
+        currentDetailId = "";
         currentConversationId = "";
         currentConversationDetail = null;
         document.getElementById("conversation-detail").classList.add("hidden");
         document.getElementById("conversation-detail-empty").classList.remove("hidden");
         document.getElementById("detail-back-button").classList.add("hidden");
+        document.getElementById("detail-panel-title").textContent = "Conversation Detail";
         document.getElementById("conversation-detail-header").innerHTML = "";
-        document.getElementById("conversation-detail-timeline").innerHTML = "";
+        document.getElementById("conversation-detail-body").innerHTML = '<div id="conversation-detail-timeline" class="timeline"></div>';
         document.getElementById("detail-message-text").value = "";
+        setConversationActionsVisible(false);
       }}
 
       function canRenderDelegationActions(conversation, event, index, events) {{
@@ -669,26 +832,28 @@ def ui_shell(token: str = Query(default="")) -> str:
       }}
 
       function renderConversationDetail(conversation, events) {{
+        currentDetailKind = "conversation";
+        currentDetailId = conversation.conversation_id || "";
+        currentConversationId = conversation.conversation_id || "";
         currentConversationDetail = {{ conversation, events }};
-        document.getElementById("conversation-detail-empty").classList.add("hidden");
-        document.getElementById("conversation-detail").classList.remove("hidden");
-        document.getElementById("detail-back-button").classList.remove("hidden");
+        showDetailPanel("Conversation Detail");
+        setConversationActionsVisible(true);
         document.getElementById("conversation-detail-header").innerHTML = `
-          <div class="item">
+          <div class="detail-card">
             <strong>${{escapeHtml(conversation.title || conversation.conversation_id)}}</strong>
             <div class="meta">${{escapeHtml(conversation.target_display_name || conversation.target_agent_id)}}</div>
             <div class="meta meta-row">
-              <span class="badge">${{escapeHtml(conversation.status || "open")}}</span>
+              <span class="badge ${{getBadgeClass(conversation.status || "open")}}">${{escapeHtml(conversation.status || "open")}}</span>
               <span>${{escapeHtml(String(conversation.timeline_event_count ?? events.length))}} event(s)</span>
             </div>
             <div class="meta">Created ${{escapeHtml(formatTime(conversation.created_at))}}</div>
           </div>
         `;
-        document.getElementById("conversation-detail-timeline").innerHTML = events.length
-          ? events.map((event, index) => `
+        document.getElementById("conversation-detail-body").innerHTML = events.length
+          ? `<div id="conversation-detail-timeline" class="timeline">${{events.map((event, index) => `
               <div class="timeline-item">
                 <div class="meta meta-row">
-                  <span class="badge">${{escapeHtml(event.kind || "timeline")}}</span>
+                  <span class="badge ${{getBadgeClass(event.kind || "timeline")}}">${{escapeHtml(event.kind || "timeline")}}</span>
                   <span>${{escapeHtml(formatTime(event.created_at))}}</span>
                 </div>
                 <strong>${{escapeHtml(event.title || "Update")}}</strong>
@@ -699,8 +864,8 @@ def ui_shell(token: str = Query(default="")) -> str:
                     : ""
                 }}
               </div>
-            `).join("")
-          : '<div class="empty">No timeline events yet.</div>';
+            `).join("")}}</div>`
+          : '<div class="empty-state">No timeline events yet.</div>';
         document.querySelectorAll("[data-delegation-action]").forEach(node => {{
           node.addEventListener("click", () => submitDelegationAction(
             node.dataset.conversationId,
@@ -728,25 +893,62 @@ def ui_shell(token: str = Query(default="")) -> str:
         }}
       }}
 
-      async function loadBootstrap() {{
-        const response = await fetch('/v1/ui/bootstrap', {{
-          headers: authHeaders(),
-        }});
-        if (!response.ok) {{
-          document.body.innerHTML = `<main><section><h2>Registry unavailable</h2><pre>${{await response.text()}}</pre></section></main>`;
+      async function refreshCurrentDetail() {{
+        if (!currentDetailKind || !currentDetailId) return;
+        if (currentDetailKind === "conversation") {{
+          const exists = (bootstrapData.conversations || []).some(item => item.conversation_id === currentDetailId);
+          if (!exists) {{
+            clearConversationDetail();
+            return;
+          }}
+          await loadConversationDetail(currentDetailId);
           return;
         }}
-        bootstrapData = await response.json();
-        renderBots(bootstrapData.bots || []);
-        renderConversations(bootstrapData.conversations || []);
-        renderTasks(bootstrapData.tasks || []);
-        if (currentConversationId) {{
-          const exists = (bootstrapData.conversations || []).some(item => item.conversation_id === currentConversationId);
-          if (exists) {{
-            await loadConversationDetail(currentConversationId);
-          }} else {{
+        if (currentDetailKind === "bot") {{
+          const bot = (bootstrapData.bots || []).find(item => item.agent_id === currentDetailId);
+          if (!bot) {{
             clearConversationDetail();
+            return;
           }}
+          renderBotDetail(bot);
+          return;
+        }}
+        if (currentDetailKind === "task") {{
+          const task = (bootstrapData.tasks || []).find(item => item.routed_task_id === currentDetailId);
+          if (!task) {{
+            clearConversationDetail();
+            return;
+          }}
+          renderTaskDetail(task);
+        }}
+      }}
+
+      async function loadBootstrap() {{
+        if (bootstrapLoaded) {{
+          setRefreshing(true);
+        }}
+        try {{
+          const response = await fetch('/v1/ui/bootstrap', {{
+            headers: authHeaders(),
+          }});
+          if (!response.ok) {{
+            throw new Error(await response.text() || "Registry unavailable.");
+          }}
+          bootstrapData = await response.json();
+          clearErrorBanner();
+          setStatus("");
+          lastSuccessfulLoad = Date.now();
+          bootstrapLoaded = true;
+          renderBots(bootstrapData.bots || []);
+          renderConversations(bootstrapData.conversations || []);
+          renderTasks(bootstrapData.tasks || []);
+          await refreshCurrentDetail();
+        }} catch (error) {{
+          const message = error.message || "Failed to refresh registry UI.";
+          showErrorBanner(message);
+          setStatus(message);
+        }} finally {{
+          setRefreshing(false);
         }}
       }}
 
@@ -832,6 +1034,9 @@ def ui_shell(token: str = Query(default="")) -> str:
         }}
         delete delegationActionState[eventId];
         delete delegationActionError[eventId];
+        if (currentConversationDetail && currentConversationDetail.conversation.conversation_id === conversationId) {{
+          renderConversationDetail(currentConversationDetail.conversation, currentConversationDetail.events);
+        }}
         await loadBootstrap();
       }}
 
@@ -842,9 +1047,26 @@ def ui_shell(token: str = Query(default="")) -> str:
       document.getElementById("detail-cancel-button").addEventListener("click", cancelConversation);
       document.getElementById("detail-back-button").addEventListener("click", clearConversationDetail);
 
-      loadBootstrap().catch(error => setStatus(error.message || "Failed to load registry UI."));
       setInterval(() => {{
-        loadBootstrap().catch(error => setStatus(error.message || "Failed to refresh registry UI."));
+        if (!lastSuccessfulLoad) return;
+        const age = Math.floor((Date.now() - lastSuccessfulLoad) / 1000);
+        const el = document.getElementById("last-updated");
+        if (!el) return;
+        el.textContent = age < 5 ? "Just updated" : `Updated ${{age}}s ago`;
+        el.style.color = age > 60 ? "#ef4444" : age > 30 ? "#f59e0b" : "#6b7280";
+      }}, 1000);
+
+      loadBootstrap().catch(error => {{
+        const message = error.message || "Failed to load registry UI.";
+        showErrorBanner(message);
+        setStatus(message);
+      }});
+      setInterval(() => {{
+        loadBootstrap().catch(error => {{
+          const message = error.message || "Failed to refresh registry UI.";
+          showErrorBanner(message);
+          setStatus(message);
+        }});
       }}, 5000);
     </script>
   </body>

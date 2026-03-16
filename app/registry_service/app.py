@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import hmac
 import html
+import logging
 import os
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi import Depends, FastAPI, Form, Header, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 
 from app.registry_service.store import RegistryStore
+
+log = logging.getLogger(__name__)
+_SESSION_TTL_SECONDS = 24 * 60 * 60
+_WARNED_MISSING_UI_TOKEN = False
 
 
 @dataclass(frozen=True)
@@ -25,8 +33,12 @@ class RegistrySettings:
 def load_settings() -> RegistrySettings:
     db_path = Path(os.environ.get("REGISTRY_DB_PATH", "/tmp/telegram-agent-registry/registry.sqlite3"))
     enroll_token = os.environ.get("REGISTRY_ENROLL_TOKEN", "dev-enroll-token")
-    ui_token = os.environ.get("REGISTRY_UI_TOKEN", "dev-ui-token")
+    ui_token = os.environ.get("REGISTRY_UI_TOKEN", "").strip()
     display_name = os.environ.get("REGISTRY_DISPLAY_NAME", "").strip()
+    global _WARNED_MISSING_UI_TOKEN
+    if not ui_token and not _WARNED_MISSING_UI_TOKEN:
+        log.warning("REGISTRY_UI_TOKEN is not set — Registry UI is running unauthenticated.")
+        _WARNED_MISSING_UI_TOKEN = True
     return RegistrySettings(db_path=db_path, enroll_token=enroll_token, ui_token=ui_token, display_name=display_name)
 
 
@@ -47,14 +59,128 @@ def require_ui_token(
     authorization: str | None = Header(default=None),
 ) -> None:
     settings = load_settings()
+    if not settings.ui_token:
+        return
     token = ""
     if authorization and authorization.startswith("Bearer "):
         token = authorization.removeprefix("Bearer ").strip()
-    if token != settings.ui_token:
+    if not hmac.compare_digest(token, settings.ui_token):
         raise HTTPException(status_code=401, detail="Invalid UI token")
 
 
+def _session_is_valid(request: Request) -> bool:
+    settings = load_settings()
+    if not settings.ui_token:
+        return True
+    return request.session.get("ui_authenticated") is True
+
+
+def _require_session(request: Request) -> None:
+    if _session_is_valid(request):
+        return
+    raise HTTPException(status_code=302, headers={"Location": "/ui/login"})
+
+
+def _login_html(settings: RegistrySettings, *, error: str = "") -> str:
+    heading = settings.display_name or "Agent Registry"
+    error_html = (
+        f'<div class="error">{html.escape(error)}</div>'
+        if error else
+        ""
+    )
+    return f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{html.escape(heading)} — Login</title>
+    <style>
+      :root {{
+        color-scheme: dark;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                     "Helvetica Neue", Arial, sans-serif;
+      }}
+      * {{ box-sizing: border-box; }}
+      body {{
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at top right, rgba(15, 118, 110, 0.22), transparent 30%),
+          linear-gradient(180deg, #0f172a 0%, #111827 100%);
+        color: #e5e7eb;
+      }}
+      .card {{
+        width: min(320px, calc(100vw - 2rem));
+        padding: 1.5rem;
+        border-radius: 1rem;
+        background: #1e293b;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+      }}
+      h1 {{
+        margin: 0 0 0.4rem;
+        font-size: 1.2rem;
+      }}
+      p {{
+        margin: 0 0 1rem;
+        color: #cbd5e1;
+        font-size: 0.92rem;
+      }}
+      label {{
+        display: block;
+        margin-bottom: 0.45rem;
+        color: #cbd5e1;
+        font-size: 0.92rem;
+      }}
+      input {{
+        width: 100%;
+        padding: 0.8rem 0.9rem;
+        border-radius: 0.8rem;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        background: #0f172a;
+        color: #f8fafc;
+        margin-bottom: 0.9rem;
+      }}
+      button {{
+        width: 100%;
+        border: 0;
+        border-radius: 0.8rem;
+        padding: 0.85rem 1rem;
+        background: #0f766e;
+        color: #f8fafc;
+        font: inherit;
+        cursor: pointer;
+      }}
+      .error {{
+        margin-bottom: 0.9rem;
+        color: #fca5a5;
+        font-size: 0.9rem;
+      }}
+    </style>
+  </head>
+  <body>
+    <form class="card" method="post" action="/ui/login">
+      <h1>{html.escape(heading)}</h1>
+      <p>Enter the Registry UI password to continue.</p>
+      {error_html}
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+      <button type="submit">Log in</button>
+    </form>
+  </body>
+</html>"""
+
+
 app = FastAPI(title="Telegram Agent Registry", version="0.1.0")
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ.get("REGISTRY_SESSION_SECRET", secrets.token_hex(32)),
+    session_cookie="registry_session",
+    same_site="strict",
+    max_age=_SESSION_TTL_SECONDS,
+)
 
 
 @app.get("/healthz")
@@ -65,7 +191,8 @@ def healthz(store: RegistryStore = Depends(get_store)) -> dict[str, Any]:
 @app.post("/v1/agents/enroll")
 def enroll(payload: dict[str, Any], store: RegistryStore = Depends(get_store)) -> dict[str, Any]:
     settings = load_settings()
-    if payload.get("enrollment_token") != settings.enroll_token:
+    enroll_tok = payload.get("enrollment_token") or ""
+    if not hmac.compare_digest(enroll_tok, settings.enroll_token):
         raise HTTPException(status_code=401, detail="Invalid enrollment token")
     agent_card = payload.get("agent_card") or {}
     return store.enroll(agent_card)
@@ -216,13 +343,44 @@ def deregister(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
-@app.get("/ui", response_class=HTMLResponse)
-def ui_shell(token: str = Query(default="")) -> str:
+@app.get("/ui/login", response_class=HTMLResponse)
+def ui_login_page(request: Request):
     settings = load_settings()
-    if token != settings.ui_token:
-        raise HTTPException(status_code=401, detail="Invalid UI token")
+    if _session_is_valid(request):
+        return RedirectResponse("/ui", status_code=303)
+    if not settings.ui_token:
+        return RedirectResponse("/ui", status_code=303)
+    return HTMLResponse(_login_html(settings))
+
+
+@app.post("/ui/login")
+async def ui_login(request: Request, password: str = Form(default="")):
+    settings = load_settings()
+    if _session_is_valid(request):
+        return RedirectResponse("/ui", status_code=303)
+    if settings.ui_token and not hmac.compare_digest(password, settings.ui_token):
+        return HTMLResponse(_login_html(settings, error="Incorrect password."))
+    request.session["ui_authenticated"] = True
+    return RedirectResponse("/ui", status_code=303)
+
+
+@app.get("/ui/logout")
+def ui_logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/ui/login", status_code=303)
+
+
+@app.get("/ui", response_class=HTMLResponse)
+def ui_shell(request: Request) -> str:
+    _require_session(request)
+    settings = load_settings()
     title_text = f"{settings.display_name} — Agent Registry" if settings.display_name else "Agent Registry"
     heading_text = settings.display_name or "Agent Registry"
+    logout_link = (
+        '<a href="/ui/logout" class="nav-link">Logout</a>'
+        if settings.ui_token else
+        ""
+    )
     return f"""<!doctype html>
 <html lang="en">
   <head>
@@ -280,6 +438,14 @@ def ui_shell(token: str = Query(default="")) -> str:
         gap: 0.75rem;
         align-items: center;
         justify-content: flex-end;
+      }}
+      .nav-link {{
+        color: var(--muted);
+        text-decoration: none;
+        font-size: 0.95rem;
+      }}
+      .nav-link:hover {{
+        color: #f5f3ee;
       }}
       main {{
         display: grid;
@@ -511,6 +677,7 @@ def ui_shell(token: str = Query(default="")) -> str:
         <span id="refresh-indicator" class="subtle hidden">Refreshing…</span>
         <span id="last-updated" class="subtle">Waiting for first update</span>
         <div id="ui-status" class="status-line"></div>
+        {logout_link}
       </div>
     </header>
     <main>
@@ -574,7 +741,7 @@ def ui_shell(token: str = Query(default="")) -> str:
       </section>
     </main>
     <script>
-      const token = {token!r};
+      const token = {settings.ui_token!r};
       const EMPTY_STATES = {{
         bots: "No bots connected yet. Start a bot in registry mode and it will appear here.<br><code>./scripts/app/guided_start.sh</code>",
         conversations: "No conversations yet. Send a message to your bot in Telegram to start.",

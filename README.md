@@ -29,48 +29,50 @@ private bot with no registry.
 
 ## First-Time Setup
 
-### Create your Telegram bot token
+### Step 1 — Create your Telegram bot token
 
 1. Open Telegram, search for **@BotFather**, and tap Start
 2. Send: `/newbot`
 3. Follow the prompts and choose a display name plus a username ending in `bot`
 4. BotFather replies with your token. Copy it — you will need it during setup.
 
-1. **Clone the repo**
+### Step 2 — Clone the repo
 
-   ```bash
-   git clone git@github.com:privacynow/octopus.git ~/telegram-agent-bot
-   cd ~/telegram-agent-bot
-   ```
+```bash
+git clone git@github.com:privacynow/octopus.git ~/telegram-agent-bot
+cd ~/telegram-agent-bot
+```
 
-2. **Run the guided setup**
+### Step 3 — Run the guided setup
 
-   ```bash
-   ./scripts/app/guided_start.sh
-   ```
+```bash
+./scripts/app/guided_start.sh
+```
 
-   The script creates the bot config if needed, asks for the Telegram token and
-   the rest of the normal settings, walks you through provider login if needed,
-   and starts the bot.
+The script asks for your bot token and a few settings, then walks you through
+provider login and starts the bot. When prompted for **Setup mode**, choose
+`quick` to accept safe defaults (you can edit `.env.bot` afterwards for
+advanced settings like role, tags, and description). Choose `full` to set
+every option interactively.
 
-   If you choose registry mode, the local registry starts automatically.
-   For manual registry management, see [Manual registry start](#manual-registry-start).
+If you choose registry mode, the local registry starts automatically.
+For manual registry management, see [Manual registry start](#manual-registry-start).
 
-   For a second or third bot from the same checkout, give it an instance name:
+For a second or third bot from the same checkout, give it an instance name:
 
-   ```bash
-   ./scripts/app/guided_start.sh reviewer
-   ./scripts/app/guided_start.sh developer
-   ```
+```bash
+./scripts/app/guided_start.sh reviewer
+./scripts/app/guided_start.sh developer
+```
 
-   Those create `.env.bot.reviewer`, `.env.bot.developer`, and separate Docker
-   projects automatically. The default no-argument path still uses `.env.bot`.
+Those create `.env.bot.reviewer`, `.env.bot.developer`, and separate Docker
+projects automatically. The default no-argument path still uses `.env.bot`.
 
-3. **Message the bot in Telegram**
+### Step 4 — Message the bot in Telegram
 
-   Start with `/start`, then send a normal request such as:
+Start with `/start`, then send a normal request such as:
 
-   > Review this diff and suggest a safer refactor.
+> Review this diff and suggest a safer refactor.
 
 ### Verify it's working
 
@@ -81,15 +83,24 @@ Open Telegram, find your bot by its username, and send:
 You should receive a response within a few seconds listing the files in the
 bot's working directory.
 
-If you are using registry mode, open [http://localhost:8787](http://localhost:8787)
-to see the bot listed as connected and the conversation appearing in real time.
+If you are using registry mode, the Registry UI URL is printed at the end of
+`guided_start.sh` — open it, log in with `REGISTRY_UI_TOKEN` from
+`.env.registry`, and you will see the bot listed as connected with the
+conversation appearing in real time.
 
 ### Registry UI
 
-When running in registry mode, the Registry UI is available at
-`http://localhost:8787`.
+When running in registry mode, the Registry UI URL is printed in the success
+box at the end of setup. It looks like:
 
-![Registry UI screenshot](/Users/tinker/output/bots/telegram-agent-bot/docs/registry-ui-screenshot.png)
+```
+http://localhost:8787/ui
+```
+
+Log in with `REGISTRY_UI_TOKEN` from `.env.registry`. The bare
+`http://localhost:8787` root is not the UI.
+
+![Registry UI screenshot](docs/registry-ui-screenshot.png)
 
 The UI shows three panels:
 

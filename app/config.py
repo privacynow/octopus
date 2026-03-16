@@ -5,6 +5,8 @@ import re
 import shutil
 import sys
 from dataclasses import dataclass
+from enum import StrEnum
+from urllib.parse import urlparse
 
 from app.session_state import ProjectBinding, field
 from pathlib import Path
@@ -52,6 +54,41 @@ def parse_allowed_users(raw: str) -> tuple[set[int], set[str]]:
         else:
             usernames.add(normalized.lower())
     return ids, usernames
+
+
+class ProviderName(StrEnum):
+    CLAUDE = "claude"
+    CODEX = "codex"
+
+
+class BotMode(StrEnum):
+    POLL = "poll"
+    WEBHOOK = "webhook"
+
+
+class AgentMode(StrEnum):
+    REGISTRY = "registry"
+    STANDALONE = "standalone"
+
+
+class RuntimeMode(StrEnum):
+    LOCAL = "local"
+    SHARED = "shared"
+
+
+class FilePolicy(StrEnum):
+    INSPECT = "inspect"
+    EDIT = "edit"
+
+
+def _has_valid_http_url(raw: str) -> bool:
+    parsed = urlparse(raw)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _has_valid_postgres_url(raw: str) -> bool:
+    parsed = urlparse(raw)
+    return (parsed.scheme == "postgresql" or parsed.scheme.startswith("postgresql+")) and bool(parsed.netloc)
 
 
 @dataclass(frozen=True)
@@ -438,7 +475,7 @@ def validate_config(config: BotConfig) -> list[str]:
             "TELEGRAM_BOT_TOKEN is not set. Get a token from @BotFather and set it in .env.bot (or your env file)."
         )
 
-    if config.provider_name not in {"claude", "codex"}:
+    if config.provider_name not in ProviderName._value2member_map_:
         errors.append(
             f"BOT_PROVIDER must be 'claude' or 'codex', got '{config.provider_name}'. "
             "Set BOT_PROVIDER=claude or BOT_PROVIDER=codex in .env.bot."
@@ -472,48 +509,42 @@ def validate_config(config: BotConfig) -> list[str]:
     if config.codex_full_auto and config.codex_dangerous:
         errors.append("CODEX_FULL_AUTO and CODEX_DANGEROUS cannot both be set")
 
-    if config.bot_mode not in {"poll", "webhook"}:
+    if config.bot_mode not in BotMode._value2member_map_:
         errors.append(
             f"BOT_MODE must be 'poll' or 'webhook', got '{config.bot_mode}'"
         )
 
-    if config.agent_mode not in {"registry", "standalone"}:
+    if config.agent_mode not in AgentMode._value2member_map_:
         errors.append(
             f"BOT_AGENT_MODE must be 'registry' or 'standalone', got '{config.agent_mode}'"
         )
 
-    if config.agent_registry_url and not (
-        config.agent_registry_url.startswith("http://")
-        or config.agent_registry_url.startswith("https://")
-    ):
+    if config.agent_registry_url and not _has_valid_http_url(config.agent_registry_url):
         errors.append(
-            "BOT_AGENT_REGISTRY_URL must start with http:// or https:// when set"
+            "BOT_AGENT_REGISTRY_URL must be a valid http:// or https:// URL when set"
         )
 
     if config.agent_poll_interval_seconds <= 0:
         errors.append("BOT_AGENT_POLL_INTERVAL_SECONDS must be greater than 0")
 
-    if config.runtime_mode == "shared":
+    if config.runtime_mode == RuntimeMode.SHARED.value:
         errors.append(
             "BOT_RUNTIME_MODE=shared is not supported until Phase 18. "
             "Use BOT_RUNTIME_MODE=local (default) for Local Runtime."
         )
-    elif config.runtime_mode != "local":
+    elif config.runtime_mode != RuntimeMode.LOCAL.value:
         errors.append(
             f"BOT_RUNTIME_MODE must be 'local' or 'shared', got '{config.runtime_mode}'. "
             "Only 'local' is supported in Phase 13."
         )
 
-    if config.bot_mode == "webhook":
+    if config.bot_mode == BotMode.WEBHOOK.value:
         if not config.webhook_url:
             errors.append("BOT_WEBHOOK_URL is required when BOT_MODE=webhook")
 
-    if config.database_url and not (
-        config.database_url.startswith("postgresql://")
-        or config.database_url.startswith("postgresql+")
-    ):
+    if config.database_url and not _has_valid_postgres_url(config.database_url):
         errors.append(
-            "BOT_DATABASE_URL must be a postgresql:// connection string when set"
+            "BOT_DATABASE_URL must be a valid postgresql:// connection string when set"
         )
 
     seen_project_names: set[str] = set()
@@ -523,7 +554,7 @@ def validate_config(config: BotConfig) -> list[str]:
         seen_project_names.add(proj.name)
         if not Path(proj.root_dir).is_dir():
             errors.append(f"Project '{proj.name}' root dir does not exist: {proj.root_dir}")
-        if proj.file_policy and proj.file_policy not in ("inspect", "edit"):
+        if proj.file_policy and proj.file_policy not in FilePolicy._value2member_map_:
             errors.append(f"Project '{proj.name}' has invalid file_policy: '{proj.file_policy}'")
         if proj.model_profile:
             if not config.model_profiles:

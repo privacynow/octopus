@@ -39,6 +39,7 @@ from app.work_queue_sqlite_impl import (
     _assert_no_invalid_rows_for_chat,
     _claim_queued_item,
     _load_work_item_by_id,
+    _run_migrations,
     _validate_work_item_row,
     _write_tx,
 )
@@ -1487,6 +1488,74 @@ def test_forged_v2_db_wrong_partial_predicate_rejected(data_dir):
         _transport_db(data_dir)
     msg = str(exc_info.value)
     assert "Unsupported" in msg or "schema" in msg.lower()
+
+
+def test_run_migrations_is_idempotent_and_adds_m10_tables(data_dir):
+    """Legacy transport DB migrates to current schema and can run migrations twice safely."""
+    db_path = data_dir / "transport.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '3')")
+    conn.execute(
+        "CREATE TABLE updates (update_id INTEGER PRIMARY KEY, chat_id INT, user_id INT, kind TEXT, "
+        "payload TEXT DEFAULT '{}', received_at TEXT, state TEXT DEFAULT 'received')"
+    )
+    conn.execute(
+        "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT, "
+        "dispatch_mode TEXT NOT NULL DEFAULT 'fresh')"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX idx_one_claimed_per_chat ON work_items(chat_id) WHERE state = 'claimed'"
+    )
+    conn.commit()
+
+    _run_migrations(conn)
+    _run_migrations(conn)
+
+    version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+    assert version == str(_SCHEMA_VERSION)
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+    assert "usage_log" in tables
+    assert "user_access" in tables
+    conn.close()
+
+
+def test_run_migrations_adds_dispatch_mode_for_v2_db(data_dir):
+    """Legacy v2 transport DB gains dispatch_mode and M10 tables during migration."""
+    db_path = data_dir / "transport.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '2')")
+    conn.execute(
+        "CREATE TABLE updates (update_id INTEGER PRIMARY KEY, chat_id INT, user_id INT, kind TEXT, "
+        "payload TEXT DEFAULT '{}', received_at TEXT, state TEXT DEFAULT 'received')"
+    )
+    conn.execute(
+        "CREATE TABLE work_items (id TEXT PRIMARY KEY, chat_id INT, update_id INT, state TEXT, "
+        "worker_id TEXT, claimed_at TEXT, completed_at TEXT, error TEXT, created_at TEXT)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX idx_one_claimed_per_chat ON work_items(chat_id) WHERE state = 'claimed'"
+    )
+    conn.commit()
+
+    _run_migrations(conn)
+
+    work_item_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(work_items)").fetchall()
+    }
+    assert "dispatch_mode" in work_item_columns
+    version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+    assert version == str(_SCHEMA_VERSION)
+    conn.close()
 
 
 # -- Contract: non-duplicate IntegrityError must raise --

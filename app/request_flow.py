@@ -16,12 +16,12 @@ Design rules:
 from __future__ import annotations
 
 import html
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.execution_context import resolve_execution_context
+from app.time_utils import age_seconds, utc_now, utc_now_timestamp
 from app.user_messages import (
     approval_context_changed,
     approval_expired,
@@ -65,7 +65,7 @@ def build_setup_state(
     return AwaitingSkillSetup(
         user_id=user_id,
         skill=skill_name,
-        started_at=time.time(),
+        started_at=utc_now_timestamp(),
         remaining=[
             {"key": r.key, "prompt": r.prompt, "help_url": r.help_url,
              "validate": r.validate}
@@ -89,7 +89,7 @@ def format_credential_prompt(req: dict) -> str:
 def foreign_setup_message(setup: AwaitingSkillSetup) -> str:
     """Format a message about another user's in-progress credential setup."""
     uid = setup.user_id
-    elapsed = int(time.time() - setup.started_at)
+    elapsed = int(age_seconds(setup.started_at, now=utc_now()) or 0)
     minutes = elapsed // 60
     time_str = f"{minutes} min ago" if minutes >= 1 else "just now"
     return (
@@ -113,7 +113,8 @@ def foreign_skill_setup(
         return None
     if skill_name is not None and setup.skill != skill_name:
         return None
-    if setup.started_at is None or (time.time() - setup.started_at) > SETUP_TIMEOUT_SECONDS:
+    age = age_seconds(setup.started_at, now=utc_now())
+    if age is None or age > SETUP_TIMEOUT_SECONDS:
         session.awaiting_skill_setup = None
         return None
     return setup
@@ -192,8 +193,8 @@ def pending_expired(
     if not created_at:
         return None
     ttl = max(3600, timeout_seconds)
-    age = time.time() - created_at
-    if age > ttl:
+    age = age_seconds(created_at, now=utc_now())
+    if age is not None and age > ttl:
         minutes = int(age // 60)
         return approval_expired(minutes)
     return None

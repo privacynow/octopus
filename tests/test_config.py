@@ -190,6 +190,16 @@ def test_validate_config_database_url_must_be_postgres():
     assert not any("BOT_DATABASE_URL" in e for e in errors_ok)
 
 
+def test_validate_config_rejects_malformed_registry_url():
+    errors = validate_config(make_config(agent_registry_url="http://"))
+    assert any("BOT_AGENT_REGISTRY_URL" in e and "valid http" in e for e in errors)
+
+
+def test_validate_config_rejects_malformed_postgres_url():
+    errors = validate_config(make_config(database_url="postgresql://"))
+    assert any("BOT_DATABASE_URL" in e and "valid postgresql" in e for e in errors)
+
+
 def test_validate_config_webhook_mode_with_url():
     errors = validate_config(make_config(
         bot_mode="webhook",

@@ -3,7 +3,6 @@
 import dataclasses
 import datetime
 import logging
-import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -11,7 +10,9 @@ import httpx
 
 from app.config import BotConfig, validate_config
 from app.providers.base import Provider
+from app.session_state import session_from_dict
 from app.storage import list_sessions, load_session
+from app.time_utils import age_seconds, utc_now
 
 log = logging.getLogger(__name__)
 
@@ -203,19 +204,21 @@ def scan_stale_sessions(
     """
     stale_pending = 0
     stale_setup = 0
-    now = time.time()
+    now = utc_now()
     for info in list_sessions(data_dir):
         if not info["has_pending"] and not info["has_setup"]:
             continue
-        session_data = load_session(
+        session = session_from_dict(load_session(
             data_dir, info["chat_id"], provider_name,
             provider_state_factory, approval_mode,
-        )
-        pending = session_data.get("pending_approval") or session_data.get("pending_retry")
-        if pending and (now - pending.get("created_at", 0)) > _STALE_PENDING_SECONDS:
+        ))
+        pending = session.pending_approval or session.pending_retry
+        pending_age = age_seconds(pending.created_at, now=now) if pending else None
+        if pending_age is not None and pending_age > _STALE_PENDING_SECONDS:
             stale_pending += 1
-        setup = session_data.get("awaiting_skill_setup")
-        if setup and (now - setup.get("started_at", 0)) > _STALE_SETUP_SECONDS:
+        setup = session.awaiting_skill_setup
+        setup_age = age_seconds(setup.started_at, now=now) if setup else None
+        if setup_age is not None and setup_age > _STALE_SETUP_SECONDS:
             stale_setup += 1
     return stale_pending, stale_setup
 
@@ -230,23 +233,19 @@ def scan_stale_delegations(
 ) -> int:
     """Return count of sessions with proposed delegation plans older than threshold."""
     stale = 0
-    now = time.time()
+    now = utc_now()
     for info in list_sessions(data_dir):
-        session_data = load_session(
+        session = session_from_dict(load_session(
             data_dir, info["chat_id"], provider_name,
             provider_state_factory, approval_mode,
-        )
-        delegation = session_data.get("pending_delegation")
-        if not isinstance(delegation, dict):
+        ))
+        delegation = session.pending_delegation
+        if delegation is None:
             continue
-        tasks = delegation.get("tasks", [])
-        if not any(isinstance(task, dict) and task.get("status") == "proposed" for task in tasks):
+        if not any(task.status == "proposed" for task in delegation.tasks):
             continue
-        try:
-            created_at = float(delegation.get("created_at", 0) or 0)
-        except (TypeError, ValueError):
-            continue
-        if (now - created_at) > stale_proposed_seconds:
+        delegation_age = age_seconds(delegation.created_at, now=now)
+        if delegation_age is not None and delegation_age > stale_proposed_seconds:
             stale += 1
     return stale
 

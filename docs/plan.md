@@ -5086,8 +5086,263 @@ bot does today.
 
 #### Milestone breakdown
 
-Phase 21 is delivered in five slices. Each slice is independently testable
+Phase 21 is delivered in six slices. Each slice is independently testable
 and leaves the system in a working state.
+
+###### M21A-0 — Surface-neutral identity generalization
+
+**Status: Not started. Prerequisite for M21A.**
+
+**Problem.** The durable transport layer, session store, access-override
+store, inbound event types, and attachment storage paths all assume
+Telegram-style integer identities. This prevents any non-Telegram
+surface from using the transport store without a hash-to-int shim
+(which is what `app/agents/bridge.py` does today for the registry
+surface). If Shared Runtime hardens persist-first ingress on top of
+these integer columns, the wrong identity model becomes permanently
+entrenched and every future surface (Slack, SMS, iMessage) would need
+its own shim — defeating the purpose of a pluggable surface architecture.
+
+**Current state — every identity-coupled surface:**
+
+1. **Transport store schema** (`updates`, `work_items`):
+   - SQLite (`app/work_queue_sqlite_impl.py:33-66`):
+     `update_id INTEGER PRIMARY KEY`, `chat_id INTEGER NOT NULL`,
+     `user_id INTEGER NOT NULL`. Per-chat serialization index:
+     `idx_one_claimed_per_chat ON work_items(chat_id) WHERE state = 'claimed'`
+   - Postgres (`app/db/migrations/postgres/0001_runtime.sql:20-47`):
+     `update_id BIGINT PRIMARY KEY`, `chat_id BIGINT NOT NULL`,
+     `user_id BIGINT NOT NULL`. Same partial unique index on `chat_id`.
+
+2. **Session store** keyed by `chat_id`:
+   - SQLite (`app/storage_sqlite.py:16`):
+     `sessions(chat_id INTEGER PRIMARY KEY)`
+   - Postgres (`app/storage_postgres.py:20`):
+     `bot_runtime.sessions(chat_id BIGINT PRIMARY KEY)`
+
+3. **Access overrides** keyed by `user_id`:
+   - SQLite (`app/work_queue_sqlite_impl.py:86-92`):
+     `user_access(user_id INTEGER PRIMARY KEY, granted_by INTEGER)`
+   - Postgres (`app/db/migrations/postgres/0003_user_access_usage_log.sql:5-11`):
+     `bot_runtime.user_access(user_id BIGINT PRIMARY KEY, granted_by BIGINT)`
+
+4. **Usage log** keyed by `chat_id`:
+   - SQLite (`app/work_queue_sqlite_impl.py:73-84`):
+     `usage_log(chat_id INTEGER NOT NULL)`
+   - Postgres (`app/db/migrations/postgres/0003_user_access_usage_log.sql:13-22`):
+     `bot_runtime.usage_log(chat_id BIGINT NOT NULL)`
+
+5. **Inbound event types** (`app/transport.py:20-67`):
+   - `InboundUser.id: int`
+   - `InboundMessage.chat_id: int`
+   - `InboundCommand.chat_id: int`
+   - `InboundCallback.chat_id: int`
+
+6. **Inbound envelope** (`app/transports/types.py:12-24`):
+   - `InboundEnvelope.actor_id: int` (used as durable user_id)
+   - `InboundEnvelope.conversation_id: int | str` (already partially
+     neutral — accepts str but the downstream store rejects it)
+   - `InboundEnvelope.update_id: int`
+
+7. **Bridge identity shim** (`app/agents/bridge.py:22-46`):
+   - `_stable_int(value: str) -> int`: SHA256 hash truncated to 15 hex
+     digits, converted to int
+   - `registry_chat_id()`, `registry_update_id()`, `registry_actor_id()`:
+     all produce synthetic ints so registry strings can flow through the
+     integer-only store
+   - `local_chat_id_for_conversation()`: reverse-maps conversation_ref
+     to Telegram int chat_id, falls back to hash
+
+8. **Attachment paths** (`app/storage.py:38-48`):
+   - `chat_upload_dir(data_dir, chat_id: int)` →
+     `data_dir / "uploads" / str(chat_id)`
+   - `build_upload_path(data_dir, chat_id: int, original_name)` uses
+     the int-derived directory
+
+9. **Callback data conventions** (`app/telegram_handlers.py`):
+   - `f"delegation_approve:{chat_id}"` (line 958)
+   - `f"delegation_cancel:{chat_id}"` (line 959)
+   - `f"expand:{chat_id}:{slot}"` (line 923)
+   - `f"collapse:{target_chat}:{slot}"` (line 3075)
+   - `f"clear_cred_cancel:{user_id}"` (line 2393)
+   These embed integer IDs in callback data strings.
+
+10. **Access policy** (`app/access.py:33-73`):
+    - `inbound.id in config.allowed_user_ids` — set of ints
+    - `inbound.id in config.admin_user_ids` — set of ints
+    - Config fields: `allowed_user_ids: set[int]`,
+      `admin_user_ids: set[int]`
+
+11. **Outbound surface factory** (`app/transports/factory.py:19-50`):
+    - `create_outbound_surface(chat_id: int, ...)` — passes int to
+      `TelegramConversationIO(bot, chat_id, ...)`
+
+12. **Work queue facade signatures** (`app/work_queue.py:46-68`):
+    - `record_and_admit_message(data_dir, update_id: int, chat_id: int,
+      user_id: int, ...)`
+    - `record_and_enqueue(data_dir, update_id: int, chat_id: int,
+      user_id: int, ...)`
+    - `claim_next(data_dir, chat_id: int, worker_id: str)`
+
+**Target identity model.** Replace Telegram-specific integer identities
+with surface-neutral text keys throughout the durable boundary:
+
+| Current | Target | Notes |
+|---------|--------|-------|
+| `chat_id: int/BIGINT` | `conversation_key: TEXT` | Telegram: `"telegram:12345"`. Registry: `"registry:abc123"`. Slack: `"slack:C01234567"`. |
+| `update_id: int/BIGINT` | `event_id: TEXT` | Telegram: `"tg:12345"`. Registry: `"reg:delivery:abc"`. UUID fallback for surfaces without native event IDs. |
+| `user_id: int/BIGINT` | `actor_key: TEXT` | Telegram: `"tg:12345"`. Registry: `"reg:actor:abc"`. Slack: `"slack:U01234567"`. |
+| `InboundUser.id: int` | `InboundUser.id: str` | All downstream access checks switch to string comparison. |
+| `InboundMessage.chat_id: int` | `InboundMessage.conversation_key: str` | Same field rename across Command, Callback. |
+| `InboundEnvelope.actor_id: int` | `InboundEnvelope.actor_key: str` | |
+| `InboundEnvelope.update_id: int` | `InboundEnvelope.event_id: str` | |
+| `InboundEnvelope.conversation_id: int\|str` | `InboundEnvelope.conversation_key: str` | Drop the union type. Always text. |
+| `config.allowed_user_ids: set[int]` | `config.allowed_actor_keys: set[str]` | Parse from env: `"tg:12345,tg:67890"`. Backward compat: bare integers auto-prefix `"tg:"`. |
+| `config.admin_user_ids: set[int]` | `config.admin_actor_keys: set[str]` | Same backward compat. |
+| `chat_upload_dir(data_dir, chat_id: int)` | `conversation_upload_dir(data_dir, conversation_key: str)` | Hash the key for filesystem safety if needed. |
+
+**Implementation — six commits, each leaving tests green:**
+
+**Commit 1: Inbound types and envelope.**
+Change `InboundUser.id` from `int` to `str`. Rename `chat_id` to
+`conversation_key` in `InboundMessage`, `InboundCommand`,
+`InboundCallback`. Update `InboundEnvelope` fields: `actor_key: str`,
+`event_id: str`, `conversation_key: str`. Update `serialize_inbound` /
+`deserialize_inbound` to use new field names (preserve backward compat:
+deserializer accepts both `chat_id` and `conversation_key` keys in
+stored JSON so in-flight work items are not lost). Update
+`normalize_message`, `normalize_command`, `normalize_callback` in
+`transport.py` to produce `conversation_key=f"tg:{chat_id}"` and
+`InboundUser(id=f"tg:{tg_user.id}")`. Update all call sites that
+construct or destructure these types.
+
+Files: `app/transport.py`, `app/transports/types.py`,
+`app/transports/admission.py`, `app/agents/bridge.py` (remove the
+hash shim — registry events now produce string keys directly).
+
+**Commit 2: Transport store schema migration.**
+Add SQLite migration (schema version 6) that:
+- Creates new `updates_v2` and `work_items_v2` tables with TEXT
+  columns (`event_id TEXT PRIMARY KEY`, `conversation_key TEXT NOT NULL`,
+  `actor_key TEXT NOT NULL`)
+- Copies existing data with `'tg:' || CAST(chat_id AS TEXT)` prefixing
+- Drops old tables, renames v2 to original names
+- Recreates indexes including the partial unique index on
+  `conversation_key` instead of `chat_id`
+
+Add Postgres migration `0005_neutral_identity.sql` that:
+- `ALTER TABLE bot_runtime.updates` renames columns and changes types
+  (`BIGINT` → `TEXT`, `chat_id` → `conversation_key`, etc.)
+- Uses `UPDATE ... SET conversation_key = 'tg:' || chat_id::text`
+- Recreates the partial unique index
+
+Update `work_queue_sqlite_impl.py` and `work_queue_pg.py` to use new
+column names. Update `_EXPECTED_COLUMNS` validation. Update all facade
+signatures: `chat_id: int` → `conversation_key: str`,
+`update_id: int` → `event_id: str`, `user_id: int` → `actor_key: str`.
+
+Files: `app/work_queue_sqlite_impl.py`, `app/work_queue_pg.py`,
+`app/work_queue_sqlite.py`, `app/work_queue_postgres.py`,
+`app/work_queue.py`, `app/db/migrations/postgres/0005_neutral_identity.sql`.
+
+**Commit 3: Session store and access store migration.**
+Same pattern: rename `chat_id` → `conversation_key` in session tables
+(both SQLite and Postgres), prefix existing data with `tg:`.
+Rename `user_id` → `actor_key` in `user_access` table.
+Rename `chat_id` → `conversation_key` in `usage_log` table.
+Update `storage_sqlite.py`, `storage_postgres.py`,
+`app/db/migrations/postgres/0005_neutral_identity.sql` (extend the
+same migration file).
+
+Files: `app/storage_sqlite.py`, `app/storage_postgres.py`,
+`app/work_queue_sqlite_impl.py` (user_access, usage_log columns),
+`app/work_queue_pg.py` (same), Postgres migration.
+
+**Commit 4: Config, access policy, attachment paths.**
+Update `BotConfig`: `allowed_user_ids: set[int]` →
+`allowed_actor_keys: set[str]`, `admin_user_ids: set[int]` →
+`admin_actor_keys: set[str]`. Add backward-compat parsing: bare
+integers in env vars auto-prefix with `tg:` (e.g. `"12345"` →
+`"tg:12345"`). Operator-facing env var names can stay the same
+(`ALLOWED_TELEGRAM_USER_IDS`) — just the internal representation
+changes.
+Update `app/access.py`: `inbound.id in config.allowed_actor_keys`
+(string set membership). No structural change.
+Update `app/storage.py`: `chat_upload_dir(data_dir, conversation_key: str)`
+— use a filesystem-safe hash or sanitized key for the directory name.
+For backward compat with existing upload dirs, Telegram keys produce
+the same directory name as before (`"tg:12345"` → directory `"12345"`
+or `"tg_12345"`).
+
+Files: `app/config.py`, `app/access.py`, `app/storage.py`,
+`app/transport.py` (upload path calls).
+
+**Commit 5: Handler layer and outbound factory.**
+Update `telegram_handlers.py`: all `chat_id` references in handler
+functions become `conversation_key`. Callback data patterns stay
+integer-based for Telegram (they are Telegram-specific UI, not durable
+identity). `create_outbound_surface` parameter changes from
+`chat_id: int` to `conversation_key: str` — the Telegram adapter
+extracts the integer from the key (`"tg:12345"` → `12345`) for PTB
+API calls. The registry adapter already uses string conversation refs.
+
+Files: `app/telegram_handlers.py`, `app/transports/factory.py`,
+`app/transports/telegram_adapter.py`, `app/worker.py`.
+
+**Commit 6: Contract tests and bridge shim removal.**
+Update `tests/contracts/test_transport_store_contract.py` — all test
+data uses string keys. Update
+`tests/contracts/test_session_store_contract.py`. Verify
+`app/agents/bridge.py` no longer needs `_stable_int`,
+`registry_chat_id`, `registry_update_id`, or `registry_actor_id` —
+registry events produce native string keys that flow through the store
+without hashing. Remove the shim functions. Update all test files that
+construct `InboundMessage`, `InboundUser`, etc. with int IDs.
+
+Files: `tests/contracts/test_transport_store_contract.py`,
+`tests/contracts/test_session_store_contract.py`,
+`tests/contracts/test_registry_store_contract.py`,
+`app/agents/bridge.py`, all test files constructing inbound types.
+
+**What M21A-0 does NOT include.**
+- Adding any new surface (Slack, SMS, iMessage). This slice only
+  removes the barriers that prevent future surfaces from plugging in.
+- Changing the Telegram UX or callback data format. Telegram callbacks
+  still embed integer chat IDs in their data strings — those are
+  Telegram-specific interaction conventions, not durable identity.
+- Changing the registry service schema. The registry store already uses
+  TEXT identifiers throughout (`agent_id TEXT`, `conversation_id TEXT`).
+- Changing provider contracts. `RunResult` is unaffected.
+- Adding new surfaces to the factory. `create_outbound_surface` still
+  returns `TelegramConversationIO` or `RegistryConversationIO`. The
+  generalized identity model enables future surfaces but does not add
+  them.
+
+**Acceptance criteria.**
+- [ ] All transport store columns use TEXT identity keys
+      (`conversation_key`, `event_id`, `actor_key`) in both SQLite
+      and Postgres
+- [ ] Session store is keyed by `conversation_key: TEXT` in both
+      backends
+- [ ] Access overrides are keyed by `actor_key: TEXT` in both backends
+- [ ] `InboundUser.id`, `InboundMessage.conversation_key`,
+      `InboundEnvelope.conversation_key` / `.actor_key` / `.event_id`
+      are all `str` type
+- [ ] `app/agents/bridge.py` no longer contains `_stable_int`,
+      `registry_chat_id`, `registry_update_id`, or `registry_actor_id`
+- [ ] Config accepts bare integer IDs (backward compat) and prefixed
+      string keys for allowed/admin actors
+- [ ] Existing Telegram conversations survive the migration (data
+      prefixed with `tg:` and round-trips correctly)
+- [ ] Existing in-flight work items survive the migration
+      (deserializer accepts both old `chat_id` and new
+      `conversation_key` JSON keys)
+- [ ] Contract tests pass against both SQLite and Postgres for
+      transport store, session store, and registry store
+- [ ] Full test suite passes
+- [ ] `git diff --check` clean
+
+---
 
 ###### M21A — Unlock Shared Runtime config and persist-first webhook ingress
 

@@ -3216,10 +3216,14 @@ Delivered:
   (`app/transports/registry_adapter.py`)
 - `TelegramConversationIO` now implements the same surface-owned bind/input/
   outcome/recovery hooks as the registry adapter
+- `app/access.py` is now the leaf-level owner for config-driven user
+  normalization, allow/admin/public classification, and trust-tier
+  resolution; handlers keep thin wrappers for the existing public API
 - `app/transports/factory.py` is now the single owner for:
   - `conversation_surface_name(conversation_ref)`
   - `create_outbound_surface(...)`
-  - `trust_tier_for_source(...)`
+  - source-aware `trust_tier_for_source(..., config=...)`, backed by
+    `app/access.py` instead of importing the handler layer
 - `worker_dispatch` and `app/agents/delivery.py` now depend on the factory
   and `InteractionSurface`, not on concrete adapter classes
 - `ConversationSimulator` can inject registry-surface messages through the
@@ -3407,52 +3411,97 @@ Acceptance criteria (complete):
 
 ##### M5 — Product-Bot Discovery and Delegation
 
-**Status: In progress — parent-side delegated-result continuation shipped; first
-capability-discovery command shipped; delegation plan UX not started.**
+**Status: In progress — Phase 1 complete (discovery + result continuation);
+Phase 2 (delegation plan UX + routed task submission) not started.**
 
-Delivered so far:
-- Parent-side delegation state is now durable in bot-local session state:
-  `PendingDelegation` and `DelegatedTask` are stored alongside the existing
-  session model, not in the registry
-- `routed_result` deliveries now update the parent bot's local delegation
-  state and emit deterministic `delegated_result` timeline events
+###### M5 Phase 1 — Delivered
+
+- Parent-side delegation state is durable in bot-local session state:
+  `PendingDelegation` and `DelegatedTask` live in `SessionState`, not in the
+  registry
+- `routed_result` deliveries update the parent bot's local delegation state
+  and emit deterministic `delegated_result` timeline events
 - When all expected child results are present, the parent bot admits a
-  synthetic continuation message back through the normal local work queue
-  so orchestration resumes through the same worker-owned execution path
-- Synthetic parent continuation is tagged to bypass a second approval gate;
-  this avoids forcing the human to re-approve the same parent orchestration
-  step just because child results arrived asynchronously
-- Parent continuations follow the bound conversation surface, so a Telegram
-  parent conversation resumes on Telegram instead of being trapped on the
-  registry surface
+  synthetic continuation message back through the normal local work queue so
+  orchestration resumes through the same worker-owned execution path
+- Synthetic continuation is tagged `skip_approval=True` to bypass re-approval
+  of the same parent orchestration step after async child results arrive
+- Parent continuations follow the bound conversation surface: Telegram parent
+  conversations resume on Telegram, not on the registry surface
 - Busy parent chats return `retry_later`; delegated-result state is preserved
   and retried instead of being dropped
-- First user-facing discovery slice is live via `/discover`: Telegram can now
-  build an `AgentDiscoveryQuery`, search the registry by role/skills/tags/free
-  text, and render matching agents to the user
-- Discovery is truthful about runtime state: standalone mode says discovery is
-  unavailable; degraded registry connectivity reports the degraded state rather
-  than pretending search worked
+- `/discover` is live: Telegram can search the registry by role/skills/tags/
+  free text via `AgentDiscoveryQuery`, render matching agents to the user, and
+  report standalone/degraded states truthfully
+
+###### M5 Phase 2 — Next Slice: Delegation Plan UX and Routed Task Submission
+
+This is the current work frontier.
+
+**What must be built:**
+
+1. **Delegation plan builder** — a pure function in `app/agents/orchestration.py`
+   that takes a list of `(target_agent_id, title, instructions)` tuples and the
+   current `conversation_ref`, and returns a `PendingDelegation` with one
+   `DelegatedTask` per target. This is called by the provider when it decides
+   to delegate during execution.
+
+2. **Delegation plan presentation** — when the provider instructs the bot to
+   propose a delegation, the bot persists the `PendingDelegation` in session
+   state (status: `proposed`), then sends the user an inline keyboard showing
+   the proposed sub-tasks and two buttons: "Approve delegation" and "Cancel".
+   The message body lists each task title and target agent name. No fan-out
+   happens yet.
+
+3. **Delegation approval callback handler** — `delegation_approve:<chat_id>` and
+   `delegation_cancel:<chat_id>` callbacks. On approve: guard that
+   `connectivity_state == "connected"` at callback time; call
+   `client.submit_routed_task()` for each `DelegatedTask` in the
+   `PendingDelegation`; update each task status to `submitted`; update
+   `PendingDelegation` in session; reply confirming fan-out. On cancel: clear
+   `PendingDelegation` from session; reply confirming cancellation.
+
+4. **Routed task submission** — `client.submit_routed_task(RoutedTaskRequest)`
+   already exists. The callback handler constructs one `RoutedTaskRequest` per
+   `DelegatedTask` with: `routed_task_id` from `DelegatedTask.routed_task_id`,
+   `parent_conversation_id` from `PendingDelegation.conversation_ref`,
+   `origin_agent_id` from `state.agent_id`, `target_agent_id` from
+   `DelegatedTask.target_agent_id`, and `instructions` from
+   `DelegatedTask.instructions` (new field on `DelegatedTask`).
+
+5. **Degraded-mode guard** — the delegation approval callback must check
+   `connectivity_state` before submitting. If degraded at callback time, reply
+   with a clear error ("Delegation is unavailable because registry connectivity
+   is degraded. The request was not sent.") and do not clear the
+   `PendingDelegation` so the user can retry.
+
+**What already exists and must not be duplicated:**
+- `PendingDelegation`, `DelegatedTask` — `app/session_state.py`
+- `RoutedTaskRequest` — `app/agents/types.py`
+- `client.submit_routed_task()` — `app/agents/client.py`
+- `registry_client()` — `app/agents/bridge.py`
+- `build_resume_prompt()`, `delegation_ready_to_resume()` — `app/agents/orchestration.py`
+- The result-handling path in `app/agents/delivery.py` (already waits for all
+  child results and admits the continuation)
+- Degraded-mode state read: `load_agent_runtime_state(cfg.data_dir).connectivity_state`
 
 Scope:
-- Capability-based agent discovery planner using `AgentDiscoveryQuery`
-  (role, skills, tags, free_text, required_state); discovery result
-  presented to user for review before delegation
-- Explicit delegation plan UX: product bot proposes which specialist bots
-  to delegate which sub-tasks to; user approval required before fan-out
-- Routed task submission from originating bot through registry to target bots
-- `routed_result` delivery consumption: originating bot resumes parent
-  orchestration when expected child results arrive (not just timeline logging)
-- Result aggregation back into parent conversation
-- Degraded mode blocks delegation cleanly: `/discover` and delegation disabled
-  when connectivity_state is degraded or standalone; clear user message
+- Delegation plan builder function (orchestration.py)
+- Delegation plan Telegram UX (inline keyboard with approve/cancel)
+- Delegation approval + cancellation callback handlers
+- Routed task submission on approval (one API call per task)
+- Degraded-mode guard in callback, with truthful user message and no data loss
+- `DelegatedTask` gains `instructions: str` field; serialization round-trips
+- Tests: plan builder pure-function test; approve callback submits tasks and
+  updates session; cancel callback clears delegation and does not submit;
+  degraded-mode callback blocks submission and preserves delegation state
 
 Role patterns (metadata only, not hardcoded logic):
 - product, requirements, developer, test-writer, reviewer, tester
 - Any role/skill combination is valid; these are examples, not constraints
 
 Acceptance criteria:
-- [ ] Product bot can search for specialist bots by role and skills
+- [x] Product bot can search for specialist bots by role and skills
 - [ ] Discovery results presented before delegation (not automatic)
 - [ ] Delegation requires explicit user approval before fan-out
 - [ ] Delegated work routes through registry and executes through the same

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.access import trust_tier
 from app.config import BotConfig
 from app.transports.ports import InteractionSurface
 
@@ -49,10 +50,8 @@ def create_outbound_surface(
     )
 
 
-def trust_tier_for_source(source: str, user: Any) -> str:
+def trust_tier_for_source(source: str, user: Any, *, config: BotConfig) -> str:
     """Return the trust tier implied by the inbound source."""
     if source == "registry":
         return "trusted"
-    from app import telegram_handlers as th
-
-    return th._trust_tier(user)
+    return trust_tier(config, user)

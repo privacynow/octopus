@@ -3439,6 +3439,65 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await msg.reply_text(_msg.policy_usage())
 
+
+@_command_handler
+async def cmd_allowuser(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin: add a user to the allowed list. Usage: /allowuser <user_id> [reason]."""
+    del context
+    if not is_admin(event.user):
+        await update.effective_message.reply_text("This command requires admin access.")
+        return
+    if not event.args or not event.args[0].isdigit():
+        await update.effective_message.reply_text("Usage: /allowuser <user_id> [reason]")
+        return
+    user_id = int(event.args[0])
+    reason = " ".join(event.args[1:])
+    granted_by = event.user.id if event.user else 0
+    cfg = _cfg()
+    work_queue.set_user_access(cfg.data_dir, user_id, "allowed", reason, granted_by)
+    await update.effective_message.reply_text(f"User {user_id} added to allowed list.")
+
+
+@_command_handler
+async def cmd_blockuser(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin: block a user. Usage: /blockuser <user_id> [reason]."""
+    del context
+    if not is_admin(event.user):
+        await update.effective_message.reply_text("This command requires admin access.")
+        return
+    if not event.args or not event.args[0].isdigit():
+        await update.effective_message.reply_text("Usage: /blockuser <user_id> [reason]")
+        return
+    user_id = int(event.args[0])
+    reason = " ".join(event.args[1:])
+    granted_by = event.user.id if event.user else 0
+    cfg = _cfg()
+    work_queue.set_user_access(cfg.data_dir, user_id, "blocked", reason, granted_by)
+    await update.effective_message.reply_text(f"User {user_id} blocked.")
+
+
+@_command_handler
+async def cmd_listaccess(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin: list all configured DB-backed access overrides."""
+    del context
+    if not is_admin(event.user):
+        await update.effective_message.reply_text("This command requires admin access.")
+        return
+    cfg = _cfg()
+    rows = work_queue.list_user_access(cfg.data_dir)
+    if not rows:
+        await update.effective_message.reply_text("No access overrides set.")
+        return
+    lines = ["<b>Access overrides</b>"]
+    for row in rows:
+        status = "✅ allowed" if row["access"] == "allowed" else "🚫 blocked"
+        reason = f" — {html.escape(row['reason'])}" if row["reason"] else ""
+        lines.append(f"• <code>{row['user_id']}</code> {status}{reason}")
+    await update.effective_message.reply_text(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+    )
+
 _bot_instance = None  # Set by build_application
 
 
@@ -3613,6 +3672,9 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     app.add_handler(CommandHandler("project", cmd_project))
     app.add_handler(CommandHandler("policy", cmd_policy))
     app.add_handler(CommandHandler("model", cmd_model))
+    app.add_handler(CommandHandler("allowuser", cmd_allowuser))
+    app.add_handler(CommandHandler("blockuser", cmd_blockuser))
+    app.add_handler(CommandHandler("listaccess", cmd_listaccess))
     app.add_handler(CommandHandler("export", cmd_export))
     app.add_handler(CommandHandler("admin", cmd_admin))
     app.add_handler(CallbackQueryHandler(handle_callback, pattern=r"^(retry_|approval_)"))

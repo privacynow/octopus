@@ -208,16 +208,21 @@ def scan_stale_sessions(
     for info in list_sessions(data_dir):
         if not info["has_pending"] and not info["has_setup"]:
             continue
-        session = session_from_dict(load_session(
+        raw_session = load_session(
             data_dir, info["chat_id"], provider_name,
             provider_state_factory, approval_mode,
-        ))
+        )
+        session = session_from_dict(raw_session)
         pending = session.pending_approval or session.pending_retry
-        pending_age = age_seconds(pending.created_at, now=now) if pending else None
+        pending_raw = raw_session.get("pending_approval") or raw_session.get("pending_retry") or {}
+        pending_created_at = pending.created_at if pending else pending_raw.get("created_at")
+        pending_age = age_seconds(pending_created_at, now=now)
         if pending_age is not None and pending_age > _STALE_PENDING_SECONDS:
             stale_pending += 1
         setup = session.awaiting_skill_setup
-        setup_age = age_seconds(setup.started_at, now=now) if setup else None
+        setup_raw = raw_session.get("awaiting_skill_setup") or {}
+        setup_started_at = setup.started_at if setup else setup_raw.get("started_at")
+        setup_age = age_seconds(setup_started_at, now=now)
         if setup_age is not None and setup_age > _STALE_SETUP_SECONDS:
             stale_setup += 1
     return stale_pending, stale_setup

@@ -3631,3 +3631,115 @@ async def test_settings_callback_model_inherit_no_double_default():
         assert "cleared" in reply.lower()
         assert "((default))" not in reply
         assert "(default) (" not in reply
+
+
+async def test_allowuser_grants_access_without_restart():
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": False,
+        "allowed_user_ids": frozenset({1, 100}),
+        "admin_user_ids": frozenset({1}),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=12345)
+        admin = FakeUser(uid=1, username="admin")
+        stranger = FakeUser(uid=99999, username="stranger")
+
+        assert th.is_allowed(stranger) is False
+        msg = await send_command(
+            th.cmd_allowuser,
+            chat,
+            admin,
+            "/allowuser 99999 incident access",
+            args=["99999", "incident", "access"],
+        )
+        assert last_reply(msg) == "User 99999 added to allowed list."
+        assert th.is_allowed(stranger) is True
+
+        await send_text(chat, stranger, "hello after allow")
+        await drain_one_worker_item(data_dir)
+        assert len(prov.run_calls) == 1
+
+
+async def test_blockuser_blocks_allowed_user_without_restart():
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": False,
+        "allowed_user_ids": frozenset({1, 100}),
+        "admin_user_ids": frozenset({1}),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=12345)
+        admin = FakeUser(uid=1, username="admin")
+        target = FakeUser(uid=100, username="trusted")
+
+        assert th.is_allowed(target) is True
+        msg = await send_command(
+            th.cmd_blockuser,
+            chat,
+            admin,
+            "/blockuser 100 abuse",
+            args=["100", "abuse"],
+        )
+        assert last_reply(msg) == "User 100 blocked."
+        assert th.is_allowed(target) is False
+
+        await send_text(chat, target, "hello after block")
+        assert len(prov.run_calls) == 0
+
+
+async def test_listaccess_shows_rows():
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": False,
+        "allowed_user_ids": frozenset({1}),
+        "admin_user_ids": frozenset({1}),
+    }) as (data_dir, cfg, prov):
+        del data_dir, cfg, prov
+        chat = FakeChat(chat_id=12345)
+        admin = FakeUser(uid=1, username="admin")
+
+        await send_command(th.cmd_allowuser, chat, admin, "/allowuser 99999 temp", args=["99999", "temp"])
+        await send_command(th.cmd_blockuser, chat, admin, "/blockuser 100 policy", args=["100", "policy"])
+        msg = await send_command(th.cmd_listaccess, chat, admin, "/listaccess")
+
+        reply = last_reply(msg)
+        assert "Access overrides" in reply
+        assert "99999" in reply
+        assert "allowed" in reply
+        assert "100" in reply
+        assert "blocked" in reply
+        assert msg.replies[-1]["parse_mode"] == "HTML"
+
+
+@pytest.mark.parametrize("handler_name", ["cmd_allowuser", "cmd_blockuser"])
+async def test_access_commands_reject_non_admin(handler_name):
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": True,
+        "admin_user_ids": frozenset({1}),
+    }) as (data_dir, cfg, prov):
+        del data_dir, cfg, prov
+        chat = FakeChat(chat_id=12345)
+        non_admin = FakeUser(uid=42, username="member")
+        handler = getattr(th, handler_name)
+        msg = await send_command(handler, chat, non_admin, "/access", args=["100"])
+        assert last_reply(msg) == "This command requires admin access."
+
+
+@pytest.mark.parametrize("args", [[], ["abc"], ["42x"]])
+async def test_allowuser_usage_hint_for_missing_or_non_numeric_arg(args):
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": False,
+        "allowed_user_ids": frozenset({1}),
+        "admin_user_ids": frozenset({1}),
+    }) as (data_dir, cfg, prov):
+        del data_dir, cfg, prov
+        chat = FakeChat(chat_id=12345)
+        admin = FakeUser(uid=1, username="admin")
+        msg = await send_command(th.cmd_allowuser, chat, admin, "/allowuser", args=args)
+        assert last_reply(msg) == "Usage: /allowuser <user_id> [reason]"

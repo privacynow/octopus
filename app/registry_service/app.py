@@ -381,6 +381,9 @@ def ui_shell(request: Request) -> str:
         if settings.ui_token else
         ""
     )
+    # TODO M11: add a read-only access panel once the registry has a bot-to-registry
+    # sync protocol for user_access overrides; the registry service cannot read
+    # the bot-local transport.db directly.
     return f"""<!doctype html>
 <html lang="en">
   <head>

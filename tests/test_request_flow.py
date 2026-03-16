@@ -690,6 +690,8 @@ def test_classify_pending_validation_accepts_iso_created_at():
     assert classify_pending_validation(pending, session, cfg, "claude") == "expired"
 
 
+
+
 # =====================================================================
 # Credential checks use resolved active_skills
 # =====================================================================

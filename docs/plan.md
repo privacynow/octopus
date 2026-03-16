@@ -4891,10 +4891,10 @@ The remaining order is:
 - [x] Live allow/block access overrides take effect without restart
 - [x] Registry-side Markdown conversation export is available from the detail panel
 - [x] Completion webhook notifications can be configured and fire from terminal outcomes
-- [ ] Usage visibility lands without fabricated token or cost data
+- [x] Usage visibility lands without fabricated token or cost data
 - [x] Registry UI can surface and safely toggle skill overrides
 - [x] `POST /v1/ui/conversations` is stabilized and documented as a public operator API
-- [ ] Full test suite passes with the remaining M10 slices in place
+- [x] Full test suite passes with all M10 slices in place
 
 ---
 
@@ -4918,186 +4918,357 @@ The feature is complete when all of the following are true:
 
 ---
 
-### Phase 16 - Registry Trust And Governance
+### Phases 16–19 — Sealed Historic Artifacts
 
-Guidance baseline:
+Phases 16 (Registry Trust and Governance), 17 (Usage Accounting, Quotas, and
+Billing), 18 (Shared Runtime: Postgres Queue Authority), and 19 (Shared
+Runtime: Multi-Process Scale) are sealed as historic design artifacts. Their
+original scope has been either absorbed into later work or superseded:
 
-- Follow the repo-local and global execution guidance before changing code or
-  contracts:
-  - `AGENTS.md`
-  - `CLAUDE.md`
-  - `docs/AGENTS-global.md`
-  - `docs/CLAUDE-global.md`
-- Apply the workflow decision rule from `Remaining-Phase Execution Discipline`
-  before introducing abstractions: governance and trust visibility should stay
-  on existing product and resolved-context contracts unless a new durable
-  workflow is explicitly justified.
+- **Phase 16** (Registry Trust and Governance) is deferred to a standalone
+  commercial-viability roadmap. It was always a separate product concern
+  (marketplace, signed manifests, publisher trust) and does not depend on or
+  block runtime infrastructure work.
+- **Phase 17** (Usage Accounting, Quotas, and Billing) was partially absorbed
+  by M10B (reported token usage visibility). Quota enforcement and billing
+  integration remain future work but do not need a dedicated roadmap phase;
+  they can be added incrementally on top of the M10B foundation.
+- **Phases 18 and 19** were artificially split into "add the queue" and "make
+  it multi-process." Those are not independently useful deliverables — a
+  webhook receiver without workers is a write-only queue, and a single worker
+  on Postgres is a slower version of what already exists. They are unified
+  and superseded by **Phase 21: Shared Runtime**.
 
-Objective:
+No code from Phases 16–19 was ever shipped. The design intent of 18 and 19
+is fully captured in Phase 21 below.
 
-- Extend store and registry trust without coupling the product to Shared
-  Runtime queue semantics.
+---
 
-Workflow classification:
+### Phase 21 — Shared Runtime: Durable Multi-Worker Execution
 
-- Primarily capability-management and governance work, not a new FSM by
-  default.
+**Status: Not started. Next active phase after Phase 20.**
 
-Implementation rules:
+#### What it is
 
-- Reuse the current object/ref store architecture.
-- Reuse the current registry metadata flow and digest-verification contract.
-- Keep publisher signing and trust policy explicit and testable.
+Today every bot runs as a single process: one long-polling loop, one
+in-memory worker, one SQLite file. The registry coordinates *which* bot
+handles *what*, but each bot is still a standalone process. If that process
+crashes mid-request, the message is lost. If traffic spikes, one process is
+all there is. If you deploy an update, there is a window where messages are
+dropped.
 
-Tests required:
+Phase 21 replaces that with a shared Postgres-backed work queue where a
+lightweight webhook receiver accepts Telegram updates, persists them
+immediately, and multiple stateless worker processes pull from that shared
+queue. Zero messages are lost (they are in Postgres before the webhook
+responds), multiple workers drain the queue in parallel, and rolling deploys
+are seamless because workers are stateless — the queue is the authority.
 
-- Store/registry contract tests
-- Trust-policy behavior tests
-- Operator-path tests for governance and verification flows
+#### Why it matters
 
-### Phase 17 - Usage Accounting, Quotas, And Billing
+The product already works for single-operator, single-bot deployments.
+But any real commercial deployment — multiple bots, multiple users, uptime
+expectations, horizontal scaling — needs the execution path to be durable
+and distributed, not pinned to one process and one SQLite file. This is
+the infrastructure that turns "works on my machine" into "runs in
+production."
 
-Guidance baseline:
+#### What already exists
 
-- Follow the repo-local and global execution guidance before changing code or
-  contracts:
-  - `AGENTS.md`
-  - `CLAUDE.md`
-  - `docs/AGENTS-global.md`
-  - `docs/CLAUDE-global.md`
-- Apply the workflow decision rule from `Remaining-Phase Execution Discipline`
-  before introducing abstractions: accounting and quotas should reuse
-  authoritative completion points and existing repository contracts rather than
-  inventing a second execution-tracking model.
+The codebase is closer to Shared Runtime than the phase list implies.
+Most of the hard infrastructure was built during Phases 11–15 and M10:
 
-Objective:
+- **Webhook mode** is already implemented in `app/main.py` (lines 200–218).
+  PTB's `run_webhook()` is wired with configurable listen address, port,
+  URL, and secret token. Config validation enforces `webhook_url` when
+  `bot_mode=webhook`.
+- **Postgres transport store** is already implemented with full parity.
+  `work_queue_pg.py` has `claim_next_any` with row-level locking, per-chat
+  mutual exclusion (`WHERE chat_id NOT IN (SELECT ... WHERE state = 'claimed')`),
+  and atomic claim+state-transition in a single transaction.
+- **Transport FSM** in `app/workflows/transport_recovery.py` already defines
+  the five-state machine (`queued → claimed → done/failed/pending_recovery`)
+  with all valid transitions and per-chat invariants.
+- **Worker loop** in `app/worker.py` already loops `claim_next_any → dispatch
+  → complete/fail` with batch sizes and configurable poll intervals.
+- **Docker Compose** already has a Postgres 16 service with health checks,
+  and db-bootstrap/db-update/db-doctor tooling.
+- **Config** already has `runtime_mode` (currently rejects `shared`),
+  `database_url`, pool sizing, and webhook fields.
+- **`_chat_lock`** in `telegram_handlers.py` already distinguishes worker-path
+  (lock for serialization only; lifecycle owned by worker_loop) from
+  live-handler-path (lock + claim + completion).
 
-- Add usage recording and quota logic in a backend-neutral product layer before
-  Shared Runtime queue work.
+What does **not** exist:
 
-Workflow classification:
+1. Unlocking `BOT_RUNTIME_MODE=shared` in config validation.
+2. A persist-first webhook ingress path that writes to Postgres and returns
+   200 before any processing happens (today webhook + polling both enter the
+   same synchronous handler pipeline).
+3. Multi-instance awareness: conflict detection currently prevents two
+   processes from polling the same token; Shared Runtime needs the opposite —
+   multiple workers sharing one queue.
+4. Cross-process recovery: stale-claim detection (`recover_stale_claims`)
+   exists but is only called within a single process. In Shared Runtime,
+   any worker must be able to recover claims abandoned by a crashed peer.
+5. Lease expiry: `claimed_at` is stored but no TTL-based expiry runs. A
+   crashed worker's claims stay `claimed` forever unless manually recovered.
+6. Compose orchestration for multi-worker deployment (replicas, load
+   balancer, health checks).
+7. Observability: queue depth, claim age, worker health, lease metrics.
 
-- Primarily product/accounting logic.
-- If later background processing is required, do not invent a broker now; keep
-  accounting tied to authoritative completion points.
+#### Architecture
 
-Implementation rules:
+```
+                        ┌────────────────────────────┐
+                        │     Telegram API            │
+                        └─────────┬──────────────────┘
+                                  │ HTTPS POST /webhook
+                        ┌─────────▼──────────────────┐
+                        │   Webhook Receiver (N)      │
+                        │   normalize → persist → 200 │
+                        └─────────┬──────────────────┘
+                                  │ INSERT INTO work_items
+                        ┌─────────▼──────────────────┐
+                        │   Postgres (shared queue)   │
+                        │   updates, work_items,      │
+                        │   sessions, usage_log       │
+                        └─────────┬──────────────────┘
+                                  │ claim_next_any (row lock)
+                    ┌─────────────┼─────────────────┐
+                    │             │                  │
+              ┌─────▼───┐  ┌─────▼───┐       ┌─────▼───┐
+              │ Worker 1 │  │ Worker 2 │  ...  │ Worker N │
+              │ dispatch │  │ dispatch │       │ dispatch │
+              └──────────┘  └──────────┘       └──────────┘
+```
 
-- Meter usage from authoritative execution completion points, not provider
-  progress heuristics.
-- Add usage recording first.
-- Add quota enforcement second.
-- Add billing integration and reporting third.
+**Webhook receiver**: A minimal FastAPI (or PTB webhook) process. Its only
+job is to normalize the Telegram update, write it to `bot_runtime.updates`
+and `bot_runtime.work_items`, and return HTTP 200. No provider execution,
+no session reads, no handler logic. The Telegram update is durable the
+instant the 200 is sent.
 
-Tests required:
+**Workers**: Stateless processes running `worker_loop`. Each worker calls
+`claim_next_any` (existing function), dispatches via `worker_dispatch`
+(existing function), and completes/fails via the existing transport FSM.
+Workers share no in-memory state. Per-chat serialization is enforced by the
+Postgres-level invariant (at most one `claimed` item per `chat_id`), not by
+in-memory locks.
 
-- Completion-owner and accounting attribution tests
-- Quota enforcement tests through real request paths
-- Regression tests proving accounting does not drift across backends
+**Registry integration**: Unchanged. Workers publish timeline events and
+report routed-task results to the registry the same way the single-process
+bot does today.
 
-### Phase 18 - Shared Runtime: Postgres Queue Authority In Webhook Mode
+#### Milestone breakdown
 
-Guidance baseline:
+Phase 21 is delivered in five slices. Each slice is independently testable
+and leaves the system in a working state.
 
-- Follow the repo-local and global execution guidance before changing code or
-  contracts:
-  - `AGENTS.md`
-  - `CLAUDE.md`
-  - `docs/AGENTS-global.md`
-  - `docs/CLAUDE-global.md`
-- Apply the workflow decision rule from `Remaining-Phase Execution Discipline`
-  before introducing abstractions: this is explicit workflow/runtime work, so
-  extend the existing FSM-backed transport and repository contracts rather than
-  hand-rolling new queue logic in handlers or stores.
+###### M21A — Unlock Shared Runtime config and persist-first webhook ingress
 
-Objective:
+**Problem.** `BOT_RUNTIME_MODE=shared` is rejected at startup.
+Webhook mode enters the same synchronous handler pipeline as polling,
+so a slow provider call blocks the HTTP response to Telegram (which
+will retry after 60s, causing duplicates).
 
-- Introduce the **Shared Runtime** capability tier last, after Local Runtime
-  and product work are stable.
+**Fix.**
+- Remove the `shared` rejection in `config.py` validation. Add a new
+  validation: `shared` requires `database_url` (Postgres) and
+  `bot_mode=webhook`.
+- Add a persist-first webhook handler: receive Telegram update →
+  `record_and_enqueue(data_dir, update_id, chat_id, user_id, kind)` →
+  return HTTP 200. No handler dispatch in the request path.
+- In Shared Runtime mode, `post_init` starts `worker_loop` but does
+  **not** register PTB message/command/callback handlers (those are
+  Local Runtime only). The webhook handler is the sole ingress path;
+  workers are the sole execution path.
 
-Workflow classification:
+**Files:** `app/config.py`, `app/main.py`, tests.
 
-- This is real **workflow/runtime** work.
-- Reuse the existing transport workflow machine and repository ownership model;
-  do not hand-roll queue transitions in handlers or workers.
+###### M21B — Multi-worker claim isolation and cross-process recovery
 
-Required outcomes:
+**Problem.** The single-process model assumes one worker loop.
+`_chat_lock` uses in-memory `asyncio.Lock` objects that do not exist
+across processes. `recover_stale_claims` is only called at startup
+within the owning process.
 
-- Keep the core Telegram request path as an app-owned Postgres queue, not a
-  generic task broker.
-- Retain explicit `updates` and `work_items` tables.
-- Retain row-lock claiming, leases, recovery metadata, replay/discard
-  ownership, stable recovery references, and explicit terminal dispositions.
-- In webhook mode, ingress should normalize, persist, and acknowledge quickly.
-- Workers become the primary execution path.
+**Fix.**
+- In Shared Runtime mode, `_chat_lock` becomes a no-op pass-through
+  (per-chat serialization is enforced by Postgres row-level locking,
+  not in-memory locks). The lock's queue-busy feedback moves to a
+  Postgres-level check: if a chat already has a `claimed` item, new
+  work stays `queued` and the user gets no busy message until a worker
+  actually claims it.
+- Add a periodic `recover_stale_claims` sweep that any worker can run.
+  Use `claimed_at + lease_ttl < NOW()` to detect abandoned claims.
+  Default lease TTL: 5 minutes (configurable via `BOT_CLAIM_LEASE_TTL`).
+  Recovered items move to `queued` (not `pending_recovery`) so any
+  worker can pick them up.
+- Add `worker_id` generation: hostname + PID + boot-time UUID, so
+  claim ownership is traceable across processes.
 
-Implementation rules:
+**Files:** `app/telegram_handlers.py` (`_chat_lock` shared-runtime
+path), `app/worker.py` (stale-claim sweep), `app/work_queue_pg.py`
+(lease TTL query), `app/config.py` (lease TTL field), tests.
 
-- This capability is for **Shared Runtime** only. Do not force Local Runtime to
-  emulate it.
-- Do not break the backend-neutral product layer above the runtime boundary.
-- Keep provider execution outside long-lived claim transactions.
+###### M21C — Compose multi-worker orchestration
 
-Tests required:
+**Problem.** There is no reference deployment for multi-worker Shared
+Runtime. Operators need a working Compose file they can `docker compose
+up` and see webhook ingress + multiple workers draining a shared queue.
 
-- Shared-runtime queue contract tests
-- Webhook persist-first ingress tests
-- Recovery/replay/discard ownership tests under the queue path
+**Fix.**
+- Add `infra/compose/docker-compose.shared.yml` override that:
+  - Sets `BOT_RUNTIME_MODE=shared`, `BOT_MODE=webhook`
+  - Configures `BOT_DATABASE_URL` pointing to the existing Postgres
+    service
+  - Runs the webhook receiver as a service with port exposure
+  - Runs N worker replicas (default 2) as a separate service with
+    `deploy.replicas`
+  - Adds an Nginx or Caddy reverse proxy in front of webhook receivers
+    (or uses Compose's built-in load balancing if receivers listen on
+    the same port)
+- Add `scripts/app/shared_start.sh` that validates prerequisites,
+  runs db-bootstrap, sets the Telegram webhook URL, and starts the
+  Compose stack.
+- Update `docs/UPGRADE.md` with Shared Runtime setup instructions.
 
-### Phase 19 - Shared Runtime: Multi-Process Scale And Durability Confidence
+**Files:** `infra/compose/docker-compose.shared.yml`,
+`scripts/app/shared_start.sh`, `docs/UPGRADE.md`, tests.
 
-Guidance baseline:
+###### M21D — Observability and operator health
 
-- Follow the repo-local and global execution guidance before changing code or
-  contracts:
-  - `AGENTS.md`
-  - `CLAUDE.md`
-  - `docs/AGENTS-global.md`
-  - `docs/CLAUDE-global.md`
-- Apply the workflow decision rule from `Remaining-Phase Execution Discipline`
-  before introducing abstractions: multi-process scale and durability remain
-  workflow/runtime coordination work and must keep extending the existing
-  transport FSM and repository ownership, not a parallel control plane.
+**Problem.** In a multi-worker deployment, operators need visibility
+into queue depth, claim ages, worker health, and lease recovery events.
 
-Objective:
+**Fix.**
+- Add `GET /v1/ui/queue` to the registry service that queries
+  `bot_runtime.work_items` aggregate state. Wait — the registry must
+  not query the bot runtime DB directly. Instead: workers publish
+  periodic `worker_health` timeline events to the registry with queue
+  metrics (depth, oldest claim age, worker uptime, items processed
+  since last report). The registry aggregates these for display.
+- Add worker health reporting: every N seconds (default 30), each
+  worker publishes a `worker_health` timeline event to the registry
+  with its `worker_id`, items processed, current claim (if any), and
+  uptime.
+- Add `/doctor` shared-runtime checks: Postgres reachable, webhook URL
+  configured, at least one worker reported health within TTL, queue
+  depth within threshold.
+- Add queue metrics to the Registry UI: queue depth, active workers,
+  oldest pending item, lease recovery count.
 
-- Add multi-process scale and confidence work only after Shared Runtime queue
-  authority exists.
+**Files:** `app/worker.py` (health reporting), `app/registry_service/app.py`
+(queue panel), `app/telegram_handlers.py` (`/doctor` shared-runtime
+checks), tests.
 
-Workflow classification:
+###### M21E — Durability confidence and E2E proof
 
-- Real workflow/runtime coordination work; continue using the existing
-  transport FSM and repository semantics as the transition authority.
+**Problem.** The Shared Runtime path must be proven under crash, restart,
+and concurrent-worker conditions. Without explicit durability tests, the
+transport FSM invariants are asserted only in single-process unit tests.
 
-Scope:
+**Fix.**
+- Add Compose E2E tests for Shared Runtime:
+  - `test_shared_runtime_webhook_persists_before_response`: send a
+    Telegram-like POST to the webhook; verify the update is in Postgres
+    before any worker claims it.
+  - `test_shared_runtime_multi_worker_parallel_chats`: send updates for
+    3 different chats; verify all 3 are claimed by (potentially
+    different) workers and all complete.
+  - `test_shared_runtime_per_chat_serialization`: send 2 updates for
+    the same chat; verify only one is `claimed` at a time; second
+    processes after first completes.
+  - `test_shared_runtime_worker_crash_recovery`: send an update; kill
+    the worker mid-claim; verify the stale-claim sweep moves the item
+    back to `queued`; another worker picks it up and completes it.
+  - `test_shared_runtime_rolling_deploy`: start 2 workers; stop one;
+    send updates; verify the remaining worker drains the queue; start
+    the stopped worker; verify it resumes claiming.
+- Add contract tests for lease-TTL recovery to
+  `tests/contracts/test_transport_store_contract.py`.
 
-- Multi-process / multi-worker deployment
-- Cross-process ingress and worker concurrency
-- Queue depth, lease, worker-health, and recovery metrics
-- Crash and lease-recovery tests
-- Webhook ingress durability tests
-- Real provider smoke coverage for the shared-runtime model
+**Files:** `tests/e2e/test_compose_shared_runtime.py`,
+`tests/contracts/test_transport_store_contract.py`, tests.
 
-Implementation rules:
+#### Implementation rules
 
-- Preserve per-chat single-flight ordering, `transport idempotency`, and
-  explicit terminal ownership across processes.
-- Treat Shared Runtime as a deployment capability tier, not as a second
-  product.
-- Do not widen Local Runtime complexity just to mimic Shared Runtime.
+- **Extend, do not replace.** The existing transport FSM, work_queue
+  facade, Postgres store, and worker loop are the foundation. Phase 21
+  adds a new ingress path and operational layer on top of them.
+- **Local Runtime is untouched.** `BOT_RUNTIME_MODE=local` (the default)
+  must work exactly as it does today. No in-memory lock changes, no
+  Postgres requirements, no webhook requirements. Phase 21 code must
+  be gated on `runtime_mode == "shared"`.
+- **No external brokers.** The queue is app-owned Postgres. No Celery,
+  no Temporal, no PGMQ, no Redis. The existing `updates` + `work_items`
+  tables are the queue.
+- **Per-chat invariants are non-negotiable.** At most one `claimed` item
+  per `chat_id` at any time, enforced by the Postgres-level FSM check.
+  Multi-worker does not mean multi-claim.
+- **Provider execution stays outside transactions.** Claim the item
+  (short transaction), release the connection, run the provider (may
+  take minutes), then complete/fail the item (short transaction).
+- **Transport facade parity rule applies.** Any new `work_queue.py`
+  method must land with SQLite + Postgres impls + contract test.
+  However: SQLite impls for shared-runtime-only methods (like
+  lease-TTL recovery) may raise `NotImplementedError` since Shared
+  Runtime requires Postgres by configuration.
+- **Registry store parity rule applies.** Any new registry store method
+  must land with both impls + contract test.
+
+#### Acceptance criteria
+
+- [ ] `BOT_RUNTIME_MODE=shared` is accepted when `database_url` and
+      `bot_mode=webhook` are configured
+- [ ] Webhook ingress persists updates to Postgres and returns 200
+      before any handler or worker processes the update
+- [ ] Multiple worker processes claim and execute work items from the
+      shared Postgres queue concurrently
+- [ ] Per-chat serialization is enforced across workers: at most one
+      `claimed` item per `chat_id` at any time
+- [ ] Stale claims from crashed workers are recovered automatically
+      within the configured lease TTL
+- [ ] A reference Compose deployment exists with webhook receiver +
+      multiple worker replicas + Postgres
+- [ ] Registry UI shows queue depth, active workers, and lease recovery
+      metrics via timeline-event aggregation
+- [ ] `/doctor` reports shared-runtime health: Postgres, webhook, worker
+      health, queue depth
+- [ ] Compose E2E tests prove: persist-before-response, parallel-chat
+      execution, per-chat serialization, crash recovery, rolling deploy
+- [ ] Local Runtime (`BOT_RUNTIME_MODE=local`) is completely unaffected
+- [ ] Full test suite passes with Shared Runtime code in place
+- [ ] ARCHITECTURE.md describes the Shared Runtime deployment model
+
+#### What Phase 21 does NOT include
+
+- SQLite-backed Shared Runtime (Postgres is required by design).
+- Horizontal scaling of the registry service (single-writer assumption
+  remains for the registry).
+- Auto-scaling workers based on queue depth (operator responsibility).
+- WebSocket or SSE push from webhook receiver to workers (workers poll
+  the queue).
+- Quota enforcement or billing (Phase 17 scope, deferred).
+- Capability marketplace or trust governance (Phase 16 scope, deferred
+  to standalone roadmap).
+- Changes to the Telegram conversation model, approval flow, or
+  delegation semantics.
 
 ---
 
 ## Architecture Decisions
 
-- Current shipped runtime after Phase 12 is Postgres-only.
-- The roadmap after Phase 12 now changes direction: restore a first-class
-  **Local Runtime** mode with SQLite as the default backend for both Docker and
-  host deployments, behind backend-neutral storage/runtime contracts.
-- Treat **Local Runtime** and **Shared Runtime** as explicit capability tiers:
-  - Local Runtime: single-machine, SQLite-default, product-first
-  - Shared Runtime: later Postgres queue authority, multi-process, webhook
-    persist-first
+- Phase 20 is complete. Local Runtime is shipped with full SQLite/Postgres
+  parity across bot runtime and registry service.
+- **Phase 21 (Shared Runtime)** is the next active phase. It adds
+  webhook-first ingress, multi-worker execution, and durability confidence
+  on top of the existing Postgres transport store and FSM.
+- **Local Runtime** and **Shared Runtime** are explicit capability tiers:
+  - Local Runtime: single-machine, SQLite-default, product-first (shipped)
+  - Shared Runtime: Postgres queue authority, multi-process, webhook
+    persist-first (Phase 21)
 - Product/core code should depend on common storage/runtime contracts where
   they are genuinely common, and should not need backend-specific code changes
   for normal feature work.
@@ -5173,6 +5344,6 @@ A roadmap phase is only complete when:
 - [ARCHITECTURE.md](ARCHITECTURE.md) matches the resulting runtime authority
   and boundary decisions
 
-Shipped phases remain sealed history. New work should advance Phase 20
-(active) rather than reopening Phases 1-15. Phases 16-19 remain deferred
-behind Phase 20.
+Shipped phases remain sealed history. Phase 20 is complete. Phases 16–19
+are sealed historic artifacts (see above). **Phase 21 (Shared Runtime) is
+the next active phase.**

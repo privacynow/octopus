@@ -109,6 +109,18 @@ async def collect_doctor_report(
                 "Set BOT_RATE_LIMIT_PER_MINUTE / BOT_RATE_LIMIT_PER_HOUR "
                 "or defaults of 5/min, 30/hr will apply.")
 
+    if config.agent_mode == "registry":
+        if not config.agent_registry_url:
+            report.warnings.append(
+                "BOT_AGENT_MODE=registry but BOT_AGENT_REGISTRY_URL is empty \u2014 "
+                "bot will run in degraded standalone operation until the registry is configured."
+            )
+        if not config.agent_registry_enroll_token:
+            report.warnings.append(
+                "BOT_AGENT_MODE=registry but BOT_AGENT_REGISTRY_ENROLL_TOKEN is empty \u2014 "
+                "first-time enrollment will fail and the bot will remain degraded until a token is provided."
+            )
+
     # Stale session scan — skip if data_dir doesn't exist yet (CLI --doctor before first run)
     if config.data_dir.is_dir():
         try:

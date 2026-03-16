@@ -10,12 +10,15 @@ cd "$REPO_DIR"
 # shellcheck source=scripts/lib_env.sh
 . "$REPO_DIR/scripts/lib_env.sh"
 
-check_env_bot_required
-provider=$(get_bot_provider)
+env_file="$(current_bot_env_file)"
+BOT_ENV_FILE="$env_file"
+export BOT_ENV_FILE
+check_env_bot_required "$env_file"
+provider=$(get_bot_provider "$env_file")
 check_provider_image "$provider" >/dev/null
 
 echo "Clearing provider auth state from bot-home volume (no Postgres required)..."
-docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot --env-file .env.bot run --rm bot-provider sh -c '
+bot_compose run --rm bot-provider sh -c '
   removed=
   for d in /home/bot/.config/Claude /home/bot/.config/claude /home/bot/.config/Codex /home/bot/.config/codex /home/bot/.config/openai /home/bot/.local/share/Claude /home/bot/.local/share/codex; do
     if [ -d "$d" ] || [ -f "$d" ]; then

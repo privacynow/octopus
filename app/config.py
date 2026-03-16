@@ -1,6 +1,7 @@
 """Configuration loading, validation, and fail-fast checks."""
 
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass
@@ -25,6 +26,13 @@ def load_dotenv_file(path: Path) -> dict[str, str]:
 
 def env_path_for_instance(instance: str) -> Path:
     return Path.home() / ".config" / "telegram-agent-bot" / f"{instance}.env"
+
+
+def derive_agent_slug(raw: str, *, fallback: str = "agent") -> str:
+    """Derive a stable, human-safe slug from a display name or instance id."""
+    value = (raw or "").strip().lower()
+    value = re.sub(r"[^a-z0-9]+", "-", value).strip("-")
+    return value or fallback
 
 
 def parse_allowed_users(raw: str) -> tuple[set[int], set[str]]:
@@ -97,6 +105,17 @@ class BotConfig:
     public_model_profiles: frozenset[str]  # allowed profiles for public users (empty = all)
     # Skill registry
     registry_url: str  # URL to a JSON skill registry index (empty = disabled)
+    # Agent/registry runtime
+    agent_mode: str  # "registry" (default via setup) | "standalone"
+    agent_display_name: str
+    agent_slug: str
+    agent_role: str
+    agent_tags: tuple[str, ...]
+    agent_description: str
+    agent_skills: tuple[str, ...]
+    agent_registry_url: str
+    agent_registry_enroll_token: str
+    agent_poll_interval_seconds: float
     # Runtime (Phase 13). local = only supported mode; shared = rejected until Phase 18.
     runtime_mode: str  # BOT_RUNTIME_MODE: "local" (default) | "shared" (rejected)
     # Postgres optional for local runtime. Empty = SQLite (default); set = Postgres as store backend.
@@ -225,6 +244,23 @@ def load_config(instance: str | None = None) -> BotConfig:
         s.strip() for s in default_skills_raw.split(",") if s.strip()
     )
 
+    agent_display_name = get("BOT_AGENT_DISPLAY_NAME", instance).strip() or instance
+    agent_registry_url = get("BOT_AGENT_REGISTRY_URL").strip()
+    raw_agent_mode = get("BOT_AGENT_MODE", "").strip().lower()
+    agent_mode = raw_agent_mode or ("registry" if agent_registry_url else "standalone")
+    agent_role = get("BOT_AGENT_ROLE").strip()
+    agent_tags = tuple(
+        s.strip() for s in get("BOT_AGENT_TAGS").split(",") if s.strip()
+    )
+    raw_agent_skills = get("BOT_AGENT_SKILLS").strip()
+    agent_skills = tuple(
+        s.strip() for s in raw_agent_skills.split(",") if s.strip()
+    ) if raw_agent_skills else default_skills
+    agent_slug = derive_agent_slug(
+        get("BOT_AGENT_SLUG").strip() or agent_display_name,
+        fallback=derive_agent_slug(instance, fallback="agent"),
+    )
+
     raw_users = get("BOT_ALLOWED_USERS")
     user_ids, usernames = parse_allowed_users(raw_users)
 
@@ -283,6 +319,16 @@ def load_config(instance: str | None = None) -> BotConfig:
             s.strip() for s in get("BOT_PUBLIC_MODEL_PROFILES").split(",") if s.strip()
         ),
         registry_url=get("BOT_REGISTRY_URL"),
+        agent_mode=agent_mode,
+        agent_display_name=agent_display_name,
+        agent_slug=agent_slug,
+        agent_role=agent_role,
+        agent_tags=agent_tags,
+        agent_description=get("BOT_AGENT_DESCRIPTION").strip(),
+        agent_skills=agent_skills,
+        agent_registry_url=agent_registry_url,
+        agent_registry_enroll_token=get("BOT_AGENT_REGISTRY_ENROLL_TOKEN").strip(),
+        agent_poll_interval_seconds=max(1.0, get_float("BOT_AGENT_POLL_INTERVAL_SECONDS", "5.0")),
         runtime_mode=get("BOT_RUNTIME_MODE", "local").strip().lower() or "local",
         database_url=get("BOT_DATABASE_URL", "").strip(),
         db_pool_min_size=max(0, get_int("BOT_DB_POOL_MIN_SIZE", "1")),
@@ -365,6 +411,16 @@ def load_config_provider_health() -> BotConfig:
         public_working_dir="",
         public_model_profiles=frozenset(),
         registry_url="",
+        agent_mode="standalone",
+        agent_display_name=instance,
+        agent_slug=derive_agent_slug(instance, fallback="agent"),
+        agent_role="",
+        agent_tags=(),
+        agent_description="",
+        agent_skills=(),
+        agent_registry_url="",
+        agent_registry_enroll_token="",
+        agent_poll_interval_seconds=5.0,
         runtime_mode="local",
         database_url="",
         db_pool_min_size=1,
@@ -420,6 +476,22 @@ def validate_config(config: BotConfig) -> list[str]:
         errors.append(
             f"BOT_MODE must be 'poll' or 'webhook', got '{config.bot_mode}'"
         )
+
+    if config.agent_mode not in {"registry", "standalone"}:
+        errors.append(
+            f"BOT_AGENT_MODE must be 'registry' or 'standalone', got '{config.agent_mode}'"
+        )
+
+    if config.agent_registry_url and not (
+        config.agent_registry_url.startswith("http://")
+        or config.agent_registry_url.startswith("https://")
+    ):
+        errors.append(
+            "BOT_AGENT_REGISTRY_URL must start with http:// or https:// when set"
+        )
+
+    if config.agent_poll_interval_seconds <= 0:
+        errors.append("BOT_AGENT_POLL_INTERVAL_SECONDS must be greater than 0")
 
     if config.runtime_mode == "shared":
         errors.append(

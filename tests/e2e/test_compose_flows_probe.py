@@ -105,6 +105,7 @@ def test_e2e_skip_fixture_skips_with_opt_in_message_when_env_unset():
     import sys
     repo_root = Path(__file__).resolve().parent.parent.parent
     env = {k: v for k, v in os.environ.items() if k != "E2E_COMPOSE"}
+    env["E2E_COMPOSE_NO_AUTODETECT"] = "1"
     r = subprocess.run(
         [
             sys.executable,

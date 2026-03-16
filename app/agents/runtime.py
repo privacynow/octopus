@@ -166,7 +166,11 @@ class AgentRuntime:
         return len(deliveries)
 
     async def run_forever(self, stop_event: asyncio.Event) -> None:
-        interval = max(1.0, self.config.agent_poll_interval_seconds)
+        import random
+
+        base = max(1.0, self.config.agent_poll_interval_seconds)
+        max_backoff = min(300.0, base * 32)
+        current_backoff = base
         while not stop_event.is_set():
             state = await self.sync_once()
             if state == "connected":
@@ -177,8 +181,13 @@ class AgentRuntime:
                     self._mark_state("degraded", error=str(exc))
                 except Exception:
                     log.exception("Unexpected registry poll failure for %s", self.config.instance)
+            if self._state.connectivity_state == "connected":
+                current_backoff = base
+            else:
+                current_backoff = min(current_backoff * 2, max_backoff)
+            sleep_time = random.uniform(0, current_backoff)
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+                await asyncio.wait_for(stop_event.wait(), timeout=sleep_time)
             except asyncio.TimeoutError:
                 continue
 

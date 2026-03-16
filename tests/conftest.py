@@ -49,9 +49,13 @@ def pytest_unconfigure(config):
 def reset_handler_runtime():
     """Reset handler globals and DB caches before and after each test (Priority 4)."""
     from tests.support.handler_support import reset_handler_test_runtime
+    from app.registry_service.backend import reset_for_test as reset_registry_store
+
+    reset_registry_store()
     reset_handler_test_runtime()
     yield
     reset_handler_test_runtime()
+    reset_registry_store()
 
 
 # ---------------------------------------------------------------------------
@@ -113,4 +117,15 @@ def postgres_truncated(postgres_db_url):
     from tests.support.postgres_support import truncate_runtime_tables
     with get_connection(postgres_db_url) as conn:
         truncate_runtime_tables(conn)
+    yield postgres_db_url
+
+
+@pytest.fixture
+def postgres_registry_truncated(postgres_db_url):
+    """Postgres URL for current worker with registry tables truncated (clean slate)."""
+    from app.db.postgres import get_connection
+    from tests.support.postgres_support import truncate_registry_tables
+
+    with get_connection(postgres_db_url) as conn:
+        truncate_registry_tables(conn)
     yield postgres_db_url

@@ -6,7 +6,7 @@ import sqlite3
 from fastapi.testclient import TestClient
 
 from app.registry_service.app import app
-from app.registry_service.store import RegistryStore
+from app.registry_service.store import RegistrySQLiteStore
 
 
 def _configure_registry(monkeypatch, tmp_path: Path) -> None:
@@ -661,8 +661,8 @@ def test_registry_store_migrations_are_idempotent_and_add_skills_override_and_ti
     conn.commit()
     conn.close()
 
-    RegistryStore(db_path)
-    RegistryStore(db_path)
+    RegistrySQLiteStore(db_path)
+    RegistrySQLiteStore(db_path)
 
     conn = sqlite3.connect(db_path)
     version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]

@@ -5,10 +5,10 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.registry_service.app import app
-from app.registry_service.store import RegistryStore
+from app.registry_service.store import RegistrySQLiteStore
 
 
-def _register_agent(store: RegistryStore, *, name: str, slug: str, skills: list[str]) -> tuple[str, str]:
+def _register_agent(store: RegistrySQLiteStore, *, name: str, slug: str, skills: list[str]) -> tuple[str, str]:
     enrolled = store.enroll(
         {
             "display_name": name,
@@ -47,8 +47,8 @@ def _register_agent(store: RegistryStore, *, name: str, slug: str, skills: list[
     return enrolled["agent_id"], enrolled["agent_token"]
 
 
-def _store(tmp_path: Path) -> RegistryStore:
-    return RegistryStore(tmp_path / "registry.sqlite3")
+def _store(tmp_path: Path) -> RegistrySQLiteStore:
+    return RegistrySQLiteStore(tmp_path / "registry.sqlite3")
 
 
 def _configure_registry(monkeypatch, tmp_path: Path) -> None:
@@ -126,7 +126,7 @@ def test_disabled_skill_absent_from_search_results(tmp_path: Path):
 def test_ui_skills_endpoints_toggle_override_and_affect_search(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
-    store = RegistryStore(tmp_path / "registry.sqlite3")
+    store = RegistrySQLiteStore(tmp_path / "registry.sqlite3")
     _, agent_token = _register_agent(store, name="Alpha Bot", slug="alpha-bot", skills=["web_search"])
 
     listed = client.get("/v1/ui/skills", headers={"Authorization": "Bearer ui-secret"})

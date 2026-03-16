@@ -16,7 +16,8 @@ from fastapi import Depends, FastAPI, Form, Header, HTTPException, Query, Reques
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.registry_service.store import RegistryStore, SkillDisabledError
+from app.registry_service.backend import get_registry_store
+from app.registry_service.store_base import AbstractRegistryStore, SkillDisabledError
 
 log = logging.getLogger(__name__)
 _SESSION_TTL_SECONDS = 24 * 60 * 60
@@ -43,13 +44,13 @@ def load_settings() -> RegistrySettings:
     return RegistrySettings(db_path=db_path, enroll_token=enroll_token, ui_token=ui_token, display_name=display_name)
 
 
-def get_store() -> RegistryStore:
-    return RegistryStore(load_settings().db_path)
+def get_store() -> AbstractRegistryStore:
+    return get_registry_store()
 
 
 def require_agent_token(
     authorization: str | None = Header(default=None),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> str:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing bearer token")
@@ -185,12 +186,12 @@ app.add_middleware(
 
 
 @app.get("/healthz")
-def healthz(store: RegistryStore = Depends(get_store)) -> dict[str, Any]:
+def healthz(store: AbstractRegistryStore = Depends(get_store)) -> dict[str, Any]:
     return {"ok": True, "bots": len(store.list_agents())}
 
 
 @app.post("/v1/agents/enroll")
-def enroll(payload: dict[str, Any], store: RegistryStore = Depends(get_store)) -> dict[str, Any]:
+def enroll(payload: dict[str, Any], store: AbstractRegistryStore = Depends(get_store)) -> dict[str, Any]:
     settings = load_settings()
     enroll_tok = payload.get("enrollment_token") or ""
     if not hmac.compare_digest(enroll_tok, settings.enroll_token):
@@ -203,7 +204,7 @@ def enroll(payload: dict[str, Any], store: RegistryStore = Depends(get_store)) -
 def register(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
         return store.register(agent_token, payload)
@@ -215,7 +216,7 @@ def register(
 def heartbeat(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
         return store.heartbeat(agent_token, payload)
@@ -227,7 +228,7 @@ def heartbeat(
 def publish_timeline(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
         return store.publish_timeline(agent_token, payload.get("events", []))
@@ -239,7 +240,7 @@ def publish_timeline(
 def bind_conversation(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
         return store.bind_conversation(agent_token, payload)
@@ -251,7 +252,7 @@ def bind_conversation(
 def search_agents(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
         # Auth check only; search itself does not need the token contents.
@@ -265,7 +266,7 @@ def search_agents(
 def create_routed_task(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
         store.heartbeat(agent_token, {"connectivity_state": "connected"})
@@ -282,7 +283,7 @@ def poll(
     limit: int = Query(default=20, ge=1, le=100),
     wait_seconds: int = Query(default=1, ge=0, le=30),
     agent_token: str = Depends(require_agent_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     del wait_seconds
     try:
@@ -295,7 +296,7 @@ def poll(
 def ack(
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
         return store.ack(
@@ -312,7 +313,7 @@ def routed_task_status(
     routed_task_id: str,
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
         return store.update_routed_task_status(agent_token, routed_task_id, payload)
@@ -325,7 +326,7 @@ def routed_task_result(
     routed_task_id: str,
     payload: dict[str, Any],
     agent_token: str = Depends(require_agent_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
         return store.update_routed_task_result(agent_token, routed_task_id, payload)
@@ -338,7 +339,7 @@ def routed_task_result(
 @app.post("/v1/agents/deregister")
 def deregister(
     agent_token: str = Depends(require_agent_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
         return store.deregister(agent_token)
@@ -1538,17 +1539,17 @@ def ui_shell(request: Request) -> str:
 
 
 @app.get("/v1/ui/bootstrap")
-def ui_bootstrap(_: None = Depends(require_ui_token), store: RegistryStore = Depends(get_store)) -> dict[str, Any]:
+def ui_bootstrap(_: None = Depends(require_ui_token), store: AbstractRegistryStore = Depends(get_store)) -> dict[str, Any]:
     return store.ui_bootstrap()
 
 
 @app.get("/v1/ui/bots")
-def ui_bots(_: None = Depends(require_ui_token), store: RegistryStore = Depends(get_store)) -> dict[str, Any]:
+def ui_bots(_: None = Depends(require_ui_token), store: AbstractRegistryStore = Depends(get_store)) -> dict[str, Any]:
     return {"bots": store.list_agents()}
 
 
 @app.get("/v1/ui/conversations")
-def ui_conversations(_: None = Depends(require_ui_token), store: RegistryStore = Depends(get_store)) -> dict[str, Any]:
+def ui_conversations(_: None = Depends(require_ui_token), store: AbstractRegistryStore = Depends(get_store)) -> dict[str, Any]:
     return {"conversations": store.list_conversations()}
 
 
@@ -1557,7 +1558,7 @@ def ui_search(
     q: str = "",
     limit: int = 20,
     _: None = Depends(require_ui_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     q = q.strip()
     if len(q) < 3:
@@ -1566,7 +1567,7 @@ def ui_search(
 
 
 @app.get("/v1/ui/skills")
-def ui_skills(_: None = Depends(require_ui_token), store: RegistryStore = Depends(get_store)) -> list[dict[str, Any]]:
+def ui_skills(_: None = Depends(require_ui_token), store: AbstractRegistryStore = Depends(get_store)) -> list[dict[str, Any]]:
     return store.list_skills()
 
 
@@ -1574,7 +1575,7 @@ def ui_skills(_: None = Depends(require_ui_token), store: RegistryStore = Depend
 def ui_enable_skill(
     skill_name: str,
     _: None = Depends(require_ui_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     store.set_skill_override(skill_name, enabled=True)
     return {"skill_name": skill_name, "enabled": True}
@@ -1584,7 +1585,7 @@ def ui_enable_skill(
 def ui_disable_skill(
     skill_name: str,
     _: None = Depends(require_ui_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     store.set_skill_override(skill_name, enabled=False)
     return {"skill_name": skill_name, "enabled": False}
@@ -1594,7 +1595,7 @@ def ui_disable_skill(
 def ui_create_conversation(
     payload: dict[str, Any],
     _: None = Depends(require_ui_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     return store.create_conversation(
         target_agent_id=payload["target_agent_id"],
@@ -1607,7 +1608,7 @@ def ui_create_conversation(
 def ui_get_conversation(
     conversation_id: str,
     _: None = Depends(require_ui_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
         return store.get_conversation(conversation_id)
@@ -1619,7 +1620,7 @@ def ui_get_conversation(
 def ui_get_conversation_timeline(
     conversation_id: str,
     _: None = Depends(require_ui_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     return {"events": store.get_conversation_timeline(conversation_id)}
 
@@ -1628,7 +1629,7 @@ def ui_get_conversation_timeline(
 def ui_export_conversation(
     conversation_id: str,
     _: None = Depends(require_ui_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> Response:
     try:
         conv = store.get_conversation(conversation_id)
@@ -1665,7 +1666,7 @@ def ui_add_conversation_message(
     conversation_id: str,
     payload: dict[str, Any],
     _: None = Depends(require_ui_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     return store.add_conversation_message(conversation_id, payload.get("text", ""))
 
@@ -1675,7 +1676,7 @@ def ui_add_conversation_action(
     conversation_id: str,
     payload: dict[str, Any],
     _: None = Depends(require_ui_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     return store.add_conversation_action(
         conversation_id,
@@ -1688,11 +1689,11 @@ def ui_add_conversation_action(
 def ui_cancel_conversation(
     conversation_id: str,
     _: None = Depends(require_ui_token),
-    store: RegistryStore = Depends(get_store),
+    store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     return store.cancel_conversation(conversation_id)
 
 
 @app.get("/v1/ui/tasks")
-def ui_tasks(_: None = Depends(require_ui_token), store: RegistryStore = Depends(get_store)) -> dict[str, Any]:
+def ui_tasks(_: None = Depends(require_ui_token), store: AbstractRegistryStore = Depends(get_store)) -> dict[str, Any]:
     return {"tasks": store.list_tasks()}

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import uuid
 from pathlib import Path
 from typing import Any
 
 import app.telegram_handlers as _th
+from app import work_queue
+from app.agents.bridge import build_registry_message_delivery
 from tests.support.handler_support import (
     FakeChat,
     FakeContext,
@@ -62,6 +65,38 @@ class ConversationSimulator:
         upd = FakeUpdate(message=msg, user=user, chat=chat)
         await _th.handle_message(upd, FakeContext())
         return upd
+
+    async def inject_registry_message_async(
+        self,
+        conversation_ref: str,
+        text: str,
+        actor_ref: str,
+        *,
+        skip_approval: bool = False,
+    ) -> dict[str, Any]:
+        """Admit a registry-surface message through the same durable worker boundary."""
+        chat_id, user_id, update_id, payload = build_registry_message_delivery(
+            conversation_ref=conversation_ref,
+            text=text,
+            actor_ref=actor_ref,
+            delivery_id=f"sim-registry:{uuid.uuid4().hex}",
+            skip_approval=skip_approval,
+        )
+        status, item_id = work_queue.record_and_admit_message(
+            self.data_dir,
+            update_id,
+            chat_id,
+            user_id,
+            "message",
+            payload,
+        )
+        return {
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "update_id": update_id,
+            "status": status,
+            "item_id": item_id,
+        }
 
     async def inject_command_async(self, chat_id: int, user_id: int, command: str, args: list[str] | None = None) -> FakeUpdate:
         """Send a command (e.g. /cancel). Returns the FakeUpdate so tests can use update_id and effective_message for reply assertions."""

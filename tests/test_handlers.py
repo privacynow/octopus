@@ -1,11 +1,19 @@
 """Core handler integration tests: happy-path routing, session lifecycle, /help, /start, /doctor, /project."""
 
+import asyncio
 import re
 import tempfile
 from pathlib import Path
 
+import pytest
+
+from app.agents.bridge import registry_chat_id
+from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+from app.agents.delivery import handle_registry_delivery
 from app.providers.base import RunContext, RunResult
+from app.transport import InboundMessage, InboundUser
 from app.storage import default_session, save_session
+from app import work_queue
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
@@ -27,6 +35,11 @@ from tests.support.handler_support import (
     send_text,
     setup_globals,
 )
+
+
+async def async_noop(*args, **kwargs):
+    del args, kwargs
+    return None
 
 
 async def test_happy_path():
@@ -59,6 +72,1221 @@ async def test_happy_path():
         bot = th._bot_instance
         assert len(bot.sent_messages) >= 2
         assert "Hello world" in " ".join(m.get("text", "") for m in bot.sent_messages)
+
+
+async def test_worker_dispatch_schedules_completion_webhook_for_terminal_outcome(monkeypatch):
+    with fresh_env(
+        config_overrides={"completion_webhook_url": "https://hooks.example.com/completed"}
+    ) as (data_dir, _cfg, prov):
+        import app.telegram_handlers as th
+
+        called: list[dict[str, object]] = []
+
+        async def fake_fire(url, *, chat_id, conversation_ref, status, summary, completed_at):
+            called.append(
+                {
+                    "url": url,
+                    "chat_id": chat_id,
+                    "conversation_ref": conversation_ref,
+                    "status": status,
+                    "summary": summary,
+                    "completed_at": completed_at,
+                }
+            )
+
+        monkeypatch.setattr("app.webhook.fire_completion_webhook", fake_fire)
+        prov.run_results = [RunResult(text="Terminal reply from provider.")]
+
+        event = InboundMessage(
+            user=InboundUser(id=42, username="telegram-user"),
+            chat_id=12345,
+            text="Do the thing.",
+            source="telegram",
+        )
+        item = {"id": "webhook-item-1", "chat_id": 12345, "update_id": 7001, "dispatch_mode": "fresh"}
+
+        await th.worker_dispatch("message", event, item)
+        await asyncio.sleep(0)
+
+        assert len(called) == 1
+        assert called[0]["url"] == "https://hooks.example.com/completed"
+        assert called[0]["chat_id"] == 12345
+        assert called[0]["status"] == "completed"
+        assert "Terminal reply from provider." in str(called[0]["summary"])
+
+
+async def test_worker_dispatch_skips_completion_webhook_for_delegation_proposed(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "off",
+            "completion_webhook_url": "https://hooks.example.com/completed",
+        }
+    ) as (_data_dir, _cfg, prov):
+        import app.telegram_handlers as th
+
+        called: list[dict[str, object]] = []
+
+        async def fake_fire(url, *, chat_id, conversation_ref, status, summary, completed_at):
+            called.append(
+                {
+                    "url": url,
+                    "chat_id": chat_id,
+                    "conversation_ref": conversation_ref,
+                    "status": status,
+                    "summary": summary,
+                    "completed_at": completed_at,
+                }
+            )
+
+        monkeypatch.setattr("app.webhook.fire_completion_webhook", fake_fire)
+        prov.run_results = [
+            RunResult(
+                text="",
+                delegation_title="Delegation plan",
+                delegation_resume_instruction="Resume after child completion.",
+                delegation_tasks=[
+                    {
+                        "routed_task_id": "task-1",
+                        "title": "Delegate task",
+                        "target_agent_id": "developer-1",
+                        "instructions": "Do the delegated work.",
+                    }
+                ],
+            )
+        ]
+
+        event = InboundMessage(
+            user=InboundUser(id=42, username="registry-ui"),
+            chat_id=12345,
+            text="Delegate this work.",
+            source="registry",
+            conversation_ref="registry:conv-webhook",
+        )
+        item = {"id": "webhook-item-2", "chat_id": 12345, "update_id": 7002, "dispatch_mode": "fresh"}
+
+        await th.worker_dispatch("message", event, item)
+        await asyncio.sleep(0)
+
+        assert called == []
+
+
+async def test_help_and_start_include_discover_in_registry_mode():
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            agent_mode="registry",
+            agent_registry_url="http://registry.test",
+            agent_registry_enroll_token="enroll-secret",
+        )
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+
+        help_msg = await send_command(th.cmd_help, chat, user, "/help")
+        start_msg = await send_command(th.cmd_start, chat, user, "/start")
+
+        assert "/discover" in help_msg.replies[0]["text"]
+        assert "/discover" in start_msg.replies[0]["text"]
+
+
+async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, _cfg, prov):
+        import app.telegram_handlers as th
+        from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+
+        seen_queries: list[object] = []
+
+        class FakeRegistryClient:
+            async def search(self, query):
+                seen_queries.append(query)
+                return [
+                    {
+                        "agent_id": "agent-2",
+                        "display_name": "Dev Bot",
+                        "slug": "dev-bot",
+                        "role": "developer",
+                        "skills": ["python", "testing"],
+                        "tags": ["backend"],
+                        "description": "Builds backend features.",
+                        "connectivity_state": "connected",
+                        "current_capacity": 0,
+                        "max_capacity": 2,
+                    }
+                ]
+
+        save_agent_runtime_state(
+            data_dir,
+            AgentRuntimeState(
+                agent_id="self-agent",
+                agent_token="agent-token",
+                connectivity_state="connected",
+            ),
+        )
+        monkeypatch.setattr(th, "registry_client", lambda config: FakeRegistryClient())
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_discover,
+            chat,
+            user,
+            "/discover role:developer skill:python tag:backend schema review",
+            args=["role:developer", "skill:python", "tag:backend", "schema", "review"],
+        )
+
+        assert seen_queries
+        query = seen_queries[0]
+        assert query.role == "developer"
+        assert query.skills == ("python",)
+        assert query.tags == ("backend",)
+        assert query.free_text == "schema review"
+        assert query.exclude_agent_ids == ("self-agent",)
+        reply = msg.replies[0]["text"]
+        assert "Dev Bot" in reply
+        assert "developer" in reply
+        assert "python, testing" in reply
+        assert "Builds backend features." in reply
+
+
+async def test_discover_standalone_reports_unavailable():
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, agent_mode="standalone")
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+
+        import app.telegram_handlers as th
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_discover,
+            chat,
+            user,
+            "/discover role:developer",
+            args=["role:developer"],
+        )
+
+        assert "standalone mode" in msg.replies[0]["text"]
+
+
+async def test_discover_degraded_reports_registry_connectivity():
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, _cfg, prov):
+        import app.telegram_handlers as th
+        from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+
+        save_agent_runtime_state(
+            data_dir,
+            AgentRuntimeState(
+                agent_id="self-agent",
+                agent_token="agent-token",
+                connectivity_state="degraded",
+                last_error="registry unavailable",
+            ),
+        )
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_discover,
+            chat,
+            user,
+            "/discover role:developer",
+            args=["role:developer"],
+        )
+
+        reply = msg.replies[0]["text"]
+        assert "registry connectivity is degraded" in reply.lower()
+        assert "registry unavailable" in reply
+
+
+async def test_registry_surface_input_respects_approval_mode():
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        event = InboundMessage(
+            user=InboundUser(id=42, username="registry-ui"),
+            chat_id=12345,
+            text="Please refine this specification.",
+            source="registry",
+            conversation_ref="registry-conv-1",
+        )
+        item = {"id": "registry-item-1", "chat_id": 12345, "update_id": 7001, "dispatch_mode": "fresh"}
+
+        await th.worker_dispatch("message", event, item)
+
+        session = load_session_disk(data_dir, 12345, prov)
+        assert len(prov.preflight_calls) == 1
+        assert len(prov.run_calls) == 0
+        assert session.get("pending_approval") is not None
+
+
+async def test_approve_delegation_from_registry_delivery(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        submitted = []
+
+        class FakeRegistryClient:
+            async def submit_routed_task(self, request):
+                submitted.append(request)
+                return {"ok": True}
+
+        monkeypatch.setattr("app.agents.delegation.registry_client", lambda _cfg: FakeRegistryClient())
+        save_agent_runtime_state(
+            data_dir,
+            AgentRuntimeState(
+                agent_id="origin-agent",
+                agent_token="secret",
+                connectivity_state="connected",
+            ),
+        )
+        save_session(
+            data_dir,
+            registry_chat_id("registry:conv-approve"),
+            {
+                **default_session(prov.name, prov.new_provider_state(), "off"),
+                "pending_delegation": {
+                    "conversation_ref": "registry:conv-approve",
+                    "title": "Registry delegation",
+                    "tasks": [
+                        {
+                            "routed_task_id": "task-1",
+                            "title": "Implement feature",
+                            "target_agent_id": "developer-1",
+                            "instructions": "Build the feature.",
+                            "status": "proposed",
+                        }
+                    ],
+                },
+            },
+        )
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "surface_action",
+                "payload": {
+                    "conversation_ref": "registry:conv-approve",
+                    "action": "approve_delegation",
+                    "payload": {},
+                },
+            },
+        )
+
+        session_after = load_session_disk(data_dir, registry_chat_id("registry:conv-approve"), prov)
+        pending = session_after.get("pending_delegation")
+        assert outcome == "accepted"
+        assert len(submitted) == 1
+        assert pending is not None
+        assert pending["status"] == "submitted"
+        assert pending["tasks"][0]["status"] == "submitted"
+
+
+async def test_cancel_delegation_from_registry_delivery():
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        save_session(
+            data_dir,
+            registry_chat_id("registry:conv-cancel"),
+            {
+                **default_session(prov.name, prov.new_provider_state(), "off"),
+                "pending_delegation": {
+                    "conversation_ref": "registry:conv-cancel",
+                    "title": "Registry delegation",
+                    "tasks": [
+                        {
+                            "routed_task_id": "task-1",
+                            "title": "Implement feature",
+                            "target_agent_id": "developer-1",
+                            "instructions": "Build the feature.",
+                            "status": "proposed",
+                        }
+                    ],
+                },
+            },
+        )
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "surface_action",
+                "payload": {
+                    "conversation_ref": "registry:conv-cancel",
+                    "action": "cancel_delegation",
+                    "payload": {},
+                },
+            },
+        )
+
+        session_after = load_session_disk(data_dir, registry_chat_id("registry:conv-cancel"), prov)
+        assert outcome == "accepted"
+        assert session_after.get("pending_delegation") is None
+
+
+async def test_delegation_proposed_event_published(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "off",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (_, _, prov):
+        import app.telegram_handlers as th
+        from app.transports.registry_adapter import RegistryConversationIO
+
+        published: list[tuple[str, str, str]] = []
+
+        async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
+            del self, status, progress, metadata, event_id
+            published.append((kind, title, body))
+
+        monkeypatch.setattr("app.transports.registry_adapter.bind_conversation", async_noop)
+        monkeypatch.setattr(RegistryConversationIO, "_publish_event", fake_publish_event)
+        prov.run_results = [
+            RunResult(
+                text="",
+                delegation_title="Feature delegation",
+                delegation_resume_instruction="Continue after the child tasks return.",
+                delegation_tasks=[
+                    {
+                        "routed_task_id": "task-1",
+                        "title": "Implement feature",
+                        "target_agent_id": "developer-1",
+                        "instructions": "Build the feature.",
+                    }
+                ],
+            )
+        ]
+
+        event = InboundMessage(
+            user=InboundUser(id=42, username="registry-ui"),
+            chat_id=12345,
+            text="Ship the feature.",
+            source="registry",
+            conversation_ref="registry:conv-proposed",
+        )
+        item = {"id": "registry-item-proposed", "chat_id": 12345, "update_id": 7101, "dispatch_mode": "fresh"}
+
+        await th.worker_dispatch("message", event, item)
+
+        assert any(kind == "delegation_proposed" for kind, _title, _body in published)
+
+
+async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (_, cfg, prov):
+        import app.telegram_handlers as th
+        import app.agents.bridge as bridge
+        from app.transports.registry_adapter import RegistryConversationIO
+
+        reported: list[tuple[str, object]] = []
+
+        class FakeRegistryClient:
+            async def sync_binding(self, **kwargs):
+                reported.append(("binding", kwargs))
+                return {"ok": True}
+
+            async def publish_timeline(self, events, *, checkpoint: str = ""):
+                del checkpoint
+                reported.append(("timeline", events))
+                return {"accepted": len(events)}
+
+            async def routed_task_result(self, routed_task_id, result):
+                reported.append(("result", routed_task_id, result))
+                return {"ok": True}
+
+        monkeypatch.setattr(th, "registry_client", lambda config: FakeRegistryClient())
+        monkeypatch.setattr(bridge, "registry_client", lambda config: FakeRegistryClient())
+        monkeypatch.setattr("app.transports.registry_adapter.bind_conversation", async_noop)
+
+        async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
+            del self, status, progress, metadata, event_id
+            reported.append(("surface_event", kind, title, body))
+
+        monkeypatch.setattr(RegistryConversationIO, "_publish_event", fake_publish_event)
+        prov.run_results = [RunResult(text="Delegated review complete.")]
+
+        event = InboundMessage(
+            user=InboundUser(id=42, username="origin-bot"),
+            chat_id=12345,
+            text="Review the latest spec.",
+            source="registry",
+            conversation_ref="routed-task-1",
+            routed_task_id="routed-task-1",
+        )
+        item = {"id": "registry-item-2", "chat_id": 12345, "update_id": 7002, "dispatch_mode": "fresh"}
+
+        await th.worker_dispatch("message", event, item)
+
+        assert len(prov.preflight_calls) == 0
+        assert len(prov.run_calls) == 1
+        assert any(
+            entry[0] == "surface_event" and entry[1] == "started"
+            for entry in reported
+        )
+        result_entries = [entry for entry in reported if entry[0] == "result"]
+        assert len(result_entries) == 1
+        _, routed_task_id, result = result_entries[0]
+        assert routed_task_id == "routed-task-1"
+        assert result.status == "completed"
+        assert "Delegated review complete." in result.full_text
+        assert any(
+            entry[0] == "surface_event" and entry[1] == "completed" and "Delegated review complete." in entry[3]
+            for entry in reported
+        )
+
+
+async def test_registry_routed_task_result_report_failure_does_not_escape_worker(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (_, cfg, prov):
+        import app.telegram_handlers as th
+        import app.agents.bridge as bridge
+
+        class FakeRegistryClient:
+            async def sync_binding(self, **kwargs):
+                return {"ok": True}
+
+            async def publish_timeline(self, events, *, checkpoint: str = ""):
+                del events, checkpoint
+                return {"accepted": 0}
+
+            async def routed_task_result(self, routed_task_id, result):
+                del routed_task_id, result
+                raise RuntimeError("registry unavailable")
+
+        monkeypatch.setattr(th, "registry_client", lambda config: FakeRegistryClient())
+        monkeypatch.setattr(bridge, "registry_client", lambda config: FakeRegistryClient())
+        prov.run_results = [RunResult(text="Delegated review complete.")]
+
+        event = InboundMessage(
+            user=InboundUser(id=42, username="origin-bot"),
+            chat_id=12345,
+            text="Review the latest spec.",
+            source="registry",
+            conversation_ref="routed-task-2",
+            routed_task_id="routed-task-2",
+        )
+        item = {"id": "registry-item-3", "chat_id": 12345, "update_id": 7003, "dispatch_mode": "fresh"}
+
+        await th.worker_dispatch("message", event, item)
+
+        assert len(prov.run_calls) == 1
+
+
+async def test_registry_routed_result_resumes_parent_conversation_without_new_approval():
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        chat_id = 12345
+        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_delegation"] = {
+            "conversation_ref": conversation_ref,
+            "title": "Spec delegation",
+            "resume_instruction": "Use the delegated result to finish the parent task.",
+            "tasks": [
+                {
+                    "routed_task_id": "child-task-1",
+                    "title": "Developer task",
+                    "status": "pending",
+                }
+            ],
+        }
+        save_session(data_dir, chat_id, session)
+        prov.run_results = [RunResult(text="Final synthesized answer.")]
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-1",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Implementation complete",
+                        "full_text": "The delegated developer task completed successfully.",
+                    },
+                },
+            },
+        )
+
+        assert outcome == "accepted"
+        assert await drain_one_worker_item(data_dir) is True
+        assert len(prov.run_calls) == 1
+        assert "delegated developer task completed successfully" in prov.run_calls[0]["prompt"].lower()
+        session_after = load_session_disk(data_dir, chat_id, prov)
+        assert session_after.get("pending_approval") is None
+        assert session_after.get("pending_delegation") is None
+        assert any(
+            "Final synthesized answer." in message.get("text", "")
+            for message in th._bot_instance.sent_messages
+        )
+
+
+async def test_delegation_completion_sends_final_message_all_completed():
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        chat_id = 12345
+        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_delegation"] = {
+            "conversation_ref": conversation_ref,
+            "title": "Spec delegation",
+            "tasks": [
+                {
+                    "routed_task_id": "child-task-1",
+                    "title": "Implement feature",
+                    "status": "submitted",
+                }
+            ],
+        }
+        save_session(data_dir, chat_id, session)
+        prov.run_results = [RunResult(text="Final parent answer.")]
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-1",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Implementation done",
+                        "full_text": "Feature implemented successfully.",
+                    },
+                },
+            },
+        )
+
+        assert outcome == "accepted"
+        assert any(
+            "All delegated tasks completed." in message.get("text", "")
+            for message in th._bot_instance.sent_messages
+        )
+        assert await drain_one_worker_item(data_dir) is True
+
+
+async def test_delegation_completion_sends_final_message_partial_failed():
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        chat_id = 12345
+        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_delegation"] = {
+            "conversation_ref": conversation_ref,
+            "title": "Spec delegation",
+            "tasks": [
+                {
+                    "routed_task_id": "child-task-1",
+                    "title": "Implement feature",
+                    "status": "submitted",
+                },
+                {
+                    "routed_task_id": "child-task-2",
+                    "title": "Review feature",
+                    "status": "submitted",
+                },
+            ],
+        }
+        save_session(data_dir, chat_id, session)
+        prov.run_results = [RunResult(text="Final parent answer.")]
+
+        first = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-1",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Implementation done",
+                        "full_text": "Feature implemented successfully.",
+                    },
+                },
+            },
+        )
+        second = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-2",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "failed",
+                        "summary": "Review crashed",
+                        "full_text": "Review tool crashed.",
+                    },
+                },
+            },
+        )
+
+        assert first == "accepted"
+        assert second == "accepted"
+        summary_texts = " ".join(message.get("text", "") for message in th._bot_instance.sent_messages)
+        assert "Some delegated tasks failed." in summary_texts
+        assert "Review feature [failed]" in summary_texts
+        assert "retry the failed tasks" in summary_texts
+
+
+async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        chat_id = 12345
+        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_delegation"] = {
+            "conversation_ref": conversation_ref,
+            "title": "Spec delegation",
+            "tasks": [
+                {
+                    "routed_task_id": "child-task-2",
+                    "title": "Reviewer task",
+                    "status": "pending",
+                }
+            ],
+        }
+        save_session(data_dir, chat_id, session)
+
+        monkeypatch.setattr(
+            "app.agents.delivery.work_queue.record_and_admit_message",
+            lambda *args, **kwargs: ("busy", "item-busy"),
+        )
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-2",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Review complete",
+                        "full_text": "The reviewer finished and returned notes.",
+                    },
+                },
+            },
+        )
+
+        assert outcome == "retry_later"
+        assert len(prov.run_calls) == 0
+        session_after = load_session_disk(data_dir, chat_id, prov)
+        pending = session_after.get("pending_delegation")
+        assert pending is not None
+        assert pending["tasks"][0]["status"] == "completed"
+        assert pending["tasks"][0]["summary"] == "Review complete"
+
+
+async def test_registry_routed_result_duplicate_resume_does_not_resend_completion_summary(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        chat_id = 12345
+        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_delegation"] = {
+            "conversation_ref": conversation_ref,
+            "title": "Spec delegation",
+            "tasks": [
+                {
+                    "routed_task_id": "child-task-dup",
+                    "title": "Reviewer task",
+                    "status": "submitted",
+                }
+            ],
+        }
+        save_session(data_dir, chat_id, session)
+
+        monkeypatch.setattr(
+            "app.agents.delivery.work_queue.record_and_admit_message",
+            lambda *args, **kwargs: ("duplicate", "item-dup"),
+        )
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-dup",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Review complete",
+                        "full_text": "The reviewer finished and returned notes.",
+                    },
+                },
+            },
+        )
+
+        assert outcome == "accepted"
+        assert not any(
+            "All delegated tasks completed." in message.get("text", "")
+            for message in th._bot_instance.sent_messages
+        )
+        session_after = load_session_disk(data_dir, chat_id, prov)
+        pending = session_after.get("pending_delegation")
+        assert pending is not None
+        assert pending["status"] == "completed"
+
+
+async def test_registry_routed_result_multi_child_resumes_only_after_final_child():
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        chat_id = 12345
+        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_delegation"] = {
+            "conversation_ref": conversation_ref,
+            "title": "Two-child delegation",
+            "resume_instruction": "Synthesize both child results before replying.",
+            "tasks": [
+                {
+                    "routed_task_id": "child-task-a",
+                    "title": "Developer task",
+                    "status": "pending",
+                },
+                {
+                    "routed_task_id": "child-task-b",
+                    "title": "Reviewer task",
+                    "status": "pending",
+                },
+            ],
+        }
+        save_session(data_dir, chat_id, session)
+        prov.run_results = [RunResult(text="Combined final answer.")]
+
+        first_outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-a",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Developer complete",
+                        "full_text": "Developer child result.",
+                    },
+                },
+            },
+        )
+
+        assert first_outcome == "accepted"
+        assert await drain_one_worker_item(data_dir) is False
+        assert len(prov.run_calls) == 0
+        mid_session = load_session_disk(data_dir, chat_id, prov)
+        pending_mid = mid_session.get("pending_delegation")
+        assert pending_mid is not None
+        assert pending_mid["tasks"][0]["status"] == "completed"
+        assert pending_mid["tasks"][1]["status"] == "pending"
+
+        final_outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-b",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Reviewer complete",
+                        "full_text": "Reviewer child result.",
+                    },
+                },
+            },
+        )
+
+        assert final_outcome == "accepted"
+        assert await drain_one_worker_item(data_dir) is True
+        assert len(prov.run_calls) == 1
+        prompt = prov.run_calls[0]["prompt"]
+        assert "Developer child result." in prompt
+        assert "Reviewer child result." in prompt
+        final_session = load_session_disk(data_dir, chat_id, prov)
+        assert final_session.get("pending_delegation") is None
+
+
+async def test_registry_surface_parent_resumes_through_registry_surface(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+        import app.agents.bridge as bridge
+        from app.transports.registry_adapter import RegistryConversationIO
+
+        published: list[tuple[str, str, str]] = []
+
+        class FakeRegistryClient:
+            async def sync_binding(self, **kwargs):
+                return {"ok": True, **kwargs}
+
+            async def publish_timeline(self, events, *, checkpoint: str = ""):
+                del checkpoint
+                for event in events:
+                    published.append((event.kind, event.title, event.body))
+                return {"accepted": len(events)}
+
+        monkeypatch.setattr(bridge, "registry_client", lambda config: FakeRegistryClient())
+        monkeypatch.setattr("app.transports.registry_adapter.bind_conversation", async_noop)
+
+        async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
+            del self, status, progress, metadata, event_id
+            published.append((kind, title, body))
+
+        monkeypatch.setattr(RegistryConversationIO, "_publish_event", fake_publish_event)
+
+        conversation_ref = "registry:parent-conv-1"
+        chat_id = registry_chat_id(conversation_ref)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_delegation"] = {
+            "conversation_ref": conversation_ref,
+            "title": "Registry parent delegation",
+            "tasks": [
+                {
+                    "routed_task_id": "child-task-registry",
+                    "title": "Requirements task",
+                    "status": "pending",
+                }
+            ],
+        }
+        save_session(data_dir, chat_id, session)
+        prov.run_results = [RunResult(text="Registry parent final answer.")]
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-registry",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Requirements complete",
+                        "full_text": "Requirements child result.",
+                    },
+                },
+            },
+        )
+
+        assert outcome == "accepted"
+        assert await drain_one_worker_item(data_dir) is True
+        assert len(prov.run_calls) == 1
+        assert th._bot_instance.sent_messages == []
+        assert any(
+            kind == "bot_message" and "Registry parent final answer." in body
+            for kind, _title, body in published
+        )
+
+
+async def test_registry_surface_action_retry_skip_clears_pending_retry():
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        chat_id = 12345
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_retry"] = {
+            "request_user_id": 42,
+            "prompt": "Retry this",
+            "image_paths": [],
+            "context_hash": "",
+            "denials": [],
+            "trust_tier": "trusted",
+            "created_at": 0,
+        }
+        save_session(data_dir, chat_id, session)
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "surface_action",
+                "payload": {
+                    "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
+                    "action": "retry_skip",
+                    "payload": {},
+                },
+            },
+        )
+
+        assert outcome == "accepted"
+        session_after = load_session_disk(data_dir, chat_id, prov)
+        assert session_after.get("pending_retry") is None
+
+
+async def test_registry_surface_action_retry_allow_executes_request():
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        chat_id = 12345
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_retry"] = {
+            "request_user_id": 42,
+            "prompt": "Retry this with extra access",
+            "image_paths": [],
+            "context_hash": "",
+            "denials": [{"path": str(data_dir / "extra")}],
+            "trust_tier": "trusted",
+            "created_at": 0,
+        }
+        save_session(data_dir, chat_id, session)
+        prov.run_results = [RunResult(text="retry complete")]
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "surface_action",
+                "payload": {
+                    "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
+                    "action": "retry_allow",
+                    "payload": {},
+                },
+            },
+        )
+
+        assert outcome == "accepted"
+        assert len(prov.run_calls) == 1
+        assert prov.run_calls[0]["prompt"] == "Retry this with extra access"
+        session_after = load_session_disk(data_dir, chat_id, prov)
+        assert session_after.get("pending_retry") is None
+
+
+async def test_registry_surface_action_recovery_discard_discards_pending_recovery():
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+        import app.runtime_backend as runtime_backend
+
+        chat_id = 12345
+        _, item_id = work_queue.record_and_enqueue(
+            data_dir, 600, chat_id, 42, "message",
+            payload='{"text": "old message"}',
+        )
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn.execute(
+            "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
+            (item_id,),
+        )
+        conn.commit()
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "surface_action",
+                "payload": {
+                    "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
+                    "action": "recovery_discard",
+                    "payload": {"update_id": 600},
+                },
+            },
+        )
+
+        row = conn.execute(
+            "SELECT state, error FROM work_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        assert outcome == "accepted"
+        assert row["state"] == "done"
+        assert row["error"] == "discarded"
+
+
+async def test_registry_surface_action_recovery_replay_executes_request():
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+        import app.runtime_backend as runtime_backend
+
+        chat_id = 12345
+        _, item_id = work_queue.record_and_enqueue(
+            data_dir, 601, chat_id, 42, "message",
+            payload='{"user_id": 42, "username": "alice", "chat_id": 12345, "text": "replay me", "attachments": []}',
+        )
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn.execute(
+            "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
+            (item_id,),
+        )
+        conn.commit()
+        prov.run_results = [RunResult(text="replayed")]
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "surface_action",
+                "payload": {
+                    "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
+                    "action": "recovery_replay",
+                    "payload": {"update_id": 601},
+                },
+            },
+        )
+
+        row = conn.execute(
+            "SELECT state FROM work_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        assert outcome == "accepted"
+        assert len(prov.run_calls) == 1
+        assert prov.run_calls[0]["prompt"] == "replay me"
+        assert row["state"] == "done"
+
+
+async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+        ) as (_, cfg, prov):
+            import app.telegram_handlers as th
+            from app.transports.registry_adapter import RegistryConversationIO
+
+            published: list[dict[str, object]] = []
+
+            monkeypatch.setattr("app.transports.registry_adapter.bind_conversation", async_noop)
+
+            async def fake_publish_event(self, **kwargs):
+                del self
+                published.append(kwargs)
+
+            monkeypatch.setattr(RegistryConversationIO, "_publish_event", fake_publish_event)
+
+            event = InboundMessage(
+                user=InboundUser(id=42, username="registry-ui"),
+                chat_id=registry_chat_id("registry-conv-2"),
+                text="resume later",
+                source="registry",
+                conversation_ref="registry-conv-2",
+            )
+            item = {"id": "registry-item-4", "chat_id": event.chat_id, "update_id": 8123, "dispatch_mode": "recovery"}
+
+            with pytest.raises(work_queue.PendingRecovery):
+                await th.worker_dispatch("message", event, item)
+
+            recovery_events = [item for item in published if item["kind"] == "recovery_notice"]
+            assert recovery_events
+            assert recovery_events[0]["metadata"]["update_id"] == 8123
 
 
 async def test_cmd_new():
@@ -2500,3 +3728,115 @@ async def test_settings_callback_model_inherit_no_double_default():
         assert "cleared" in reply.lower()
         assert "((default))" not in reply
         assert "(default) (" not in reply
+
+
+async def test_allowuser_grants_access_without_restart():
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": False,
+        "allowed_user_ids": frozenset({1, 100}),
+        "admin_user_ids": frozenset({1}),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=12345)
+        admin = FakeUser(uid=1, username="admin")
+        stranger = FakeUser(uid=99999, username="stranger")
+
+        assert th.is_allowed(stranger) is False
+        msg = await send_command(
+            th.cmd_allowuser,
+            chat,
+            admin,
+            "/allowuser 99999 incident access",
+            args=["99999", "incident", "access"],
+        )
+        assert last_reply(msg) == "User 99999 added to allowed list."
+        assert th.is_allowed(stranger) is True
+
+        await send_text(chat, stranger, "hello after allow")
+        await drain_one_worker_item(data_dir)
+        assert len(prov.run_calls) == 1
+
+
+async def test_blockuser_blocks_allowed_user_without_restart():
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": False,
+        "allowed_user_ids": frozenset({1, 100}),
+        "admin_user_ids": frozenset({1}),
+    }) as (data_dir, cfg, prov):
+        chat = FakeChat(chat_id=12345)
+        admin = FakeUser(uid=1, username="admin")
+        target = FakeUser(uid=100, username="trusted")
+
+        assert th.is_allowed(target) is True
+        msg = await send_command(
+            th.cmd_blockuser,
+            chat,
+            admin,
+            "/blockuser 100 abuse",
+            args=["100", "abuse"],
+        )
+        assert last_reply(msg) == "User 100 blocked."
+        assert th.is_allowed(target) is False
+
+        await send_text(chat, target, "hello after block")
+        assert len(prov.run_calls) == 0
+
+
+async def test_listaccess_shows_rows():
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": False,
+        "allowed_user_ids": frozenset({1}),
+        "admin_user_ids": frozenset({1}),
+    }) as (data_dir, cfg, prov):
+        del data_dir, cfg, prov
+        chat = FakeChat(chat_id=12345)
+        admin = FakeUser(uid=1, username="admin")
+
+        await send_command(th.cmd_allowuser, chat, admin, "/allowuser 99999 temp", args=["99999", "temp"])
+        await send_command(th.cmd_blockuser, chat, admin, "/blockuser 100 policy", args=["100", "policy"])
+        msg = await send_command(th.cmd_listaccess, chat, admin, "/listaccess")
+
+        reply = last_reply(msg)
+        assert "Access overrides" in reply
+        assert "99999" in reply
+        assert "allowed" in reply
+        assert "100" in reply
+        assert "blocked" in reply
+        assert msg.replies[-1]["parse_mode"] == "HTML"
+
+
+@pytest.mark.parametrize("handler_name", ["cmd_allowuser", "cmd_blockuser"])
+async def test_access_commands_reject_non_admin(handler_name):
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": True,
+        "admin_user_ids": frozenset({1}),
+    }) as (data_dir, cfg, prov):
+        del data_dir, cfg, prov
+        chat = FakeChat(chat_id=12345)
+        non_admin = FakeUser(uid=42, username="member")
+        handler = getattr(th, handler_name)
+        msg = await send_command(handler, chat, non_admin, "/access", args=["100"])
+        assert last_reply(msg) == "This command requires admin access."
+
+
+@pytest.mark.parametrize("args", [[], ["abc"], ["42x"]])
+async def test_allowuser_usage_hint_for_missing_or_non_numeric_arg(args):
+    import app.telegram_handlers as th
+
+    with fresh_env(config_overrides={
+        "allow_open": False,
+        "allowed_user_ids": frozenset({1}),
+        "admin_user_ids": frozenset({1}),
+    }) as (data_dir, cfg, prov):
+        del data_dir, cfg, prov
+        chat = FakeChat(chat_id=12345)
+        admin = FakeUser(uid=1, username="admin")
+        msg = await send_command(th.cmd_allowuser, chat, admin, "/allowuser", args=args)
+        assert last_reply(msg) == "Usage: /allowuser <user_id> [reason]"

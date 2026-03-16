@@ -9,10 +9,12 @@ from app.transport import (
     InboundCommand,
     InboundMessage,
     InboundUser,
+    deserialize_inbound,
     normalize_callback,
     normalize_command,
     normalize_message,
     normalize_user,
+    serialize_inbound,
 )
 from tests.support.handler_support import (
     FakeCallbackQuery,
@@ -257,6 +259,46 @@ def test_inbound_attachment_frozen():
         assert False, "should be frozen"
     except (AttributeError, TypeError, Exception):
         pass  # frozen raises on mutation — expected
+
+
+def test_inbound_message_skip_approval_round_trips():
+    payload = serialize_inbound(
+        InboundMessage(
+            user=InboundUser(id=7, username="registry"),
+            chat_id=42,
+            text="resume work",
+            source="registry",
+            conversation_ref="registry:conv-1",
+            routed_task_id="task-42",
+            skip_approval=True,
+        )
+    )
+
+    restored = deserialize_inbound("message", payload)
+
+    assert isinstance(restored, InboundMessage)
+    assert restored.source == "registry"
+    assert restored.conversation_ref == "registry:conv-1"
+    assert restored.routed_task_id == "task-42"
+    assert restored.skip_approval is True
+
+
+def test_inbound_message_skip_approval_defaults_false():
+    payload = serialize_inbound(
+        InboundMessage(
+            user=InboundUser(id=8, username="telegram"),
+            chat_id=99,
+            text="normal message",
+        )
+    )
+
+    restored = deserialize_inbound("message", payload)
+
+    assert isinstance(restored, InboundMessage)
+    assert restored.source == "telegram"
+    assert restored.conversation_ref == ""
+    assert restored.routed_task_id == ""
+    assert restored.skip_approval is False
 
 
 def test_inbound_user_frozen():

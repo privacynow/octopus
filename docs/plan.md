@@ -91,10 +91,12 @@ If the product is working correctly, these statements are true:
 These are intentionally out of scope for the core product plan:
 
 - full billing and quota systems before the runtime is stable
-- multi-agent delegation as a user-facing concept
 - Docker or Kubernetes control-plane design
 - hosted SaaS architecture decisions
 - general-purpose package-manager behavior outside the skill system
+
+Note: multi-agent delegation is now an active product feature tracked under
+Phase 20. It is no longer a non-goal.
 
 Those may matter later, but they are not the core product definition.
 
@@ -133,8 +135,9 @@ The product is complete when these capability areas are in place.
 ## Roadmap Rules
 
 - The roadmap is one strict execution order, not priority buckets.
-- Phases 1-14 are sealed as shipped history.
-- Phase 15 is the active roadmap phase.
+- Phases 1-15 are sealed as shipped history.
+- Phase 20 is the active roadmap phase (Networked Multi-Agent Platform).
+- Phases 16-19 remain on the roadmap but are deferred behind Phase 20.
 - From Phase 13 onward, the roadmap is split by **capability tier**, not by
   database ideology:
   - **local/product track first**: backend-neutral product work plus a
@@ -174,7 +177,8 @@ This is the authoritative phase sequence.
 | 12 | Postgres runtime cutover | Sealed / shipped |
 | 13 | Storage backend abstraction and Local Runtime mode | Sealed / shipped |
 | 14 | Product polish on local foundations | Sealed / shipped |
-| 15 | Behavior extensions | In progress |
+| 15 | Behavior extensions | Sealed / shipped |
+| 20 | Networked multi-agent platform | In progress |
 | 16 | Registry trust and governance | Remaining |
 | 17 | Usage accounting, quotas, and billing | Remaining |
 | 18 | Shared Runtime: Postgres queue authority in webhook mode | Remaining |
@@ -729,12 +733,20 @@ Library choice: [python-statemachine](https://pypi.org/project/python-statemachi
 
 **Phase 11 seal checklist (done when moving to Phase 12):** All three claim entry points use one shared claim helper; both initial-insert paths use one shared insert helper; no transport mutation helper open-codes its own CAS/reread classification; repository-shape tests pin the single-claim and single-insert behavior; docs/status truthfully reflect that state.
 
-### Phase 12 - Postgres Runtime Cutover *(complete)*
+### Phase 12 - Postgres Runtime Cutover *(complete, historical phase record)*
 
-Make Postgres the only supported runtime backend after cutover. Phase 12 is a
-contract-preserving backend replacement and environment/bootstrap phase, not a
-queue redesign phase and not a CI/CD phase. Implementation complete; see
-[status.md](status.md).
+This section is preserved because it explains why the repo still has explicit
+Postgres tooling, migrations, and integration suites. It is a sealed
+historical phase record, not the current runtime contract. The current shipped
+runtime is the Phase 13+ Local Runtime baseline: SQLite-default, Postgres as a
+supported alternate backend, with the current operator paths documented in
+[README.md](../README.md), [status.md](status.md), and
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
+Phase 12 itself made Postgres the only supported runtime backend after cutover.
+It was a contract-preserving backend replacement and
+environment/bootstrap phase, not a queue redesign phase and not a CI/CD phase.
+Implementation complete; see [status.md](status.md).
 
 **What Phase 12 is solving.**
 
@@ -857,7 +869,7 @@ supported lifecycle:
 
 1. App bootstrap
    - Build or refresh the app image and related runtime assets.
-   - `scripts/bootstrap.sh` remains useful for local development and tests, but
+   - `scripts/app/bootstrap.sh` remains useful for local development and tests, but
      Docker is the primary product-facing operational path.
 2. DB bootstrap
    - Apply repo-owned schema to an *existing* database (database and runtime role
@@ -877,12 +889,12 @@ The app itself should not absorb these workflows.
 
 The exact filenames can change, but the plan should assume a command set like:
 
-- `scripts/bootstrap.sh`
-- `scripts/db_bootstrap.sh`
-- `scripts/db_update.sh`
-- `scripts/db_doctor.sh`
+- `scripts/app/bootstrap.sh`
+- `scripts/db/db_bootstrap.sh`
+- `scripts/db/db_update.sh`
+- `scripts/db/db_doctor.sh`
 - optional convenience wrapper for local development such as:
-  - `scripts/dev_up.sh`
+  - `scripts/app/dev_up.sh`
   - or `make dev-first`
   - or Compose profiles plus one-shot services
 
@@ -3104,6 +3116,1808 @@ Done when:
 - New implementation work for Phase 15 continues to extend the current owners
   instead of building shadow abstractions around them.
 
+### Phase 20 - Networked Multi-Agent Platform
+
+Guidance baseline:
+
+- Follow the repo-local and global execution guidance before changing code or
+  contracts:
+  - `AGENTS.md`
+  - `CLAUDE.md`
+  - `docs/AGENTS-global.md`
+  - `docs/CLAUDE-global.md`
+- No new surface or registry feature may bypass the existing
+  workflow/state-machine model. Registry-originated actions must use the same
+  underlying workflow ownership as Telegram.
+- No parallel execution paths. Registry deliveries enter the local work queue
+  and are processed by the same worker/state-machine core as Telegram messages.
+- Registry is a delivery and visibility plane, not an execution engine.
+
+Objective:
+
+Build the product into a **networked multi-agent platform** with one public
+registry control plane and many private bots.
+
+End-state capability:
+
+- A human can start work from **Telegram** or from the **Registry UI**.
+- A product bot can refine requirements, ask follow-up questions, and plan work.
+- The product bot can discover specialist bots by role, skills, tags, and
+  description, and delegate work through the registry gateway.
+- Bots may run on local desktops, private machines, VPS/cloud hosts, or
+  same-host Docker containers without exposing public HTTP APIs.
+- Telegram remains a supported, reduced surface.
+- Registry UI is a richer, first-class alternate client.
+- Both surfaces act on the same underlying conversation, workflow, and
+  execution state.
+
+Architecture principles:
+
+- One authoritative execution core per bot (local worker-owned queue).
+- One authoritative workflow/state-machine layer.
+- One canonical conversation identity (`ConversationRef`).
+- No surface-specific orchestration forks.
+- No registry-side shadow execution engine.
+- Bot-local worker/state-machine execution remains the final authority.
+- Registry owns delivery routing, presence, discovery, and timeline mirroring.
+- Bots do not expose public HTTP APIs in v1; they use outbound polling only.
+- Registry is the only public component.
+
+Network model:
+
+- Bots poll the registry for: routed delegated tasks, registry UI user input,
+  registry UI actions, and control signals (cancel/approve/reject).
+- Bots use outbound authenticated HTTP with bearer tokens issued at enrollment.
+- Routed work: originating bot submits to registry → registry queues to target
+  bot poll queue → target bot executes locally → result flows back to registry
+  → registry delivers to originating bot as `routed_result` delivery.
+
+Bot configuration:
+
+- `BOT_AGENT_MODE=registry|standalone`
+- `BOT_AGENT_DISPLAY_NAME`, `BOT_AGENT_SLUG`, `BOT_AGENT_ROLE`
+- `BOT_AGENT_TAGS`, `BOT_AGENT_DESCRIPTION`, `BOT_AGENT_SKILLS`
+- `BOT_AGENT_REGISTRY_URL`, `BOT_AGENT_REGISTRY_ENROLL_TOKEN`
+- `BOT_AGENT_POLL_INTERVAL_SECONDS`
+- Registry-issued credentials (`agent_id`, `agent_token`, poll cursor) are
+  stored in bot-local runtime state (`data_dir/agent/registry_state.json`),
+  not written back to operator config.
+
+Connectivity states:
+
+- `connected`: registry mode with active registry connectivity
+- `degraded`: registry mode configured but registry unreachable; local
+  Telegram operation continues; polls retry with backoff
+- `standalone`: bot intentionally not using registry
+- `offline`: registry-side classification only; bot has missed heartbeats
+
+Registry outage behavior:
+
+- Bot still starts in degraded state.
+- Telegram and local interaction remain fully functional.
+- Discovery, delegation, and registry UI sync are unavailable.
+- Bot retries registration, heartbeat, and poll in the background.
+- `/doctor` and logs report degraded state clearly.
+
+---
+
+#### Phase 20 — Milestone Status
+
+##### M1 — Shared Conversation Core and Surface Refactor
+
+**Status: Complete.**
+
+Outcome:
+- Shared conversation and surface concepts are now part of the runtime
+  contract rather than Telegram-only implementation detail.
+- Surface selection is owned by the transport factory at the dispatch
+  boundary.
+- Registry and Telegram flows share the same worker-owned orchestration path.
+- Simulator coverage includes registry-surface flows through the durable worker
+  boundary.
+
+Acceptance criteria (complete):
+- [x] Telegram behavior is preserved after adapter migration
+- [x] No surface-specific orchestration fork exists in worker_dispatch
+- [x] Shared conversation identity is testable across both surfaces
+- [x] Simulator covers registry-surface flows through ConversationIO
+- [x] Registry surface dispatches through same state machine as Telegram
+
+---
+
+##### M2 — Docker Multi-Instance and Registry-First Wizard
+
+**Status: Complete.**
+
+Outcome:
+- One checkout can run multiple bot instances with per-instance env files.
+- Registry-backed setup is the default operator path, with explicit standalone
+  support.
+- Repo-owned bot and registry scripts provide the primary operational surface.
+
+Acceptance criteria (complete):
+- [x] One checkout can run product/dev/test-writer/reviewer bots
+- [x] Wizard is usable by non-technical operators
+- [x] No second checkout required
+
+---
+
+##### M3 — Registry Service, Store, and UI Shell
+
+**Status: Complete.**
+
+Outcome:
+- The registry now provides the public control plane for enrollment,
+  presence, discovery, routed delivery, and operator visibility.
+- Bots and humans both have first-class APIs.
+- Registry UI exists as a richer alternate client surface.
+
+Acceptance criteria (complete):
+- [x] Bots can enroll, register, heartbeat, and poll
+- [x] Humans can view bots and conversations in UI
+- [x] Registry is the only public service needed
+- [x] Bot-to-bot routed task round-trip verified in integration tests
+
+---
+
+##### M4 — Bot Polling Client and Routed Work Execution
+
+**Status: Complete, including safety-gap hardening.**
+
+Outcome:
+- Polling, delivery dispatch, and routed-task execution all enter the same
+  local worker/state-machine path as Telegram messages.
+- Registry-side deliveries cover input, actions, control, routed work, and
+  routed results.
+- Safety hardening is part of the milestone definition: busy deliveries retry,
+  report failures do not corrupt completed work, bad deliveries do not poison
+  the whole batch, and the background runtime survives unexpected handler
+  errors.
+
+Acceptance criteria (complete):
+- [x] Bots do not need public APIs
+- [x] Registry-routed work enters the same local execution core
+- [x] Registry-originated actions use the same workflow/state-machine rules
+- [x] Chat-busy deliveries are retried, not lost
+- [x] Completed work is not marked failed on registry report failure
+- [x] One bad delivery does not poison the poll batch
+- [x] Poll runtime survives unexpected handler exceptions
+
+---
+
+##### M1 Closure Gate — Required Before Remaining M5 Work
+
+**Status: Complete.**
+
+Purpose:
+- Finish the M1 refactor before deeper M5 work by removing remaining
+  post-dispatch surface forks from orchestration code.
+- Keep surface selection, trust semantics, and adapter construction owned by
+  the transport factory rather than by handlers.
+- Ensure simulator coverage proves registry-surface traffic through the real
+  durable worker path.
+
+Acceptance criteria (complete):
+- [x] `grep -n "conversation_surface" app/telegram_handlers.py` returns zero
+      results
+- [x] `grep -n "_BotMessage" app/telegram_handlers.py` returns zero results
+- [x] `skip_approval` round-trip tests pass in `test_transport.py`
+- [x] Full suite passes: `python -m pytest -x -q`
+- [x] `test_registry_routed_result_resumes_parent_conversation_without_new_approval`
+      still passes
+- [x] `test_registry_surface_input_respects_approval_mode` still passes
+- [x] At least one simulator test exercises a registry-surface message end-to-end
+
+---
+
+##### M5 — Product-Bot Discovery and Delegation
+
+**Status: Complete.**
+
+Scope:
+- Telegram can discover candidate specialist bots through the registry using
+  structured capability search.
+- Parent-side delegation state is durable in bot-local session state and child
+  results resume orchestration through the same worker-owned path.
+- Delegation uses an explicit user-facing plan and approval step before any
+  routed work is submitted.
+- Approved plans submit routed tasks through the registry and preserve retry
+  semantics when registry connectivity is degraded.
+
+Role patterns (metadata only, not hardcoded logic):
+- product, requirements, developer, test-writer, reviewer, tester
+- Any role/skill combination is valid; these are examples, not constraints
+
+Acceptance criteria:
+- [x] Product bot can search for specialist bots by role and skills
+- [x] Discovery results presented before delegation (not automatic)
+- [x] Delegation requires explicit user approval before fan-out
+- [x] Delegated work routes through registry and executes through the same
+      local worker-owned runtime on the target bot
+- [x] Parent bot resumes orchestration after receiving child results
+- [x] Degraded mode blocks delegation and tells the user why
+
+---
+
+##### M6 — Hardening, Docs, and E2E Confidence
+
+**Status: Complete.**
+
+Scope:
+- Exponential backoff with jitter for degraded registry polling
+- `/doctor` diagnostics for registry connectivity, enrollment, stale contact,
+  and pending delegation approval state
+- Docs aligned so README and ARCHITECTURE describe the shipped multi-agent
+  system, degraded-mode contract, and operator-facing registry behavior
+
+Acceptance criteria:
+- [x] Degraded behavior is explicit, observable, and tested
+- [x] `/doctor` reports registry connectivity, enrollment status, stale contact,
+      and stale pending delegation approval state
+- [x] README describes multi-agent mode and degraded-mode operator behavior
+- [x] ARCHITECTURE describes the multi-agent registry, surface factory, and
+      degraded-mode contract
+- [x] Full suite is green after the hardening and doc-alignment changes
+
+---
+
+##### M7 — Registry UI: Conversation Timeline and Human-Initiated Work
+
+**Status: Complete.**
+
+Scope:
+- Bot publishes timeline events to the registry so the registry has real
+  content to show: conversation start, progress updates (rate-limited),
+  and outcome (done/failed). These flow through `RegistryConversationIO`
+  lifecycle hooks, not through a new side-channel.
+- Registry UI renders a conversation detail view with timeline events,
+  replacing the bootstrap-only read board with a drill-down interface.
+- Registry UI exposes a "New conversation" form so a human can initiate
+  work from the UI without Telegram.
+- Auto-refresh (5 s) renders new timeline events live.
+
+Implementation seams:
+- `RegistryConversationIO.bind()` — publish `started` event
+- `RegistryConversationIO.on_outcome()` — publish `completed` or `failed`
+- `RegistryConversationIO` progress sink — rate-limit, publish `progress`
+  events at most once per 5 s
+- `/v1/agents/timeline` (POST, already implemented) — bot posts events
+- `/v1/ui/conversations/{id}/timeline` (GET, already implemented) — UI
+  fetches events
+- `/v1/ui/conversations` (POST, already implemented) — UI starts a
+  conversation; bot polls and processes it as a `registry_input` delivery
+- Registry UI `/ui` shell — extend existing HTML/JS to add:
+  - Conversation row click → detail panel with timeline
+  - Timeline event list (kind, title, body, timestamp)
+  - "New conversation" button + modal form (target bot, message text)
+  - Auto-refresh at 5 s (same as main bootstrap poll)
+
+What M7 does NOT include:
+- Approval / reject actions from UI (requires control-action delivery
+  round-trip; deferred to a follow-on slice)
+- WebSocket / SSE real-time push (polling at 5 s is sufficient)
+- Work-item status mirroring into registry (conversation timeline is
+  the richer visibility surface; raw queue state stays bot-local)
+
+Acceptance criteria:
+- [x] Bot publishes timeline events via `RegistryConversationIO` for
+      start, progress (rate-limited), and outcome
+- [x] Timeline events appear in `GET /v1/ui/conversations/{id}/timeline`
+- [x] Registry UI shows conversation detail with timeline on click
+- [x] Human can start a conversation from the Registry UI targeting any
+      connected bot; bot receives and processes it
+- [x] Auto-refresh renders new timeline events within 10 s of publication
+- [x] Rate-limiting: at most one progress event per 5 s per conversation
+- [x] All existing surface contracts (Telegram, degraded mode) unchanged
+- [x] Full suite passes, including E2E
+
+---
+
+##### M8 — Registry UI Actions and Delegation Completion
+
+**Status: Complete.**
+
+Why this milestone exists:
+
+M7 adds the Registry UI conversation timeline and lets a human start work
+from the UI. But two concrete UX gaps remain before Phase 20 is complete
+from a non-technical user's perspective:
+
+1. **Approval-from-UI gap.** After M7, a user who starts a conversation
+   from the Registry UI and triggers a delegation plan cannot approve or
+   cancel that plan from the UI — they must switch to Telegram. The
+   backend action APIs (`POST /v1/ui/conversations/{id}/actions`,
+   `POST /v1/ui/conversations/{id}/cancel`) already exist. The gap is
+   entirely in the UI: no approve/cancel controls are wired to those
+   endpoints. For a user who initiated work from the Registry UI, this
+   is a broken flow with no alternative visible in the interface.
+
+2. **Delegation completion message path.** When child bots finish and
+   the parent bot receives `routed_result` deliveries, the parent
+   re-enters the worker path. The current M5 implementation does not
+   specify what final message is sent to the originating surface.
+   From the user's perspective: they approved delegation, child bots
+   ran, and nothing concludes — no final answer arrives in the Registry
+   UI or Telegram. This path must be defined, implemented, and tested.
+
+Scope:
+
+**Part 1 — Approve/cancel delegation from Registry UI**
+
+- When the conversation timeline contains a `delegation_proposed` event
+  (a delegation plan awaiting approval), render approve and cancel
+  buttons alongside it in the detail view.
+- Approve button → `POST /v1/ui/conversations/{id}/actions` with
+  `{"action": "approve_delegation"}`.
+- Cancel button → `POST /v1/ui/conversations/{id}/cancel` or
+  `{"action": "cancel_delegation"}` depending on the action contract
+  established in `store.add_conversation_action`.
+- The bot receives these as `action` deliveries via its existing poll
+  path and routes them through `handle_delegation_approve` /
+  `handle_delegation_cancel` — the same handlers Telegram callbacks use.
+- Degraded mode: if the bot is not connected, the action is queued as a
+  delivery and processed when connectivity returns. The UI shows
+  "pending" until the bot acks.
+
+**Part 2 — Delegation completion: parent bot final response**
+
+- When all delegated tasks reach `completed` or `failed` state, the
+  parent bot must send a final synthesized response to the originating
+  surface (Registry UI or Telegram).
+- The final response content: the parent bot re-runs a brief synthesis
+  prompt incorporating the child task results, or (if synthesis is too
+  expensive) sends a structured summary: "Delegation complete. N tasks
+  finished. Here are the results: …"
+- The response is sent via the originating `ConversationIO` surface —
+  Telegram sends it as a message; Registry surface publishes it as a
+  `completed` timeline event with the full result body.
+- If any tasks failed, the response says so explicitly and offers a
+  retry path.
+- Durable state: `PendingDelegation` transitions from
+  `submitted` → `completed` (all tasks done) or `partial_failed`
+  (some tasks failed). These states must be defined in
+  `app/agents/orchestration.py` and honored by the durable state
+  machine.
+
+**Part 3 — Bot side: action delivery routing**
+
+- The bot's delivery handler already routes `action` deliveries through
+  `app/agents/bridge.py`. Verify that `approve_delegation` and
+  `cancel_delegation` action kinds are routed to the correct handlers
+  with the correct `chat_id` and `conversation_ref` extracted from the
+  delivery payload.
+- The action delivery must carry the `conversation_ref` so the handler
+  can load the correct session. If this field is missing from the
+  current action delivery schema, add it.
+
+Implementation seams:
+- `app/agents/bridge.py` — route `approve_delegation` / `cancel_delegation`
+  action deliveries to `handle_delegation_approve` / `handle_delegation_cancel`
+- `app/telegram_handlers.py` — `_handle_delegation_approve` and
+  `_handle_delegation_cancel` already exist; verify they work when
+  invoked from registry delivery (not just from Telegram callback)
+- `app/agents/orchestration.py` — define `completed` and `partial_failed`
+  delegation states; add `all_tasks_terminal(delegation)` predicate
+- `app/transports/registry_adapter.py` — `on_work_complete` publishes
+  the final result as a timeline event with full body
+- `app/registry_service/app.py` (UI) — approve/cancel buttons on
+  delegation-proposed timeline events; "pending" state while awaiting
+  bot ack
+
+What M8 does NOT include:
+- Retry of individual failed child tasks from UI (deferred; requires
+  per-task action routing)
+- Push notifications when delegation completes (deferred; polling at
+  5 s is sufficient)
+- Any change to the Telegram approval/cancel flow (must remain
+  unchanged)
+
+Acceptance criteria:
+- [x] A user who starts a conversation from Registry UI and receives a
+      delegation plan can approve or cancel it from the UI without
+      switching to Telegram
+- [x] When all delegated tasks complete, the parent bot sends a final
+      result to the originating surface (Registry UI or Telegram)
+- [x] When some tasks fail, the user sees which tasks failed and a clear
+      next step
+- [x] `PendingDelegation` status transitions to `completed` or
+      `partial_failed` after all tasks reach terminal state
+- [x] Action deliveries (`approve_delegation`, `cancel_delegation`) are
+      routed to the correct handlers on the bot side and carry enough
+      context (`conversation_ref`, `chat_id`) to load the right session
+- [x] Telegram approval/cancel flow is unchanged
+- [x] Degraded mode: actions queue and process on reconnect; UI shows
+      pending state, not silent failure
+- [x] Full suite passes, including E2E
+
+---
+
+##### M9 — First-Run Polish and Registry UI World-Class UX
+
+**Status: Complete.**
+
+M8 completes the multi-agent feature set. M9 is the commercial-polish pass: fix
+every friction point that prevents a first-time user from successfully bringing
+up a bot from a fresh `git clone`, and upgrade the Registry UI from a functional
+prototype to a world-class, production-quality interface.
+
+This milestone is triggered by a full first-run walkthrough that identified 17
+concrete UX failures across the setup scripts, README, and Registry UI. Each is
+addressed below.
+
+---
+
+**Section A — Provider Login Exit Confusion (critical)**
+
+*Problem:* `scripts/provider/container_provider_login.sh` launches the Claude or
+Codex CLI inside a Docker container and prints a brief instruction, but the user
+has no visual cue inside the live CLI that they must exit when authentication is
+complete. The current user experience: enter a live AI CLI session, complete the
+login flow, and then be stuck — with no reminder that "exit" is the next step.
+
+*Fix A1 — Pre-entry warning banner.*
+Before launching the provider CLI, print a clearly bordered banner:
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║  ACTION REQUIRED — INSIDE THE CLAUDE CLI                     ║
+║                                                              ║
+║  1. Run:  /login                                             ║
+║  2. Follow the browser link to authenticate.                 ║
+║  3. When done — TYPE:  /exit   (or press Ctrl-D)             ║
+║                                                              ║
+║  You MUST exit the CLI to return to setup.                   ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+*Fix A2 — Post-exit confirmation.*
+After the CLI exits, print:
+```
+✓ Claude authentication complete. Returning to setup...
+```
+If the container exits with a non-zero code, print:
+```
+✗ Authentication may have failed (exit code N). Re-run this step
+  if the provider health check fails in the next step.
+```
+
+*Fix A3 — Codex parity.*
+`codex --login` has its own exit flow. Before launching codex, print the
+equivalent banner explaining that `q` or `Ctrl-C` returns to setup once
+authentication is complete.
+
+*Implementation seam — exit code capture:*
+The script uses `set -euo pipefail`. The provider CLI may exit non-zero even
+on a clean auth session. Capture the exit code explicitly immediately after the
+CLI call, then continue unconditionally to the post-exit message and the existing
+health check. Do NOT use `|| true` to swallow the code. Pattern:
+
+```bash
+claude
+exit_code=$?
+if [ "$exit_code" -eq 0 ]; then
+  echo "✓ Claude authentication complete. Returning to setup..."
+else
+  echo "✗ Authentication may have failed (exit code $exit_code). Re-run this"
+  echo "  step if the provider health check fails in the next step."
+fi
+# fall through unconditionally to health check
+```
+
+The health check at the bottom of the script is the actual failure gate — the
+post-exit message is informational only.
+
+*Files:* `scripts/provider/container_provider_login.sh`
+
+---
+
+**Section B — Guided Start Script (guided_start.sh)**
+
+*Pre-existing bugs to fix first:* The current `guided_start.sh` has three
+orphaned variable assignments that must be removed before adding new features:
+- Line that sets `registry_prompt=` is immediately overwritten by `registry_token=` — delete the orphaned line
+- First of two `role=` assignments captures the tags prompt result before being overwritten by `tags=` — delete the orphaned line
+- First of two `role=` assignments captures the skills prompt result before being overwritten by `skills=` — delete the orphaned line
+
+*Problem B1 — Enrollment token prompt has no hint.*
+When the user is asked "Registry enrollment token", they have no idea where to
+find it. If the registry was just started locally (auto-started by
+`auto_start_local_registry_if_needed`), the token is in `.env.registry` — but
+the script never says so.
+
+*Fix B1:* After auto-starting the local registry, read the enrollment token from
+`.env.registry` automatically and skip the prompt entirely, printing:
+```
+  ✓ Enrollment token read from .env.registry (auto-configured)
+```
+If the user is connecting to a remote registry, prompt as before but add the
+hint: `(check your registry's .env.registry or admin panel)`.
+
+*Implementation seam — structural ordering:* This fix requires restructuring the
+script flow. Currently `create_env_file_if_missing` runs before
+`auto_start_local_registry_if_needed`, so the token is not yet in `.env.registry`
+when the registry URL prompt fires. The fix splits prompt collection into two
+phases: (1) collect bot name, token, provider, mode, and registry URL, write a
+minimal env file; (2) call `auto_start_local_registry_if_needed` which starts the
+registry and reads the token; (3) if local registry and token was auto-read,
+append it to the env file silently; if remote registry, prompt for the token with
+the hint. The `auto_start_local_registry_if_needed` function must also match
+`http://172.17.0.1:8787` in its case statement alongside the existing
+`host.docker.internal` and `localhost` variants.
+
+*Problem B2 — Advanced field overload.*
+12–14 interactive questions including Role, Tags, Description, and Skills confuse
+first-time users. These fields have valid advanced use cases but are not needed
+to get a working bot.
+
+*Fix B2:* Add a "quick setup / full setup" fork at the top of prompt collection:
+```
+Setup mode? [quick/full] (quick):
+```
+- **quick** (default): ask only Bot name, Token, Provider, Mode (4–5 questions
+  total, including registry URL if mode=registry). Write defaults: `working_dir=/home/bot`,
+  `timeout=3600`, `allow_open=1`. Print at end: "Advanced settings (role, tags,
+  description, skills) can be set by editing $BOT_ENV_FILE."
+- **full**: current behavior, all prompts.
+
+*Problem B3 — `host.docker.internal` fails on Linux.*
+The default registry URL `http://host.docker.internal:8787` works on
+macOS/Docker Desktop but is unreachable from Docker containers on Linux.
+
+*Fix B3:* Detect the OS at prompt time. On Linux, default to
+`http://172.17.0.1:8787` and add a comment in the generated env file:
+```
+# Registry URL: use host.docker.internal on macOS/Windows, 172.17.0.1 on Linux.
+```
+Detection: `if [ "$(uname -s)" = "Linux" ]; then default_registry_url="http://172.17.0.1:8787"; fi`
+
+*Problem B4 — No success summary.*
+After `./scripts/app/start_instance.sh` succeeds, the script prints minimal
+output. The user doesn't know what they have, how to use it, or what to do next.
+
+*Fix B4:* Replace the final plain-text echo block with a boxed success summary:
+```
+╔══════════════════════════════════════════════════════════════╗
+║  Bot is running!                                             ║
+║                                                              ║
+║  • Open Telegram and message your bot to start.              ║
+║  • Registry UI: http://localhost:8787  (if registry mode)    ║
+║  • Logs:  ./scripts/app/logs_instance.sh default             ║
+║  • Stop:  ./scripts/app/stop_instance.sh default             ║
+╚══════════════════════════════════════════════════════════════╝
+```
+The registry UI line is omitted in standalone mode. The registry URL shown must
+be the actual URL from the env file, not a hardcoded localhost — read it with
+`grep -E '^\s*BOT_AGENT_REGISTRY_URL='` from `$BOT_ENV_FILE`. Box lines are
+exactly 64 characters wide (matching Section A banners). Use `printf` for the
+variable-width registry URL line to pad correctly.
+
+*Files:* `scripts/app/guided_start.sh`, `scripts/lib_env.sh` (if needed)
+
+---
+
+**Section C — Registry Start Script (registry/start.sh)**
+
+*Problem:* The script creates `.env.registry` and prints "Enrollment token is
+stored in .env.registry" but never prints the actual token value. The user must
+open the file to find it.
+
+*Fix C1:* After writing `.env.registry`, extract and print the enrollment token.
+The file is already sourced via `set -a; . "$ENV_FILE"; set +a` before the
+`docker compose` call, so `$REGISTRY_ENROLL_TOKEN` is in scope. Print it:
+```bash
+echo "Enrollment token: $REGISTRY_ENROLL_TOKEN"
+echo "(also stored in $ENV_FILE — keep this file private)"
+```
+This applies on both first-run (token just generated) and subsequent runs (token
+already in file). The existing `echo "Enrollment token is stored in $ENV_FILE."`
+line is replaced, not supplemented.
+
+*Files:* `scripts/registry/start.sh`
+
+---
+
+**Section D — README**
+
+*Problem D1 — Redundant Step 2 and lost registry URL.*
+Step 2 says "Start the registry" with `./scripts/registry/start.sh`. But
+`guided_start.sh` already calls `auto_start_local_registry_if_needed()` which
+starts the registry automatically for localhost URLs. The README makes users do
+this manually before running guided setup — so the registry starts twice. Worse:
+the user runs Step 2, the registry URL is printed to the terminal, and then they
+immediately get buried in 12–14 `guided_start.sh` questions. By the time setup
+finishes, the URL has scrolled off or been forgotten. It is never reprinted at
+the end of setup.
+
+*Fix D1:* Collapse into one command. Replace Steps 2 and 3 with:
+```
+./scripts/app/guided_start.sh
+```
+Add a note: "If you chose registry mode, the registry starts automatically."
+Keep a separate "Manual registry start" section for advanced use.
+The success summary (Fix B4) must reprint the registry URL so it is the last
+thing the user sees — not something that scrolled past mid-setup.
+
+*Problem D2 — No BotFather link or new-bot walkthrough.*
+The README says "you need a Telegram bot token" but doesn't explain how to get
+one. First-time Telegram bot users don't know about BotFather.
+
+*Fix D2:* Add a "Create your bot token" subsection:
+```
+1. Open Telegram → search for @BotFather → tap Start
+2. Send: /newbot
+3. Follow the prompts (choose a name, choose a username ending in "bot")
+4. Copy the token BotFather gives you — you'll need it in setup
+```
+
+*Problem D3 — "What You Need" lists enrollment token as a prerequisite.*
+The prerequisites section says "Registry enrollment token (from your registry
+admin)". This makes the registry sound like an external dependency. For the
+common case (local registry), the token is auto-generated.
+
+*Fix D3:* Replace the enrollment token prerequisite with: "Registry enrollment
+token — auto-generated if you start a local registry (see below)."
+
+*Problem D4 — No "what success looks like."*
+After completing setup, the user has no reference point for whether it worked.
+
+*Fix D4:* Add a "Verify it's working" section at the end of Quick Start:
+```
+Open Telegram, find your bot (search for its username), and send:
+  What files are in my working directory?
+You should receive a response within a few seconds.
+
+If using registry mode, open http://localhost:8787 to see the bot listed
+as connected and the conversation appearing in real time.
+```
+The suggested first message must be something guaranteed to work — not
+"review this diff" (requires a diff) or "hello" (underuses the product).
+"What files are in my working directory?" exercises the full pipeline with
+no prerequisites and gives an immediate, concrete, non-trivial response.
+
+*Problem D5 — Working directory note causes confusion.*
+A note about the bot's working directory appears mid-setup in a context where
+it's confusing. New users don't know what a "working directory" means in this
+context.
+
+*Fix D5:* Move to a "Configuration" or "Troubleshooting" section at the bottom.
+In Quick Start, keep only the default (`/home/bot`) with no explanation.
+
+*Problem D6 — No Registry UI screenshot or description.*
+The Registry UI is one of the product's primary differentiators — it provides
+real-time conversation visibility, multi-bot management, and (after M7/M8)
+human-initiated work and delegation approval. It is completely invisible in the
+README. A user who reads the README has no idea the UI exists or what it looks
+like.
+
+*Fix D6:* Add a "Registry UI" section with:
+- A screenshot saved to `docs/registry-ui-screenshot.png`, taken after M9 UI
+  fixes (E1–E9) are complete so the screenshot reflects the polished state.
+  Reference it in the README as `![Registry UI](docs/registry-ui-screenshot.png)`.
+- A one-paragraph description: what the three panels show (Bots, Conversations,
+  Routed Tasks), what makes it different from Telegram (real-time timeline,
+  multi-bot view, approval flow, shareable conversation link), and the URL
+  (`http://localhost:8787` for local setups).
+
+*Files:* `README.md`, `docs/registry-ui-screenshot.png`
+
+---
+
+**Section E — Registry UI**
+
+*Design direction to preserve:* The existing design is aesthetically considered
+and distinctive. The warm cream palette (`#f7f3ea`, `#fffaf1`), teal accent
+(`#0f766e`), radial gradient header highlight, backdrop blur on cards, 20px
+border-radius, and soft box shadows are coherent and polished. In a static
+screenshot the UI looks professional. All fixes below must preserve this design
+direction. The goal is to make the UI functional and complete — not to restyle it.
+
+*Problem E1 — IBM Plex Sans never loads.*
+The CSS declares `font-family: "IBM Plex Sans", ...` but no `<link>` to Google
+Fonts or a local font file exists. The UI falls back to system fonts inconsistently.
+
+*Fix E1:* Add `<link rel="preconnect" href="https://fonts.googleapis.com">` and
+the IBM Plex Sans import, OR switch to a system-font stack that looks polished on
+all platforms:
+```css
+font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+             "Helvetica Neue", Arial, sans-serif;
+```
+The system-font stack is the recommended fix: zero network dependency, loads
+instantly, matches OS conventions.
+
+*Problem E2 — No interactivity; no click targets; no hover states.*
+All items in the Bots, Conversations, and Routed Tasks panels render as static
+divs. Nothing is clickable. There are no hover states, no `cursor: pointer`,
+no visual affordance that any action is possible. A user looking at this UI
+cannot tell whether it is broken or intentionally a read-only board.
+
+*Fix E2:*
+- Wrap each item in a `<button>` or add `cursor: pointer` + `tabindex="0"` +
+  `role="button"` + `onkeydown` handler for Enter/Space.
+- Add hover state to `.item` CSS:
+  ```css
+  .item { cursor: pointer; transition: background 0.15s; }
+  .item:hover { background: rgba(255, 255, 255, 0.08); }
+  ```
+- On click, open the existing detail side-panel (which already exists for
+  conversations). Wire it to bots and routed tasks as well, or at minimum extend
+  the existing conversation detail panel path for all item types.
+- All interactive elements must be keyboard-accessible (Enter/Space to activate).
+
+*Problem E3 — No loading state.*
+On initial load, the three panels immediately render "Nothing yet." before the
+first fetch resolves. On any network latency — including a healthy local server —
+this looks like an empty, broken page. There is no spinner, skeleton, or any
+indication that data is loading.
+
+*Fix E3:*
+- On page load, initialize each panel's `innerHTML` to
+  `<div class="loading-state">Loading…</div>` before the first fetch fires.
+  CSS: `.loading-state { text-align: center; padding: 2rem; color: #888; }`
+- On subsequent polls (after the first successful load), show a non-disruptive
+  "Refreshing…" badge in the header — not a full spinner — so browsing is not
+  disrupted.
+- Skeleton cards are an acceptable alternative to the loading-state div.
+
+*Problem E4 — No last-refreshed indicator.*
+The user has no way to know how fresh the data is or whether the UI is still
+connected.
+
+*Fix E4:* Add a `<span id="last-updated">` element in the header or footer.
+Record `lastSuccessfulLoad = Date.now()` after each successful `loadBootstrap()`.
+Update the display every second via `setInterval`:
+```js
+setInterval(() => {
+  if (!lastSuccessfulLoad) return;
+  const age = Math.floor((Date.now() - lastSuccessfulLoad) / 1000);
+  const el = document.getElementById("last-updated");
+  if (!el) return;
+  el.textContent = age < 5 ? "Just updated" : `Updated ${age}s ago`;
+  el.style.color = age > 60 ? "#ef4444" : age > 30 ? "#f59e0b" : "#6b7280";
+}, 1000);
+```
+Call `clearErrorBanner()` (see E6) on each successful load so the banner
+and the age indicator are in sync.
+
+*Problem E5 — Raw API strings for status; no color coding.*
+Status values are displayed as raw strings (e.g., "connected", "degraded",
+"standalone"). There is no visual distinction between healthy, warning, and error
+states.
+
+*Fix E5:* Replace raw strings with styled badge chips. Add CSS color variants:
+```css
+.badge-connected  { background: #22c55e; color: #fff; }
+.badge-degraded   { background: #f59e0b; color: #fff; }
+.badge-standalone { background: #6b7280; color: #fff; }
+.badge-pending    { background: #3b82f6; color: #fff; }
+.badge-failed     { background: #ef4444; color: #fff; }
+.badge-running    { background: #3b82f6; color: #fff; }
+.badge-open       { background: #22c55e; color: #fff; }
+.badge-cancelling { background: #f59e0b; color: #fff; }
+.badge-completed  { background: #6b7280; color: #fff; }
+```
+Add a JS helper:
+```js
+function getBadgeClass(status) {
+  const s = (status || "").toLowerCase().replace(/[^a-z]/g, "");
+  const map = {
+    connected: "badge-connected", degraded: "badge-degraded",
+    standalone: "badge-standalone", pending: "badge-pending",
+    failed: "badge-failed", running: "badge-running",
+    open: "badge-open", cancelling: "badge-cancelling",
+    completed: "badge-completed",
+  };
+  return map[s] || "";
+}
+```
+Replace all `<span class="badge">${escapeHtml(status)}</span>` with
+`<span class="badge ${getBadgeClass(status)}">${escapeHtml(status)}</span>`.
+
+*Problem E6 — Full-page error replacement.*
+On fetch failure, `document.body.innerHTML = rawErrorText` replaces the entire
+UI with a developer-facing error dump.
+
+*Fix E6:* Replace `document.body.innerHTML = ...` error handling with an inline
+banner that is shown/hidden without destroying the page. JS pattern:
+```js
+function showErrorBanner(message) {
+  let banner = document.getElementById("error-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "error-banner";
+    banner.className = "error-banner";
+    banner.setAttribute("role", "alert");
+    document.body.prepend(banner);
+  }
+  banner.textContent = `⚠ Could not refresh data. Retrying… (${message})`;
+  banner.style.display = "block";
+}
+function clearErrorBanner() {
+  const banner = document.getElementById("error-banner");
+  if (banner) banner.style.display = "none";
+}
+```
+CSS:
+```css
+.error-banner {
+  background: #fef2f2; border-left: 4px solid #ef4444;
+  color: #991b1b; padding: 0.75rem 1rem; margin-bottom: 1rem; display: none;
+}
+```
+Call `showErrorBanner(error.message)` on fetch failure, `clearErrorBanner()` on
+next successful fetch. Never assign to `document.body.innerHTML`.
+
+*Problem E7 — ASCII arrow in routed task display.*
+Routed tasks show source and target with ` -> ` (literal ASCII). This looks
+unfinished.
+
+*Fix E7:* Replace with a Unicode arrow `→` or an SVG arrow icon.
+
+*Problem E8 — Empty state is bare.*
+When no bots, conversations, or tasks exist, the panel shows:
+```
+Nothing yet.
+```
+This communicates nothing useful to a new user.
+
+*Fix E8:* Replace bare "Nothing yet." with per-panel instructional empty states.
+Use a `EMPTY_STATES` map keyed by panel, rendered via `innerHTML` into a styled
+`.empty-state` div:
+```js
+const EMPTY_STATES = {
+  bots: "No bots connected yet. Start a bot in registry mode and it will appear here.<br><code>./scripts/app/guided_start.sh</code>",
+  conversations: "No conversations yet. Send a message to your bot in Telegram to start.",
+  tasks: "No routed tasks yet. Delegated tasks appear here in real time.",
+};
+```
+CSS: `.empty-state { padding: 1.5rem; text-align: center; color: #888; font-size: 0.9rem; line-height: 1.6; }`
+
+*Problem E9 — No favicon, no brand mark; tab title is default.*
+The browser tab shows "Agent Registry" with the default browser icon. On a
+desktop with many tabs this is indistinguishable.
+
+*Fix E9:*
+- Add an inline SVG favicon in `<head>` — no external files required:
+  ```html
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230f766e'/><text x='16' y='22' font-size='18' font-family='sans-serif' fill='white' text-anchor='middle'>A</text></svg>">
+  ```
+- `<title>Agent Registry</title>` is already present. If `REGISTRY_DISPLAY_NAME`
+  env var is set, prepend it: `{display_name} — Agent Registry`. This lets
+  operators with multiple registries distinguish tabs. If the env var is absent,
+  leave the title as `Agent Registry`.
+
+*Files:* `app/registry_service/app.py` (all inline HTML/CSS/JS)
+
+*Implementation note — acceptance for M9 is operator-facing:* Most of M9 lives
+in shell scripts, README, and inline frontend HTML/CSS/JS. Acceptance should be
+proven with operator-script and README contract coverage, a live registry UI
+render check, and a fresh screenshot captured from the running local registry
+after the UI polish is complete.
+
+---
+
+**Files to change:**
+
+| File | Sections |
+|---|---|
+| `scripts/provider/container_provider_login.sh` | A1–A3 |
+| `scripts/registry/start.sh` | C1 |
+| `scripts/app/guided_start.sh` | B1–B4 (+ pre-existing bug fixes) |
+| `README.md` | D1–D6 |
+| `app/registry_service/app.py` | E1–E9 (inline HTML/CSS/JS only) |
+| `docs/registry-ui-screenshot.png` | D6 (screenshot taken after E fixes) |
+
+**Implementation order within M9:**
+
+1. A1–A3: Provider login banners (highest impact, single file, quick)
+2. C1: Registry start token print (quick, single line)
+3. B1–B4: Guided start script improvements (including auto-read token, quick
+   mode, Linux default, success summary with registry URL reprinted)
+4. D1–D6: README updates (collapse steps, BotFather, verified-first-message,
+   working-dir relocation, Registry UI section with screenshot)
+5. E1–E9: Registry UI polish (largest scope, self-contained; preserve existing
+   design aesthetic throughout)
+
+**What M9 does NOT include:**
+- Registry UI real-time push (WebSocket/SSE) — deferred
+- Registry UI authentication/login — deferred
+- Telegram bot UI changes — out of scope
+- Provider login flow changes to Docker image (no Dockerfile changes needed;
+  all fixes are in shell scripts)
+
+**Acceptance criteria:**
+- [ ] A user following README Quick Start from `git clone` to first bot message
+      can complete setup without confusion, without external documentation, and
+      without needing to discover any step on their own
+- [ ] Provider login script prints an explicit banner before launching the
+      provider CLI stating what the user must do and how to exit; confirms
+      success or failure after the CLI exits
+- [ ] `guided_start.sh` quick mode asks ≤ 5 questions and works end-to-end
+      for both registry and standalone modes
+- [ ] `guided_start.sh` auto-reads the enrollment token for local registries
+      with no manual token entry; prompts with a "where to find it" hint for
+      remote registries
+- [ ] `guided_start.sh` defaults to a platform-appropriate registry URL
+      (`host.docker.internal` on macOS/Windows, `172.17.0.1` on Linux)
+- [ ] `guided_start.sh` success summary reprints the registry URL, first-
+      message suggestion, log command, and stop command as the final output
+- [ ] `./scripts/registry/start.sh` prints the enrollment token value at
+      startup alongside the note that it is stored in `.env.registry`
+- [ ] README has a BotFather walkthrough with the token creation flow fully
+      described; no external knowledge required to create a bot
+- [ ] README "verify it's working" section recommends a first message that
+      exercises the full pipeline with no prerequisites
+      ("What files are in my working directory?")
+- [ ] README has no redundant manual steps that `guided_start.sh` performs
+      automatically; registry start is a single command
+- [ ] README includes a Registry UI section describing what the UI shows and
+      includes a screenshot or visual reference
+- [ ] Registry UI uses a system-font stack; design aesthetic (cream palette,
+      teal accent, radial gradient, backdrop blur, 20px radius, box shadows)
+      is preserved
+- [ ] Registry UI items have hover states and click targets; at least a
+      basic detail view on click; keyboard-accessible
+- [ ] Registry UI shows a loading spinner on initial load; a non-disruptive
+      "Refreshing..." indicator on subsequent polls
+- [ ] Registry UI shows a "last updated N seconds ago" indicator that ages to
+      amber (> 30 s) and red (> 60 s)
+- [ ] Status values are rendered as color-coded badge chips with the correct
+      color for connected/degraded/standalone/pending/failed
+- [ ] Fetch errors show an inline dismissable banner, not a full-page
+      replacement; banner clears on next successful poll
+- [ ] Routed task arrows use Unicode `→`, not ASCII ` -> `
+- [ ] Empty states per panel have instructional text explaining how to populate
+      them, not bare "Nothing yet."
+- [ ] A favicon using the teal accent color is present; tab title is specific
+      enough to identify the instance
+- [ ] Full suite passes
+
+---
+
+##### M10 — Operations, Visibility, and Platform Maturity
+
+**Why this milestone exists.**
+After M9, first-run setup is polished and the Registry UI is world-class in presentation. M10 closes the operational gap between a demo-ready bot and one that a small team can run in production without constant operator intervention. It adds the six properties that every real deployment eventually requires: security (authenticated UI), observability (cost and usage visibility), maintainability (upgrade path), discoverability (search and filter), team safety (live user access control), and data portability (export and notifications). Two additional sections cover the highest-leverage power-user features: skills management from the UI and a stabilised programmatic trigger API. Most of the milestone is additive around operator surfaces and storage seams; where provider adapters are touched, the goal is usage metadata only, not a second execution model.
+
+**Current status.**
+
+- Complete: **A**, **B-0**, **C**, **D**, **E**, **F** (Registry UI export),
+  and **G**
+- Remaining: **B**, **H**, and **I**
+
+The status line under each section is authoritative. For sections already
+complete, any deeper implementation notes below are preserved as historical
+design record rather than current build instructions.
+
+---
+
+###### A. Registry UI Authentication
+
+**Status: Complete.**
+
+Current shipped truth: the Registry UI now uses Starlette session middleware
+for the HTML login flow, `/ui/login` and `/ui/logout` are live, `/v1/ui/*`
+keeps bearer-token auth, and `REGISTRY_SESSION_SECRET` is the optional way to
+keep sessions valid across registry restarts.
+
+**Problem.**
+This was the pre-M10A gap: any process that could reach the port could read the
+full conversation history, send delegation actions, and invoke control
+actions. That gap is now closed.
+
+**Fix.**
+Introduce a minimal single-password login form. The `REGISTRY_UI_TOKEN` value becomes the password. On successful login the server issues a short-lived session cookie (`registry_session`). All `/ui` and `/v1/ui` routes check for a valid session cookie; requests without one are redirected to `/ui/login` (GET) or rejected with 401 (API routes).
+
+**Implementation seams.**
+
+- `app/registry_service/app.py` — add two routes:
+  - `GET /ui/login` — returns a styled inline HTML login form. Form POSTs to `/ui/login`.
+  - `POST /ui/login` — reads `password` from form body, compares to `REGISTRY_UI_TOKEN` using `hmac.compare_digest`. On match: set `Set-Cookie: registry_session=<token>; HttpOnly; SameSite=Strict; Path=/` (64-char random hex, stored in a module-level dict mapping token → expiry). Redirect to `/ui`. On failure: re-render login form with an error message. No username field — single shared password.
+  - `GET /ui/logout` — clears the cookie, redirects to `/ui/login`.
+- Add a `_require_auth(request)` helper that reads the `registry_session` cookie, validates it against the in-memory session store, and returns the session or raises `web.HTTPFound("/ui/login")`.
+- Call `_require_auth` at the top of every handler that serves `/ui` HTML or `/v1/ui` JSON. API routes return 401 JSON `{"error": "unauthorized"}` instead of redirecting.
+- Session expiry: 24 hours from last use. Each validated request resets the expiry. No persistent session store — restart clears sessions (acceptable for single-operator use).
+- If `REGISTRY_UI_TOKEN` is empty or not set, authentication is bypassed entirely (dev/local mode). Log a warning at startup.
+- Login form CSS: match the existing dark theme (background `#0f172a`, card `#1e293b`, teal button `#0f766e`). Single centered card, 320 px wide, input and button full-width.
+- Add a small "Logout" link to the top-right of the Registry UI nav bar (visible only when authenticated).
+
+**Files to change.**
+- `app/registry_service/app.py` — add login/logout routes, `_require_auth`, session store, nav bar logout link.
+- `scripts/registry/start.sh` — `REGISTRY_UI_TOKEN` already generated and stored in `.env.registry`. No change needed.
+- `docs/OPERATORS.md` (or equivalent) — note that restarting the registry service clears all active sessions.
+
+**What M10A does NOT include.**
+- Multi-user accounts or per-user permissions (M11+).
+- OAuth / SSO.
+- Persistent session storage across restarts.
+- Rate limiting on the login endpoint (acceptable for single-operator use; add in M11 if needed).
+
+---
+
+###### B-0. Transport Store Abstraction Integrity and Postgres Parity
+
+**Status: Complete.**
+
+Current shipped truth: `app/access.py` is pure policy again, live access
+overrides go through the transport-store facade on both SQLite and Postgres,
+the Postgres migration set includes `user_access` and `usage_log`, and the
+transport contract test now covers the `user_access` methods.
+
+**Problem.**
+M10E introduced three abstraction violations that leave the Postgres runtime broken for all new M10 transport features:
+
+1. **`app/access.py` bypasses the transport-store abstraction.** It imports `sqlite3` directly, opens `data_dir/transport.db` with a short-lived `sqlite3.connect()` on every access check, and is never exercised by the Postgres backend. The module's own docstring says it is "intentionally leaf-level" and "depends only on config and transport-normalized user identity." That contract is broken.
+
+2. **`work_queue_postgres.py` is missing `get_user_access`, `set_user_access`, and `list_user_access`.** These methods were added to `work_queue.py` (facade) and `work_queue_sqlite.py` but never implemented in `PostgresTransportStore`. Any Postgres-backed deployment calling `/allowuser`, `/blockuser`, or `is_allowed()` will raise `AttributeError` at runtime.
+
+3. **No Postgres migration for `user_access` or `usage_log`.** SQLite's `_CREATE_SQL` at schema version 5 includes both tables. The Postgres migration set stops at `0002_work_items_dispatch_mode.sql`. A Postgres deployment is missing both tables entirely.
+
+4. **The transport store contract test was not extended.** `tests/contracts/test_transport_store_contract.py` is the enforcement mechanism that runs every transport method against both backends. New methods were added to the SQLite store without simultaneously adding them to the contract test. The Postgres tests appeared green because they were blind to the new surface — not because the surface was correct.
+
+**Root cause pattern.**
+The M10E implementation read `work_queue_sqlite.py` but not `work_queue_postgres.py` or `work_queue_pg.py`, and did not extend the contract test. Every new method on the transport facade must have: (a) a Postgres implementation, (b) a Postgres migration, and (c) a contract test entry — in the same commit. Without (c), breakage is silent.
+
+**Fix.**
+Seven changes across eight files restore the invariant:
+
+1. `app/access.py` — remove all DB access. Become purely policy.
+2. `app/work_queue_sqlite.py` — fix `get_user_access` to not create `transport.db` when the file is absent (i.e., before the first message arrives on first boot).
+3. `app/work_queue_pg.py` — add `get_user_access_override`, `set_user_access`, `list_user_access` as conn-based functions.
+4. `app/work_queue_postgres.py` — add `get_user_access`, `set_user_access`, `list_user_access` wrapper methods delegating to `work_queue_pg`.
+5. `app/db/migrations/postgres/0003_user_access_usage_log.sql` — new migration adding `user_access` and `usage_log` tables to `bot_runtime`.
+6. `app/telegram_handlers.py` — update the `is_allowed()` wrapper to fetch the override through the facade before calling the pure policy function.
+7. `tests/contracts/test_transport_store_contract.py` — add `user_access` contract cases that run against both SQLite and Postgres.
+8. `CLAUDE.md` — add a standing rule: every new facade method must be in the contract test in the same commit.
+
+**Implementation seams.**
+
+**`app/access.py`**
+
+Remove:
+- `import sqlite3`
+- `from pathlib import Path`
+- `_db_access_override(data_dir, user_id)` function
+
+Add:
+```python
+def is_allowed_user_with_override(
+    config: BotConfig, user, override: str | None
+) -> bool:
+    """Apply DB override precedence on top of config baseline.
+
+    override: 'allowed' | 'blocked' | None (no DB row found).
+    Call sites fetch override from work_queue.get_user_access before calling this.
+    """
+    inbound = to_inbound_user(user)
+    if inbound is None:
+        return False
+    if override == "blocked":
+        return False
+    if override == "allowed":
+        return True
+    return is_allowed_user(config, user)
+```
+
+Change `is_allowed_user(config, user)` to remove the DB call entirely — it becomes config-only:
+```python
+def is_allowed_user(config: BotConfig, user) -> bool:
+    """Config baseline — no DB lookup.
+
+    Use is_allowed_user_with_override when a live DB override is needed.
+    """
+    inbound = to_inbound_user(user)
+    if inbound is None:
+        return False
+    if config.allow_open:
+        return True
+    if not config.allowed_user_ids and not config.allowed_usernames:
+        return False
+    return (
+        inbound.id in config.allowed_user_ids
+        or inbound.username in config.allowed_usernames
+    )
+```
+
+`is_admin_user`, `is_public_user`, and `trust_tier` are unchanged.
+
+The result: `access.py` has no storage imports, no `Path`, no file I/O of any kind.
+
+**`app/work_queue_sqlite.py` — `get_user_access`**
+
+The current implementation calls `self._transport_db(data_dir)` which creates `transport.db` as a side effect. `is_allowed()` runs before `record_and_admit_message` on every message — so on first boot, before any message is ever admitted, `transport.db` does not yet exist. Creating it just to answer "no override" would create an empty DB and confuse the migration path.
+
+Replace:
+```python
+def get_user_access(self, data_dir: Path, user_id: int) -> str | None:
+    conn = self._transport_db(data_dir)
+    return work_queue_sqlite_impl.get_user_access_override(conn, user_id)
+```
+
+With:
+```python
+def get_user_access(self, data_dir: Path, user_id: int) -> str | None:
+    # Use cached connection if already open (normal case after first message)
+    if data_dir in self._connections:
+        return work_queue_sqlite_impl.get_user_access_override(
+            self._connections[data_dir], user_id
+        )
+    # DB not yet open — do not create it just for a read-only override check
+    if not (data_dir / "transport.db").exists():
+        return None
+    # File exists but not cached — open normally (runs migrations)
+    conn = self._transport_db(data_dir)
+    return work_queue_sqlite_impl.get_user_access_override(conn, user_id)
+```
+
+**`app/work_queue_pg.py` — three new conn-based functions**
+
+Add after the existing functions, matching the SQLite impl shape exactly:
+
+```python
+def get_user_access_override(conn, user_id: int) -> str | None:
+    """Return 'allowed', 'blocked', or None when no override exists for user_id."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT access FROM bot_runtime.user_access WHERE user_id = %s",
+            (user_id,),
+        )
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def set_user_access(
+    conn,
+    user_id: int,
+    access: str,
+    reason: str,
+    granted_by: int,
+) -> None:
+    """Upsert a user access override row."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO bot_runtime.user_access
+                   (user_id, access, reason, granted_by, granted_at)
+               VALUES (%s, %s, %s, %s, %s)
+               ON CONFLICT (user_id) DO UPDATE SET
+                   access = EXCLUDED.access,
+                   reason = EXCLUDED.reason,
+                   granted_by = EXCLUDED.granted_by,
+                   granted_at = EXCLUDED.granted_at""",
+            (user_id, access, reason, granted_by, now),
+        )
+    conn.commit()
+
+
+def list_user_access(conn) -> list[dict]:
+    """Return all user access overrides ordered by most recent grant first."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT user_id, access, reason, granted_by, granted_at "
+            "FROM bot_runtime.user_access ORDER BY granted_at DESC"
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "user_id": r[0],
+            "access": r[1],
+            "reason": r[2],
+            "granted_by": r[3],
+            "granted_at": r[4],
+        }
+        for r in rows
+    ]
+```
+
+**`app/work_queue_postgres.py` — three new wrapper methods**
+
+Add after the existing `purge_old` method, following the exact pattern of every other method in `PostgresTransportStore`:
+
+```python
+def get_user_access(self, data_dir: Path, user_id: int) -> str | None:
+    with self._conn() as conn:
+        return work_queue_pg.get_user_access_override(conn, user_id)
+
+def set_user_access(
+    self,
+    data_dir: Path,
+    user_id: int,
+    access: str,
+    reason: str = "",
+    granted_by: int = 0,
+) -> None:
+    with self._conn() as conn:
+        work_queue_pg.set_user_access(conn, user_id, access, reason, granted_by)
+
+def list_user_access(self, data_dir: Path) -> list[dict]:
+    with self._conn() as conn:
+        return work_queue_pg.list_user_access(conn)
+```
+
+**`app/db/migrations/postgres/0003_user_access_usage_log.sql`** (new file)
+
+```sql
+-- Add user_access and usage_log tables for M10E access overrides and M10B usage tracking.
+-- Version: 3
+
+CREATE TABLE IF NOT EXISTS bot_runtime.user_access (
+    user_id    BIGINT PRIMARY KEY,
+    access     TEXT NOT NULL CHECK (access IN ('allowed', 'blocked')),
+    reason     TEXT NOT NULL DEFAULT '',
+    granted_by BIGINT NOT NULL DEFAULT 0,
+    granted_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bot_runtime.usage_log (
+    id                BIGSERIAL PRIMARY KEY,
+    chat_id           BIGINT NOT NULL,
+    work_item_id      TEXT NOT NULL,
+    provider          TEXT NOT NULL,
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd          REAL NOT NULL DEFAULT 0.0,
+    recorded_at       TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+);
+CREATE INDEX IF NOT EXISTS idx_usage_log_chat ON bot_runtime.usage_log (chat_id);
+CREATE INDEX IF NOT EXISTS idx_usage_log_recorded_at ON bot_runtime.usage_log (recorded_at);
+```
+
+`usage_log` is added here even though M10B has not been implemented yet, because the migration must exist before the application code that writes to it is deployed. The M10B Postgres implementation (`record_usage`, `get_usage_since` in `work_queue_pg.py` and `work_queue_postgres.py`) will be added as part of M10B.
+
+**`app/telegram_handlers.py` — `is_allowed()` wrapper**
+
+Change only the `is_allowed()` function. All existing call sites remain unchanged — they all call `is_allowed(user)`.
+
+Replace:
+```python
+def is_allowed(user) -> bool:
+    return access.is_allowed_user(_cfg(), user)
+```
+
+With:
+```python
+def is_allowed(user) -> bool:
+    cfg = _cfg()
+    inbound = access.to_inbound_user(user)
+    if inbound is None:
+        return False
+    override = work_queue.get_user_access(cfg.data_dir, inbound.id)
+    return access.is_allowed_user_with_override(cfg, user, override)
+```
+
+No other handler function changes. `is_admin` and `is_public_user` are unchanged.
+
+**`tests/contracts/test_transport_store_contract.py` — user_access contract cases**
+
+Add three test functions to the existing contract test. They use the `backend_and_data_dir` fixture which parameterizes over both SQLite and Postgres:
+
+```python
+def test_user_access_no_override_returns_none(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    result = get_user_access(data_dir, user_id=99999)
+    assert result is None
+
+
+def test_user_access_set_and_get_round_trip(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    set_user_access(data_dir, user_id=100, access="blocked", reason="test", granted_by=1)
+    assert get_user_access(data_dir, user_id=100) == "blocked"
+    set_user_access(data_dir, user_id=100, access="allowed", reason="reversed", granted_by=1)
+    assert get_user_access(data_dir, user_id=100) == "allowed"
+
+
+def test_user_access_list_returns_all_rows(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    set_user_access(data_dir, user_id=200, access="allowed", reason="a", granted_by=1)
+    set_user_access(data_dir, user_id=201, access="blocked", reason="b", granted_by=1)
+    rows = list_user_access(data_dir)
+    user_ids = {r["user_id"] for r in rows}
+    assert 200 in user_ids
+    assert 201 in user_ids
+```
+
+Import `get_user_access`, `set_user_access`, `list_user_access` from `app.work_queue` at the top of the file alongside the existing imports.
+
+**`CLAUDE.md` — standing rule to prevent recurrence**
+
+Add a new rule to the "Repo-Specific Process" section:
+
+> **Transport facade parity rule.** Every new method added to `app/work_queue.py` must land in the same commit as: (a) a `work_queue_pg.py` conn-based implementation, (b) a `PostgresTransportStore` wrapper in `work_queue_postgres.py`, (c) a Postgres migration if the method touches a new table, and (d) a contract test case in `tests/contracts/test_transport_store_contract.py`. If Postgres support is genuinely impossible in the same slice, the method must not be added to the facade or `__all__` until it is — a SQLite-only shortcut in the facade is not acceptable.
+
+**Files to change.**
+
+| File | Change |
+|---|---|
+| `app/access.py` | Remove `sqlite3`, `Path`, `_db_access_override`; add `is_allowed_user_with_override`; make `is_allowed_user` config-only |
+| `app/work_queue_sqlite.py` | Fix `get_user_access` to not create DB when file absent |
+| `app/work_queue_pg.py` | Add `get_user_access_override`, `set_user_access`, `list_user_access` |
+| `app/work_queue_postgres.py` | Add `get_user_access`, `set_user_access`, `list_user_access` wrappers |
+| `app/db/migrations/postgres/0003_user_access_usage_log.sql` | New file: `user_access` and `usage_log` tables |
+| `app/telegram_handlers.py` | Update `is_allowed()` to fetch override from facade, call pure policy |
+| `tests/contracts/test_transport_store_contract.py` | Add three `user_access` contract cases; import new facade functions |
+| `CLAUDE.md` | Add transport facade parity rule |
+
+**What M10B-0 does NOT include.**
+
+- The `record_usage` and `get_usage_since` Postgres implementations — these land in M10B, which also implements the SQLite side. The `usage_log` table is added to the Postgres migration here so the migration is available when M10B deploys.
+- Changes to the approval or recovery flow — `is_allowed` wraps only the user identity check, not work-item state transitions.
+- Registry UI or Telegram command behavior changes — the user-facing behavior of `/allowuser`, `/blockuser`, and `is_allowed` is identical after this refactor.
+- The `usage_log` Postgres methods (`record_usage`, `get_usage_since`) in `work_queue_pg.py` — those are M10B.
+
+**Acceptance criteria.**
+
+- [ ] `rg -n "sqlite3|import sqlite3" app/access.py` → no hits
+- [ ] `rg -n "transport\.db|Path" app/access.py` → no hits
+- [ ] `rg -n "SQLiteTransportStore|PostgresTransportStore" app/telegram_handlers.py` → no hits
+- [ ] `work_queue.get_user_access(data_dir, user_id)` works under both SQLite and Postgres runtime
+- [ ] `work_queue.set_user_access(data_dir, ...)` works under both backends
+- [ ] `work_queue.list_user_access(data_dir)` works under both backends
+- [ ] `blocked` override from `set_user_access` prevents a user in `BOT_ALLOWED_USERS` from sending messages without restart
+- [ ] `allowed` override from `set_user_access` admits a user not in `BOT_ALLOWED_USERS` without restart
+- [ ] `get_user_access` called when `transport.db` does not exist returns `None` and does not create the file
+- [ ] `is_admin_user` still checks only config — no DB access
+- [ ] The three new contract tests pass against both SQLite and Postgres backends
+- [ ] All existing access, handler, and transport tests remain green
+- [ ] `0003_user_access_usage_log.sql` is present in the Postgres migration directory
+- [ ] CLAUDE.md includes the transport facade parity rule
+
+---
+
+###### B. Reported Token Usage Visibility
+
+**Status: Shipped.**
+
+Reported usage visibility is now live as an operator-facing surface. The
+runtime extracts best-effort usage metadata from both provider CLIs, records
+completed runs into the transport `usage_log`, and mirrors non-zero reported
+usage into registry timeline events so the Registry UI can aggregate it
+without reaching across into the bot runtime database.
+
+**Shipped behavior.**
+
+- `RunResult` now carries `prompt_tokens`, `completion_tokens`, and
+  `cost_usd`.
+- Claude reads `usage.input_tokens`, `usage.output_tokens`, and
+  `total_cost_usd` from the final `result` event when present.
+- Codex reads the nested `msg.type == "token_count"` event when present and
+  falls back to zero when the CLI version does not emit usage.
+- Transport-store parity is enforced for usage persistence:
+  `record_usage(...)` and `get_usage_since(...)` exist in the facade, SQLite
+  store, Postgres store, and contract suite.
+- Every completed run is recorded in transport usage history. A value of `0`
+  means "unreported by the provider," not "zero cost/zero tokens."
+- The registry boundary stays intact: the registry service does not query the
+  bot runtime database. Instead, the bot publishes `usage` timeline events for
+  conversations that have non-zero reported token counts.
+- The Registry UI now exposes `GET /v1/ui/usage`, shows `Reported today:
+  N tokens` in the header, and shows per-conversation reported tokens and cost
+  in conversation detail when available.
+
+**Scope limits that remain intentional.**
+
+- This is reported usage visibility, not guaranteed-complete accounting.
+  Missing CLI metadata remains `0`.
+- There is still no pricing table, budget policy, quota enforcement, or
+  historical charting in M10.
+- Claude may report `cost_usd`; Codex currently does not, so cost remains
+  best-effort as well.
+
+---
+
+###### C. Upgrade Path
+
+**Status: Complete.**
+
+Current shipped truth: bot and registry stores now migrate through numbered
+schema versions, the repo has `VERSION`, `CHANGELOG.md`, and `docs/UPGRADE.md`,
+and guided setup reprints the repo version in its success summary.
+
+**Problem.**
+There is no documented or tooled upgrade procedure. Operators who installed the bot at M5 have no safe path to M10 without risking data loss or schema breakage. SQLite schema changes added across milestones (e.g. `usage_log` in M10B, `status` column in M8) are applied only at first run via `CREATE TABLE IF NOT EXISTS` or `ALTER TABLE` sprinkled through the code. There is no migration history, no rollback procedure, and no version marker.
+
+**Fix.**
+Introduce a lightweight schema migration system and a version file. Document the upgrade procedure in a single operations guide.
+
+**Implementation seams.**
+
+- `app/storage.py` — add a `schema_version` table:
+  ```sql
+  CREATE TABLE IF NOT EXISTS schema_version (
+      version INTEGER PRIMARY KEY,
+      applied_at REAL NOT NULL
+  );
+  ```
+- Write a `migrate(conn)` function that runs numbered migration functions in order:
+  ```python
+  MIGRATIONS = [
+      (1, _migrate_v1_baseline),
+      (2, _migrate_v2_add_usage_log),
+      # ...
+  ]
+  def migrate(conn):
+      current = _current_version(conn)
+      for version, fn in MIGRATIONS:
+          if version > current:
+              fn(conn)
+              conn.execute("INSERT INTO schema_version VALUES (?, ?)", (version, time.time()))
+              conn.commit()
+  ```
+- Each `_migrate_vN_*` function is idempotent (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` via try/except on SQLite's `OperationalError: duplicate column name`).
+- Call `migrate(conn)` once at startup before any other DB access.
+- Add a `VERSION` file at the project root containing the current milestone string (e.g. `M10`). `scripts/app/guided_start.sh` reads it and prints `Bot version: M10` in the startup summary.
+- `CHANGELOG.md` — create with a section per milestone listing the user-visible changes and the schema version bumped. One sentence per change, bulleted. No internal implementation details.
+- `docs/UPGRADE.md` — document the upgrade procedure:
+  1. `git pull`
+  2. `pip install -r requirements.txt`
+  3. Restart the bot (migrations run automatically on startup).
+  4. Restart the registry service if running.
+  5. Check `journalctl -u telegram-agent-bot -n 50` for migration log lines.
+  - Note: sessions and conversations are preserved across upgrades.
+
+**Files to change.**
+- `app/storage.py` — `schema_version` table, `migrate()`, numbered migration functions.
+- `app/__init__.py` or startup entry point — call `migrate()` at startup.
+- `VERSION` (new file at project root).
+- `CHANGELOG.md` (new file).
+- `docs/UPGRADE.md` (new file).
+- `scripts/app/guided_start.sh` — read and print `VERSION`.
+
+**What M10C does NOT include.**
+- Rollback / downgrade support (SQLite schema rollback is destructive; document "restore from backup" instead).
+- Automated backup before migration (suggest in UPGRADE.md, do not automate in M10).
+
+---
+
+###### D. Conversation Search and Filter
+
+**Status: Complete.**
+
+Current shipped truth: the Registry UI has client-side filters plus server-side
+FTS search implemented in `app/registry_service/store.py`, keyed to
+`timeline_events.seq`, with malformed queries failing closed to an empty result
+set and active search results preserved across the normal poll refresh.
+
+**Problem.**
+As conversation history grows, operators cannot find a specific conversation. The Registry UI renders all conversations in a single unsorted list. There is no way to filter by bot, by status, or by approximate date, and no way to search message content.
+
+**Fix.**
+Add a search and filter bar to the Registry UI conversations panel. Client-side filtering covers bot/status/date. Server-side SQLite FTS covers content search.
+
+**Implementation seams.**
+
+**Client-side filter (no new endpoints).**
+- Above the conversations list, render a single-line filter bar containing:
+  - A text input (`id="conv-search"`, placeholder `"Search…"`).
+  - A `<select>` for status (`all / running / done / failed`).
+  - A `<select>` for date range (`any / today / last 7 days / last 30 days`).
+- On every `input`/`change` event, filter the in-memory `state.conversations` array and re-render the list. No network request for filter changes.
+- Match logic: text input checks `conversation.title` and last message snippet (case-insensitive substring). Status select checks `conversation.status`. Date select checks `conversation.updated_at` (Unix timestamp).
+- Show a filtered count: `"Showing 3 of 47 conversations"` when a filter is active; hide when showing all.
+- Filter state is not persisted across page loads.
+
+**Server-side FTS (new endpoint for content search).**
+- SQLite FTS5 virtual table over the timeline events `body` column:
+  ```sql
+  CREATE VIRTUAL TABLE IF NOT EXISTS timeline_fts USING fts5(
+      body,
+      content=timeline_events,
+      content_rowid=seq
+  );
+  ```
+- Populate on insert via trigger or explicit `INSERT INTO timeline_fts` after each `timeline_events` insert.
+- New endpoint `GET /v1/ui/search?q=<query>&limit=20` — runs `SELECT te.conversation_ref, snippet(timeline_fts, 0, '<b>', '</b>', '…', 32) FROM timeline_fts JOIN timeline_events te ON te.seq = timeline_fts.rowid WHERE timeline_fts MATCH ? LIMIT ?`. Returns `[{ "conversation_ref": "...", "snippet": "..." }]`.
+- Registry UI: when the search input has 3+ characters and the user pauses typing (300 ms debounce), call `/v1/ui/search`. Highlight matched conversation entries in the list. Results replace the client-side filtered list.
+- If `q` is fewer than 3 characters, revert to client-side filtering only.
+
+**Files to change.**
+- `app/registry_service/app.py` — filter bar HTML/CSS/JS, `/v1/ui/search` endpoint, FTS table DDL, timeline insert logic.
+- `app/registry_service/store.py` — `timeline_fts` DDL in the registry-store migration path.
+
+**What M10D does NOT include.**
+- Sorting (newest-first is the current order; do not add sort controls in M10).
+- Saved search / bookmarks.
+- Full-text search across work item text (limit to timeline events in M10).
+
+---
+
+###### E. Live User Access Control
+
+**Status: Complete.**
+
+Current shipped truth: `/allowuser`, `/blockuser`, and `/listaccess` are live
+through Telegram admin commands and take effect on the next message without
+restart. The planned Registry UI access panel is still deferred because the
+registry service does not read the bot's local transport store directly.
+
+**Problem.**
+The `ALLOWED_USERS` config key is set once at startup and requires a bot restart to change. Operators cannot quickly block an abusive user or grant access to a new team member without downtime. There is no `/allowuser` or `/blockuser` command.
+
+**Fix.**
+Persist user access grants and blocks in SQLite. Add Telegram admin commands to modify the live list without restart.
+
+**Implementation seams.**
+
+- Transport store backends — new `user_access` table:
+  ```sql
+  CREATE TABLE IF NOT EXISTS user_access (
+      user_id INTEGER PRIMARY KEY,
+      access TEXT NOT NULL CHECK(access IN ('allowed', 'blocked')),
+      reason TEXT NOT NULL DEFAULT '',
+      granted_by INTEGER NOT NULL DEFAULT 0,
+      granted_at REAL NOT NULL
+  );
+  ```
+- `app/access.py` — `is_user_allowed(data_dir, user_id) -> bool`:
+  - Check `user_access` table first. If a row exists, return `access == 'allowed'`.
+  - Fall through to the existing `ALLOWED_USERS` env-var check.
+  - Result: env-var list remains the baseline; DB overrides on top.
+- `app/telegram_handlers.py` — add admin-only commands:
+  - `/allowuser <user_id> [reason]` — upserts `user_access` row with `access='allowed'`. Replies `"User 123456 added to allowed list."`.
+  - `/blockuser <user_id> [reason]` — upserts with `access='blocked'`. Replies `"User 123456 blocked."`.
+  - `/listaccess` — replies with a formatted table of all rows in `user_access`, plus the count of users in `ALLOWED_USERS` env var.
+  - These commands require the invoking user to be in `ADMIN_USERS` (existing config key). If `ADMIN_USERS` is empty, they are disabled.
+- Replace existing per-request `is_allowed_user()` call sites with `await is_user_allowed(config.data_dir, user_id)` (async wrapper that runs the sync DB check on the thread pool).
+- Registry UI access view is deferred. The registry service does not read the
+  bot's local transport store directly, so a read-only panel needs an explicit
+  sync path rather than a direct DB read.
+
+**Files to change.**
+- `app/work_queue_sqlite_impl.py`, `app/work_queue_pg.py` — `user_access` table and access methods in backend-specific transport stores.
+- `app/access.py` — policy helpers.
+- `app/telegram_handlers.py` — `/allowuser`, `/blockuser`, `/listaccess` handlers.
+
+**What M10E does NOT include.**
+- Adding/removing users from the Registry UI (Telegram commands are the authoritative interface in M10).
+- Per-channel or per-skill access grants.
+- Temporary / expiring access grants.
+
+---
+
+###### F. Conversation Export
+
+**Status: Complete for the Registry UI.**
+
+Current shipped truth: the Registry UI exposes Markdown export from the
+registry timeline and downloads it through authenticated `fetch + blob`.
+Telegram's existing `/export` command remains the older bot-local export path;
+this milestone did not unify both surfaces onto the registry timeline.
+
+**Problem.**
+There is no way to extract a conversation for archival, sharing with a colleague, or audit review. Operators must manually copy-paste from the Registry UI or read raw SQLite.
+
+**Fix.**
+Add a Markdown export from the Registry UI and a `/export` Telegram command that sends the current conversation as a file.
+
+**Implementation seams.**
+
+- `app/registry_service/app.py` — new endpoint `GET /v1/ui/conversations/<conversation_ref>/export`:
+  - Reads all timeline events for the conversation in chronological order.
+  - Renders as Markdown:
+    ```
+    # Conversation: <title>
+    Exported: <ISO date>
+
+    ## [<timestamp>] <event kind>
+    <body>
+    ```
+  - Returns `Content-Type: text/markdown`, `Content-Disposition: attachment; filename="conversation-<ref>.md"`.
+- Registry UI conversation detail panel — add an "Export" button (top-right of the panel, beside the conversation title). Because the UI API is authenticated, the browser path should use authenticated `fetch` plus a blob download rather than `window.open(...)`.
+- `app/telegram_handlers.py` — `/export` command:
+  - Reads the current chat's timeline events via the same storage query.
+  - Renders the same Markdown format.
+  - Sends it as a Telegram document (`bot.send_document(chat_id, InputFile(io.BytesIO(content.encode()), filename="conversation.md"))`).
+  - Reply: `"Conversation exported as Markdown."` (then the document).
+  - If no events exist: `"No conversation history to export."`.
+
+**Files to change.**
+- `app/registry_service/app.py` — export endpoint, "Export" button.
+- `app/telegram_handlers.py` — `/export` command.
+
+**What M10F does NOT include.**
+- JSON or PDF export (Markdown only in M10).
+- Bulk export of all conversations.
+- Encrypted export.
+
+---
+
+###### G. Completion Notifications
+
+**Status: Complete.**
+
+Current shipped truth: `BOT_COMPLETION_WEBHOOK_URL` now fires outbound
+completion notifications via `app/webhook.py` using `httpx`, `tenacity`, and a
+process-local circuit breaker. The planned Registry UI display of webhook
+configuration is still deferred because the registry service does not own
+bot-local config.
+
+**Problem.**
+Long-running agent tasks can take minutes. Users or operators who do not have Telegram open miss the completion. There is no external notification mechanism: no webhook, no email.
+
+**Fix.**
+Add a configurable webhook callback that fires on conversation completion. Email fallback is out of scope for M10 (requires SMTP config, adds a dependency); document it as a future option.
+
+**Implementation seams.**
+
+- `app/config.py` — add `completion_webhook_url: str = ""`. This is the full URL the bot will POST to when a conversation reaches a terminal state.
+- `app/telegram_handlers.py` completion path plus a leaf `app/webhook.py` module — after terminal outcome resolution, if `config.completion_webhook_url` is set, schedule a non-blocking HTTP POST:
+  ```json
+  {
+    "event": "conversation_completed",
+    "conversation_ref": "telegram:agent-id:chat-id",
+    "chat_id": 12345,
+    "status": "done",
+    "summary": "<first 200 chars of final reply>",
+    "completed_at": "<ISO timestamp>"
+  }
+  ```
+  Use `httpx` with bounded retries/backoff and a process-local circuit breaker. Failures log warnings and must not fail the work item.
+- `scripts/app/guided_start.sh` — add an optional prompt `"Completion webhook URL (optional, press Enter to skip): "`. Write `BOT_COMPLETION_WEBHOOK_URL` to `.env` if non-empty.
+- Registry UI webhook-configured status is deferred; the registry service does not currently read bot-local config.
+
+**Files to change.**
+- `app/config.py` — `completion_webhook_url` field.
+- `app/webhook.py`, `app/telegram_handlers.py` — fire webhook after completion.
+- `scripts/app/guided_start.sh` — optional prompt.
+
+**What M10G does NOT include.**
+- Shared secret / signature verification for webhook receivers.
+- Email or SMS notifications.
+- Per-conversation webhook override (single global URL only in M10).
+
+---
+
+###### H. Skills Management from Registry UI
+
+**Status: Shipped.**
+
+**Problem.**
+Active skills are configured via `ACTIVE_SKILLS` in `.env` and require a restart to change. Operators cannot see which skills are currently active or toggle them without shell access.
+
+**Fix.**
+Add a read-only "Skills" panel to the Registry UI that lists all registered skills, shows which are active, and (for operators who want live toggling) exposes enable/disable actions that write through to a durable skills override table.
+
+**Implementation seams.**
+
+- `app/storage.py` — new `skills_override` table:
+  ```sql
+  CREATE TABLE IF NOT EXISTS skills_override (
+      skill_name TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
+      set_by TEXT NOT NULL DEFAULT 'ui',
+      set_at REAL NOT NULL
+  );
+  ```
+- `app/skills.py` (or wherever skills are resolved) — after resolving `ACTIVE_SKILLS` from config, apply overrides from `skills_override`: a row with `enabled=0` removes the skill from the active set even if it is in the env var; a row with `enabled=1` adds it even if it is not. The env var remains the baseline.
+- `app/registry_service/app.py`:
+  - `GET /v1/ui/skills` — returns list of all skills from the skills registry (name, description, active status, override status).
+  - `POST /v1/ui/skills/<skill_name>/enable` — upserts `skills_override` row with `enabled=1`. Returns updated skills list.
+  - `POST /v1/ui/skills/<skill_name>/disable` — upserts with `enabled=0`. Returns updated skills list.
+  - Registry UI "Skills" panel — list of skill cards showing name, description, and a toggle switch. Toggle fires the enable/disable endpoint. Active-from-env skills show a small "from config" label; overridden skills show "overridden" label. The active set reloads on next worker poll cycle (no restart required if the skills check is per-request; if cached, add a `_reload_skills()` call triggered by the API write).
+
+**Files to change.**
+- `app/storage.py` — `skills_override` table, DDL migration.
+- `app/skills.py` — apply overrides.
+- `app/registry_service/app.py` — `/v1/ui/skills` endpoints, "Skills" panel.
+
+**What M10H does NOT include.**
+- Installing new skills from the UI (requires file system write + restart).
+- Per-user or per-conversation skill assignment.
+- Skill parameter editing from the UI.
+
+---
+
+###### H-2. Registry Store Backend Abstraction and Postgres Parity
+
+**Status: Complete.**
+
+**What shipped.**
+The registry service now mirrors the backend seam used by the bot runtime. A shared contract lives in `app/registry_service/store_base.py`; `app/registry_service/store.py` is the SQLite implementation (`RegistrySQLiteStore`); `app/registry_service/store_postgres.py` is the Postgres implementation; and `app/registry_service/backend.py` selects the backend from `REGISTRY_DATABASE_URL` or `REGISTRY_DB_PATH`. The Postgres schema is created by `app/db/migrations/postgres/0004_registry.sql`, and `tests/contracts/test_registry_store_contract.py` now enforces backend-neutral behavior across both stores.
+
+**Key implementation notes.**
+- SQL stays backend-native. SQLite retains FTS5 and `json_each(...)`; Postgres uses `tsvector`/`ts_headline(...)` and `jsonb_array_elements_text(...)`.
+- Registry discovery and skills filtering now push the heavy filtering into SQL on both backends instead of broad fetch-then-filter-in-Python behavior.
+- Registry app routes depend only on `AbstractRegistryStore`; the FastAPI layer no longer imports a concrete backend class.
+- Test isolation now resets the registry backend selector and closes Postgres pools between tests.
+
+**What M10H-2 does NOT include.**
+- Any changes to bot runtime session or transport stores (done in B-0).
+- Automatic migration of existing SQLite registry data into Postgres.
+- Horizontal scale-out for the registry service; the control plane still assumes one writer per backing database.
+- Shared SQL across backends; each store remains idiomatic to its database.
+
+---
+
+###### I. Programmatic API Trigger
+
+**Status: Shipped.**
+
+**What shipped.**
+`POST /v1/ui/conversations` is now a first-class, bearer-authenticated API endpoint for starting registry-surface conversations from external systems such as CI jobs, scripts, or inbound webhooks. The path remains unchanged so the Registry UI continues to use the same handler.
+
+**Key implementation notes.**
+- Request validation is handled by a Pydantic model in `app/registry_service/app.py`:
+  - `target_agent_id`: required, non-empty
+  - `message_text`: required, non-empty
+  - `title`: optional, defaults to `""`
+- The route now returns `201 Created` on success.
+- Unknown `target_agent_id` is rejected with `404` before the store writes anything, so the API no longer creates orphaned conversations that can never be delivered.
+- `require_ui_token` already handled bearer authentication; that auth path remains the single source of truth for the endpoint.
+- `docs/API.md` now documents auth, request/response shape, errors, and a curl example.
+- The existing Registry UI JavaScript already posted `target_agent_id`, `title`, and `message_text`, so the UI kept working unchanged.
+
+**What M10I does NOT include.**
+- Any new URL path; `/v1/ui/conversations` remains the canonical endpoint.
+- Batch trigger support; the API creates one conversation per call.
+- Webhook registration or callback delivery; this is an ingress endpoint only.
+- Bot-side direct registry access; the API remains owned by the registry service.
+
+---
+
+###### M10 — Files to Change
+
+| Scope | Current files of record |
+|-------|-------------------------|
+| Shipped A/C/D/F | `app/registry_service/app.py`, `app/registry_service/store.py`, `VERSION`, `CHANGELOG.md`, `docs/UPGRADE.md`, `scripts/app/guided_start.sh` |
+| Shipped B-0/E | `app/access.py`, `app/work_queue.py`, `app/work_queue_sqlite.py`, `app/work_queue_sqlite_impl.py`, `app/work_queue_pg.py`, `app/work_queue_postgres.py`, `app/db/migrations/postgres/0003_user_access_usage_log.sql`, `app/telegram_handlers.py`, `tests/contracts/test_transport_store_contract.py` |
+| Shipped G | `app/config.py`, `app/webhook.py`, `app/telegram_handlers.py`, `scripts/app/guided_start.sh` |
+| Shipped H | `app/registry_service/app.py`, `app/registry_service/store.py`, `tests/test_registry_skills.py` |
+| Shipped H-2 | `app/registry_service/store_base.py`, `app/registry_service/store_postgres.py`, `app/registry_service/backend.py`, `app/registry_service/store.py` (rename), `app/registry_service/app.py` (import update), `app/db/migrations/postgres/0004_registry.sql`, `tests/contracts/test_registry_store_contract.py` |
+| Shipped I | `app/registry_service/app.py` (Pydantic model, 201, agent guard), `docs/API.md`, `tests/test_registry_service.py` |
+| Remaining B | provider adapters, transport-store usage recording, Registry UI `/v1/ui/usage`, and contract coverage |
+
+###### M10 — Remaining Implementation Order
+
+The remaining order is:
+
+1. **B** usage and cost visibility
+
+###### M10 — What M10 Does NOT Include
+
+- Multi-user accounts or per-user permissions beyond the simple allowed/blocked access control in M10E.
+- Budget alerts, hard spend caps, or automated cost enforcement (M11+).
+- SMTP email or SMS notifications (webhook only in M10).
+- Installing new skills or editing skill parameters from the Registry UI.
+- A mobile-optimised Registry UI (responsive improvements may land but are not a gate).
+- Shared Runtime queue-authority work or multi-process execution changes.
+- New approval flows or delegation changes (M10 is operational infrastructure, not feature additions to the conversation model).
+
+###### M10 — Acceptance Criteria
+
+- [x] Registry UI HTML auth is session-backed and `/v1/ui/*` bearer auth still works
+- [x] Bot and registry stores migrate in place with version markers and upgrade docs
+- [x] Registry conversations are searchable and filterable
+- [x] Live allow/block access overrides take effect without restart
+- [x] Registry-side Markdown conversation export is available from the detail panel
+- [x] Completion webhook notifications can be configured and fire from terminal outcomes
+- [ ] Usage visibility lands without fabricated token or cost data
+- [x] Registry UI can surface and safely toggle skill overrides
+- [x] `POST /v1/ui/conversations` is stabilized and documented as a public operator API
+- [ ] Full test suite passes with the remaining M10 slices in place
+
+---
+
+#### Phase 20 — Product-Level Acceptance Criteria
+
+The feature is complete when all of the following are true:
+
+1. Registry mode is the default and works from guided setup end-to-end.
+2. Standalone mode remains explicitly available.
+3. Bots can run privately without exposing public APIs.
+4. Telegram and Registry UI act on the same conversation truth.
+5. Delegated work routes through registry and executes through the same
+   local worker-owned runtime.
+6. Registry-originated actions do not bypass workflow/state-machine ownership.
+7. Registry UI provides materially richer progress/state visibility than
+   Telegram.
+8. Operators can stand up registry plus multiple bots from one checkout with
+   understandable scripts and config.
+9. Degraded registry behavior is observable and never fatal to local operation.
+10. Discovery and delegation require user approval; neither is automatic.
+
+---
+
 ### Phase 16 - Registry Trust And Governance
 
 Guidance baseline:
@@ -3359,5 +5173,6 @@ A roadmap phase is only complete when:
 - [ARCHITECTURE.md](ARCHITECTURE.md) matches the resulting runtime authority
   and boundary decisions
 
-Shipped phases remain sealed history. New work should advance Phases 11-19
-rather than reopening Phases 1-10.
+Shipped phases remain sealed history. New work should advance Phase 20
+(active) rather than reopening Phases 1-15. Phases 16-19 remain deferred
+behind Phase 20.

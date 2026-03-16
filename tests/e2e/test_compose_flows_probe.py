@@ -204,6 +204,8 @@ def test_compose_down_includes_all_profiles(tmp_path):
         "--profile",
         "tools",
         "--profile",
+        "registry",
+        "--profile",
         "bot",
         "--profile",
         "stub",

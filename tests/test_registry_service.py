@@ -1,0 +1,838 @@
+"""Tests for the FastAPI registry control-plane service."""
+
+from datetime import datetime, timezone
+from pathlib import Path
+import sqlite3
+
+from fastapi.testclient import TestClient
+
+from app.registry_service.app import app
+from app.registry_service.store import RegistrySQLiteStore
+
+
+def _configure_registry(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
+    monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
+
+
+def _enroll_and_register(client: TestClient, name: str, slug: str) -> tuple[str, str]:
+    enroll = client.post(
+        "/v1/agents/enroll",
+        json={
+            "enrollment_token": "enroll-secret",
+            "agent_card": {
+                "display_name": name,
+                "slug": slug,
+                "role": "developer",
+                "skills": ["python", "tests"],
+                "tags": ["backend"],
+                "description": "Writes and tests code",
+                "provider": "codex",
+                "mode": "registry",
+                "connectivity_state": "degraded",
+                "surface_capabilities": ["telegram", "registry"],
+                "version": "test",
+            },
+        },
+    )
+    assert enroll.status_code == 200
+    agent_id = enroll.json()["agent_id"]
+    token = enroll.json()["agent_token"]
+    register = client.post(
+        "/v1/agents/register",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "agent_card": {
+                "display_name": name,
+                "slug": slug,
+                "role": "developer",
+                "skills": ["python", "tests"],
+                "tags": ["backend"],
+                "description": "Writes and tests code",
+                "provider": "codex",
+                "mode": "registry",
+                "surface_capabilities": ["telegram", "registry"],
+                "version": "test",
+            },
+            "connectivity_state": "connected",
+            "current_capacity": 0,
+            "max_capacity": 2,
+        },
+    )
+    assert register.status_code == 200
+    return agent_id, token
+
+
+def test_registry_enroll_register_heartbeat_and_search(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, token = _enroll_and_register(client, "Dev Bot", "dev-bot")
+
+    heartbeat = client.post(
+        "/v1/agents/heartbeat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connectivity_state": "connected",
+            "current_capacity": 1,
+            "max_capacity": 3,
+        },
+    )
+    assert heartbeat.status_code == 200
+    assert heartbeat.json()["agent"]["agent_id"] == agent_id
+
+    search = client.post(
+        "/v1/agents/discovery/search",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"role": "developer", "skills": ["python"], "required_state": "connected"},
+    )
+    assert search.status_code == 200
+    agents = search.json()["agents"]
+    assert len(agents) == 1
+    assert agents[0]["slug"] == "dev-bot"
+    assert agents[0]["connectivity_state"] == "connected"
+
+
+def test_registry_bind_conversation_is_visible_in_ui(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    _, token = _enroll_and_register(client, "Dev Bot", "dev-bot")
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": "telegram:dev-bot:123",
+            "title": "Telegram chat 123",
+            "origin_surface": "telegram",
+            "external_id": "123",
+        },
+    )
+    assert bind.status_code == 200
+    assert bind.json()["conversation_id"] == "telegram:dev-bot:123"
+
+    conversations = client.get(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert conversations.status_code == 200
+    items = conversations.json()["conversations"]
+    assert len(items) == 1
+    assert items[0]["conversation_id"] == "telegram:dev-bot:123"
+    assert items[0]["title"] == "Telegram chat 123"
+
+
+def test_ui_requires_session_cookie_redirects_to_login(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/ui", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"] == "/ui/login"
+
+
+def test_ui_login_with_correct_password_sets_cookie_and_redirects(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/ui/login",
+        data={"password": "ui-secret"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/ui"
+    assert "registry_session=" in response.headers.get("set-cookie", "")
+
+
+def test_ui_login_with_wrong_password_returns_form_with_error(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.post("/ui/login", data={"password": "wrong-secret"})
+    assert response.status_code == 200
+    assert "Incorrect password." in response.text
+
+
+def test_ui_bootstrap_still_accepts_bearer_token(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.get(
+        "/v1/ui/bootstrap",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert response.status_code == 200
+
+
+def test_registry_ui_conversation_routes_surface_input_to_polled_bot(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, token = _enroll_and_register(client, "Product Bot", "product-bot-2")
+    create = client.post(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={
+            "target_agent_id": agent_id,
+            "title": "Spec review",
+            "message_text": "Please refine this PRD.",
+        },
+    )
+    assert create.status_code == 201
+    conversation_id = create.json()["conversation_id"]
+
+    poll = client.get(
+        "/v1/agents/poll",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"cursor": "0", "limit": 20, "wait_seconds": 0},
+    )
+    assert poll.status_code == 200
+    deliveries = poll.json()["deliveries"]
+    assert len(deliveries) == 1
+    assert deliveries[0]["kind"] == "surface_input"
+    assert deliveries[0]["payload"]["conversation_id"] == conversation_id
+    assert deliveries[0]["payload"]["text"] == "Please refine this PRD."
+
+    ack = client.post(
+        "/v1/agents/ack",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"delivery_ids": [deliveries[0]["delivery_id"]], "classification": "accepted"},
+    )
+    assert ack.status_code == 200
+
+    timeline = client.get(
+        f"/v1/ui/conversations/{conversation_id}/timeline",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert timeline.status_code == 200
+    assert timeline.json()["events"][0]["title"] == "Conversation started"
+
+
+def test_publish_timeline_stores_events(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, token = _enroll_and_register(client, "Registry Bot", "registry-bot")
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": "conv-timeline-1",
+            "title": "Timeline conversation",
+            "origin_surface": "registry",
+            "external_id": "conv-timeline-1",
+        },
+    )
+    assert bind.status_code == 200
+
+    publish = client.post(
+        "/v1/agents/timeline",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-1",
+                    "conversation_id": "conv-timeline-1",
+                    "kind": "started",
+                    "title": "Conversation started",
+                    "body": "",
+                    "created_at": "2026-03-15T00:00:00+00:00",
+                },
+                {
+                    "event_id": "evt-2",
+                    "conversation_id": "conv-timeline-1",
+                    "kind": "completed",
+                    "title": "Done",
+                    "body": "Finished work",
+                    "created_at": "2026-03-15T00:00:01+00:00",
+                },
+            ]
+        },
+    )
+    assert publish.status_code == 200
+
+    timeline = client.get(
+        "/v1/ui/conversations/conv-timeline-1/timeline",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert timeline.status_code == 200
+    events = timeline.json()["events"]
+    assert [event["event_id"] for event in events] == ["evt-1", "evt-2"]
+    assert [event["kind"] for event in events] == ["started", "completed"]
+
+
+def test_ui_bootstrap_includes_timeline_event_count(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    _, token = _enroll_and_register(client, "Registry Bot", "registry-bot-count")
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": "conv-count-1",
+            "title": "Counted timeline",
+            "origin_surface": "registry",
+            "external_id": "conv-count-1",
+        },
+    )
+    assert bind.status_code == 200
+    publish = client.post(
+        "/v1/agents/timeline",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-count-1",
+                    "conversation_id": "conv-count-1",
+                    "kind": "started",
+                    "title": "Conversation started",
+                    "created_at": "2026-03-15T00:00:00+00:00",
+                },
+                {
+                    "event_id": "evt-count-2",
+                    "conversation_id": "conv-count-1",
+                    "kind": "progress",
+                    "title": "Working…",
+                    "body": "Inspecting task",
+                    "created_at": "2026-03-15T00:00:01+00:00",
+                },
+            ]
+        },
+    )
+    assert publish.status_code == 200
+
+    bootstrap = client.get(
+        "/v1/ui/bootstrap",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert bootstrap.status_code == 200
+    conversations = bootstrap.json()["conversations"]
+    assert conversations[0]["conversation_id"] == "conv-count-1"
+    assert conversations[0]["timeline_event_count"] == 2
+
+
+def test_ui_search_returns_matching_conversations(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    _, token = _enroll_and_register(client, "Search Bot", "search-bot")
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": "conv-search-1",
+            "title": "Searchable conversation",
+            "origin_surface": "registry",
+            "external_id": "conv-search-1",
+        },
+    )
+    assert bind.status_code == 200
+    publish = client.post(
+        "/v1/agents/timeline",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-search-1",
+                    "conversation_id": "conv-search-1",
+                    "kind": "progress",
+                    "title": "Working…",
+                    "body": "Reviewing quarterly roadmap risks",
+                    "created_at": "2026-03-16T00:00:00+00:00",
+                }
+            ]
+        },
+    )
+    assert publish.status_code == 200
+
+    search = client.get(
+        "/v1/ui/search",
+        params={"q": "roadmap"},
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert search.status_code == 200
+    assert search.json()["results"] == [
+        {"conversation_id": "conv-search-1", "snippet": "Reviewing quarterly <b>roadmap</b> risks"}
+    ]
+
+
+def test_ui_search_returns_empty_results_for_malformed_query(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.get(
+        "/v1/ui/search",
+        params={"q": "\"bad"},
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"results": []}
+
+
+def test_ui_export_conversation_returns_markdown_and_missing_conversation_404(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    _, token = _enroll_and_register(client, "Export Bot", "export-bot")
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": "conv-export-1",
+            "title": "Exportable conversation",
+            "origin_surface": "registry",
+            "external_id": "conv-export-1",
+        },
+    )
+    assert bind.status_code == 200
+    publish = client.post(
+        "/v1/agents/timeline",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-export-1",
+                    "conversation_id": "conv-export-1",
+                    "kind": "started",
+                    "title": "Conversation started",
+                    "body": "Kick off export flow",
+                    "created_at": "2026-03-16T00:00:00+00:00",
+                },
+                {
+                    "event_id": "evt-export-2",
+                    "conversation_id": "conv-export-1",
+                    "kind": "completed",
+                    "title": "Done",
+                    "body": "Export finished",
+                    "created_at": "2026-03-16T00:00:01+00:00",
+                },
+            ]
+        },
+    )
+    assert publish.status_code == 200
+
+    export = client.get(
+        "/v1/ui/conversations/conv-export-1/export",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert export.status_code == 200
+    assert export.headers["content-type"].startswith("text/markdown")
+    assert (
+        export.headers["content-disposition"]
+        == 'attachment; filename="conversation-conv-export-1.md"'
+    )
+    assert "# Conversation: Exportable conversation" in export.text
+    assert "Status: completed" in export.text
+    assert "Bot: Export Bot" in export.text
+    assert "## [2026-03-16T00:00:00+00:00] started" in export.text
+    assert "Kick off export flow" in export.text
+    assert "## [2026-03-16T00:00:01+00:00] completed" in export.text
+
+    missing = client.get(
+        "/v1/ui/conversations/does-not-exist/export",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "Conversation not found"
+
+
+def test_ui_usage_endpoint_returns_daily_totals(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    _, token = _enroll_and_register(client, "Usage Bot", "usage-bot")
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": "conv-usage-1",
+            "title": "Usage conversation",
+            "origin_surface": "registry",
+            "external_id": "conv-usage-1",
+        },
+    )
+    assert bind.status_code == 200
+    publish = client.post(
+        "/v1/agents/timeline",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-usage-1",
+                    "conversation_id": "conv-usage-1",
+                    "kind": "usage",
+                    "title": "Token usage",
+                    "body": "",
+                    "metadata": {
+                        "prompt_tokens": 120,
+                        "completion_tokens": 30,
+                        "cost_usd": 0.015,
+                        "provider": "claude",
+                    },
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+            ]
+        },
+    )
+    assert publish.status_code == 200
+
+    response = client.get(
+        "/v1/ui/usage",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["daily_total"] == {
+        "prompt_tokens": 120,
+        "completion_tokens": 30,
+        "cost_usd": 0.015,
+    }
+    assert payload["by_conversation"] == [
+        {
+            "conversation_id": "conv-usage-1",
+            "prompt_tokens": 120,
+            "completion_tokens": 30,
+            "cost_usd": 0.015,
+        }
+    ]
+
+
+def test_create_conversation_api_success(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, _ = _enroll_and_register(client, "API Bot", "api-bot")
+    response = client.post(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={
+            "target_agent_id": agent_id,
+            "title": "Programmatic trigger",
+            "message_text": "Run the nightly report",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["conversation_id"]
+    assert payload["target_agent_id"] == agent_id
+    assert payload["title"] == "Programmatic trigger"
+
+
+def test_create_conversation_api_missing_fields(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={},
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_conversation_api_unknown_agent(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={
+            "target_agent_id": "does-not-exist",
+            "message_text": "Run the nightly report",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Unknown agent: does-not-exist"}
+
+
+def test_create_conversation_api_empty_message(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, _ = _enroll_and_register(client, "API Bot", "api-bot-empty-message")
+    response = client.post(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={
+            "target_agent_id": agent_id,
+            "message_text": "",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_conversation_api_unauthorized(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/ui/conversations",
+        json={
+            "target_agent_id": "any-agent",
+            "message_text": "Run the nightly report",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid UI token"}
+
+
+def test_ui_create_conversation_creates_delivery(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, token = _enroll_and_register(client, "Product Bot", "product-bot-delivery")
+    create = client.post(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={
+            "target_agent_id": agent_id,
+            "title": "UI created work",
+            "message_text": "Start from the registry UI.",
+        },
+    )
+    assert create.status_code == 201
+    conversation_id = create.json()["conversation_id"]
+
+    poll = client.get(
+        "/v1/agents/poll",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"cursor": "0", "limit": 20, "wait_seconds": 0},
+    )
+    assert poll.status_code == 200
+    deliveries = poll.json()["deliveries"]
+    assert len(deliveries) == 1
+    assert deliveries[0]["kind"] == "surface_input"
+    assert deliveries[0]["payload"]["conversation_id"] == conversation_id
+    assert deliveries[0]["payload"]["text"] == "Start from the registry UI."
+
+
+def test_ui_action_delivery_includes_conversation_ref(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, token = _enroll_and_register(client, "Product Bot", "product-bot-action")
+    create = client.post(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={
+            "target_agent_id": agent_id,
+            "title": "Actionable work",
+            "message_text": "Start this from the registry UI.",
+        },
+    )
+    assert create.status_code == 201
+    conversation_id = create.json()["conversation_id"]
+
+    action = client.post(
+        f"/v1/ui/conversations/{conversation_id}/actions",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={"action": "approve_delegation"},
+    )
+    assert action.status_code == 200
+
+    poll = client.get(
+        "/v1/agents/poll",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"cursor": "0", "limit": 20, "wait_seconds": 0},
+    )
+    assert poll.status_code == 200
+    deliveries = [item for item in poll.json()["deliveries"] if item["kind"] == "surface_action"]
+    assert len(deliveries) == 1
+    assert deliveries[0]["payload"]["conversation_ref"] == conversation_id
+    assert deliveries[0]["payload"]["action"] == "approve_delegation"
+
+
+def test_cancel_conversation_marks_status_cancelling_and_late_progress_does_not_reopen(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, token = _enroll_and_register(client, "Product Bot", "product-bot-cancel")
+    create = client.post(
+        "/v1/ui/conversations",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={
+            "target_agent_id": agent_id,
+            "title": "Cancelable work",
+            "message_text": "Start this task.",
+        },
+    )
+    assert create.status_code == 201
+    conversation_id = create.json()["conversation_id"]
+
+    cancel = client.post(
+        f"/v1/ui/conversations/{conversation_id}/cancel",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert cancel.status_code == 200
+
+    publish = client.post(
+        "/v1/agents/timeline",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-cancel-progress",
+                    "conversation_id": conversation_id,
+                    "kind": "progress",
+                    "title": "Working…",
+                    "body": "Still winding down",
+                    "created_at": "2026-03-15T00:00:02+00:00",
+                }
+            ]
+        },
+    )
+    assert publish.status_code == 200
+
+    conversation = client.get(
+        f"/v1/ui/conversations/{conversation_id}",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert conversation.status_code == 200
+    assert conversation.json()["status"] == "cancelling"
+
+
+def test_publish_timeline_rejects_foreign_conversation(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    _, owner_token = _enroll_and_register(client, "Owner Bot", "owner-bot")
+    _, other_token = _enroll_and_register(client, "Other Bot", "other-bot")
+
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={
+            "conversation_id": "conv-owner-1",
+            "title": "Owner conversation",
+            "origin_surface": "registry",
+            "external_id": "conv-owner-1",
+        },
+    )
+    assert bind.status_code == 200
+
+    publish = client.post(
+        "/v1/agents/timeline",
+        headers={"Authorization": f"Bearer {other_token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-foreign-1",
+                    "conversation_id": "conv-owner-1",
+                    "kind": "started",
+                    "title": "Should fail",
+                    "created_at": "2026-03-15T00:00:00+00:00",
+                }
+            ]
+        },
+    )
+    assert publish.status_code == 401
+    assert "does not belong to agent" in publish.json()["detail"]
+
+
+def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    origin_id, origin_token = _enroll_and_register(client, "Product Bot", "product-origin")
+    target_id, target_token = _enroll_and_register(client, "Reviewer Bot", "reviewer-target")
+
+    routed = client.post(
+        "/v1/agents/routed-tasks",
+        headers={"Authorization": f"Bearer {origin_token}"},
+        json={
+            "routed_task_id": "task-1",
+            "parent_conversation_id": "conv-1",
+            "origin_agent_id": origin_id,
+            "target_agent_id": target_id,
+            "title": "Review test plan",
+            "instructions": "Find missing test coverage.",
+            "context": {},
+            "constraints": {},
+            "requested_capabilities": ["reviewer", "tests"],
+            "priority": "normal",
+            "created_at": "2026-03-15T00:00:00+00:00",
+        },
+    )
+    assert routed.status_code == 200
+
+    target_poll = client.get(
+        "/v1/agents/poll",
+        headers={"Authorization": f"Bearer {target_token}"},
+        params={"cursor": "0", "limit": 20, "wait_seconds": 0},
+    )
+    assert target_poll.status_code == 200
+    assert target_poll.json()["deliveries"][0]["kind"] == "routed_task"
+
+    result = client.post(
+        "/v1/agents/routed-tasks/task-1/result",
+        headers={"Authorization": f"Bearer {target_token}"},
+        json={
+            "routed_task_id": "task-1",
+            "status": "completed",
+            "summary": "Added missing tests",
+            "full_text": "Test plan updated with edge cases.",
+            "artifacts": [],
+            "follow_up_questions": [],
+            "completed_at": "2026-03-15T00:01:00+00:00",
+        },
+    )
+    assert result.status_code == 200
+
+    origin_poll = client.get(
+        "/v1/agents/poll",
+        headers={"Authorization": f"Bearer {origin_token}"},
+        params={"cursor": "0", "limit": 20, "wait_seconds": 0},
+    )
+    assert origin_poll.status_code == 200
+    origin_deliveries = origin_poll.json()["deliveries"]
+    assert any(item["kind"] == "routed_result" for item in origin_deliveries)
+
+
+def test_registry_store_migrations_are_idempotent_and_add_skills_override_and_timeline_fts(tmp_path: Path):
+    db_path = tmp_path / "registry.sqlite3"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE conversations (conversation_id TEXT PRIMARY KEY, target_agent_id TEXT NOT NULL, "
+        "title TEXT NOT NULL DEFAULT '', origin_surface TEXT NOT NULL DEFAULT 'registry', "
+        "status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+    RegistrySQLiteStore(db_path)
+    RegistrySQLiteStore(db_path)
+
+    conn = sqlite3.connect(db_path)
+    version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+    assert version == "2"
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+    assert "skills_override" in tables
+    triggers = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'"
+        ).fetchall()
+    }
+    assert "tl_ai" in triggers
+    assert "tl_ad" in triggers
+    assert "tl_au" in triggers
+    fts_row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='timeline_fts'"
+    ).fetchone()
+    assert fts_row is not None
+    conn.close()

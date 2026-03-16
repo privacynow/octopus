@@ -217,7 +217,7 @@ def create_test_database(base_url: str, db_name: str) -> None:
 
 
 def truncate_runtime_tables(conn) -> None:
-    """Truncate bot_runtime tables (sessions, updates, work_items). Do not truncate schema_migrations.
+    """Truncate bot_runtime tables used by runtime and transport tests. Do not truncate schema_migrations.
 
     Must only be called for connections to the harness-started test Postgres container,
     never for dev/staging/production (see module docstring).
@@ -226,6 +226,21 @@ def truncate_runtime_tables(conn) -> None:
         cur.execute("TRUNCATE TABLE bot_runtime.work_items CASCADE")
         cur.execute("TRUNCATE TABLE bot_runtime.updates CASCADE")
         cur.execute("TRUNCATE TABLE bot_runtime.sessions CASCADE")
+        cur.execute("TRUNCATE TABLE bot_runtime.usage_log RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE TABLE bot_runtime.user_access RESTART IDENTITY CASCADE")
+    conn.commit()
+
+
+def truncate_registry_tables(conn) -> None:
+    """Truncate registry tables in the test schema. Safe only for harness-owned DBs."""
+    with conn.cursor() as cur:
+        cur.execute("TRUNCATE TABLE agent_registry.deliveries RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE TABLE agent_registry.timeline_events RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE TABLE agent_registry.routed_tasks RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE TABLE agent_registry.conversations RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE TABLE agent_registry.agents RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE TABLE agent_registry.skills_override RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE TABLE agent_registry.meta RESTART IDENTITY CASCADE")
     conn.commit()
 
 

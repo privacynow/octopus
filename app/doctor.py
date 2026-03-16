@@ -1,8 +1,8 @@
 """Health checks and session diagnostics — shared by CLI and Telegram /doctor."""
 
 import dataclasses
+import datetime
 import logging
-import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -10,12 +10,15 @@ import httpx
 
 from app.config import BotConfig, validate_config
 from app.providers.base import Provider
+from app.session_state import session_from_dict
 from app.storage import list_sessions, load_session
+from app.time_utils import age_seconds, utc_now
 
 log = logging.getLogger(__name__)
 
 _STALE_PENDING_SECONDS = 3600   # 1 hour
 _STALE_SETUP_SECONDS = 600      # 10 minutes
+_STALE_DELEGATION_SECONDS = 3600
 
 
 @dataclasses.dataclass
@@ -109,6 +112,55 @@ async def collect_doctor_report(
                 "Set BOT_RATE_LIMIT_PER_MINUTE / BOT_RATE_LIMIT_PER_HOUR "
                 "or defaults of 5/min, 30/hr will apply.")
 
+    if config.agent_mode == "registry":
+        if not config.agent_registry_url:
+            report.warnings.append(
+                "BOT_AGENT_MODE=registry but BOT_AGENT_REGISTRY_URL is empty \u2014 "
+                "bot will run in degraded standalone operation until the registry is configured."
+            )
+        if not config.agent_registry_enroll_token:
+            report.warnings.append(
+                "BOT_AGENT_MODE=registry but BOT_AGENT_REGISTRY_ENROLL_TOKEN is empty \u2014 "
+                "first-time enrollment will fail and the bot will remain degraded until a token is provided."
+            )
+    if config.agent_mode == "registry" and config.data_dir.is_dir():
+        from app.agents.state import load_agent_runtime_state
+
+        agent_state = load_agent_runtime_state(config.data_dir)
+        if agent_state.connectivity_state == "degraded":
+            detail = f": {agent_state.last_error}" if agent_state.last_error else ""
+            report.warnings.append(
+                f"Registry connectivity is degraded{detail}. "
+                "Bot is operating in standalone fallback mode."
+            )
+        elif agent_state.connectivity_state == "standalone":
+            if not agent_state.agent_id:
+                report.warnings.append(
+                    "Registry enrollment has not completed. Bot is in standalone mode "
+                    "until the first successful registry sync."
+                )
+        elif agent_state.connectivity_state == "connected":
+            if not agent_state.agent_id:
+                report.warnings.append(
+                    "Registry reports connected but agent_id is missing — "
+                    "registry state may be corrupt. Delete data/agent/registry_state.json and restart."
+                )
+
+        if agent_state.last_successful_contact_at:
+            try:
+                last = datetime.datetime.fromisoformat(agent_state.last_successful_contact_at)
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=datetime.timezone.utc)
+                age = (datetime.datetime.now(datetime.timezone.utc) - last).total_seconds()
+                if age > 300:
+                    minutes = int(age // 60)
+                    report.warnings.append(
+                        f"Registry: last successful contact was {minutes}m ago. "
+                        "Bot may be running in degraded mode."
+                    )
+            except ValueError:
+                pass
+
     # Stale session scan — skip if data_dir doesn't exist yet (CLI --doctor before first run)
     if config.data_dir.is_dir():
         try:
@@ -122,6 +174,17 @@ async def collect_doctor_report(
             if stale_setup:
                 report.warnings.append(
                     f"{stale_setup} session(s) with stale credential setup (>10m old).")
+            stale_delegation = scan_stale_delegations(
+                config.data_dir,
+                config.provider_name,
+                provider.new_provider_state,
+                config.approval_mode,
+            )
+            if stale_delegation:
+                report.warnings.append(
+                    f"{stale_delegation} session(s) with delegation plans awaiting user approval for >1h. "
+                    "The user has not approved or cancelled delegation. Use /doctor in-chat to review."
+                )
         except Exception as e:
             # SQLite, Postgres (e.g. psycopg.OperationalError), and other storage/connection errors
             report.errors.append(f"Session database error: {e}")
@@ -141,21 +204,55 @@ def scan_stale_sessions(
     """
     stale_pending = 0
     stale_setup = 0
-    now = time.time()
+    now = utc_now()
     for info in list_sessions(data_dir):
         if not info["has_pending"] and not info["has_setup"]:
             continue
-        session_data = load_session(
+        raw_session = load_session(
             data_dir, info["chat_id"], provider_name,
             provider_state_factory, approval_mode,
         )
-        pending = session_data.get("pending_approval") or session_data.get("pending_retry")
-        if pending and (now - pending.get("created_at", 0)) > _STALE_PENDING_SECONDS:
+        session = session_from_dict(raw_session)
+        pending = session.pending_approval or session.pending_retry
+        pending_raw = raw_session.get("pending_approval") or raw_session.get("pending_retry") or {}
+        pending_created_at = pending.created_at if pending else pending_raw.get("created_at")
+        pending_age = age_seconds(pending_created_at, now=now)
+        if pending_age is not None and pending_age > _STALE_PENDING_SECONDS:
             stale_pending += 1
-        setup = session_data.get("awaiting_skill_setup")
-        if setup and (now - setup.get("started_at", 0)) > _STALE_SETUP_SECONDS:
+        setup = session.awaiting_skill_setup
+        setup_raw = raw_session.get("awaiting_skill_setup") or {}
+        setup_started_at = setup.started_at if setup else setup_raw.get("started_at")
+        setup_age = age_seconds(setup_started_at, now=now)
+        if setup_age is not None and setup_age > _STALE_SETUP_SECONDS:
             stale_setup += 1
     return stale_pending, stale_setup
+
+
+def scan_stale_delegations(
+    data_dir: Path,
+    provider_name: str,
+    provider_state_factory: Callable,
+    approval_mode: str,
+    *,
+    stale_proposed_seconds: float = _STALE_DELEGATION_SECONDS,
+) -> int:
+    """Return count of sessions with proposed delegation plans older than threshold."""
+    stale = 0
+    now = utc_now()
+    for info in list_sessions(data_dir):
+        session = session_from_dict(load_session(
+            data_dir, info["chat_id"], provider_name,
+            provider_state_factory, approval_mode,
+        ))
+        delegation = session.pending_delegation
+        if delegation is None:
+            continue
+        if not any(task.status == "proposed" for task in delegation.tasks):
+            continue
+        delegation_age = age_seconds(delegation.created_at, now=now)
+        if delegation_age is not None and delegation_age > stale_proposed_seconds:
+            stale += 1
+    return stale
 
 
 async def check_polling_conflict(token: str) -> str | None:

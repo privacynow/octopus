@@ -109,3 +109,57 @@ def test_provider_status_requires_env_bot():
     assert script_has_message or lib_has_message, (
         "provider_status.sh or scripts/lib_env.sh must tell operator to create .env.bot when missing"
     )
+
+
+def test_container_provider_login_banners_explain_exit_steps():
+    """container_provider_login.sh should tell the operator how to return from each CLI."""
+    repo = Path(__file__).resolve().parent.parent
+    script = repo / "scripts" / "provider" / "container_provider_login.sh"
+    text = script.read_text()
+    assert "You MUST exit the CLI to return to setup." in text
+    assert "/login" in text, "Claude banner should tell the user to run /login"
+    assert "q  or  Ctrl-C" in text or "q or Ctrl-C" in text, (
+        "Codex banner should tell the user how to return to setup"
+    )
+
+
+def test_registry_start_prints_enrollment_token():
+    """registry/start.sh should print the generated enrollment token for local setup."""
+    repo = Path(__file__).resolve().parent.parent
+    script = repo / "scripts" / "registry" / "start.sh"
+    text = script.read_text()
+    assert "Enrollment token:" in text
+    assert "Registry UI password:" in text
+    assert "keep this file private" in text
+
+
+def test_guided_start_offers_quick_setup_and_local_registry_token_reuse():
+    """guided_start.sh should expose quick setup and auto-reuse local registry tokens."""
+    repo = Path(__file__).resolve().parent.parent
+    script = repo / "scripts" / "app" / "guided_start.sh"
+    text = script.read_text()
+    assert "Setup mode (quick/full)" in text
+    assert "_LOCAL_REGISTRY_ENROLL_TOKEN" in text
+    assert "Using local registry enrollment token" in text
+
+
+def test_guided_start_success_summary_uses_browser_registry_ui_url():
+    """guided_start.sh should reprint a browser-safe Registry UI URL in the final box."""
+    repo = Path(__file__).resolve().parent.parent
+    script = repo / "scripts" / "app" / "guided_start.sh"
+    text = script.read_text()
+    assert "build_registry_ui_display_url" in text
+    assert "REGISTRY_UI_TOKEN" in text
+    assert '/ui' in text
+    assert "http://localhost:" in text
+    assert "login password" in text
+    assert "print_box_wrapped_line" in text
+
+
+def test_guided_start_reads_repo_version_for_success_summary():
+    """guided_start.sh should read VERSION and show it in the final startup summary."""
+    repo = Path(__file__).resolve().parent.parent
+    script = repo / "scripts" / "app" / "guided_start.sh"
+    text = script.read_text()
+    assert 'bot_version_display="$(tr -d' in text
+    assert 'printf "║  • Bot version:' in text

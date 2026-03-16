@@ -27,6 +27,7 @@ cross-feature checks, and tests/test_high_risk.py (extra_dirs_from_denials).
 """
 
 import asyncio
+import datetime
 import os
 import tempfile
 import time
@@ -665,6 +666,30 @@ def test_classify_pending_validation_returns_ok_expired_context_changed():
         created_at=time.time(),
     )
     assert classify_pending_validation(pending_stale, session, cfg, "claude") == "context_changed"
+
+
+def test_classify_pending_validation_accepts_iso_created_at():
+    """Pending expiry logic accepts ISO timestamps as well as legacy floats."""
+    from app.request_flow import classify_pending_validation
+
+    cfg = _make_config(timeout_seconds=3600)
+    session = SessionState(provider="claude", provider_state={}, approval_mode="on")
+    current_hash = resolve_execution_context(session, cfg, "claude", trust_tier="trusted").context_hash
+    stale_iso = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
+    ).isoformat()
+    pending = PendingApproval(
+        request_user_id=42,
+        prompt="test",
+        image_paths=[],
+        attachment_dicts=[],
+        context_hash=current_hash,
+        trust_tier="trusted",
+        created_at=stale_iso,
+    )
+    assert classify_pending_validation(pending, session, cfg, "claude") == "expired"
+
+
 
 
 # =====================================================================

@@ -1,6 +1,7 @@
 # Telegram Agent Bot
 
-Talk to Claude Code or Codex from Telegram.
+Talk to Claude Code or Codex from Telegram, with an optional shared registry UI
+for multi-bot coordination.
 
 This bot lets you:
 
@@ -8,9 +9,13 @@ This bot lets you:
 - review a plan before anything runs
 - upload files and get files back
 - add skills and credentials when needed
+- run one bot or many specialist bots from one checkout
+- keep private bots visible in a shared registry UI without exposing them publicly
 
 You do **not** need to set up a database or choose a storage backend for normal
-use. The standard setup is one guided script.
+use. The standard setup is one guided script. Registry-backed mode is the
+default guided path; standalone remains available in the wizard if you want one
+private bot with no registry.
 
 **Repo:** [github.com/privacynow/octopus](https://github.com/privacynow/octopus)
 
@@ -20,54 +25,94 @@ use. The standard setup is one guided script.
 - a Telegram bot token from `@BotFather`
 - one provider: `claude` or `codex`
 - your Telegram user ID for `BOT_ALLOWED_USERS`
+- for the multi-bot path: a local or hosted registry URL and a registry enrollment token — auto-generated when you start a local registry (see below)
 
 ## First-Time Setup
 
-1. **Clone the repo**
+### Step 1 — Create your Telegram bot token
 
-   ```bash
-   git clone git@github.com:privacynow/octopus.git ~/telegram-agent-bot
-   cd ~/telegram-agent-bot
-   ```
+1. Open Telegram, search for **@BotFather**, and tap Start
+2. Send: `/newbot`
+3. Follow the prompts and choose a display name plus a username ending in `bot`
+4. BotFather replies with your token. Copy it — you will need it during setup.
 
-2. **Create `.env.bot`**
+### Step 2 — Clone the repo
 
-   Minimal private example:
+```bash
+git clone git@github.com:privacynow/octopus.git ~/telegram-agent-bot
+cd ~/telegram-agent-bot
+```
 
-   ```bash
-   TELEGRAM_BOT_TOKEN=<from @BotFather>
-   BOT_PROVIDER=claude
-   BOT_ALLOWED_USERS=123456789
-   ```
+### Step 3 — Run the guided setup
 
-   `BOT_ALLOWED_USERS` should be your own Telegram user ID so the bot starts in
-   a simple private mode.
+```bash
+./scripts/app/guided_start.sh
+```
 
-   If you prefer an open bot for local testing, this is also valid:
+The script asks for your bot token and a few settings, then walks you through
+provider login and starts the bot. When prompted for **Setup mode**, choose
+`quick` to accept safe defaults (you can edit `.env.bot` afterwards for
+advanced settings like role, tags, and description). Choose `full` to set
+every option interactively.
 
-   ```bash
-   TELEGRAM_BOT_TOKEN=<from @BotFather>
-   BOT_PROVIDER=codex
-   BOT_ALLOW_OPEN=1
-   ```
+If you choose registry mode, the local registry starts automatically.
+For manual registry management, see [Manual registry start](#manual-registry-start).
 
-   Leave `BOT_WORKING_DIR` unset unless you actually need it. If you do set it
-   for the Docker path, use `/home/bot`, not your host home directory.
+For a second or third bot from the same checkout, give it an instance name:
 
-3. **Run the guided setup**
+```bash
+./scripts/app/guided_start.sh reviewer
+./scripts/app/guided_start.sh developer
+```
 
-   ```bash
-   ./scripts/app/guided_start.sh
-   ```
+Those create `.env.bot.reviewer`, `.env.bot.developer`, and separate Docker
+projects automatically. The default no-argument path still uses `.env.bot`.
 
-   The script builds what it needs, walks you through provider login if needed,
-   and starts the bot.
+### Step 4 — Message the bot in Telegram
 
-4. **Message the bot in Telegram**
+Start with `/start`, then send a normal request such as:
 
-   Start with `/start`, then send a normal request such as:
+> Review this diff and suggest a safer refactor.
 
-   > Review this diff and suggest a safer refactor.
+### Verify it's working
+
+Open Telegram, find your bot by its username, and send:
+
+> What files are in my working directory?
+
+You should receive a response within a few seconds listing the files in the
+bot's working directory.
+
+If you are using registry mode, the Registry UI URL is printed at the end of
+`guided_start.sh` — open it, log in with `REGISTRY_UI_TOKEN` from
+`.env.registry`, and you will see the bot listed as connected with the
+conversation appearing in real time.
+
+### Registry UI
+
+When running in registry mode, the Registry UI URL is printed in the success
+box at the end of setup. It looks like:
+
+```
+http://localhost:8787/ui
+```
+
+Log in with `REGISTRY_UI_TOKEN` from `.env.registry`. The bare
+`http://localhost:8787` root is not the UI.
+
+![Registry UI screenshot](docs/registry-ui-screenshot.png)
+
+The UI starts with three live lists plus a detail panel for the selected item:
+
+- **Bots** — all registered bots, their connection status, and last heartbeat
+- **Conversations** — a live timeline for every conversation across all bots
+- **Routed Tasks** — delegated sub-tasks being handled by specialist bots
+- **Skills** — enable or disable skills across all bots from one place
+- **Detail panel** — the selected bot, conversation, or task, with drill-down actions such as follow-up messages, delegation approval, and export where supported
+
+Unlike the Telegram interface, the Registry UI lets you start conversations
+directly, approve or cancel delegation plans, manage skills, and see all bot
+activity in one place without switching between Telegram chats.
 
 ## Day-To-Day Use
 
@@ -80,6 +125,24 @@ The bot is designed to feel simple from Telegram:
 
 After a `git pull`, run `./scripts/app/guided_start.sh` again. It will rebuild and
 restart the bot if needed.
+
+## Multi-Agent Mode
+
+Registry-backed mode is the normal multi-agent setup. Set
+`BOT_AGENT_MODE=registry` to let the bot:
+
+- register itself in the shared registry UI
+- answer `/discover` with live specialist bots
+- propose delegation plans and send approved child tasks through the registry
+
+The required registry settings are:
+
+- `BOT_AGENT_REGISTRY_URL`
+- `BOT_AGENT_REGISTRY_ENROLL_TOKEN`
+
+If registry connectivity drops, the bot keeps running in degraded standalone
+operation. Normal Telegram requests still work, but `/discover`, delegation,
+and registry UI sync stay unavailable until registry connectivity returns.
 
 ## Using the Bot
 
@@ -150,7 +213,7 @@ to see the full output whenever you need it.
 | `/skills setup <name>` | Configure a skill when prompted |
 | `/settings` | Open chat settings |
 | `/session` | Show current session details |
-| `/doctor` | Run the bot health check |
+| `/doctor` | Run the bot health check, including registry connectivity state |
 
 ## Troubleshooting
 
@@ -162,7 +225,14 @@ then run `./scripts/app/guided_start.sh` again.
 The login script will walk you through the right sign-in flow for your
 provider.
 
-If you want the bot to check itself from Telegram, use `/doctor`.
+If you want the bot to check itself from Telegram, use `/doctor`. It now
+reports the normal bot health checks plus registry connectivity state when the
+bot is running in registry mode.
+
+If the bot is configured for registry mode but the registry is unavailable, the
+bot still starts in degraded standalone operation. Telegram continues to work,
+but discovery, delegation, and registry UI sync stay unavailable until the
+registry comes back.
 
 If a technical helper wants to run the full health check locally, use:
 
@@ -170,13 +240,30 @@ If a technical helper wants to run the full health check locally, use:
 docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot --env-file .env.bot run --rm bot python -m app.main --doctor
 ```
 
+### Configuration notes
+
+Leave `BOT_WORKING_DIR` unset unless you actually need it. If you do set it for
+the Docker path, use `/home/bot`, not your host home directory.
+
+### Manual registry start
+
+For advanced users who want to manage the registry directly:
+
+```bash
+./scripts/registry/start.sh
+```
+
+The script creates `.env.registry` on first run, starts the local registry UI,
+and prints the enrollment token it generated.
+
 ### The bot still will not start
 
 Try these in order:
 
 1. Run `./scripts/app/guided_start.sh` again
 2. If it asks for provider login, complete that step
-3. Run `/doctor` in Telegram or the full app health command above
+3. If you are using registry mode, check `./scripts/registry/logs.sh`
+4. Run `/doctor` in Telegram or the full app health command above
 
 ### `claude` or `codex` not found
 
@@ -188,10 +275,25 @@ Telegram allows a single active polling connection per bot token. If you see
 `Conflict: terminated by other getUpdates request`, another process is already
 using that token. Stop it first, then start the current instance.
 
+## Programmatic API
+
+External systems (CI, webhooks, scripts) can start conversations via the
+registry API without a browser session:
+
+```bash
+curl -X POST http://localhost:8787/v1/ui/conversations \
+  -H "Authorization: Bearer $REGISTRY_UI_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"target_agent_id": "abc123", "message_text": "Run the nightly report"}'
+```
+
+See [docs/API.md](docs/API.md) for the full request/response contract.
+
 ## Want The Technical Details?
 
 For deeper details, use:
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): runtime, storage, bootstrap, and testing contracts
+- [docs/API.md](docs/API.md): programmatic API reference
 - [docs/plan.md](docs/plan.md): product definition, roadmap, and design decisions
 - [docs/status.md](docs/status.md): current shipped state and progress

@@ -9,6 +9,8 @@ from app.config import BotConfig, fail_fast, load_config, load_config_provider_h
 from app.providers.base import Provider
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
+from app.agents.delivery import handle_registry_delivery
+from app.agents.runtime import start_agent_runtime_task
 from app.storage import close_db, ensure_data_dirs
 from app.work_queue import close_transport_db, recover_stale_claims, purge_old
 from app.worker import start_worker_task
@@ -140,6 +142,9 @@ def main() -> None:
     log.info("Provider: %s", provider.name)
     log.info("Working dir: %s", config.working_dir)
     log.info("Data dir: %s", config.data_dir)
+    log.info("Agent mode: %s", config.agent_mode)
+    if config.agent_mode == "registry":
+        log.info("Agent registry: %s", config.agent_registry_url or "(degraded: not configured)")
 
     if config.allowed_user_ids or config.allowed_usernames:
         log.info("Allowed user IDs: %s", sorted(config.allowed_user_ids))
@@ -159,17 +164,30 @@ def main() -> None:
     # worker loop catches items that survived a crash or were left behind.
     _worker_task = None
     _worker_stop = None
+    _agent_task = None
+    _agent_stop = None
 
     async def _on_post_init(_app) -> None:
-        nonlocal _worker_task, _worker_stop
+        nonlocal _worker_task, _worker_stop, _agent_task, _agent_stop
         from app.telegram_handlers import worker_dispatch
         _worker_task, _worker_stop = start_worker_task(
             config.data_dir, boot_id, worker_dispatch,
         )
+        _agent_task, _agent_stop = start_agent_runtime_task(
+            config,
+            delivery_handler=lambda delivery: handle_registry_delivery(config, delivery),
+        )
 
     async def _on_post_shutdown(_app) -> None:
+        if _agent_stop:
+            _agent_stop.set()
         if _worker_stop:
             _worker_stop.set()
+        if _agent_task:
+            try:
+                await asyncio.wait_for(_agent_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                _agent_task.cancel()
         if _worker_task:
             try:
                 await asyncio.wait_for(_worker_task, timeout=5.0)

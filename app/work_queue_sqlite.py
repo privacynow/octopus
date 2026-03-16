@@ -20,7 +20,8 @@ class SQLiteTransportStore:
         """Return (or create) a WAL-mode SQLite connection for data_dir/transport.db.
 
         For a brand-new DB (no tables), creates schema and inserts schema_version.
-        For an existing DB, validates schema/layout only; does not mutate.
+        For an existing DB, runs supported in-place migrations, then validates
+        the supported schema/layout.
         """
         if data_dir in self._connections:
             return self._connections[data_dir]
@@ -221,3 +222,59 @@ class SQLiteTransportStore:
     def purge_old(self, data_dir: Path, older_than_hours: int = 24) -> int:
         conn = self._transport_db(data_dir)
         return work_queue_sqlite_impl.purge_old(conn, older_than_hours)
+
+    def get_user_access(self, data_dir: Path, user_id: int) -> str | None:
+        if data_dir in self._connections:
+            return work_queue_sqlite_impl.get_user_access_override(
+                self._connections[data_dir], user_id
+            )
+        if not (data_dir / "transport.db").exists():
+            return None
+        conn = self._transport_db(data_dir)
+        return work_queue_sqlite_impl.get_user_access_override(conn, user_id)
+
+    def set_user_access(
+        self,
+        data_dir: Path,
+        user_id: int,
+        access: str,
+        reason: str = "",
+        granted_by: int = 0,
+    ) -> None:
+        conn = self._transport_db(data_dir)
+        work_queue_sqlite_impl.set_user_access(conn, user_id, access, reason, granted_by)
+
+    def list_user_access(self, data_dir: Path) -> list[dict]:
+        conn = self._transport_db(data_dir)
+        return work_queue_sqlite_impl.list_user_access(conn)
+
+    def record_usage(
+        self,
+        data_dir: Path,
+        *,
+        chat_id: int,
+        work_item_id: str,
+        provider: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        cost_usd: float,
+    ) -> None:
+        conn = self._transport_db(data_dir)
+        work_queue_sqlite_impl.record_usage(
+            conn,
+            chat_id=chat_id,
+            work_item_id=work_item_id,
+            provider=provider,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=cost_usd,
+        )
+
+    def get_usage_since(
+        self,
+        data_dir: Path,
+        *,
+        since_epoch: float,
+    ) -> list[dict]:
+        conn = self._transport_db(data_dir)
+        return work_queue_sqlite_impl.get_usage_since(conn, since_epoch=since_epoch)

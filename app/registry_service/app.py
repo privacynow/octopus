@@ -710,6 +710,28 @@ def ui_shell(request: Request) -> str:
             <button id="cancel-new-conversation-button" class="secondary" type="button">Cancel</button>
           </div>
         </div>
+        <div id="conv-filter-bar" style="display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid #333;">
+          <input id="conv-search" type="text" placeholder="Search…"
+            style="flex:1;min-width:0;background:#1e1e1e;color:#ccc;border:1px solid #444;
+                   border-radius:4px;padding:4px 8px;font-size:12px;" />
+          <select id="conv-status"
+            style="background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:4px;
+                   padding:4px 6px;font-size:12px;">
+            <option value="">All status</option>
+            <option value="running">running</option>
+            <option value="done">done</option>
+            <option value="failed">failed</option>
+          </select>
+          <select id="conv-date"
+            style="background:#1e1e1e;color:#ccc;border:1px solid #444;border-radius:4px;
+                   padding:4px 6px;font-size:12px;">
+            <option value="">Any time</option>
+            <option value="today">Today</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+          </select>
+        </div>
+        <div id="conv-filter-count" style="font-size:11px;color:#888;padding:2px 8px;display:none;"></div>
         <div id="conversations" class="list"><div class="loading-state">Loading…</div></div>
       </section>
       <section>
@@ -759,6 +781,7 @@ def ui_shell(request: Request) -> str:
       let currentConversationDetail = null;
       const delegationActionState = Object.create(null);
       const delegationActionError = Object.create(null);
+      var _convSearchTimer = null;
 
       function authHeaders(extra = {{}}) {{
         return {{ Authorization: `Bearer ${{token}}`, ...extra }};
@@ -834,6 +857,97 @@ def ui_shell(request: Request) -> str:
           : `<div class="empty-state">${{EMPTY_STATES[emptyKey] || "Nothing yet."}}</div>`;
       }}
 
+      function convItemTemplate(item) {{
+        return `
+          <button type="button" class="item item-button" data-conversation-id="${{escapeHtml(item.conversation_id)}}">
+            <strong>${{escapeHtml(item.title || item.conversation_id)}}</strong>
+            <div class="meta">${{escapeHtml(item.target_display_name || item.target_agent_id)}}</div>
+            <div class="meta meta-row">
+              <span class="badge ${{getBadgeClass(item.status || "open")}}">${{escapeHtml(item.status || "open")}}</span>
+              <span>${{escapeHtml(String(item.timeline_event_count ?? 0))}} event(s)</span>
+            </div>
+            ${{
+              item.search_snippet
+                ? `<div class="meta">${{escapeHtml(item.search_snippet).replace(/&lt;b&gt;/g, "<b>").replace(/&lt;\\/b&gt;/g, "</b>")}}</div>`
+                : ""
+            }}
+          </button>
+        `;
+      }}
+
+      function _applyConvFilters(conversations) {{
+        var text = (document.getElementById('conv-search') || {{value:''}}).value.trim().toLowerCase();
+        var status = (document.getElementById('conv-status') || {{value:''}}).value;
+        var dateRange = (document.getElementById('conv-date') || {{value:''}}).value;
+        var now = Date.now();
+        var cutoffs = {{ today: 86400000, '7d': 7 * 86400000, '30d': 30 * 86400000 }};
+        var filtered = conversations.filter(function(c) {{
+          var normalizedStatus = (c.status || "") === "completed" ? "done" : (c.status || "");
+          if (status && normalizedStatus !== status) return false;
+          if (dateRange && cutoffs[dateRange]) {{
+            var t = new Date(c.updated_at).getTime();
+            if (!Number.isNaN(t) && now - t > cutoffs[dateRange]) return false;
+          }}
+          if (text && text.length < 3) {{
+            if (!c.title || c.title.toLowerCase().indexOf(text) === -1) return false;
+          }}
+          return true;
+        }});
+        var total = conversations.length;
+        var countEl = document.getElementById('conv-filter-count');
+        if (countEl) {{
+          if (filtered.length < total) {{
+            countEl.textContent = 'Showing ' + filtered.length + ' of ' + total;
+            countEl.style.display = '';
+          }} else {{
+            countEl.style.display = 'none';
+          }}
+        }}
+        return filtered;
+      }}
+
+      function _renderConvSearchResults(results) {{
+        var all = bootstrapData.conversations || [];
+        var idMap = {{}};
+        all.forEach(function(c) {{ idMap[c.conversation_id] = c; }});
+        var matched = results.map(function(r) {{
+          var conversation = idMap[r.conversation_id];
+          if (!conversation) return null;
+          return {{ ...conversation, search_snippet: r.snippet || "" }};
+        }}).filter(Boolean);
+        var countEl = document.getElementById('conv-filter-count');
+        if (countEl) {{
+          countEl.textContent = 'Search: ' + matched.length + ' result' + (matched.length === 1 ? '' : 's');
+          countEl.style.display = '';
+        }}
+        renderList('conversations', matched, convItemTemplate, "conversations");
+        document.querySelectorAll("[data-conversation-id]").forEach(node => {{
+          node.addEventListener("click", () => loadConversationDetail(node.dataset.conversationId));
+        }});
+      }}
+
+      async function refreshConversationPanel() {{
+        var searchEl = document.getElementById('conv-search');
+        var q = searchEl ? searchEl.value.trim() : "";
+        if (q.length >= 3) {{
+          try {{
+            const response = await fetch('/v1/ui/search?q=' + encodeURIComponent(q), {{
+              headers: authHeaders(),
+            }});
+            if (!response.ok) {{
+              throw new Error("Search failed.");
+            }}
+            const data = await response.json();
+            _renderConvSearchResults(data.results || []);
+            return;
+          }} catch (_error) {{
+            // Keep the existing panel contents on transient search failures.
+            return;
+          }}
+        }}
+        renderConversations(bootstrapData.conversations || []);
+      }}
+
       function connectedBots() {{
         return bootstrapData.bots.filter(item => item.connectivity_state === "connected");
       }}
@@ -881,16 +995,7 @@ def ui_shell(request: Request) -> str:
       }}
 
       function renderConversations(items) {{
-        renderList("conversations", items, item => `
-          <button type="button" class="item item-button" data-conversation-id="${{escapeHtml(item.conversation_id)}}">
-            <strong>${{escapeHtml(item.title || item.conversation_id)}}</strong>
-            <div class="meta">${{escapeHtml(item.target_display_name || item.target_agent_id)}}</div>
-            <div class="meta meta-row">
-              <span class="badge ${{getBadgeClass(item.status || "open")}}">${{escapeHtml(item.status || "open")}}</span>
-              <span>${{escapeHtml(String(item.timeline_event_count ?? 0))}} event(s)</span>
-            </div>
-          </button>
-        `, "conversations");
+        renderList("conversations", _applyConvFilters(items), convItemTemplate, "conversations");
         document.querySelectorAll("[data-conversation-id]").forEach(node => {{
           node.addEventListener("click", () => loadConversationDetail(node.dataset.conversationId));
         }});
@@ -1110,7 +1215,10 @@ def ui_shell(request: Request) -> str:
           lastSuccessfulLoad = Date.now();
           bootstrapLoaded = true;
           renderBots(bootstrapData.bots || []);
-          renderConversations(bootstrapData.conversations || []);
+          var searchInput = document.getElementById('conv-search');
+          if (!(searchInput && searchInput.value.trim().length >= 3)) {{
+            renderConversations(bootstrapData.conversations || []);
+          }}
           renderTasks(bootstrapData.tasks || []);
           await refreshCurrentDetail();
         }} catch (error) {{
@@ -1216,6 +1324,28 @@ def ui_shell(request: Request) -> str:
       document.getElementById("detail-send-button").addEventListener("click", sendDetailMessage);
       document.getElementById("detail-cancel-button").addEventListener("click", cancelConversation);
       document.getElementById("detail-back-button").addEventListener("click", clearConversationDetail);
+      var convSearchEl = document.getElementById('conv-search');
+      if (convSearchEl) {{
+        convSearchEl.addEventListener('input', function() {{
+          var q = this.value.trim();
+          clearTimeout(_convSearchTimer);
+          if (q.length >= 3) {{
+            _convSearchTimer = setTimeout(function() {{
+              refreshConversationPanel().catch(function() {{}});
+            }}, 300);
+          }} else {{
+            renderConversations(bootstrapData.conversations || []);
+          }}
+        }});
+      }}
+      ['conv-status', 'conv-date'].forEach(function(id) {{
+        var el = document.getElementById(id);
+        if (el) el.addEventListener('change', function() {{
+          var search = document.getElementById('conv-search');
+          if (search && search.value.trim().length >= 3) return;
+          renderConversations(bootstrapData.conversations || []);
+        }});
+      }});
 
       setInterval(() => {{
         if (!lastSuccessfulLoad) return;
@@ -1256,6 +1386,19 @@ def ui_bots(_: None = Depends(require_ui_token), store: RegistryStore = Depends(
 @app.get("/v1/ui/conversations")
 def ui_conversations(_: None = Depends(require_ui_token), store: RegistryStore = Depends(get_store)) -> dict[str, Any]:
     return {"conversations": store.list_conversations()}
+
+
+@app.get("/v1/ui/search")
+def ui_search(
+    q: str = "",
+    limit: int = 20,
+    _: None = Depends(require_ui_token),
+    store: RegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    q = q.strip()
+    if len(q) < 3:
+        return {"results": []}
+    return {"results": store.search_conversations(q, min(limit, 100))}
 
 
 @app.post("/v1/ui/conversations")

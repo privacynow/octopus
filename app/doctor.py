@@ -1,6 +1,7 @@
 """Health checks and session diagnostics — shared by CLI and Telegram /doctor."""
 
 import dataclasses
+import datetime
 import logging
 import time
 from pathlib import Path
@@ -16,6 +17,7 @@ log = logging.getLogger(__name__)
 
 _STALE_PENDING_SECONDS = 3600   # 1 hour
 _STALE_SETUP_SECONDS = 600      # 10 minutes
+_STALE_DELEGATION_SECONDS = 3600
 
 
 @dataclasses.dataclass
@@ -120,6 +122,43 @@ async def collect_doctor_report(
                 "BOT_AGENT_MODE=registry but BOT_AGENT_REGISTRY_ENROLL_TOKEN is empty \u2014 "
                 "first-time enrollment will fail and the bot will remain degraded until a token is provided."
             )
+    if config.agent_mode == "registry" and config.data_dir.is_dir():
+        from app.agents.state import load_agent_runtime_state
+
+        agent_state = load_agent_runtime_state(config.data_dir)
+        if agent_state.connectivity_state == "degraded":
+            detail = f": {agent_state.last_error}" if agent_state.last_error else ""
+            report.warnings.append(
+                f"Registry connectivity is degraded{detail}. "
+                "Bot is operating in standalone fallback mode."
+            )
+        elif agent_state.connectivity_state == "standalone":
+            if not agent_state.agent_id:
+                report.warnings.append(
+                    "Registry enrollment has not completed. Bot is in standalone mode "
+                    "until the first successful registry sync."
+                )
+        elif agent_state.connectivity_state == "connected":
+            if not agent_state.agent_id:
+                report.warnings.append(
+                    "Registry reports connected but agent_id is missing — "
+                    "registry state may be corrupt. Delete data/agent/registry_state.json and restart."
+                )
+
+        if agent_state.last_successful_contact_at:
+            try:
+                last = datetime.datetime.fromisoformat(agent_state.last_successful_contact_at)
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=datetime.timezone.utc)
+                age = (datetime.datetime.now(datetime.timezone.utc) - last).total_seconds()
+                if age > 300:
+                    minutes = int(age // 60)
+                    report.warnings.append(
+                        f"Registry: last successful contact was {minutes}m ago. "
+                        "Bot may be running in degraded mode."
+                    )
+            except ValueError:
+                pass
 
     # Stale session scan — skip if data_dir doesn't exist yet (CLI --doctor before first run)
     if config.data_dir.is_dir():
@@ -134,6 +173,17 @@ async def collect_doctor_report(
             if stale_setup:
                 report.warnings.append(
                     f"{stale_setup} session(s) with stale credential setup (>10m old).")
+            stale_delegation = scan_stale_delegations(
+                config.data_dir,
+                config.provider_name,
+                provider.new_provider_state,
+                config.approval_mode,
+            )
+            if stale_delegation:
+                report.warnings.append(
+                    f"{stale_delegation} session(s) with delegation plans awaiting user approval for >1h. "
+                    "The user has not approved or cancelled delegation. Use /doctor in-chat to review."
+                )
         except Exception as e:
             # SQLite, Postgres (e.g. psycopg.OperationalError), and other storage/connection errors
             report.errors.append(f"Session database error: {e}")
@@ -168,6 +218,37 @@ def scan_stale_sessions(
         if setup and (now - setup.get("started_at", 0)) > _STALE_SETUP_SECONDS:
             stale_setup += 1
     return stale_pending, stale_setup
+
+
+def scan_stale_delegations(
+    data_dir: Path,
+    provider_name: str,
+    provider_state_factory: Callable,
+    approval_mode: str,
+    *,
+    stale_proposed_seconds: float = _STALE_DELEGATION_SECONDS,
+) -> int:
+    """Return count of sessions with proposed delegation plans older than threshold."""
+    stale = 0
+    now = time.time()
+    for info in list_sessions(data_dir):
+        session_data = load_session(
+            data_dir, info["chat_id"], provider_name,
+            provider_state_factory, approval_mode,
+        )
+        delegation = session_data.get("pending_delegation")
+        if not isinstance(delegation, dict):
+            continue
+        tasks = delegation.get("tasks", [])
+        if not any(isinstance(task, dict) and task.get("status") == "proposed" for task in tasks):
+            continue
+        try:
+            created_at = float(delegation.get("created_at", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if (now - created_at) > stale_proposed_seconds:
+            stale += 1
+    return stale
 
 
 async def check_polling_conflict(token: str) -> str | None:

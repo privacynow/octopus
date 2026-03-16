@@ -86,6 +86,24 @@ The bot is designed to feel simple from Telegram:
 After a `git pull`, run `./scripts/app/guided_start.sh` again. It will rebuild and
 restart the bot if needed.
 
+## Multi-Agent Mode
+
+Registry-backed mode is the normal multi-agent setup. Set
+`BOT_AGENT_MODE=registry` to let the bot:
+
+- register itself in the shared registry UI
+- answer `/discover` with live specialist bots
+- propose delegation plans and send approved child tasks through the registry
+
+The required registry settings are:
+
+- `BOT_AGENT_REGISTRY_URL`
+- `BOT_AGENT_REGISTRY_ENROLL_TOKEN`
+
+If registry connectivity drops, the bot keeps running in degraded standalone
+operation. Normal Telegram requests still work, but `/discover`, delegation,
+and registry UI sync stay unavailable until registry connectivity returns.
+
 ## Using the Bot
 
 Send a normal message:
@@ -155,7 +173,7 @@ to see the full output whenever you need it.
 | `/skills setup <name>` | Configure a skill when prompted |
 | `/settings` | Open chat settings |
 | `/session` | Show current session details |
-| `/doctor` | Run the bot health check |
+| `/doctor` | Run the bot health check, including registry connectivity state |
 
 ## Troubleshooting
 
@@ -167,7 +185,9 @@ then run `./scripts/app/guided_start.sh` again.
 The login script will walk you through the right sign-in flow for your
 provider.
 
-If you want the bot to check itself from Telegram, use `/doctor`.
+If you want the bot to check itself from Telegram, use `/doctor`. It now
+reports the normal bot health checks plus registry connectivity state when the
+bot is running in registry mode.
 
 If the bot is configured for registry mode but the registry is unavailable, the
 bot still starts in degraded standalone operation. Telegram continues to work,

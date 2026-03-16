@@ -91,6 +91,97 @@ In plain terms:
 3. The bot resolves one authoritative execution context before invoking the provider.
 4. The bot stores the state needed to make approval, retry, recovery, and output behavior consistent.
 
+## Multi-Agent Registry
+
+Phase 20 adds a registry-backed multi-agent mode without changing execution
+ownership.
+
+Operating modes:
+
+- `BOT_AGENT_MODE=registry`
+  - the default multi-bot product path
+  - bot enrolls with the registry, publishes presence and timeline state, and
+    polls for routed tasks, registry-surface inputs, and registry-surface
+    actions
+- `BOT_AGENT_MODE=standalone`
+  - explicit single-bot mode
+  - no registry participation, no discovery, no delegation
+
+The registry is a **delivery and visibility plane**, not an execution engine.
+
+- Registry owns:
+  - enrollment and issued bot identity
+  - presence and connectivity state
+  - discovery index
+  - routed delivery queues
+  - mirrored timeline/progress state
+  - registry UI visibility
+- Bot-local runtime still owns:
+  - durable work queue
+  - workflow/state-machine transitions
+  - provider execution
+  - parent-side delegation state
+  - final execution truth
+
+The registry loop is driven by `AgentRuntime.run_forever()`:
+
+- `sync_once()` establishes enrollment / registration / heartbeat state
+- `poll_once()` runs only while the runtime is connected
+- degraded cycles use exponential backoff with full jitter before retrying
+
+Surface selection is owned by the transport factory, not orchestration code.
+`app/transports/factory.py` is the single decision point that maps a
+`conversation_ref` to an `InteractionSurface` implementation and to the right
+trust semantics for the inbound source.
+
+Delegation flow:
+
+```text
+provider run
+  -> RunResult.delegation_tasks
+  -> _propose_delegation_plan(...)
+  -> PendingDelegation persisted in session state
+  -> user approves or cancels in Telegram
+  -> client.submit_routed_task(...) for each approved child task
+  -> target bot polls routed_task delivery from registry
+  -> target bot executes locally through the normal worker path
+  -> registry returns routed_result to origin bot
+  -> app/agents/delivery.py updates PendingDelegation
+  -> continuation message is admitted back through the local worker queue
+```
+
+Discovery is the user-visible front door to that flow: `/discover` queries the
+registry by structured capabilities and shows candidate specialist bots before
+delegation is proposed.
+
+## Degraded Mode Contract
+
+Registry runtime state is persisted in:
+
+- `data/agent/registry_state.json`
+
+Connectivity states:
+
+- `connected`
+  - registry enrollment and polling are healthy
+  - discovery, delegation, and registry UI sync are available
+- `degraded`
+  - registry mode is configured, but registry connectivity is currently down
+  - Telegram execution continues through the normal local worker path
+  - discovery and delegation are blocked
+  - registry UI sync is unavailable until connectivity returns
+- `standalone`
+  - bot is intentionally operating without registry participation
+
+Operator surfaces must tell the truth about that state:
+
+- `/doctor` reports degraded connectivity, incomplete enrollment, stale last
+  successful registry contact, and stale delegation plans awaiting approval
+- logs and startup diagnostics must say when the bot is falling back to local
+  standalone behavior
+- the bot must never claim that delegation or registry-backed discovery are
+  available while runtime state is degraded
+
 ---
 
 ## Main Boundaries

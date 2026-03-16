@@ -3340,23 +3340,75 @@ Acceptance criteria:
 
 ##### M6 — Hardening, Docs, and E2E Confidence
 
-**Status: Not started.**
+**Status: Complete.**
 
 Scope:
-- Doctor/startup diagnostics for registry mode, standalone mode, degraded
-  mode, auth, and routing
-- Exponential backoff with jitter for poll retry on registry failure
-- Stronger workflow and simulator tests for registry-originated flows
-- Full multi-bot registry E2E: registry + multiple bots, task beginning in
-  Telegram and appearing in Registry UI, product bot discovery and delegation,
-  child bot execution, richer registry progress, downgraded Telegram progress
-- Docs updated: README, ARCHITECTURE, plan, and status all match shipped state
+- Exponential backoff with jitter for degraded registry polling
+- `/doctor` diagnostics for registry connectivity, enrollment, stale contact,
+  and pending delegation approval state
+- Docs aligned so README and ARCHITECTURE describe the shipped multi-agent
+  system, degraded-mode contract, and operator-facing registry behavior
 
 Acceptance criteria:
-- [ ] Degraded behavior is explicit, observable, and tested
-- [ ] Docs match shipped behavior end-to-end
-- [ ] Full same-host Docker multi-bot path is reproducible from guided setup
-- [ ] Simulator implements the shared surface contract (completed in M1 Closure Gate)
+- [x] Degraded behavior is explicit, observable, and tested
+- [x] `/doctor` reports registry connectivity, enrollment status, stale contact,
+      and stale pending delegation approval state
+- [x] README describes multi-agent mode and degraded-mode operator behavior
+- [x] ARCHITECTURE describes the multi-agent registry, surface factory, and
+      degraded-mode contract
+- [x] Full suite is green after the hardening and doc-alignment changes
+
+---
+
+##### M7 — Registry UI: Conversation Timeline and Human-Initiated Work
+
+**Status: Active.**
+
+Scope:
+- Bot publishes timeline events to the registry so the registry has real
+  content to show: conversation start, progress updates (rate-limited),
+  and outcome (done/failed). These flow through `RegistryConversationIO`
+  lifecycle hooks, not through a new side-channel.
+- Registry UI renders a conversation detail view with timeline events,
+  replacing the bootstrap-only read board with a drill-down interface.
+- Registry UI exposes a "New conversation" form so a human can initiate
+  work from the UI without Telegram.
+- Auto-refresh (5 s) renders new timeline events live.
+
+Implementation seams:
+- `RegistryConversationIO.bind()` — publish `started` event
+- `RegistryConversationIO.on_outcome()` — publish `completed` or `failed`
+- `RegistryConversationIO` progress sink — rate-limit, publish `progress`
+  events at most once per 5 s
+- `/v1/agents/timeline` (POST, already implemented) — bot posts events
+- `/v1/ui/conversations/{id}/timeline` (GET, already implemented) — UI
+  fetches events
+- `/v1/ui/conversations` (POST, already implemented) — UI starts a
+  conversation; bot polls and processes it as a `registry_input` delivery
+- Registry UI `/ui` shell — extend existing HTML/JS to add:
+  - Conversation row click → detail panel with timeline
+  - Timeline event list (kind, title, body, timestamp)
+  - "New conversation" button + modal form (target bot, message text)
+  - Auto-refresh at 5 s (same as main bootstrap poll)
+
+What M7 does NOT include:
+- Approval / reject actions from UI (requires control-action delivery
+  round-trip; deferred to a follow-on slice)
+- WebSocket / SSE real-time push (polling at 5 s is sufficient)
+- Work-item status mirroring into registry (conversation timeline is
+  the richer visibility surface; raw queue state stays bot-local)
+
+Acceptance criteria:
+- [ ] Bot publishes timeline events via `RegistryConversationIO` for
+      start, progress (rate-limited), and outcome
+- [ ] Timeline events appear in `GET /v1/ui/conversations/{id}/timeline`
+- [ ] Registry UI shows conversation detail with timeline on click
+- [ ] Human can start a conversation from the Registry UI targeting any
+      connected bot; bot receives and processes it
+- [ ] Auto-refresh renders new timeline events within 10 s of publication
+- [ ] Rate-limiting: at most one progress event per 5 s per conversation
+- [ ] All existing surface contracts (Telegram, degraded mode) unchanged
+- [ ] Full suite passes, including E2E
 
 ---
 

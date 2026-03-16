@@ -4113,6 +4113,329 @@ Introduce a minimal single-password login form. The `REGISTRY_UI_TOKEN` value be
 
 ---
 
+###### B-0. Transport Store Abstraction Integrity and Postgres Parity
+
+**Problem.**
+M10E introduced three abstraction violations that leave the Postgres runtime broken for all new M10 transport features:
+
+1. **`app/access.py` bypasses the transport-store abstraction.** It imports `sqlite3` directly, opens `data_dir/transport.db` with a short-lived `sqlite3.connect()` on every access check, and is never exercised by the Postgres backend. The module's own docstring says it is "intentionally leaf-level" and "depends only on config and transport-normalized user identity." That contract is broken.
+
+2. **`work_queue_postgres.py` is missing `get_user_access`, `set_user_access`, and `list_user_access`.** These methods were added to `work_queue.py` (facade) and `work_queue_sqlite.py` but never implemented in `PostgresTransportStore`. Any Postgres-backed deployment calling `/allowuser`, `/blockuser`, or `is_allowed()` will raise `AttributeError` at runtime.
+
+3. **No Postgres migration for `user_access` or `usage_log`.** SQLite's `_CREATE_SQL` at schema version 5 includes both tables. The Postgres migration set stops at `0002_work_items_dispatch_mode.sql`. A Postgres deployment is missing both tables entirely.
+
+4. **The transport store contract test was not extended.** `tests/contracts/test_transport_store_contract.py` is the enforcement mechanism that runs every transport method against both backends. New methods were added to the SQLite store without simultaneously adding them to the contract test. The Postgres tests appeared green because they were blind to the new surface — not because the surface was correct.
+
+**Root cause pattern.**
+The M10E implementation read `work_queue_sqlite.py` but not `work_queue_postgres.py` or `work_queue_pg.py`, and did not extend the contract test. Every new method on the transport facade must have: (a) a Postgres implementation, (b) a Postgres migration, and (c) a contract test entry — in the same commit. Without (c), breakage is silent.
+
+**Fix.**
+Seven changes across eight files restore the invariant:
+
+1. `app/access.py` — remove all DB access. Become purely policy.
+2. `app/work_queue_sqlite.py` — fix `get_user_access` to not create `transport.db` when the file is absent (i.e., before the first message arrives on first boot).
+3. `app/work_queue_pg.py` — add `get_user_access_override`, `set_user_access`, `list_user_access` as conn-based functions.
+4. `app/work_queue_postgres.py` — add `get_user_access`, `set_user_access`, `list_user_access` wrapper methods delegating to `work_queue_pg`.
+5. `app/db/migrations/postgres/0003_user_access_usage_log.sql` — new migration adding `user_access` and `usage_log` tables to `bot_runtime`.
+6. `app/telegram_handlers.py` — update the `is_allowed()` wrapper to fetch the override through the facade before calling the pure policy function.
+7. `tests/contracts/test_transport_store_contract.py` — add `user_access` contract cases that run against both SQLite and Postgres.
+8. `CLAUDE.md` — add a standing rule: every new facade method must be in the contract test in the same commit.
+
+**Implementation seams.**
+
+**`app/access.py`**
+
+Remove:
+- `import sqlite3`
+- `from pathlib import Path`
+- `_db_access_override(data_dir, user_id)` function
+
+Add:
+```python
+def is_allowed_user_with_override(
+    config: BotConfig, user, override: str | None
+) -> bool:
+    """Apply DB override precedence on top of config baseline.
+
+    override: 'allowed' | 'blocked' | None (no DB row found).
+    Call sites fetch override from work_queue.get_user_access before calling this.
+    """
+    inbound = to_inbound_user(user)
+    if inbound is None:
+        return False
+    if override == "blocked":
+        return False
+    if override == "allowed":
+        return True
+    return is_allowed_user(config, user)
+```
+
+Change `is_allowed_user(config, user)` to remove the DB call entirely — it becomes config-only:
+```python
+def is_allowed_user(config: BotConfig, user) -> bool:
+    """Config baseline — no DB lookup.
+
+    Use is_allowed_user_with_override when a live DB override is needed.
+    """
+    inbound = to_inbound_user(user)
+    if inbound is None:
+        return False
+    if config.allow_open:
+        return True
+    if not config.allowed_user_ids and not config.allowed_usernames:
+        return False
+    return (
+        inbound.id in config.allowed_user_ids
+        or inbound.username in config.allowed_usernames
+    )
+```
+
+`is_admin_user`, `is_public_user`, and `trust_tier` are unchanged.
+
+The result: `access.py` has no storage imports, no `Path`, no file I/O of any kind.
+
+**`app/work_queue_sqlite.py` — `get_user_access`**
+
+The current implementation calls `self._transport_db(data_dir)` which creates `transport.db` as a side effect. `is_allowed()` runs before `record_and_admit_message` on every message — so on first boot, before any message is ever admitted, `transport.db` does not yet exist. Creating it just to answer "no override" would create an empty DB and confuse the migration path.
+
+Replace:
+```python
+def get_user_access(self, data_dir: Path, user_id: int) -> str | None:
+    conn = self._transport_db(data_dir)
+    return work_queue_sqlite_impl.get_user_access_override(conn, user_id)
+```
+
+With:
+```python
+def get_user_access(self, data_dir: Path, user_id: int) -> str | None:
+    # Use cached connection if already open (normal case after first message)
+    if data_dir in self._connections:
+        return work_queue_sqlite_impl.get_user_access_override(
+            self._connections[data_dir], user_id
+        )
+    # DB not yet open — do not create it just for a read-only override check
+    if not (data_dir / "transport.db").exists():
+        return None
+    # File exists but not cached — open normally (runs migrations)
+    conn = self._transport_db(data_dir)
+    return work_queue_sqlite_impl.get_user_access_override(conn, user_id)
+```
+
+**`app/work_queue_pg.py` — three new conn-based functions**
+
+Add after the existing functions, matching the SQLite impl shape exactly:
+
+```python
+def get_user_access_override(conn, user_id: int) -> str | None:
+    """Return 'allowed', 'blocked', or None when no override exists for user_id."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT access FROM bot_runtime.user_access WHERE user_id = %s",
+            (user_id,),
+        )
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def set_user_access(
+    conn,
+    user_id: int,
+    access: str,
+    reason: str,
+    granted_by: int,
+) -> None:
+    """Upsert a user access override row."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO bot_runtime.user_access
+                   (user_id, access, reason, granted_by, granted_at)
+               VALUES (%s, %s, %s, %s, %s)
+               ON CONFLICT (user_id) DO UPDATE SET
+                   access = EXCLUDED.access,
+                   reason = EXCLUDED.reason,
+                   granted_by = EXCLUDED.granted_by,
+                   granted_at = EXCLUDED.granted_at""",
+            (user_id, access, reason, granted_by, now),
+        )
+    conn.commit()
+
+
+def list_user_access(conn) -> list[dict]:
+    """Return all user access overrides ordered by most recent grant first."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT user_id, access, reason, granted_by, granted_at "
+            "FROM bot_runtime.user_access ORDER BY granted_at DESC"
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "user_id": r[0],
+            "access": r[1],
+            "reason": r[2],
+            "granted_by": r[3],
+            "granted_at": r[4],
+        }
+        for r in rows
+    ]
+```
+
+**`app/work_queue_postgres.py` — three new wrapper methods**
+
+Add after the existing `purge_old` method, following the exact pattern of every other method in `PostgresTransportStore`:
+
+```python
+def get_user_access(self, data_dir: Path, user_id: int) -> str | None:
+    with self._conn() as conn:
+        return work_queue_pg.get_user_access_override(conn, user_id)
+
+def set_user_access(
+    self,
+    data_dir: Path,
+    user_id: int,
+    access: str,
+    reason: str = "",
+    granted_by: int = 0,
+) -> None:
+    with self._conn() as conn:
+        work_queue_pg.set_user_access(conn, user_id, access, reason, granted_by)
+
+def list_user_access(self, data_dir: Path) -> list[dict]:
+    with self._conn() as conn:
+        return work_queue_pg.list_user_access(conn)
+```
+
+**`app/db/migrations/postgres/0003_user_access_usage_log.sql`** (new file)
+
+```sql
+-- Add user_access and usage_log tables for M10E access overrides and M10B usage tracking.
+-- Version: 3
+
+CREATE TABLE IF NOT EXISTS bot_runtime.user_access (
+    user_id    BIGINT PRIMARY KEY,
+    access     TEXT NOT NULL CHECK (access IN ('allowed', 'blocked')),
+    reason     TEXT NOT NULL DEFAULT '',
+    granted_by BIGINT NOT NULL DEFAULT 0,
+    granted_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bot_runtime.usage_log (
+    id                BIGSERIAL PRIMARY KEY,
+    chat_id           BIGINT NOT NULL,
+    work_item_id      TEXT NOT NULL,
+    provider          TEXT NOT NULL,
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd          REAL NOT NULL DEFAULT 0.0,
+    recorded_at       TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'utc')
+);
+CREATE INDEX IF NOT EXISTS idx_usage_log_chat ON bot_runtime.usage_log (chat_id);
+CREATE INDEX IF NOT EXISTS idx_usage_log_recorded_at ON bot_runtime.usage_log (recorded_at);
+```
+
+`usage_log` is added here even though M10B has not been implemented yet, because the migration must exist before the application code that writes to it is deployed. The M10B Postgres implementation (`record_usage`, `get_usage_since` in `work_queue_pg.py` and `work_queue_postgres.py`) will be added as part of M10B.
+
+**`app/telegram_handlers.py` — `is_allowed()` wrapper**
+
+Change only the `is_allowed()` function. All existing call sites remain unchanged — they all call `is_allowed(user)`.
+
+Replace:
+```python
+def is_allowed(user) -> bool:
+    return access.is_allowed_user(_cfg(), user)
+```
+
+With:
+```python
+def is_allowed(user) -> bool:
+    cfg = _cfg()
+    inbound = access.to_inbound_user(user)
+    if inbound is None:
+        return False
+    override = work_queue.get_user_access(cfg.data_dir, inbound.id)
+    return access.is_allowed_user_with_override(cfg, user, override)
+```
+
+No other handler function changes. `is_admin` and `is_public_user` are unchanged.
+
+**`tests/contracts/test_transport_store_contract.py` — user_access contract cases**
+
+Add three test functions to the existing contract test. They use the `backend_and_data_dir` fixture which parameterizes over both SQLite and Postgres:
+
+```python
+def test_user_access_no_override_returns_none(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    result = get_user_access(data_dir, user_id=99999)
+    assert result is None
+
+
+def test_user_access_set_and_get_round_trip(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    set_user_access(data_dir, user_id=100, access="blocked", reason="test", granted_by=1)
+    assert get_user_access(data_dir, user_id=100) == "blocked"
+    set_user_access(data_dir, user_id=100, access="allowed", reason="reversed", granted_by=1)
+    assert get_user_access(data_dir, user_id=100) == "allowed"
+
+
+def test_user_access_list_returns_all_rows(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    set_user_access(data_dir, user_id=200, access="allowed", reason="a", granted_by=1)
+    set_user_access(data_dir, user_id=201, access="blocked", reason="b", granted_by=1)
+    rows = list_user_access(data_dir)
+    user_ids = {r["user_id"] for r in rows}
+    assert 200 in user_ids
+    assert 201 in user_ids
+```
+
+Import `get_user_access`, `set_user_access`, `list_user_access` from `app.work_queue` at the top of the file alongside the existing imports.
+
+**`CLAUDE.md` — standing rule to prevent recurrence**
+
+Add a new rule to the "Repo-Specific Process" section:
+
+> **Transport facade parity rule.** Every new method added to `app/work_queue.py` must land in the same commit as: (a) a `work_queue_pg.py` conn-based implementation, (b) a `PostgresTransportStore` wrapper in `work_queue_postgres.py`, (c) a Postgres migration if the method touches a new table, and (d) a contract test case in `tests/contracts/test_transport_store_contract.py`. If Postgres support is genuinely impossible in the same slice, the method must not be added to the facade or `__all__` until it is — a SQLite-only shortcut in the facade is not acceptable.
+
+**Files to change.**
+
+| File | Change |
+|---|---|
+| `app/access.py` | Remove `sqlite3`, `Path`, `_db_access_override`; add `is_allowed_user_with_override`; make `is_allowed_user` config-only |
+| `app/work_queue_sqlite.py` | Fix `get_user_access` to not create DB when file absent |
+| `app/work_queue_pg.py` | Add `get_user_access_override`, `set_user_access`, `list_user_access` |
+| `app/work_queue_postgres.py` | Add `get_user_access`, `set_user_access`, `list_user_access` wrappers |
+| `app/db/migrations/postgres/0003_user_access_usage_log.sql` | New file: `user_access` and `usage_log` tables |
+| `app/telegram_handlers.py` | Update `is_allowed()` to fetch override from facade, call pure policy |
+| `tests/contracts/test_transport_store_contract.py` | Add three `user_access` contract cases; import new facade functions |
+| `CLAUDE.md` | Add transport facade parity rule |
+
+**What M10B-0 does NOT include.**
+
+- The `record_usage` and `get_usage_since` Postgres implementations — these land in M10B, which also implements the SQLite side. The `usage_log` table is added to the Postgres migration here so the migration is available when M10B deploys.
+- Changes to the approval or recovery flow — `is_allowed` wraps only the user identity check, not work-item state transitions.
+- Registry UI or Telegram command behavior changes — the user-facing behavior of `/allowuser`, `/blockuser`, and `is_allowed` is identical after this refactor.
+- The `usage_log` Postgres methods (`record_usage`, `get_usage_since`) in `work_queue_pg.py` — those are M10B.
+
+**Acceptance criteria.**
+
+- [ ] `rg -n "sqlite3|import sqlite3" app/access.py` → no hits
+- [ ] `rg -n "transport\.db|Path" app/access.py` → no hits
+- [ ] `rg -n "SQLiteTransportStore|PostgresTransportStore" app/telegram_handlers.py` → no hits
+- [ ] `work_queue.get_user_access(data_dir, user_id)` works under both SQLite and Postgres runtime
+- [ ] `work_queue.set_user_access(data_dir, ...)` works under both backends
+- [ ] `work_queue.list_user_access(data_dir)` works under both backends
+- [ ] `blocked` override from `set_user_access` prevents a user in `BOT_ALLOWED_USERS` from sending messages without restart
+- [ ] `allowed` override from `set_user_access` admits a user not in `BOT_ALLOWED_USERS` without restart
+- [ ] `get_user_access` called when `transport.db` does not exist returns `None` and does not create the file
+- [ ] `is_admin_user` still checks only config — no DB access
+- [ ] The three new contract tests pass against both SQLite and Postgres backends
+- [ ] All existing access, handler, and transport tests remain green
+- [ ] `0003_user_access_usage_log.sql` is present in the Postgres migration directory
+- [ ] CLAUDE.md includes the transport facade parity rule
+
+---
+
 ###### B. Cost and Usage Visibility
 
 **Problem.**
@@ -4485,12 +4808,25 @@ Stabilise and document `POST /v1/ui/conversations` as a first-class authenticate
 | Section | File | Change type |
 |---------|------|-------------|
 | A | `app/registry_service/app.py` | Login/logout routes, session store, `_require_auth`, nav logout link |
+| B-0 | `app/access.py` | Remove DB access; add `is_allowed_user_with_override`; make `is_allowed_user` config-only |
+| B-0 | `app/work_queue_sqlite.py` | Fix `get_user_access` to not create DB when absent |
+| B-0 | `app/work_queue_pg.py` | Add `get_user_access_override`, `set_user_access`, `list_user_access` |
+| B-0 | `app/work_queue_postgres.py` | Add `get_user_access`, `set_user_access`, `list_user_access` wrappers |
+| B-0 | `app/db/migrations/postgres/0003_user_access_usage_log.sql` (new) | `user_access` and `usage_log` Postgres tables |
+| B-0 | `app/telegram_handlers.py` | Update `is_allowed()` to use facade + pure policy |
+| B-0 | `tests/contracts/test_transport_store_contract.py` | Add `user_access` contract cases (both backends) |
+| B-0 | `CLAUDE.md` | Transport facade parity rule |
 | B | `app/providers/base.py` | `RunResult` token fields |
 | B | `app/providers/claude_provider.py` | Populate token fields from API response |
 | B | `app/providers/codex_provider.py` | Populate token fields where available |
-| B | `app/storage.py` | `usage_log` table (M10B migration) |
-| B | `app/worker.py` | Insert usage row after run |
+| B | `app/work_queue_sqlite_impl.py` | `record_usage`, `get_usage_since` functions |
+| B | `app/work_queue_sqlite.py` | `record_usage`, `get_usage_since` wrappers |
+| B | `app/work_queue_pg.py` | `record_usage`, `get_usage_since` conn-based functions |
+| B | `app/work_queue_postgres.py` | `record_usage`, `get_usage_since` wrappers |
+| B | `app/work_queue.py` | Add `record_usage`, `get_usage_since` to facade and `__all__` |
+| B | `app/telegram_handlers.py` | Write usage log after successful run |
 | B | `app/registry_service/app.py` | `/v1/ui/usage` endpoint, conversation usage display |
+| B | `tests/contracts/test_transport_store_contract.py` | Add `usage_log` contract cases |
 | C | `app/storage.py` | `schema_version` table, `migrate()` function, numbered migrations |
 | C | `app/__init__.py` | Call `migrate()` at startup |
 | C | `VERSION` (new) | Milestone version string |
@@ -4500,7 +4836,7 @@ Stabilise and document `POST /v1/ui/conversations` as a first-class authenticate
 | D | `app/registry_service/app.py` | Filter bar, `/v1/ui/search` endpoint, FTS table |
 | D | `app/storage.py` | `timeline_fts` FTS5 table (M10D migration) |
 | E | `app/storage.py` | `user_access` table (M10E migration) |
-| E | `app/access.py` (new) | `is_user_allowed()` |
+| E | `app/access.py` | `is_user_allowed()` |
 | E | `app/telegram_handlers.py` | `/allowuser`, `/blockuser`, `/listaccess` |
 | E | `app/registry_service/app.py` | `/v1/ui/access` endpoint, "Access" panel tab |
 | F | `app/registry_service/app.py` | Export endpoint, "Export" button |
@@ -4522,12 +4858,13 @@ The sections are ordered by risk and dependency, not by user value:
 1. **C (Upgrade Path)** — implement first. The migration framework is a prerequisite for all other DB changes (B, D, E, H). Writing the `schema_version` table and `migrate()` before anything else ensures all subsequent DB changes land cleanly.
 2. **A (Authentication)** — implement second. Once migrations are in place, auth is purely additive to the registry service with no DB changes. Getting auth right early prevents accidentally shipping M10 features unauthenticated.
 3. **E (User Access Control)** — implement third. Depends on C for migration. `app/access.py` is a small, isolated module. Get the DB write path working before adding the Telegram commands.
-4. **B (Cost Visibility)** — implement fourth. Depends on C for migration. Provider changes are isolated; UI changes are additive.
-5. **D (Search and Filter)** — implement fifth. Client-side filtering has no dependencies. FTS5 depends on C.
-6. **F (Export)** — implement sixth. No DB changes, minimal surface area.
-7. **G (Webhook Notifications)** — implement seventh. Config change + one fire-and-forget HTTP call.
-8. **H (Skills Management)** — implement eighth. Depends on C for migration. Skills override logic must be tested carefully to avoid silently dropping active skills.
-9. **I (Programmatic API)** — implement last. Endpoint already exists; this is stabilisation + auth + docs. Low risk.
+4. **B-0 (Transport Store Abstraction Integrity)** — implement immediately after E ships. Fixes the abstraction violations introduced by E and makes the Postgres backend correct before any more transport methods are added.
+5. **B (Cost Visibility)** — implement after B-0. Builds on the repaired abstraction. Adds `record_usage`/`get_usage_since` to both backends correctly from the start.
+6. **D (Search and Filter)** — implement fifth. Client-side filtering has no dependencies. FTS5 depends on C.
+7. **F (Export)** — implement sixth. No DB changes, minimal surface area.
+8. **G (Webhook Notifications)** — implement seventh. Config change + one fire-and-forget HTTP call.
+9. **H (Skills Management)** — implement eighth. Depends on C for migration. Skills override logic must be tested carefully to avoid silently dropping active skills.
+10. **I (Programmatic API)** — implement last. Endpoint already exists; this is stabilisation + auth + docs. Low risk.
 
 ###### M10 — What M10 Does NOT Include
 

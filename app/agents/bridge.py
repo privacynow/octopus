@@ -131,6 +131,7 @@ def build_registry_message_delivery(
     actor_ref: str,
     delivery_id: str,
     routed_task_id: str = "",
+    skip_approval: bool = False,
 ) -> tuple[int, int, int, str]:
     chat_id = local_chat_id_for_conversation(conversation_ref)
     user_id = registry_actor_id(actor_ref)
@@ -144,6 +145,7 @@ def build_registry_message_delivery(
             source="registry",
             conversation_ref=conversation_ref,
             routed_task_id=routed_task_id,
+            skip_approval=skip_approval,
         )
     )
     return chat_id, user_id, update_id, payload

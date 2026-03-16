@@ -59,6 +59,7 @@ from app.session_state import (
 )
 from app.agents.bridge import (
     bind_conversation,
+    conversation_surface_name,
     publish_timeline_event,
     registry_client,
     summarize_text,
@@ -3195,6 +3196,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             telegram_conversation_ref(_cfg(), chat_id) if source == "telegram" else f"registry:{chat_id}"
         )
         routed_task_id = getattr(event, "routed_task_id", "")
+        conversation_surface = conversation_surface_name(conversation_ref) if source == "registry" else source
 
         # Recovered item: send notice and move to pending_recovery.
         if item.get("dispatch_mode") == "recovery":
@@ -3203,8 +3205,8 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
                     _cfg(),
                     conversation_ref=conversation_ref,
                     title=summarize_text(event.text) or "Recovered registry conversation",
-                    origin_surface="registry",
-                    external_id=conversation_ref,
+                    origin_surface=conversation_surface,
+                    external_id=str(chat_id) if conversation_surface == "telegram" else conversation_ref,
                 )
                 await publish_timeline_event(
                     _cfg(),
@@ -3250,7 +3252,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
         if source == "telegram" and not is_allowed(event.user):
             work_queue.fail_work_item(data_dir, item["id"], error="not_allowed")
             return
-        if source == "registry":
+        if conversation_surface == "registry":
             bot_msg = RegistryConversationIO(
                 _cfg(),
                 conversation_ref=conversation_ref,
@@ -3258,7 +3260,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
                 title=summarize_text(event.text) or "Registry conversation",
             )
         else:
-            bot_msg = _BotMessage(bot, chat_id)
+            bot_msg = _BotMessage(bot, chat_id) if source == "telegram" else TelegramConversationIO(bot, chat_id)
         prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
         user_id = event.user.id
         trust = "trusted" if source == "registry" else _trust_tier(event.user)
@@ -3266,8 +3268,8 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             _cfg(),
             conversation_ref=conversation_ref,
             title=summarize_text(event.text) or "Conversation",
-            origin_surface=source,
-            external_id=str(chat_id) if source == "telegram" else conversation_ref,
+            origin_surface=conversation_surface,
+            external_id=str(chat_id) if conversation_surface == "telegram" else conversation_ref,
         )
         if source == "telegram":
             await publish_timeline_event(
@@ -3281,7 +3283,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             async with _chat_lock(chat_id, worker_item=item):
                 session = _load(chat_id)
                 outcome = None
-                if not routed_task_id and session.approval_mode == "on":
+                if not routed_task_id and not getattr(event, "skip_approval", False) and session.approval_mode == "on":
                     await request_approval(
                         chat_id, prompt, image_paths, list(event.attachments),
                         bot_msg, request_user_id=user_id, trust_tier=trust,
@@ -3316,7 +3318,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
                         routed_task_id,
                         exc_info=True,
                     )
-        elif source == "telegram" and outcome is not None:
+        elif conversation_surface == "telegram" and outcome is not None:
             body = outcome.reply_text or outcome.error_text
             if body:
                 await publish_timeline_event(

@@ -21,6 +21,7 @@ def default_session(
         "pending_approval": None,
         "pending_retry": None,
         "awaiting_skill_setup": None,
+        "pending_delegation": None,
         "created_at": now,
         "updated_at": now,
     }

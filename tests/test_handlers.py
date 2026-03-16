@@ -193,6 +193,275 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
         assert len(prov.run_calls) == 1
 
 
+async def test_registry_routed_result_resumes_parent_conversation_without_new_approval():
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        chat_id = 12345
+        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_delegation"] = {
+            "conversation_ref": conversation_ref,
+            "title": "Spec delegation",
+            "resume_instruction": "Use the delegated result to finish the parent task.",
+            "tasks": [
+                {
+                    "routed_task_id": "child-task-1",
+                    "title": "Developer task",
+                    "status": "pending",
+                }
+            ],
+        }
+        save_session(data_dir, chat_id, session)
+        prov.run_results = [RunResult(text="Final synthesized answer.")]
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-1",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Implementation complete",
+                        "full_text": "The delegated developer task completed successfully.",
+                    },
+                },
+            },
+        )
+
+        assert outcome == "accepted"
+        assert await drain_one_worker_item(data_dir) is True
+        assert len(prov.run_calls) == 1
+        assert "delegated developer task completed successfully" in prov.run_calls[0]["prompt"].lower()
+        session_after = load_session_disk(data_dir, chat_id, prov)
+        assert session_after.get("pending_approval") is None
+        assert session_after.get("pending_delegation") is None
+        assert any(
+            "Final synthesized answer." in message.get("text", "")
+            for message in th._bot_instance.sent_messages
+        )
+
+
+async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        chat_id = 12345
+        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_delegation"] = {
+            "conversation_ref": conversation_ref,
+            "title": "Spec delegation",
+            "tasks": [
+                {
+                    "routed_task_id": "child-task-2",
+                    "title": "Reviewer task",
+                    "status": "pending",
+                }
+            ],
+        }
+        save_session(data_dir, chat_id, session)
+
+        monkeypatch.setattr(
+            "app.agents.delivery.work_queue.record_and_admit_message",
+            lambda *args, **kwargs: ("busy", "item-busy"),
+        )
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-2",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Review complete",
+                        "full_text": "The reviewer finished and returned notes.",
+                    },
+                },
+            },
+        )
+
+        assert outcome == "retry_later"
+        assert len(prov.run_calls) == 0
+        session_after = load_session_disk(data_dir, chat_id, prov)
+        pending = session_after.get("pending_delegation")
+        assert pending is not None
+        assert pending["tasks"][0]["status"] == "completed"
+        assert pending["tasks"][0]["summary"] == "Review complete"
+
+
+async def test_registry_routed_result_multi_child_resumes_only_after_final_child():
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        chat_id = 12345
+        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_delegation"] = {
+            "conversation_ref": conversation_ref,
+            "title": "Two-child delegation",
+            "resume_instruction": "Synthesize both child results before replying.",
+            "tasks": [
+                {
+                    "routed_task_id": "child-task-a",
+                    "title": "Developer task",
+                    "status": "pending",
+                },
+                {
+                    "routed_task_id": "child-task-b",
+                    "title": "Reviewer task",
+                    "status": "pending",
+                },
+            ],
+        }
+        save_session(data_dir, chat_id, session)
+        prov.run_results = [RunResult(text="Combined final answer.")]
+
+        first_outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-a",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Developer complete",
+                        "full_text": "Developer child result.",
+                    },
+                },
+            },
+        )
+
+        assert first_outcome == "accepted"
+        assert await drain_one_worker_item(data_dir) is False
+        assert len(prov.run_calls) == 0
+        mid_session = load_session_disk(data_dir, chat_id, prov)
+        pending_mid = mid_session.get("pending_delegation")
+        assert pending_mid is not None
+        assert pending_mid["tasks"][0]["status"] == "completed"
+        assert pending_mid["tasks"][1]["status"] == "pending"
+
+        final_outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-b",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Reviewer complete",
+                        "full_text": "Reviewer child result.",
+                    },
+                },
+            },
+        )
+
+        assert final_outcome == "accepted"
+        assert await drain_one_worker_item(data_dir) is True
+        assert len(prov.run_calls) == 1
+        prompt = prov.run_calls[0]["prompt"]
+        assert "Developer child result." in prompt
+        assert "Reviewer child result." in prompt
+        final_session = load_session_disk(data_dir, chat_id, prov)
+        assert final_session.get("pending_delegation") is None
+
+
+async def test_registry_surface_parent_resumes_through_registry_surface(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.telegram_handlers as th
+        import app.agents.bridge as bridge
+
+        published: list[tuple[str, str, str]] = []
+
+        class FakeRegistryClient:
+            async def sync_binding(self, **kwargs):
+                return {"ok": True, **kwargs}
+
+            async def publish_timeline(self, events, *, checkpoint: str = ""):
+                del checkpoint
+                for event in events:
+                    published.append((event.kind, event.title, event.body))
+                return {"accepted": len(events)}
+
+        monkeypatch.setattr(bridge, "registry_client", lambda config: FakeRegistryClient())
+
+        conversation_ref = "registry:parent-conv-1"
+        chat_id = registry_chat_id(conversation_ref)
+        session = default_session(prov.name, prov.new_provider_state(), "on")
+        session["pending_delegation"] = {
+            "conversation_ref": conversation_ref,
+            "title": "Registry parent delegation",
+            "tasks": [
+                {
+                    "routed_task_id": "child-task-registry",
+                    "title": "Requirements task",
+                    "status": "pending",
+                }
+            ],
+        }
+        save_session(data_dir, chat_id, session)
+        prov.run_results = [RunResult(text="Registry parent final answer.")]
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "child-task-registry",
+                    "parent_conversation_id": conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Requirements complete",
+                        "full_text": "Requirements child result.",
+                    },
+                },
+            },
+        )
+
+        assert outcome == "accepted"
+        assert await drain_one_worker_item(data_dir) is True
+        assert len(prov.run_calls) == 1
+        assert th._bot_instance.sent_messages == []
+        assert any(
+            kind == "bot_message" and "Registry parent final answer." in body
+            for kind, _title, body in published
+        )
+
+
 async def test_registry_surface_action_retry_skip_clears_pending_retry():
     with fresh_env(
         config_overrides={

@@ -91,10 +91,12 @@ If the product is working correctly, these statements are true:
 These are intentionally out of scope for the core product plan:
 
 - full billing and quota systems before the runtime is stable
-- multi-agent delegation as a user-facing concept
 - Docker or Kubernetes control-plane design
 - hosted SaaS architecture decisions
 - general-purpose package-manager behavior outside the skill system
+
+Note: multi-agent delegation is now an active product feature tracked under
+Phase 20. It is no longer a non-goal.
 
 Those may matter later, but they are not the core product definition.
 
@@ -133,8 +135,9 @@ The product is complete when these capability areas are in place.
 ## Roadmap Rules
 
 - The roadmap is one strict execution order, not priority buckets.
-- Phases 1-14 are sealed as shipped history.
-- Phase 15 is the active roadmap phase.
+- Phases 1-15 are sealed as shipped history.
+- Phase 20 is the active roadmap phase (Networked Multi-Agent Platform).
+- Phases 16-19 remain on the roadmap but are deferred behind Phase 20.
 - From Phase 13 onward, the roadmap is split by **capability tier**, not by
   database ideology:
   - **local/product track first**: backend-neutral product work plus a
@@ -3112,6 +3115,311 @@ Done when:
 - New implementation work for Phase 15 continues to extend the current owners
   instead of building shadow abstractions around them.
 
+### Phase 20 - Networked Multi-Agent Platform
+
+Guidance baseline:
+
+- Follow the repo-local and global execution guidance before changing code or
+  contracts:
+  - `AGENTS.md`
+  - `CLAUDE.md`
+  - `docs/AGENTS-global.md`
+  - `docs/CLAUDE-global.md`
+- No new surface or registry feature may bypass the existing
+  workflow/state-machine model. Registry-originated actions must use the same
+  underlying workflow ownership as Telegram.
+- No parallel execution paths. Registry deliveries enter the local work queue
+  and are processed by the same worker/state-machine core as Telegram messages.
+- Registry is a delivery and visibility plane, not an execution engine.
+
+Objective:
+
+Build the product into a **networked multi-agent platform** with one public
+registry control plane and many private bots.
+
+End-state capability:
+
+- A human can start work from **Telegram** or from the **Registry UI**.
+- A product bot can refine requirements, ask follow-up questions, and plan work.
+- The product bot can discover specialist bots by role, skills, tags, and
+  description, and delegate work through the registry gateway.
+- Bots may run on local desktops, private machines, VPS/cloud hosts, or
+  same-host Docker containers without exposing public HTTP APIs.
+- Telegram remains a supported, reduced surface.
+- Registry UI is a richer, first-class alternate client.
+- Both surfaces act on the same underlying conversation, workflow, and
+  execution state.
+
+Architecture principles:
+
+- One authoritative execution core per bot (local worker-owned queue).
+- One authoritative workflow/state-machine layer.
+- One canonical conversation identity (`ConversationRef`).
+- No surface-specific orchestration forks.
+- No registry-side shadow execution engine.
+- Bot-local worker/state-machine execution remains the final authority.
+- Registry owns delivery routing, presence, discovery, and timeline mirroring.
+- Bots do not expose public HTTP APIs in v1; they use outbound polling only.
+- Registry is the only public component.
+
+Network model:
+
+- Bots poll the registry for: routed delegated tasks, registry UI user input,
+  registry UI actions, and control signals (cancel/approve/reject).
+- Bots use outbound authenticated HTTP with bearer tokens issued at enrollment.
+- Routed work: originating bot submits to registry → registry queues to target
+  bot poll queue → target bot executes locally → result flows back to registry
+  → registry delivers to originating bot as `routed_result` delivery.
+
+Bot configuration:
+
+- `BOT_AGENT_MODE=registry|standalone`
+- `BOT_AGENT_DISPLAY_NAME`, `BOT_AGENT_SLUG`, `BOT_AGENT_ROLE`
+- `BOT_AGENT_TAGS`, `BOT_AGENT_DESCRIPTION`, `BOT_AGENT_SKILLS`
+- `BOT_AGENT_REGISTRY_URL`, `BOT_AGENT_REGISTRY_ENROLL_TOKEN`
+- `BOT_AGENT_POLL_INTERVAL_SECONDS`
+- Registry-issued credentials (`agent_id`, `agent_token`, poll cursor) are
+  stored in bot-local runtime state (`data_dir/agent/registry_state.json`),
+  not written back to operator config.
+
+Connectivity states:
+
+- `connected`: registry mode with active registry connectivity
+- `degraded`: registry mode configured but registry unreachable; local
+  Telegram operation continues; polls retry with backoff
+- `standalone`: bot intentionally not using registry
+- `offline`: registry-side classification only; bot has missed heartbeats
+
+Registry outage behavior:
+
+- Bot still starts in degraded state.
+- Telegram and local interaction remain fully functional.
+- Discovery, delegation, and registry UI sync are unavailable.
+- Bot retries registration, heartbeat, and poll in the background.
+- `/doctor` and logs report degraded state clearly.
+
+---
+
+#### Phase 20 — Milestone Status
+
+##### M1 — Shared Conversation Core and Surface Refactor
+
+**Status: Partial — foundation types and port abstractions shipped; Telegram
+adapter and simulator migration incomplete.**
+
+Delivered:
+- `ConversationRef`, `SurfaceBinding`, `SurfaceEvent`, `TimelineEvent` types
+  (`app/agents/types.py`)
+- `InteractionSurface`, `SurfaceCapabilities`, `SurfaceEditableHandle`,
+  `ConversationIO` port abstractions (`app/transports/ports.py`)
+- `RegistryConversationIO` as `InteractionSurface` implementation
+  (`app/transports/registry_adapter.py`)
+- `worker_dispatch` selects surface polymorphically at dispatch point;
+  all downstream handler logic is surface-agnostic
+
+Not yet delivered:
+- Telegram adapter not yet migrated to `ConversationIO`; handler-owned
+  command/callback paths still use PTB-direct methods
+- Simulator not yet upgraded to the shared surface contract
+- Full workflow/state-machine audit for surface-originated action parity
+
+Acceptance criteria (incomplete):
+- [ ] Telegram behavior is preserved after adapter migration
+- [ ] No surface-specific orchestration fork exists
+- [ ] Shared conversation identity is testable across both surfaces
+- [ ] Simulator continues to prove real worker-owned semantics
+- [x] Registry surface dispatches through same state machine as Telegram
+
+---
+
+##### M2 — Docker Multi-Instance and Registry-First Wizard
+
+**Status: Complete.**
+
+Delivered:
+- `.env.bot.<instance>` convention for same-checkout multi-bot deployments
+- Instance-aware bot scripts (`start_instance.sh`, `stop_instance.sh`,
+  `logs_instance.sh`)
+- Registry lifecycle scripts (`scripts/registry/start.sh`, `stop.sh`,
+  `logs.sh`)
+- Single-line interactive `guided_start.sh` with registry-first defaults,
+  inline default values, bot display name prompt with slug derivation, and
+  explicit standalone support
+- Docker-safe working-dir guidance
+
+Acceptance criteria (complete):
+- [x] One checkout can run product/dev/test-writer/reviewer bots
+- [x] Wizard is usable by non-technical operators
+- [x] No second checkout required
+
+---
+
+##### M3 — Registry Service, Store, and UI Shell
+
+**Status: Complete.**
+
+Delivered:
+- FastAPI registry service (`app/registry_service/app.py`)
+- SQLite-backed registry store with WAL mode (`app/registry_service/store.py`)
+- Full bot-facing API: enroll, register, heartbeat, timeline publish,
+  discovery search, routed-task create/status/result, poll, ack, deregister
+- Full UI-facing API: bootstrap, bot directory, conversation CRUD, conversation
+  timeline, conversation actions (approve/reject/cancel), task board
+- Delivery queue with state machine: queued → leased → acked/dead_letter/queued
+- Slug collision handling, cursor-based poll, offline detection
+- Vanilla HTML/CSS/JS UI shell (`/ui` endpoint)
+- Deployment-issued bearer tokens for both bot and UI auth; no login/password
+
+Acceptance criteria (complete):
+- [x] Bots can enroll, register, heartbeat, and poll
+- [x] Humans can view bots and conversations in UI
+- [x] Registry is the only public service needed
+- [x] Bot-to-bot routed task round-trip verified in integration tests
+
+---
+
+##### M4 — Bot Polling Client and Routed Work Execution
+
+**Status: Complete, including safety-gap hardening.**
+
+Delivered:
+- Bot-side registry client (`app/agents/client.py`): full async HTTP, all
+  endpoints, bearer auth, injectable for tests
+- Agent runtime (`app/agents/runtime.py`): enrollment → registration →
+  heartbeat + poll loop, durable state persistence, degraded/connected/
+  standalone state transitions, per-delivery exception isolation, runtime
+  survival on unexpected poll errors
+- Delivery dispatch (`app/agents/delivery.py`): routes surface_input,
+  routed_task, surface_action (approve/reject/cancel/retry/recovery),
+  control, and routed_result delivery kinds
+- Delivery bridge (`app/agents/bridge.py`): converts registry deliveries into
+  local `work_queue.record_and_admit_message` calls; returns `retry_later`
+  on chat-busy (not silently acked); binds conversation refs; publishes
+  timeline events
+- Registry surface integration (`app/transports/registry_adapter.py`):
+  `RegistryConversationIO` implements `InteractionSurface`; translates all
+  outbound operations to timeline events; declares correct capabilities
+- `worker_dispatch` integration (`app/telegram_handlers.py`): single dispatch
+  path with polymorphic surface selection; routed task result reporting wrapped
+  so registry-unreachable at result time does not mark completed work as failed
+- Registry store: conversation binding, leased poll delivery state machine,
+  routed_result return delivery to origin agent
+
+Safety gaps fixed after initial slice:
+- `busy → retry_later`: chat-busy deliveries return `retry_later`, not
+  silently acked and dropped (was: message lost permanently)
+- Result reporting isolation: `routed_task_result()` failure is caught and
+  logged; completed local work is not marked failed if registry unreachable
+- Per-delivery poll isolation: bad delivery handler exceptions reject only
+  that delivery; remaining batch continues
+- Runtime survival: unexpected poll errors are caught and logged; background
+  runtime task does not die permanently on one bad cycle
+
+Acceptance criteria (complete):
+- [x] Bots do not need public APIs
+- [x] Registry-routed work enters the same local execution core
+- [x] Registry-originated actions use the same workflow/state-machine rules
+- [x] Chat-busy deliveries are retried, not lost
+- [x] Completed work is not marked failed on registry report failure
+- [x] One bad delivery does not poison the poll batch
+- [x] Poll runtime survives unexpected handler exceptions
+
+---
+
+##### M5 — Product-Bot Discovery and Delegation
+
+**Status: In progress — parent-side delegated-result continuation shipped; discovery
+planner and user-facing delegation UX not started.**
+
+Delivered so far:
+- Parent-side delegation state is now durable in bot-local session state:
+  `PendingDelegation` and `DelegatedTask` are stored alongside the existing
+  session model, not in the registry
+- `routed_result` deliveries now update the parent bot's local delegation
+  state and emit deterministic `delegated_result` timeline events
+- When all expected child results are present, the parent bot admits a
+  synthetic continuation message back through the normal local work queue
+  so orchestration resumes through the same worker-owned execution path
+- Synthetic parent continuation is tagged to bypass a second approval gate;
+  this avoids forcing the human to re-approve the same parent orchestration
+  step just because child results arrived asynchronously
+- Parent continuations follow the bound conversation surface, so a Telegram
+  parent conversation resumes on Telegram instead of being trapped on the
+  registry surface
+- Busy parent chats return `retry_later`; delegated-result state is preserved
+  and retried instead of being dropped
+
+Scope:
+- Capability-based agent discovery planner using `AgentDiscoveryQuery`
+  (role, skills, tags, free_text, required_state); discovery result
+  presented to user for review before delegation
+- Explicit delegation plan UX: product bot proposes which specialist bots
+  to delegate which sub-tasks to; user approval required before fan-out
+- Routed task submission from originating bot through registry to target bots
+- `routed_result` delivery consumption: originating bot resumes parent
+  orchestration when expected child results arrive (not just timeline logging)
+- Result aggregation back into parent conversation
+- Degraded mode blocks delegation cleanly: `/discover` and delegation disabled
+  when connectivity_state is degraded or standalone; clear user message
+
+Role patterns (metadata only, not hardcoded logic):
+- product, requirements, developer, test-writer, reviewer, tester
+- Any role/skill combination is valid; these are examples, not constraints
+
+Acceptance criteria:
+- [ ] Product bot can search for specialist bots by role and skills
+- [ ] Discovery results presented before delegation (not automatic)
+- [ ] Delegation requires explicit user approval before fan-out
+- [ ] Delegated work routes through registry and executes through the same
+      local worker-owned runtime on the target bot
+- [x] Parent bot resumes orchestration after receiving child results
+- [ ] Degraded mode blocks delegation and tells the user why
+
+---
+
+##### M6 — Hardening, Docs, and E2E Confidence
+
+**Status: Not started.**
+
+Scope:
+- Doctor/startup diagnostics for registry mode, standalone mode, degraded
+  mode, auth, and routing
+- Exponential backoff with jitter for poll retry on registry failure
+- Stronger workflow and simulator tests for registry-originated flows
+- Full multi-bot registry E2E: registry + multiple bots, task beginning in
+  Telegram and appearing in Registry UI, product bot discovery and delegation,
+  child bot execution, richer registry progress, downgraded Telegram progress
+- Docs updated: README, ARCHITECTURE, plan, and status all match shipped state
+
+Acceptance criteria:
+- [ ] Degraded behavior is explicit, observable, and tested
+- [ ] Docs match shipped behavior end-to-end
+- [ ] Full same-host Docker multi-bot path is reproducible from guided setup
+- [ ] Simulator implements the shared surface contract
+- [ ] Telegram adapter migrated to `ConversationIO` (M1 completion)
+
+---
+
+#### Phase 20 — Product-Level Acceptance Criteria
+
+The feature is complete when all of the following are true:
+
+1. Registry mode is the default and works from guided setup end-to-end.
+2. Standalone mode remains explicitly available.
+3. Bots can run privately without exposing public APIs.
+4. Telegram and Registry UI act on the same conversation truth.
+5. Delegated work routes through registry and executes through the same
+   local worker-owned runtime.
+6. Registry-originated actions do not bypass workflow/state-machine ownership.
+7. Registry UI provides materially richer progress/state visibility than
+   Telegram.
+8. Operators can stand up registry plus multiple bots from one checkout with
+   understandable scripts and config.
+9. Degraded registry behavior is observable and never fatal to local operation.
+10. Discovery and delegation require user approval; neither is automatic.
+
+---
+
 ### Phase 16 - Registry Trust And Governance
 
 Guidance baseline:
@@ -3367,5 +3675,6 @@ A roadmap phase is only complete when:
 - [ARCHITECTURE.md](ARCHITECTURE.md) matches the resulting runtime authority
   and boundary decisions
 
-Shipped phases remain sealed history. New work should advance Phases 11-19
-rather than reopening Phases 1-10.
+Shipped phases remain sealed history. New work should advance Phase 20
+(active) rather than reopening Phases 1-15. Phases 16-19 remain deferred
+behind Phase 20.

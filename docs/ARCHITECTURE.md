@@ -1,8 +1,9 @@
 # Architecture
 
-This document explains the current system shape: the main components, the
-boundaries between them, the key runtime contracts, and the rules changes must
-preserve. It is architecture, not a changelog. Current implementation status
+This document explains the current system shape: the main subsystems and
+components, the data flows between them, the interfaces and implementations in
+play, and the runtime contracts the code must preserve. It is architecture,
+not a changelog. Current implementation status
 lives in [status.md](status.md). For setup and day-to-day use, start with
 [README.md](../README.md).
 
@@ -44,16 +45,26 @@ Quick orientation:
 
 Terminology used in this document:
 
-- **component** = a concrete part of the system
-- **boundary** = an ownership line between kinds of decisions
+- **subsystem** = a major part of the system with a clear job
+- **component** = a concrete part inside a subsystem
+- **data flow** = how requests, state, or events move between subsystems
 - **interface** = the API shape other code depends on
 - **implementation** = a concrete SQLite, Postgres, Telegram, or provider-specific realization
 - **contract** = the behavior and invariants that must remain true
+- **boundary** = used only when the ownership line between responsibilities is the important point
 - **seam** = used only when emphasizing a deliberate replacement point for testing or backend swapping
+
+The default language in this document is **subsystems, components, data
+flows, interfaces, implementations, and contracts**. Terms like
+**boundary**, **authority**, and **seam** are used only when they are more
+precise than the simpler words above.
 
 ---
 
 ## System context (high-level)
+
+This is the top-level subsystem view: external actors, the bot runtime, the
+registry service, and the main data flows between them.
 
 ```mermaid
 flowchart LR
@@ -62,37 +73,45 @@ flowchart LR
     WHK["Operator webhook endpoint"]
 
     subgraph BOT["Bot process"]
-        TR["Transport"]
-        WQ["Work queue"]
-        SS["Session store"]
-        EC["Execution context"]
-        RF["Request flow"]
-        PR["Providers<br/>Claude / Codex"]
-        RD["Rendering"]
-        AG["Agent runtime<br/>registry sync + poll"]
-        WH["Completion webhook"]
+        MSG["Message intake"]
+        QUEUE["Work queue"]
+        STATE["Session state"]
+        FLOW["Request flow"]
+        EXEC["Execution context"]
+        PROV["Provider integration<br/>Claude / Codex"]
+        OUT["Output rendering"]
+        REGSYNC["Registry sync + routed work"]
+        WEBHOOK["Completion webhook"]
 
-        TR --> WQ
-        WQ --> RF
-        RF --> EC
-        EC --> SS
-        RF --> PR
-        PR --> RD
-        AG --> WQ
-        WH --> WHK
+        MSG --> QUEUE
+        QUEUE --> FLOW
+        FLOW --> EXEC
+        EXEC --> STATE
+        FLOW --> PROV
+        PROV --> OUT
+        REGSYNC --> QUEUE
+        WEBHOOK --> WHK
     end
 
-    TG <--> TR
-    AG <--> REG
-    PR --> CLI["Provider CLI process"]
+    TG <--> MSG
+    REGSYNC <--> REG
+    PROV --> CLI["Provider CLI process"]
 ```
 
-The system has two authorities:
+The system has two top-level subsystems:
 
 - the **bot runtime**, which owns durable admission, workflow state,
   provider execution, response rendering, and bot-local persistence
 - the **registry service**, which owns bot discovery, routed delivery queues,
   shared conversation visibility, and the operator UI
+
+When the distinction matters, each of those subsystems is also the source of
+truth for its own data:
+
+- the bot runtime is the source of truth for execution and bot-local workflow
+  state
+- the registry service is the source of truth for shared directory, routing,
+  and UI-visible coordination state
 
 The registry is a **delivery and visibility plane**, not an execution engine.
 Registry mode adds coordination without changing where code actually runs.
@@ -109,7 +128,7 @@ Registry mode adds coordination without changing where code actually runs.
   - registry service uses `REGISTRY_DATABASE_URL`
 - **Shared Runtime**
   - not shipped
-  - no execution authority is currently shared across bots
+  - no execution subsystem is currently shared across bots
 
 ### Registry mode and degraded mode
 
@@ -136,31 +155,32 @@ Operator surfaces must tell the truth about that state. `/doctor`, startup
 output, logs, and the registry UI must never imply that delegation or shared
 visibility are healthy when the runtime is degraded.
 
-## Main Boundaries
+## Subsystems and Ownership
 
-The runtime is easiest to reason about as eight ownership boundaries. Each one
-owns a kind of decision. Code should not skip across those ownership lines.
+The runtime is easiest to reason about as eight core subsystems. Each one owns
+a kind of decision and exposes a small set of interfaces to the rest of the
+system. Code should not skip across those responsibility lines.
 
 ```mermaid
 flowchart TB
     subgraph ROW1[" "]
         direction LR
-        B1["1. Transport<br/>normalize inbound"]
-        B2["2. Work queue<br/>journal, admit, recover"]
-        B3["3. Session<br/>durable chat state"]
-        B4["4. Execution context<br/>one resolved identity"]
+        B1["1. Transport subsystem<br/>normalize inbound data"]
+        B2["2. Work-queue subsystem<br/>journal, admit, recover"]
+        B3["3. Session subsystem<br/>durable chat state"]
+        B4["4. Execution-context subsystem<br/>resolve one execution identity"]
     end
 
     subgraph ROW2[" "]
         direction LR
-        B5["5. Request flow<br/>business rules"]
-        B6["6. Provider<br/>run, preflight, progress"]
-        B7["7. Capability<br/>skills, credentials, artifacts"]
-        B8["8. Rendering<br/>Telegram-safe output"]
+        B5["5. Request-flow subsystem<br/>business rules"]
+        B6["6. Provider subsystem<br/>run, preflight, progress"]
+        B7["7. Capability subsystem<br/>skills, credentials, artifacts"]
+        B8["8. Rendering subsystem<br/>Telegram-safe output"]
     end
 ```
 
-### 1. Transport boundary
+### 1. Transport subsystem
 
 **Owner**
 
@@ -197,7 +217,7 @@ flowchart TB
 - command and callback entrypoints still have some PTB-direct behavior; that
   limitation is explicit, not hidden
 
-### 2. Work-queue boundary
+### 2. Work-queue subsystem
 
 **Owner**
 
@@ -237,7 +257,7 @@ flowchart TB
   work is cancelled cooperatively through the worker-owned live registry
 - `app/work_queue.py` is the backend-neutral owner across SQLite and Postgres
 
-### 3. Session boundary
+### 3. Session subsystem
 
 **Owner**
 
@@ -267,16 +287,16 @@ flowchart TB
 **Key guarantees**
 
 - orchestration operates on typed session objects, not raw dicts
-- project/settings mutation must flow through the typed session boundary
+- project/settings mutation must flow through the typed session interface
 - changing project or file policy resets provider-local state and clears stale
   pending workflow state
 - trust tier is resolved per request, not stored here as the source of truth
 
-### 4. Execution-context boundary
+### 4. Execution-context subsystem
 
 **Owner**
 
-- one authoritative resolved execution identity per request
+- one resolved execution identity per request
 
 **Main module**
 
@@ -303,7 +323,7 @@ flowchart TB
   `/session` all agree on the same resolved identity
 - effective model selection resolves here, not inside providers
 
-### 5. Request-flow boundary
+### 5. Request-flow subsystem
 
 **Owner**
 
@@ -331,11 +351,11 @@ flowchart TB
 **Key guarantees**
 
 - credential checks use resolved active skills, not raw session state
-- `classify_pending_validation()` is the authoritative freshness classifier
+- `classify_pending_validation()` is the single freshness classifier
 - `PendingRequestMachine` owns transition legality; handlers select events and
   render outcomes, but do not define the workflow rules
 
-### 6. Provider boundary
+### 6. Provider subsystem
 
 **Owner**
 
@@ -369,7 +389,7 @@ flowchart TB
 - reported token/cost fields in `RunResult` are best-effort and may remain zero
   when a CLI does not expose usage metadata
 
-### 7. Capability boundary
+### 7. Capability subsystem
 
 **Owner**
 
@@ -401,7 +421,7 @@ flowchart TB
 - managed objects are immutable and content-addressed
 - credentials are loaded only for the request user at execution time
 
-### 8. Rendering boundary
+### 8. Rendering subsystem
 
 **Owner**
 
@@ -440,18 +460,20 @@ document should elaborate these flows, not restate them from scratch.
 
 ### Normal request
 
+This is the main request data flow through the bot runtime.
+
 ```mermaid
 flowchart LR
     U["Telegram update"]
-    T["Transport normalize"]
-    A["Access / trust tier"]
-    Q["Journal + admit fresh work"]
-    W["Worker claim"]
+    T["Normalize inbound data"]
+    A["Check access<br/>and trust tier"]
+    Q["Journal update<br/>and admit work"]
+    W["Worker claims work item"]
     X["Resolve execution context"]
-    R["Request flow<br/>credential and pending rules"]
-    P["Provider run / preflight"]
-    O["Render + send output"]
-    S["Persist session and queue state"]
+    R["Apply request rules<br/>credentials, pending state"]
+    P["Run provider<br/>or preflight"]
+    O["Render and send output"]
+    S["Persist session<br/>and work-item state"]
 
     U --> T --> A --> Q --> W --> X --> R --> P --> O --> S
 ```
@@ -465,7 +487,7 @@ Execution order in plain language:
 4. otherwise journal the update and atomically admit or reject fresh work
 5. return promptly from the handler; the worker later claims runnable work
 6. load typed session state in the worker-owned path
-7. resolve the authoritative execution context
+7. resolve the execution context
 8. apply business rules using the resolved context
 9. build provider-facing context and invoke the provider
 10. render transport-safe output, persist session and delivery state, save raw
@@ -478,14 +500,14 @@ validate that state against the current execution identity before executing.
 
 ```mermaid
 flowchart TD
-    M["Incoming request<br/>approval_mode = on"]
+    M["Incoming request<br/>approval mode on"]
     C["Resolve execution context"]
     PF["Provider preflight"]
     PA["Persist PendingApproval"]
-    UX["User approves / rejects / retries"]
-    V["classify_pending_validation()<br/>PendingRequestMachine"]
+    UX["User approves<br/>rejects, or retries"]
+    V["Validate pending state<br/>PendingRequestMachine"]
     EX["Execute request"]
-    CL["Clear pending and show user-facing message"]
+    CL["Clear pending state<br/>and show message"]
 
     M --> C --> PF --> PA --> UX --> V
     V --> EX
@@ -505,16 +527,15 @@ Registry mode adds coordination, not remote execution.
 
 ```mermaid
 flowchart LR
-    ORIG["Origin bot"]
+    ORIG["Origin bot runtime"]
     REG["Registry service"]
-    TGT["Target bot"]
+    TGT["Target bot runtime"]
 
-    ORIG -->|"enroll / heartbeat / timeline"| REG
-    ORIG -->|"submit routed task"| REG
-    REG -->|"poll routed_task delivery"| TGT
-    TGT -->|"execute locally through its own worker path"| TGT
-    TGT -->|"publish result + timeline"| REG
-    REG -->|"deliver routed_result"| ORIG
+    ORIG -->|"presence, timeline, task submission"| REG
+    REG -->|"routed-task delivery"| TGT
+    TGT -->|"local execution"| TGT
+    TGT -->|"results and timeline events"| REG
+    REG -->|"routed result delivery"| ORIG
 ```
 
 Delegation flow in practice:
@@ -544,25 +565,27 @@ The system has four durable state families: bot-local transport state,
 bot-local session state, filesystem artifacts, and registry control-plane
 state.
 
+This diagram is the durable-state map for the shipped system.
+
 ```mermaid
 flowchart LR
     subgraph BOT["Bot local runtime"]
-        TS["Transport store<br/>updates, work_items,<br/>user_access, usage_log"]
-        SS["Session store<br/>SessionState and pending state"]
-        FS["Filesystem<br/>uploads, raw history,<br/>managed store, credentials"]
-        RS["registry_state.json<br/>runtime connectivity state"]
+        TS["Transport data<br/>updates, work_items,<br/>user_access, usage_log"]
+        SS["Session data<br/>SessionState and pending state"]
+        FS["Filesystem artifacts<br/>uploads, raw history,<br/>managed store, credentials"]
+        RS["Registry runtime state<br/>registry_state.json"]
     end
 
     subgraph REG["Registry service"]
-        RG["Registry store<br/>agents, deliveries,<br/>conversations, timeline_events,<br/>skills_override"]
+        RG["Registry data<br/>agents, deliveries,<br/>conversations, timeline_events,<br/>skills_override"]
     end
 
     TS --- SS
     SS --- FS
-    BOT -->|"timeline / poll / routed deliveries"| REG
+    BOT -->|"timeline events, polling, routed deliveries"| REG
 ```
 
-### Durable authorities
+### Durable subsystems and stores
 
 **Bot runtime**
 
@@ -605,7 +628,7 @@ Registry backends:
 - selected by `app/registry_service/backend.py`
 - SQLite default via `REGISTRY_DB_PATH`
 - Postgres alternate via `REGISTRY_DATABASE_URL`
-- `app/registry_service/store_base.py` defines the backend-neutral contract
+- `app/registry_service/store_base.py` defines the backend-neutral interface
 
 ### Why this split exists
 
@@ -614,7 +637,7 @@ Registry backends:
 - files and artifacts benefit from filesystem semantics and direct provider
   access
 - registry state is a control-plane concern and must stay separate from
-  bot-local execution authority
+  bot-local execution state
 - the split lets the bot keep executing locally even when registry
   connectivity degrades
 
@@ -637,17 +660,17 @@ Only allowed users may interact. When open mode is enabled, users resolve to
 
 Authorization applies two layers in order:
 
-1. a DB override fetched at the handler / transport boundary
+1. a DB override fetched at the handler / transport layer
 2. the config baseline evaluated by `app/access.py`
 
 ```mermaid
 flowchart TD
     REQ["Inbound request"]
-    FETCH["fetch DB override<br/>via work_queue.get_user_access()"]
-    OVR{"override?"}
+    FETCH["Load DB override<br/>via work_queue.get_user_access()"]
+    OVR{"Override row?"}
     BLK["blocked -> deny"]
     ALW["allowed -> allow"]
-    CFG["access.is_allowed_user()<br/>config baseline"]
+    CFG["Config baseline<br/>access.is_allowed_user()"]
     DENY["deny"]
     OK["allow"]
 
@@ -741,7 +764,7 @@ If you rework the runtime, preserve this order:
 4. atomically admit or reject fresh provider-starting work
 5. claim runnable work from the worker-owned execution lane
 6. load typed session state
-7. resolve trust tier and authoritative execution context
+7. resolve trust tier and execution context
 8. apply business rules using the resolved context
 9. build provider-facing context from the resolved context
 10. invoke provider and map raw events to shared progress events
@@ -797,7 +820,7 @@ the primary reading path.
 
 **ResolvedExecutionContext**
 
-- single authoritative execution identity
+- single resolved execution identity
 - source of context hash, provider-facing working dir, effective model, file
   policy, allowed roots, and public/trusted execution-scope restrictions
 
@@ -848,6 +871,8 @@ The remaining gap is explicit:
 `TransportRecoveryMachine` owns transition legality. Repository/store code owns
 SQL, compare-and-update, races, and repository-only outcomes such as
 `already_handled`.
+
+This is the work-item lifecycle inside the transport store.
 
 ```mermaid
 stateDiagram-v2
@@ -959,7 +984,7 @@ debugging and tests.
   Docker volume mounted at `/home/bot`, and startup plus `/doctor` validate
   runtime/auth health before treating the bot as ready.
 - **Host-run bot:** still supported as a secondary fallback/debug path with the
-  same Local Runtime contract above the storage boundary.
+  same Local Runtime contract above the storage interfaces.
 - **Later environments:** staging and production may still choose Local Runtime
   while Shared Runtime remains future work.
 

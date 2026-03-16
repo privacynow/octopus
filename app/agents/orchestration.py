@@ -7,7 +7,32 @@ from dataclasses import replace
 from app.agents.types import RoutedTaskResult
 from app.session_state import DelegatedTask, PendingDelegation
 
-_ACTIVE_DELEGATION_STATES = {"", "pending", "queued", "leased", "running", "submitted"}
+_ACTIVE_DELEGATION_STATES = {"", "pending", "proposed", "queued", "leased", "running", "submitted"}
+
+
+def build_delegation_plan(
+    conversation_ref: str,
+    title: str,
+    resume_instruction: str,
+    tasks: list[dict[str, str]],
+) -> PendingDelegation:
+    """Build a PendingDelegation from provider-supplied child-task descriptors."""
+    delegated_tasks = [
+        DelegatedTask(
+            routed_task_id=str(task["routed_task_id"]),
+            title=str(task["title"]),
+            target_agent_id=str(task["target_agent_id"]),
+            instructions=str(task["instructions"]),
+            status="proposed",
+        )
+        for task in tasks
+    ]
+    return PendingDelegation(
+        conversation_ref=conversation_ref,
+        title=title,
+        resume_instruction=resume_instruction,
+        tasks=delegated_tasks,
+    )
 
 
 def apply_routed_result(

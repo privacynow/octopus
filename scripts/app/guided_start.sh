@@ -47,7 +47,7 @@ create_env_file_if_missing() {
   [ "$default_name" = "default" ] && default_name="product"
 
   local display_name token setup_mode provider mode default_registry_url registry_url registry_token
-  local role tags description skills allowed_users working_dir timeout
+  local role tags description skills allowed_users working_dir timeout completion_webhook_url
   display_name="$(prompt_with_default "Bot name" "$default_name")"
   while true; do
     token="$(prompt_with_default "Telegram bot token" "")"
@@ -119,6 +119,7 @@ create_env_file_if_missing() {
     allowed_users="$(prompt_with_default "Allowed users (blank = open)" "")"
     working_dir="$(prompt_with_default "Working dir" "/home/bot")"
     timeout="$(prompt_with_default "Timeout seconds" "3600")"
+    completion_webhook_url="$(prompt_with_default "Completion webhook URL (optional, press Enter to skip)" "")"
   else
     _USED_QUICK_SETUP=1
     role=""
@@ -128,6 +129,7 @@ create_env_file_if_missing() {
     allowed_users=""
     working_dir="/home/bot"
     timeout="3600"
+    completion_webhook_url=""
   fi
 
   {
@@ -163,6 +165,9 @@ create_env_file_if_missing() {
       echo "BOT_AGENT_SKILLS=$skills"
     fi
     echo "BOT_AGENT_POLL_INTERVAL_SECONDS=5"
+    if [ -n "$completion_webhook_url" ]; then
+      echo "BOT_COMPLETION_WEBHOOK_URL=$(escape_env "$completion_webhook_url")"
+    fi
     if [ "$mode" = "registry" ]; then
       echo "# Registry URL: use host.docker.internal on macOS/Windows, 172.17.0.1 on Linux."
       echo "BOT_AGENT_REGISTRY_URL=$registry_url"

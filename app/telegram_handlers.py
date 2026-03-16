@@ -452,6 +452,28 @@ async def _progress_timeline_callback(conversation_ref: str, routed_task_id: str
     )
 
 
+def _maybe_fire_webhook(cfg: BotConfig, chat_id: int, conversation_ref: str, outcome: RequestExecutionOutcome | None) -> None:
+    """Schedule a non-blocking completion webhook for terminal outcomes."""
+    if not cfg.completion_webhook_url:
+        return
+    if outcome is None or outcome.status == "delegation_proposed":
+        return
+    from app.webhook import fire_completion_webhook
+
+    summary = (outcome.reply_text or outcome.error_text or "")[:200]
+    completed_at = datetime.now(timezone.utc).isoformat()
+    asyncio.create_task(
+        fire_completion_webhook(
+            cfg.completion_webhook_url,
+            chat_id=chat_id,
+            conversation_ref=conversation_ref,
+            status=outcome.status,
+            summary=summary,
+            completed_at=completed_at,
+        )
+    )
+
+
 # -- Auth ------------------------------------------------------------------
 
 def is_allowed(user) -> bool:
@@ -3620,6 +3642,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
                         routed_task_id,
                         exc_info=True,
                     )
+        _maybe_fire_webhook(_cfg(), chat_id, conversation_ref, outcome)
         return
 
     if isinstance(event, (InboundCommand, InboundCallback)):

@@ -1,9 +1,74 @@
-# Foundation-First Execution Plan
+# Runtime Skills / Content System Plan
 
 ## Goal
 
-Build the right seams first, then move runtime skills and provider guidance into
-durable storage without baking in today's mistakes.
+Finish the runtime-skill and provider-guidance refactor with the correct long-
+term architecture:
+
+- one durable content model
+- one application/use-case layer
+- no old-path compatibility shims
+- no surface-owned business logic
+- no confusion between runtime skills and registry routing capabilities
+
+This plan is grounded in the code as it exists after:
+
+- capability split
+- shared lifecycle service extraction
+- registry runtime-skill API/UI addition
+- content-store foundation
+- hard cutover of runtime skills to the content store
+- confidence-suite rewrite
+
+## Current Position
+
+### Already complete
+
+These are no longer future work:
+
+1. Runtime skills and registry routing capabilities are separated.
+2. Shared service seams exist for:
+   - `SkillCatalogService`
+   - `SkillActivationService`
+   - `SkillLifecycleService`
+   - `SkillImportService`
+   - `ProviderGuidanceService`
+   - `CapabilityService`
+3. Registry exposes runtime-skill APIs under a separate namespace:
+   - `/v1/catalog/skills/...`
+   - `/v1/conversations/{conversation_key}/skills/...`
+   - `/v1/provider-guidance/...`
+4. Registry UI has an initial runtime-skill surface.
+5. Content-store foundation exists with SQLite/Postgres parity.
+6. Runtime skill reads are cut over to the content store.
+7. Confidence suites were rewritten around the content-store model.
+
+### Regressions/shortcuts already found during execution
+
+These findings must shape all future work:
+
+1. Registry artifact digest verification was lost during the cutover.
+   - Fixed.
+   - Lesson: migration of storage/location must preserve contract checks.
+
+2. SQLite content-store access was not thread-safe under `asyncio.to_thread`.
+   - Fixed.
+   - Lesson: runtime call patterns matter as much as interface shape.
+
+3. Old file-backed logic survived in hidden helpers after the hard cutover.
+   - normalization
+   - execution-context hashing
+   - health/setup behavior
+   - fixed
+   - Lesson: “main path is migrated” is not enough; helper audits are required.
+
+4. Some tests were still proving deleted architecture.
+   - Fixed by rewriting suites instead of adding compatibility.
+   - Lesson: a green suite can still be wrong.
+
+5. Docker/Postgres harness storage pressure can cause false red.
+   - Not product code, but a real verification risk.
+   - Lesson: test infrastructure must preserve signal.
 
 ## Non-Negotiable Principles
 
@@ -11,135 +76,112 @@ durable storage without baking in today's mistakes.
 - No parallel paths for the same concern.
 - No backward-compatibility shims that keep old runtime paths alive.
 - Interfaces before implementations.
+- Extend before inventing.
+- The shared use-case boundary must be modular and concern-owned, not a god-service.
 - Registry is the only public HTTP API.
+- Registry UI, Telegram UI, and future surfaces must share the same application/use-case layer.
+- Bot runtime uses shared services in-process, not registry HTTP, for runtime reads and mutations.
+- Registry UI uses registry HTTP APIs for all mutations.
 - Telegram remains a first-class UI surface.
 - Capability parity across Telegram and registry.
-- Dedicated content schema.
-- Bot runtime uses shared services in-process, not HTTP calls to registry, for
-  runtime reads.
-- SQLite/Postgres parity in the same slice.
+- Content store is the durable source of truth.
+- SQLite/Postgres parity is required in the same slice.
+- Use battle-tested libraries for generic infrastructure.
 
-## Core Problems To Fix First
+## Clean Conceptual Model
 
-1. "Skills" means two different things today.
-   - Runtime skills: prompt/config/helper script skills for end users.
-   - Routing skills: agent discovery/routing traits in the registry.
-   - These must be separated.
+There are four distinct layers. These must not be collapsed again.
 
-2. Inbound abstraction is missing.
-   - Outbound surface abstraction exists.
-   - Inbound lifecycle logic is still mostly Telegram-specific.
-   - Registry UI is not yet another implementation of the same inbound seam.
+### 1. Domain services
 
-3. Content ownership is wrong.
-   - Repo files
-   - filesystem stores
-   - session state
-   - in-memory prompt composition
-   - all mixed together
+Pure business logic and durable-state rules.
 
-4. Config semantics are wrong.
-   - `BOT_AGENT_SKILLS` falling back to `BOT_SKILLS` is a conceptual bug.
-   - Config validation should not import repo/runtime catalog loading.
+Examples:
 
-## Current Architectural Reality
+- `SkillCatalogService`
+- `SkillActivationService`
+- `SkillLifecycleService`
+- `SkillImportService`
+- `ProviderGuidanceService`
+- `CapabilityService`
 
-### Runtime skills
+### 2. Application / use-case boundary
 
-Current runtime skills come from:
+This is the canonical **inbound interaction abstraction**.
 
-- repo `skills/catalog`
-- filesystem managed store
-- filesystem custom store
-- session `active_skills`
-- runtime prompt composition in `app/skills.py`
+It is not one central class or mega-service. It is a set of small,
+concern-owned use-case modules with typed contracts.
 
-### Registry "skills"
+Examples:
 
-The registry already uses "skills" for a different concept:
+- `skills_catalog_use_cases`
+- `skills_activation_use_cases`
+- `skills_authoring_use_cases`
+- `skills_approval_use_cases`
+- `provider_guidance_use_cases`
+- `conversation_control_use_cases`
 
-- agent-advertised routing/discovery capabilities
-- stored in `skills_json`
-- used by:
-  - `list_capabilities()`
-  - `skills_override`
-  - `search_agents()`
-  - routed-task eligibility
+Those modules own typed operations such as:
 
-Files involved:
+- list skills
+- get skill detail
+- create draft
+- edit draft
+- submit approval
+- approve/reject
+- publish/archive
+- install/update/uninstall
+- activate/deactivate/clear
+- preview provider guidance
+- edit provider guidance
 
-- `app/agents/runtime.py`
-- `app/config.py`
-- `app/registry_service/store.py`
-- `app/registry_service/store_postgres.py`
+This boundary is the actual abstraction that all inbound surfaces must share.
+Adding a new surface should require:
 
-These must be separated from runtime skills.
+- a new surface adapter
+- surface-specific rendering/input translation
 
-### Surface abstraction
+and should **not** require redesigning the concern-owned use-case modules unless
+the product capability itself changes.
 
-Current abstraction is only partial:
+### 3. Surface adapters
 
-- outbound surface abstraction exists in:
-  - `app/transports/ports.py`
-  - `app/transports/factory.py`
-- inbound lifecycle interaction is still mostly Telegram-specific:
-  - `app/telegram_handlers.py`
-  - `app/skill_commands.py`
+These translate surface-native input into canonical use-case calls.
 
-Registry UI is not yet another implementation of the same inbound lifecycle seam.
+They are **not** the use-case layer.
 
-## Hard Cutover Rule
+- Telegram UI adapter
+- Registry API adapter
+- future Slack adapter
 
-This repo is still under development and has not been deployed to production.
-That means the migration strategy is a hard cutover, not a compatibility
-bridge.
+Registry UI is not a sibling adapter here; it is a client of the registry API.
 
-- Built-in skills are seeded into the content store at startup.
-- Provider guidance is seeded into the content store at startup.
-- Repo skill files are seed inputs only, never live runtime inputs.
-- If content seeding fails, startup fails.
-- Runtime reads must go through the content store only.
-- There is no `if content store empty, fall back to files` behavior.
-- Old filesystem-backed skill/store paths must be removed from active runtime
-  services, not retained behind compatibility flags.
+### 4. Outbound transport adapters
 
-## Locked Decisions
+These render/send replies and surface events:
 
-1. Do the hard things first.
-   - Do not defer the missing inbound abstraction.
-   - Do not defer the runtime-skill vs routing-capability split.
+- Telegram adapter
+- Registry adapter
+- future Slack adapter
 
-2. Registry remains the only public HTTP/programmatic API surface in phase 1.
-   - No second public bot-local API.
+This is a separate concern from inbound interaction.
 
-3. Telegram remains a first-class UI surface.
-   - `/skills` stays.
-   - Telegram and registry must be implementations of the same lifecycle
-     abstraction.
+## Critical Clarification: API vs UI vs Adapter
 
-4. Parity means capability parity, not identical widget parity.
-   - Same operations
-   - same invariants
-   - same service layer
-   - surface-appropriate UX
+The correct model is:
 
-5. Activation remains in `SessionState.active_skills` for this refactor.
-   - No normalized activation table in this slice.
+- **Registry API** is an adapter over the shared application/use-case layer.
+- **Telegram UI** is another adapter over the same application/use-case layer.
+- **Registry UI** is a client of the registry API.
+- **Outbound transport adapters** are separate and do not solve inbound interaction.
 
-6. Runtime skills and routing capabilities are distinct product concepts.
-   - They must have distinct names, schemas, and APIs.
+This means:
 
-7. Built-in and imported runtime skills are immutable.
-   - Custom skills support draft + publish.
-   - Published revisions are immutable.
-   - One active revision pointer is the current version.
+- Telegram should **not** call registry HTTP for normal runtime mutations.
+- Standalone bots remain viable because Telegram can call the shared use-case layer directly.
+- Registry remains the only public programmatic HTTP surface.
 
-8. Backed-up developer tooling content stays out of the repo and out of runtime.
-   - `docs/codex-skills/*`
-   - backed-up `CLAUDE.md`
-   - backed-up `AGENTS.md`
-
-## Naming And Domain Separation
+## Clean Domain Names
 
 ### A. Runtime Skills
 
@@ -150,7 +192,7 @@ End-user bot skills:
 - github-integration
 - etc.
 
-Used for:
+These affect:
 
 - prompt composition
 - provider config
@@ -160,611 +202,460 @@ Used for:
 
 ### B. Provider Runtime Guidance
 
-Bot runtime provider instructions:
+Runtime provider instructions for the bot:
 
 - Claude guidance
 - Codex guidance
 
-Used for:
-
-- provider execution behavior
-
 ### C. Routing Capabilities
 
-Agent-advertised routing/discovery traits in the registry.
+Registry discovery/routing traits for agents.
 
-Used for:
-
-- discovery
-- capability-based routing
-- registry agent filtering
-- operator visibility
+These are not runtime skills and must never be merged back together.
 
 Use these names consistently:
 
 - `skills` = runtime skills
 - `capabilities` = routing/discovery traits
 
-## Target Architecture
+## Architecture Rules
 
-There should be four layers:
+### 1. Outbound transport abstraction is not inbound interaction abstraction
 
-### 1. Domain services
+[app/transports/ports.py](/Users/tinker/output/bots/telegram-agent-bot/app/transports/ports.py)
+and
+[app/transports/telegram_adapter.py](/Users/tinker/output/bots/telegram-agent-bot/app/transports/telegram_adapter.py)
+solve outbound delivery and rendering.
 
-Single source of lifecycle/business truth.
+They do **not** solve inbound lifecycle abstraction.
 
-Examples:
+Do not mistake:
 
-- `SkillCatalogService`
-- `SkillActivationService`
-- `ProviderGuidanceService`
-- `SkillApprovalService`
-- `SkillImportService`
-- `CapabilityService`
+- “we have a transport adapter”
 
-### 2. Persistence ports
+for:
 
-Explicit storage abstractions.
+- “we have clean inbound surface architecture”
 
-Examples:
+### 2. Registry UI, Telegram UI, and registry API must meet at the use-case layer
 
-- `ContentStore`
-- `CapabilityStore`
-- existing session store remains for activation state
+The application/use-case layer is the canonical inbound abstraction.
 
-### 3. Surface interaction ports
+Rules:
 
-Shared inbound lifecycle abstraction.
+- registry API adapts HTTP into typed use-cases
+- Telegram adapts commands/callbacks/messages into typed use-cases
+- registry UI performs all mutations through registry APIs
+- no business workflow logic lives in handlers, routes, or browser JS
+- do not collapse all inbound behavior into one monolithic orchestrator
 
-Examples:
+### 3. Registry is the only public API, not the only UI
 
-- `LifecycleSurface`
-- `SkillLifecycleSurface`
-- or a command/action dispatcher over typed operations
+Registry owns the public HTTP/programmatic API.
+Telegram remains a first-class user UI surface.
+Standalone bots continue to work because Telegram talks to the use-case layer directly.
 
-### 4. Surface implementations
+### 4. No old-path resurrection
 
-- Telegram
-- Registry UI + registry HTTP handlers
-- future Slack
+Do not add:
 
-No surface should own separate business logic.
+- file fallback if content store is empty
+- direct repo catalog reads in runtime logic
+- filesystem custom/managed fallback reads
+- dual-read logic
+- migration shims that become permanent
 
-## Important Architecture Choice
+### 5. Extend before inventing
 
-Use a dedicated content schema, but do not force the bot to call registry over
-HTTP for runtime content access.
+Before adding a new module or abstraction:
 
-Correct model:
+- find the existing seam that already owns the concern
+- extend it if possible
+- if no seam exists, define the interface/protocol first
 
-- Registry hosts the only public HTTP API.
-- Bot runtime and registry both use the same content services/store.
-- Bot calls services in-process.
-- Registry calls the same services through HTTP/UI handlers.
+Do not add a concrete-only shortcut that bypasses an existing boundary.
 
-This gives:
+### 6. Interfaces before implementations
 
-- encapsulation
-- one service layer
-- one content schema
-- no duplicated logic
-- no runtime network dependency for prompt resolution
-- standalone still works
+Every new pluggable component must have a Protocol or ABC first.
 
-## Phase 0: Fix The Missing Abstractions
+Orchestration/use-case code imports:
 
-### 0.1 Separate runtime skills from routing capabilities
+- the protocol
+- not the concrete implementation
 
-Required changes:
+### 7. No hand-rolled infrastructure
 
-- stop `BOT_AGENT_SKILLS` from falling back to `BOT_SKILLS` in `app/config.py`
-- rename/clarify registry-facing "skills" to "capabilities" in the service layer
-  and UI
-- keep backward compatibility at the edge only if necessary, but the internal
-  model must be clean
+Use battle-tested libraries for generic concerns:
 
-End state:
+- `psycopg` / `psycopg_pool`
+- `pydantic`
+- `python-statemachine`
+- `starlette` sessions
+- CodeMirror 6 for web editing
 
-- runtime skills live in the content domain
-- routing capabilities live in the registry capability domain
-- no shared schema or config fallback pretending they are the same thing
+Do not invent bespoke frameworks for these concerns.
 
-### 0.2 Create a real inbound lifecycle abstraction
+## Repeated Failure Patterns To Guard Against
 
-Current problem:
+These come directly from the backed-up project guidance and from the recent cutover.
 
-- Telegram owns command parsing and lifecycle orchestration
-- Registry UI is a separate path
-- There is no shared inbound seam for lifecycle operations
+1. Parallel path drift.
+   - command vs callback
+   - Telegram vs registry
+   - approval vs retry
+   - normal vs recovery
 
-Required abstraction:
+2. Raw state instead of resolved state.
+   - `session.active_skills` instead of resolved skills
+   - raw config/session in user-visible or safety-sensitive paths
 
-Add a surface-neutral lifecycle layer for operations such as:
+3. Test doubles not matching production shape.
 
-- list skills
-- read skill
-- search skills
+4. Testing implementation instead of contracts.
+
+5. Component isolation hiding interaction bugs.
+
+6. Subprocess and resource leaks.
+
+7. Decorator/wrapper swallowing behavior.
+
+8. Leaking internals to users.
+
+9. State-transition accounting failures.
+
+10. Completion-owner drift.
+
+11. Hidden stale helper reads after major cutovers.
+
+12. Surface-specific logic leaking into orchestration/use-case layers.
+
+13. Half-migrated contract changes.
+
+14. False “queueing” that is really rejection.
+
+15. Recovery path re-entering itself and creating loops.
+
+## Current Risks Still Open
+
+### 1. `app/telegram_handlers.py` is still too much of the system
+
+This is the biggest remaining architecture problem.
+
+It currently mixes:
+
+- Telegram command parsing
+- callback routing
+- request orchestration
+- lifecycle/UI branching
+- worker action dispatch
+- app wiring
+- surface decisions
+- domain decisions
+
+That means it is **not** a clean transport implementation.
+It is a Telegram-shaped orchestration monolith.
+
+This must be refactored until it is structurally correct, not merely smaller.
+
+### 2. Registry API and UI are better, but still too concentrated
+
+[app/registry_service/app.py](/Users/tinker/output/bots/telegram-agent-bot/app/registry_service/app.py)
+currently mixes:
+
+- HTTP routes
+- HTML shell
+- browser JS
+- runtime-surface bridging
+- some lifecycle shaping
+
+This is directionally better than Telegram, but still too monolithic.
+
+### 3. Seed assets still leak through old repo layout
+
+[app/content_seed.py](/Users/tinker/output/bots/telegram-agent-bot/app/content_seed.py)
+still reads via top-level repo skill paths through
+[app/skills.py](/Users/tinker/output/bots/telegram-agent-bot/app/skills.py)
+`CATALOG_DIR`.
+
+This is acceptable only as a temporary seed-input mechanism.
+
+### 4. Dead file-store code still exists
+
+[app/store.py](/Users/tinker/output/bots/telegram-agent-bot/app/store.py) still
+contains historical bundled-store/file-store logic that no longer owns runtime
+truth.
+
+That code should be deleted, not bypassed forever.
+
+### 5. Lifecycle completion is still partial
+
+The current system supports content-store-backed read/install/update/uninstall/diff,
+but not the full intended lifecycle:
+
 - create draft
 - edit draft
+- revisions/history
 - submit approval
 - approve/reject
 - publish/archive
-- install/import/update/uninstall
-- activate/deactivate/clear
-- manage provider guidance
+- provider-guidance editing lifecycle
 
-The important rule:
+### 6. Surface parity is not yet real
 
-- Telegram and registry must call the same underlying typed operations
+Telegram remains first-class in principle, but not yet in actual lifecycle capability.
 
-End state:
+Registry currently has richer support than Telegram for the new lifecycle.
+That is only acceptable as an in-progress state.
 
-- Telegram `/skills ...` handlers become an adapter
-- Registry HTTP/UI handlers become another adapter
-- future Slack becomes another adapter
+## Stage Plan
 
-### 0.3 Pull lifecycle logic out of storage helpers
+### Stage 1. Define and land the real use-case layer
 
-Current problem:
+#### Goal
 
-- `app/store.py` mixes storage with product semantics
-- `app/skills.py` mixes loading, resolution, prompt composition, and authoring
-  helpers
+Make the shared inbound interaction abstraction explicit, modular, and
+concern-owned.
 
-Required change:
+#### Required work
 
-Move business rules into services:
+- define the canonical typed use-cases/commands for runtime-skill and provider-guidance lifecycle
+- make it clear which operations belong there
+- ensure both Telegram and registry API are adapters to this layer
+- split the use-case boundary by concern instead of centralizing all behavior
+  in one orchestrator
 
-- install/update rules
-- diff logic
-- prompt-size checks
-- approval logic
-- precedence resolution
-- import verification decisions
+#### Watchouts
 
-Storage modules should persist/query only.
+- do not confuse service methods with full use-cases if the workflow spans multiple services
+- do not let HTTP or PTB types leak into use-case inputs
+- do not let browser JS become a second workflow engine
+- do not build a single mega-service that every inbound action must pass through
 
-## Phase 1: Define The Correct Service Layer
+#### Success criteria
 
-### 1.1 Runtime skill services
+- one explicit inbound interaction abstraction exists
+- Telegram and registry API both map into it
+- the abstraction is composed of small concern-owned use-case modules, not one monolith
 
-Create:
+### Stage 2. Refactor Telegram into a true surface adapter
 
-- `SkillCatalogService`
-- `SkillActivationService`
-- `SkillApprovalService`
-- `SkillImportService`
+#### Goal
 
-Responsibilities:
+Turn [app/telegram_handlers.py](/Users/tinker/output/bots/telegram-agent-bot/app/telegram_handlers.py)
+into a proper Telegram adapter over shared use-cases.
 
-- resolution
-- lifecycle operations
-- publish semantics
-- diff generation
-- prompt-size impact analysis
-- import/update handling
-- activation validation against session state
+#### Required work
 
-### 1.2 Provider guidance service
+- pull workflow/business logic out of Telegram handlers
+- leave:
+  - PTB edge parsing
+  - Telegram-specific rendering
+  - adapter glue
+- move shared lifecycle branching into the use-case layer
 
-Create:
+#### Watchouts
 
-- `ProviderGuidanceService`
+- do not move PTB types into domain code
+- do not keep “just one more special case” in `telegram_handlers.py`
+- audit command, callback, approval, retry, admin, CLI-equivalent, and recovery parity
 
-Responsibilities:
+#### Success criteria
 
-- effective guidance resolution
-- revision lifecycle
-- preview
-- publish semantics
+- `telegram_handlers.py` is no longer the place where domain workflows live
 
-### 1.3 Capability service
+### Stage 3. Refactor registry API/UI into the same shape
 
-Create:
+#### Goal
 
-- `CapabilityService`
+Make the registry API a clean adapter over the use-case layer, and the registry UI a client of those APIs.
 
-Responsibilities:
+#### Required work
 
-- registry capability declarations
-- capability overrides
-- capability search/filter semantics
+- thin API routes
+- move HTML/JS concerns out of overly concentrated route modules where reasonable
+- ensure browser UI performs mutations only through the registry APIs
 
-This remains separate from runtime skills.
+#### Watchouts
 
-## Phase 2: Define The Persistence Interfaces
+- do not add server-side UI-only shortcuts that bypass the API
+- do not put business rules in browser JS
+- keep API validation and lifecycle semantics authoritative on the server
 
-Create explicit ports first.
+#### Success criteria
 
-Suggested modules:
+- registry API is a thin adapter
+- registry UI is an API client, not a bypass
 
-- `app/content_models.py`
-- `app/content_store_base.py`
-- `app/content_store_sqlite.py`
-- `app/content_store_postgres.py`
-- `app/content_store.py`
+### Stage 4. Complete runtime-skill and provider-guidance lifecycle
 
-Separate capability persistence if needed:
+#### Goal
 
-- `app/capability_store_base.py`
-- or keep using registry store with renamed internal semantics
+Support the full content lifecycle.
 
-### Content domains in the content store
-
-- runtime skills
-- provider runtime guidance
-
-### Content store rules
-
-- SQLite/Postgres parity in the same slice
-- no repo-file runtime lookups in the store
-- no Telegram/registry surface logic in the store
+#### Required work
 
-## Phase 3: Data Model
-
-### 3.1 Runtime skills
-
-#### `skill_namespaces`
-
-- `skill_id`
-- `slug`
-- `display_name`
-- `description`
-- `archived_at`
-- `created_at`
-- `updated_at`
-
-#### `skill_tracks`
-
-- `track_id`
-- `skill_id`
-- `source_kind` (`builtin`, `imported`, `custom`)
-- `source_uri`
-- `publisher`
-- `version_label`
-- `pinned`
-- `is_mutable`
-- `visibility` (`private`, `pending_approval`, `shared`)
-- `owner_actor`
-- `approved_by`
-- `approved_at`
-- `active_revision_id`
-- `created_at`
-- `updated_at`
-
-#### `skill_revisions`
-
-- `revision_id`
-- `track_id`
-- `digest`
-- `instruction_body`
-- `requirements_json`
-- `provider_config_json`
-- `changelog`
-- `created_by`
-- `created_at`
-
-#### `skill_files`
-
-- `file_id`
-- `revision_id`
-- `relative_path`
-- `content_text`
-- `content_type`
-- `executable`
-- `digest`
-
-### 3.2 Provider runtime guidance
-
-#### `provider_guidance_tracks`
-
-- `guidance_id`
-- `provider` (`claude`, `codex`)
-- `scope_kind` (`system`, `instance`)
-- `scope_key`
-- `is_mutable`
-- `active_revision_id`
-- `created_at`
-- `updated_at`
-
-#### `provider_guidance_revisions`
-
-- `revision_id`
-- `guidance_id`
-- `digest`
-- `content`
-- `format`
-- `created_by`
-- `created_at`
-
-## Phase 4: Keep Activation In Session State
-
-This is explicit and non-negotiable for this slice.
-
-- `SessionState.active_skills` remains the only activation source of truth
-- `SkillActivationService` mutates session state through existing session storage
-- no normalized activation table
-
-## Phase 5: Seed And Migration Model
-
-### 5.1 Repo seed assets
-
-Move product seed assets into internal app-owned seed locations:
-
-- `app/content_seed_assets/skills/...`
-- `app/content_seed_assets/provider_guidance/...`
-
-These are seed assets only.
-
-### 5.2 Existing filesystem migration
-
-Import existing:
-
-- custom skills from `~/.config/octopus-agent/skills/custom`
-- managed refs/objects from `~/.config/octopus-agent/skills/managed`
-
-Preserve where possible:
-
-- provenance
-- installed timestamps
-- version labels
-- publisher
-- pin state
-
-### 5.3 Built-in updates
-
-Built-in seeded updates advance automatically.
-
-## Phase 6: Surface Parity Plan
-
-Telegram and registry must share capability parity.
-
-This does not require identical UX mechanics, but it does require the same
-operations and rules.
-
-### 6.1 Required lifecycle capability set
-
-Both Telegram and registry must support:
-
-- list skills
-- info
-- search
-- activate
-- deactivate
-- clear
 - create draft
 - edit draft
+- revisions/history
 - submit approval
 - approve/reject
-- publish
-- archive
-- import/install
-- uninstall
-- update
-- diff/history
-- provider guidance view/edit/publish/preview
+- publish/archive
+- provider-guidance lifecycle with the same rigor
 
-### 6.2 UX interpretation
+#### Watchouts
 
-#### Registry UI
+- do not put approval logic in surface code
+- keep built-in/imported immutable
+- custom shared visibility remains approval-gated
+- use resolved state, not raw session/config state
 
-Best for:
+#### Success criteria
 
-- richer forms
-- side-by-side diff
-- revision history
-- approval dashboard
-- provider guidance editing
-- file/script editing
+- services/use-cases fully own lifecycle behavior
 
-#### Telegram
+### Stage 5. Add rich registry editing
 
-Must still support the same lifecycle, but through:
+#### Goal
 
-- guided multi-step chat flows
-- buttons/callbacks
-- previews
-- compact diff/history presentation
-- attachment/upload or chunked edit flows where needed
+Give registry UI rich editing without creating another logic path.
 
-## Phase 7: Programmatic API Rule
+#### Required work
 
-Registry remains the only HTTP API surface in phase 1.
+- CodeMirror 6 integration
+- skill draft editing
+- provider-guidance editing
+- diff/history UI
+- approval UI
 
-That means:
+#### Watchouts
 
-- registry service exposes lifecycle APIs
-- Telegram uses service calls directly, not HTTP
-- no second public bot-local API is introduced
+- UI richness must not become UI-owned business logic
+- keep the same mutation semantics as Telegram/API
 
-### Important implementation note
+#### Success criteria
 
-Registry and bot runtime do not automatically share storage today.
+- registry UI is richer in presentation, not richer in capability
 
-So this plan requires an explicit shared content-backend configuration model.
+### Stage 6. Bring Telegram to capability parity
 
-### Recommended approach
+#### Goal
 
-- the content store has its own backend selector
-- both bot runtime and registry service point to the same content backend
-- SQLite same-host deployments can share the same DB files
-- Postgres deployments share the same schema/database
+Telegram supports the same lifecycle operations as registry/API through chat-native UX.
 
-Do not accidentally store runtime skills inside the registry metadata DB without
-explicitly designing that.
+#### Required work
 
-## Phase 8: API Surface
+- guided draft editing
+- revision/history flow
+- approval/publish/archive flow
+- provider-guidance flow if in scope
+- attachment/import support alongside guided editing
 
-Use separate API namespaces so runtime skills do not collide with registry
-capabilities.
+#### Watchouts
 
-### Runtime skill catalog API
+- do not accept “registry can do it, Telegram can’t” as architecture
+- parity means operations and outcomes, not identical controls
+- do not reintroduce file-based authoring because chat UX is harder
 
-Recommended namespace:
+#### Success criteria
 
-- `/v1/catalog/skills`
+- Telegram and registry expose the same lifecycle capability set
 
-Endpoints:
+### Stage 7. Remove remaining old seed/store residue
 
-- `GET /v1/catalog/skills`
-- `GET /v1/catalog/skills/{slug}`
-- `GET /v1/catalog/skills/{slug}/tracks`
-- `GET /v1/catalog/skills/{slug}/revisions`
-- `GET /v1/catalog/skills/{slug}/files`
-- `POST /v1/catalog/skills`
-- `PATCH /v1/catalog/skills/{slug}`
-- `POST /v1/catalog/skills/{slug}/revisions`
-- `POST /v1/catalog/skills/{slug}/publish`
-- `POST /v1/catalog/skills/{slug}/submit-approval`
-- `POST /v1/catalog/skills/{slug}/approve`
-- `POST /v1/catalog/skills/{slug}/archive`
-- `POST /v1/catalog/skills/{slug}/install`
-- `POST /v1/catalog/skills/{slug}/uninstall`
-- `POST /v1/catalog/skills/{slug}/update`
-- `GET /v1/catalog/skills/{slug}/diff`
-- `GET /v1/catalog/skills/search`
-- `POST /v1/catalog/skills/import`
-- `POST /v1/catalog/skills/{slug}/validate`
-- `POST /v1/catalog/skills/{slug}/preview`
+#### Goal
 
-### Activation API
+Delete dead architecture and move seed assets into the final app-owned location.
 
-- `GET /v1/conversations/{conversation_key}/skills`
-- `POST /v1/conversations/{conversation_key}/skills/{slug}/activate`
-- `POST /v1/conversations/{conversation_key}/skills/{slug}/deactivate`
-- `POST /v1/conversations/{conversation_key}/skills/clear`
+#### Required work
 
-### Provider guidance API
+- move seed assets under `app/`
+- stop seeding through top-level repo catalog paths
+- delete dead file-store/bundled-store code in
+  [app/store.py](/Users/tinker/output/bots/telegram-agent-bot/app/store.py)
+- remove stale helpers and docs that still imply the old model
 
-- `GET /v1/provider-guidance`
-- `GET /v1/provider-guidance/{provider}`
-- `GET /v1/provider-guidance/{provider}/revisions`
-- `POST /v1/provider-guidance/{provider}/revisions`
-- `POST /v1/provider-guidance/{provider}/publish`
-- `GET /v1/provider-guidance/{provider}/effective`
-- `POST /v1/provider-guidance/{provider}/preview`
+#### Watchouts
 
-### Capability API
+- do not leave dead code “for now”
+- do not leave old terminology that implies filesystem runtime truth
+- do not leave tests touching deleted concepts
 
-Keep separate. Do not merge with runtime skills.
+#### Success criteria
 
-Current registry capability endpoints/store semantics should evolve under a
-capability name, not a runtime-skill name.
+- no live or seed-time dependency on top-level runtime skill directories
+- no dead file-store lifecycle code in normal runtime modules
 
-## Phase 9: Runtime Resolution
+## Cross-Stage Audit Checklist
 
-For each skill slug in session state:
+At the end of every stage, explicitly audit for:
 
-1. resolve namespace
-2. choose effective track by precedence:
-   - custom
-   - imported
-   - builtin
-3. load active revision
-4. compose:
-   - instruction body
-   - requirement schema
-   - provider config
-   - helper files
+1. Hidden old-path reads
+   - repo file helpers
+   - filesystem custom/managed helpers
+   - stale digest/hash helpers
 
-For provider guidance:
+2. Surface logic drift
+   - Telegram path doing one thing
+   - registry path doing another
 
-1. resolve effective guidance from content store
-2. inject into provider execution as current runtime already does
-3. optional file materialization later only if needed
+3. Naming drift
+   - runtime skill
+   - capability
+   - provider guidance
 
-## Phase 10: Telegram Authoring Model
+4. Service/use-case ownership drift
+   - business logic sliding back into handlers, routes, or browser JS
 
-Because abstraction parity matters, Telegram cannot simply lose authoring.
+5. Contract blast radius
+   - every consumer of changed statuses, return types, or state transitions updated together
 
-### Recommended Telegram authoring model
+6. Resource and process cleanup
+   - subprocesses killed and awaited
+   - DB handles closed
+   - no leaked descriptors on error paths
 
-- `/skills create <name>` creates a private draft
-- bot walks the user through:
-  - display name
-  - description
-  - instruction body
-  - provider config editing
-  - helper file add/remove/import
-- `/skills edit <name>` resumes/edit draft
-- `/skills submit <name>` sends for admin approval
-- `/skills publish <name>` if permitted
-- `/skills history <name>` and `/skills diff <name>`
+7. User-facing language discipline
+   - no provider names
+   - no internal IDs
+   - no implementation terminology
 
-This is more work, but it is the correct abstraction-respecting path.
+8. Test relevance
+   - are tests still proving the current architecture, or a deleted one?
 
-## Phase 11: Specific Existing Problems To Fix
+## Durable Workflow Rules
 
-### 11.1 Config semantics
+These remain mandatory for any queue/recovery/runtime-state changes in adjacent work:
 
-Fix `app/config.py`:
+- queueing is a first-class runtime contract, not a polite rejection
+- stale-claim detection is age-based, not worker-based
+- transport contract changes require full blast-radius audit
+- durable queue changes require FSM and invariant review first
+- recovered claimed work is replay-notice only, never auto-rerun
+- completion ownership must be explicit whenever semantics change
 
-- stop validating `BOT_SKILLS` by importing `load_catalog()`
-- stop making `BOT_AGENT_SKILLS` fall back to runtime `BOT_SKILLS`
-- validate runtime skills and capabilities through the appropriate services
+## Immediate Next Slice
 
-### 11.2 Store/service split
+The next implementation slice should be:
 
-Refactor:
+1. define the explicit use-case layer
+2. refactor Telegram into a real adapter over it
+3. refactor registry API/UI to the same shape
+4. then complete lifecycle and parity work
+5. then delete the remaining old seed/store residue
 
-- `app/store.py`
-- `app/skills.py`
+## Acceptance Criteria For This Plan
 
-so that:
+This plan is satisfied only when:
 
-- storage modules persist/query
-- services own lifecycle logic
-- surfaces call services
-
-### 11.3 Registry naming
-
-Refactor registry-facing "skills" concept toward "capabilities" in the service
-layer and UI to avoid ongoing confusion.
-
-### 11.4 Shared content backend config
-
-Design and implement a content-backend selector used by both:
-
-- bot runtime
-- registry service
-
-This is required if registry is the sole HTTP API surface for lifecycle.
-
-## Phase 12: Implementation Sequence
-
-1. Separate runtime skills from routing capabilities in config/model terminology.
-2. Add inbound lifecycle abstraction/service layer.
-3. Rebase Telegram `/skills` and registry lifecycle handlers onto that service
-   layer.
-4. Add content store interfaces and models.
-5. Add SQLite/Postgres content store implementations + migrations + contract
-   tests.
-6. Add built-in seed loader and provider guidance seed loader.
-7. Add filesystem migration importer.
-8. Switch runtime resolution to DB-backed content store.
-9. Remove repo/runtime dependency on `skills/catalog` and `skills/store`.
-10. Expand Telegram and registry UI flows until lifecycle capability parity is
-    satisfied.
-
-## Acceptance Criteria
-
-- Runtime skills and capabilities are separate concepts everywhere.
-- Telegram and registry both use the same lifecycle services.
-- Registry is the only public API.
-- Telegram remains a first-class lifecycle UI.
-- Activation still lives only in session state.
-- Runtime skills and provider guidance are DB-backed.
-- Built-ins seed automatically and update automatically.
-- Custom/private/shared workflow works.
-- Registry UI supports rich editing with CodeMirror 6.
-- Telegram supports the same operations via guided flows/imports.
-- Repo/file runtime dependencies for skills are removed.
-- SQLite/Postgres parity is enforced by tests.
-
-## Assumptions
-
-- No external third-party dependency on current registry `/v1/ui/capabilities`
-  semantics beyond this repo/product. If there is, handle rename as a
-  coordinated breaking change.
-- Standalone deployments keep working without registry HTTP because bot runtime
-  uses services in-process.
+- runtime skills, provider guidance, and capabilities are cleanly separated
+- registry UI uses registry APIs for all mutations
+- registry API and Telegram are both adapters over the same use-case layer
+- the shared use-case boundary is modular and concern-owned, not a monolithic orchestrator
+- no parallel old/new content paths exist
+- `telegram_handlers.py` is no longer a domain-orchestration monolith
+- registry route/UI modules are no longer excessively concentrated
+- Telegram and registry both implement the same lifecycle capabilities
+- content store is the sole durable source of runtime skill/guidance truth
+- seed inputs live under `app/`, not as top-level runtime clutter
+- dead file-store code is removed, not merely bypassed

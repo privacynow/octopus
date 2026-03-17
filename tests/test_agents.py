@@ -9,6 +9,7 @@ from app.agents.runtime import AgentRuntime
 from app.agents.state import load_agent_runtime_state
 from app.config import derive_agent_slug
 from tests.support.config_support import make_config
+from tests.support.handler_support import drain_one_worker_item, fresh_env
 
 
 def _reg_conv(conversation_ref: str) -> str:
@@ -372,43 +373,43 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
 
 
 async def test_handle_registry_surface_action_and_control_dispatch(monkeypatch, tmp_path: Path):
-    seen: list[tuple[str, int, str]] = []
+    seen: list[tuple[str, str, str]] = []
 
-    async def fake_approve(chat_id: int, message) -> None:
-        seen.append(("approve", chat_id, message.conversation_ref))
+    async def fake_execute_worker_action(event, item, *, cancel_event=None) -> None:
+        del item, cancel_event
+        seen.append((event.action, event.conversation_key, event.conversation_ref))
 
-    async def fake_cancel(chat_id: int, message, *, actor_user_id: int = 0, allow_admin_override: bool = False, update_id: int | None = None) -> None:
-        del actor_user_id, allow_admin_override, update_id
-        seen.append(("cancel", chat_id, message.conversation_ref))
+    monkeypatch.setattr("app.telegram_handlers._execute_worker_action", fake_execute_worker_action)
 
-    monkeypatch.setattr("app.telegram_handlers.approve_pending", fake_approve)
-    monkeypatch.setattr("app.telegram_handlers.cancel_chat_operation", fake_cancel)
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, _prov):
+        approve_outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-approve",
+                "kind": "surface_action",
+                "payload": {"conversation_id": "conv-approve", "action": "approve"},
+            },
+        )
+        control_outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-cancel",
+                "kind": "control",
+                "payload": {"conversation_id": "conv-cancel", "action": "cancel"},
+            },
+        )
 
-    config = make_config(
-        data_dir=tmp_path,
-        agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
-    )
-
-    approve_outcome = await handle_registry_delivery(
-        config,
-        {
-            "kind": "surface_action",
-            "payload": {"conversation_id": "conv-approve", "action": "approve"},
-        },
-    )
-    control_outcome = await handle_registry_delivery(
-        config,
-        {
-            "kind": "control",
-            "payload": {"conversation_id": "conv-cancel", "action": "cancel"},
-        },
-    )
-
-    assert approve_outcome == "accepted"
-    assert control_outcome == "accepted"
-    assert seen == [
-        ("approve", _reg_conv("conv-approve"), "conv-approve"),
-        ("cancel", _reg_conv("conv-cancel"), "conv-cancel"),
-    ]
+        assert approve_outcome == "accepted"
+        assert control_outcome == "accepted"
+        assert await drain_one_worker_item(data_dir) is True
+        assert await drain_one_worker_item(data_dir) is True
+        assert seen == [
+            ("approve_pending", _reg_conv("conv-approve"), "conv-approve"),
+            ("cancel_conversation", _reg_conv("conv-cancel"), "conv-cancel"),
+        ]

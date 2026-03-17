@@ -883,6 +883,7 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
         approve_delivery = next(item for item in approve_poll["deliveries"] if item["kind"] == "surface_action")
         assert await handle_registry_delivery(cfg, approve_delivery) == "accepted"
         await parent_client.ack([approve_delivery["delivery_id"]], classification="accepted")
+        assert await drain_one_worker_item(cfg.data_dir) is True
 
         child_poll = await child_client.poll(cursor="0", limit=20, wait_seconds=0)
         child_delivery = next(item for item in child_poll["deliveries"] if item["kind"] == "routed_task")

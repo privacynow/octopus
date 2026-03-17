@@ -8,6 +8,7 @@ from typing import Any
 from app import runtime_backend
 from app.transport_contract import (
     ApplyResult,
+    CancelRequestResult,
     DiscardResult,
     LeaveClaimed,
     PendingRecovery,
@@ -16,6 +17,7 @@ from app.transport_contract import (
 
 __all__ = [
     "ApplyResult",
+    "CancelRequestResult",
     "DiscardResult",
     "LeaveClaimed",
     "PendingRecovery",
@@ -40,6 +42,7 @@ __all__ = [
     "list_user_access",
     "mark_pending_recovery",
     "purge_old",
+    "request_cancel",
     "reclaim_for_replay",
     "record_and_admit_message",
     "record_and_enqueue",
@@ -48,6 +51,7 @@ __all__ = [
     "recover_stale_claims",
     "set_user_access",
     "supersede_pending_recovery",
+    "is_cancel_requested",
     "get_usage_since",
     "update_payload",
 ]
@@ -143,6 +147,25 @@ def cancel_queued_fresh_for_chat(data_dir: Path, conversation_key: str) -> bool:
     return _store().cancel_queued_fresh_for_chat(data_dir, conversation_key)
 
 
+def request_cancel(
+    data_dir: Path,
+    conversation_key: str,
+    actor_key: str,
+    *,
+    cancel_request_event_id: str = "",
+) -> CancelRequestResult:
+    return _store().request_cancel(
+        data_dir,
+        conversation_key,
+        actor_key,
+        cancel_request_event_id=cancel_request_event_id,
+    )
+
+
+def is_cancel_requested(data_dir: Path, item_id: str) -> bool:
+    return _store().is_cancel_requested(data_dir, item_id)
+
+
 def has_claimed_for_chat(data_dir: Path, conversation_key: str) -> bool:
     return _store().has_claimed_for_chat(data_dir, conversation_key)
 
@@ -226,9 +249,18 @@ def discard_recovery(data_dir: Path, item_id: str) -> DiscardResult:
 
 
 def reclaim_for_replay(
-    data_dir: Path, item_id: str, worker_id: str,
+    data_dir: Path,
+    item_id: str,
+    worker_id: str,
+    *,
+    ignore_claimed_item_id: str = "",
 ) -> dict[str, Any] | None:
-    return _store().reclaim_for_replay(data_dir, item_id, worker_id)
+    return _store().reclaim_for_replay(
+        data_dir,
+        item_id,
+        worker_id,
+        ignore_claimed_item_id=ignore_claimed_item_id,
+    )
 
 
 def recover_stale_claims(

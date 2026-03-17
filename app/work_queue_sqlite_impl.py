@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from app.transport_contract import (
     ApplyResult,
+    CancelRequestResult,
     DiscardResult,
     ReclaimBlocked,
     _validate_work_item_row,
@@ -31,7 +32,7 @@ class _DuplicateUpdate(Exception):
     """Signals duplicate event_id in record_and_admit_message (rollback and return duplicate, None)."""
 
 
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 _CREATE_SQL = """\
 CREATE TABLE IF NOT EXISTS updates (
@@ -56,6 +57,9 @@ CREATE TABLE IF NOT EXISTS work_items (
     error             TEXT,
     created_at        TEXT NOT NULL,
     dispatch_mode     TEXT NOT NULL DEFAULT 'fresh',
+    cancel_requested_at TEXT,
+    cancel_requested_by TEXT NOT NULL DEFAULT '',
+    cancel_request_event_id TEXT NOT NULL DEFAULT '',
     CHECK (state IN ('queued','claimed','pending_recovery','done','failed')),
     CHECK (state != 'claimed' OR worker_id IS NOT NULL),
     CHECK (state != 'claimed' OR claimed_at IS NOT NULL),
@@ -96,7 +100,11 @@ _UNSUPPORTED_SCHEMA_MSG = "Unsupported transport.db schema/layout for this build
 _EXPECTED_TABLES = ("updates", "work_items", "meta", "usage_log", "user_access")
 _EXPECTED_COLUMNS: dict[str, set[str]] = {
     "updates": {"event_id", "conversation_key", "actor_key", "kind", "payload", "received_at", "state"},
-    "work_items": {"id", "conversation_key", "event_id", "state", "worker_id", "claimed_at", "completed_at", "error", "created_at", "dispatch_mode"},
+    "work_items": {
+        "id", "conversation_key", "event_id", "state", "worker_id", "claimed_at", "completed_at",
+        "error", "created_at", "dispatch_mode", "cancel_requested_at", "cancel_requested_by",
+        "cancel_request_event_id",
+    },
     "meta": {"key", "value"},
     "usage_log": {"id", "conversation_key", "work_item_id", "provider", "prompt_tokens", "completion_tokens", "cost_usd", "recorded_at"},
     "user_access": {"actor_key", "access", "reason", "granted_by", "granted_at"},
@@ -266,11 +274,23 @@ def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
+    """Migrate transport DB from schema version 6 to 7: durable cancel metadata."""
+    conn.executescript(
+        """
+        ALTER TABLE work_items ADD COLUMN cancel_requested_at TEXT;
+        ALTER TABLE work_items ADD COLUMN cancel_requested_by TEXT NOT NULL DEFAULT '';
+        ALTER TABLE work_items ADD COLUMN cancel_request_event_id TEXT NOT NULL DEFAULT '';
+        """
+    )
+
+
 _MIGRATIONS = (
     (3, _migrate_v2_to_v3),
     (4, _migrate_v3_to_v4),
     (5, _migrate_v4_to_v5),
     (6, _migrate_v5_to_v6),
+    (7, _migrate_v6_to_v7),
 )
 
 
@@ -996,6 +1016,56 @@ def cancel_queued_fresh_for_chat(conn: sqlite3.Connection, conversation_key: str
         return cur.rowcount > 0
 
 
+def request_cancel(
+    conn: sqlite3.Connection,
+    conversation_key: str,
+    actor_key: str,
+    *,
+    cancel_request_event_id: str = "",
+) -> CancelRequestResult:
+    now = datetime.now(timezone.utc).isoformat()
+    with _write_tx(conn):
+        claimed = conn.execute(
+            "SELECT id, cancel_requested_at FROM work_items "
+            "WHERE conversation_key = ? AND state = 'claimed' AND dispatch_mode = 'fresh' "
+            "ORDER BY created_at ASC LIMIT 1",
+            (conversation_key,),
+        ).fetchone()
+        if claimed is not None:
+            item_id = claimed["id"]
+            conn.execute(
+                "UPDATE work_items SET cancel_requested_at = COALESCE(cancel_requested_at, ?), "
+                "cancel_requested_by = ?, cancel_request_event_id = ? "
+                "WHERE id = ? AND state = 'claimed'",
+                (now, actor_key, cancel_request_event_id, item_id),
+            )
+            return CancelRequestResult.claimed_cancel_requested
+
+        queued = conn.execute(
+            "SELECT id FROM work_items WHERE conversation_key = ? AND state = 'queued' "
+            "AND dispatch_mode = 'fresh' ORDER BY created_at ASC LIMIT 1",
+            (conversation_key,),
+        ).fetchone()
+        if queued is not None:
+            cur = conn.execute(
+                "UPDATE work_items SET state = 'failed', completed_at = ?, error = 'cancelled' "
+                "WHERE id = ? AND state = 'queued'",
+                (now, queued["id"]),
+            )
+            if cur.rowcount > 0:
+                return CancelRequestResult.queued_cancelled
+
+        return CancelRequestResult.nothing_to_cancel
+
+
+def is_cancel_requested(conn: sqlite3.Connection, item_id: str) -> bool:
+    row = conn.execute(
+        "SELECT cancel_requested_at FROM work_items WHERE id = ?",
+        (item_id,),
+    ).fetchone()
+    return bool(row and row["cancel_requested_at"])
+
+
 def get_work_items_for_chat(conn: sqlite3.Connection, conversation_key: str) -> list[dict[str, Any]]:
     """Return work items for a conversation with id, event_id, state, error, dispatch_mode, kind. Read-only."""
     rows = conn.execute(
@@ -1116,7 +1186,11 @@ def discard_recovery(conn: sqlite3.Connection, item_id: str) -> DiscardResult:
 
 
 def reclaim_for_replay(
-    conn: sqlite3.Connection, item_id: str, worker_id: str
+    conn: sqlite3.Connection,
+    item_id: str,
+    worker_id: str,
+    *,
+    ignore_claimed_item_id: str = "",
 ) -> dict[str, Any] | None:
     with _write_tx(conn):
         row = _load_work_item_by_id(conn, item_id)
@@ -1124,10 +1198,17 @@ def reclaim_for_replay(
             return None
         conversation_key = row["conversation_key"]
         _assert_no_invalid_rows_for_conversation(conn, conversation_key)
-        has_claimed = conn.execute(
-            "SELECT 1 FROM work_items WHERE conversation_key = ? AND state = 'claimed' LIMIT 1",
-            (conversation_key,),
-        ).fetchone()
+        if ignore_claimed_item_id:
+            has_claimed = conn.execute(
+                "SELECT 1 FROM work_items WHERE conversation_key = ? AND state = 'claimed' "
+                "AND id <> ? LIMIT 1",
+                (conversation_key, ignore_claimed_item_id),
+            ).fetchone()
+        else:
+            has_claimed = conn.execute(
+                "SELECT 1 FROM work_items WHERE conversation_key = ? AND state = 'claimed' LIMIT 1",
+                (conversation_key,),
+            ).fetchone()
         out = _apply_claim_event(
             conn,
             item_id,
@@ -1158,7 +1239,8 @@ def recover_stale_claims(
     now = datetime.now(timezone.utc)
     with _write_tx(conn):
         rows = conn.execute(
-            "SELECT id, state, worker_id, claimed_at, dispatch_mode FROM work_items WHERE state = 'claimed'"
+            "SELECT id, state, worker_id, claimed_at, dispatch_mode, cancel_requested_at "
+            "FROM work_items WHERE state = 'claimed'"
         ).fetchall()
         requeued = 0
         for row in rows:
@@ -1183,17 +1265,24 @@ def recover_stale_claims(
                         f"recover_stale_claims: workflow rejected for item {r['id']}: "
                         f"{result.disposition} — {result.reason}"
                     )
-                new_state = result.new_state
-                cursor = conn.execute(
-                    "UPDATE work_items SET state = ?, worker_id = NULL, claimed_at = NULL, dispatch_mode = 'recovery' "
-                    "WHERE id = ? AND state = 'claimed' AND worker_id = ? AND claimed_at = ?",
-                    (new_state, r["id"], r["worker_id"], r["claimed_at"]),
-                )
+                if r.get("cancel_requested_at"):
+                    cursor = conn.execute(
+                        "UPDATE work_items SET state = 'failed', completed_at = ?, error = 'cancelled' "
+                        "WHERE id = ? AND state = 'claimed' AND worker_id = ? AND claimed_at = ?",
+                        (now.isoformat(), r["id"], r["worker_id"], r["claimed_at"]),
+                    )
+                else:
+                    new_state = result.new_state
+                    cursor = conn.execute(
+                        "UPDATE work_items SET state = ?, worker_id = NULL, claimed_at = NULL, dispatch_mode = 'recovery' "
+                        "WHERE id = ? AND state = 'claimed' AND worker_id = ? AND claimed_at = ?",
+                        (new_state, r["id"], r["worker_id"], r["claimed_at"]),
+                    )
                 if cursor.rowcount > 0:
                     requeued += 1
                     continue
                 re_read = conn.execute(
-                    "SELECT state, worker_id, claimed_at, dispatch_mode FROM work_items WHERE id = ?",
+                    "SELECT state, worker_id, claimed_at, dispatch_mode, cancel_requested_at FROM work_items WHERE id = ?",
                     (r["id"],),
                 ).fetchone()
                 if re_read is None:

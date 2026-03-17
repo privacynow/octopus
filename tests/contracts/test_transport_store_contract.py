@@ -9,7 +9,7 @@ import pytest
 
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.storage import ensure_data_dirs
-from app.transport_contract import DiscardResult
+from app.transport_contract import CancelRequestResult, DiscardResult
 from app.work_queue import (
     cancel_queued_fresh_for_chat,
     claim_for_update,
@@ -29,6 +29,8 @@ from app.work_queue import (
     has_queued_or_claimed,
     list_user_access,
     mark_pending_recovery,
+    is_cancel_requested,
+    request_cancel,
     reclaim_for_replay,
     record_and_admit_message,
     record_and_enqueue,
@@ -215,6 +217,74 @@ def test_fail_work_item(backend_and_data_dir):
     claim_for_update(data_dir, conversation_key=_conv(1), event_id=_event(502), worker_id="w1")
     fail_work_item(data_dir, item_id, "test error")
     assert has_queued_or_claimed(data_dir, _conv(1)) is False
+
+
+def test_request_cancel_sets_flag_on_claimed_item(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    _, item_id = record_and_enqueue(data_dir, _event(550), _conv(1), _actor(42), "message")
+    claim_for_update(data_dir, conversation_key=_conv(1), event_id=_event(550), worker_id="w1")
+    result = request_cancel(
+        data_dir,
+        conversation_key=_conv(1),
+        actor_key=_actor(42),
+        cancel_request_event_id=_event(551),
+    )
+    assert result == CancelRequestResult.claimed_cancel_requested
+    assert is_cancel_requested(data_dir, item_id) is True
+
+
+def test_request_cancel_returns_nothing_when_idle(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    result = request_cancel(
+        data_dir,
+        conversation_key=_conv(1),
+        actor_key=_actor(42),
+        cancel_request_event_id=_event(552),
+    )
+    assert result == CancelRequestResult.nothing_to_cancel
+
+
+def test_request_cancel_cancels_queued_fresh_item(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    status, item_id = record_and_admit_message(
+        data_dir,
+        _event(553),
+        _conv(1),
+        _actor(42),
+        "message",
+        '{"text":"queued"}',
+    )
+    assert status == "admitted"
+    result = request_cancel(
+        data_dir,
+        conversation_key=_conv(1),
+        actor_key=_actor(42),
+        cancel_request_event_id=_event(554),
+    )
+    assert result == CancelRequestResult.queued_cancelled
+    items = get_work_items_for_chat(data_dir, _conv(1))
+    cancelled = [row for row in items if row["id"] == item_id]
+    assert cancelled and cancelled[0]["state"] == "failed"
+    assert cancelled[0]["error"] == "cancelled"
+
+
+def test_recover_stale_claims_honors_cancel_request(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    _, item_id = record_and_enqueue(data_dir, _event(555), _conv(1), _actor(42), "message")
+    claim_for_update(data_dir, conversation_key=_conv(1), event_id=_event(555), worker_id="w1")
+    result = request_cancel(
+        data_dir,
+        conversation_key=_conv(1),
+        actor_key=_actor(42),
+        cancel_request_event_id=_event(556),
+    )
+    assert result == CancelRequestResult.claimed_cancel_requested
+    recovered = recover_stale_claims(data_dir, current_worker_id="w2", max_age_seconds=0)
+    assert recovered >= 1
+    items = get_work_items_for_chat(data_dir, _conv(1))
+    final = [row for row in items if row["id"] == item_id]
+    assert final and final[0]["state"] == "failed"
+    assert final[0]["error"] == "cancelled"
 
 
 def test_mark_pending_recovery_and_get_latest(backend_and_data_dir):

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app import work_queue_sqlite_impl
-from app.transport_contract import DiscardResult
+from app.transport_contract import CancelRequestResult, DiscardResult
 
 
 class SQLiteTransportStore:
@@ -160,6 +160,26 @@ class SQLiteTransportStore:
         conn = self._transport_db(data_dir)
         return work_queue_sqlite_impl.cancel_queued_fresh_for_chat(conn, conversation_key)
 
+    def request_cancel(
+        self,
+        data_dir: Path,
+        conversation_key: str,
+        actor_key: str,
+        *,
+        cancel_request_event_id: str = "",
+    ) -> CancelRequestResult:
+        conn = self._transport_db(data_dir)
+        return work_queue_sqlite_impl.request_cancel(
+            conn,
+            conversation_key,
+            actor_key,
+            cancel_request_event_id=cancel_request_event_id,
+        )
+
+    def is_cancel_requested(self, data_dir: Path, item_id: str) -> bool:
+        conn = self._transport_db(data_dir)
+        return work_queue_sqlite_impl.is_cancel_requested(conn, item_id)
+
     def has_claimed_for_chat(self, data_dir: Path, conversation_key: str) -> bool:
         conn = self._transport_db(data_dir)
         return work_queue_sqlite_impl.has_claimed_for_chat(conn, conversation_key)
@@ -203,10 +223,20 @@ class SQLiteTransportStore:
         return work_queue_sqlite_impl.discard_recovery(conn, item_id)
 
     def reclaim_for_replay(
-        self, data_dir: Path, item_id: str, worker_id: str
+        self,
+        data_dir: Path,
+        item_id: str,
+        worker_id: str,
+        *,
+        ignore_claimed_item_id: str = "",
     ) -> dict[str, Any] | None:
         conn = self._transport_db(data_dir)
-        return work_queue_sqlite_impl.reclaim_for_replay(conn, item_id, worker_id)
+        return work_queue_sqlite_impl.reclaim_for_replay(
+            conn,
+            item_id,
+            worker_id,
+            ignore_claimed_item_id=ignore_claimed_item_id,
+        )
 
     def recover_stale_claims(
         self,

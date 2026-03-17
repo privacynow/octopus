@@ -13,7 +13,7 @@ from app.agents.delivery import handle_registry_delivery
 from app.agents.runtime import start_agent_runtime_task
 from app.storage import close_db, ensure_data_dirs
 from app.work_queue import close_transport_db, recover_stale_claims, purge_old
-from app.worker import start_worker_task
+from app.worker import poll_interval_for_runtime, start_worker_task
 from app.store import startup_recovery
 from app.telegram_handlers import build_application
 
@@ -86,13 +86,6 @@ def main() -> None:
     config = load_config(args.instance)
     provider = make_provider(config)
     fail_fast(config)
-
-    # Phase 13: Only local runtime is supported. Reject shared until Phase 18.
-    if config.runtime_mode != "local":
-        print("Only Local Runtime is supported (BOT_RUNTIME_MODE=local).", file=sys.stderr)
-        if config.runtime_mode == "shared":
-            print("BOT_RUNTIME_MODE=shared (Shared Runtime) is not available until Phase 18.", file=sys.stderr)
-        sys.exit(1)
 
     # Single backend bootstrap seam: SQLite (default) or Postgres when BOT_DATABASE_URL set.
     from app import runtime_backend
@@ -171,7 +164,10 @@ def main() -> None:
         nonlocal _worker_task, _worker_stop, _agent_task, _agent_stop
         from app.telegram_handlers import worker_dispatch
         _worker_task, _worker_stop = start_worker_task(
-            config.data_dir, boot_id, worker_dispatch,
+            config.data_dir,
+            boot_id,
+            worker_dispatch,
+            poll_interval=poll_interval_for_runtime(config.runtime_mode),
         )
         _agent_task, _agent_stop = start_agent_runtime_task(
             config,

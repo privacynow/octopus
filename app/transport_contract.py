@@ -34,6 +34,12 @@ class ApplyResult(str, Enum):
     corruption = "corruption"
 
 
+class CancelRequestResult(str, Enum):
+    queued_cancelled = "queued_cancelled"
+    claimed_cancel_requested = "claimed_cancel_requested"
+    nothing_to_cancel = "nothing_to_cancel"
+
+
 def validate_work_item_row(row: dict[str, Any], item_id: str = "") -> None:
     """Raise TransportStateCorruption if row violates transport invariants."""
     state = row.get("state")

@@ -408,6 +408,7 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
         outcome = await handle_registry_delivery(
             cfg,
             {
+                "delivery_id": "registry-approve-delegation",
                 "kind": "surface_action",
                 "payload": {
                     "conversation_ref": "registry:conv-approve",
@@ -416,6 +417,7 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
                 },
             },
         )
+        assert await drain_one_worker_item(data_dir) is True
 
         session_after = load_session_disk(data_dir, _reg_conv("registry:conv-approve"), prov)
         pending = session_after.get("pending_delegation")
@@ -458,6 +460,7 @@ async def test_cancel_delegation_from_registry_delivery():
         outcome = await handle_registry_delivery(
             cfg,
             {
+                "delivery_id": "registry-cancel-delegation",
                 "kind": "surface_action",
                 "payload": {
                     "conversation_ref": "registry:conv-cancel",
@@ -466,6 +469,7 @@ async def test_cancel_delegation_from_registry_delivery():
                 },
             },
         )
+        assert await drain_one_worker_item(data_dir) is True
 
         session_after = load_session_disk(data_dir, _reg_conv("registry:conv-cancel"), prov)
         assert outcome == "accepted"
@@ -1122,6 +1126,7 @@ async def test_registry_surface_action_retry_skip_clears_pending_retry():
         outcome = await handle_registry_delivery(
             cfg,
             {
+                "delivery_id": "registry-retry-skip",
                 "kind": "surface_action",
                 "payload": {
                     "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
@@ -1130,6 +1135,7 @@ async def test_registry_surface_action_retry_skip_clears_pending_retry():
                 },
             },
         )
+        assert await drain_one_worker_item(data_dir) is True
 
         assert outcome == "accepted"
         session_after = load_session_disk(data_dir, _conv(chat_id), prov)
@@ -1164,6 +1170,7 @@ async def test_registry_surface_action_retry_allow_executes_request():
         outcome = await handle_registry_delivery(
             cfg,
             {
+                "delivery_id": "registry-retry-allow",
                 "kind": "surface_action",
                 "payload": {
                     "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
@@ -1172,6 +1179,7 @@ async def test_registry_surface_action_retry_allow_executes_request():
                 },
             },
         )
+        assert await drain_one_worker_item(data_dir) is True
 
         assert outcome == "accepted"
         assert len(prov.run_calls) == 1
@@ -1206,6 +1214,7 @@ async def test_registry_surface_action_recovery_discard_discards_pending_recover
         outcome = await handle_registry_delivery(
             cfg,
             {
+                "delivery_id": "registry-recovery-discard",
                 "kind": "surface_action",
                 "payload": {
                     "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
@@ -1214,6 +1223,7 @@ async def test_registry_surface_action_recovery_discard_discards_pending_recover
                 },
             },
         )
+        assert await drain_one_worker_item(data_dir) is True
 
         row = conn.execute(
             "SELECT state, error FROM work_items WHERE id = ?", (item_id,)
@@ -1250,6 +1260,7 @@ async def test_registry_surface_action_recovery_replay_executes_request():
         outcome = await handle_registry_delivery(
             cfg,
             {
+                "delivery_id": "registry-recovery-replay",
                 "kind": "surface_action",
                 "payload": {
                     "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
@@ -1258,6 +1269,7 @@ async def test_registry_surface_action_recovery_replay_executes_request():
                 },
             },
         )
+        assert await drain_one_worker_item(data_dir) is True
 
         row = conn.execute(
             "SELECT state FROM work_items WHERE id = ?", (item_id,)

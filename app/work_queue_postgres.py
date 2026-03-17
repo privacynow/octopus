@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from app.transport_contract import DiscardResult
+from app.transport_contract import CancelRequestResult, DiscardResult
 from app import work_queue_pg
 
 
@@ -120,6 +120,26 @@ class PostgresTransportStore:
         with self._conn() as conn:
             return work_queue_pg.cancel_queued_fresh_for_chat(conn, conversation_key)
 
+    def request_cancel(
+        self,
+        data_dir: Path,
+        conversation_key: str,
+        actor_key: str,
+        *,
+        cancel_request_event_id: str = "",
+    ) -> CancelRequestResult:
+        with self._conn() as conn:
+            return work_queue_pg.request_cancel(
+                conn,
+                conversation_key,
+                actor_key,
+                cancel_request_event_id=cancel_request_event_id,
+            )
+
+    def is_cancel_requested(self, data_dir: Path, item_id: str) -> bool:
+        with self._conn() as conn:
+            return work_queue_pg.is_cancel_requested(conn, item_id)
+
     def has_claimed_for_chat(self, data_dir: Path, conversation_key: str) -> bool:
         with self._conn() as conn:
             return work_queue_pg.has_claimed_for_chat(conn, conversation_key)
@@ -159,10 +179,20 @@ class PostgresTransportStore:
             return work_queue_pg.discard_recovery(conn, item_id)
 
     def reclaim_for_replay(
-        self, data_dir: Path, item_id: str, worker_id: str,
+        self,
+        data_dir: Path,
+        item_id: str,
+        worker_id: str,
+        *,
+        ignore_claimed_item_id: str = "",
     ) -> dict[str, Any] | None:
         with self._conn() as conn:
-            return work_queue_pg.reclaim_for_replay(conn, item_id, worker_id)
+            return work_queue_pg.reclaim_for_replay(
+                conn,
+                item_id,
+                worker_id,
+                ignore_claimed_item_id=ignore_claimed_item_id,
+            )
 
     def recover_stale_claims(
         self, data_dir: Path, current_worker_id: str, max_age_seconds: int = 300,

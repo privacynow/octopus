@@ -100,7 +100,8 @@ from app.skills import (
     cleanup_codex_scripts,
     SkillRequirement,
 )
-from app.skill_import_service import get_skill_import_service
+from app.runtime_skill_activation_use_cases import get_runtime_skill_activation_use_cases
+from app.runtime_skill_import_use_cases import get_runtime_skill_import_use_cases
 from app.skill_activation_service import get_skill_activation_service
 from app.skill_catalog_service import get_skill_catalog_service
 from app.skill_lifecycle_service import get_skill_lifecycle_service
@@ -862,7 +863,7 @@ def _callback_handler(fn):
 
 
 def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
-    """Check prompt size in all chats where skill_name is active."""
+    """Telegram-side helper for prompt-size impact warnings."""
     cfg = _cfg()
     return get_provider_guidance_service().check_prompt_size_cross_chat(
         data_dir,
@@ -3603,7 +3604,7 @@ async def handle_skill_add_callback(event, query) -> None:
             if not already_answered:
                 await query.answer()
             session = _load(chat_id)
-            if get_skill_lifecycle_service().confirm_add(session, name).mutated:
+            if get_runtime_skill_activation_use_cases().confirm_activate(session, name).mutated:
                 _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(
@@ -3626,31 +3627,33 @@ async def handle_skill_update_callback(event, query) -> None:
 
     if event.data.startswith("skill_update_confirm:"):
         name = event.data.split(":", 1)[1]
-        result = get_skill_import_service().update(name)
+        result = await asyncio.to_thread(
+            get_runtime_skill_import_use_cases().update,
+            name,
+        )
         msg = result.message
-        if result.ok:
-            cfg = _cfg()
-            size_warnings = _check_prompt_size_cross_chat(cfg.data_dir, name)
-            if size_warnings:
-                msg += "\n\nPrompt size warnings:\n" + "\n".join(size_warnings)
+        size_warnings = _check_prompt_size_cross_chat(_cfg().data_dir, name) if result.ok else []
+        if size_warnings:
+            msg += "\n\nPrompt size warnings:\n" + "\n".join(size_warnings)
         await query.edit_message_reply_markup(reply_markup=None)
         await query.edit_message_text(html.escape(msg), parse_mode=ParseMode.HTML)
         return
 
     if event.data == "skill_update_all_confirm":
-        results = get_skill_import_service().update_all()
+        results = await asyncio.to_thread(
+            get_runtime_skill_import_use_cases().update_all,
+        )
         if not results:
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text("No imported skills need updating.")
             return
         lines = ["<b>Update results:</b>"]
-        cfg = _cfg()
         all_size_warnings: list[str] = []
         for result in results:
             status = "\u2714" if result.ok else "\u2718"
             lines.append(f"  {status} {html.escape(result.message)}")
             if result.ok:
-                all_size_warnings.extend(_check_prompt_size_cross_chat(cfg.data_dir, result.name))
+                all_size_warnings.extend(_check_prompt_size_cross_chat(_cfg().data_dir, result.name))
         if all_size_warnings:
             lines.append("")
             lines.append("<b>Prompt size warnings:</b>")

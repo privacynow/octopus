@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.content_models import ProviderGuidanceTrackRecord
+from app.content_seed import default_provider_guidance_tracks
 from app.providers.base import PreflightContext, RunContext
 from app.skills import (
     build_capability_summary,
@@ -133,6 +135,9 @@ class ProviderGuidanceService:
         active_skills: list[str],
     ) -> Path | None:
         return _stage_codex_scripts(data_dir, conversation_key, active_skills)
+
+    def default_seed_tracks(self) -> list[ProviderGuidanceTrackRecord]:
+        return default_provider_guidance_tracks()
 
 
 _SERVICE = ProviderGuidanceService()

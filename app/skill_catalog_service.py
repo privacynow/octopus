@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.content_models import RuntimeSkillTrackRecord
+from app.content_seed import builtin_skill_tracks
 from app.skills import (
     SkillMeta,
     get_skill_requirements,
@@ -48,6 +50,9 @@ class SkillCatalogService:
 
     def create_custom_draft(self, skill_name: str) -> Path:
         return scaffold_skill(skill_name)
+
+    def builtin_seed_tracks(self) -> list[RuntimeSkillTrackRecord]:
+        return builtin_skill_tracks()
 
 
 _SERVICE = SkillCatalogService()

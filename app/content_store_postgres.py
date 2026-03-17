@@ -1,0 +1,473 @@
+"""Postgres implementation of the runtime content store."""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from datetime import datetime, timezone
+import json
+
+from app.content_models import (
+    ProviderGuidanceRevisionRecord,
+    ProviderGuidanceTrackRecord,
+    RuntimeSkillSummary,
+    RuntimeSkillTrackRecord,
+    SkillFileRecord,
+    SkillRevisionRecord,
+    skill_precedence,
+)
+from app.content_store_base import AbstractContentStore
+from app.db.postgres import get_connection
+from psycopg.rows import dict_row
+
+_SCHEMA = "bot_content"
+_INIT_SQL = f"""\
+CREATE SCHEMA IF NOT EXISTS {_SCHEMA};
+CREATE TABLE IF NOT EXISTS {_SCHEMA}.skill_namespaces (
+    skill_id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    archived BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE IF NOT EXISTS {_SCHEMA}.skill_tracks (
+    track_id TEXT PRIMARY KEY,
+    skill_id TEXT NOT NULL REFERENCES {_SCHEMA}.skill_namespaces(skill_id) ON DELETE CASCADE,
+    source_kind TEXT NOT NULL,
+    source_uri TEXT NOT NULL DEFAULT '',
+    owner_actor TEXT NOT NULL DEFAULT '',
+    visibility TEXT NOT NULL DEFAULT 'shared',
+    is_mutable BOOLEAN NOT NULL DEFAULT FALSE,
+    active_revision_id TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    UNIQUE(skill_id, source_kind, source_uri, owner_actor)
+);
+CREATE TABLE IF NOT EXISTS {_SCHEMA}.skill_revisions (
+    revision_id TEXT PRIMARY KEY,
+    track_id TEXT NOT NULL REFERENCES {_SCHEMA}.skill_tracks(track_id) ON DELETE CASCADE,
+    version_label TEXT NOT NULL DEFAULT '',
+    digest TEXT NOT NULL,
+    instruction_body TEXT NOT NULL DEFAULT '',
+    requirements_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    provider_config_json JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    changelog TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE IF NOT EXISTS {_SCHEMA}.skill_files (
+    revision_id TEXT NOT NULL REFERENCES {_SCHEMA}.skill_revisions(revision_id) ON DELETE CASCADE,
+    relative_path TEXT NOT NULL,
+    content_text TEXT NOT NULL DEFAULT '',
+    content_type TEXT NOT NULL DEFAULT 'text/plain',
+    executable BOOLEAN NOT NULL DEFAULT FALSE,
+    digest TEXT NOT NULL,
+    PRIMARY KEY(revision_id, relative_path)
+);
+CREATE TABLE IF NOT EXISTS {_SCHEMA}.provider_guidance_tracks (
+    guidance_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    scope_kind TEXT NOT NULL DEFAULT 'system',
+    scope_key TEXT NOT NULL DEFAULT '',
+    is_mutable BOOLEAN NOT NULL DEFAULT FALSE,
+    active_revision_id TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    UNIQUE(provider, scope_kind, scope_key)
+);
+CREATE TABLE IF NOT EXISTS {_SCHEMA}.provider_guidance_revisions (
+    revision_id TEXT PRIMARY KEY,
+    guidance_id TEXT NOT NULL REFERENCES {_SCHEMA}.provider_guidance_tracks(guidance_id) ON DELETE CASCADE,
+    digest TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    format TEXT NOT NULL DEFAULT 'markdown',
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL
+);
+"""
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_json(raw, default):
+    if raw is None:
+        return default
+    if isinstance(raw, (dict, list)):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return default
+
+
+class PostgresContentStore(AbstractContentStore):
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        pool_min: int = 1,
+        pool_max: int = 10,
+        connect_timeout: int = 10,
+    ) -> None:
+        self._database_url = database_url
+        self._pool_min = pool_min
+        self._pool_max = pool_max
+        self._connect_timeout = connect_timeout
+        self._schema_ready = False
+
+    @contextmanager
+    def _connect(self):
+        with get_connection(
+            self._database_url,
+            min_size=self._pool_min,
+            max_size=self._pool_max,
+            connect_timeout=self._connect_timeout,
+        ) as conn:
+            self._ensure_schema(conn)
+            yield conn
+
+    def _ensure_schema(self, conn) -> None:
+        if self._schema_ready:
+            return
+        with conn.cursor() as cur:
+            cur.execute(_INIT_SQL)
+        conn.commit()
+        self._schema_ready = True
+
+    def _skill_id(self, slug: str) -> str:
+        return f"skill:{slug}"
+
+    def _track_id(self, record: RuntimeSkillTrackRecord) -> str:
+        return "|".join((record.slug, record.source_kind, record.source_uri, record.owner_actor))
+
+    def _guidance_id(self, record: ProviderGuidanceTrackRecord) -> str:
+        return "|".join((record.provider, record.scope_kind, record.scope_key))
+
+    def replace_skill_track(self, record: RuntimeSkillTrackRecord) -> None:
+        now = _utcnow()
+        skill_id = self._skill_id(record.slug)
+        track_id = self._track_id(record)
+        revision_id = f"{track_id}|{record.revision.digest}"
+        with self._connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.skill_namespaces (
+                        skill_id, slug, display_name, description, archived, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s::timestamptz, %s::timestamptz)
+                    ON CONFLICT(skill_id) DO UPDATE SET
+                        display_name = EXCLUDED.display_name,
+                        description = EXCLUDED.description,
+                        archived = EXCLUDED.archived,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        skill_id,
+                        record.slug,
+                        record.display_name,
+                        record.description,
+                        record.archived,
+                        now,
+                        now,
+                    ),
+                )
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.skill_tracks (
+                        track_id, skill_id, source_kind, source_uri, owner_actor, visibility,
+                        is_mutable, active_revision_id, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::timestamptz, %s::timestamptz)
+                    ON CONFLICT(track_id) DO UPDATE SET
+                        visibility = EXCLUDED.visibility,
+                        is_mutable = EXCLUDED.is_mutable,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        track_id,
+                        skill_id,
+                        record.source_kind,
+                        record.source_uri,
+                        record.owner_actor,
+                        record.visibility,
+                        record.is_mutable,
+                        revision_id,
+                        now,
+                        now,
+                    ),
+                )
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.skill_revisions (
+                        revision_id, track_id, version_label, digest, instruction_body,
+                        requirements_json, provider_config_json, changelog, created_by, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s::timestamptz)
+                    ON CONFLICT(revision_id) DO UPDATE SET
+                        version_label = EXCLUDED.version_label,
+                        instruction_body = EXCLUDED.instruction_body,
+                        requirements_json = EXCLUDED.requirements_json,
+                        provider_config_json = EXCLUDED.provider_config_json,
+                        changelog = EXCLUDED.changelog,
+                        created_by = EXCLUDED.created_by
+                    """,
+                    (
+                        revision_id,
+                        track_id,
+                        record.revision.version_label,
+                        record.revision.digest,
+                        record.revision.instruction_body,
+                        json.dumps(record.revision.requirements, sort_keys=True),
+                        json.dumps(record.revision.provider_config, sort_keys=True),
+                        record.revision.changelog,
+                        record.revision.created_by,
+                        record.revision.created_at or now,
+                    ),
+                )
+                cur.execute(f"DELETE FROM {_SCHEMA}.skill_files WHERE revision_id = %s", (revision_id,))
+                for file_record in record.revision.files:
+                    cur.execute(
+                        f"""
+                        INSERT INTO {_SCHEMA}.skill_files (
+                            revision_id, relative_path, content_text, content_type, executable, digest
+                        ) VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            revision_id,
+                            file_record.relative_path,
+                            file_record.content_text,
+                            file_record.content_type,
+                            file_record.executable,
+                            file_record.digest,
+                        ),
+                    )
+                cur.execute(
+                    f"UPDATE {_SCHEMA}.skill_tracks SET active_revision_id = %s, updated_at = %s::timestamptz WHERE track_id = %s",
+                    (revision_id, now, track_id),
+                )
+            conn.commit()
+
+    def _rows_for_slug(self, slug: str):
+        with self._connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        ns.slug,
+                        ns.display_name,
+                        ns.description,
+                        ns.archived,
+                        tr.track_id,
+                        tr.source_kind,
+                        tr.source_uri,
+                        tr.owner_actor,
+                        tr.visibility,
+                        tr.is_mutable,
+                        rev.revision_id,
+                        rev.version_label,
+                        rev.digest,
+                        rev.instruction_body,
+                        rev.requirements_json,
+                        rev.provider_config_json,
+                        rev.changelog,
+                        rev.created_by,
+                        rev.created_at
+                    FROM {_SCHEMA}.skill_namespaces ns
+                    JOIN {_SCHEMA}.skill_tracks tr ON tr.skill_id = ns.skill_id
+                    JOIN {_SCHEMA}.skill_revisions rev ON rev.revision_id = tr.active_revision_id
+                    WHERE ns.slug = %s
+                    ORDER BY tr.source_kind ASC, tr.updated_at DESC
+                    """,
+                    (slug,),
+                )
+                return cur.fetchall()
+
+    def _files_for_revision(self, revision_id: str) -> tuple[SkillFileRecord, ...]:
+        with self._connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    f"""
+                    SELECT relative_path, content_text, content_type, executable
+                    FROM {_SCHEMA}.skill_files
+                    WHERE revision_id = %s
+                    ORDER BY relative_path ASC
+                    """,
+                    (revision_id,),
+                )
+                rows = cur.fetchall()
+        return tuple(
+            SkillFileRecord(
+                relative_path=row["relative_path"],
+                content_text=row["content_text"],
+                content_type=row["content_type"],
+                executable=bool(row["executable"]),
+            )
+            for row in rows
+        )
+
+    def _record_from_row(self, row) -> RuntimeSkillTrackRecord:
+        revision = SkillRevisionRecord(
+            instruction_body=row["instruction_body"],
+            requirements=_parse_json(row["requirements_json"], []),
+            provider_config=_parse_json(row["provider_config_json"], {}),
+            files=self._files_for_revision(row["revision_id"]),
+            version_label=row["version_label"],
+            changelog=row["changelog"],
+            created_by=row["created_by"],
+            created_at=str(row["created_at"]),
+        )
+        return RuntimeSkillTrackRecord(
+            slug=row["slug"],
+            display_name=row["display_name"],
+            description=row["description"],
+            source_kind=row["source_kind"],
+            revision=revision,
+            source_uri=row["source_uri"],
+            owner_actor=row["owner_actor"],
+            visibility=row["visibility"],
+            is_mutable=bool(row["is_mutable"]),
+            archived=bool(row["archived"]),
+        )
+
+    def list_skill_tracks(self, slug: str) -> list[RuntimeSkillTrackRecord]:
+        records = [self._record_from_row(row) for row in self._rows_for_slug(slug)]
+        return sorted(records, key=lambda item: skill_precedence(item.source_kind), reverse=True)
+
+    def resolve_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
+        tracks = self.list_skill_tracks(slug)
+        return tracks[0] if tracks else None
+
+    def list_skill_summaries(self) -> list[RuntimeSkillSummary]:
+        with self._connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(f"SELECT slug FROM {_SCHEMA}.skill_namespaces ORDER BY lower(slug)")
+                rows = cur.fetchall()
+        summaries: list[RuntimeSkillSummary] = []
+        for row in rows:
+            record = self.resolve_skill(row["slug"])
+            if record is None:
+                continue
+            summaries.append(
+                RuntimeSkillSummary(
+                    slug=record.slug,
+                    display_name=record.display_name,
+                    description=record.description,
+                    source_kind=record.source_kind,
+                    source_uri=record.source_uri,
+                    visibility=record.visibility,
+                    is_mutable=record.is_mutable,
+                    digest=record.revision.digest,
+                )
+            )
+        return summaries
+
+    def replace_provider_guidance(self, record: ProviderGuidanceTrackRecord) -> None:
+        now = _utcnow()
+        guidance_id = self._guidance_id(record)
+        revision_id = f"{guidance_id}|{record.revision.digest}"
+        with self._connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.provider_guidance_tracks (
+                        guidance_id, provider, scope_kind, scope_key, is_mutable, active_revision_id, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s::timestamptz, %s::timestamptz)
+                    ON CONFLICT(guidance_id) DO UPDATE SET
+                        is_mutable = EXCLUDED.is_mutable,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (
+                        guidance_id,
+                        record.provider,
+                        record.scope_kind,
+                        record.scope_key,
+                        record.is_mutable,
+                        revision_id,
+                        now,
+                        now,
+                    ),
+                )
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.provider_guidance_revisions (
+                        revision_id, guidance_id, digest, content, format, created_by, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s::timestamptz)
+                    ON CONFLICT(revision_id) DO UPDATE SET
+                        content = EXCLUDED.content,
+                        format = EXCLUDED.format,
+                        created_by = EXCLUDED.created_by
+                    """,
+                    (
+                        revision_id,
+                        guidance_id,
+                        record.revision.digest,
+                        record.revision.content,
+                        record.revision.format,
+                        record.revision.created_by,
+                        record.revision.created_at or now,
+                    ),
+                )
+                cur.execute(
+                    f"UPDATE {_SCHEMA}.provider_guidance_tracks SET active_revision_id = %s, updated_at = %s::timestamptz WHERE guidance_id = %s",
+                    (revision_id, now, guidance_id),
+                )
+            conn.commit()
+
+    def get_provider_guidance(
+        self,
+        provider: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> ProviderGuidanceTrackRecord | None:
+        with self._connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        tr.provider,
+                        tr.scope_kind,
+                        tr.scope_key,
+                        tr.is_mutable,
+                        rev.content,
+                        rev.format,
+                        rev.created_by,
+                        rev.created_at
+                    FROM {_SCHEMA}.provider_guidance_tracks tr
+                    JOIN {_SCHEMA}.provider_guidance_revisions rev ON rev.revision_id = tr.active_revision_id
+                    WHERE tr.provider = %s AND tr.scope_kind = %s AND tr.scope_key = %s
+                    """,
+                    (provider, scope_kind, scope_key),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return None
+        return ProviderGuidanceTrackRecord(
+            provider=row["provider"],
+            scope_kind=row["scope_kind"],
+            scope_key=row["scope_key"],
+            is_mutable=bool(row["is_mutable"]),
+            revision=ProviderGuidanceRevisionRecord(
+                content=row["content"],
+                format=row["format"],
+                created_by=row["created_by"],
+                created_at=str(row["created_at"]),
+            ),
+        )
+
+    def resolve_provider_guidance(
+        self,
+        provider: str,
+        *,
+        instance_key: str = "",
+    ) -> ProviderGuidanceTrackRecord | None:
+        if instance_key:
+            match = self.get_provider_guidance(
+                provider,
+                scope_kind="instance",
+                scope_key=instance_key,
+            )
+            if match is not None:
+                return match
+        return self.get_provider_guidance(provider, scope_kind="system", scope_key="")

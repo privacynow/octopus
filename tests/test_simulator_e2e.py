@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app import runtime_backend
 from app import work_queue
 from app.agents.bridge import conversation_key_for_ref
 from app.identity import telegram_conversation_key, telegram_actor_key, telegram_event_id
@@ -156,8 +155,8 @@ async def test_simulator_cancel_before_worker_claim():
 
 
 @pytest.mark.asyncio
-async def test_simulator_second_message_busy_no_fan_out():
-    """Second message while first is admitted/active gets busy; no second runnable; provider count 1."""
+async def test_simulator_second_message_queues_fifo():
+    """Second message while first is active is accepted into the durable queue and runs next."""
     with fresh_data_dir() as data_dir:
         import app.telegram_handlers as th
 
@@ -173,16 +172,17 @@ async def test_simulator_second_message_busy_no_fan_out():
         async with sim.running_worker():
             await sim.wait_for_provider_started()
             msg_second_upd = await sim.inject_message_async(12345, 42, "second")
-            assert _msg.queue_busy() in last_reply(msg_second_upd.effective_message)
+            assert _msg.queue_accepted() in last_reply(msg_second_upd.effective_message)
             prov.gate.set()
 
-        assert len(prov.run_calls) == 1
+        assert len(prov.run_calls) == 2
 
         items = work_queue.get_work_items_for_chat(data_dir, _conv(12345))
         runnable = [i for i in items if i.get("state") in ("queued", "claimed")]
-        second_busy = [i for i in items if i.get("event_id") == _event(msg_second_upd.update_id) and i.get("kind") == "message" and i.get("state") == "failed" and i.get("error") == "chat_busy"]
-        assert len(runnable) == 0, f"zero runnable items after completion (anti-fan-out), got: {items}"
-        assert len(second_busy) == 1, f"expected exactly one failed/chat_busy item for second message update {msg_second_upd.update_id}, got: {items}"
+        second_item = [i for i in items if i.get("event_id") == _event(msg_second_upd.update_id) and i.get("kind") == "message"]
+        assert len(runnable) == 0, f"zero runnable items after completion, got: {items}"
+        assert len(second_item) == 1, f"expected durable queued work item for second message update {msg_second_upd.update_id}, got: {items}"
+        assert second_item[0]["state"] == "done"
 
 
 @pytest.mark.asyncio
@@ -237,7 +237,7 @@ async def test_simulator_recovery_notice_no_provider_call():
             data_dir, _event(9001), _conv(12345), _actor(42), "message",
             payload='{"actor_key": "tg:42", "username": "", "conversation_key": "tg:12345", "text": "recovered"}',
         )
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "INSERT INTO work_items (id, conversation_key, event_id, state, created_at, dispatch_mode) VALUES (?, ?, ?, 'queued', ?, 'recovery')",

@@ -173,13 +173,13 @@ def test_compose_ctx_teardown_calls_remove_image_after_down():
         with patch.object(m, "_remove_image") as mr:
             ctx = {
                 "artifacts_dir": Path("/tmp/fake-e2e-artifacts"),
-                "bot_image": "telegram-agent-bot-e2e:gw0-abc123-claude",
+                "bot_image": "octopus-agent-e2e:gw0-abc123-claude",
             }
             down_result, down_log = m._compose_down(ctx)
             m._remove_image(ctx["bot_image"], ctx.get("artifacts_dir"))
             assert down_result.returncode == 0
             assert down_log is None
-    mr.assert_called_once_with("telegram-agent-bot-e2e:gw0-abc123-claude", ctx["artifacts_dir"])
+    mr.assert_called_once_with("octopus-agent-e2e:gw0-abc123-claude", ctx["artifacts_dir"])
     md.assert_called_once_with(ctx)
 
 

@@ -24,6 +24,7 @@ def create_outbound_surface(
     bot: Any,
     conversation_key: str = "",
     chat_id: int | None = None,
+    target_message_id: int | None = None,
     source: str,
     routed_task_id: str = "",
     output_log: list | None = None,
@@ -49,6 +50,7 @@ def create_outbound_surface(
             config=config,
             conversation_ref=conversation_ref,
             mirror_input_event=(source == "telegram"),
+            target_message_id=target_message_id,
         )
 
     from app.transports.registry_adapter import RegistryConversationIO

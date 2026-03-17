@@ -18,13 +18,14 @@ from pathlib import Path
 from app.providers.base import RunResult
 from app import runtime_backend
 from app.storage import (
-    _reset_db,
     close_db,
     default_session,
+    debug_session_connection,
     delete_session,
     ensure_data_dirs,
     list_sessions,
     load_session,
+    reset_db_for_test,
     save_session,
     session_exists,
 )
@@ -76,7 +77,7 @@ async def test_handler_roundtrip_through_sqlite():
         assert sessions_dir.exists() is False
 
         # Verify the actual SQLite DB file has the row
-        conn = runtime_backend.session_store()._db(data_dir)
+        conn = debug_session_connection(data_dir)
         row = conn.execute(
             "SELECT provider, has_pending FROM sessions WHERE conversation_key = ?",
             (telegram_conversation_key(7001),),
@@ -216,7 +217,7 @@ async def test_delete_session():
         assert fresh["role"] == ""
 
         # Verify at DB level
-        conn = runtime_backend.session_store()._db(data_dir)
+        conn = debug_session_connection(data_dir)
         row = conn.execute(
             "SELECT 1 FROM sessions WHERE conversation_key = ?",
             (telegram_conversation_key(5001),),
@@ -409,7 +410,7 @@ async def test_db_no_fd_leak_on_schema_error():
         # Repeatedly trigger the error — should NOT accumulate open fds
         for _ in range(20):
             try:
-                store._db(data_dir)
+                debug_session_connection(data_dir)
             except RuntimeError:
                 pass
 

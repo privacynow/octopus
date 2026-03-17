@@ -20,17 +20,18 @@ import asyncio
 import os
 import tempfile
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from app import runtime_backend
 from app.providers.base import (
     RunResult,
 )
 from app.progress import render as render_progress
 from app.providers.codex import CodexProvider
 from app.storage import default_session, save_session
+from app.work_queue import debug_transport_connection
 from tests.support.config_support import make_config as _make_config
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
@@ -216,7 +217,7 @@ async def test_registry_search_does_not_block_event_loop():
 
 async def test_doctor_warns_missing_public_working_dir():
     """Doctor should warn when allow_open=True but no public working dir set."""
-    from app.doctor import collect_doctor_report
+    from app.runtime_health import collect_runtime_health_report
 
     cfg = _make_config(
         allow_open=True,
@@ -226,13 +227,17 @@ async def test_doctor_warns_missing_public_working_dir():
     )
     prov = FakeProvider("claude")
     prov._health_errors = ["skip"]  # skip runtime health
-    report = await collect_doctor_report(cfg, prov)
-    assert any("BOT_PUBLIC_WORKING_DIR" in w for w in report.warnings)
+    report = await collect_runtime_health_report(cfg, prov)
+    assert any(
+        "BOT_PUBLIC_WORKING_DIR" in item.message
+        for item in report.diagnostics
+        if item.level == "warning"
+    )
 
 
 async def test_doctor_warns_missing_rate_limits():
     """Doctor should warn when allow_open=True with no rate limits."""
-    from app.doctor import collect_doctor_report
+    from app.runtime_health import collect_runtime_health_report
 
     cfg = _make_config(
         allow_open=True,
@@ -242,13 +247,17 @@ async def test_doctor_warns_missing_rate_limits():
     )
     prov = FakeProvider("claude")
     prov._health_errors = ["skip"]
-    report = await collect_doctor_report(cfg, prov)
-    assert any("rate limit" in w.lower() for w in report.warnings)
+    report = await collect_runtime_health_report(cfg, prov)
+    assert any(
+        "rate limit" in item.message.lower()
+        for item in report.diagnostics
+        if item.level == "warning"
+    )
 
 
 async def test_doctor_no_public_warnings_when_closed():
     """Doctor should not warn about public mode when allow_open=False."""
-    from app.doctor import collect_doctor_report
+    from app.runtime_health import collect_runtime_health_report
 
     cfg = _make_config(
         allow_open=False,
@@ -258,9 +267,10 @@ async def test_doctor_no_public_warnings_when_closed():
     )
     prov = FakeProvider("claude")
     prov._health_errors = ["skip"]
-    report = await collect_doctor_report(cfg, prov)
-    assert not any("BOT_PUBLIC_WORKING_DIR" in w for w in report.warnings)
-    assert not any("rate limit" in w.lower() for w in report.warnings)
+    report = await collect_runtime_health_report(cfg, prov)
+    warnings = [item.message for item in report.diagnostics if item.level == "warning"]
+    assert not any("BOT_PUBLIC_WORKING_DIR" in w for w in warnings)
+    assert not any("rate limit" in w.lower() for w in warnings)
 
 
 # =====================================================================
@@ -376,7 +386,7 @@ async def test_duplicate_update_id_skipped_for_callbacks():
 
 async def test_doctor_warns_polling_with_webhook_url():
     """Doctor should warn when poll mode is active with webhook URL configured."""
-    from app.doctor import collect_doctor_report
+    from app.runtime_health import collect_runtime_health_report
 
     cfg = _make_config(
         bot_mode="poll",
@@ -384,13 +394,17 @@ async def test_doctor_warns_polling_with_webhook_url():
     )
     prov = FakeProvider("claude")
     prov._health_errors = ["skip"]
-    report = await collect_doctor_report(cfg, prov)
-    assert any("polling" in w.lower() and "webhook" in w.lower() for w in report.warnings)
+    report = await collect_runtime_health_report(cfg, prov)
+    assert any(
+        "polling" in item.message.lower() and "webhook" in item.message.lower()
+        for item in report.diagnostics
+        if item.level == "warning"
+    )
 
 
 async def test_doctor_no_polling_warning_when_clean():
     """Doctor should not warn when poll mode is active with no webhook URL."""
-    from app.doctor import collect_doctor_report
+    from app.runtime_health import collect_runtime_health_report
 
     cfg = _make_config(
         bot_mode="poll",
@@ -398,8 +412,12 @@ async def test_doctor_no_polling_warning_when_clean():
     )
     prov = FakeProvider("claude")
     prov._health_errors = ["skip"]
-    report = await collect_doctor_report(cfg, prov)
-    assert not any("polling" in w.lower() for w in report.warnings)
+    report = await collect_runtime_health_report(cfg, prov)
+    assert not any(
+        "polling" in item.message.lower()
+        for item in report.diagnostics
+        if item.level == "warning"
+    )
 
 
 # =====================================================================
@@ -414,12 +432,12 @@ async def test_doctor_no_polling_warning_when_clean():
 async def test_doctor_detects_polling_conflict_409():
     """check_polling_conflict returns a warning when Telegram returns 409."""
     from unittest.mock import AsyncMock, patch
-    from app.doctor import check_polling_conflict
+    from app.runtime_health import check_polling_conflict
 
     mock_response = AsyncMock()
     mock_response.status_code = 409
 
-    with patch("app.doctor.httpx.AsyncClient") as MockClient:
+    with patch("app.runtime_health.httpx.AsyncClient") as MockClient:
         client_instance = AsyncMock()
         client_instance.post.return_value = mock_response
         client_instance.__aenter__ = AsyncMock(return_value=client_instance)
@@ -436,12 +454,12 @@ async def test_doctor_detects_polling_conflict_409():
 async def test_doctor_no_conflict_on_200():
     """check_polling_conflict returns None when Telegram returns 200 (no conflict)."""
     from unittest.mock import AsyncMock, patch
-    from app.doctor import check_polling_conflict
+    from app.runtime_health import check_polling_conflict
 
     mock_response = AsyncMock()
     mock_response.status_code = 200
 
-    with patch("app.doctor.httpx.AsyncClient") as MockClient:
+    with patch("app.runtime_health.httpx.AsyncClient") as MockClient:
         client_instance = AsyncMock()
         client_instance.post.return_value = mock_response
         client_instance.__aenter__ = AsyncMock(return_value=client_instance)
@@ -456,9 +474,9 @@ async def test_doctor_no_conflict_on_200():
 async def test_doctor_conflict_check_survives_network_error():
     """check_polling_conflict returns None on network failure, not crash."""
     from unittest.mock import AsyncMock, patch
-    from app.doctor import check_polling_conflict
+    from app.runtime_health import check_polling_conflict
 
-    with patch("app.doctor.httpx.AsyncClient") as MockClient:
+    with patch("app.runtime_health.httpx.AsyncClient") as MockClient:
         client_instance = AsyncMock()
         client_instance.post.side_effect = Exception("network error")
         client_instance.__aenter__ = AsyncMock(return_value=client_instance)
@@ -761,7 +779,7 @@ async def test_same_chat_overlapping_updates_complete_correctly():
         assert len(prov.run_calls) == 2
 
         # Both work items are done (not queued)
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = debug_transport_connection(data_dir)
         rows = conn.execute(
             "SELECT event_id, state FROM work_items WHERE conversation_key = ? "
             "ORDER BY event_id",
@@ -812,7 +830,7 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
     }) as (data_dir, cfg, prov):
         # Create a real claimed work item in the DB (must set claimed_at for CHECK and validator).
         _, item_id = record_and_enqueue(data_dir, telegram_event_id(9999), telegram_conversation_key(12345), telegram_actor_key(42), "message")
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = debug_transport_connection(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'claimed', worker_id = ?, claimed_at = ? WHERE id = ?",
             ("test", "2025-01-01T00:00:00+00:00", item_id),
@@ -862,7 +880,7 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
 #
 # A provider child killed by service shutdown (rc=-15) must not be turned
 # into a normal provider error and marked done. The durable work item must
-# remain claimed so the next boot can recover and replay it.
+# remain claimed until its lease expires so the next boot can recover and replay it.
 # =====================================================================
 
 class _StickyReplyMessage(FakeMessage):
@@ -895,7 +913,7 @@ async def test_interrupted_message_run_stays_claimed_for_recovery():
         )
         assert "Claude error" not in joined
 
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = debug_transport_connection(data_dir)
         row = conn.execute(
             "SELECT state, worker_id FROM work_items WHERE event_id = ?",
             (_event(upd.update_id),),
@@ -903,7 +921,20 @@ async def test_interrupted_message_run_stays_claimed_for_recovery():
         assert row["state"] == "claimed"
         assert row["worker_id"] == "test-boot"
 
-        recovered = recover_stale_claims(data_dir, current_worker_id="next-boot")
+        conn.execute(
+            "UPDATE work_items SET claimed_at = ? WHERE event_id = ?",
+            (
+                (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat(),
+                _event(upd.update_id),
+            ),
+        )
+        conn.commit()
+
+        recovered = recover_stale_claims(
+            data_dir,
+            current_worker_id="next-boot",
+            max_age_seconds=300,
+        )
         assert recovered == 1
         row = conn.execute(
             "SELECT state, worker_id FROM work_items WHERE event_id = ?",
@@ -944,7 +975,7 @@ async def test_any_signal_treated_as_interrupted(rc):
         assert "error" not in joined.lower() or "killed" not in joined.lower()
 
         # Work item stays claimed
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = debug_transport_connection(data_dir)
         row = conn.execute(
             "SELECT state FROM work_items WHERE event_id = ?",
             (_event(upd.update_id),),
@@ -1101,7 +1132,7 @@ async def test_command_exception_marks_work_item_failed():
         finally:
             th._load = original_load
 
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = debug_transport_connection(data_dir)
         row = conn.execute(
             "SELECT state FROM work_items WHERE event_id = ?",
             (_event(upd.update_id),),
@@ -1133,7 +1164,7 @@ async def test_callback_exception_marks_work_item_failed():
         finally:
             th._load = original_load
 
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = debug_transport_connection(data_dir)
         row = conn.execute(
             "SELECT state FROM work_items WHERE event_id = ?",
             (_event(upd.update_id),),
@@ -1212,7 +1243,7 @@ async def test_callback_none_event_completes_work_item():
         finally:
             th.normalize_callback = original
 
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = debug_transport_connection(data_dir)
         row = conn.execute(
             "SELECT state FROM work_items WHERE event_id = ?",
             (_event(upd.update_id),),

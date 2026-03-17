@@ -302,6 +302,10 @@ class RegistryConversationIO(InteractionSurface):
         self._append_output("edit", html.unescape(text))
         await self._publish_progress(text)
 
+    async def edit_reply_markup(self, reply_markup: Any = None, **kwargs: Any) -> None:
+        del reply_markup, kwargs
+        return None
+
     async def delete(self) -> None:
         return None
 

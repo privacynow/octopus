@@ -12,8 +12,9 @@ not a full transport rewrite.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from app.identity import (
     telegram_actor_key,
@@ -86,6 +87,25 @@ class InboundCallback:
     user: InboundUser
     conversation_key: str
     data: str
+    source: str = "telegram"
+    conversation_ref: str = ""
+
+    @property
+    def chat_id(self) -> int:
+        value = telegram_numeric_id(self.conversation_key)
+        if value is None:
+            raise ValueError(f"conversation_key {self.conversation_key!r} is not a Telegram chat")
+        return value
+
+
+@dataclass(frozen=True)
+class InboundAction:
+    """Normalized worker-owned semantic action."""
+
+    user: InboundUser
+    conversation_key: str
+    action: str
+    params: dict[str, Any] = field(default_factory=dict)
     source: str = "telegram"
     conversation_ref: str = ""
 
@@ -223,7 +243,7 @@ def normalize_callback(update) -> InboundCallback | None:
 import json
 
 
-def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback) -> str:
+def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback | InboundAction) -> str:
     """Serialize a normalized inbound event to JSON for durable storage."""
     if isinstance(event, InboundMessage):
         return json.dumps({
@@ -260,10 +280,23 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback) 
             "source": event.source,
             "conversation_ref": event.conversation_ref,
         })
+    if isinstance(event, InboundAction):
+        return json.dumps({
+            "actor_key": event.user.id,
+            "username": event.user.username,
+            "conversation_key": event.conversation_key,
+            "action": event.action,
+            "params": event.params,
+            "source": event.source,
+            "conversation_ref": event.conversation_ref,
+        })
     raise TypeError(f"Unknown inbound type: {type(event)}")
 
 
-def deserialize_inbound(kind: str, payload_json: str) -> InboundMessage | InboundCommand | InboundCallback:
+def deserialize_inbound(
+    kind: str,
+    payload_json: str,
+) -> InboundMessage | InboundCommand | InboundCallback | InboundAction:
     """Reconstruct a normalized inbound event from stored JSON."""
     d = json.loads(payload_json)
     actor_key = d.get("actor_key")
@@ -305,6 +338,18 @@ def deserialize_inbound(kind: str, payload_json: str) -> InboundMessage | Inboun
             user=user,
             conversation_key=str(conversation_key or ""),
             data=d.get("data", ""),
+            source=d.get("source", "telegram"),
+            conversation_ref=d.get("conversation_ref", ""),
+        )
+    if kind == "action":
+        params = d.get("params", {})
+        if not isinstance(params, dict):
+            params = {}
+        return InboundAction(
+            user=user,
+            conversation_key=str(conversation_key or ""),
+            action=d.get("action", ""),
+            params=dict(params),
             source=d.get("source", "telegram"),
             conversation_ref=d.get("conversation_ref", ""),
         )

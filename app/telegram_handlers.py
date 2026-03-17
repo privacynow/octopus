@@ -6,6 +6,8 @@ import contextvars
 import dataclasses
 import html
 import logging
+import os
+import platform
 import re
 import time
 import uuid
@@ -84,7 +86,11 @@ from app.agents.orchestration import build_delegation_plan
 from app.agents.state import load_agent_runtime_state
 from app.agents.types import AgentDiscoveryQuery, RoutedTaskResult, TimelineEvent
 from app.transports import factory
-from app.transports.admission import admit_fresh_message
+from app.transports.admission import (
+    admit_fresh_message,
+    enqueue_inbound_envelope,
+    record_inbound_envelope,
+)
 from app.transports.types import InboundEnvelope
 from app.skills import (
     build_run_context, build_preflight_context,
@@ -112,6 +118,7 @@ from app.summarize import export_chat_history, load_raw, save_raw
 from app import work_queue
 from app.workflows.results import TransportStateCorruption
 from app.transport import (
+    InboundAction,
     InboundAttachment,
     normalize_callback,
     normalize_command,
@@ -119,6 +126,7 @@ from app.transport import (
     normalize_user,
     serialize_inbound,
 )
+from app.worker import poll_interval_for_runtime
 
 log = logging.getLogger(__name__)
 
@@ -244,12 +252,20 @@ async def _chat_lock(chat_id: int | str, *, message=None, query=None, update_id:
     consumed), ``False`` otherwise.  Callback handlers should skip their
     own ``query.answer()`` when the yielded value is ``True``.
     """
+    data_dir = _cfg().data_dir
+    conversation_key = _conversation_key(chat_id)
+    if _cfg().runtime_mode == "shared" and worker_item is not None:
+        work_queue.supersede_pending_recovery(data_dir, conversation_key)
+        try:
+            yield False
+        except work_queue.LeaveClaimed:
+            raise
+        return
+
     lock = CHAT_LOCKS[chat_id]
     sent_feedback = False
     # In-memory lock is the primary contention signal.  The durable check
     # only matters on restart recovery (lock not held but stale work items exist).
-    data_dir = _cfg().data_dir
-    conversation_key = _conversation_key(chat_id)
     is_busy = lock.locked()
     if is_busy:
         sent_feedback = True
@@ -348,6 +364,10 @@ _rate_limiter: RateLimiter | None = None
 _pending_work_items: dict[int, str] = {}  # update_id -> work_item_id
 
 
+def _make_boot_id() -> str:
+    return f"{platform.node()}:{os.getpid()}:{uuid.uuid4().hex[:12]}"
+
+
 def _dedup_update(update: Update, kind: str = "unknown", payload: str = "{}") -> bool:
     """Return True if this update_id was already processed (duplicate).
 
@@ -430,6 +450,209 @@ def _telegram_chat_id(chat_id: int | str) -> int:
 
 def _approval_mode_source(session: SessionState) -> str:
     return "chat override" if session.approval_mode_explicit else "instance default"
+
+
+def _callback_message_id(update: Update) -> int | None:
+    query = update.callback_query
+    if query is None or query.message is None:
+        return None
+    return getattr(query.message, "message_id", None)
+
+
+def _build_action_envelope(
+    *,
+    transport: str,
+    event_id: str,
+    action: InboundAction,
+    conversation_ref: str = "",
+) -> InboundEnvelope:
+    return InboundEnvelope(
+        transport=transport,
+        event_id=event_id,
+        conversation_key=action.conversation_key,
+        actor_key=action.user.id,
+        received_at=datetime.now(timezone.utc),
+        event=action,
+        conversation_ref=conversation_ref or action.conversation_ref,
+    )
+
+
+def _worker_owned_command_action(event) -> InboundAction | None:
+    args = tuple(event.args or ())
+    command = (event.command or "").lower()
+
+    if command == "new":
+        return InboundAction(event.user, event.conversation_key, "session_new")
+    if command == "approval":
+        mode = args[0].lower() if args else "status"
+        if mode in {"on", "off"}:
+            return InboundAction(
+                event.user,
+                event.conversation_key,
+                "set_approval_mode",
+                params={"value": mode},
+            )
+        return None
+    if command == "approve":
+        return InboundAction(event.user, event.conversation_key, "approve_pending")
+    if command == "reject":
+        return InboundAction(event.user, event.conversation_key, "reject_pending")
+    if command == "cancel":
+        return InboundAction(event.user, event.conversation_key, "cancel_conversation")
+    if command == "role":
+        if not args:
+            return None
+        value = "" if args[0].lower() == "clear" else " ".join(args)
+        return InboundAction(
+            event.user,
+            event.conversation_key,
+            "set_role",
+            params={"value": value},
+        )
+    if command == "compact":
+        if not args:
+            return None
+        mode = args[0].lower()
+        if mode not in {"on", "off"}:
+            return None
+        return InboundAction(
+            event.user,
+            event.conversation_key,
+            "set_compact_mode",
+            params={"value": mode == "on"},
+        )
+    if command == "model":
+        if not args:
+            return None
+        profile = args[0].lower()
+        if profile == "status":
+            return None
+        if profile == "inherit":
+            profile = ""
+        return InboundAction(
+            event.user,
+            event.conversation_key,
+            "set_model_profile",
+            params={"profile": profile},
+        )
+    if command == "project":
+        if not args:
+            return None
+        sub = args[0].lower()
+        if sub == "use" and len(args) >= 2:
+            return InboundAction(
+                event.user,
+                event.conversation_key,
+                "set_project",
+                params={"value": args[1]},
+            )
+        if sub == "clear":
+            return InboundAction(
+                event.user,
+                event.conversation_key,
+                "set_project",
+                params={"value": "clear"},
+            )
+        return None
+    if command == "policy":
+        mode = args[0].lower() if args else ""
+        if mode in {"inspect", "edit"}:
+            value = mode
+        elif mode == "inherit":
+            value = ""
+        else:
+            return None
+        return InboundAction(
+            event.user,
+            event.conversation_key,
+            "set_file_policy",
+            params={"value": value},
+        )
+    if command == "skills":
+        sub = args[0].lower() if args else ""
+        if sub == "add" and len(args) >= 2:
+            return InboundAction(
+                event.user,
+                event.conversation_key,
+                "skills_add",
+                params={"name": args[1]},
+            )
+        if sub == "remove" and len(args) >= 2:
+            return InboundAction(
+                event.user,
+                event.conversation_key,
+                "skills_remove",
+                params={"name": args[1]},
+            )
+        if sub == "setup" and len(args) >= 2:
+            return InboundAction(
+                event.user,
+                event.conversation_key,
+                "skills_setup",
+                params={"name": args[1]},
+            )
+        if sub == "clear":
+            return InboundAction(event.user, event.conversation_key, "skills_clear")
+        return None
+    return None
+
+
+def _worker_owned_callback_action(update: Update, event) -> InboundAction | None:
+    params: dict[str, Any] = {}
+    message_id = _callback_message_id(update)
+    if message_id is not None:
+        params["message_id"] = message_id
+
+    data = event.data or ""
+    if data == "approval_approve":
+        return InboundAction(event.user, event.conversation_key, "approve_pending", params=params)
+    if data == "approval_reject":
+        return InboundAction(event.user, event.conversation_key, "reject_pending", params=params)
+    if data == "retry_allow":
+        return InboundAction(event.user, event.conversation_key, "retry_allow", params=params)
+    if data == "retry_skip":
+        return InboundAction(event.user, event.conversation_key, "retry_skip", params=params)
+    if data.startswith("recovery_"):
+        parts = data.split(":", 1)
+        if len(parts) != 2:
+            return None
+        try:
+            params["update_id"] = int(parts[1])
+        except (TypeError, ValueError):
+            return None
+        return InboundAction(event.user, event.conversation_key, parts[0], params=params)
+    if data.startswith("delegation_"):
+        parsed = _parse_delegation_callback(data)
+        if parsed is None:
+            return None
+        action, chat_id = parsed
+        params["target_conversation_key"] = _conversation_key(chat_id)
+        return InboundAction(event.user, event.conversation_key, action, params=params)
+    if data.startswith("setting_"):
+        _, rest = data.split("_", 1)
+        if ":" not in rest:
+            return None
+        setting, value = rest.split(":", 1)
+        if setting == "model":
+            params["profile"] = "" if value == "inherit" else value
+            return InboundAction(event.user, event.conversation_key, "set_model_profile", params=params)
+        if setting == "approval":
+            params["value"] = value
+            return InboundAction(event.user, event.conversation_key, "set_approval_mode", params=params)
+        if setting == "compact":
+            params["value"] = value == "on"
+            return InboundAction(event.user, event.conversation_key, "set_compact_mode", params=params)
+        if setting == "policy":
+            params["value"] = "" if value == "inherit" else value
+            return InboundAction(event.user, event.conversation_key, "set_file_policy", params=params)
+        if setting == "project":
+            params["value"] = value
+            return InboundAction(event.user, event.conversation_key, "set_project", params=params)
+        return None
+    if data.startswith("skill_add_confirm:"):
+        params["name"] = data.split(":", 1)[1]
+        return InboundAction(event.user, event.conversation_key, "skills_add", params=params)
+    return None
 
 
 # -- Data classes ----------------------------------------------------------
@@ -638,7 +861,7 @@ def _callback_handler(fn):
 
 def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
     """Check prompt size in all chats where skill_name is active."""
-    from app.doctor import check_prompt_size_cross_chat
+    from app.skills import check_prompt_size_cross_chat
     cfg = _cfg()
     return check_prompt_size_cross_chat(
         data_dir, skill_name, cfg.provider_name,
@@ -905,6 +1128,9 @@ async def send_formatted_reply(message, text: str) -> None:
 
 
 async def _edit_or_reply_text(message, text: str, **kwargs) -> None:
+    if getattr(message, "_target_message_id", None) is not None and hasattr(message, "edit_text"):
+        await message.edit_text(text, **kwargs)
+        return
     caps = getattr(message, "capabilities", None)
     if getattr(caps, "surface_name", "") == "telegram":
         await message.reply_text(text, **kwargs)
@@ -1212,6 +1438,7 @@ async def execute_request(
     request_user_id: int | str = "",
     skip_permissions: bool = False,
     trust_tier: str = "trusted",
+    cancel_event: asyncio.Event | None = None,
 ) -> RequestExecutionOutcome:
     cfg = _cfg()
     prov = _prov()
@@ -1308,10 +1535,17 @@ async def execute_request(
     typing_task = asyncio.create_task(keep_typing(message.chat))
     heartbeat_task = asyncio.create_task(_heartbeat(progress, content_started))
 
-    cancel_event = asyncio.Event()
-    _LIVE_CANCEL[chat_id] = cancel_event
+    local_cancel_event = cancel_event or asyncio.Event()
+    _LIVE_CANCEL[chat_id] = local_cancel_event
     try:
-        result = await prov.run(session.provider_state, prompt, image_paths, progress, context=context, cancel=cancel_event)
+        result = await prov.run(
+            session.provider_state,
+            prompt,
+            image_paths,
+            progress,
+            context=context,
+            cancel=local_cancel_event,
+        )
     finally:
         _LIVE_CANCEL.pop(chat_id, None)
         heartbeat_task.cancel()
@@ -1454,6 +1688,7 @@ async def request_approval(
     message,
     request_user_id: int | str = "",
     trust_tier: str = "trusted",
+    cancel_event: asyncio.Event | None = None,
 ) -> None:
     cfg = _cfg()
     prov = _prov()
@@ -1505,10 +1740,16 @@ async def request_approval(
     heartbeat_task = asyncio.create_task(_heartbeat(progress, content_started))
 
     preflight_prompt = build_preflight_prompt(prompt, prov.name)
-    cancel_event = asyncio.Event()
-    _LIVE_CANCEL[chat_id] = cancel_event
+    local_cancel_event = cancel_event or asyncio.Event()
+    _LIVE_CANCEL[chat_id] = local_cancel_event
     try:
-        plan_result = await prov.run_preflight(preflight_prompt, image_paths, progress, context=preflight_context, cancel=cancel_event)
+        plan_result = await prov.run_preflight(
+            preflight_prompt,
+            image_paths,
+            progress,
+            context=preflight_context,
+            cancel=local_cancel_event,
+        )
     finally:
         _LIVE_CANCEL.pop(chat_id, None)
         heartbeat_task.cancel()
@@ -1562,7 +1803,12 @@ async def request_approval(
     await message.chat.send_message(_msg.approval_plan_question(), reply_markup=keyboard)
 
 
-async def approve_pending(chat_id: int, message) -> None:
+async def approve_pending(
+    chat_id: int | str,
+    message,
+    *,
+    cancel_event: asyncio.Event | None = None,
+) -> None:
     session = _load(chat_id)
     pending = session.pending_approval or session.pending_retry
     if not pending:
@@ -1605,6 +1851,7 @@ async def approve_pending(chat_id: int, message) -> None:
         request_user_id=request_user_id,
         skip_permissions=True,
         trust_tier=trust_tier,
+        cancel_event=cancel_event,
     )
 
 
@@ -1628,7 +1875,12 @@ async def retry_skip_pending(chat_id: int, message) -> None:
     await _edit_or_reply_text(message, _msg.retry_skip_confirmation())
 
 
-async def retry_allow_pending(chat_id: int, message) -> None:
+async def retry_allow_pending(
+    chat_id: int | str,
+    message,
+    *,
+    cancel_event: asyncio.Event | None = None,
+) -> None:
     session = _load(chat_id)
     pending = session.pending_retry
     if not pending:
@@ -1670,6 +1922,7 @@ async def retry_allow_pending(chat_id: int, message) -> None:
         request_user_id=request_user_id,
         skip_permissions=True,
         trust_tier=trust_tier,
+        cancel_event=cancel_event,
     )
 
 
@@ -2022,23 +2275,39 @@ async def cmd_id(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 @_command_handler
 async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     import sqlite3
-    from app.doctor import collect_doctor_report
+    from app.runtime_health import (
+        SessionHealthContext,
+        collect_runtime_health_report,
+        format_runtime_health_for_doctor,
+    )
     try:
         session = _load(event.chat_id)
     except (sqlite3.DatabaseError, sqlite3.OperationalError, RuntimeError):
         session = None
     cfg = _cfg()
-    kwargs: dict[str, Any] = {}
+    session_context = None
     if session is not None:
-        kwargs.update(session=session_to_dict(session), user_id=event.user.id,
-                      encryption_key=_encryption_key())
-    report = await collect_doctor_report(
-        cfg, _prov(), caller_is_bot=True, **kwargs)
+        session_context = SessionHealthContext(
+            session=session_to_dict(session),
+            user_id=str(event.user.id),
+            encryption_key=_encryption_key(),
+        )
+    report = await collect_runtime_health_report(
+        cfg,
+        _prov(),
+        caller_is_bot=True,
+        session_context=session_context,
+    )
     parts: list[str] = []
-    if report.errors:
-        parts.extend(f"\u274c {html.escape(e)}" for e in report.errors)
-    if report.warnings:
-        parts.extend(f"\u26a0\ufe0f {html.escape(w)}" for w in report.warnings)
+    for line in format_runtime_health_for_doctor(report):
+        if line.startswith("INFO: "):
+            parts.append(f"\u2139\ufe0f {html.escape(line[6:])}")
+        elif line.startswith("FAIL: "):
+            parts.append(f"\u274c {html.escape(line[6:])}")
+        elif line.startswith("WARN: "):
+            parts.append(f"\u26a0\ufe0f {html.escape(line[6:])}")
+        else:
+            parts.append(html.escape(line))
     # Prompt weight from resolved execution context (respects trust tier)
     if session is not None:
         from app.skills import build_system_prompt
@@ -2717,14 +2986,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     payload = serialize_inbound(msg)
 
     cfg = _cfg()
-    if not session_exists(cfg.data_dir, _conversation_key(chat_id)):
-        welcome = "I'm ready. Send me a message or type /help to see what I can do."
-        if cfg.approval_mode == "on":
-            welcome += "\nApproval mode is on \u2014 I'll show a plan before acting."
-        effective_compact = cfg.compact_mode
-        if effective_compact:
-            welcome += "\nCompact mode is on \u2014 long answers are summarized. Use /compact off for full answers."
-        await message.chat.send_message(welcome)
+    needs_welcome = not session_exists(cfg.data_dir, _conversation_key(chat_id))
 
     data_dir = cfg.data_dir
     session = _load(chat_id)
@@ -2810,13 +3072,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     status, item_id = admit_fresh_message(data_dir, envelope)
     if status == "duplicate":
         return
-    if status == "busy":
+    if status == "admitted" and needs_welcome:
+        welcome = "I'm ready. Send me a message or type /help to see what I can do."
+        if cfg.approval_mode == "on":
+            welcome += "\nApproval mode is on \u2014 I'll show a plan before acting."
+        effective_compact = cfg.compact_mode
+        if effective_compact:
+            welcome += "\nCompact mode is on \u2014 long answers are summarized. Use /compact off for full answers."
+        await message.chat.send_message(welcome)
+    if status == "queued":
         await message.reply_text(
-            f"<i>{_msg.queue_busy()}</i>",
+            f"<i>{_msg.queue_accepted()}</i>",
             parse_mode=ParseMode.HTML,
         )
         return
-    if status != "admitted" or item_id is None:
+    if status not in {"admitted", "queued"} or item_id is None:
         return
 
     # Enqueued for worker; return so /cancel can be processed without blocking.
@@ -2907,12 +3177,13 @@ async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT
 
 
 async def handle_recovery_action(
-    chat_id: int,
+    chat_id: int | str,
     action: str,
     update_id: int,
     message,
     *,
     answer_action=None,
+    cancel_event: asyncio.Event | None = None,
 ) -> None:
     if answer_action is None:
         async def answer_action(text=None, show_alert=False):
@@ -2972,7 +3243,12 @@ async def handle_recovery_action(
 
     # Reclaim the item for replay execution.
     try:
-        item = work_queue.reclaim_for_replay(data_dir, recovery_item["id"], _boot_id)
+        item = work_queue.reclaim_for_replay(
+            data_dir,
+            recovery_item["id"],
+            _boot_id,
+            ignore_claimed_item_id=str(getattr(message, "_worker_item_id", "")),
+        )
     except TransportStateCorruption as e:
         log.exception("Transport state corruption on reclaim for item %s: %s", recovery_item["id"], e)
         await answer_action(_msg.recovery_error_try_again(), show_alert=True)
@@ -3064,12 +3340,17 @@ async def handle_recovery_action(
             if not getattr(event, "routed_task_id", "") and session.approval_mode == "on":
                 await request_approval(
                     chat_id, prompt, image_paths, list(event.attachments),
-                    message, request_user_id=event.user.id, trust_tier=trust,
+                    message,
+                    request_user_id=event.user.id,
+                    trust_tier=trust,
+                    cancel_event=cancel_event,
                 )
             else:
                 await execute_request(
                     chat_id, prompt, image_paths, message,
-                    request_user_id=event.user.id, trust_tier=trust,
+                    request_user_id=event.user.id,
+                    trust_tier=trust,
+                    cancel_event=cancel_event,
                 )
         work_queue.complete_work_item(data_dir, item["id"])
     except work_queue.LeaveClaimed:
@@ -3609,6 +3890,359 @@ async def cmd_listaccess(event, update: Update, context: ContextTypes.DEFAULT_TY
 _bot_instance = None  # Set by build_application
 
 
+@dataclasses.dataclass(frozen=True)
+class _WorkerSkillEvent:
+    chat_id: int | str
+    user: Any
+
+
+class _WorkerSkillUpdate:
+    def __init__(self, message: Any) -> None:
+        self.effective_message = message
+
+
+async def _poll_cancel_requested(item_id: str, cancel_event: asyncio.Event) -> None:
+    interval = poll_interval_for_runtime(_cfg().runtime_mode)
+    while not cancel_event.is_set():
+        if work_queue.is_cancel_requested(_cfg().data_dir, item_id):
+            cancel_event.set()
+            return
+        await asyncio.sleep(interval)
+
+
+async def _run_with_cancel_watch(
+    item: dict[str, Any],
+    runner,
+):
+    if _cfg().runtime_mode != "shared":
+        return await runner(None)
+    cancel_event = asyncio.Event()
+    watcher = asyncio.create_task(
+        _poll_cancel_requested(item["id"], cancel_event),
+        name=f"cancel-watch:{item['id']}",
+    )
+    try:
+        return await runner(cancel_event)
+    finally:
+        watcher.cancel()
+        await asyncio.gather(watcher, return_exceptions=True)
+
+
+def _action_target_message_id(event: InboundAction) -> int | None:
+    raw = event.params.get("message_id")
+    if isinstance(raw, int) and raw > 0:
+        return raw
+    if isinstance(raw, str) and raw.isdigit():
+        return int(raw)
+    return None
+
+
+def _build_action_surface(
+    event: InboundAction,
+    *,
+    item: dict[str, Any],
+):
+    source = getattr(event, "source", "telegram")
+    conversation_key = str(item.get("conversation_key") or event.conversation_key)
+    chat_id = telegram_numeric_id(conversation_key) if source == "telegram" else None
+    if source == "telegram" and (chat_id is None or _bot_instance is None):
+        raise RuntimeError(
+            f"Telegram action item {item.get('id')} missing bot or chat_id for {conversation_key!r}"
+        )
+    runtime_chat = chat_id if chat_id is not None else conversation_key
+    conversation_ref = event.conversation_ref or (
+        telegram_conversation_ref(_cfg(), chat_id)
+        if source == "telegram" and chat_id is not None
+        else conversation_key
+    )
+    surface = factory.create_outbound_surface(
+        conversation_ref,
+        config=_cfg(),
+        bot=_bot_instance,
+        conversation_key=conversation_key,
+        source=source,
+        target_message_id=_action_target_message_id(event),
+        output_log=getattr(_bot_instance, "_output_log", None) if _bot_instance is not None else None,
+    )
+    setattr(surface, "_worker_item_id", str(item.get("id", "")))
+    return surface, runtime_chat, chat_id, conversation_ref, source
+
+
+async def _execute_worker_action(
+    event: InboundAction,
+    item: dict[str, Any],
+    *,
+    cancel_event: asyncio.Event | None,
+) -> None:
+    from app.skill_commands import skills_add, skills_clear, skills_remove, skills_setup
+
+    surface, runtime_chat, chat_id, conversation_ref, source = _build_action_surface(event, item=item)
+    trust = factory.trust_tier_for_source(source, event.user, config=_cfg())
+    action = event.action
+    params = dict(event.params)
+
+    if action == "session_new":
+        cfg = _cfg()
+        prov = _prov()
+        old_session = _load(runtime_chat)
+        user_id = event.user.id
+        if foreign_skill_setup(old_session, _actor_key(user_id)):
+            await surface.reply_text(
+                foreign_setup_message(old_session.awaiting_skill_setup),
+            )
+            return
+        approval_mode = old_session.approval_mode if old_session.approval_mode_explicit else cfg.approval_mode
+        session = session_from_dict(
+            default_session(prov.name, prov.new_provider_state(), approval_mode, cfg.role, cfg.default_skills)
+        )
+        if old_session.approval_mode_explicit:
+            session.approval_mode_explicit = True
+        _save(runtime_chat, session)
+        cleanup_codex_scripts(cfg.data_dir, _conversation_key(runtime_chat))
+        await surface.reply_text(f"Fresh {prov.name} conversation started.")
+        return
+
+    if action == "set_approval_mode":
+        value = str(params.get("value", "")).lower()
+        if value not in {"on", "off"}:
+            return
+        session = _load(runtime_chat)
+        _apply_approval_change(runtime_chat, session, value)
+        await surface.edit_reply_markup(reply_markup=None)
+        await _edit_or_reply_text(surface, f"Approval mode set to {value} for this chat.")
+        return
+
+    if action == "approve_pending":
+        await surface.edit_reply_markup(reply_markup=None)
+        await approve_pending(runtime_chat, surface, cancel_event=cancel_event)
+        return
+
+    if action == "reject_pending":
+        await surface.edit_reply_markup(reply_markup=None)
+        await reject_pending(runtime_chat, surface)
+        return
+
+    if action == "retry_skip":
+        await surface.edit_reply_markup(reply_markup=None)
+        await retry_skip_pending(runtime_chat, surface)
+        return
+
+    if action == "retry_allow":
+        await surface.edit_reply_markup(reply_markup=None)
+        await retry_allow_pending(runtime_chat, surface, cancel_event=cancel_event)
+        return
+
+    if action in {"recovery_replay", "recovery_discard"}:
+        update_id = int(params.get("update_id") or 0)
+        if update_id <= 0:
+            await surface.reply_text(_msg.recovery_invalid_action())
+            return
+        if action == "recovery_replay":
+            work_queue.complete_work_item(_cfg().data_dir, str(item.get("id", "")))
+        await surface.edit_reply_markup(reply_markup=None)
+        await handle_recovery_action(
+            runtime_chat,
+            action,
+            update_id,
+            surface,
+            cancel_event=cancel_event,
+        )
+        return
+
+    if action == "delegation_approve":
+        target = params.get("target_conversation_key") or runtime_chat
+        target_runtime = target
+        if isinstance(target, str):
+            numeric = telegram_numeric_id(target)
+            if numeric is not None:
+                target_runtime = numeric
+        await handle_surface_delegation_approve(target_runtime, conversation_ref, surface)
+        return
+
+    if action == "delegation_cancel":
+        target = params.get("target_conversation_key") or runtime_chat
+        target_runtime = target
+        if isinstance(target, str):
+            numeric = telegram_numeric_id(target)
+            if numeric is not None:
+                target_runtime = numeric
+        await handle_surface_delegation_cancel(target_runtime, conversation_ref, surface)
+        return
+
+    if action == "cancel_conversation":
+        result = work_queue.request_cancel(
+            _cfg().data_dir,
+            _conversation_key(runtime_chat),
+            _actor_key(event.user.id),
+            cancel_request_event_id=str(item.get("event_id", "")),
+        )
+        if result == work_queue.CancelRequestResult.claimed_cancel_requested:
+            await surface.reply_text(_msg.cancel_live_requested())
+            return
+        if result == work_queue.CancelRequestResult.queued_cancelled:
+            await surface.reply_text(_msg.cancel_queued_superseded())
+            return
+        session = _load(runtime_chat)
+        setup = session.awaiting_skill_setup
+        allow_admin_override = source != "telegram" or is_admin(event.user)
+        if setup:
+            if setup.user_id == _actor_key(event.user.id) or allow_admin_override:
+                session.awaiting_skill_setup = None
+                _save(runtime_chat, session)
+                await surface.reply_text(_msg.credential_setup_cancelled())
+                return
+            await surface.reply_text(_msg.credential_setup_another_user_in_progress())
+            return
+        if session.has_pending:
+            session.clear_pending()
+            _save(runtime_chat, session)
+            await surface.reply_text(_msg.cancel_pending_request())
+            return
+        await surface.reply_text(_msg.nothing_to_cancel())
+        return
+
+    if action == "set_compact_mode":
+        value = bool(params.get("value", False))
+        session = _load(runtime_chat)
+        _apply_compact_change(runtime_chat, session, value)
+        await surface.edit_reply_markup(reply_markup=None)
+        label = _msg.settings_compact_on_label() if value else _msg.settings_compact_off_label()
+        await _edit_or_reply_text(
+            surface,
+            f"Compact mode set to <b>{label}</b>.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if action == "set_role":
+        if is_public_user(event.user):
+            await surface.reply_text(_msg.trust_command_not_available_public())
+            return
+        value = str(params.get("value", ""))
+        session = _load(runtime_chat)
+        if not value:
+            session.role = _cfg().role
+            _save(runtime_chat, session)
+            await surface.reply_text("Role reset to instance default.")
+            return
+        session.role = value
+        _save(runtime_chat, session)
+        await surface.reply_text(
+            f"Role set to: <code>{html.escape(value)}</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if action == "set_model_profile":
+        cfg = _cfg()
+        session = _load(runtime_chat)
+        profile = str(params.get("profile", ""))
+        if profile == "":
+            if not session.model_profile:
+                await _edit_or_reply_text(surface, "Model profile is already inherited.", parse_mode=ParseMode.HTML)
+                return
+            _apply_model_change(runtime_chat, session, "")
+            resolved = _resolve_context(_load(runtime_chat), trust)
+            effective = resolved.effective_model or cfg.model
+            _, profile_name = _settings_model_profile_state(_load(runtime_chat), cfg, trust, effective or "")
+            if effective and profile_name != "(default)":
+                text = (
+                    "Model profile cleared. Effective: "
+                    f"<code>{html.escape(profile_name)}</code> ({html.escape(effective)})"
+                )
+            else:
+                text = "Model profile cleared. Using default model."
+            await surface.edit_reply_markup(reply_markup=None)
+            await _edit_or_reply_text(surface, text, parse_mode=ParseMode.HTML)
+            return
+        if not cfg.model_profiles:
+            stale = session.model_profile
+            if stale:
+                await surface.reply_text(
+                    "No model profiles configured, but this chat has a stale override "
+                    f"(<code>{html.escape(stale)}</code>). Use /model inherit to clear it.",
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                await surface.reply_text(_msg.trust_no_model_profiles())
+            return
+        ok, text = _apply_model_selection(runtime_chat, session, profile, cfg, trust)
+        await surface.edit_reply_markup(reply_markup=None)
+        await _edit_or_reply_text(surface, text, parse_mode=ParseMode.HTML)
+        return
+
+    if action == "set_project":
+        if is_public_user(event.user):
+            await _edit_or_reply_text(surface, _msg.trust_project_public())
+            return
+        cfg = _cfg()
+        if not cfg.projects:
+            await _edit_or_reply_text(surface, _msg.no_projects_configured())
+            return
+        session = _load(runtime_chat)
+        _ok, reply_text = _apply_project_change(runtime_chat, session, str(params.get("value", "")))
+        await surface.edit_reply_markup(reply_markup=None)
+        await _edit_or_reply_text(surface, reply_text, parse_mode=ParseMode.HTML)
+        return
+
+    if action == "set_file_policy":
+        if is_public_user(event.user):
+            await _edit_or_reply_text(surface, _msg.trust_file_policy_public())
+            return
+        value = str(params.get("value", ""))
+        session = _load(runtime_chat)
+        if not value:
+            if not session.file_policy:
+                await _edit_or_reply_text(surface, "File policy is already inherited.", parse_mode=ParseMode.HTML)
+                return
+            _apply_policy_change(runtime_chat, session, "")
+            resolved = _resolve_context(_load(runtime_chat), trust)
+            effective = resolved.file_policy or "edit"
+            await surface.edit_reply_markup(reply_markup=None)
+            await _edit_or_reply_text(
+                surface,
+                f"File policy cleared. Effective policy: <code>{html.escape(effective)}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        if value not in {"inspect", "edit"}:
+            return
+        resolved = _resolve_context(session, trust)
+        old_policy = resolved.file_policy or "edit"
+        if old_policy == value:
+            await _edit_or_reply_text(
+                surface,
+                f"File policy is already <code>{html.escape(value)}</code>.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        _apply_policy_change(runtime_chat, session, value)
+        await surface.edit_reply_markup(reply_markup=None)
+        await _edit_or_reply_text(surface, _msg.trust_file_policy_set(value), parse_mode=ParseMode.HTML)
+        return
+
+    if action in {"skills_add", "skills_remove", "skills_setup", "skills_clear"}:
+        if is_public_user(event.user):
+            await surface.reply_text(_msg.trust_command_not_available_public())
+            return
+        proxy_event = _WorkerSkillEvent(chat_id=runtime_chat, user=event.user)
+        proxy_update = _WorkerSkillUpdate(surface)
+        name = str(params.get("name", ""))
+        if action == "skills_add":
+            await skills_add(proxy_event, proxy_update, name)
+            return
+        if action == "skills_remove":
+            await skills_remove(proxy_event, proxy_update, name)
+            return
+        if action == "skills_setup":
+            await skills_setup(proxy_event, proxy_update, name)
+            return
+        await skills_clear(proxy_event, proxy_update)
+        return
+
+    log.warning("Worker dispatch: unknown semantic action %s for item %s", action, item.get("id"))
+
+
 async def worker_dispatch(kind: str, event, item: dict) -> None:
     """Dispatch a deserialized inbound event from the worker loop.
 
@@ -3617,7 +4251,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
     here: execute_request or request_approval; they register _LIVE_CANCEL so
     /cancel works.
     """
-    from app.transport import InboundMessage, InboundCommand, InboundCallback
+    from app.transport import InboundAction, InboundCallback, InboundCommand, InboundMessage
 
     bot = _bot_instance
     cfg = _cfg()
@@ -3684,16 +4318,36 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             async with _chat_lock(runtime_chat, worker_item=item):
                 session = _load(runtime_chat)
                 outcome = None
-                if not routed_task_id and not getattr(event, "skip_approval", False) and session.approval_mode == "on":
-                    await request_approval(
-                        runtime_chat, prompt, image_paths, list(event.attachments),
-                        bot_msg, request_user_id=user_id, trust_tier=trust,
-                    )
-                else:
-                    outcome = await execute_request(
-                        runtime_chat, prompt, image_paths, bot_msg,
-                        request_user_id=user_id, trust_tier=trust,
-                    )
+
+                async def _run_message(cancel_event: asyncio.Event | None):
+                    nonlocal outcome
+                    if (
+                        not routed_task_id
+                        and not getattr(event, "skip_approval", False)
+                        and session.approval_mode == "on"
+                    ):
+                        await request_approval(
+                            runtime_chat,
+                            prompt,
+                            image_paths,
+                            list(event.attachments),
+                            bot_msg,
+                            request_user_id=user_id,
+                            trust_tier=trust,
+                            cancel_event=cancel_event,
+                        )
+                    else:
+                        outcome = await execute_request(
+                            runtime_chat,
+                            prompt,
+                            image_paths,
+                            bot_msg,
+                            request_user_id=user_id,
+                            trust_tier=trust,
+                            cancel_event=cancel_event,
+                        )
+
+                await _run_with_cancel_watch(item, _run_message)
         except work_queue.LeaveClaimed:
             raise
         if outcome is not None:
@@ -3770,6 +4424,16 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
         _maybe_fire_webhook(cfg, chat_id or 0, conversation_ref, outcome)
         return
 
+    if isinstance(event, InboundAction):
+        try:
+            await _run_with_cancel_watch(
+                item,
+                lambda cancel_event: _execute_worker_action(event, item, cancel_event=cancel_event),
+            )
+        except work_queue.LeaveClaimed:
+            raise
+        return
+
     if isinstance(event, (InboundCommand, InboundCallback)):
         conversation_key = str(item.get("conversation_key", ""))
         chat_id = telegram_numeric_id(conversation_key)
@@ -3795,11 +4459,153 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
     log.warning("Worker dispatch: unknown event type for item %s", item.get("id"))
 
 
+def _shared_inline_command_handler(command: str):
+    return {
+        "approval": cmd_approval,
+        "skills": cmd_skills,
+        "compact": cmd_compact,
+        "role": cmd_role,
+        "model": cmd_model,
+        "project": cmd_project,
+        "policy": cmd_policy,
+    }.get(command)
+
+
+def _action_requires_public_guard(action: str) -> bool:
+    return action in {
+        "cancel_conversation",
+        "set_role",
+        "set_project",
+        "set_file_policy",
+        "skills_add",
+        "skills_remove",
+        "skills_setup",
+        "skills_clear",
+    }
+
+
+async def _enqueue_shared_action(update: Update, action: InboundAction) -> tuple[bool, str | None]:
+    envelope = _build_action_envelope(
+        transport="telegram",
+        event_id=_event_key(update.update_id),
+        action=action,
+    )
+    return enqueue_inbound_envelope(_cfg().data_dir, envelope)
+
+
+def _shared_action_envelope(update: Update, action: InboundAction) -> InboundEnvelope:
+    return _build_action_envelope(
+        transport="telegram",
+        event_id=_event_key(update.update_id),
+        action=action,
+    )
+
+
+def _record_shared_action(update: Update, action: InboundAction) -> tuple[bool, InboundEnvelope]:
+    envelope = _shared_action_envelope(update, action)
+    return record_inbound_envelope(_cfg().data_dir, envelope), envelope
+
+
+async def _shared_cancel_command(update: Update, event, action: InboundAction) -> None:
+    is_new, envelope = _record_shared_action(update, action)
+    if not is_new:
+        return
+    chat_id = event.chat_id
+    actor_key = _actor_key(event.user.id)
+    message = update.effective_message
+    session = _load(chat_id)
+    setup = session.awaiting_skill_setup
+    if setup:
+        if setup.user_id == actor_key or is_admin(event.user):
+            async with _chat_lock(chat_id, message=message, update_id=update.update_id):
+                session = _load(chat_id)
+                if session.awaiting_skill_setup and (
+                    session.awaiting_skill_setup.user_id == actor_key or is_admin(event.user)
+                ):
+                    session.awaiting_skill_setup = None
+                    _save(chat_id, session)
+                    await message.reply_text(_msg.credential_setup_cancelled())
+                    return
+            return
+        await message.reply_text(_msg.credential_setup_another_user_in_progress())
+        return
+
+    result = work_queue.request_cancel(
+        _cfg().data_dir,
+        _conversation_key(chat_id),
+        actor_key,
+        cancel_request_event_id=_event_key(update.update_id),
+    )
+    if result == work_queue.CancelRequestResult.claimed_cancel_requested:
+        await message.reply_text(_msg.cancel_live_requested())
+        return
+    if result == work_queue.CancelRequestResult.queued_cancelled:
+        await message.reply_text(_msg.cancel_queued_superseded())
+        return
+
+    work_queue.enqueue_work_item(
+        _cfg().data_dir,
+        envelope.conversation_key,
+        envelope.event_id,
+    )
+
+
+async def _shared_command_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    event = normalize_command(update, context)
+    if event is None:
+        return
+    if not is_allowed(event.user):
+        await update.effective_message.reply_text(_msg.trust_not_authorized())
+        return
+
+    action = _worker_owned_command_action(event)
+    if action is None:
+        handler = _shared_inline_command_handler(event.command)
+        if handler is not None:
+            await handler(update, context)
+        return
+
+    if _action_requires_public_guard(action.action) and await _public_guard(event, update):
+        return
+
+    if action.action == "cancel_conversation":
+        await _shared_cancel_command(update, event, action)
+        return
+
+    await _enqueue_shared_action(update, action)
+
+
+async def _shared_callback_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    del context
+    event = normalize_callback(update)
+    query = update.callback_query
+    if event is None or query is None:
+        return
+    if not is_allowed(event.user):
+        await query.answer(_msg.trust_not_authorized(), show_alert=True)
+        return
+
+    action = _worker_owned_callback_action(update, event)
+    if action is None:
+        if (event.data or "").startswith("skill_add_"):
+            await handle_skill_add_callback(update, None)  # type: ignore[arg-type]
+            return
+        await query.answer()
+        return
+
+    if _action_requires_public_guard(action.action) and is_public_user(event.user):
+        await query.answer(_msg.trust_command_not_available_public(), show_alert=True)
+        return
+
+    await query.answer()
+    await _enqueue_shared_action(update, action)
+
+
 def build_application(config: BotConfig, provider: Provider) -> Application:
     global _config, _provider, _boot_id, _rate_limiter, _bot_instance
     _config = config
     _provider = provider
-    _boot_id = uuid.uuid4().hex
+    _boot_id = _make_boot_id()
     # Apply conservative rate-limit defaults for public mode
     per_minute = config.rate_limit_per_minute
     per_hour = config.rate_limit_per_hour
@@ -3810,43 +4616,88 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     _rate_limiter = RateLimiter(per_minute=per_minute, per_hour=per_hour)
 
     # Sequential update processing; live runs are worker-owned so /cancel is delivered promptly.
-    app = Application.builder().token(config.telegram_token).build()
+    builder = Application.builder().token(config.telegram_token)
+    if config.telegram_api_base_url:
+        builder = builder.base_url(config.telegram_api_base_url)
+    if config.telegram_file_api_base_url:
+        builder = builder.base_file_url(config.telegram_file_api_base_url)
+    app = builder.build()
     _bot_instance = app.bot
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("new", cmd_new))
-    app.add_handler(CommandHandler("session", cmd_session))
-    app.add_handler(CommandHandler("approval", cmd_approval))
-    app.add_handler(CommandHandler("approve", cmd_approve))
-    app.add_handler(CommandHandler("reject", cmd_reject))
-    app.add_handler(CommandHandler("skills", cmd_skills))
-    app.add_handler(CommandHandler("cancel", cmd_cancel))
-    app.add_handler(CommandHandler("clear_credentials", cmd_clear_credentials))
-    app.add_handler(CommandHandler("role", cmd_role))
-    app.add_handler(CommandHandler("compact", cmd_compact))
-    app.add_handler(CommandHandler("raw", cmd_raw))
-    app.add_handler(CommandHandler("send", cmd_send))
-    app.add_handler(CommandHandler("id", cmd_id))
-    app.add_handler(CommandHandler("doctor", cmd_doctor))
-    app.add_handler(CommandHandler("discover", cmd_discover))
-    app.add_handler(CommandHandler("settings", cmd_settings))
-    app.add_handler(CommandHandler("project", cmd_project))
-    app.add_handler(CommandHandler("policy", cmd_policy))
-    app.add_handler(CommandHandler("model", cmd_model))
-    app.add_handler(CommandHandler("allowuser", cmd_allowuser))
-    app.add_handler(CommandHandler("blockuser", cmd_blockuser))
-    app.add_handler(CommandHandler("listaccess", cmd_listaccess))
-    app.add_handler(CommandHandler("export", cmd_export))
-    app.add_handler(CommandHandler("admin", cmd_admin))
-    app.add_handler(CallbackQueryHandler(handle_callback, pattern=r"^(retry_|approval_)"))
-    app.add_handler(CallbackQueryHandler(handle_delegation_callback, pattern=r"^delegation_"))
-    app.add_handler(CallbackQueryHandler(handle_recovery_callback, pattern=r"^recovery_"))
-    app.add_handler(CallbackQueryHandler(handle_settings_callback, pattern=r"^setting_"))
-    app.add_handler(CallbackQueryHandler(handle_expand_callback, pattern=r"^expand:"))
-    app.add_handler(CallbackQueryHandler(handle_collapse_callback, pattern=r"^collapse:"))
-    app.add_handler(CallbackQueryHandler(handle_skill_add_callback, pattern=r"^skill_add_"))
-    app.add_handler(CallbackQueryHandler(handle_skill_update_callback, pattern=r"^skill_update_"))
-    app.add_handler(CallbackQueryHandler(handle_clear_cred_callback, pattern=r"^clear_cred_"))
+    if config.runtime_mode == "shared":
+        app.add_handler(CommandHandler("start", cmd_start))
+        app.add_handler(CommandHandler("help", cmd_help))
+        app.add_handler(CommandHandler("session", cmd_session))
+        app.add_handler(CommandHandler("clear_credentials", cmd_clear_credentials))
+        app.add_handler(CommandHandler("raw", cmd_raw))
+        app.add_handler(CommandHandler("send", cmd_send))
+        app.add_handler(CommandHandler("id", cmd_id))
+        app.add_handler(CommandHandler("doctor", cmd_doctor))
+        app.add_handler(CommandHandler("discover", cmd_discover))
+        app.add_handler(CommandHandler("settings", cmd_settings))
+        app.add_handler(CommandHandler("allowuser", cmd_allowuser))
+        app.add_handler(CommandHandler("blockuser", cmd_blockuser))
+        app.add_handler(CommandHandler("listaccess", cmd_listaccess))
+        app.add_handler(CommandHandler("export", cmd_export))
+        app.add_handler(CommandHandler("admin", cmd_admin))
+        for command in (
+            "new",
+            "approval",
+            "approve",
+            "reject",
+            "skills",
+            "cancel",
+            "role",
+            "compact",
+            "project",
+            "policy",
+            "model",
+        ):
+            app.add_handler(CommandHandler(command, _shared_command_dispatch))
+        app.add_handler(CallbackQueryHandler(_shared_callback_dispatch, pattern=r"^(retry_|approval_)"))
+        app.add_handler(CallbackQueryHandler(_shared_callback_dispatch, pattern=r"^delegation_"))
+        app.add_handler(CallbackQueryHandler(_shared_callback_dispatch, pattern=r"^recovery_"))
+        app.add_handler(CallbackQueryHandler(_shared_callback_dispatch, pattern=r"^setting_"))
+        app.add_handler(CallbackQueryHandler(handle_expand_callback, pattern=r"^expand:"))
+        app.add_handler(CallbackQueryHandler(handle_collapse_callback, pattern=r"^collapse:"))
+        app.add_handler(CallbackQueryHandler(_shared_callback_dispatch, pattern=r"^skill_add_"))
+        app.add_handler(CallbackQueryHandler(handle_skill_update_callback, pattern=r"^skill_update_"))
+        app.add_handler(CallbackQueryHandler(handle_clear_cred_callback, pattern=r"^clear_cred_"))
+    else:
+        app.add_handler(CommandHandler("start", cmd_start))
+        app.add_handler(CommandHandler("help", cmd_help))
+        app.add_handler(CommandHandler("new", cmd_new))
+        app.add_handler(CommandHandler("session", cmd_session))
+        app.add_handler(CommandHandler("approval", cmd_approval))
+        app.add_handler(CommandHandler("approve", cmd_approve))
+        app.add_handler(CommandHandler("reject", cmd_reject))
+        app.add_handler(CommandHandler("skills", cmd_skills))
+        app.add_handler(CommandHandler("cancel", cmd_cancel))
+        app.add_handler(CommandHandler("clear_credentials", cmd_clear_credentials))
+        app.add_handler(CommandHandler("role", cmd_role))
+        app.add_handler(CommandHandler("compact", cmd_compact))
+        app.add_handler(CommandHandler("raw", cmd_raw))
+        app.add_handler(CommandHandler("send", cmd_send))
+        app.add_handler(CommandHandler("id", cmd_id))
+        app.add_handler(CommandHandler("doctor", cmd_doctor))
+        app.add_handler(CommandHandler("discover", cmd_discover))
+        app.add_handler(CommandHandler("settings", cmd_settings))
+        app.add_handler(CommandHandler("project", cmd_project))
+        app.add_handler(CommandHandler("policy", cmd_policy))
+        app.add_handler(CommandHandler("model", cmd_model))
+        app.add_handler(CommandHandler("allowuser", cmd_allowuser))
+        app.add_handler(CommandHandler("blockuser", cmd_blockuser))
+        app.add_handler(CommandHandler("listaccess", cmd_listaccess))
+        app.add_handler(CommandHandler("export", cmd_export))
+        app.add_handler(CommandHandler("admin", cmd_admin))
+        app.add_handler(CallbackQueryHandler(handle_callback, pattern=r"^(retry_|approval_)"))
+        app.add_handler(CallbackQueryHandler(handle_delegation_callback, pattern=r"^delegation_"))
+        app.add_handler(CallbackQueryHandler(handle_recovery_callback, pattern=r"^recovery_"))
+        app.add_handler(CallbackQueryHandler(handle_settings_callback, pattern=r"^setting_"))
+        app.add_handler(CallbackQueryHandler(handle_expand_callback, pattern=r"^expand:"))
+        app.add_handler(CallbackQueryHandler(handle_collapse_callback, pattern=r"^collapse:"))
+        app.add_handler(CallbackQueryHandler(handle_skill_add_callback, pattern=r"^skill_add_"))
+        app.add_handler(CallbackQueryHandler(handle_skill_update_callback, pattern=r"^skill_update_"))
+        app.add_handler(CallbackQueryHandler(handle_clear_cred_callback, pattern=r"^clear_cred_"))
     app.add_handler(
         MessageHandler(
             (filters.TEXT | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,

@@ -1,4 +1,9 @@
-"""Phase 13: Single backend seam. Owns one selected backend (session + transport). No selection state elsewhere."""
+"""Single runtime backend seam.
+
+Owns one selected session + transport backend pair. Shared Runtime and Local
+Runtime both use this selector; runtime mode changes ingress/worker ownership,
+not the storage backend choice.
+"""
 
 from __future__ import annotations
 
@@ -37,12 +42,6 @@ def transport_store():
 def init(config: BotConfig) -> None:
     """Select and initialize the session and transport backend from config. Call once at startup."""
     global _backend
-    if config.runtime_mode != "local":
-        raise ValueError(
-            f"Only Local Runtime is supported (BOT_RUNTIME_MODE=local). "
-            f"Got BOT_RUNTIME_MODE={config.runtime_mode!r}. "
-            "Shared Runtime is not available until Phase 18."
-        )
     if config.database_url:
         from app.storage_postgres import PostgresSessionStore
         from app.work_queue_postgres import PostgresTransportStore

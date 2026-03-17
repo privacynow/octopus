@@ -8,7 +8,9 @@ from app.agents.delivery import handle_registry_delivery
 from app.agents.runtime import AgentRuntime
 from app.agents.state import load_agent_runtime_state
 from app.config import derive_agent_slug
+from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
 from tests.support.config_support import make_config
+from tests.support.handler_support import drain_one_worker_item, fresh_env
 
 
 def _reg_conv(conversation_ref: str) -> str:
@@ -105,6 +107,99 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
         ("enroll", "Product Bot", "enroll-secret"),
         ("register", "agent-123", "connected"),
         ("heartbeat", "connected", "0"),
+    ]
+
+
+async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypatch, tmp_path: Path):
+    calls: list[tuple[str, object]] = []
+
+    class FakeRegistryClient:
+        def __init__(self, base_url: str, *, agent_token: str = "", timeout_seconds: float = 10.0, client=None):
+            self.base_url = base_url
+            self.agent_token = agent_token
+
+        async def enroll(self, card, enrollment_token: str):
+            return {
+                "agent_id": "agent-123",
+                "slug": "product-bot",
+                "agent_token": "secret-token",
+                "poll_cursor": "0",
+            }
+
+        async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
+            return {"ok": True}
+
+        async def heartbeat(
+            self,
+            *,
+            connectivity_state: str,
+            current_capacity: int,
+            max_capacity: int,
+            active_work_count: int = 0,
+            timeline_checkpoint: str = "",
+            runtime_health: dict | None = None,
+        ):
+            calls.append(("heartbeat", runtime_health, active_work_count))
+            return {"ok": True}
+
+    class FakeHealthProvider:
+        async def collect(self, config, provider, *, caller_is_bot=False, session_context=None):
+            assert caller_is_bot is True
+            return RuntimeHealthReport(
+                generated_at="2026-03-16T00:00:00+00:00",
+                summary=RuntimeHealthSummary(
+                    status="degraded",
+                    healthy_worker_count=1,
+                    stale_worker_count=0,
+                    fresh_queued_count=0,
+                    claimed_count=2,
+                    pending_recovery_count=0,
+                    recovery_queued_count=0,
+                    oldest_claim_age_seconds=12,
+                    warning_count=1,
+                    error_count=0,
+                ),
+            )
+
+    monkeypatch.setattr("app.agents.runtime.AgentRegistryClient", FakeRegistryClient)
+    config = make_config(
+        data_dir=tmp_path,
+        provider_name="codex",
+        agent_mode="registry",
+        agent_display_name="Product Bot",
+        agent_registry_url="http://registry.test",
+        agent_registry_enroll_token="enroll-secret",
+    )
+    runtime = AgentRuntime(
+        config,
+        runtime_health_provider=FakeHealthProvider(),
+        provider=object(),
+    )
+
+    assert await runtime.sync_once() == "connected"
+    assert calls == [
+        (
+            "heartbeat",
+            {
+                "schema_version": 1,
+                "generated_at": "2026-03-16T00:00:00+00:00",
+                "summary": {
+                    "status": "degraded",
+                    "healthy_worker_count": 1,
+                    "stale_worker_count": 0,
+                    "fresh_queued_count": 0,
+                    "claimed_count": 2,
+                    "pending_recovery_count": 0,
+                    "recovery_queued_count": 0,
+                    "oldest_claim_age_seconds": 12,
+                    "warning_count": 1,
+                    "error_count": 0,
+                },
+                "snapshot": None,
+                "diagnostics": [],
+            },
+            2,
+        )
     ]
 
 
@@ -263,15 +358,22 @@ async def test_agent_runtime_run_forever_survives_unexpected_poll_error(tmp_path
     await runtime.run_forever(stop_event)
 
 
-async def test_admit_registry_delivery_busy_returns_retry_later(monkeypatch, tmp_path: Path):
-    async def should_not_run(*args, **kwargs):
-        raise AssertionError("bind/timeline should not run for busy delivery")
+async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path: Path):
+    seen: list[tuple[str, str]] = []
 
-    monkeypatch.setattr("app.agents.bridge.bind_conversation", should_not_run)
-    monkeypatch.setattr("app.agents.bridge.publish_timeline_event", should_not_run)
+    async def fake_bind(*args, **kwargs):
+        del args
+        seen.append(("bind", str(kwargs.get("conversation_ref", ""))))
+
+    async def fake_timeline(*args, **kwargs):
+        del args
+        seen.append(("timeline", str(kwargs.get("conversation_ref", ""))))
+
+    monkeypatch.setattr("app.agents.bridge.bind_conversation", fake_bind)
+    monkeypatch.setattr("app.agents.bridge.publish_timeline_event", fake_timeline)
     monkeypatch.setattr(
         "app.agents.bridge.work_queue.record_and_admit_message",
-        lambda *args, **kwargs: ("busy", None),
+        lambda *args, **kwargs: ("queued", "queued-item"),
     )
     config = make_config(
         data_dir=tmp_path,
@@ -303,8 +405,12 @@ async def test_admit_registry_delivery_busy_returns_retry_later(monkeypatch, tmp
         },
     )
 
-    assert outcome_message == "retry_later"
-    assert outcome_task == "retry_later"
+    assert outcome_message == "accepted"
+    assert outcome_task == "accepted"
+    assert ("bind", "conv-1") in seen
+    assert ("timeline", "conv-1") in seen
+    assert ("bind", "task-1") in seen
+    assert ("timeline", "task-1") in seen
 
 
 async def test_handle_registry_routed_result_publishes_parent_timeline_before_retry_on_startup_race(monkeypatch, tmp_path: Path):
@@ -372,43 +478,43 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
 
 
 async def test_handle_registry_surface_action_and_control_dispatch(monkeypatch, tmp_path: Path):
-    seen: list[tuple[str, int, str]] = []
+    seen: list[tuple[str, str, str]] = []
 
-    async def fake_approve(chat_id: int, message) -> None:
-        seen.append(("approve", chat_id, message.conversation_ref))
+    async def fake_execute_worker_action(event, item, *, cancel_event=None) -> None:
+        del item, cancel_event
+        seen.append((event.action, event.conversation_key, event.conversation_ref))
 
-    async def fake_cancel(chat_id: int, message, *, actor_user_id: int = 0, allow_admin_override: bool = False, update_id: int | None = None) -> None:
-        del actor_user_id, allow_admin_override, update_id
-        seen.append(("cancel", chat_id, message.conversation_ref))
+    monkeypatch.setattr("app.telegram_handlers._execute_worker_action", fake_execute_worker_action)
 
-    monkeypatch.setattr("app.telegram_handlers.approve_pending", fake_approve)
-    monkeypatch.setattr("app.telegram_handlers.cancel_chat_operation", fake_cancel)
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, _prov):
+        approve_outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-approve",
+                "kind": "surface_action",
+                "payload": {"conversation_id": "conv-approve", "action": "approve"},
+            },
+        )
+        control_outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-cancel",
+                "kind": "control",
+                "payload": {"conversation_id": "conv-cancel", "action": "cancel"},
+            },
+        )
 
-    config = make_config(
-        data_dir=tmp_path,
-        agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
-    )
-
-    approve_outcome = await handle_registry_delivery(
-        config,
-        {
-            "kind": "surface_action",
-            "payload": {"conversation_id": "conv-approve", "action": "approve"},
-        },
-    )
-    control_outcome = await handle_registry_delivery(
-        config,
-        {
-            "kind": "control",
-            "payload": {"conversation_id": "conv-cancel", "action": "cancel"},
-        },
-    )
-
-    assert approve_outcome == "accepted"
-    assert control_outcome == "accepted"
-    assert seen == [
-        ("approve", _reg_conv("conv-approve"), "conv-approve"),
-        ("cancel", _reg_conv("conv-cancel"), "conv-cancel"),
-    ]
+        assert approve_outcome == "accepted"
+        assert control_outcome == "accepted"
+        assert await drain_one_worker_item(data_dir) is True
+        assert await drain_one_worker_item(data_dir) is True
+        assert seen == [
+            ("approve_pending", _reg_conv("conv-approve"), "conv-approve"),
+            ("cancel_conversation", _reg_conv("conv-cancel"), "conv-cancel"),
+        ]

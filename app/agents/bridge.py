@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from app import work_queue
@@ -13,8 +14,9 @@ from app.agents.state import load_agent_runtime_state
 from app.agents.types import RoutedTaskResult, TimelineEvent
 from app.config import BotConfig
 from app.identity import telegram_conversation_key
-from app.transport import InboundMessage, InboundUser, serialize_inbound
+from app.transport import InboundAction, InboundMessage, InboundUser, serialize_inbound
 from app.transports.factory import conversation_surface_name
+from app.transports.types import InboundEnvelope
 
 log = logging.getLogger(__name__)
 
@@ -126,6 +128,36 @@ def build_registry_message_delivery(
     return conversation_key, actor_key, event_id, payload
 
 
+def build_registry_action_envelope(
+    *,
+    conversation_ref: str,
+    action: str,
+    action_payload: dict[str, Any],
+    actor_ref: str,
+    delivery_id: str,
+) -> InboundEnvelope:
+    conversation_key = conversation_key_for_ref(conversation_ref)
+    actor_key = f"reg:{actor_ref}"
+    event_id = f"reg:{delivery_id}"
+    event = InboundAction(
+        user=InboundUser(id=actor_key, username="registry"),
+        conversation_key=conversation_key,
+        action=action,
+        params=dict(action_payload),
+        source="registry",
+        conversation_ref=conversation_ref,
+    )
+    return InboundEnvelope(
+        transport="registry",
+        event_id=event_id,
+        conversation_key=conversation_key,
+        actor_key=actor_key,
+        received_at=datetime.now(timezone.utc),
+        event=event,
+        conversation_ref=conversation_ref,
+    )
+
+
 async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -> str:
     """Convert a registry delivery into a normal local work item or control action."""
     kind = delivery.get("kind", "")
@@ -149,9 +181,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
             "message",
             serialized,
         )
-        if status == "busy":
-            return "retry_later"
-        if status in {"admitted", "duplicate"}:
+        if status in {"admitted", "queued", "duplicate"}:
             await bind_conversation(
                 config,
                 conversation_ref=conversation_ref,
@@ -200,9 +230,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
             "message",
             serialized,
         )
-        if status == "busy":
-            return "retry_later"
-        if status in {"admitted", "duplicate"}:
+        if status in {"admitted", "queued", "duplicate"}:
             await bind_conversation(
                 config,
                 conversation_ref=conversation_ref,

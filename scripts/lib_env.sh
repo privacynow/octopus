@@ -42,14 +42,14 @@ get_bot_provider() {
   echo "${p:-claude}"
 }
 
-# Exit with message if image telegram-agent-bot:$1 is missing. Call with provider from get_bot_provider or arg.
+# Exit with message if image octopus-agent:$1 is missing. Call with provider from get_bot_provider or arg.
 check_provider_image() {
   local provider="${1:-}"
   if [ -z "$provider" ]; then
     provider=$(get_bot_provider)
   fi
-  if ! docker image inspect "telegram-agent-bot:$provider" >/dev/null 2>&1; then
-    echo "Image telegram-agent-bot:$provider not found." >&2
+  if ! docker image inspect "octopus-agent:$provider" >/dev/null 2>&1; then
+    echo "Image octopus-agent:$provider not found." >&2
     echo "Run: ./scripts/provider/build_bot_image.sh $provider" >&2
     exit 1
   fi
@@ -60,11 +60,30 @@ bot_compose() {
   local env_file="${BOT_ENV_FILE:-$(current_bot_env_file)}"
   local project="${BOT_COMPOSE_PROJECT:-}"
   if [ -z "$project" ] && [ "$env_file" != ".env.bot" ]; then
-    project="telegram-agent-bot-$(current_bot_instance "$env_file")"
+    project="octopus-agent-$(current_bot_instance "$env_file")"
   fi
   if [ -n "$project" ]; then
     docker compose --project-directory . -p "$project" -f infra/compose/docker-compose.yml --profile bot --env-file "$env_file" "$@"
     return
   fi
   docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot --env-file "$env_file" "$@"
+}
+
+bot_shared_compose() {
+  local env_file="${BOT_ENV_FILE:-$(current_bot_env_file)}"
+  local project="${BOT_COMPOSE_PROJECT:-}"
+  if [ -z "$project" ] && [ "$env_file" != ".env.bot" ]; then
+    project="octopus-agent-$(current_bot_instance "$env_file")"
+  fi
+  if [ -n "$project" ]; then
+    docker compose --project-directory . -p "$project" \
+      -f infra/compose/docker-compose.yml \
+      -f infra/compose/docker-compose.shared.yml \
+      --env-file "$env_file" "$@"
+    return
+  fi
+  docker compose --project-directory . \
+    -f infra/compose/docker-compose.yml \
+    -f infra/compose/docker-compose.shared.yml \
+    --env-file "$env_file" "$@"
 }

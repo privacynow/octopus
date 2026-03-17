@@ -109,17 +109,21 @@ class AgentRegistryClient:
         max_capacity: int,
         active_work_count: int = 0,
         timeline_checkpoint: str = "",
+        runtime_health: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        payload = {
+            "connectivity_state": connectivity_state,
+            "current_capacity": current_capacity,
+            "max_capacity": max_capacity,
+            "active_work_count": active_work_count,
+            "timeline_checkpoint": timeline_checkpoint,
+        }
+        if runtime_health:
+            payload["runtime_health"] = runtime_health
         return await self._request(
             "POST",
             "/v1/agents/heartbeat",
-            json_data={
-                "connectivity_state": connectivity_state,
-                "current_capacity": current_capacity,
-                "max_capacity": max_capacity,
-                "active_work_count": active_work_count,
-                "timeline_checkpoint": timeline_checkpoint,
-            },
+            json_data=payload,
         )
 
     async def publish_timeline(self, events: list[TimelineEvent], *, checkpoint: str = "") -> dict[str, Any]:

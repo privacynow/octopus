@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from contextlib import contextmanager
@@ -93,8 +94,16 @@ def _load_work_item_by_conversation_event(
     if row is None:
         return None
     row = dict(row)
+    if "payload" in row:
+        row["payload"] = _payload_json_text(row["payload"])
     _validate_work_item_row(row)
     return row
+
+
+def _payload_json_text(value: Any) -> str:
+    if isinstance(value, dict):
+        return json.dumps(value)
+    return str(value) if value is not None else "{}"
 
 
 def _assert_no_invalid_rows_for_conversation(conn, conversation_key: str) -> None:
@@ -503,7 +512,7 @@ def claim_for_update(
             u = cur.fetchone()
         if u:
             out["kind"] = u["kind"]
-            out["payload"] = u["payload"]
+            out["payload"] = _payload_json_text(u["payload"])
         return out
 
 
@@ -568,6 +577,8 @@ def claim_next_any(conn, worker_id: str) -> dict[str, Any] | None:
         if item is None:
             return None
         out = dict(item)
+        if "payload" in out:
+            out["payload"] = _payload_json_text(out["payload"])
         _validate_work_item_row(out, out["id"])
         return out
 
@@ -965,6 +976,8 @@ def get_latest_pending_recovery(conn, conversation_key: str) -> dict[str, Any] |
         rows = cur.fetchall()
     for row in rows:
         r = dict(row)
+        if "payload" in r:
+            r["payload"] = _payload_json_text(r["payload"])
         _validate_work_item_row(r, r["id"])
         if r["state"] == "pending_recovery":
             return r
@@ -1064,6 +1077,8 @@ def reclaim_for_replay(
         if full is None:
             return None
         r = dict(full)
+        if "payload" in r:
+            r["payload"] = _payload_json_text(r["payload"])
         _validate_work_item_row(r, item_id)
         return r
 

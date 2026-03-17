@@ -417,6 +417,23 @@ def test_load_config_reads_webhook_env_vars():
         os.unlink(env_path)
 
 
+def test_load_config_reads_telegram_api_base_urls():
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write("TELEGRAM_BOT_TOKEN=tok\n")
+        f.write("BOT_PROVIDER=claude\n")
+        f.write("BOT_ALLOW_OPEN=1\n")
+        f.write("BOT_TELEGRAM_API_BASE_URL=http://telegram-api-stub:8081/bot\n")
+        f.write("BOT_TELEGRAM_FILE_API_BASE_URL=http://telegram-api-stub:8081/file/bot\n")
+        env_path = f.name
+    try:
+        with patch("app.config.env_path_for_instance", return_value=Path(env_path)):
+            cfg = load_config("test-telegram-api")
+        assert cfg.telegram_api_base_url == "http://telegram-api-stub:8081/bot"
+        assert cfg.telegram_file_api_base_url == "http://telegram-api-stub:8081/file/bot"
+    finally:
+        os.unlink(env_path)
+
+
 def test_load_config_reads_completion_webhook_url():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
         f.write("TELEGRAM_BOT_TOKEN=tok\n")
@@ -533,6 +550,16 @@ def test_claim_lease_ttl_from_env():
 def test_claim_lease_ttl_must_be_positive():
     errors = validate_config(make_config(claim_lease_ttl_seconds=0))
     assert any("BOT_CLAIM_LEASE_TTL must be greater than 0" in e for e in errors)
+
+
+def test_claim_sweep_interval_must_be_positive():
+    errors = validate_config(make_config(claim_sweep_interval_seconds=0))
+    assert any("BOT_CLAIM_SWEEP_INTERVAL_SECONDS must be greater than 0" in e for e in errors)
+
+
+def test_validate_config_rejects_invalid_telegram_api_base_url():
+    errors = validate_config(make_config(telegram_api_base_url="ftp://telegram-api-stub:8081/bot"))
+    assert any("BOT_TELEGRAM_API_BASE_URL" in e for e in errors)
 
 
 def test_load_config_reads_database_url_and_pool_settings():

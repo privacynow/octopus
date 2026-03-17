@@ -6386,184 +6386,222 @@ a projector. One abstraction, many surfaces.
 
 ###### M21E — Durability confidence and E2E proof
 
-**Status: Not started.**
+**Status: Complete.**
 
-**Problem.** The Shared Runtime path must be proven under crash,
-restart, and concurrent-worker conditions. M21A-D shipped the runtime
-semantics, deployment shape, and observability — but the transport
-FSM invariants and multi-worker queue guarantees are asserted only in
-single-process unit tests and contract tests. There is no proof that
-the full Compose deployment (webhook + workers + shared queue)
-actually works end-to-end under realistic conditions.
+**Problem.** M21A-D shipped the runtime semantics, deployment shape,
+and observability. The transport FSM invariants and multi-worker
+queue guarantees are asserted only in single-process unit tests and
+contract tests. There is no proof that the full Compose deployment
+(webhook + workers + shared queue) actually works end-to-end under
+realistic multi-process conditions.
 
-**Goal.** Prove the Shared Runtime contract under real multi-process
-conditions using Compose E2E tests. Each test starts the full split-
-role stack (webhook + worker containers), sends real HTTP requests to
-the webhook, and asserts on durable state in the shared transport
-store.
+**Goal.** Prove the Shared Runtime contract under real split-role
+Compose execution across both supported backends (SQLite and
+Postgres). This is primarily a test/harness slice, but if the
+current runnable image cannot produce deterministic proof conditions,
+M21E includes the smallest justified testability seam.
 
-**Design constraints.**
-- Tests must run against both SQLite and Postgres backends where
-  feasible. SQLite is the default; Postgres runs when
-  `TEST_DATABASE_URL` or Docker Postgres is available.
-- Tests must not depend on provider auth. Use the stub image
-  (`Dockerfile.runnable`) or a test provider that completes
-  immediately.
-- Tests must be deterministic. No log-scraping as the primary oracle.
-  Assert on transport store state (DB queries or inspecting the shared
-  SQLite file).
-- Cleanup discipline: `docker compose down -v || true` before and
-  after every test.
-- Reuse the existing E2E harness: `bot_image_built` fixture, project
-  isolation, artifact dirs, `_compose_down`, shared override
-  generation.
+**Core principles.**
+- **Proof over smoke.** Assertions must prove the runtime contract,
+  not just show that logs appeared.
+- **Durable state is the primary oracle.** Query `work_items`,
+  `updates`, and related durable state directly.
+- **Both backends required.** Every proof test runs for both SQLite
+  and Postgres. Postgres is not optional.
+- **One harness, two backends.** Backend setup is parameterized
+  centrally; tests do not fork into separate hand-maintained suites.
+- **No log-driven correctness.** Logs are supporting evidence only.
+- **Deterministic timing.** Use explicit wait helpers that poll for
+  state predicates; no fixed sleeps.
+- **Replay-notice recovery, never auto-rerun.** Crash recovery must
+  prove `dispatch_mode='recovery'`, not silent re-execution.
+- **Cleanup is mandatory.** Pre-clean and post-clean every test.
+- **If the current runtime image cannot support deterministic proof,
+  add the smallest justified seam.** Do not weaken tests to avoid a
+  small harness fix.
 
-**What M21E must deliver.**
+**What M21E must prove.**
 
-**1. Compose E2E test file**
-(`tests/e2e/test_compose_shared_runtime.py`, new).
+**1. Persist-before-response.**
+Webhook POST is durably recorded before worker execution begins.
 
-All tests use the M21C split-role Compose shape: `bot-webhook`
-service (webhook role) + `bot-worker` service (worker role). Both
-use the same image. The webhook publishes a port for HTTP POSTs.
-Workers drain the shared queue.
+Proof: POST update → immediately query store → assert `updates` row
+exists and `work_items` row is `queued` before worker has completed
+it → then allow worker execution → verify eventual terminal state.
+This proves ingress durability, not just eventual processing.
 
-The test harness needs:
-- A way to POST fake Telegram update JSON to the webhook endpoint.
-- A way to query the transport store state. For SQLite: mount the
-  shared volume and open the `transport.db` file directly from the
-  test host. For Postgres: connect to the test Postgres instance.
-- A stub or test provider that completes immediately without real
-  CLI auth. Either use `Dockerfile.runnable` (existing stub image)
-  or set env vars that make the bot use a mock provider.
+**2. Cross-chat multi-worker concurrency.**
+Different conversations can be processed concurrently by different
+workers.
 
-**2. Test cases.**
+Proof: run webhook + 2 workers → inject blocking work for chat A
+and chat B → wait until both chats have simultaneously `claimed`
+items → assert two distinct conversation keys are claimed at the
+same time by two distinct `worker_id`s. It is not enough to see
+two different worker IDs in terminal rows — that can still be serial.
 
-`test_shared_runtime_webhook_persists_before_worker_claims`:
-- Start webhook + 1 worker.
-- POST a fake Telegram update to the webhook.
-- Immediately query the transport store: verify the `updates` row
-  exists and a `work_items` row is `queued`.
-- Wait for the worker to claim and complete it (poll state or check
-  logs).
-- Verify the work item reaches terminal state (`done` or `failed`).
+**3. Same-chat serialization.**
+Only one fresh item per conversation may be claimed at a time.
 
-`test_shared_runtime_multi_worker_parallel_chats`:
-- Start webhook + 2 workers.
-- POST updates for 3 different conversation keys.
-- Wait for all 3 to reach terminal state.
-- Verify all 3 completed (not stuck in `queued` or `claimed`).
-- Verify at least 2 different `worker_id` values in the completed
-  items (proves parallel claiming).
+Proof: inject two updates for the same chat → assert both persisted
+→ wait for item 1 = `claimed`, item 2 = still `queued` → assert
+item 2 does not become `claimed` until item 1 leaves `claimed` →
+allow completion → verify FIFO drain. Do not use `completed_at`
+ordering alone — that is weaker than the actual invariant.
 
-`test_shared_runtime_per_chat_serialization`:
-- Start webhook + 1 worker.
-- POST 2 updates for the same conversation key in quick succession.
-- Verify both are persisted as `queued`.
-- Verify only one is `claimed` at any given time (poll state during
-  execution or check that the second waits).
-- Verify both eventually reach terminal state in FIFO order.
+**4. Worker crash and lease recovery.**
+Crashed worker's claim is recovered into replay-notice flow, not
+auto-rerun.
 
-`test_shared_runtime_worker_crash_recovery`:
-- Start webhook + 1 worker.
-- POST an update. Wait for the worker to claim it.
-- Kill the worker container (`docker compose kill bot-worker`).
-- Wait for `claim_lease_ttl_seconds` to elapse (or set a short TTL
-  like 10s for the test).
-- Start a new worker container.
-- Verify the stale-claim sweep recovers the item to
-  `dispatch_mode='recovery'`.
-- Verify the new worker picks it up (as a recovery notice, not
-  auto-rerun — the item should reach `pending_recovery` or be
-  re-dispatched with recovery notice).
+Proof: start with short `BOT_CLAIM_LEASE_TTL` → inject blocking
+item → wait for `claimed` by worker A → kill worker A container →
+wait past lease TTL + sweep interval → assert item does not
+silently become `done` → assert item leaves live claimed ownership
+→ assert `dispatch_mode='recovery'` → assert subsequent handling
+follows replay-notice path, not direct provider completion.
 
-`test_shared_runtime_rolling_deploy`:
-- Start webhook + 2 workers.
-- Stop one worker (`docker compose stop bot-worker-1` or scale
-  down to 1).
-- POST updates. Verify the remaining worker drains them.
-- Start the stopped worker (scale back to 2).
-- POST more updates. Verify both workers claim items.
+**5. Durable cancel.**
+Cancel request durably targets the claimed item.
 
-`test_shared_runtime_durable_cancel`:
-- Start webhook + 1 worker.
-- POST a message update. Wait for the worker to claim it.
-- POST a `/cancel` command update (or directly set the durable
-  cancel flag via DB).
-- Verify the worker detects the cancel and the item reaches
-  terminal state.
+Preferred proof: inject message → wait for `claimed` → inject
+`/cancel` as real webhook update → assert `cancel_requested_at` set
+on the claimed item → allow worker to observe → assert terminal
+cancelled outcome. Fallback: direct DB mutation only if the same
+ingress path cannot be exercised in the harness.
 
-**3. Contract test additions**
-(`tests/contracts/test_transport_store_contract.py`).
+**6. Rolling worker replacement.**
+Queue drains continuously across worker churn.
 
-Add if not already present:
-- `test_lease_ttl_recovery_age_only` — claim an item, backdate
-  `claimed_at`, sweep with a different worker, verify recovery.
-  Parameterized for both backends.
-- `test_lease_ttl_recovery_does_not_touch_live_claims` — claim an
-  item (fresh `claimed_at`), sweep, verify item stays claimed.
-- `test_durable_cancel_plus_stale_recovery` — claim, set cancel
-  flag, backdate, sweep, verify item goes to `failed`/`cancelled`
-  not `recovery`.
-- `test_queue_fifo_across_multiple_admits` — admit 5 items, claim
-  them one at a time, verify FIFO ordering.
+Proof: start webhook + 2 workers → stop one worker explicitly →
+inject work → verify remaining worker drains → start stopped worker
+→ inject more work → verify both worker IDs appear in live claims
+or terminal ownership.
 
-These may already be partially covered by M21B contract tests.
-Check before adding duplicates.
+**Mandatory Step 0: harness audit.**
+Before implementing tests, verify whether the current
+runnable/stub image can create:
+- Long-lived claimed work (blocking provider execution)
+- Deterministic completion control
+- Deterministic cancellation observation
 
-**4. Test utilities.**
+If yes, use it. If not, add the smallest justified testability
+seam: a deterministic test provider, a test-only env switch that
+blocks/releases provider execution, or a controlled fake provider
+already compatible with `app.main`. Do not weaken the proofs.
 
-Add shared helpers to the E2E test module:
+**Backend matrix.**
 
-`_post_telegram_update(ctx, chat_id, text, update_id)`:
-- POST a minimal Telegram update JSON to the webhook endpoint.
-- Return the HTTP response.
+Every M21E proof test runs with `backend = "sqlite"` and
+`backend = "postgres"` via parameterization. If the environment
+cannot run Postgres Compose, M21E is not satisfied.
 
-`_query_work_items(ctx, conversation_key)`:
-- For SQLite: open the shared volume's `transport.db`, query
-  `work_items WHERE conversation_key = ?`.
-- For Postgres: connect and query `bot_runtime.work_items`.
-- Return list of dicts.
+SQLite: use the same shared Docker-volume topology as the shipped
+split-role deployment and inspect `transport.db` from inside the
+running bot container. This avoids host-filesystem WAL/locking
+distortion on Docker Desktop while keeping the transport DB as the
+primary oracle.
 
-`_wait_for_terminal(ctx, conversation_key, timeout)`:
-- Poll `_query_work_items` until all items for the conversation
-  are in terminal state (`done`, `failed`) or timeout.
+Postgres: start Compose `postgres`, run bootstrap/update, query
+`bot_runtime.work_items` directly via test DB connection.
+
+**Harness design.**
+
+New file: `tests/e2e/test_compose_shared_runtime.py`. Use the M21C
+split-role topology (`bot-webhook` + `bot-worker`). Worker scaled
+explicitly.
+
+Deterministic helpers:
+- `_post_telegram_update(webhook_url, chat_id, text, update_id)`
+- `_wait_for_predicate(query_fn, predicate, timeout)`
+- `_wait_for_claimed(query_fn, conversation_key, timeout)`
+- `_wait_for_terminal(query_fn, conversation_key, timeout)`
+- `_wait_for_recovery_mode(query_fn, conversation_key, timeout)`
+- `_query_work_items_sqlite(data_dir, conversation_key)`
+- `_query_work_items_postgres(database_url, conversation_key)`
+- `_compose_up_shared(ctx)`
+- `_compose_down_shared(ctx)`
+- `_kill_worker_instance(ctx, instance_name)`
+
+SQLite state inspection: query `transport.db` in-container via
+`docker exec` against the shared runtime volume.
+
+Postgres state inspection: test DB connection querying
+`bot_runtime.work_items`.
+
+Backend-neutral test-call level: each test asks for "items for
+conversation"; the helper chooses SQLite vs Postgres query path.
+
+**Cleanup and isolation.**
+
+Every test:
+- `docker compose down -v --remove-orphans || true` before startup
+- Same command in teardown
+- Unique `COMPOSE_PROJECT_NAME` per test
+- Unique host ports and data directories
+- Baked into fixtures, not developer memory
+
+On failure, capture:
+- `docker compose ps`
+- `docker compose logs`
+- Queried DB snapshot / relevant rows
+- Generated env/compose override used by the test
+
+**Existing contract tests — reuse, do not duplicate.**
+
+M21B already covers in
+`tests/contracts/test_transport_store_contract.py`:
+- Age-based stale recovery
+- Queue-first admission
+- FIFO queue drain
+- Single claimed item with queued backlog
+- Durable cancel flagging
+- Stale recovery honoring cancel
+- Live claim not recovered by another worker
+
+M21E contract additions only for gaps discovered during Compose
+proof development.
 
 **Files to change.**
 
 | File | Change |
 |------|--------|
-| `tests/e2e/test_compose_shared_runtime.py` (new) | All Compose E2E tests |
-| `tests/contracts/test_transport_store_contract.py` | Additional lease/cancel/FIFO contract tests if not already present |
+| `tests/e2e/test_compose_shared_runtime.py` (new) | All Compose E2E proof tests |
+| `tests/contracts/test_transport_store_contract.py` | Only if gaps found |
+| `tests/e2e/compose_support.py` (new) | Shared Docker/Compose helpers reused by the proof suite |
+| `scripts/docker/stub_claude.py`, `scripts/docker/stub_codex.py` | Deterministic block/release provider control for Compose proofs |
+| `scripts/docker/telegram_api_stub.py` (new) | Minimal Telegram Bot API stub for webhook + worker-owned output |
+| `app/config.py`, `app/main.py` | Small justified testability seams (`BOT_TELEGRAM_API_BASE_URL`, `BOT_TELEGRAM_FILE_API_BASE_URL`, `BOT_CLAIM_SWEEP_INTERVAL_SECONDS`) |
+| `app/telegram_handlers.py` | Persist-first welcome ordering fix discovered during proof work |
+| `app/work_queue_postgres_impl.py` | Postgres payload normalization fix uncovered by proof runs |
 | `docs/plan.md`, `docs/status.md` | Status update |
 
 **What M21E does NOT include.**
-- New runtime code. M21E is tests only.
+- Runtime semantic changes. Default is tests/harness only.
 - Changes to the transport FSM, claim semantics, or queue behavior.
-- Changes to the deployment shape or Compose files (beyond test
-  overrides).
 - Performance benchmarks or load testing.
 - Chaos engineering beyond single-worker crash recovery.
+- Registry-specific scope expansion.
 
 **Acceptance criteria.**
-- [ ] Compose E2E tests prove webhook-persist-before-claim on both
-      backends
-- [ ] Multi-worker parallel claiming proven with 2+ workers
-- [ ] Per-conversation FIFO serialization proven under concurrent
-      updates
-- [ ] Worker crash recovery proven: stale claim → recovery → new
-      worker picks up
-- [ ] Rolling deploy proven: scale down, verify drain, scale up,
-      verify resume
-- [ ] Durable cancel proven end-to-end
-- [ ] Contract tests cover lease-TTL recovery, cancel+stale, FIFO
-      for both backends
-- [ ] No duplicate contract tests (check M21B coverage first)
-- [ ] All tests use cleanup discipline (down -v before and after)
-- [ ] Tests do not depend on provider auth
-- [ ] Tests assert on transport store state, not log scraping
-- [ ] Full test suite passes
-- [ ] `git diff --check` clean
+- [x] Step 0 harness audit completed: runtime image can produce
+      deterministic proof conditions (small justified seams added)
+- [x] Every proof test runs on both SQLite and Postgres
+- [x] Persist-before-response proven with immediate store query
+- [x] Multi-worker concurrency proven with simultaneous claimed
+      rows owned by different workers (not just terminal worker IDs)
+- [x] Same-chat serialization proven with one claimed row + one
+      queued row at the same time (not just completion ordering)
+- [x] Worker crash recovery proven: `dispatch_mode='recovery'` and
+      replay-notice path, not auto-rerun
+- [x] Durable cancel proven through real ingress
+- [x] Worker replacement proven: queue drains across worker churn
+- [x] Tests assert on durable state, not logs
+- [x] Both backends required, not optional
+- [x] Cleanup discipline automatic (fixtures, not memory)
+- [x] Failure artifacts captured (logs, DB state, compose config)
+- [x] No duplicate contract tests (M21B coverage checked first)
+- [x] Full test suite passes
+- [x] `git diff --check` clean
 
 #### Implementation rules
 

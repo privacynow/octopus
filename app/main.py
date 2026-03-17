@@ -235,6 +235,7 @@ def main() -> None:
                 worker_dispatch,
                 poll_interval=poll_interval_for_runtime(config.runtime_mode),
                 lease_ttl=config.claim_lease_ttl_seconds,
+                sweep_interval=config.claim_sweep_interval_seconds,
                 process_role=config.process_role,
                 heartbeat_enabled=(config.runtime_mode == "shared"),
             )

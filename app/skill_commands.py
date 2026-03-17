@@ -12,15 +12,14 @@ from app.request_flow import (
     foreign_skill_setup,
     format_credential_prompt,
 )
+from app.skill_activation_service import get_skill_activation_service
+from app.skill_catalog_service import get_skill_catalog_service
+from app.skill_import_service import get_skill_import_service
+from app.provider_guidance_service import get_provider_guidance_service
 from app.skills import (
-    build_system_prompt,
     check_credentials,
-    estimate_prompt_size,
     get_skill_requirements,
-    load_catalog,
     load_user_credentials,
-    scaffold_skill,
-    SkillRequirement,
 )
 
 
@@ -31,9 +30,9 @@ def _th():
 
 
 async def skills_show(event, update: Update) -> None:
-    catalog = load_catalog()
+    catalog = get_skill_catalog_service().catalog()
     session = _th()._load(event.chat_id)
-    active = session.active_skills
+    active = get_skill_activation_service().list_active(session)
     if active:
         lines = [f"<b>Active skills ({len(active)}):</b>"]
         for name in active:
@@ -47,18 +46,18 @@ async def skills_show(event, update: Update) -> None:
 
 
 async def skills_list(event, update: Update) -> None:
-    catalog = load_catalog()
+    catalog = get_skill_catalog_service().catalog()
+    imports = get_skill_import_service()
     if not catalog:
         await update.effective_message.reply_text("No skills available.")
         return
     th = _th()
     session = th._load(event.chat_id)
-    active = set(session.active_skills)
+    active = set(get_skill_activation_service().list_active(session))
     req_user_id = event.user.id
     user_creds = load_user_credentials(th._cfg().data_dir, req_user_id, th._encryption_key())
     lines = ["<b>Available skills:</b>"]
     for name, meta in sorted(catalog.items()):
-        from app.store import is_store_installed, has_custom_override
         if name in active:
             status = " [active]"
         else:
@@ -68,11 +67,11 @@ async def skills_list(event, update: Update) -> None:
                 status = " [needs setup]" if missing else " [ready]"
             else:
                 status = ""
-        if has_custom_override(name):
+        if imports.has_custom_override(name):
             custom_tag = " [custom override]"
         elif meta.is_custom:
             custom_tag = " (custom)"
-        elif is_store_installed(name):
+        elif imports.is_installed(name):
             custom_tag = " (managed)"
         else:
             custom_tag = ""
@@ -82,7 +81,8 @@ async def skills_list(event, update: Update) -> None:
 
 
 async def skills_add(event, update: Update, name: str) -> None:
-    catalog = load_catalog()
+    catalog = get_skill_catalog_service().catalog()
+    guidance = get_provider_guidance_service()
     if name not in catalog:
         await update.effective_message.reply_text(
             f"Unknown skill: {html.escape(name)}. Use /skills list to see available.",
@@ -94,7 +94,7 @@ async def skills_add(event, update: Update, name: str) -> None:
     chat_id = event.chat_id
     async with th.CHAT_LOCKS[chat_id]:
         session = th._load(chat_id)
-        active = session.active_skills
+        active = get_skill_activation_service().list_active(session)
 
         requirements = get_skill_requirements(name)
         if requirements:
@@ -119,7 +119,7 @@ async def skills_add(event, update: Update, name: str) -> None:
                 return
 
         if name not in active:
-            projected_size, over = estimate_prompt_size(
+            projected_size, over = guidance.estimate_prompt_size(
                 session.role, active, name)
             if over:
                 from app.skills import PROMPT_SIZE_WARNING_THRESHOLD
@@ -134,7 +134,7 @@ async def skills_add(event, update: Update, name: str) -> None:
                     f"This may reduce response quality. Continue?",
                     parse_mode=ParseMode.HTML, reply_markup=kb)
                 return
-            active.append(name)
+            get_skill_activation_service().activate(session, name)
             th._save(chat_id, session)
         await update.effective_message.reply_text(
             f"Skill <code>{html.escape(name)}</code> activated.",
@@ -154,11 +154,9 @@ async def skills_remove(event, update: Update, name: str) -> None:
             )
             return
         setup_expired = had_setup and session.awaiting_skill_setup is None
-        active = session.active_skills
+        active = get_skill_activation_service().list_active(session)
         removed = False
-        if name in active:
-            active.remove(name)
-            removed = True
+        removed = get_skill_activation_service().deactivate(session, name)
         setup = session.awaiting_skill_setup
         setup_cleared = False
         if setup and setup.skill == name:
@@ -174,7 +172,7 @@ async def skills_remove(event, update: Update, name: str) -> None:
 
 
 async def skills_setup(event, update: Update, name: str) -> None:
-    catalog = load_catalog()
+    catalog = get_skill_catalog_service().catalog()
     if name not in catalog:
         await update.effective_message.reply_text(
             f"Unknown skill: {html.escape(name)}. Use /skills list to see available.",
@@ -220,7 +218,7 @@ async def skills_clear(event, update: Update) -> None:
                 foreign_setup_message(session.awaiting_skill_setup),
             )
             return
-        session.active_skills = []
+        get_skill_activation_service().clear(session)
         session.awaiting_skill_setup = None
         th._save(chat_id, session)
     await update.effective_message.reply_text("All skills removed.")
@@ -228,7 +226,7 @@ async def skills_clear(event, update: Update) -> None:
 
 async def skills_create(event, update: Update, name: str) -> None:
     try:
-        skill_dir = scaffold_skill(name)
+        skill_dir = get_skill_catalog_service().create_custom_draft(name)
         await update.effective_message.reply_text(
             f"Created custom skill <code>{html.escape(name)}</code>\n"
             f"Edit: <code>{html.escape(str(skill_dir / 'skill.md'))}</code>",
@@ -239,8 +237,8 @@ async def skills_create(event, update: Update, name: str) -> None:
 
 
 async def skills_search(event, update: Update, query: str) -> None:
-    from app.store import search as store_search
-    results = store_search(query)
+    imports = get_skill_import_service()
+    results = imports.bundled_search(query)
     lines: list[str] = []
     if results:
         lines.append(f"<b>Store skills matching '{html.escape(query)}':</b>")
@@ -252,9 +250,7 @@ async def skills_search(event, update: Update, query: str) -> None:
     registry_url = _th()._cfg().registry_url
     if registry_url:
         try:
-            from app.registry import fetch_index, search_index
-            index = await asyncio.to_thread(fetch_index, registry_url)
-            reg_results = search_index(index, query)
+            reg_results = await asyncio.to_thread(imports.registry_search, registry_url, query)
             # Exclude skills already in store results
             store_names = {r.name for r in results}
             reg_only = [r for r in reg_results if r.name not in store_names]
@@ -278,17 +274,15 @@ async def skills_search(event, update: Update, query: str) -> None:
 
 
 async def skills_info(event, update: Update, name: str) -> None:
-    from app.skills import skill_info_resolved
-    result = skill_info_resolved(name)
+    result = get_skill_catalog_service().resolve_info(name)
     if not result:
         await update.effective_message.reply_text(
             f"Skill '{html.escape(name)}' not found.",
             parse_mode=ParseMode.HTML,
         )
         return
-    meta, body, source, skill_path = result
-    display_name = meta.get("display_name", name)
-    description = meta.get("description", "")
+    display_name = result.meta.get("display_name", name)
+    description = result.meta.get("description", "")
     parts = [f"<b>{html.escape(display_name)}</b>"]
     if description:
         parts.append(html.escape(description))
@@ -296,42 +290,40 @@ async def skills_info(event, update: Update, name: str) -> None:
     if reqs:
         req_keys = ", ".join(r.key for r in reqs)
         parts.append(f"Requires: {html.escape(req_keys)}")
-    elif source == "store (not installed)":
-        from app.store import get_store_skill_requirements
-        store_keys = get_store_skill_requirements(name)
+    elif result.source == "store (not installed)":
+        store_keys = get_skill_import_service().requirement_keys(name)
         if store_keys:
             parts.append(f"Requires: {html.escape(', '.join(store_keys))}")
     providers = []
-    if (skill_path / "claude.yaml").is_file():
+    if (result.skill_path / "claude.yaml").is_file():
         providers.append("Claude")
-    if (skill_path / "codex.yaml").is_file():
+    if (result.skill_path / "codex.yaml").is_file():
         providers.append("Codex")
     if providers:
         parts.append(f"Providers: {', '.join(providers)}")
-    parts.append(f"Resolves to: {source}")
-    if len(body) > 1000:
-        cut = body.rfind("\n\n", 0, 1000)
+    parts.append(f"Resolves to: {result.source}")
+    if len(result.body) > 1000:
+        cut = result.body.rfind("\n\n", 0, 1000)
         if cut < 500:
             cut = 1000
-        preview = body[:cut] + "..."
+        preview = result.body[:cut] + "..."
     else:
-        preview = body
+        preview = result.body
     parts.append(f"\n<pre>{html.escape(preview)}</pre>")
     await update.effective_message.reply_text("\n".join(parts), parse_mode=ParseMode.HTML)
 
 
 async def skills_install(event, update: Update, name: str) -> None:
-    from app.store import install as store_install, STORE_DIR
     th = _th()
+    imports = get_skill_import_service()
     if not th.is_admin(event.user):
         await update.effective_message.reply_text("Only admins can install skills.")
         return
 
     # Try bundled store first
-    store_path = STORE_DIR / name
-    if store_path.is_dir() and (store_path / "skill.md").is_file():
-        ok, msg = store_install(name)
-        await update.effective_message.reply_text(html.escape(msg), parse_mode=ParseMode.HTML)
+    if imports.bundled_exists(name):
+        result = imports.install_bundled(name)
+        await update.effective_message.reply_text(html.escape(result.message), parse_mode=ParseMode.HTML)
         return
 
     # Fall back to registry
@@ -344,17 +336,8 @@ async def skills_install(event, update: Update, name: str) -> None:
         return
 
     try:
-        from app.registry import fetch_index
-        from app.store import install_from_registry
-        index = await asyncio.to_thread(fetch_index, registry_url)
-        if name not in index:
-            await update.effective_message.reply_text(
-                f"Skill '{html.escape(name)}' not found in store or registry.",
-                parse_mode=ParseMode.HTML,
-            )
-            return
-        ok, msg = await asyncio.to_thread(install_from_registry, name, index[name])
-        await update.effective_message.reply_text(html.escape(msg), parse_mode=ParseMode.HTML)
+        result = await asyncio.to_thread(imports.install_from_registry, name, registry_url)
+        await update.effective_message.reply_text(html.escape(result.message), parse_mode=ParseMode.HTML)
     except Exception as e:
         await update.effective_message.reply_text(
             f"Registry install failed: {html.escape(str(e)[:300])}",
@@ -363,33 +346,32 @@ async def skills_install(event, update: Update, name: str) -> None:
 
 
 async def skills_uninstall(event, update: Update, name: str) -> None:
-    from app.store import uninstall as store_uninstall
     th = _th()
     if not th.is_admin(event.user):
         await update.effective_message.reply_text("Only admins can uninstall store skills.")
         return
     cfg = th._cfg()
-    ok, msg = store_uninstall(name, cfg.default_skills)
-    await update.effective_message.reply_text(html.escape(msg), parse_mode=ParseMode.HTML)
+    result = get_skill_import_service().uninstall(name, cfg.default_skills)
+    await update.effective_message.reply_text(html.escape(result.message), parse_mode=ParseMode.HTML)
 
 
 async def skills_updates(event, update: Update) -> None:
-    from app.store import check_updates as store_check_updates, has_custom_override
-    updates = store_check_updates()
+    updates = get_skill_import_service().list_updates()
     if not updates:
         await update.effective_message.reply_text("No store-installed skills found.")
         return
     lines = ["<b>Store skill status:</b>"]
-    for name, status in updates:
+    for item in updates:
+        name = item.name
+        status = item.status
         label = "update available" if status == "update_available" else "up to date"
-        override = " [custom override]" if has_custom_override(name) else ""
+        override = " [custom override]" if item.has_custom_override else ""
         lines.append(f"  <code>{html.escape(name)}</code> \u2014 {label}{override}")
     await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 async def skills_diff(event, update: Update, name: str) -> None:
-    from app.store import diff_skill
-    ok, diff_text = diff_skill(name)
+    diff_text = get_skill_import_service().diff(name).message
     if not diff_text.strip():
         diff_text = "No differences."
     if len(diff_text) > 4000:
@@ -399,24 +381,33 @@ async def skills_diff(event, update: Update, name: str) -> None:
 
 
 async def skills_update(event, update: Update, target: str) -> None:
-    from app.store import update_skill as store_update_skill, update_all as store_update_all
     th = _th()
+    guidance = get_provider_guidance_service()
+    imports = get_skill_import_service()
     if not th.is_admin(event.user):
         await update.effective_message.reply_text("Only admins can update store skills.")
         return
     if target == "all":
-        results = store_update_all()
+        results = imports.update_all()
         if not results:
             await update.effective_message.reply_text("No store skills need updating.")
             return
         lines = ["<b>Update results:</b>"]
         cfg = th._cfg()
         all_size_warnings: list[str] = []
-        for name, ok, msg in results:
-            status = "\u2714" if ok else "\u2718"
-            lines.append(f"  {status} {html.escape(msg)}")
-            if ok:
-                all_size_warnings.extend(th._check_prompt_size_cross_chat(cfg.data_dir, name))
+        for result in results:
+            status = "\u2714" if result.ok else "\u2718"
+            lines.append(f"  {status} {html.escape(result.message)}")
+            if result.ok:
+                all_size_warnings.extend(
+                    guidance.check_prompt_size_cross_chat(
+                        cfg.data_dir,
+                        result.name,
+                        cfg.provider_name,
+                        th._prov().new_provider_state,
+                        cfg.approval_mode,
+                    )
+                )
         if all_size_warnings:
             lines.append("")
             lines.append("<b>Prompt size warnings:</b>")
@@ -424,10 +415,17 @@ async def skills_update(event, update: Update, target: str) -> None:
                 lines.append(f"  {html.escape(w)}")
         await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
     else:
-        ok, msg = store_update_skill(target)
-        if ok:
+        result = imports.update(target)
+        msg = result.message
+        if result.ok:
             cfg = th._cfg()
-            size_warnings = th._check_prompt_size_cross_chat(cfg.data_dir, target)
+            size_warnings = guidance.check_prompt_size_cross_chat(
+                cfg.data_dir,
+                target,
+                cfg.provider_name,
+                th._prov().new_provider_state,
+                cfg.approval_mode,
+            )
             if size_warnings:
                 msg += "\n\nPrompt size warnings:\n" + "\n".join(size_warnings)
         await update.effective_message.reply_text(html.escape(msg), parse_mode=ParseMode.HTML)

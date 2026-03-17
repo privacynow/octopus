@@ -68,7 +68,7 @@ class AgentCard:
     display_name: str = ""
     slug: str = ""
     role: str = ""
-    skills: tuple[str, ...] = ()
+    capabilities: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
     description: str = ""
     provider: str = ""
@@ -83,7 +83,7 @@ class AgentCard:
 @dataclass(frozen=True)
 class AgentDiscoveryQuery:
     role: str = ""
-    skills: tuple[str, ...] = ()
+    capabilities: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
     free_text: str = ""
     exclude_agent_ids: tuple[str, ...] = ()

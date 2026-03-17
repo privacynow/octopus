@@ -232,7 +232,7 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
                         "display_name": "Dev Bot",
                         "slug": "dev-bot",
                         "role": "developer",
-                        "skills": ["python", "testing"],
+                        "capabilities": ["python", "testing"],
                         "tags": ["backend"],
                         "description": "Builds backend features.",
                         "connectivity_state": "connected",
@@ -257,14 +257,14 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
             th.cmd_discover,
             chat,
             user,
-            "/discover role:developer skill:python tag:backend schema review",
-            args=["role:developer", "skill:python", "tag:backend", "schema", "review"],
+            "/discover role:developer capability:python tag:backend schema review",
+            args=["role:developer", "capability:python", "tag:backend", "schema", "review"],
         )
 
         assert seen_queries
         query = seen_queries[0]
         assert query.role == "developer"
-        assert query.skills == ("python",)
+        assert query.capabilities == ("python",)
         assert query.tags == ("backend",)
         assert query.free_text == "schema review"
         assert query.exclude_agent_ids == ("self-agent",)

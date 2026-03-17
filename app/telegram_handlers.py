@@ -93,16 +93,18 @@ from app.transports.admission import (
 )
 from app.transports.types import InboundEnvelope
 from app.skills import (
-    build_run_context, build_preflight_context,
     get_provider_config_digest, get_skill_digests,
     get_skill_requirements,
     save_user_credential, delete_user_credentials, list_user_credential_skills,
     derive_encryption_key,
     build_credential_env,
     validate_credential,
-    stage_codex_scripts, cleanup_codex_scripts,
+    cleanup_codex_scripts,
     SkillRequirement,
 )
+from app.skill_activation_service import get_skill_activation_service
+from app.skill_import_service import get_skill_import_service
+from app.provider_guidance_service import get_provider_guidance_service
 from app.storage import (
     chat_upload_dir,
     default_session,
@@ -861,11 +863,13 @@ def _callback_handler(fn):
 
 def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
     """Check prompt size in all chats where skill_name is active."""
-    from app.skills import check_prompt_size_cross_chat
     cfg = _cfg()
-    return check_prompt_size_cross_chat(
-        data_dir, skill_name, cfg.provider_name,
-        _prov().new_provider_state, cfg.approval_mode,
+    return get_provider_guidance_service().check_prompt_size_cross_chat(
+        data_dir,
+        skill_name,
+        cfg.provider_name,
+        _prov().new_provider_state,
+        cfg.approval_mode,
     )
 
 
@@ -1442,6 +1446,7 @@ async def execute_request(
 ) -> RequestExecutionOutcome:
     cfg = _cfg()
     prov = _prov()
+    guidance = get_provider_guidance_service()
     session = _load(chat_id)
 
     # Resolve the authoritative execution identity once
@@ -1461,7 +1466,7 @@ async def execute_request(
 
     # Stage Codex scripts before building context so scripts_dir is in extra_dirs
     if prov.name == "codex":
-        scripts_dir = stage_codex_scripts(
+        scripts_dir = guidance.stage_codex_scripts(
             cfg.data_dir,
             _conversation_key(chat_id),
             resolved.active_skills,
@@ -1470,10 +1475,13 @@ async def execute_request(
             all_extra_dirs.append(str(scripts_dir))
 
     # Build execution context (includes all extra_dirs, including staged scripts)
-    context = build_run_context(
-        resolved.role, resolved.active_skills, all_extra_dirs,
+    context = guidance.build_run_context(
+        resolved.role,
+        resolved.active_skills,
+        all_extra_dirs,
         provider_name=prov.name,
-        credential_env=credential_env, working_dir=resolved.working_dir,
+        credential_env=credential_env,
+        working_dir=resolved.working_dir,
         file_policy=resolved.file_policy,
         effective_model=resolved.effective_model,
     )
@@ -1481,16 +1489,7 @@ async def execute_request(
 
     # Compact mode: add summary-first instruction to system prompt
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
-    if compact and context.system_prompt:
-        context.system_prompt += (
-            "\n\nIMPORTANT: Structure your response with a 2-4 line summary first, "
-            "then provide detailed explanation below. Lead with the answer."
-        )
-    elif compact:
-        context.system_prompt = (
-            "Structure your response with a 2-4 line summary first, "
-            "then provide detailed explanation below. Lead with the answer."
-        )
+    context.system_prompt = guidance.apply_compact_mode(context.system_prompt, compact)
 
     # Use the single authoritative context hash
     context_hash = resolved.context_hash
@@ -1692,6 +1691,7 @@ async def request_approval(
 ) -> None:
     cfg = _cfg()
     prov = _prov()
+    guidance = get_provider_guidance_service()
     session = _load(chat_id)
 
     if session.has_pending:
@@ -1711,10 +1711,13 @@ async def request_approval(
     # Build preflight context (include config extra_dirs + upload dir)
     upload_dir = str(chat_upload_dir(cfg.data_dir, _conversation_key(chat_id)))
     preflight_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs)
-    preflight_context = build_preflight_context(
-        resolved.role, resolved.active_skills, preflight_extra_dirs,
+    preflight_context = guidance.build_preflight_context(
+        resolved.role,
+        resolved.active_skills,
+        preflight_extra_dirs,
         provider_name=prov.name,
-        working_dir=resolved.working_dir, file_policy=resolved.file_policy,
+        working_dir=resolved.working_dir,
+        file_policy=resolved.file_policy,
         effective_model=resolved.effective_model,
     )
 
@@ -2172,8 +2175,10 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     compact_display = "on" if compact else "off"
 
     # Prompt weight estimate (chars of system prompt)
-    from app.skills import build_system_prompt
-    sys_prompt = build_system_prompt(resolved.role, resolved.active_skills)
+    sys_prompt = get_provider_guidance_service().system_prompt(
+        resolved.role,
+        resolved.active_skills,
+    )
     prompt_weight = f"~{len(sys_prompt)} chars" if sys_prompt else "minimal"
 
     body = (
@@ -2310,9 +2315,11 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
             parts.append(html.escape(line))
     # Prompt weight from resolved execution context (respects trust tier)
     if session is not None:
-        from app.skills import build_system_prompt
         resolved = _resolve_context(session, trust_tier=_trust_tier(event.user))
-        sys_prompt = build_system_prompt(resolved.role, resolved.active_skills)
+        sys_prompt = get_provider_guidance_service().system_prompt(
+            resolved.role,
+            resolved.active_skills,
+        )
         if sys_prompt:
             parts.append(f"Prompt weight: ~{len(sys_prompt)} chars")
     if parts:
@@ -2324,8 +2331,8 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 def _discover_usage() -> str:
     return (
-        "Usage: /discover <query> [role:<role>] [skill:<skill>] [tag:<tag>] [state:<connected|degraded|standalone|offline>]\n"
-        "Example: <code>/discover role:developer skill:python tag:backend schema review</code>"
+        "Usage: /discover <query> [role:<role>] [capability:<capability>] [tag:<tag>] [state:<connected|degraded|standalone|offline>]\n"
+        "Example: <code>/discover role:developer capability:python tag:backend schema review</code>"
     )
 
 
@@ -2335,7 +2342,7 @@ def _parse_discovery_query(
     exclude_agent_id: str = "",
 ) -> tuple[AgentDiscoveryQuery | None, str | None]:
     role = ""
-    skills: list[str] = []
+    capabilities: list[str] = []
     tags: list[str] = []
     required_state = "connected"
     free_text_parts: list[str] = []
@@ -2356,8 +2363,8 @@ def _parse_discovery_query(
             continue
         if key == "role":
             role = value
-        elif key in {"skill", "skills"}:
-            skills.extend(part.strip() for part in value.split(",") if part.strip())
+        elif key in {"capability", "capabilities", "skill", "skills"}:
+            capabilities.extend(part.strip() for part in value.split(",") if part.strip())
         elif key in {"tag", "tags"}:
             tags.extend(part.strip() for part in value.split(",") if part.strip())
         elif key == "state":
@@ -2366,12 +2373,12 @@ def _parse_discovery_query(
             free_text_parts.append(token)
     if required_state not in {"connected", "degraded", "standalone", "offline"}:
         return None, _discover_usage()
-    if not role and not skills and not tags and not free_text_parts:
+    if not role and not capabilities and not tags and not free_text_parts:
         return None, _discover_usage()
     return (
         AgentDiscoveryQuery(
             role=role,
-            skills=tuple(skills),
+            capabilities=tuple(capabilities),
             tags=tuple(tags),
             free_text=" ".join(free_text_parts).strip(),
             exclude_agent_ids=(exclude_agent_id,) if exclude_agent_id else (),
@@ -2397,9 +2404,9 @@ def _format_discovery_results(agents: list[dict[str, Any]]) -> str:
         lines.append(
             f"State: <code>{state}</code> · Capacity: <code>{current_capacity}/{max_capacity}</code>"
         )
-        skills = [str(skill) for skill in agent.get("skills", []) if skill]
-        if skills:
-            lines.append(f"Skills: <code>{html.escape(', '.join(skills))}</code>")
+        capabilities = [str(capability) for capability in agent.get("capabilities", agent.get("skills", [])) if capability]
+        if capabilities:
+            lines.append(f"Capabilities: <code>{html.escape(', '.join(capabilities))}</code>")
         tags = [str(tag) for tag in agent.get("tags", []) if tag]
         if tags:
             lines.append(f"Tags: <code>{html.escape(', '.join(tags))}</code>")
@@ -3050,8 +3057,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 else:
                     skill_name = setup.skill
                     session.awaiting_skill_setup = None
-                    if skill_name not in session.active_skills:
-                        session.active_skills.append(skill_name)
+                    get_skill_activation_service().activate(session, skill_name)
                     _save(chat_id, session)
                     await message.reply_text(
                         f"Skill <code>{html.escape(skill_name)}</code> is ready.",
@@ -3597,8 +3603,7 @@ async def handle_skill_add_callback(event, query) -> None:
             if not already_answered:
                 await query.answer()
             session = _load(chat_id)
-            if name not in session.active_skills:
-                session.active_skills.append(name)
+            if get_skill_activation_service().activate(session, name):
                 _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(
@@ -3620,10 +3625,10 @@ async def handle_skill_update_callback(event, query) -> None:
         return
 
     if event.data.startswith("skill_update_confirm:"):
-        from app.store import update_skill as store_update_skill
         name = event.data.split(":", 1)[1]
-        ok, msg = store_update_skill(name)
-        if ok:
+        result = get_skill_import_service().update(name)
+        msg = result.message
+        if result.ok:
             cfg = _cfg()
             size_warnings = _check_prompt_size_cross_chat(cfg.data_dir, name)
             if size_warnings:
@@ -3633,8 +3638,7 @@ async def handle_skill_update_callback(event, query) -> None:
         return
 
     if event.data == "skill_update_all_confirm":
-        from app.store import update_all as store_update_all
-        results = store_update_all()
+        results = get_skill_import_service().update_all()
         if not results:
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text("No store skills need updating.")
@@ -3642,11 +3646,11 @@ async def handle_skill_update_callback(event, query) -> None:
         lines = ["<b>Update results:</b>"]
         cfg = _cfg()
         all_size_warnings: list[str] = []
-        for name, ok, msg in results:
-            status = "\u2714" if ok else "\u2718"
-            lines.append(f"  {status} {html.escape(msg)}")
-            if ok:
-                all_size_warnings.extend(_check_prompt_size_cross_chat(cfg.data_dir, name))
+        for result in results:
+            status = "\u2714" if result.ok else "\u2718"
+            lines.append(f"  {status} {html.escape(result.message)}")
+            if result.ok:
+                all_size_warnings.extend(_check_prompt_size_cross_chat(cfg.data_dir, result.name))
         if all_size_warnings:
             lines.append("")
             lines.append("<b>Prompt size warnings:</b>")

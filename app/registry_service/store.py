@@ -12,9 +12,14 @@ from pathlib import Path
 from typing import Any
 
 from app.agents.types import TimelineEvent
+from app.capability_service import (
+    declared_capabilities,
+    query_capabilities,
+    requested_routed_capabilities,
+)
 from app.registry_service.store_base import (
     AbstractRegistryStore,
-    SkillDisabledError,
+    CapabilityDisabledError,
     conversation_status_for_event,
     decode_json_field,
     effective_connectivity_state,
@@ -270,7 +275,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "display_name": row["display_name"],
             "slug": row["slug"],
             "role": row["role"],
-            "skills": decode_json_field(row["skills_json"], []),
+            "capabilities": decode_json_field(row["skills_json"], []),
             "tags": decode_json_field(row["tags_json"], []),
             "description": row["description"],
             "provider": row["provider"],
@@ -485,7 +490,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     requested_card.get("display_name") or slug,
                     slug,
                     requested_card.get("role", ""),
-                    ensure_json(requested_card.get("skills", [])),
+                    ensure_json(declared_capabilities(requested_card)),
                     ensure_json(requested_card.get("tags", [])),
                     requested_card.get("description", ""),
                     requested_card.get("provider", ""),
@@ -526,7 +531,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 (
                     card.get("display_name", row["display_name"]),
                     card.get("role", row["role"]),
-                    ensure_json(card.get("skills", [])),
+                    ensure_json(declared_capabilities(card)),
                     ensure_json(card.get("tags", [])),
                     card.get("description", row["description"]),
                     card.get("provider", row["provider"]),
@@ -663,8 +668,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             )
         return self.get_conversation(payload["conversation_id"])
 
-    def get_skill_override(self, skill_name: str) -> bool | None:
-        normalized = skill_name.strip().lower()
+    def get_capability_override(self, capability_name: str) -> bool | None:
+        normalized = capability_name.strip().lower()
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT enabled FROM skills_override WHERE lower(skill_name) = ?",
@@ -674,8 +679,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             return None
         return bool(row["enabled"])
 
-    def set_skill_override(self, skill_name: str, enabled: bool, set_by: str = "ui") -> None:
-        normalized = skill_name.strip().lower()
+    def set_capability_override(self, capability_name: str, enabled: bool, set_by: str = "ui") -> None:
+        normalized = capability_name.strip().lower()
         with self._connect() as conn:
             conn.execute(
                 """
@@ -690,7 +695,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             )
             conn.commit()
 
-    def list_skills(self) -> list[dict[str, Any]]:
+    def list_capabilities(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             offline_before = self._offline_before()
             declared_rows = conn.execute(
@@ -704,14 +709,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     END != 'offline'
                 ),
                 declared AS (
-                    SELECT lower(je.value) AS skill_key, je.value AS skill_name, live_agents.slug
+                    SELECT lower(je.value) AS capability_key, je.value AS capability_name, live_agents.slug
                     FROM live_agents
                     JOIN json_each(live_agents.skills_json) AS je
                 )
-                SELECT skill_key, MIN(skill_name) AS skill_name, GROUP_CONCAT(DISTINCT slug) AS declared_by_agents
+                SELECT capability_key, MIN(capability_name) AS capability_name, GROUP_CONCAT(DISTINCT slug) AS declared_by_agents
                 FROM declared
-                GROUP BY skill_key
-                ORDER BY skill_key
+                GROUP BY capability_key
+                ORDER BY capability_key
                 """
                 ,
                 (offline_before,),
@@ -726,11 +731,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
         merged: dict[str, dict[str, Any]] = {}
         for row in declared_rows:
-            skill_name = row["skill_name"]
+            capability_name = row["capability_name"]
             item = merged.setdefault(
-                row["skill_key"],
+                row["capability_key"],
                 {
-                    "skill_name": skill_name,
+                    "capability_name": capability_name,
                     "declared_by_agents": sorted(
                         str(row["declared_by_agents"]).split(",")
                         if row["declared_by_agents"]
@@ -740,20 +745,20 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 },
             )
         for row in override_rows:
-            skill_name = row["skill_name"]
-            key = skill_name.lower()
+            capability_name = row["skill_name"]
+            key = capability_name.lower()
             item = merged.setdefault(
                 key,
                 {
-                    "skill_name": skill_name,
+                    "capability_name": capability_name,
                     "declared_by_agents": [],
                     "enabled": None,
                 },
             )
             item["enabled"] = bool(row["enabled"])
-        return sorted(merged.values(), key=lambda item: item["skill_name"].lower())
+        return sorted(merged.values(), key=lambda item: item["capability_name"].lower())
 
-    def _disabled_skills(self, conn: sqlite3.Connection) -> set[str]:
+    def _disabled_capabilities(self, conn: sqlite3.Connection) -> set[str]:
         rows = conn.execute(
             "SELECT skill_name FROM skills_override WHERE enabled = 0"
         ).fetchall()
@@ -762,14 +767,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
     def search_agents(self, query: dict[str, Any]) -> list[dict[str, Any]]:
         role = query.get("role", "").strip().lower()
         required_state = query.get("required_state", "connected")
-        skills = {s.lower() for s in query.get("skills", []) if s}
+        capabilities = query_capabilities(query)
         tags = {s.lower() for s in query.get("tags", []) if s}
         free_text = query.get("free_text", "").strip().lower()
         exclude = sorted(set(query.get("exclude_agent_ids", [])))
         with self._connect() as conn:
-            disabled_skills = self._disabled_skills(conn)
-            skills = skills - disabled_skills
-            if query.get("skills") and not skills:
+            disabled_capabilities = self._disabled_capabilities(conn)
+            capabilities = capabilities - disabled_capabilities
+            if (query.get("capabilities") or query.get("skills")) and not capabilities:
                 return []
             sql = [
                 """
@@ -797,7 +802,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             if role:
                 sql.append(" AND lower(role) LIKE ?")
                 params.append(f"%{role}%")
-            for skill in sorted(skills):
+            for capability in sorted(capabilities):
                 sql.append(
                     """
                     AND EXISTS (
@@ -807,7 +812,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     )
                     """
                 )
-                params.append(skill)
+                params.append(capability)
             for tag in sorted(tags):
                 sql.append(
                     """
@@ -902,9 +907,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
     def create_routed_task(self, request: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
         with self._connect() as conn:
-            requested_skill = str(request.get("skill") or "").strip()
-            if requested_skill and requested_skill.lower() in self._disabled_skills(conn):
-                raise SkillDisabledError(requested_skill)
+            disabled_capabilities = self._disabled_capabilities(conn)
+            for capability in requested_routed_capabilities(request):
+                if capability.lower() in disabled_capabilities:
+                    raise CapabilityDisabledError(capability)
             conn.execute(
                 """
                 INSERT INTO routed_tasks (

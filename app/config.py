@@ -164,7 +164,7 @@ class BotConfig:
     agent_role: str
     agent_tags: tuple[str, ...]
     agent_description: str
-    agent_skills: tuple[str, ...]
+    agent_capabilities: tuple[str, ...]
     agent_registry_url: str
     agent_registry_enroll_token: str
     agent_poll_interval_seconds: float
@@ -327,10 +327,13 @@ def load_config(instance: str | None = None) -> BotConfig:
     agent_tags = tuple(
         s.strip() for s in get("BOT_AGENT_TAGS").split(",") if s.strip()
     )
-    raw_agent_skills = get("BOT_AGENT_SKILLS").strip()
-    agent_skills = tuple(
-        s.strip() for s in raw_agent_skills.split(",") if s.strip()
-    ) if raw_agent_skills else default_skills
+    raw_agent_capabilities = (
+        get("BOT_AGENT_CAPABILITIES").strip()
+        or get("BOT_AGENT_SKILLS").strip()
+    )
+    agent_capabilities = tuple(
+        s.strip() for s in raw_agent_capabilities.split(",") if s.strip()
+    )
     agent_slug = derive_agent_slug(
         get("BOT_AGENT_SLUG").strip() or agent_display_name,
         fallback=derive_agent_slug(instance, fallback="agent"),
@@ -403,7 +406,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         agent_role=agent_role,
         agent_tags=agent_tags,
         agent_description=get("BOT_AGENT_DESCRIPTION").strip(),
-        agent_skills=agent_skills,
+        agent_capabilities=agent_capabilities,
         agent_registry_url=agent_registry_url,
         agent_registry_enroll_token=get("BOT_AGENT_REGISTRY_ENROLL_TOKEN").strip(),
         agent_poll_interval_seconds=max(1.0, get_float("BOT_AGENT_POLL_INTERVAL_SECONDS", "5.0")),
@@ -501,7 +504,7 @@ def load_config_provider_health() -> BotConfig:
         agent_role="",
         agent_tags=(),
         agent_description="",
-        agent_skills=(),
+        agent_capabilities=(),
         agent_registry_url="",
         agent_registry_enroll_token="",
         agent_poll_interval_seconds=5.0,
@@ -654,11 +657,11 @@ def validate_config(config: BotConfig) -> list[str]:
 
     # Validate default_skills against catalog
     if config.default_skills:
-        from app.skills import load_catalog
+        from app.skill_catalog_service import get_skill_catalog_service
         try:
-            catalog = load_catalog()
+            catalog = get_skill_catalog_service()
             for skill_name in config.default_skills:
-                if skill_name not in catalog:
+                if not catalog.has_skill(skill_name):
                     errors.append(f"BOT_SKILLS references unknown skill: '{skill_name}'")
         except Exception:
             pass  # Don't block startup if catalog can't load

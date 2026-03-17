@@ -17,8 +17,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
+from app.capability_service import CapabilityService
 from app.registry_service.backend import get_registry_store
-from app.registry_service.store_base import AbstractRegistryStore, SkillDisabledError
+from app.registry_service.store_base import AbstractRegistryStore, CapabilityDisabledError
 
 log = logging.getLogger(__name__)
 _SESSION_TTL_SECONDS = 24 * 60 * 60
@@ -294,8 +295,8 @@ def create_routed_task(
         return store.create_routed_task(payload)
     except PermissionError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
-    except SkillDisabledError as exc:
-        raise HTTPException(status_code=409, detail="skill_disabled") from exc
+    except CapabilityDisabledError as exc:
+        raise HTTPException(status_code=409, detail="capability_disabled") from exc
 
 
 @app.get("/v1/agents/poll")
@@ -839,10 +840,10 @@ def ui_shell(request: Request) -> str:
       </section>
       <section class="skills-panel">
         <div class="panel-header">
-          <h2>Skills</h2>
+          <h2>Capabilities</h2>
           <span class="subtle">Global routing kill switches</span>
         </div>
-        <div id="skills"><div class="loading-state">Loading…</div></div>
+        <div id="capabilities"><div class="loading-state">Loading…</div></div>
       </section>
     </main>
     <script>
@@ -851,12 +852,12 @@ def ui_shell(request: Request) -> str:
         bots: "No bots connected yet. Start a bot in registry mode and it will appear here.<br><code>./scripts/app/guided_start.sh</code>",
         conversations: "No conversations yet. Send a message to your bot in Telegram to start.",
         tasks: "No routed tasks yet. Delegated tasks appear here in real time.",
-        skills: "No skills declared yet. Connect bots with advertised skills and they will appear here.",
+        capabilities: "No capabilities declared yet. Connect bots with advertised capabilities and they will appear here.",
       }};
       let bootstrapData = {{ bots: [], conversations: [], tasks: [] }};
       let usageSummary = {{ daily_total: {{ prompt_tokens: 0, completion_tokens: 0, cost_usd: 0 }}, by_conversation: [] }};
       let bootstrapLoaded = false;
-      let skillsLoaded = false;
+      let capabilitiesLoaded = false;
       let lastSuccessfulLoad = 0;
       let currentDetailKind = "";
       let currentDetailId = "";
@@ -1177,7 +1178,7 @@ def ui_shell(request: Request) -> str:
           <button type="button" class="item item-button" data-bot-id="${{escapeHtml(item.agent_id)}}">
             <strong>${{escapeHtml(item.display_name)}}</strong>
             <div class="meta meta-row">${{stateBadge(item)}}<span>${{escapeHtml(item.role || "unassigned role")}}</span></div>
-            <div class="meta">${{escapeHtml(item.description || (item.skills || []).join(", ") || "no skills declared")}}</div>
+            <div class="meta">${{escapeHtml(item.description || (item.capabilities || []).join(", ") || "no capabilities declared")}}</div>
             ${{renderRuntimeHealthSummary(item.runtime_health_summary)}}
           </button>
         `, "bots");
@@ -1211,18 +1212,18 @@ def ui_shell(request: Request) -> str:
         }});
       }}
 
-      function renderSkills(items) {{
-        const container = document.getElementById("skills");
+      function renderCapabilities(items) {{
+        const container = document.getElementById("capabilities");
         if (!container) return;
         if (!items.length) {{
-          container.innerHTML = `<div class="empty-state">${{EMPTY_STATES.skills}}</div>`;
+          container.innerHTML = `<div class="empty-state">${{EMPTY_STATES.capabilities}}</div>`;
           return;
         }}
         container.innerHTML = `
           <table class="skills-table">
             <thead>
               <tr>
-                <th>Skill</th>
+                <th>Capability</th>
                 <th>Declared by</th>
                 <th>Status</th>
                 <th>Action</th>
@@ -1245,15 +1246,15 @@ def ui_shell(request: Request) -> str:
                     : '<span class="skill-empty">(none active)</span>';
                   return `
                     <tr class="${{disabled ? 'skill-row-disabled' : ''}}">
-                      <td><strong>${{escapeHtml(item.skill_name)}}</strong></td>
+                      <td><strong>${{escapeHtml(item.capability_name)}}</strong></td>
                       <td>${{declaredBy}}</td>
                       <td>${{status}}</td>
                       <td>
                         <button
                           type="button"
                           class="${{disabled ? '' : 'secondary'}}"
-                          data-skill-name="${{escapeHtml(item.skill_name)}}"
-                          data-skill-action="${{action}}"
+                          data-capability-name="${{escapeHtml(item.capability_name)}}"
+                          data-capability-action="${{action}}"
                         >${{actionLabel}}</button>
                       </td>
                     </tr>
@@ -1263,9 +1264,9 @@ def ui_shell(request: Request) -> str:
             </tbody>
           </table>
         `;
-        document.querySelectorAll("[data-skill-action]").forEach(node => {{
+        document.querySelectorAll("[data-capability-action]").forEach(node => {{
           node.addEventListener("click", () => {{
-            toggleSkillOverride(node.dataset.skillName, node.dataset.skillAction === "enable");
+            toggleCapabilityOverride(node.dataset.capabilityName, node.dataset.capabilityAction === "enable");
           }});
         }});
       }}
@@ -1310,7 +1311,7 @@ def ui_shell(request: Request) -> str:
         document.getElementById("conversation-detail-body").innerHTML = `
           <div class="detail-card">
             <div class="meta"><strong>Description:</strong> ${{escapeHtml(bot.description || "No description provided.")}}</div>
-            <div class="meta"><strong>Skills:</strong> ${{escapeHtml((bot.skills || []).join(", ") || "No skills declared")}}</div>
+            <div class="meta"><strong>Capabilities:</strong> ${{escapeHtml((bot.capabilities || []).join(", ") || "No capabilities declared")}}</div>
             <div class="meta"><strong>Tags:</strong> ${{escapeHtml((bot.tags || []).join(", ") || "No tags declared")}}</div>
             <div class="meta"><strong>Version:</strong> ${{escapeHtml(bot.version || "unknown")}}</div>
             <div class="meta"><strong>Last heartbeat:</strong> ${{escapeHtml(formatTime(bot.last_heartbeat_at) || "unknown")}}</div>
@@ -1512,8 +1513,8 @@ def ui_shell(request: Request) -> str:
             renderConversations(bootstrapData.conversations || []);
           }}
           renderTasks(bootstrapData.tasks || []);
-          if (!skillsLoaded) {{
-            await loadSkills();
+          if (!capabilitiesLoaded) {{
+            await loadCapabilities();
           }}
           await refreshCurrentDetail();
         }} catch (error) {{
@@ -1573,16 +1574,16 @@ def ui_shell(request: Request) -> str:
         await loadBootstrap();
       }}
 
-      async function loadSkills() {{
-        const response = await fetch('/v1/ui/skills', {{
+      async function loadCapabilities() {{
+        const response = await fetch('/v1/ui/capabilities', {{
           headers: authHeaders(),
         }});
         if (!response.ok) {{
-          throw new Error(await response.text() || "Failed to load skills.");
+          throw new Error(await response.text() || "Failed to load capabilities.");
         }}
-        const skills = await response.json();
-        skillsLoaded = true;
-        renderSkills(Array.isArray(skills) ? skills : []);
+        const capabilities = await response.json();
+        capabilitiesLoaded = true;
+        renderCapabilities(Array.isArray(capabilities) ? capabilities : []);
       }}
 
       async function loadUsage() {{
@@ -1606,16 +1607,16 @@ def ui_shell(request: Request) -> str:
         }}
       }}
 
-      async function toggleSkillOverride(skillName, enable) {{
+      async function toggleCapabilityOverride(capabilityName, enable) {{
         const action = enable ? "enable" : "disable";
-        const response = await fetch(`/v1/ui/skills/${{encodeURIComponent(skillName)}}/${{action}}`, {{
+        const response = await fetch(`/v1/ui/capabilities/${{encodeURIComponent(capabilityName)}}/${{action}}`, {{
           method: "POST",
           headers: authHeaders(),
         }});
         if (!response.ok) {{
-          setStatus(await response.text() || "Skill update failed.");
+          setStatus(await response.text() || "Capability update failed.");
         }}
-        await loadSkills();
+        await loadCapabilities();
       }}
 
       async function cancelConversation() {{
@@ -1785,9 +1786,16 @@ def ui_search(
     return {"results": store.search_conversations(q, min(limit, 100))}
 
 
-@app.get("/v1/ui/skills")
-def ui_skills(_: None = Depends(require_ui_token), store: AbstractRegistryStore = Depends(get_store)) -> list[dict[str, Any]]:
-    return store.list_skills()
+@app.get("/v1/ui/capabilities")
+def ui_capabilities(_: None = Depends(require_ui_token), store: AbstractRegistryStore = Depends(get_store)) -> list[dict[str, Any]]:
+    return [
+        {
+            "capability_name": item.capability_name,
+            "declared_by_agents": list(item.declared_by_agents),
+            "enabled": item.enabled,
+        }
+        for item in CapabilityService(store).list_capabilities()
+    ]
 
 
 @app.get("/v1/ui/usage")
@@ -1837,24 +1845,24 @@ def ui_usage(
     }
 
 
-@app.post("/v1/ui/skills/{skill_name}/enable")
-def ui_enable_skill(
-    skill_name: str,
+@app.post("/v1/ui/capabilities/{capability_name}/enable")
+def ui_enable_capability(
+    capability_name: str,
     _: None = Depends(require_ui_token),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    store.set_skill_override(skill_name, enabled=True)
-    return {"skill_name": skill_name, "enabled": True}
+    item = CapabilityService(store).set_enabled(capability_name, enabled=True)
+    return {"capability_name": item.capability_name, "enabled": True}
 
 
-@app.post("/v1/ui/skills/{skill_name}/disable")
-def ui_disable_skill(
-    skill_name: str,
+@app.post("/v1/ui/capabilities/{capability_name}/disable")
+def ui_disable_capability(
+    capability_name: str,
     _: None = Depends(require_ui_token),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
-    store.set_skill_override(skill_name, enabled=False)
-    return {"skill_name": skill_name, "enabled": False}
+    item = CapabilityService(store).set_enabled(capability_name, enabled=False)
+    return {"capability_name": item.capability_name, "enabled": False}
 
 
 @app.post("/v1/ui/conversations", status_code=201)

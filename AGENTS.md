@@ -169,6 +169,53 @@ existed at that version, not as they exist in the current schema.
 Rewriting historical migrations to use current names breaks upgrade
 paths from older databases.
 
+### Transport Contract Changes Require Full Blast-Radius Audit
+
+When changing a transport facade return type or status value (e.g.
+`"busy"` → `"queued"`), grep the entire codebase for every consumer
+of that status before starting implementation. Surface call sites
+(Telegram handlers, registry bridge, registry delivery, tests) all
+encode the old contract. Change the transport implementation and every
+consumer in the same commit or coordinated sequence — never leave a
+half-migrated contract.
+
+### Stale-Claim Detection Is Age-Based
+
+A claimed item is stale only when `claimed_at + lease_ttl < now`. Never
+treat `worker_id != current_worker_id` as evidence of staleness — in
+multi-worker deployments every other worker's live claims would be
+incorrectly recovered. The optimistic update guard
+(`WHERE worker_id = ? AND claimed_at = ?`) uses the stale row's
+original values for race protection, not for staleness detection.
+
+### Queueing Is a First-Class Runtime Contract
+
+If this repo says a surface or runtime path is queued, the transport
+store must durably accept and enqueue the work item. Do not simulate
+queueing with terminal `chat_busy`, `retry_later`, or reject-and-
+redeliver behavior. When changing fresh-message admission from reject
+to queue, update the transport store, Telegram/registry call sites, and
+all affected tests in the same slice.
+
+### FSM Review Before Durable Queue Changes
+
+Any change to durable queueing, stale-claim recovery, replay, or
+admission policy must start with an audit of the existing
+`python-statemachine` transport workflow and its tests. Confirm the
+machine still expresses the intended contract: multiple queued fresh
+items, one claimed item per conversation, replay-only stale recovery,
+and correct coexistence of queued fresh work with `pending_recovery`.
+If the contract is missing, extend the workflow abstraction and tests
+first; do not patch around it with ad hoc SQL branches.
+
+### Recovered Work Is Replay-Notice Only
+
+Stale claimed work must never auto-rerun on recovery. Recovery
+transitions should move the item into the existing replay/discard flow
+(`dispatch_mode = 'recovery'` to `pending_recovery`) so the user
+explicitly chooses what happens next. Automatic continuation risks
+circular loops and false actions after restart.
+
 ## Repo-Specific Bug Reports
 
 When writing a bug report for this repo:

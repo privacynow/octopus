@@ -5344,59 +5344,528 @@ Files: `tests/contracts/test_transport_store_contract.py`,
 
 ---
 
-###### M21A — Unlock Shared Runtime config and persist-first webhook ingress
+###### M21A — Surface-neutral persist-first ingress for worker-owned interactions
 
-**Problem.** `BOT_RUNTIME_MODE=shared` is rejected at startup.
-Webhook mode enters the same synchronous handler pipeline as polling,
-so a slow provider call blocks the HTTP response to Telegram (which
-will retry after 60s, causing duplicates).
+**Status: Not started.**
 
-**Fix.**
-- Remove the `shared` rejection in `config.py` validation. Add a new
-  validation: `shared` requires `bot_mode=webhook`. It does **not**
-  require `database_url` — SQLite is a valid Shared Runtime backend
-  when all processes share a local filesystem.
-- Add a persist-first webhook handler: receive Telegram update →
-  `record_and_enqueue(data_dir, update_id, chat_id, user_id, kind)` →
-  return HTTP 200. No handler dispatch in the request path. This uses
-  the existing transport facade, which routes to SQLite or Postgres
-  depending on `BOT_DATABASE_URL`.
-- In Shared Runtime mode, `post_init` starts `worker_loop` but does
-  **not** register PTB message/command/callback handlers (those are
-  Local Runtime only). The webhook handler is the sole ingress path;
-  workers are the sole execution path.
+**Problem.** `BOT_RUNTIME_MODE=shared` is rejected at startup
+(`app/config.py:559`). In Local Runtime, webhook mode enters the same
+synchronous handler pipeline as polling, so a slow provider call blocks
+the HTTP response to Telegram (which retries after 60s, causing
+duplicates). More fundamentally, all conversation-scoped state mutation
+and execution-affecting interactions currently run inline in the ingress
+process. In a multi-worker deployment this means `_chat_lock`
+(process-local `asyncio.Lock`) and `_LIVE_CANCEL` (process-local
+`dict`) cannot serialize or cancel across workers.
 
-**Files:** `app/config.py`, `app/main.py`, tests.
+**Goal.** M21A establishes the rule: **no conversation-scoped state
+mutation or execution-affecting interaction runs in a surface ingress
+process/request path.** Those interactions must be normalized into a
+surface-neutral semantic action, persisted to the durable transport
+store, and executed by the worker loop — regardless of whether the
+surface is Telegram, registry, Slack, or any future transport. Telegram
+webhook is the first concrete ingress adapter for this rule; the
+registry already proves the pattern works.
 
-###### M21B — Multi-worker claim isolation and cross-process recovery
+**Core rule.**
 
-**Problem.** The single-process model assumes one worker loop.
-`_chat_lock` uses in-memory `asyncio.Lock` objects that do not exist
-across processes. `recover_stale_claims` is only called at startup
-within the owning process.
+Worker-owned in shared mode:
+- all conversation-scoped state mutation
+- all execution-affecting actions
+- all replay/cancel/retry/approval/delegation actions
 
-**Fix.**
-- In Shared Runtime mode, `_chat_lock` becomes a no-op pass-through
-  (per-chat serialization is enforced by the database — Postgres via
-  row-level locking, SQLite via `BEGIN IMMEDIATE` database-wide write
-  lock). The lock's queue-busy feedback moves to a database-level
-  check: if a chat already has a `claimed` item, new work stays
-  `queued` and the user gets no busy message until a worker actually
-  claims it.
-- Add a periodic `recover_stale_claims` sweep that any worker can run.
-  Use `claimed_at + lease_ttl < NOW()` to detect abandoned claims.
-  Default lease TTL: 5 minutes (configurable via `BOT_CLAIM_LEASE_TTL`).
-  Recovered items move to `queued` (not `pending_recovery`) so any
-  worker can pick them up. The sweep query must work in both backends:
-  SQLite uses `julianday('now') - julianday(claimed_at)` or epoch
-  comparison; Postgres uses `NOW() - claimed_at`.
-- Add `worker_id` generation: hostname + PID + boot-time UUID, so
-  claim ownership is traceable across processes.
+Inline in shared mode:
+- read-only conversation inspection
+- global/admin operator commands
+- harmless display-only callbacks
 
-**Files:** `app/telegram_handlers.py` (`_chat_lock` shared-runtime
-path), `app/worker.py` (stale-claim sweep), `app/work_queue_sqlite_impl.py`
-and `app/work_queue_pg.py` (lease TTL query in both backends),
-`app/config.py` (lease TTL field), tests.
+Credential-setup replies remain the deliberate inline exception
+(`telegram_handlers.py:2732`).
+
+**Interaction classification model (surface-neutral).**
+
+| Category | Rule | Shared-mode examples |
+|----------|------|----------------------|
+| **Read-only** | Inline | `/help`, `/start`, `/session`, `/doctor`, `/id`, `/raw`, `/discover`, `/send`, `/export`, expand/collapse |
+| **Global/admin** | Inline | `/allowuser`, `/blockuser`, `/listaccess`, `/admin` |
+| **Conversation state mutation** | Worker-owned | `/new`, `/approval`, `/role`, `/compact`, `/model`, `/project`, `/policy`, `/skills`, settings callbacks, `approval_reject`, `retry_skip`, `recovery_discard`, skill/session-mutating callbacks |
+| **Execution-affecting** | Worker-owned | plain messages, `/approve`, `approval_approve`, `retry_allow`, `recovery_replay`, `delegation_approve` |
+| **Durable cancel** | Worker-owned | `/cancel` — persisted as `InboundAction(action="cancel_conversation")`; worker clears active work, pending approval/retry, or queued items |
+| **Inline exception** | Inline | credential-setup replies (`telegram_handlers.py:2732`) |
+
+**Key abstraction: `InboundAction`.**
+
+Worker-owned non-message interactions must not flow through the worker
+as raw Telegram command names or callback data strings. Instead, a new
+`InboundAction` type represents semantic worker-owned actions in a
+surface-neutral way:
+
+```python
+@dataclass(frozen=True)
+class InboundAction:
+    user: InboundUser
+    conversation_key: str
+    action: str             # e.g. "approve_pending", "set_model_profile"
+    params: dict[str, Any]  # e.g. {"profile": "fast"}
+    source: str = "telegram"
+    conversation_ref: str = ""
+```
+
+Telegram `/approve` and Telegram callback `approval_approve` both
+normalize to `InboundAction(action="approve_pending")`. A Slack
+"approve" button would produce the same `InboundAction`. The worker
+never sees the surface origin.
+
+Semantic action names include: `approve_pending`, `reject_pending`,
+`retry_allow`, `retry_skip`, `recovery_replay`, `recovery_discard`,
+`cancel_conversation`, `session_reset`, `set_approval_mode`,
+`set_model_profile`, `set_project`, `set_file_policy`,
+`set_compact_mode`, `set_role`, `approve_delegation`.
+
+`serialize_inbound` / `deserialize_inbound` in `app/transport.py` get
+a fourth `kind="action"` branch. `worker_loop` at `app/worker.py:66`
+already deserializes by `kind` and dispatches — no structural change
+needed there.
+
+Persist-first wrappers for shared mode persist `kind="action"` with
+`InboundAction` payload. Raw `command` / `callback` kinds remain only
+for local inline journaling via `_dedup_update` and for legacy/recovery
+compatibility.
+
+**What already exists.**
+
+- Fresh messages already use persist-first admission via
+  `app/transports/admission.py` → `record_and_admit_message`.
+- Commands/callbacks are already journaled via `_dedup_update()` in
+  `app/telegram_handlers.py:351`, but they are claimed and completed
+  inline in the ingress process.
+- `worker_dispatch` already executes fresh `InboundMessage` items from
+  the queue. For `InboundCommand` / `InboundCallback` it only emits
+  an orphaned-recovery notice (`telegram_handlers.py:3773`).
+- The worker loop (`app/worker.py`) is already backend-neutral.
+- The transport facade already has `record_and_enqueue` with neutral
+  identity keys (M21A-0 complete).
+- Extracted core helpers already exist: `approve_pending`,
+  `reject_pending`, `retry_allow_pending`, `retry_skip_pending`,
+  `handle_recovery_action`, delegation approval logic.
+- Providers already accept `cancel: asyncio.Event | None` via
+  `app/providers/base.py` — no provider contract change needed.
+
+**What M21A must deliver.**
+
+**A. Config unlock.**
+Remove the `shared` rejection in `config.py:559`. Add validation:
+`shared` requires `bot_mode=webhook`. Do NOT require `database_url` —
+SQLite is valid on single-host deployments.
+
+**B. `InboundAction` type + serialization.**
+Add `InboundAction` dataclass to `app/transport.py`. Add `kind="action"`
+serialization/deserialization branch. Add Telegram-to-semantic-action
+normalization helpers (`normalize_shared_command_action`,
+`normalize_shared_callback_action`) in `app/telegram_handlers.py` that
+map Telegram commands and callbacks to `InboundAction` instances.
+
+**C. Mode-aware Telegram handler registration.**
+`build_application` in `app/telegram_handlers.py` accepts
+`runtime_mode` and splits handler registration. In shared mode:
+worker-owned interactions point at persist-first wrappers; inline
+interactions keep existing handlers. Registration logic stays in
+`telegram_handlers.py` — Telegram routing is the Telegram adapter's
+concern, not `main.py`'s.
+
+**D. Persist-first wrappers.**
+For messages: reuse `normalize_message` → `serialize_inbound` →
+`record_and_admit_message`. For worker-owned actions: normalize to
+`InboundAction` → `serialize_inbound` → `record_and_enqueue`. Return
+immediately (answer callback queries first). No new queue. No new
+broker.
+
+**E. Extract core action helpers.**
+Some helpers already exist and are reusable. Others have logic buried
+in PTB-shaped handlers. Extract pure helpers that operate on
+conversation identity + outbound surface + typed params. Both inline
+handlers (local mode) and worker dispatch (shared mode) call the same
+helpers. No duplicated business logic.
+
+**F. Extend `worker_dispatch` for `InboundAction`.**
+Add an `InboundAction` branch to `worker_dispatch`. The worker
+constructs an outbound surface via the factory and routes to the
+appropriate core helper based on `action.action`. Keep the existing
+`InboundMessage` branch unchanged. Keep the orphan-notice behavior for
+legacy raw `InboundCommand`/`InboundCallback` queue items (recovery
+compat).
+
+**G. Durable cancel.**
+`/cancel` is modeled as `InboundAction(action="cancel_conversation")`.
+Worker-side logic: if claimed fresh exists → set durable cancel request;
+elif queued fresh exists → cancel queued item; elif pending
+approval/retry exists → clear it; elif credential setup in progress →
+(inline exception, handled before normalization); else → nothing to
+cancel.
+
+Durable cancel metadata on `work_items`: `cancel_requested_at TEXT`,
+`cancel_requested_by TEXT`, `cancel_request_event_id TEXT`. Not just a
+boolean — auditability, diagnostics, and stale-claim recovery rules
+need the metadata.
+
+Transport facade methods (parity rule applies):
+- `request_cancel(data_dir, conversation_key, actor_key,
+  cancel_request_event_id="") -> CancelRequestResult`
+  - `queued_cancelled`: queued fresh item was cancelled immediately
+  - `claimed_cancel_requested`: cancel metadata set on claimed item
+  - `nothing_to_cancel`: no active work for this conversation
+- `is_cancel_requested(data_dir, item_id) -> bool`
+
+Worker cancel watcher pattern:
+- Worker creates a local `cancel_event: asyncio.Event`
+- Worker starts provider/preflight task
+- Worker starts a cancel-watcher task that polls
+  `is_cancel_requested(item_id)` at `SHARED_POLL_INTERVAL`
+- `asyncio.wait` on both tasks; whichever finishes first cancels the
+  other
+- Same pattern for both `execute_request` and `request_approval`
+- Provider contracts unchanged — they already accept
+  `cancel: asyncio.Event`
+
+Stale-claim recovery rule: if a stale claimed fresh item has
+`cancel_requested_at` set, do NOT move it to `dispatch_mode='recovery'`.
+Transition it to terminal cancelled/failed. Do not show replay UI for
+work the user explicitly cancelled.
+
+**H. Shared-mode worker poll interval.**
+Shared mode uses `SHARED_POLL_INTERVAL = 0.5` seconds (vs local mode's
+`POLL_INTERVAL = 1.0`). Active-action latency matters more when state
+mutations are worker-owned. The cancel watcher uses the same interval.
+This is a tuning constant in `app/worker.py`, not a second execution
+path.
+
+**I. Auditability.** All incoming Telegram updates are journaled via
+`_dedup_update` (as today) even for inline interactions. This is for
+duplicate suppression and operator diagnosis — not for replay.
+
+**Files to change.**
+
+| File | Change |
+|------|--------|
+| `app/config.py` | Remove shared rejection, add shared→webhook validation |
+| `app/transport.py` | Add `InboundAction` dataclass + `kind="action"` serialization/deserialization |
+| `app/telegram_handlers.py` | Semantic-action normalization helpers; mode-aware handler registration; persist-first wrappers; extract core action helpers; extend `worker_dispatch` for `InboundAction`; `/cancel` as `cancel_conversation` action |
+| `app/worker.py` | `SHARED_POLL_INTERVAL = 0.5`; cancel-watcher task pattern; pass interval based on runtime mode |
+| `app/work_queue.py` | Add `request_cancel` / `is_cancel_requested` (parity rule) |
+| `app/work_queue_sqlite_impl.py` | Durable cancel columns + migration |
+| `app/work_queue_pg.py` | Same |
+| `app/work_queue_postgres.py` | Same |
+| `app/work_queue_sqlite.py` | Same |
+| `app/db/migrations/postgres/0006_durable_cancel.sql` | Cancel metadata columns |
+| `tests/test_config.py` | Shared-mode validation tests |
+| `tests/test_shared_runtime.py` (new) | Ingress, worker action execution, durable cancel |
+| `tests/contracts/test_transport_store_contract.py` | Cancel facade contract tests |
+| `docs/plan.md`, `docs/status.md` | Status update |
+
+**Commit plan.**
+
+1. Config unlock + `InboundAction` type + serialization. No runtime
+   behavior switch yet.
+2. Shared-mode Telegram registration + persist-first wrappers + worker
+   dispatch for `InboundAction` + extracted core helpers reused by both
+   inline and worker paths.
+3. Durable cancel schema + facade + both backends + contract tests +
+   worker cancel watcher + stale-claim recovery honoring cancel +
+   `/cancel` as semantic action.
+4. Docs + full verification + clean diffs.
+
+**What M21A does NOT include.**
+- Multi-worker deployment orchestration (M21C).
+- Stale-claim sweep or lease TTL (M21B).
+- Observability or health reporting (M21D).
+- New surfaces (Slack, SMS, iMessage).
+- Full replay semantics for journaled interactions.
+- Changes to Local Runtime behavior — all shared-mode code is gated
+  on `config.runtime_mode == "shared"`.
+
+**Acceptance criteria.**
+- [ ] `BOT_RUNTIME_MODE=shared` with `BOT_MODE=webhook` starts
+      successfully (with or without `BOT_DATABASE_URL`)
+- [ ] `BOT_RUNTIME_MODE=shared` with `BOT_MODE=poll` is rejected
+- [ ] All conversation-scoped state mutations and execution-affecting
+      interactions are persisted as `InboundAction` and worker-executed
+      in shared mode
+- [ ] Read-only and admin commands respond inline in shared mode
+- [ ] `worker_dispatch` handles `InboundAction` items using extracted
+      core helpers, not raw Telegram command/callback parsing
+- [ ] `/cancel` persists as `InboundAction(action="cancel_conversation")`
+      and the worker clears active work, pending approval/retry, or
+      queued items as appropriate
+- [ ] Durable cancel metadata (not just boolean) on work_items with
+      SQLite + Postgres impls + contract tests
+- [ ] Cancel watcher task polls `is_cancel_requested` at 0.5s and
+      shuts down cleanly when provider exits
+- [ ] Stale-claim recovery skips cancelled items (no replay UI for
+      explicitly cancelled work)
+- [ ] Shared-mode worker poll interval is 0.5s
+- [ ] Local Runtime is completely unchanged
+- [ ] All Telegram updates journaled for auditability
+- [ ] Credential-setup replies remain inline (documented exception)
+- [ ] Full test suite passes
+- [ ] Compose E2E passes
+- [ ] `git diff --check` clean
+
+###### M21B — Durable per-conversation queue, lease-based recovery, multi-worker isolation
+
+**Status: Not started.**
+
+**Problem.** Three pre-multi-worker assumptions remain after M21A:
+
+1. `_chat_lock` in `app/telegram_handlers.py` is process-local.
+   In shared mode the worker path acquires an `asyncio.Lock` that
+   other processes cannot see. The database partial unique index
+   (`idx_one_claimed_per_conv`) is the real authority.
+
+2. `recover_stale_claims()` in both backends uses `worker_id !=
+   current_worker_id` as part of the stale predicate. In multi-worker
+   deployments every worker would try to recover every other worker's
+   **live** claims. Staleness must be age-based only.
+
+3. `record_and_admit_message()` in both backends rejects a second
+   fresh message for the same conversation as terminal `chat_busy`
+   (inserts a `failed` work item). This prevents durable queueing.
+   A second message should be accepted and queued behind in-flight
+   work, not rejected.
+
+**Goal.** Make the durable per-conversation queue real across
+processes:
+
+- Fresh messages are durably accepted and queued behind in-flight work.
+- Only one fresh item per conversation is ever `claimed` at a time
+  (enforced by the database, not a process-local lock).
+- Stale claimed work is detected by lease age, never by foreign
+  worker ID.
+- Stale claimed work always becomes a user-facing replay/discard
+  recovery notice, never auto-rerun.
+- Shared-mode workers rely on DB ownership, not `_chat_lock`.
+
+**Admission contract change.**
+
+`record_and_admit_message()` moves from
+`duplicate | admitted | busy` to `duplicate | admitted | queued`.
+
+| Status | Meaning |
+|--------|---------|
+| `duplicate` | Event ID already recorded |
+| `admitted` | Inserted; no earlier fresh runnable work existed |
+| `queued` | Inserted behind existing fresh queued/claimed work |
+
+No schema change needed — `work_items` already supports multiple
+queued rows per conversation. The single-claimed invariant is enforced
+by `idx_one_claimed_per_conv`.
+
+**Surface call-site updates required.**
+
+- **Telegram** (`telegram_handlers.py`): `status == "busy"` currently
+  sends `queue_busy()` rejection text. With `"queued"`, send a softer
+  acknowledgement like "Queued behind current work." Do not reuse
+  `queue_busy()` unchanged — the request is now accepted, not rejected.
+- **Registry bridge** (`agents/bridge.py`): `status == "busy"` returns
+  `"retry_later"`. With `"queued"`, return `"accepted"`. The registry
+  ACKs the delivery as accepted; the item sits in the local queue.
+  The `queued` branch must also run conversation binding and timeline
+  publication (currently only run for `admitted` and `duplicate`).
+- **Registry delivery** (`agents/delivery.py`): post-admit summary is
+  only sent when `admit_status == "admitted"`. With `"queued"`, decide
+  intentionally whether to send the summary or skip it. Recommended:
+  skip the inline summary for queued work — the worker will send
+  output when it executes.
+
+**Stale-claim recovery predicate change.**
+
+`recover_stale_claims()` in both backends:
+- **Remove**: `worker_id != current_worker_id` as a staleness signal.
+- **Keep**: `claimed_at` older than `max_age_seconds` as the sole
+  staleness predicate.
+- **Keep**: optimistic update guard `WHERE id = ? AND state = 'claimed'
+  AND worker_id = ? AND claimed_at = ?` using the stale row's original
+  values (race protection, not staleness detection).
+- **Keep**: cancelled stale items → terminal `failed` / `error =
+  'cancelled'` (M21A).
+- **Keep**: non-cancelled stale items → `dispatch_mode = 'recovery'`,
+  clear `worker_id` and `claimed_at` (replay-notice path).
+
+**Recovery stays replay-notice based.** Worker dispatch for
+`dispatch_mode='recovery'` items sends a recovery notice and moves to
+`pending_recovery`. The user explicitly chooses replay or discard.
+No automatic continuation. No auto-rerun.
+
+**Cancel semantics unchanged.** `/cancel` still cancels one item at a
+time: active claimed fresh first, then oldest queued fresh. With
+queueing, repeated `/cancel` can drain the backlog one item at a time.
+"Flush whole queue" is a separate future slice if desired.
+
+**Transport FSM verification (prerequisite, not redesign).**
+
+The transport FSM in `app/workflows/transport_recovery.py` models
+per-work-item state transitions. The per-conversation queue policy
+(how many items can be queued, how admission works) is a **repository**
+concern, not an FSM concern. The FSM's relevant invariant is:
+`ensure_no_other_claimed` checks for other **claimed** items, not
+other **queued** items. Multiple queued fresh items per conversation
+are already compatible with the machine.
+
+Before changing repository code:
+
+1. Review `app/workflows/transport_recovery.py` and
+   `tests/test_transport_workflow_machine.py`.
+2. Confirm the existing machine supports:
+   - multiple fresh `queued` items per conversation (no FSM
+     prohibition — `claim_worker` only checks
+     `has_other_claimed_for_chat`)
+   - exactly one `claimed` item per conversation
+   - stale `claimed` → `queued` with `dispatch_mode='recovery'`
+   - `pending_recovery` coexistence with fresh queued backlog
+   - `supersede_recovery` when fresh work arrives
+3. If any of those assumptions are not explicit in machine tests,
+   add FSM-level invariant tests first.
+4. Do **not** modify the state machine unless verification reveals a
+   real gap. No new states, no new events, no transition rewrites.
+
+The old `chat_busy` behavior was a **repository-side terminal-row
+policy** in `record_and_admit_message()`, not an FSM transition.
+Both backends currently insert a `failed` work item with
+`error='chat_busy'` directly — they do not fire the FSM `fail`
+event for this case. Under the new queueing contract, that terminal-
+row insertion is simply removed and replaced with a normal fresh
+`queued` item insertion. Verify that no callers, tests, or reporting
+paths depend on the existence of terminal `failed`/`chat_busy` rows.
+
+**What M21B must deliver.**
+
+**1. Claim lease TTL config** (`app/config.py`).
+Add `claim_lease_ttl_seconds: int` (env `BOT_CLAIM_LEASE_TTL`,
+default 300, must be > 0). Single source of truth for startup
+recovery and periodic sweep.
+
+**2. Traceable worker ID** (`app/telegram_handlers.py`).
+Replace `_boot_id = uuid.uuid4().hex` with
+`{hostname}:{pid}:{uuid12}`. Stored in `work_items.worker_id` on
+claim. Operators can identify host + process in multi-worker
+deployments.
+
+**3. `_chat_lock` shared worker-path bypass**
+(`app/telegram_handlers.py`). When `runtime_mode == "shared"` and
+`worker_item is not None`, skip the `asyncio.Lock`. Still call
+`supersede_pending_recovery`. Keep the lock for local mode and
+shared-mode inline commands.
+
+**4. Age-based stale predicate** (`app/work_queue_sqlite_impl.py`,
+`app/work_queue_pg.py`). Change `recover_stale_claims()` so
+staleness is `claimed_at` age only. Remove the
+`worker_id != current_worker_id` check. Keep the optimistic update
+guard. Keep cancel-aware terminal disposition.
+
+**5. Periodic stale sweep** (`app/worker.py`). Every
+`SWEEP_INTERVAL` seconds (default 60), call
+`recover_stale_claims(data_dir, worker_id,
+max_age_seconds=lease_ttl)`. Track `last_sweep` with
+`time.monotonic`. Log recovered count. Swallow and log errors
+without killing the worker loop. Startup recovery in `main.py`
+also passes `lease_ttl`.
+
+**6. Fresh-message queueing** (`app/work_queue_sqlite_impl.py`,
+`app/work_queue_pg.py`). Change `record_and_admit_message()` from
+`duplicate | admitted | busy` to `duplicate | admitted | queued`.
+Always insert a fresh queued work item. Return `queued` instead of
+inserting a `failed` / `chat_busy` row. No schema change.
+
+**7. Surface call-site updates** (`app/telegram_handlers.py`,
+`app/agents/bridge.py`, `app/agents/delivery.py`). Handle `"queued"`
+status: Telegram gets softer acknowledgement; registry gets
+`"accepted"` with conversation binding and timeline publication;
+delegation continuation decides whether to send inline summary.
+
+**8. Test updates.** Grep for `chat_busy` and `status == "busy"`
+across the full test tree before starting. Replace terminal
+`chat_busy` assertions with queue-order and single-claim assertions.
+Add lease-based stale recovery tests. Add multi-queued-item FIFO
+tests.
+
+**Files to change.**
+
+| File | Change |
+|------|--------|
+| `app/config.py` | Add `claim_lease_ttl_seconds` field |
+| `app/telegram_handlers.py` | Traceable worker ID; `_chat_lock` shared bypass; `"queued"` acknowledgement text |
+| `app/worker.py` | Periodic sweep; accept `lease_ttl` + `sweep_interval` |
+| `app/main.py` | Pass `lease_ttl` to startup recovery and worker task |
+| `app/work_queue_sqlite_impl.py` | Age-based stale predicate; `admitted\|queued` admission |
+| `app/work_queue_pg.py` | Same |
+| `app/work_queue_postgres.py` | Forward `lease_ttl` |
+| `app/work_queue_sqlite.py` | Forward `lease_ttl` |
+| `app/work_queue.py` | Update `record_and_admit_message` docstring |
+| `app/transports/admission.py` | Update `admit_fresh_message` docstring |
+| `app/agents/bridge.py` | `"queued"` → `"accepted"` with binding/timeline |
+| `app/agents/delivery.py` | Decide on queued-continuation summary |
+| `app/user_messages.py` | New `queue_accepted()` message |
+| `tests/contracts/test_transport_store_contract.py` | Age-based stale tests; queueing tests |
+| `tests/test_shared_runtime.py` | Lock bypass; sweep; queueing |
+| `tests/test_work_queue.py` | Replace `chat_busy` assertions |
+| `tests/test_work_queue_pg.py` | Same |
+| `tests/test_workitem_integration.py` | Same |
+| `tests/test_cancel.py` | Queue-aware cancel |
+| `tests/test_handlers.py` | Queued acknowledgement |
+| `tests/test_agents.py` | Registry accepted path |
+| `tests/test_simulator_e2e.py` | Queue-order execution |
+| `tests/test_config.py` | Lease TTL config |
+| `docs/plan.md`, `docs/status.md` | Status update |
+
+**Implementation order.**
+
+0. FSM verification pass: review machine and add invariant tests
+   if the multi-queued-item contract is not explicit.
+1. Lease TTL config and startup/worker plumbing.
+2. Traceable worker ID helper.
+3. `_chat_lock` shared worker-path bypass.
+4. Backend `recover_stale_claims()` fix to age-based staleness only.
+5. Periodic sweep in `app/worker.py`.
+6. Pre-implementation audit: `grep -rn "chat_busy" app/ tests/` and
+   `grep -rn 'status == "busy"' app/ tests/` — record every hit.
+7. Fresh-message admission contract change to
+   `duplicate|admitted|queued`.
+8. Surface call-site updates for Telegram and registry.
+9. Contract/backend/integration test updates.
+10. Docs and full verification.
+
+**What M21B does NOT include.**
+- Compose multi-worker orchestration (M21C).
+- Observability or health reporting (M21D).
+- E2E durability proofs (M21E).
+- "Flush whole queue" cancel semantics.
+- Changes to the cancel metadata schema (M21A).
+- Changes to `InboundAction` or semantic action routing (M21A).
+- New surfaces.
+
+**Acceptance criteria.**
+- [ ] Transport FSM verified: multiple queued items per conversation
+      are legal under the existing machine (no FSM changes needed)
+- [ ] Sending a second message during active work creates a second
+      fresh queued work item, not a `failed` / `chat_busy` item
+- [ ] Workers drain queued fresh items in FIFO order per conversation
+- [ ] At most one fresh item per conversation is `claimed` at a time
+      (database-enforced)
+- [ ] A crashed claimed item returns as a recovery notice after lease
+      TTL expires, not automatic rerun
+- [ ] `recover_stale_claims` uses age-only staleness — a healthy
+      worker's live claim is never recovered by another worker
+- [ ] Periodic stale sweep runs every 60s in the worker loop
+- [ ] `BOT_CLAIM_LEASE_TTL` defaults to 300, configurable via env
+- [ ] Worker IDs include hostname + PID + UUID suffix
+- [ ] `_chat_lock` is bypassed for the worker path in shared mode
+- [ ] Registry deliveries return `"accepted"` instead of
+      `"retry_later"` when local queue accepts the work
+- [ ] `/cancel` still cancels one item at a time (claimed first,
+      then oldest queued)
+- [ ] Local Runtime is completely unchanged
+- [ ] Full test suite passes (no `chat_busy` assertions remain)
+- [ ] Compose E2E passes
+- [ ] `git diff --check` clean
 
 ###### M21C — Compose multi-worker orchestration
 

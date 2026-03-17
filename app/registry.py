@@ -37,7 +37,7 @@ _ARTIFACT_TIMEOUT = 60  # seconds
 _MAX_INDEX_SIZE = 2 * 1024 * 1024  # 2 MB
 _MAX_ARTIFACT_SIZE = 10 * 1024 * 1024  # 10 MB
 
-_HEADERS = {"User-Agent": "telegram-agent-bot/1.0"}
+_HEADERS = {"User-Agent": "octopus-agent/1.0"}
 
 
 @dataclass(frozen=True)

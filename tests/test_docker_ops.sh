@@ -61,7 +61,7 @@ cat > "$MOCK_BIN/docker" << 'MOCK_DOCKER'
 #!/bin/sh
 case "$1" in
   image)
-    if [ "$2" = "inspect" ] && echo "$3" | grep -q '^telegram-agent-bot:'; then
+    if [ "$2" = "inspect" ] && echo "$3" | grep -q '^octopus-agent:'; then
       exit "${DOCKER_IMAGE_INSPECT_EXIT:-0}"
     fi
     ;;
@@ -153,7 +153,7 @@ stderr="$("$REPO_DIR/scripts/provider/provider_login.sh" codex 2>&1)"
 exit_code=$?
 set -e
 check_exit "exit non-zero when image missing" "$exit_code" "1"
-check_contains "stderr says image not found" "$stderr" "telegram-agent-bot:codex not found"
+check_contains "stderr says image not found" "$stderr" "octopus-agent:codex not found"
 check_contains "stderr tells user to rebuild" "$stderr" "build_bot_image.sh codex"
 
 echo
@@ -237,7 +237,7 @@ stderr="$("$REPO_DIR/scripts/provider/provider_status.sh" 2>&1)"
 exit_code=$?
 set -e
 check_exit "exit non-zero when image missing" "$exit_code" "1"
-check_contains "stderr says image not found" "$stderr" "telegram-agent-bot:codex not found"
+check_contains "stderr says image not found" "$stderr" "octopus-agent:codex not found"
 check_contains "stderr tells user to rebuild" "$stderr" "build_bot_image.sh"
 
 echo
@@ -260,7 +260,7 @@ stderr="$("$REPO_DIR/scripts/provider/provider_logout.sh" 2>&1)"
 exit_code=$?
 set -e
 check_exit "exit non-zero when image missing" "$exit_code" "1"
-check_contains "stderr says image not found" "$stderr" "telegram-agent-bot:codex not found"
+check_contains "stderr says image not found" "$stderr" "octopus-agent:codex not found"
 check_contains "stderr tells user to rebuild" "$stderr" "build_bot_image.sh"
 
 # --- Summary ---

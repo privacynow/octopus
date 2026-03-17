@@ -1,6 +1,6 @@
 """Managed immutable skill store.
 
-Layout under ~/.config/telegram-agent-bot/skills/:
+Layout under ~/.config/octopus-agent/skills/:
 
     custom/<name>/              Operator-authored, editable
     managed/version.json        Schema version marker
@@ -32,7 +32,7 @@ _log = logging.getLogger(__name__)
 STORE_DIR = Path(__file__).resolve().parent.parent / "skills" / "store"
 
 # Managed store root — shared across instances
-_SKILLS_ROOT = Path.home() / ".config" / "telegram-agent-bot" / "skills"
+_SKILLS_ROOT = Path.home() / ".config" / "octopus-agent" / "skills"
 CUSTOM_DIR = _SKILLS_ROOT / "custom"
 MANAGED_DIR = _SKILLS_ROOT / "managed"
 OBJECTS_DIR = MANAGED_DIR / "objects"

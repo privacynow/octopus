@@ -47,7 +47,7 @@ def runnable_bot_image(tmp_path_factory) -> dict[str, object]:
     worker = _worker_id()
     run_id = uuid.uuid4().hex[:10]
     artifacts_dir = tmp_path_factory.mktemp(f"compose-shared-runtime-build-{worker}")
-    tag = f"telegram-agent-bot-e2e-runnable:{worker}-{run_id}"
+    tag = f"octopus-agent-e2e-runnable:{worker}-{run_id}"
     build_image(
         dockerfile="infra/docker/Dockerfile.runnable",
         tag=tag,
@@ -63,7 +63,7 @@ def shared_runtime_env(tmp_path, backend, runnable_bot_image):
     run_id = uuid.uuid4().hex[:10]
     artifacts_dir = tmp_path / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-    project = f"telegram-agent-bot-shared-proof-{backend}-{worker}-{run_id}"
+    project = f"octopus-agent-shared-proof-{backend}-{worker}-{run_id}"
     webhook_port = free_local_port()
     postgres_port = free_local_port() if backend == "postgres" else 0
     env_file = tmp_path / ".env.shared.runtime"

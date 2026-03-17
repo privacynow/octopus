@@ -128,7 +128,7 @@ async def run_worker_process(app) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Telegram Agent Bot")
+    parser = argparse.ArgumentParser(description="Octopus Agent Platform")
     parser.add_argument("instance", nargs="?", default=None, help="Instance name (default: from BOT_INSTANCE env)")
     parser.add_argument("--doctor", action="store_true", help="Run full health checks (config, DB, provider, Telegram) and exit")
     parser.add_argument("--provider-health", action="store_true", help="Run only provider auth/runtime checks and exit (no DB or Telegram)")
@@ -298,7 +298,7 @@ def main() -> None:
             conflict_msg = None
         if conflict_msg:
             log.error(
-                "%s Stop the other instance (e.g. systemctl --user stop telegram-agent-bot@%s.service) or wait a minute, then try again.",
+                "%s Stop the other instance (e.g. systemctl --user stop octopus-agent@%s.service) or wait a minute, then try again.",
                 conflict_msg,
                 config.instance,
             )

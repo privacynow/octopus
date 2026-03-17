@@ -5,7 +5,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-# Writable temp config root; setup_instance.sh will use XDG_CONFIG_HOME/telegram-agent-bot
+# Writable temp config root; setup_instance.sh will use XDG_CONFIG_HOME/octopus-agent
 TEST_XDG_ROOT=""
 CONFIG_DIR=""
 PASS=0
@@ -41,8 +41,8 @@ cleanup() {
     rm -f "$CONFIG_DIR/test-setup-"*.env 2>/dev/null || true
     rm -f "$REPO_DIR/scripts/host/.setup-test-patched.sh"
     # Stop any test services we may have started
-    systemctl --user stop "telegram-agent-bot@test-setup-launch.service" 2>/dev/null || true
-    systemctl --user disable "telegram-agent-bot@test-setup-launch.service" 2>/dev/null || true
+    systemctl --user stop "octopus-agent@test-setup-launch.service" 2>/dev/null || true
+    systemctl --user disable "octopus-agent@test-setup-launch.service" 2>/dev/null || true
 }
 on_exit() {
     cleanup
@@ -54,7 +54,7 @@ trap on_exit EXIT
 TEST_XDG_ROOT="$(mktemp -d)"
 export XDG_CONFIG_HOME="$TEST_XDG_ROOT/xdg-config"
 mkdir -p "$XDG_CONFIG_HOME"
-CONFIG_DIR="$XDG_CONFIG_HOME/telegram-agent-bot"
+CONFIG_DIR="$XDG_CONFIG_HOME/octopus-agent"
 
 # --- Create patched setup_instance.sh with mock validate_token ---
 # Place it under scripts/host so REPO_DIR inside the script resolves to repo root.

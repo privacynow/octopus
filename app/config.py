@@ -13,6 +13,7 @@ from app.session_state import ProjectBinding, field
 from pathlib import Path
 
 from dotenv import dotenv_values
+from app.identity import parse_actor_key, telegram_numeric_id
 
 log = logging.getLogger(__name__)
 
@@ -40,12 +41,12 @@ def derive_agent_slug(raw: str, *, fallback: str = "agent") -> str:
     return value or fallback
 
 
-def parse_allowed_users(raw: str) -> tuple[set[int], set[str]]:
-    """Parse BOT_ALLOWED_USERS into (user_ids, usernames).
+def parse_allowed_users(raw: str) -> tuple[set[str], set[str]]:
+    """Parse BOT_ALLOWED_USERS into (actor_keys, usernames).
 
     Accepts comma-separated values: numeric IDs and @usernames.
     """
-    ids: set[int] = set()
+    actor_keys: set[str] = set()
     usernames: set[str] = set()
     for token in raw.split(","):
         token = token.strip()
@@ -53,10 +54,12 @@ def parse_allowed_users(raw: str) -> tuple[set[int], set[str]]:
             continue
         normalized = token.lstrip("@")
         if normalized.isdigit():
-            ids.add(int(normalized))
+            actor_keys.add(parse_actor_key(normalized))
+        elif ":" in normalized:
+            actor_keys.add(parse_actor_key(normalized))
         else:
             usernames.add(normalized.lower())
-    return ids, usernames
+    return actor_keys, usernames
 
 
 class ProviderName(StrEnum):
@@ -99,7 +102,7 @@ class BotConfig:
     instance: str
     telegram_token: str
     allow_open: bool
-    allowed_user_ids: frozenset[int]
+    allowed_actor_keys: frozenset[str]
     allowed_usernames: frozenset[str]
     provider_name: str
     model: str
@@ -120,7 +123,7 @@ class BotConfig:
     codex_dangerous: bool
     codex_profile: str
     # Admin users — gates store install/uninstall/update
-    admin_user_ids: frozenset[int]
+    admin_actor_keys: frozenset[str]
     admin_usernames: frozenset[str]
     admin_users_explicit: bool  # True if BOT_ADMIN_USERS was set
     # Compact mode — mobile-friendly response summarization
@@ -164,6 +167,26 @@ class BotConfig:
     db_pool_min_size: int
     db_pool_max_size: int
     db_connect_timeout_seconds: int
+
+    @property
+    def allowed_user_ids(self) -> frozenset[int]:
+        return frozenset(
+            numeric
+            for key in self.allowed_actor_keys
+            if (numeric := telegram_numeric_id(key)) is not None
+        )
+
+    @property
+    def admin_user_ids(self) -> frozenset[int]:
+        return frozenset(
+            numeric
+            for key in self.admin_actor_keys
+            if (numeric := telegram_numeric_id(key)) is not None
+        )
+
+    @property
+    def provider(self) -> str:
+        return self.provider_name
 
 
 def _parse_model_profiles(raw: str) -> dict[str, str]:
@@ -303,21 +326,21 @@ def load_config(instance: str | None = None) -> BotConfig:
     )
 
     raw_users = get("BOT_ALLOWED_USERS")
-    user_ids, usernames = parse_allowed_users(raw_users)
+    actor_keys, usernames = parse_allowed_users(raw_users)
 
     raw_admins = get("BOT_ADMIN_USERS")
     admin_explicit = bool(raw_admins)
     if raw_admins:
-        admin_ids, admin_names = parse_allowed_users(raw_admins)
+        admin_actor_keys, admin_names = parse_allowed_users(raw_admins)
     else:
         # Fallback: all allowed users are admins
-        admin_ids, admin_names = user_ids, usernames
+        admin_actor_keys, admin_names = actor_keys, usernames
 
     return BotConfig(
         instance=instance,
         telegram_token=get("TELEGRAM_BOT_TOKEN"),
         allow_open=get_bool("BOT_ALLOW_OPEN"),
-        allowed_user_ids=frozenset(user_ids),
+        allowed_actor_keys=frozenset(actor_keys),
         allowed_usernames=frozenset(usernames),
         provider_name=get("BOT_PROVIDER"),
         model=get("BOT_MODEL"),
@@ -340,7 +363,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         codex_full_auto=get_bool("CODEX_FULL_AUTO"),
         codex_dangerous=get_bool("CODEX_DANGEROUS"),
         codex_profile=get("CODEX_PROFILE"),
-        admin_user_ids=frozenset(admin_ids),
+        admin_actor_keys=frozenset(admin_actor_keys),
         admin_usernames=frozenset(admin_names),
         admin_users_explicit=admin_explicit,
         compact_mode=get_bool("BOT_COMPACT_MODE"),
@@ -416,7 +439,7 @@ def load_config_provider_health() -> BotConfig:
         instance=instance,
         telegram_token="",
         allow_open=False,
-        allowed_user_ids=frozenset(),
+        allowed_actor_keys=frozenset(),
         allowed_usernames=frozenset(),
         provider_name=get("BOT_PROVIDER", "claude").strip() or "claude",
         model=get("BOT_MODEL"),
@@ -435,7 +458,7 @@ def load_config_provider_health() -> BotConfig:
         codex_full_auto=get_bool("CODEX_FULL_AUTO"),
         codex_dangerous=get_bool("CODEX_DANGEROUS"),
         codex_profile=get("CODEX_PROFILE"),
-        admin_user_ids=frozenset(),
+        admin_actor_keys=frozenset(),
         admin_usernames=frozenset(),
         admin_users_explicit=False,
         compact_mode=True,
@@ -487,7 +510,7 @@ def validate_config(config: BotConfig) -> list[str]:
             "Set BOT_PROVIDER=claude or BOT_PROVIDER=codex in .env.bot."
         )
 
-    if not config.allowed_user_ids and not config.allowed_usernames and not config.allow_open:
+    if not config.allowed_actor_keys and not config.allowed_usernames and not config.allow_open:
         errors.append(
             "Access not configured: BOT_ALLOWED_USERS is empty and BOT_ALLOW_OPEN is not set. "
             "Set BOT_ALLOWED_USERS=<your-telegram-user-id> or BOT_ALLOW_OPEN=1 in .env.bot."

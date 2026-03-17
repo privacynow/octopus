@@ -4,6 +4,7 @@ import time
 
 from app.providers.base import PreflightContext, RunResult
 from app.storage import default_session, save_session
+from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
@@ -67,7 +68,7 @@ async def test_approval_flow():
         assert "approval_approve" in cb_values
         assert "approval_reject" in cb_values
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is not None
 
         cb_msg = FakeMessage(chat=chat)
@@ -83,7 +84,7 @@ async def test_approval_flow():
         assert len(prov.run_calls) == 1
         approved_ctx = prov.run_calls[0]["context"]
         assert approved_ctx.skip_permissions is True
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
@@ -160,7 +161,7 @@ async def test_denial_retry_flow():
         assert "retry_allow" in retry_cbs
         assert "retry_skip" in retry_cbs
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_retry") is not None
         assert session["pending_retry"].get("denials") is not None
 
@@ -180,7 +181,7 @@ async def test_denial_retry_flow():
         assert "/opt/app" in extra_dirs_str
         assert retry_ctx.skip_permissions is True
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
@@ -192,13 +193,13 @@ async def test_retry_skip():
 
         session = default_session("claude", prov.new_provider_state(), "off")
         session["pending_retry"] = {
-            "request_user_id": 42,
+            "request_user_id": "tg:42",
             "prompt": "test",
             "image_paths": [],
             "context_hash": "somehash",
             "denials": [{"tool_name": "X"}],
         }
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         chat = FakeChat(12345)
         cb_msg = FakeMessage(chat=chat)
@@ -212,7 +213,7 @@ async def test_retry_skip():
         await th.handle_callback(cb_update, FakeContext())
 
         assert has_markup_removal(cb_msg)
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
         assert len(prov.run_calls) == 0
 
@@ -230,7 +231,7 @@ async def test_retry_allow_no_pending():
 
         session = default_session("claude", prov.new_provider_state(), "off")
         assert session.get("pending_retry") is None
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         chat = FakeChat(12345)
         cb_msg = FakeMessage(chat=chat)
@@ -256,13 +257,13 @@ async def test_stale_context_hash():
 
         session = default_session("claude", prov.new_provider_state(), "off")
         session["pending_retry"] = {
-            "request_user_id": 42,
+            "request_user_id": "tg:42",
             "prompt": "test",
             "image_paths": [],
             "context_hash": "definitely_stale_hash",
             "denials": [{"tool_name": "X"}],
         }
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         chat = FakeChat(12345)
         cb_msg = FakeMessage(chat=chat)
@@ -278,7 +279,7 @@ async def test_stale_context_hash():
         assert len(prov.run_calls) == 0
         assert has_markup_removal(cb_msg)
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
         reply_texts = " ".join(r.get("edit_text", r.get("text", "")) for r in cb_msg.replies)
@@ -307,10 +308,10 @@ async def test_cross_user_approval():
 
         assert len(prov.preflight_calls) == 1
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         pending = session.get("pending_approval")
         assert pending is not None
-        assert pending["request_user_id"] == 100
+        assert pending["request_user_id"] == "tg:100"
 
         cb_msg = FakeMessage(chat=chat)
         query = FakeCallbackQuery("approval_approve", message=cb_msg)
@@ -320,7 +321,7 @@ async def test_cross_user_approval():
 
         assert len(prov.run_calls) == 1
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
@@ -344,7 +345,7 @@ async def test_approval_preflight_timeout():
         assert len(prov.preflight_calls) == 1
         assert len(prov.run_calls) == 0
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
         chat_msgs = " ".join(m.get("text", "") for m in chat.sent_messages)
@@ -371,7 +372,7 @@ async def test_approval_preflight_error():
         assert len(prov.preflight_calls) == 1
         assert len(prov.run_calls) == 0
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
@@ -398,7 +399,7 @@ async def test_duplicate_pending_blocked():
         update2 = FakeUpdate(message=msg2, user=user, chat=chat)
         await th.handle_message(update2, FakeContext())
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert (session.get("pending_approval") or session.get("pending_retry")) is not None
 
 
@@ -424,10 +425,10 @@ async def test_denial_preserves_request_user_id():
         await th.handle_message(update, FakeContext())
         await drain_one_worker_item(data_dir)
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         pending = session.get("pending_retry")
         assert pending is not None
-        assert pending["request_user_id"] == 100
+        assert pending["request_user_id"] == "tg:100"
         assert len(pending.get("denials", [])) > 0
 
 
@@ -444,14 +445,14 @@ async def test_cancel_pending():
 
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["pending_approval"] = {
-            "request_user_id": 42,
+            "request_user_id": "tg:42",
             "prompt": "test",
             "image_paths": [],
             "attachment_dicts": [],
             "context_hash": "abc",
             "created_at": time.time(),
         }
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         msg = FakeMessage(chat=chat, text="/cancel")
         update = FakeUpdate(message=msg, user=user, chat=chat)
@@ -461,7 +462,7 @@ async def test_cancel_pending():
         from app.user_messages import cancel_pending_request
         assert reply == cancel_pending_request()
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
@@ -479,7 +480,7 @@ async def test_cancel_nothing_to_cancel():
         user = FakeUser(42)
         session = default_session(prov.name, prov.new_provider_state(), "off")
         assert not session.get("pending_approval") and not session.get("pending_retry")
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         msg = FakeMessage(chat=chat, text="/cancel")
         await th.cmd_cancel(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
@@ -502,7 +503,7 @@ async def test_approve_no_pending_shows_canonical_message():
         user = FakeUser(42)
         session = default_session(prov.name, prov.new_provider_state(), "on")
         assert not session.get("pending_approval") and not session.get("pending_retry")
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         msg = await send_command(th.cmd_approve, chat, user, "/approve")
         reply = last_reply(msg)
@@ -523,7 +524,7 @@ async def test_reject_no_pending_shows_canonical_message():
         user = FakeUser(42)
         session = default_session(prov.name, prov.new_provider_state(), "on")
         assert not session.get("pending_approval") and not session.get("pending_retry")
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         msg = await send_command(th.cmd_reject, chat, user, "/reject")
         reply = last_reply(msg)
@@ -544,7 +545,7 @@ async def test_approve_callback_no_pending_shows_canonical_message():
         user = FakeUser(42)
         session = default_session(prov.name, prov.new_provider_state(), "on")
         assert not session.get("pending_approval") and not session.get("pending_retry")
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         query, cb_msg = await send_callback(th.handle_callback, chat, user, "approval_approve")
         assert any(approval_no_pending_approve() in r.get("text", "") for r in cb_msg.replies), (
@@ -566,7 +567,7 @@ async def test_reject_callback_no_pending_shows_canonical_message():
         user = FakeUser(42)
         session = default_session(prov.name, prov.new_provider_state(), "on")
         assert not session.get("pending_approval") and not session.get("pending_retry")
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         query, cb_msg = await send_callback(th.handle_callback, chat, user, "approval_reject")
         assert any(approval_no_pending_reject() in r.get("text", "") for r in cb_msg.replies), (
@@ -587,14 +588,14 @@ async def test_stale_pending_ttl():
 
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_approval"] = {
-            "request_user_id": 42,
+            "request_user_id": "tg:42",
             "prompt": "old request",
             "image_paths": [],
             "attachment_dicts": [],
             "context_hash": "",
             "created_at": time.time() - 7200,
         }
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         msg = FakeMessage(chat=chat, text="")
         await th.approve_pending(12345, msg)
@@ -633,7 +634,7 @@ async def test_approval_with_project_active():
             FakeUpdate(message=FakeMessage(chat=chat, text="/project use frontend"), user=user, chat=chat),
             FakeContext(["use", "frontend"]),
         )
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("project_id") == "frontend"
 
         # Send message — triggers preflight
@@ -643,7 +644,7 @@ async def test_approval_with_project_active():
         assert len(prov.preflight_calls) == 1
         assert len(prov.run_calls) == 0
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is not None
 
         # Approve — this must NOT say "Context changed"
@@ -661,7 +662,7 @@ async def test_approval_with_project_active():
         )
         assert "Context changed" not in reply_texts
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
 
@@ -705,7 +706,7 @@ async def test_retry_with_project_active():
         await drain_one_worker_item(data_dir)
         assert len(prov.run_calls) == 1
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_retry") is not None
 
         # Retry — must NOT say "Context changed"
@@ -773,12 +774,12 @@ async def test_role_change_invalidates_pending_approval():
 
         await send_text(chat, user, "hello")
         await drain_one_worker_item(data_dir)
-        session = load_session_disk(data_dir, 1001, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
         assert session.get("pending_approval") is not None
 
         # Change role -- must invalidate pending
         await send_command(th.cmd_role, chat, user, "/role", args=["Python", "expert"])
-        session = load_session_disk(data_dir, 1001, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
         assert session.get("role") == "Python expert"
 
         # Approve should fail -- context changed

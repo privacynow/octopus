@@ -43,6 +43,7 @@ from app.session_state import (
 from app.skills import get_provider_config_digest, get_skill_digests
 from app.storage import default_session, save_session
 from tests.support.config_support import make_config as _make_config
+from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
@@ -386,7 +387,7 @@ async def test_resolve_context_matches_all_paths():
             FakeContext(["inspect"]),
         )
 
-        session_dict = load_session_disk(data_dir, 12345, prov)
+        session_dict = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         session = session_from_dict(session_dict)
 
         # Path 1: handler adapter (_resolve_context)
@@ -472,7 +473,7 @@ def test_session_round_trip_approval():
         project_id="frontend",
         file_policy="inspect",
         pending_approval=PendingApproval(
-            request_user_id=42,
+            request_user_id=telegram_actor_key(42),
             prompt="deploy to prod",
             image_paths=["/tmp/img.png"],
             attachment_dicts=[{"path": "/tmp/f", "original_name": "f", "is_image": False}],
@@ -485,7 +486,7 @@ def test_session_round_trip_approval():
 
     assert restored.pending_approval is not None
     assert restored.pending_retry is None
-    assert restored.pending_approval.request_user_id == 42
+    assert restored.pending_approval.request_user_id == telegram_actor_key(42)
     assert restored.pending_approval.prompt == "deploy to prod"
     assert restored.pending_approval.context_hash == "abc123"
     assert restored.pending_approval.attachment_dicts == original.pending_approval.attachment_dicts
@@ -501,7 +502,7 @@ def test_session_round_trip_retry():
         provider_state={},
         approval_mode="off",
         pending_retry=PendingRetry(
-            request_user_id=99,
+            request_user_id=telegram_actor_key(99),
             prompt="edit config",
             image_paths=[],
             context_hash="def456",
@@ -514,7 +515,7 @@ def test_session_round_trip_retry():
 
     assert restored.pending_retry is not None
     assert restored.pending_approval is None
-    assert restored.pending_retry.request_user_id == 99
+    assert restored.pending_retry.request_user_id == telegram_actor_key(99)
     assert restored.pending_retry.denials == original.pending_retry.denials
     assert restored.pending_retry.context_hash == "def456"
 
@@ -572,7 +573,7 @@ async def test_resolve_execution_context_matches_handler_adapter():
         )
 
         # Get hash via handler adapter
-        session_dict = load_session_disk(data_dir, 12345, prov)
+        session_dict = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         typed = session_from_dict(session_dict)
         handler_hash = th._resolve_context(typed).context_hash
 

@@ -4957,12 +4957,29 @@ crashes mid-request, the message is lost. If traffic spikes, one process is
 all there is. If you deploy an update, there is a window where messages are
 dropped.
 
-Phase 21 replaces that with a shared Postgres-backed work queue where a
+Phase 21 replaces that with a shared database-backed work queue where a
 lightweight webhook receiver accepts Telegram updates, persists them
 immediately, and multiple stateless worker processes pull from that shared
-queue. Zero messages are lost (they are in Postgres before the webhook
+queue. Zero messages are lost (they are in the database before the webhook
 responds), multiple workers drain the queue in parallel, and rolling deploys
 are seamless because workers are stateless — the queue is the authority.
+
+Shared Runtime works with both backends:
+
+- **SQLite Shared Runtime** (same-host): all processes share one SQLite
+  file on a local filesystem. SQLite WAL mode handles ~1,000 writes/second;
+  a busy Telegram bot does ~10 messages/second. `BEGIN IMMEDIATE` serializes
+  claim transactions across processes — correctness is guaranteed by
+  database-wide write locking. Suitable for single-host deployments with
+  1–5 workers. Does **not** work on network filesystems (NFS, EFS).
+- **Postgres Shared Runtime** (any topology): processes can span hosts.
+  Row-level locking via `SELECT ... FOR UPDATE` allows concurrent claims on
+  different chats. Suitable for multi-host, high-availability deployments.
+
+The backend choice is orthogonal to the runtime mode. `BOT_RUNTIME_MODE=shared`
+requires `bot_mode=webhook` but does **not** require Postgres. If
+`BOT_DATABASE_URL` is set, Postgres is used; otherwise SQLite is used — the
+same selector as Local Runtime.
 
 #### Why it matters
 
@@ -4982,10 +4999,13 @@ Most of the hard infrastructure was built during Phases 11–15 and M10:
   PTB's `run_webhook()` is wired with configurable listen address, port,
   URL, and secret token. Config validation enforces `webhook_url` when
   `bot_mode=webhook`.
-- **Postgres transport store** is already implemented with full parity.
-  `work_queue_pg.py` has `claim_next_any` with row-level locking, per-chat
-  mutual exclusion (`WHERE chat_id NOT IN (SELECT ... WHERE state = 'claimed')`),
-  and atomic claim+state-transition in a single transaction.
+- **Both transport stores** already implement `claim_next_any` with
+  multi-process-safe locking. Postgres uses row-level locking via
+  `SELECT ... FOR UPDATE`. SQLite uses `BEGIN IMMEDIATE` which acquires a
+  database-wide write lock — serializing claim transactions across
+  processes. Both enforce per-chat mutual exclusion
+  (`WHERE chat_id NOT IN (SELECT ... WHERE state = 'claimed')`) and atomic
+  claim+state-transition in a single transaction.
 - **Transport FSM** in `app/workflows/transport_recovery.py` already defines
   the five-state machine (`queued → claimed → done/failed/pending_recovery`)
   with all valid transitions and per-chat invariants.
@@ -5002,9 +5022,9 @@ Most of the hard infrastructure was built during Phases 11–15 and M10:
 What does **not** exist:
 
 1. Unlocking `BOT_RUNTIME_MODE=shared` in config validation.
-2. A persist-first webhook ingress path that writes to Postgres and returns
-   200 before any processing happens (today webhook + polling both enter the
-   same synchronous handler pipeline).
+2. A persist-first webhook ingress path that writes to the database and
+   returns 200 before any processing happens (today webhook + polling both
+   enter the same synchronous handler pipeline).
 3. Multi-instance awareness: conflict detection currently prevents two
    processes from polling the same token; Shared Runtime needs the opposite —
    multiple workers sharing one queue.
@@ -5030,11 +5050,12 @@ What does **not** exist:
                         └─────────┬──────────────────┘
                                   │ INSERT INTO work_items
                         ┌─────────▼──────────────────┐
-                        │   Postgres (shared queue)   │
+                        │   Shared Queue              │
+                        │   SQLite or Postgres        │
                         │   updates, work_items,      │
                         │   sessions, usage_log       │
                         └─────────┬──────────────────┘
-                                  │ claim_next_any (row lock)
+                                  │ claim_next_any (db lock)
                     ┌─────────────┼─────────────────┐
                     │             │                  │
               ┌─────▼───┐  ┌─────▼───┐       ┌─────▼───┐
@@ -5044,17 +5065,20 @@ What does **not** exist:
 ```
 
 **Webhook receiver**: A minimal FastAPI (or PTB webhook) process. Its only
-job is to normalize the Telegram update, write it to `bot_runtime.updates`
-and `bot_runtime.work_items`, and return HTTP 200. No provider execution,
-no session reads, no handler logic. The Telegram update is durable the
-instant the 200 is sent.
+job is to normalize the Telegram update, write it to the transport store
+(`updates` + `work_items` tables), and return HTTP 200. No provider
+execution, no session reads, no handler logic. The Telegram update is
+durable the instant the 200 is sent.
 
 **Workers**: Stateless processes running `worker_loop`. Each worker calls
 `claim_next_any` (existing function), dispatches via `worker_dispatch`
 (existing function), and completes/fails via the existing transport FSM.
 Workers share no in-memory state. Per-chat serialization is enforced by the
-Postgres-level invariant (at most one `claimed` item per `chat_id`), not by
-in-memory locks.
+database-level invariant (at most one `claimed` item per `chat_id`), not by
+in-memory locks. With Postgres, concurrent claims on different chats proceed
+in parallel via row-level locking. With SQLite, claims serialize via
+`BEGIN IMMEDIATE` — correct at any concurrency level, with throughput
+limited to ~1,000 writes/second (sufficient for Telegram bot traffic).
 
 **Registry integration**: Unchanged. Workers publish timeline events and
 report routed-task results to the registry the same way the single-process
@@ -5062,8 +5086,263 @@ bot does today.
 
 #### Milestone breakdown
 
-Phase 21 is delivered in five slices. Each slice is independently testable
+Phase 21 is delivered in six slices. Each slice is independently testable
 and leaves the system in a working state.
+
+###### M21A-0 — Surface-neutral identity generalization
+
+**Status: Complete. Migration fix landed as M21A-0A.**
+
+**Problem.** The durable transport layer, session store, access-override
+store, inbound event types, and attachment storage paths all assume
+Telegram-style integer identities. This prevents any non-Telegram
+surface from using the transport store without a hash-to-int shim
+(which is what `app/agents/bridge.py` does today for the registry
+surface). If Shared Runtime hardens persist-first ingress on top of
+these integer columns, the wrong identity model becomes permanently
+entrenched and every future surface (Slack, SMS, iMessage) would need
+its own shim — defeating the purpose of a pluggable surface architecture.
+
+**Current state — every identity-coupled surface:**
+
+1. **Transport store schema** (`updates`, `work_items`):
+   - SQLite (`app/work_queue_sqlite_impl.py:33-66`):
+     `update_id INTEGER PRIMARY KEY`, `chat_id INTEGER NOT NULL`,
+     `user_id INTEGER NOT NULL`. Per-chat serialization index:
+     `idx_one_claimed_per_chat ON work_items(chat_id) WHERE state = 'claimed'`
+   - Postgres (`app/db/migrations/postgres/0001_runtime.sql:20-47`):
+     `update_id BIGINT PRIMARY KEY`, `chat_id BIGINT NOT NULL`,
+     `user_id BIGINT NOT NULL`. Same partial unique index on `chat_id`.
+
+2. **Session store** keyed by `chat_id`:
+   - SQLite (`app/storage_sqlite.py:16`):
+     `sessions(chat_id INTEGER PRIMARY KEY)`
+   - Postgres (`app/storage_postgres.py:20`):
+     `bot_runtime.sessions(chat_id BIGINT PRIMARY KEY)`
+
+3. **Access overrides** keyed by `user_id`:
+   - SQLite (`app/work_queue_sqlite_impl.py:86-92`):
+     `user_access(user_id INTEGER PRIMARY KEY, granted_by INTEGER)`
+   - Postgres (`app/db/migrations/postgres/0003_user_access_usage_log.sql:5-11`):
+     `bot_runtime.user_access(user_id BIGINT PRIMARY KEY, granted_by BIGINT)`
+
+4. **Usage log** keyed by `chat_id`:
+   - SQLite (`app/work_queue_sqlite_impl.py:73-84`):
+     `usage_log(chat_id INTEGER NOT NULL)`
+   - Postgres (`app/db/migrations/postgres/0003_user_access_usage_log.sql:13-22`):
+     `bot_runtime.usage_log(chat_id BIGINT NOT NULL)`
+
+5. **Inbound event types** (`app/transport.py:20-67`):
+   - `InboundUser.id: int`
+   - `InboundMessage.chat_id: int`
+   - `InboundCommand.chat_id: int`
+   - `InboundCallback.chat_id: int`
+
+6. **Inbound envelope** (`app/transports/types.py:12-24`):
+   - `InboundEnvelope.actor_id: int` (used as durable user_id)
+   - `InboundEnvelope.conversation_id: int | str` (already partially
+     neutral — accepts str but the downstream store rejects it)
+   - `InboundEnvelope.update_id: int`
+
+7. **Bridge identity shim** (`app/agents/bridge.py:22-46`):
+   - `_stable_int(value: str) -> int`: SHA256 hash truncated to 15 hex
+     digits, converted to int
+   - `registry_chat_id()`, `registry_update_id()`, `registry_actor_id()`:
+     all produce synthetic ints so registry strings can flow through the
+     integer-only store
+   - `local_chat_id_for_conversation()`: reverse-maps conversation_ref
+     to Telegram int chat_id, falls back to hash
+
+8. **Attachment paths** (`app/storage.py:38-48`):
+   - `chat_upload_dir(data_dir, chat_id: int)` →
+     `data_dir / "uploads" / str(chat_id)`
+   - `build_upload_path(data_dir, chat_id: int, original_name)` uses
+     the int-derived directory
+
+9. **Callback data conventions** (`app/telegram_handlers.py`):
+   - `f"delegation_approve:{chat_id}"` (line 958)
+   - `f"delegation_cancel:{chat_id}"` (line 959)
+   - `f"expand:{chat_id}:{slot}"` (line 923)
+   - `f"collapse:{target_chat}:{slot}"` (line 3075)
+   - `f"clear_cred_cancel:{user_id}"` (line 2393)
+   These embed integer IDs in callback data strings.
+
+10. **Access policy** (`app/access.py:33-73`):
+    - `inbound.id in config.allowed_user_ids` — set of ints
+    - `inbound.id in config.admin_user_ids` — set of ints
+    - Config fields: `allowed_user_ids: set[int]`,
+      `admin_user_ids: set[int]`
+
+11. **Outbound surface factory** (`app/transports/factory.py:19-50`):
+    - `create_outbound_surface(chat_id: int, ...)` — passes int to
+      `TelegramConversationIO(bot, chat_id, ...)`
+
+12. **Work queue facade signatures** (`app/work_queue.py:46-68`):
+    - `record_and_admit_message(data_dir, update_id: int, chat_id: int,
+      user_id: int, ...)`
+    - `record_and_enqueue(data_dir, update_id: int, chat_id: int,
+      user_id: int, ...)`
+    - `claim_next(data_dir, chat_id: int, worker_id: str)`
+
+**Target identity model.** Replace Telegram-specific integer identities
+with surface-neutral text keys throughout the durable boundary:
+
+| Current | Target | Notes |
+|---------|--------|-------|
+| `chat_id: int/BIGINT` | `conversation_key: TEXT` | Telegram: `"telegram:12345"`. Registry: `"registry:abc123"`. Slack: `"slack:C01234567"`. |
+| `update_id: int/BIGINT` | `event_id: TEXT` | Telegram: `"tg:12345"`. Registry: `"reg:delivery:abc"`. UUID fallback for surfaces without native event IDs. |
+| `user_id: int/BIGINT` | `actor_key: TEXT` | Telegram: `"tg:12345"`. Registry: `"reg:actor:abc"`. Slack: `"slack:U01234567"`. |
+| `InboundUser.id: int` | `InboundUser.id: str` | All downstream access checks switch to string comparison. |
+| `InboundMessage.chat_id: int` | `InboundMessage.conversation_key: str` | Same field rename across Command, Callback. |
+| `InboundEnvelope.actor_id: int` | `InboundEnvelope.actor_key: str` | |
+| `InboundEnvelope.update_id: int` | `InboundEnvelope.event_id: str` | |
+| `InboundEnvelope.conversation_id: int\|str` | `InboundEnvelope.conversation_key: str` | Drop the union type. Always text. |
+| `config.allowed_user_ids: set[int]` | `config.allowed_actor_keys: set[str]` | Parse from env: `"tg:12345,tg:67890"`. Backward compat: bare integers auto-prefix `"tg:"`. |
+| `config.admin_user_ids: set[int]` | `config.admin_actor_keys: set[str]` | Same backward compat. |
+| `chat_upload_dir(data_dir, chat_id: int)` | `conversation_upload_dir(data_dir, conversation_key: str)` | Hash the key for filesystem safety if needed. |
+
+**Implementation — six commits, each leaving tests green:**
+
+**Commit 1: Inbound types and envelope.**
+Change `InboundUser.id` from `int` to `str`. Rename `chat_id` to
+`conversation_key` in `InboundMessage`, `InboundCommand`,
+`InboundCallback`. Update `InboundEnvelope` fields: `actor_key: str`,
+`event_id: str`, `conversation_key: str`. Update `serialize_inbound` /
+`deserialize_inbound` to use new field names (preserve backward compat:
+deserializer accepts both `chat_id` and `conversation_key` keys in
+stored JSON so in-flight work items are not lost). Update
+`normalize_message`, `normalize_command`, `normalize_callback` in
+`transport.py` to produce `conversation_key=f"tg:{chat_id}"` and
+`InboundUser(id=f"tg:{tg_user.id}")`. Update all call sites that
+construct or destructure these types.
+
+Files: `app/transport.py`, `app/transports/types.py`,
+`app/transports/admission.py`, `app/agents/bridge.py` (remove the
+hash shim — registry events now produce string keys directly).
+
+**Commit 2: Transport store schema migration.**
+Add SQLite migration (schema version 6) that:
+- Creates new `updates_v2` and `work_items_v2` tables with TEXT
+  columns (`event_id TEXT PRIMARY KEY`, `conversation_key TEXT NOT NULL`,
+  `actor_key TEXT NOT NULL`)
+- Copies existing data with `'tg:' || CAST(chat_id AS TEXT)` prefixing
+- Drops old tables, renames v2 to original names
+- Recreates indexes including the partial unique index on
+  `conversation_key` instead of `chat_id`
+
+Add Postgres migration `0005_neutral_identity.sql` that:
+- `ALTER TABLE bot_runtime.updates` renames columns and changes types
+  (`BIGINT` → `TEXT`, `chat_id` → `conversation_key`, etc.)
+- Uses `UPDATE ... SET conversation_key = 'tg:' || chat_id::text`
+- Recreates the partial unique index
+
+Update `work_queue_sqlite_impl.py` and `work_queue_pg.py` to use new
+column names. Update `_EXPECTED_COLUMNS` validation. Update all facade
+signatures: `chat_id: int` → `conversation_key: str`,
+`update_id: int` → `event_id: str`, `user_id: int` → `actor_key: str`.
+
+Files: `app/work_queue_sqlite_impl.py`, `app/work_queue_pg.py`,
+`app/work_queue_sqlite.py`, `app/work_queue_postgres.py`,
+`app/work_queue.py`, `app/db/migrations/postgres/0005_neutral_identity.sql`.
+
+**Commit 3: Session store and access store migration.**
+Same pattern: rename `chat_id` → `conversation_key` in session tables
+(both SQLite and Postgres), prefix existing data with `tg:`.
+Rename `user_id` → `actor_key` in `user_access` table.
+Rename `chat_id` → `conversation_key` in `usage_log` table.
+Update `storage_sqlite.py`, `storage_postgres.py`,
+`app/db/migrations/postgres/0005_neutral_identity.sql` (extend the
+same migration file).
+
+Files: `app/storage_sqlite.py`, `app/storage_postgres.py`,
+`app/work_queue_sqlite_impl.py` (user_access, usage_log columns),
+`app/work_queue_pg.py` (same), Postgres migration.
+
+**Commit 4: Config, access policy, attachment paths.**
+Update `BotConfig`: `allowed_user_ids: set[int]` →
+`allowed_actor_keys: set[str]`, `admin_user_ids: set[int]` →
+`admin_actor_keys: set[str]`. Add backward-compat parsing: bare
+integers in env vars auto-prefix with `tg:` (e.g. `"12345"` →
+`"tg:12345"`). Operator-facing env var names can stay the same
+(`ALLOWED_TELEGRAM_USER_IDS`) — just the internal representation
+changes.
+Update `app/access.py`: `inbound.id in config.allowed_actor_keys`
+(string set membership). No structural change.
+Update `app/storage.py`: `chat_upload_dir(data_dir, conversation_key: str)`
+— use a filesystem-safe hash or sanitized key for the directory name.
+For backward compat with existing upload dirs, Telegram keys produce
+the same directory name as before (`"tg:12345"` → directory `"12345"`
+or `"tg_12345"`).
+
+Files: `app/config.py`, `app/access.py`, `app/storage.py`,
+`app/transport.py` (upload path calls).
+
+**Commit 5: Handler layer and outbound factory.**
+Update `telegram_handlers.py`: all `chat_id` references in handler
+functions become `conversation_key`. Callback data patterns stay
+integer-based for Telegram (they are Telegram-specific UI, not durable
+identity). `create_outbound_surface` parameter changes from
+`chat_id: int` to `conversation_key: str` — the Telegram adapter
+extracts the integer from the key (`"tg:12345"` → `12345`) for PTB
+API calls. The registry adapter already uses string conversation refs.
+
+Files: `app/telegram_handlers.py`, `app/transports/factory.py`,
+`app/transports/telegram_adapter.py`, `app/worker.py`.
+
+**Commit 6: Contract tests and bridge shim removal.**
+Update `tests/contracts/test_transport_store_contract.py` — all test
+data uses string keys. Update
+`tests/contracts/test_session_store_contract.py`. Verify
+`app/agents/bridge.py` no longer needs `_stable_int`,
+`registry_chat_id`, `registry_update_id`, or `registry_actor_id` —
+registry events produce native string keys that flow through the store
+without hashing. Remove the shim functions. Update all test files that
+construct `InboundMessage`, `InboundUser`, etc. with int IDs.
+
+Files: `tests/contracts/test_transport_store_contract.py`,
+`tests/contracts/test_session_store_contract.py`,
+`tests/contracts/test_registry_store_contract.py`,
+`app/agents/bridge.py`, all test files constructing inbound types.
+
+**What M21A-0 does NOT include.**
+- Adding any new surface (Slack, SMS, iMessage). This slice only
+  removes the barriers that prevent future surfaces from plugging in.
+- Changing the Telegram UX or callback data format. Telegram callbacks
+  still embed integer chat IDs in their data strings — those are
+  Telegram-specific interaction conventions, not durable identity.
+- Changing the registry service schema. The registry store already uses
+  TEXT identifiers throughout (`agent_id TEXT`, `conversation_id TEXT`).
+- Changing provider contracts. `RunResult` is unaffected.
+- Adding new surfaces to the factory. `create_outbound_surface` still
+  returns `TelegramConversationIO` or `RegistryConversationIO`. The
+  generalized identity model enables future surfaces but does not add
+  them.
+
+**Acceptance criteria.**
+- [ ] All transport store columns use TEXT identity keys
+      (`conversation_key`, `event_id`, `actor_key`) in both SQLite
+      and Postgres
+- [ ] Session store is keyed by `conversation_key: TEXT` in both
+      backends
+- [ ] Access overrides are keyed by `actor_key: TEXT` in both backends
+- [ ] `InboundUser.id`, `InboundMessage.conversation_key`,
+      `InboundEnvelope.conversation_key` / `.actor_key` / `.event_id`
+      are all `str` type
+- [ ] `app/agents/bridge.py` no longer contains `_stable_int`,
+      `registry_chat_id`, `registry_update_id`, or `registry_actor_id`
+- [ ] Config accepts bare integer IDs (backward compat) and prefixed
+      string keys for allowed/admin actors
+- [ ] Existing Telegram conversations survive the migration (data
+      prefixed with `tg:` and round-trips correctly)
+- [ ] Existing in-flight work items survive the migration
+      (deserializer accepts both old `chat_id` and new
+      `conversation_key` JSON keys)
+- [ ] Contract tests pass against both SQLite and Postgres for
+      transport store, session store, and registry store
+- [ ] Full test suite passes
+- [ ] `git diff --check` clean
+
+---
 
 ###### M21A — Unlock Shared Runtime config and persist-first webhook ingress
 
@@ -5074,11 +5353,14 @@ will retry after 60s, causing duplicates).
 
 **Fix.**
 - Remove the `shared` rejection in `config.py` validation. Add a new
-  validation: `shared` requires `database_url` (Postgres) and
-  `bot_mode=webhook`.
+  validation: `shared` requires `bot_mode=webhook`. It does **not**
+  require `database_url` — SQLite is a valid Shared Runtime backend
+  when all processes share a local filesystem.
 - Add a persist-first webhook handler: receive Telegram update →
   `record_and_enqueue(data_dir, update_id, chat_id, user_id, kind)` →
-  return HTTP 200. No handler dispatch in the request path.
+  return HTTP 200. No handler dispatch in the request path. This uses
+  the existing transport facade, which routes to SQLite or Postgres
+  depending on `BOT_DATABASE_URL`.
 - In Shared Runtime mode, `post_init` starts `worker_loop` but does
   **not** register PTB message/command/callback handlers (those are
   Local Runtime only). The webhook handler is the sole ingress path;
@@ -5095,22 +5377,26 @@ within the owning process.
 
 **Fix.**
 - In Shared Runtime mode, `_chat_lock` becomes a no-op pass-through
-  (per-chat serialization is enforced by Postgres row-level locking,
-  not in-memory locks). The lock's queue-busy feedback moves to a
-  Postgres-level check: if a chat already has a `claimed` item, new
-  work stays `queued` and the user gets no busy message until a worker
-  actually claims it.
+  (per-chat serialization is enforced by the database — Postgres via
+  row-level locking, SQLite via `BEGIN IMMEDIATE` database-wide write
+  lock). The lock's queue-busy feedback moves to a database-level
+  check: if a chat already has a `claimed` item, new work stays
+  `queued` and the user gets no busy message until a worker actually
+  claims it.
 - Add a periodic `recover_stale_claims` sweep that any worker can run.
   Use `claimed_at + lease_ttl < NOW()` to detect abandoned claims.
   Default lease TTL: 5 minutes (configurable via `BOT_CLAIM_LEASE_TTL`).
   Recovered items move to `queued` (not `pending_recovery`) so any
-  worker can pick them up.
+  worker can pick them up. The sweep query must work in both backends:
+  SQLite uses `julianday('now') - julianday(claimed_at)` or epoch
+  comparison; Postgres uses `NOW() - claimed_at`.
 - Add `worker_id` generation: hostname + PID + boot-time UUID, so
   claim ownership is traceable across processes.
 
 **Files:** `app/telegram_handlers.py` (`_chat_lock` shared-runtime
-path), `app/worker.py` (stale-claim sweep), `app/work_queue_pg.py`
-(lease TTL query), `app/config.py` (lease TTL field), tests.
+path), `app/worker.py` (stale-claim sweep), `app/work_queue_sqlite_impl.py`
+and `app/work_queue_pg.py` (lease TTL query in both backends),
+`app/config.py` (lease TTL field), tests.
 
 ###### M21C — Compose multi-worker orchestration
 
@@ -5121,18 +5407,25 @@ up` and see webhook ingress + multiple workers draining a shared queue.
 **Fix.**
 - Add `infra/compose/docker-compose.shared.yml` override that:
   - Sets `BOT_RUNTIME_MODE=shared`, `BOT_MODE=webhook`
-  - Configures `BOT_DATABASE_URL` pointing to the existing Postgres
-    service
   - Runs the webhook receiver as a service with port exposure
   - Runs N worker replicas (default 2) as a separate service with
     `deploy.replicas`
+  - Supports two backend configurations:
+    - **SQLite mode** (default): shared volume mount for the SQLite DB
+      file. All webhook receiver and worker containers mount the same
+      `BOT_DATA_DIR`. No Postgres dependency.
+    - **Postgres mode**: sets `BOT_DATABASE_URL` pointing to the
+      existing Postgres service. No shared volume needed for transport
+      data (sessions and work items live in Postgres).
   - Adds an Nginx or Caddy reverse proxy in front of webhook receivers
     (or uses Compose's built-in load balancing if receivers listen on
     the same port)
 - Add `scripts/app/shared_start.sh` that validates prerequisites,
-  runs db-bootstrap, sets the Telegram webhook URL, and starts the
-  Compose stack.
-- Update `docs/UPGRADE.md` with Shared Runtime setup instructions.
+  detects backend choice, optionally runs db-bootstrap (Postgres only),
+  sets the Telegram webhook URL, and starts the Compose stack.
+- Update `docs/UPGRADE.md` with Shared Runtime setup instructions for
+  both SQLite and Postgres backends, including the same-host constraint
+  for SQLite Shared Runtime.
 
 **Files:** `infra/compose/docker-compose.shared.yml`,
 `scripts/app/shared_start.sh`, `docs/UPGRADE.md`, tests.
@@ -5153,7 +5446,8 @@ into queue depth, claim ages, worker health, and lease recovery events.
   worker publishes a `worker_health` timeline event to the registry
   with its `worker_id`, items processed, current claim (if any), and
   uptime.
-- Add `/doctor` shared-runtime checks: Postgres reachable, webhook URL
+- Add `/doctor` shared-runtime checks: database reachable (Postgres
+  connection or SQLite file accessible and not locked), webhook URL
   configured, at least one worker reported health within TTL, queue
   depth within threshold.
 - Add queue metrics to the Registry UI: queue depth, active workers,
@@ -5170,24 +5464,28 @@ and concurrent-worker conditions. Without explicit durability tests, the
 transport FSM invariants are asserted only in single-process unit tests.
 
 **Fix.**
-- Add Compose E2E tests for Shared Runtime:
+- Add Compose E2E tests for Shared Runtime, parameterized for both
+  SQLite and Postgres backends where feasible:
   - `test_shared_runtime_webhook_persists_before_response`: send a
-    Telegram-like POST to the webhook; verify the update is in Postgres
-    before any worker claims it.
+    Telegram-like POST to the webhook; verify the update is in the
+    database before any worker claims it. Run against both backends.
   - `test_shared_runtime_multi_worker_parallel_chats`: send updates for
     3 different chats; verify all 3 are claimed by (potentially
-    different) workers and all complete.
+    different) workers and all complete. Run against both backends.
   - `test_shared_runtime_per_chat_serialization`: send 2 updates for
     the same chat; verify only one is `claimed` at a time; second
-    processes after first completes.
+    processes after first completes. Run against both backends.
   - `test_shared_runtime_worker_crash_recovery`: send an update; kill
     the worker mid-claim; verify the stale-claim sweep moves the item
     back to `queued`; another worker picks it up and completes it.
+    Run against both backends.
   - `test_shared_runtime_rolling_deploy`: start 2 workers; stop one;
     send updates; verify the remaining worker drains the queue; start
     the stopped worker; verify it resumes claiming.
 - Add contract tests for lease-TTL recovery to
-  `tests/contracts/test_transport_store_contract.py`.
+  `tests/contracts/test_transport_store_contract.py` — these run
+  against both SQLite and Postgres via the existing parameterized
+  fixture.
 
 **Files:** `tests/e2e/test_compose_shared_runtime.py`,
 `tests/contracts/test_transport_store_contract.py`, tests.
@@ -5201,50 +5499,64 @@ transport FSM invariants are asserted only in single-process unit tests.
   must work exactly as it does today. No in-memory lock changes, no
   Postgres requirements, no webhook requirements. Phase 21 code must
   be gated on `runtime_mode == "shared"`.
-- **No external brokers.** The queue is app-owned Postgres. No Celery,
-  no Temporal, no PGMQ, no Redis. The existing `updates` + `work_items`
-  tables are the queue.
+- **No external brokers.** The queue is app-owned SQLite or Postgres.
+  No Celery, no Temporal, no PGMQ, no Redis. The existing `updates` +
+  `work_items` tables are the queue.
 - **Per-chat invariants are non-negotiable.** At most one `claimed` item
-  per `chat_id` at any time, enforced by the Postgres-level FSM check.
-  Multi-worker does not mean multi-claim.
+  per `chat_id` at any time, enforced by the database-level FSM check
+  (Postgres row lock or SQLite `BEGIN IMMEDIATE`). Multi-worker does
+  not mean multi-claim.
 - **Provider execution stays outside transactions.** Claim the item
   (short transaction), release the connection, run the provider (may
   take minutes), then complete/fail the item (short transaction).
-- **Transport facade parity rule applies.** Any new `work_queue.py`
-  method must land with SQLite + Postgres impls + contract test.
-  However: SQLite impls for shared-runtime-only methods (like
-  lease-TTL recovery) may raise `NotImplementedError` since Shared
-  Runtime requires Postgres by configuration.
+- **Transport facade parity rule applies without exception.** Any new
+  `work_queue.py` method must land with SQLite + Postgres impls +
+  contract test. Shared Runtime works on both backends, so there are
+  no `NotImplementedError` stubs. Every shared-runtime method —
+  including lease-TTL recovery — must have a working SQLite
+  implementation.
+- **SQLite same-host constraint is a deployment rule, not a code rule.**
+  The code does not check whether the filesystem is local or network-
+  mounted. The constraint is documented in UPGRADE.md and enforced by
+  operator awareness, not by validation. SQLite WAL mode on a network
+  filesystem will silently corrupt; this is a known SQLite limitation,
+  not something the application can detect.
 - **Registry store parity rule applies.** Any new registry store method
   must land with both impls + contract test.
 
 #### Acceptance criteria
 
-- [ ] `BOT_RUNTIME_MODE=shared` is accepted when `database_url` and
-      `bot_mode=webhook` are configured
-- [ ] Webhook ingress persists updates to Postgres and returns 200
-      before any handler or worker processes the update
+- [ ] `BOT_RUNTIME_MODE=shared` is accepted when `bot_mode=webhook` is
+      configured (does not require `database_url` — SQLite is valid)
+- [ ] Webhook ingress persists updates to the database (SQLite or
+      Postgres) and returns 200 before any handler or worker processes
+      the update
 - [ ] Multiple worker processes claim and execute work items from the
-      shared Postgres queue concurrently
-- [ ] Per-chat serialization is enforced across workers: at most one
-      `claimed` item per `chat_id` at any time
+      shared queue concurrently, on both SQLite and Postgres backends
+- [ ] Per-chat serialization is enforced across workers on both
+      backends: at most one `claimed` item per `chat_id` at any time
 - [ ] Stale claims from crashed workers are recovered automatically
-      within the configured lease TTL
+      within the configured lease TTL, on both backends
 - [ ] A reference Compose deployment exists with webhook receiver +
-      multiple worker replicas + Postgres
+      multiple worker replicas, with documented configurations for
+      both SQLite (shared volume) and Postgres backends
 - [ ] Registry UI shows queue depth, active workers, and lease recovery
       metrics via timeline-event aggregation
-- [ ] `/doctor` reports shared-runtime health: Postgres, webhook, worker
-      health, queue depth
+- [ ] `/doctor` reports shared-runtime health: database reachable,
+      webhook configured, worker health, queue depth
 - [ ] Compose E2E tests prove: persist-before-response, parallel-chat
       execution, per-chat serialization, crash recovery, rolling deploy
+      — parameterized for both SQLite and Postgres where feasible
+- [ ] Contract tests for lease-TTL recovery run against both backends
+      via the existing parameterized transport-store fixture
 - [ ] Local Runtime (`BOT_RUNTIME_MODE=local`) is completely unaffected
 - [ ] Full test suite passes with Shared Runtime code in place
 - [ ] ARCHITECTURE.md describes the Shared Runtime deployment model
+      including both SQLite (same-host) and Postgres (any topology)
+      tiers
 
 #### What Phase 21 does NOT include
 
-- SQLite-backed Shared Runtime (Postgres is required by design).
 - Horizontal scaling of the registry service (single-writer assumption
   remains for the registry).
 - Auto-scaling workers based on queue depth (operator responsibility).
@@ -5264,11 +5576,11 @@ transport FSM invariants are asserted only in single-process unit tests.
   parity across bot runtime and registry service.
 - **Phase 21 (Shared Runtime)** is the next active phase. It adds
   webhook-first ingress, multi-worker execution, and durability confidence
-  on top of the existing Postgres transport store and FSM.
+  on top of the existing transport store and FSM (both SQLite and Postgres).
 - **Local Runtime** and **Shared Runtime** are explicit capability tiers:
-  - Local Runtime: single-machine, SQLite-default, product-first (shipped)
-  - Shared Runtime: Postgres queue authority, multi-process, webhook
-    persist-first (Phase 21)
+  - Local Runtime: single-process, SQLite-default, product-first (shipped)
+  - Shared Runtime: multi-process, webhook persist-first, works on both
+    SQLite (same-host) and Postgres (any topology) (Phase 21)
 - Product/core code should depend on common storage/runtime contracts where
   they are genuinely common, and should not need backend-specific code changes
   for normal feature work.

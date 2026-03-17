@@ -14,12 +14,14 @@ unset. Postgres is a supported alternate backend for the same runtime contract
 when `BOT_DATABASE_URL` is set. The registry service has its own backend
 interface and selector: SQLite by default via `REGISTRY_DB_PATH`, or Postgres
 via `REGISTRY_DATABASE_URL`. Shared Runtime is not part of the current product
-surface.
+surface, but the bot-local runtime now already uses surface-neutral durable
+identity keys (`conversation_key`, `event_id`, `actor_key`) across the
+transport and session stores.
 
 If you only remember four things, remember these:
 
-- normal provider-starting chat requests are admitted durably and executed by
-  the worker
+- normal provider-starting requests are admitted durably and executed by the
+  worker
 - credential-setup replies stay inline and off-queue
 - one resolved execution context owns execution-scope truth for each request
 - the registry is a control plane for visibility, delivery, and coordination;
@@ -167,7 +169,7 @@ flowchart TB
         direction LR
         B1["1. Transport subsystem<br/>normalize inbound data"]
         B2["2. Work-queue subsystem<br/>journal, admit, recover"]
-        B3["3. Session subsystem<br/>durable chat state"]
+        B3["3. Session subsystem<br/>durable session state"]
         B4["4. Execution-context subsystem<br/>resolve one execution identity"]
     end
 
@@ -212,6 +214,8 @@ flowchart TB
   normalized type exists
 - serialized inbound payload JSON is a stable runtime contract across the
   supported backends
+- Telegram numeric IDs are edge-local conveniences for PTB calls; durable
+  payloads and stores use prefixed text keys instead
 - fresh plain-message admission and worker-owned outbound output already use
   the project-owned transport interfaces
 - command and callback entrypoints still have some PTB-direct behavior; that
@@ -233,7 +237,7 @@ flowchart TB
 
 **Owns**
 
-- `update_id` journaling
+- `event_id` journaling and surface-neutral durable identity keys
 - work-item lifecycle (`queued`, `claimed`, `pending_recovery`, `done`,
   `failed`)
 - fresh-vs-recovery dispatch routing
@@ -249,10 +253,10 @@ flowchart TB
 
 **Key guarantees**
 
-- duplicate `update_id` delivery is journaled idempotently, not reprocessed
+- duplicate `event_id` delivery is journaled idempotently, not reprocessed
 - fresh provider work is admitted durably and atomically
-- at most one fresh runnable provider-starting work item may exist per chat at
-  a time
+- at most one fresh runnable provider-starting work item may exist per
+  conversation key at a time
 - queued fresh work may be cancelled before claim through the queue; claimed
   work is cancelled cooperatively through the worker-owned live registry
 - `app/work_queue.py` is the backend-neutral owner across SQLite and Postgres
@@ -261,7 +265,7 @@ flowchart TB
 
 **Owner**
 
-- durable, chat-scoped runtime state
+- durable, conversation-scoped runtime state
 
 **Main modules**
 
@@ -276,6 +280,7 @@ flowchart TB
 - project binding, file policy, model-profile override, compact-mode override
 - pending approval / retry state
 - awaiting credential setup state
+- conversation-keyed session persistence and actor-keyed pending identities
 
 **Does not own**
 
@@ -590,17 +595,19 @@ flowchart LR
 **Bot runtime**
 
 - **transport store**
-  - journaled updates
+  - journaled inbound events
   - work-item state machine
   - queued-cancel and recovery state
-  - user-access overrides
+  - surface-neutral durable identity keys (`conversation_key`, `event_id`,
+    `actor_key`)
+  - actor-keyed user-access overrides
   - per-run usage history
 - **session store**
-  - typed chat-scoped session state
+  - typed conversation-scoped session state
   - pending approval / retry / setup state
   - project / model / policy / compact-mode preferences
 - **filesystem**
-  - uploads per chat
+  - uploads per conversation
   - raw-response ring buffer
   - managed skill objects and refs
   - encrypted credentials
@@ -701,7 +708,7 @@ Allowed roots and working scope derive from the resolved execution context:
 
 - resolved working directory
 - resolved extra dirs
-- per-chat upload dir
+- per-conversation upload dir
 - denial-derived retry dirs
 
 Those roots must be computed from `ResolvedExecutionContext`, not from raw
@@ -745,8 +752,9 @@ The following contracts should change only deliberately:
 - `check_credential_satisfaction` signature (resolved active skills)
 - pending-validation contract built on `classify_pending_validation()`
 - work-item state machine and `TransportRecoveryMachine` events / guards
-- transport delivery semantics (`update_id` handling, fresh-admission rules,
-  queued-cancel rules, recovery routing)
+- transport delivery semantics (`event_id` handling, `conversation_key` /
+  `actor_key` identity rules, fresh-admission rules, queued-cancel rules,
+  recovery routing)
 - managed store layout (`objects/`, `refs/`, `custom/`)
 - registry store contract in `app/registry_service/store_base.py`
 - ring-buffer slot format used by expand/collapse callback data
@@ -807,7 +815,7 @@ the primary reading path.
 
 **SessionState**
 
-- typed runtime representation of a chat session
+- typed runtime representation of a conversation session
 - owns provider-local state, approval mode, active skills, project binding,
   model/profile overrides, compact mode, and pending/setup workflow state
 
@@ -857,7 +865,9 @@ Current simulator contract (`tests/support/conversation_simulator.py`):
 - exposes one ordered text-output log
 - does not include markup-only edits
 - does not yet inject callbacks as a first-class simulator surface
-- does not yet drive ingress by delivering `InboundEnvelope` end-to-end
+- does not yet drive all Telegram ingress through `InboundEnvelope`
+  end-to-end; plain-message production admission does, but the simulator still
+  enters mostly through handler-owned entrypoints
 
 The remaining gap is explicit:
 
@@ -892,8 +902,9 @@ Runtime invariants:
   `done`, `failed`
 - `dispatch_mode` must be `fresh` or `recovery`
 - `claimed` rows must have `worker_id` and `claimed_at`
-- at most one `claimed` row may exist per chat
-- at most one fresh runnable (`queued` or `claimed`) row may exist per chat
+- at most one `claimed` row may exist per conversation key
+- at most one fresh runnable (`queued` or `claimed`) row may exist per
+  conversation key
 - stale claims must requeue as `dispatch_mode='recovery'`
 - queued fresh cancel must terminate the item visibly as cancelled; it must not
   silently disappear

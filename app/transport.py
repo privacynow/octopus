@@ -15,13 +15,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.identity import (
+    telegram_actor_key,
+    telegram_conversation_key,
+    telegram_numeric_id,
+)
 from app.storage import build_upload_path, is_image_path
 
 
 @dataclass(frozen=True)
 class InboundUser:
     """Identity of the user who sent the update."""
-    id: int
+    id: str
     username: str = ""
 
 
@@ -41,7 +46,7 @@ class InboundAttachment:
 class InboundMessage:
     """Normalized inbound plain message (non-command, non-callback)."""
     user: InboundUser
-    chat_id: int
+    conversation_key: str
     text: str
     attachments: tuple[InboundAttachment, ...] = ()
     source: str = "telegram"
@@ -49,26 +54,47 @@ class InboundMessage:
     routed_task_id: str = ""
     skip_approval: bool = False
 
+    @property
+    def chat_id(self) -> int:
+        value = telegram_numeric_id(self.conversation_key)
+        if value is None:
+            raise ValueError(f"conversation_key {self.conversation_key!r} is not a Telegram chat")
+        return value
+
 
 @dataclass(frozen=True)
 class InboundCommand:
     """Normalized inbound slash-command."""
     user: InboundUser
-    chat_id: int
+    conversation_key: str
     command: str
     args: tuple[str, ...] = ()
     source: str = "telegram"
     conversation_ref: str = ""
+
+    @property
+    def chat_id(self) -> int:
+        value = telegram_numeric_id(self.conversation_key)
+        if value is None:
+            raise ValueError(f"conversation_key {self.conversation_key!r} is not a Telegram chat")
+        return value
 
 
 @dataclass(frozen=True)
 class InboundCallback:
     """Normalized inbound inline-keyboard callback."""
     user: InboundUser
-    chat_id: int
+    conversation_key: str
     data: str
     source: str = "telegram"
     conversation_ref: str = ""
+
+    @property
+    def chat_id(self) -> int:
+        value = telegram_numeric_id(self.conversation_key)
+        if value is None:
+            raise ValueError(f"conversation_key {self.conversation_key!r} is not a Telegram chat")
+        return value
 
 
 # ---------------------------------------------------------------------------
@@ -83,13 +109,13 @@ def normalize_user(tg_user) -> InboundUser | None:
     if tg_user is None:
         return None
     return InboundUser(
-        id=tg_user.id,
+        id=telegram_actor_key(tg_user.id),
         username=(tg_user.username or "").lower(),
     )
 
 
 async def download_attachments(
-    update, chat_id: int, data_dir: Path,
+    update, conversation_key: str, data_dir: Path,
 ) -> list[InboundAttachment]:
     """Download photos/documents from a Telegram Update to local disk.
 
@@ -100,7 +126,7 @@ async def download_attachments(
 
     if message.photo:
         photo = message.photo[-1]
-        path = build_upload_path(data_dir, chat_id, "photo.jpg")
+        path = build_upload_path(data_dir, conversation_key, "photo.jpg")
         tf = await photo.get_file()
         await tf.download_to_drive(custom_path=str(path))
         attachments.append(InboundAttachment(
@@ -111,7 +137,7 @@ async def download_attachments(
     if message.document:
         doc = message.document
         name = doc.file_name or "document"
-        path = build_upload_path(data_dir, chat_id, name)
+        path = build_upload_path(data_dir, conversation_key, name)
         tf = await doc.get_file()
         await tf.download_to_drive(custom_path=str(path))
         is_img = (doc.mime_type or "").startswith("image/") or is_image_path(path)
@@ -135,17 +161,18 @@ async def normalize_message(
     if user is None:
         return None
     chat_id = update.effective_chat.id
+    conversation_key = telegram_conversation_key(chat_id)
     message = update.effective_message
     text = message.text or message.caption or ""
 
-    attachments = await download_attachments(update, chat_id, data_dir)
+    attachments = await download_attachments(update, conversation_key, data_dir)
 
     if not text and not attachments:
         return None
 
     return InboundMessage(
         user=user,
-        chat_id=chat_id,
+        conversation_key=conversation_key,
         text=text,
         attachments=tuple(attachments),
     )
@@ -164,7 +191,12 @@ def normalize_command(update, context) -> InboundCommand | None:
     raw = (update.effective_message.text or "").split()[0] if update.effective_message.text else ""
     command = raw.lstrip("/").split("@")[0]  # strip leading / and @botname suffix
     args = tuple(context.args or [])
-    return InboundCommand(user=user, chat_id=chat_id, command=command, args=args)
+    return InboundCommand(
+        user=user,
+        conversation_key=telegram_conversation_key(chat_id),
+        command=command,
+        args=args,
+    )
 
 
 def normalize_callback(update) -> InboundCallback | None:
@@ -177,7 +209,11 @@ def normalize_callback(update) -> InboundCallback | None:
         return None
     chat_id = update.effective_chat.id
     data = update.callback_query.data or ""
-    return InboundCallback(user=user, chat_id=chat_id, data=data)
+    return InboundCallback(
+        user=user,
+        conversation_key=telegram_conversation_key(chat_id),
+        data=data,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -191,9 +227,9 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback) 
     """Serialize a normalized inbound event to JSON for durable storage."""
     if isinstance(event, InboundMessage):
         return json.dumps({
-            "user_id": event.user.id,
+            "actor_key": event.user.id,
             "username": event.user.username,
-            "chat_id": event.chat_id,
+            "conversation_key": event.conversation_key,
             "text": event.text,
             "source": event.source,
             "conversation_ref": event.conversation_ref,
@@ -207,9 +243,9 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback) 
         })
     if isinstance(event, InboundCommand):
         return json.dumps({
-            "user_id": event.user.id,
+            "actor_key": event.user.id,
             "username": event.user.username,
-            "chat_id": event.chat_id,
+            "conversation_key": event.conversation_key,
             "command": event.command,
             "args": list(event.args),
             "source": event.source,
@@ -217,9 +253,9 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback) 
         })
     if isinstance(event, InboundCallback):
         return json.dumps({
-            "user_id": event.user.id,
+            "actor_key": event.user.id,
             "username": event.user.username,
-            "chat_id": event.chat_id,
+            "conversation_key": event.conversation_key,
             "data": event.data,
             "source": event.source,
             "conversation_ref": event.conversation_ref,
@@ -230,7 +266,13 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback) 
 def deserialize_inbound(kind: str, payload_json: str) -> InboundMessage | InboundCommand | InboundCallback:
     """Reconstruct a normalized inbound event from stored JSON."""
     d = json.loads(payload_json)
-    user = InboundUser(id=d["user_id"], username=d.get("username", ""))
+    actor_key = d.get("actor_key")
+    if not actor_key and "user_id" in d:
+        actor_key = telegram_actor_key(d["user_id"])
+    conversation_key = d.get("conversation_key")
+    if not conversation_key and "chat_id" in d:
+        conversation_key = telegram_conversation_key(d["chat_id"])
+    user = InboundUser(id=str(actor_key or ""), username=d.get("username", ""))
     if kind == "message":
         attachments = tuple(
             InboundAttachment(
@@ -239,19 +281,31 @@ def deserialize_inbound(kind: str, payload_json: str) -> InboundMessage | Inboun
             )
             for a in d.get("attachments", [])
         )
-        return InboundMessage(user=user, chat_id=d["chat_id"], text=d.get("text", ""),
-                              attachments=attachments,
-                              source=d.get("source", "telegram"),
-                              conversation_ref=d.get("conversation_ref", ""),
-                              routed_task_id=d.get("routed_task_id", ""),
-                              skip_approval=bool(d.get("skip_approval", False)))
+        return InboundMessage(
+            user=user,
+            conversation_key=str(conversation_key or ""),
+            text=d.get("text", ""),
+            attachments=attachments,
+            source=d.get("source", "telegram"),
+            conversation_ref=d.get("conversation_ref", ""),
+            routed_task_id=d.get("routed_task_id", ""),
+            skip_approval=bool(d.get("skip_approval", False)),
+        )
     if kind == "command":
-        return InboundCommand(user=user, chat_id=d["chat_id"],
-                              command=d["command"], args=tuple(d.get("args", [])),
-                              source=d.get("source", "telegram"),
-                              conversation_ref=d.get("conversation_ref", ""))
+        return InboundCommand(
+            user=user,
+            conversation_key=str(conversation_key or ""),
+            command=d["command"],
+            args=tuple(d.get("args", [])),
+            source=d.get("source", "telegram"),
+            conversation_ref=d.get("conversation_ref", ""),
+        )
     if kind == "callback":
-        return InboundCallback(user=user, chat_id=d["chat_id"], data=d.get("data", ""),
-                               source=d.get("source", "telegram"),
-                               conversation_ref=d.get("conversation_ref", ""))
+        return InboundCallback(
+            user=user,
+            conversation_key=str(conversation_key or ""),
+            data=d.get("data", ""),
+            source=d.get("source", "telegram"),
+            conversation_ref=d.get("conversation_ref", ""),
+        )
     raise ValueError(f"Unknown kind: {kind}")

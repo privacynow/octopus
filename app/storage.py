@@ -7,6 +7,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from app.identity import filesystem_component_for_key
+
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 
 from app.session_defaults import default_session  # re-export for callers
@@ -35,15 +37,15 @@ def is_image_path(path: Path) -> bool:
     return path.suffix.lower() in IMAGE_EXTENSIONS
 
 
-def chat_upload_dir(data_dir: Path, chat_id: int) -> Path:
-    d = data_dir / "uploads" / str(chat_id)
+def chat_upload_dir(data_dir: Path, conversation_key: str) -> Path:
+    d = data_dir / "uploads" / filesystem_component_for_key(conversation_key)
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def build_upload_path(data_dir: Path, chat_id: int, original_name: str) -> Path:
+def build_upload_path(data_dir: Path, conversation_key: str, original_name: str) -> Path:
     return (
-        chat_upload_dir(data_dir, chat_id)
+        chat_upload_dir(data_dir, conversation_key)
         / f"{uuid.uuid4().hex}_{sanitize_filename(original_name)}"
     )
 
@@ -72,14 +74,14 @@ def resolve_allowed_path(raw_path: str, allowed_roots: list[Path]) -> Path | Non
 # Session CRUD (delegate to selected backend)
 # ---------------------------------------------------------------------------
 
-def session_exists(data_dir: Path, chat_id: int) -> bool:
+def session_exists(data_dir: Path, conversation_key: str) -> bool:
     from app import runtime_backend
-    return runtime_backend.session_store().session_exists(data_dir, chat_id)
+    return runtime_backend.session_store().session_exists(data_dir, conversation_key)
 
 
 def load_session(
     data_dir: Path,
-    chat_id: int,
+    conversation_key: str,
     provider_name: str,
     provider_state_factory: Callable[[], dict[str, Any]],
     approval_mode: str,
@@ -88,19 +90,19 @@ def load_session(
 ) -> dict[str, Any]:
     from app import runtime_backend
     return runtime_backend.session_store().load_session(
-        data_dir, chat_id, provider_name, provider_state_factory,
+        data_dir, conversation_key, provider_name, provider_state_factory,
         approval_mode, role, default_skills,
     )
 
 
-def save_session(data_dir: Path, chat_id: int, session: dict[str, Any]) -> None:
+def save_session(data_dir: Path, conversation_key: str, session: dict[str, Any]) -> None:
     from app import runtime_backend
-    runtime_backend.session_store().save_session(data_dir, chat_id, session)
+    runtime_backend.session_store().save_session(data_dir, conversation_key, session)
 
 
-def delete_session(data_dir: Path, chat_id: int) -> None:
+def delete_session(data_dir: Path, conversation_key: str) -> None:
     from app import runtime_backend
-    runtime_backend.session_store().delete_session(data_dir, chat_id)
+    runtime_backend.session_store().delete_session(data_dir, conversation_key)
 
 
 def list_sessions(data_dir: Path) -> list[dict[str, Any]]:

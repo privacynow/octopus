@@ -21,3 +21,7 @@ __pycache__/
 # Test artifacts
 .setup-test-patched.sh
 tests/.postgres_run_id*
+test-results/
+
+# OS/editor junk
+.DS_Store

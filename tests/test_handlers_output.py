@@ -3,6 +3,7 @@
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
 from app.telegram_handlers import _extract_summary
+from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeChat,
     FakeProvider,
@@ -26,7 +27,7 @@ async def test_compact_toggle():
         setup_globals(cfg, prov)
 
         session = default_session("codex", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
         user = FakeUser(42)
@@ -38,12 +39,12 @@ async def test_compact_toggle():
 
         msg2 = await send_command(th.cmd_compact, chat, user, "/compact on", args=["on"])
         assert "on" in last_reply(msg2).lower()
-        session = load_session_disk(data_dir, 1, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(1), prov)
         assert session.get("compact_mode") == True
 
         msg3 = await send_command(th.cmd_compact, chat, user, "/compact off", args=["off"])
         assert "off" in last_reply(msg3).lower()
-        session = load_session_disk(data_dir, 1, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(1), prov)
         assert session.get("compact_mode") == False
 
 
@@ -54,7 +55,7 @@ async def test_raw_retrieves_response():
         setup_globals(cfg, prov)
 
         session = default_session("codex", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         chat = FakeChat(1)
         user = FakeUser(42)
@@ -81,7 +82,7 @@ async def test_e2e_table_in_provider_response():
         setup_globals(cfg, prov)
 
         session = default_session("codex", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         table_response = (
             "Here are the results:\n\n"
@@ -115,7 +116,7 @@ async def test_e2e_compact_mode_uses_blockquote():
 
         session = default_session("codex", prov.new_provider_state(), "off")
         session["compact_mode"] = True
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         long_response = "Summary line one.\n\nDetailed analysis paragraph. " * 30
         prov.run_results = [RunResult(text=long_response)]
@@ -152,7 +153,7 @@ async def test_e2e_compact_off_no_summarize():
         setup_globals(cfg, prov)
 
         session = default_session("codex", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         long_response = "Full verbose response. " * 50
         prov.run_results = [RunResult(text=long_response)]
@@ -181,7 +182,7 @@ async def test_e2e_compact_mode_short_response_no_blockquote():
 
         session = default_session("codex", prov.new_provider_state(), "off")
         session["compact_mode"] = True
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         short_response = "Quick answer: 42."
         prov.run_results = [RunResult(text=short_response)]
@@ -225,7 +226,7 @@ async def test_compact_mode_injects_summary_first_instruction():
 
         session = default_session("codex", prov.new_provider_state(), "off")
         session["compact_mode"] = True
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         prov.run_results = [RunResult(text="Short answer.")]
         chat = FakeChat(1)
@@ -248,7 +249,7 @@ async def test_compact_off_no_summary_first_instruction():
 
         session = default_session("codex", prov.new_provider_state(), "off")
         session["compact_mode"] = False
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         prov.run_results = [RunResult(text="Full answer.")]
         chat = FakeChat(1)
@@ -287,7 +288,7 @@ async def test_compact_long_response_shows_expand_button():
 
         session = default_session("codex", prov.new_provider_state(), "off")
         session["compact_mode"] = True
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         prov.run_results = [RunResult(text=_button_path_response())]
 
@@ -329,7 +330,7 @@ async def test_expand_callback_shows_full_response():
 
         session = default_session("codex", prov.new_provider_state(), "off")
         session["compact_mode"] = True
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         prov.run_results = [RunResult(text=_button_path_response())]
 
@@ -376,7 +377,7 @@ async def test_expand_collapse_round_trip_with_short_full_text():
         setup_globals(cfg, prov)
 
         session = default_session("codex", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         # Write a short raw text directly to ring buffer — short enough for
         # in-place edit (≤ 4000 formatted) but with summary+detail structure
@@ -431,7 +432,7 @@ async def test_collapse_callback_restores_compact_with_expand_button():
         setup_globals(cfg, prov)
 
         session = default_session("codex", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         # Write raw text directly to ring buffer
         from app.summarize import save_raw
@@ -466,7 +467,7 @@ async def test_expand_callback_rotated_buffer():
         setup_globals(cfg, prov)
 
         session = default_session("codex", prov.new_provider_state(), "off")
-        save_session(data_dir, 1, session)
+        save_session(data_dir, telegram_conversation_key(1), session)
 
         # Fire expand callback for a slot that was never written
         import app.telegram_handlers as th

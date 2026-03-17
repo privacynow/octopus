@@ -15,13 +15,13 @@ class RateLimiter:
     def __init__(self, per_minute: int = 0, per_hour: int = 0):
         self.per_minute = per_minute
         self.per_hour = per_hour
-        self._timestamps: dict[int, deque[float]] = defaultdict(deque)
+        self._timestamps: dict[str, deque[float]] = defaultdict(deque)
 
     @property
     def enabled(self) -> bool:
         return self.per_minute > 0 or self.per_hour > 0
 
-    def check(self, user_id: int) -> tuple[bool, int]:
+    def check(self, user_id: str) -> tuple[bool, int]:
         """Check if a request is allowed.
 
         Returns (allowed, retry_after_seconds).
@@ -57,7 +57,7 @@ class RateLimiter:
         ts.append(now)
         return True, 0
 
-    def clear(self, user_id: int | None = None) -> None:
+    def clear(self, user_id: str | None = None) -> None:
         """Clear rate limit state. If user_id given, clear only that user."""
         if user_id is not None:
             self._timestamps.pop(user_id, None)

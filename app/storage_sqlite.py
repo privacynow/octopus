@@ -7,13 +7,14 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Callable
 
+from app.identity import telegram_conversation_key
 from app.session_defaults import default_session
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _CREATE_SQL = """\
 CREATE TABLE IF NOT EXISTS sessions (
-    chat_id     INTEGER PRIMARY KEY,
+    conversation_key TEXT PRIMARY KEY,
     provider    TEXT    NOT NULL DEFAULT '',
     data        TEXT    NOT NULL DEFAULT '{}',
     has_pending INTEGER NOT NULL DEFAULT 0,
@@ -62,12 +63,54 @@ class SQLiteSessionStore:
                         f"Session DB schema version {stored} is newer than supported "
                         f"version {_SCHEMA_VERSION}. Upgrade the bot."
                     )
+                if stored < _SCHEMA_VERSION:
+                    self._run_migrations(conn, stored)
             self._migrate_json_files(data_dir, conn)
         except Exception:
             conn.close()
             raise
         self._connections[data_dir] = conn
         return conn
+
+    def _run_migrations(self, conn: sqlite3.Connection, stored_version: int) -> None:
+        version = stored_version
+        if version < 2:
+            self._migrate_v1_to_v2(conn)
+            version = 2
+        conn.execute(
+            "UPDATE meta SET value = ? WHERE key = 'schema_version'",
+            (str(version),),
+        )
+        conn.commit()
+
+    def _migrate_v1_to_v2(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE sessions_v2 (
+                conversation_key TEXT PRIMARY KEY,
+                provider    TEXT    NOT NULL DEFAULT '',
+                data        TEXT    NOT NULL DEFAULT '{}',
+                has_pending INTEGER NOT NULL DEFAULT 0,
+                has_setup   INTEGER NOT NULL DEFAULT 0,
+                project_id  TEXT,
+                file_policy TEXT,
+                created_at  TEXT    NOT NULL DEFAULT '',
+                updated_at  TEXT    NOT NULL DEFAULT ''
+            );
+            INSERT INTO sessions_v2 (
+                conversation_key, provider, data, has_pending, has_setup,
+                project_id, file_policy, created_at, updated_at
+            )
+            SELECT
+                'tg:' || CAST(chat_id AS TEXT),
+                provider, data, has_pending, has_setup,
+                project_id, file_policy, created_at, updated_at
+            FROM sessions;
+            DROP TABLE sessions;
+            ALTER TABLE sessions_v2 RENAME TO sessions;
+            CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions (updated_at);
+            """
+        )
 
     def _migrate_json_files(self, data_dir: Path, conn: sqlite3.Connection) -> None:
         sessions_dir = data_dir / "sessions"
@@ -83,14 +126,14 @@ class SQLiteSessionStore:
         for sf in json_files:
             try:
                 data = json.loads(sf.read_text())
-                chat_id = int(sf.stem)
-            except (json.JSONDecodeError, OSError, ValueError):
+                conversation_key = sf.stem if ":" in sf.stem else telegram_conversation_key(sf.stem)
+            except (json.JSONDecodeError, OSError):
                 try:
                     sf.unlink()
                 except OSError:
                     pass
                 continue
-            self._upsert(conn, chat_id, data)
+            self._upsert(conn, conversation_key, data)
             sf.unlink()
         conn.commit()
         try:
@@ -98,7 +141,7 @@ class SQLiteSessionStore:
         except OSError:
             pass
 
-    def _upsert(self, conn: sqlite3.Connection, chat_id: int, session: dict[str, Any]) -> None:
+    def _upsert(self, conn: sqlite3.Connection, conversation_key: str, session: dict[str, Any]) -> None:
         from datetime import datetime, timezone
         has_pending = (
             session.get("pending_approval") is not None
@@ -111,11 +154,11 @@ class SQLiteSessionStore:
             session["updated_at"] = datetime.now(timezone.utc).isoformat()
         conn.execute(
             """INSERT OR REPLACE INTO sessions
-               (chat_id, provider, data, has_pending, has_setup,
+               (conversation_key, provider, data, has_pending, has_setup,
                 project_id, file_policy, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                chat_id,
+                conversation_key,
                 session.get("provider", ""),
                 json.dumps(session, sort_keys=True),
                 1 if has_pending else 0,
@@ -127,17 +170,17 @@ class SQLiteSessionStore:
             ),
         )
 
-    def session_exists(self, data_dir: Path, chat_id: int) -> bool:
+    def session_exists(self, data_dir: Path, conversation_key: str) -> bool:
         conn = self._db(data_dir)
         row = conn.execute(
-            "SELECT 1 FROM sessions WHERE chat_id = ?", (chat_id,)
+            "SELECT 1 FROM sessions WHERE conversation_key = ?", (conversation_key,)
         ).fetchone()
         return row is not None
 
     def load_session(
         self,
         data_dir: Path,
-        chat_id: int,
+        conversation_key: str,
         provider_name: str,
         provider_state_factory: Callable[[], dict[str, Any]],
         approval_mode: str,
@@ -149,7 +192,7 @@ class SQLiteSessionStore:
         )
         conn = self._db(data_dir)
         row = conn.execute(
-            "SELECT data FROM sessions WHERE chat_id = ?", (chat_id,)
+            "SELECT data FROM sessions WHERE conversation_key = ?", (conversation_key,)
         ).fetchone()
         if row is not None:
             try:
@@ -173,33 +216,33 @@ class SQLiteSessionStore:
                 pass
         return session
 
-    def save_session(self, data_dir: Path, chat_id: int, session: dict[str, Any]) -> None:
+    def save_session(self, data_dir: Path, conversation_key: str, session: dict[str, Any]) -> None:
         from datetime import datetime, timezone
         session["updated_at"] = datetime.now(timezone.utc).isoformat()
         conn = self._db(data_dir)
-        self._upsert(conn, chat_id, session)
+        self._upsert(conn, conversation_key, session)
         conn.commit()
 
-    def delete_session(self, data_dir: Path, chat_id: int) -> None:
+    def delete_session(self, data_dir: Path, conversation_key: str) -> None:
         conn = self._db(data_dir)
-        conn.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
+        conn.execute("DELETE FROM sessions WHERE conversation_key = ?", (conversation_key,))
         conn.commit()
 
     def list_sessions(self, data_dir: Path) -> list[dict[str, Any]]:
         conn = self._db(data_dir)
         rows = conn.execute(
-            """SELECT chat_id, provider, data, has_pending, has_setup,
+            """SELECT conversation_key, provider, data, has_pending, has_setup,
                       created_at, updated_at
                FROM sessions ORDER BY updated_at DESC"""
         ).fetchall()
         results: list[dict[str, Any]] = []
-        for chat_id, provider, data_json, has_pending, has_setup, created_at, updated_at in rows:
+        for conversation_key, provider, data_json, has_pending, has_setup, created_at, updated_at in rows:
             try:
                 data = json.loads(data_json)
             except json.JSONDecodeError:
                 data = {}
             results.append({
-                "chat_id": chat_id,
+                "conversation_key": conversation_key,
                 "provider": provider,
                 "active_skills": data.get("active_skills", []),
                 "has_pending": bool(has_pending),

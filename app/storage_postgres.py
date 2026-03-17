@@ -17,18 +17,18 @@ _SCHEMA_TABLE = "bot_runtime.sessions"
 # Conn-based API (used by tests and by PostgresSessionStore)
 # ---------------------------------------------------------------------------
 
-def session_exists(conn, chat_id: int) -> bool:
+def session_exists(conn, conversation_key: str) -> bool:
     with conn.cursor() as cur:
         cur.execute(
-            f"SELECT 1 FROM {_SCHEMA_TABLE} WHERE chat_id = %s",
-            (chat_id,),
+            f"SELECT 1 FROM {_SCHEMA_TABLE} WHERE conversation_key = %s",
+            (conversation_key,),
         )
         return cur.fetchone() is not None
 
 
 def load_session(
     conn,
-    chat_id: int,
+    conversation_key: str,
     provider_name: str,
     provider_state_factory: Callable[[], dict[str, Any]],
     approval_mode: str,
@@ -40,8 +40,8 @@ def load_session(
     )
     with conn.cursor() as cur:
         cur.execute(
-            f"SELECT data FROM {_SCHEMA_TABLE} WHERE chat_id = %s",
-            (chat_id,),
+            f"SELECT data FROM {_SCHEMA_TABLE} WHERE conversation_key = %s",
+            (conversation_key,),
         )
         row = cur.fetchone()
     if row is None:
@@ -69,7 +69,7 @@ def load_session(
     return session
 
 
-def _upsert(conn, chat_id: int, session: dict[str, Any]) -> None:
+def _upsert(conn, conversation_key: str, session: dict[str, Any]) -> None:
     has_pending = (
         session.get("pending_approval") is not None
         or session.get("pending_retry") is not None
@@ -87,9 +87,9 @@ def _upsert(conn, chat_id: int, session: dict[str, Any]) -> None:
         cur.execute(
             f"""
             INSERT INTO {_SCHEMA_TABLE}
-            (chat_id, provider, data, has_pending, has_setup, project_id, file_policy, created_at, updated_at)
+            (conversation_key, provider, data, has_pending, has_setup, project_id, file_policy, created_at, updated_at)
             VALUES (%s, %s, %s::jsonb, %s, %s, %s, %s, %s::timestamptz, %s::timestamptz)
-            ON CONFLICT (chat_id) DO UPDATE SET
+            ON CONFLICT (conversation_key) DO UPDATE SET
                 provider = EXCLUDED.provider,
                 data = EXCLUDED.data,
                 has_pending = EXCLUDED.has_pending,
@@ -99,7 +99,7 @@ def _upsert(conn, chat_id: int, session: dict[str, Any]) -> None:
                 updated_at = EXCLUDED.updated_at
             """,
             (
-                chat_id,
+                conversation_key,
                 session.get("provider", ""),
                 data_json,
                 has_pending,
@@ -113,14 +113,14 @@ def _upsert(conn, chat_id: int, session: dict[str, Any]) -> None:
     conn.commit()
 
 
-def save_session(conn, chat_id: int, session: dict[str, Any]) -> None:
+def save_session(conn, conversation_key: str, session: dict[str, Any]) -> None:
     session["updated_at"] = datetime.now(timezone.utc).isoformat()
-    _upsert(conn, chat_id, session)
+    _upsert(conn, conversation_key, session)
 
 
-def delete_session(conn, chat_id: int) -> None:
+def delete_session(conn, conversation_key: str) -> None:
     with conn.cursor() as cur:
-        cur.execute(f"DELETE FROM {_SCHEMA_TABLE} WHERE chat_id = %s", (chat_id,))
+        cur.execute(f"DELETE FROM {_SCHEMA_TABLE} WHERE conversation_key = %s", (conversation_key,))
     conn.commit()
 
 
@@ -128,7 +128,7 @@ def list_sessions(conn) -> list[dict[str, Any]]:
     with conn.cursor() as cur:
         cur.execute(
             f"""
-            SELECT chat_id, provider, data, has_pending, has_setup, created_at, updated_at
+            SELECT conversation_key, provider, data, has_pending, has_setup, created_at, updated_at
             FROM {_SCHEMA_TABLE}
             ORDER BY updated_at DESC
             """
@@ -136,7 +136,7 @@ def list_sessions(conn) -> list[dict[str, Any]]:
         rows = cur.fetchall()
     results: list[dict[str, Any]] = []
     for row in rows:
-        chat_id, provider, data, has_pending, has_setup, created_at, updated_at = (
+        conversation_key, provider, data, has_pending, has_setup, created_at, updated_at = (
             row[0], row[1], row[2], row[3], row[4], row[5], row[6]
         )
         if isinstance(data, dict):
@@ -147,7 +147,7 @@ def list_sessions(conn) -> list[dict[str, Any]]:
             except json.JSONDecodeError:
                 data_dict = {}
         results.append({
-            "chat_id": chat_id,
+            "conversation_key": conversation_key,
             "provider": provider,
             "active_skills": data_dict.get("active_skills", []),
             "has_pending": bool(has_pending),
@@ -190,14 +190,14 @@ class PostgresSessionStore:
         ) as conn:
             yield conn
 
-    def session_exists(self, data_dir: Path, chat_id: int) -> bool:
+    def session_exists(self, data_dir: Path, conversation_key: str) -> bool:
         with self._conn() as conn:
-            return session_exists(conn, chat_id)
+            return session_exists(conn, conversation_key)
 
     def load_session(
         self,
         data_dir: Path,
-        chat_id: int,
+        conversation_key: str,
         provider_name: str,
         provider_state_factory: Callable[[], dict[str, Any]],
         approval_mode: str,
@@ -206,17 +206,17 @@ class PostgresSessionStore:
     ) -> dict[str, Any]:
         with self._conn() as conn:
             return load_session(
-                conn, chat_id, provider_name, provider_state_factory,
+                conn, conversation_key, provider_name, provider_state_factory,
                 approval_mode, role, default_skills,
             )
 
-    def save_session(self, data_dir: Path, chat_id: int, session: dict[str, Any]) -> None:
+    def save_session(self, data_dir: Path, conversation_key: str, session: dict[str, Any]) -> None:
         with self._conn() as conn:
-            save_session(conn, chat_id, session)
+            save_session(conn, conversation_key, session)
 
-    def delete_session(self, data_dir: Path, chat_id: int) -> None:
+    def delete_session(self, data_dir: Path, conversation_key: str) -> None:
         with self._conn() as conn:
-            delete_session(conn, chat_id)
+            delete_session(conn, conversation_key)
 
     def list_sessions(self, data_dir: Path) -> list[dict[str, Any]]:
         with self._conn() as conn:

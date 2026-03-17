@@ -28,6 +28,7 @@ from app.storage import (
     save_session,
     session_exists,
 )
+from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeChat,
     FakeProvider,
@@ -57,16 +58,16 @@ async def test_handler_roundtrip_through_sqlite():
         user = FakeUser(1)
 
         # No session yet
-        assert session_exists(data_dir, 7001) is False
+        assert session_exists(data_dir, telegram_conversation_key(7001)) is False
 
         await send_text(chat, user, "hello")
         await drain_one_worker_item(data_dir)
 
         # Session now exists in SQLite
-        assert session_exists(data_dir, 7001) is True
+        assert session_exists(data_dir, telegram_conversation_key(7001)) is True
 
         # Load it back — provider and updated_at should reflect the handler's save
-        session = load_session_disk(data_dir, 7001, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(7001), prov)
         assert session["provider"] == "claude"
         assert bool(session.get("updated_at")) is True
 
@@ -77,7 +78,8 @@ async def test_handler_roundtrip_through_sqlite():
         # Verify the actual SQLite DB file has the row
         conn = runtime_backend.session_store()._db(data_dir)
         row = conn.execute(
-            "SELECT provider, has_pending FROM sessions WHERE chat_id = ?", (7001,)
+            "SELECT provider, has_pending FROM sessions WHERE conversation_key = ?",
+            (telegram_conversation_key(7001),),
         ).fetchone()
         assert row is not None
         assert row[0] == "claude"
@@ -113,7 +115,7 @@ async def test_migration_then_handler_message():
             assert sessions_dir.exists() is False
 
             # Session should be in SQLite
-            assert session_exists(data_dir, 8001) is True
+            assert session_exists(data_dir, telegram_conversation_key(8001)) is True
 
             # Now send a message through the handler
             prov = FakeProvider("claude")
@@ -127,7 +129,7 @@ async def test_migration_then_handler_message():
             await drain_one_worker_item(data_dir)
 
             # Verify merged state: role from migration, session_id preserved
-            session = load_session_disk(data_dir, 8001, prov)
+            session = load_session_disk(data_dir, telegram_conversation_key(8001), prov)
             assert session["role"] == "You are helpful."
             assert session["provider_state"]["session_id"] == "legacy-abc"
 
@@ -154,16 +156,16 @@ async def test_doctor_reads_sqlite_not_json():
         # Create stale pending session directly via storage API
         s1 = default_session("claude", prov.new_provider_state(), "off")
         s1["pending_approval"] = {"prompt": "do something", "created_at": 0}
-        save_session(data_dir, 9001, s1)
+        save_session(data_dir, telegram_conversation_key(9001), s1)
 
         # Create stale setup session
         s2 = default_session("claude", prov.new_provider_state(), "off")
-        s2["awaiting_skill_setup"] = {"user_id": 42, "skill": "test", "started_at": 0}
-        save_session(data_dir, 9002, s2)
+        s2["awaiting_skill_setup"] = {"user_id": "tg:42", "skill": "test", "started_at": 0}
+        save_session(data_dir, telegram_conversation_key(9002), s2)
 
         # Create clean session (should not trigger warnings)
         s3 = default_session("claude", prov.new_provider_state(), "off")
-        save_session(data_dir, 9003, s3)
+        save_session(data_dir, telegram_conversation_key(9003), s3)
 
         # Verify no JSON session dir exists
         assert (data_dir / "sessions").exists() is False
@@ -201,21 +203,24 @@ async def test_delete_session():
         s = default_session("claude", prov.new_provider_state(), "on")
         s["active_skills"] = ["my-skill"]
         s["role"] = "custom role"
-        save_session(data_dir, 5001, s)
-        assert session_exists(data_dir, 5001) is True
+        save_session(data_dir, telegram_conversation_key(5001), s)
+        assert session_exists(data_dir, telegram_conversation_key(5001)) is True
 
         # Delete it
-        delete_session(data_dir, 5001)
-        assert session_exists(data_dir, 5001) is False
+        delete_session(data_dir, telegram_conversation_key(5001))
+        assert session_exists(data_dir, telegram_conversation_key(5001)) is False
 
         # load_session returns fresh default (no skills, no role)
-        fresh = load_session(data_dir, 5001, "claude", prov.new_provider_state, "on")
+        fresh = load_session(data_dir, telegram_conversation_key(5001), "claude", prov.new_provider_state, "on")
         assert fresh["active_skills"] == []
         assert fresh["role"] == ""
 
         # Verify at DB level
         conn = runtime_backend.session_store()._db(data_dir)
-        row = conn.execute("SELECT 1 FROM sessions WHERE chat_id = ?", (5001,)).fetchone()
+        row = conn.execute(
+            "SELECT 1 FROM sessions WHERE conversation_key = ?",
+            (telegram_conversation_key(5001),),
+        ).fetchone()
         assert row is None
 
 
@@ -229,25 +234,25 @@ async def test_close_db_and_reopen():
     with fresh_data_dir() as data_dir:
         s = default_session("claude", {"session_id": "abc", "started": False}, "on")
         s["role"] = "persistent role"
-        save_session(data_dir, 6001, s)
+        save_session(data_dir, telegram_conversation_key(6001), s)
 
         # Close the connection
         close_db(data_dir)
 
         # Operations should transparently reopen
-        assert session_exists(data_dir, 6001) is True
+        assert session_exists(data_dir, telegram_conversation_key(6001)) is True
 
-        loaded = load_session(data_dir, 6001, "claude",
+        loaded = load_session(data_dir, telegram_conversation_key(6001), "claude",
                               lambda: {"session_id": "abc", "started": False}, "on")
         assert loaded["role"] == "persistent role"
 
         # Save new data after reopen
         loaded["role"] = "updated role"
-        save_session(data_dir, 6001, loaded)
+        save_session(data_dir, telegram_conversation_key(6001), loaded)
         close_db(data_dir)
 
         # Verify again
-        loaded2 = load_session(data_dir, 6001, "claude",
+        loaded2 = load_session(data_dir, telegram_conversation_key(6001), "claude",
                                lambda: {"session_id": "abc", "started": False}, "on")
         assert loaded2["role"] == "updated role"
 
@@ -273,12 +278,16 @@ async def test_multiple_chats_save_independently():
         sessions = list_sessions(data_dir)
         assert len(sessions) == 3
 
-        chat_ids = {s["chat_id"] for s in sessions}
-        assert chat_ids == {3001, 3002, 3003}
+        conversation_keys = {s["conversation_key"] for s in sessions}
+        assert conversation_keys == {
+            telegram_conversation_key(3001),
+            telegram_conversation_key(3002),
+            telegram_conversation_key(3003),
+        }
 
         # Each session has correct independent state
         for chat_id in (3001, 3002, 3003):
-            s = load_session_disk(data_dir, chat_id, prov)
+            s = load_session_disk(data_dir, telegram_conversation_key(chat_id), prov)
             assert s["provider"] == "claude"
             assert bool(s.get("updated_at")) is True
 
@@ -305,7 +314,7 @@ async def test_prompt_size_cross_chat_reads_sqlite():
 
         # Create a session without the skill
         s3 = default_session("claude", prov.new_provider_state(), "off")
-        save_session(data_dir, 4003, s3)
+        save_session(data_dir, telegram_conversation_key(4003), s3)
 
         # No JSON dir
         assert (data_dir / "sessions").exists() is False
@@ -344,8 +353,8 @@ async def test_fresh_db_no_json_artifacts():
         assert session_json == []
 
         # SQLite has both sessions
-        assert session_exists(data_dir, 2001) is True
-        assert session_exists(data_dir, 2002) is True
+        assert session_exists(data_dir, telegram_conversation_key(2001)) is True
+        assert session_exists(data_dir, telegram_conversation_key(2002)) is True
 
         # DB file exists
         assert (data_dir / "sessions.db").exists() is True

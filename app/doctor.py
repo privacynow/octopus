@@ -32,7 +32,7 @@ async def collect_doctor_report(
     provider: Provider,
     *,
     session: dict[str, Any] | None = None,
-    user_id: int | None = None,
+    user_id: str | None = None,
     encryption_key: bytes | None = None,
     caller_is_bot: bool = False,
 ) -> DoctorReport:
@@ -78,7 +78,7 @@ async def collect_doctor_report(
         ))
 
     # Advisory: admin not explicitly set
-    total_users = len(config.allowed_user_ids) + len(config.allowed_usernames)
+    total_users = len(config.allowed_actor_keys) + len(config.allowed_usernames)
     if total_users > 1 and not config.admin_users_explicit:
         report.warnings.append(
             "BOT_ADMIN_USERS not set \u2014 all allowed users have admin "
@@ -209,7 +209,7 @@ def scan_stale_sessions(
         if not info["has_pending"] and not info["has_setup"]:
             continue
         raw_session = load_session(
-            data_dir, info["chat_id"], provider_name,
+            data_dir, info["conversation_key"], provider_name,
             provider_state_factory, approval_mode,
         )
         session = session_from_dict(raw_session)
@@ -241,7 +241,7 @@ def scan_stale_delegations(
     now = utc_now()
     for info in list_sessions(data_dir):
         session = session_from_dict(load_session(
-            data_dir, info["chat_id"], provider_name,
+            data_dir, info["conversation_key"], provider_name,
             provider_state_factory, approval_mode,
         ))
         delegation = session.pending_delegation
@@ -299,11 +299,11 @@ def check_prompt_size_cross_chat(
         if skill_name not in active:
             continue
         session_data = load_session(
-            data_dir, info["chat_id"], provider_name,
+            data_dir, info["conversation_key"], provider_name,
             provider_state_factory, approval_mode,
         )
         role = session_data.get("role", "")
         warning = check_prompt_size(role, active)
         if warning:
-            warnings.append(f"  Chat {info['chat_id']}: {warning}")
+            warnings.append(f"  Conversation {info['conversation_key']}: {warning}")
     return warnings

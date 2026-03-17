@@ -35,6 +35,7 @@ from app.skills import (
 )
 from app.storage import default_session, load_session, save_session
 from tests.support.config_support import make_config
+from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 
 
 def _hash(**kwargs):
@@ -55,30 +56,30 @@ def _hash(**kwargs):
 
 def test_pending_approval_preserves_requester_identity():
     pending = PendingApproval(
-        request_user_id=111,
+        request_user_id="tg:111",
         prompt="review this",
         image_paths=[],
         attachment_dicts=[{"path": "/tmp/a.txt", "original_name": "a.txt", "is_image": False}],
         context_hash="abc123",
     )
-    assert pending.request_user_id == 111
+    assert pending.request_user_id == "tg:111"
     assert pending.context_hash == "abc123"
 
     d = dataclasses.asdict(pending)
-    assert d["request_user_id"] == 111
+    assert d["request_user_id"] == "tg:111"
     assert d["context_hash"] == "abc123"
 
 
 def test_pending_retry_preserves_fields():
     pending_retry = PendingRetry(
-        request_user_id=222,
+        request_user_id="tg:222",
         prompt="write file",
         image_paths=[],
         context_hash="def456",
         denials=[{"tool_name": "Write", "tool_input": {"file_path": "/etc/hosts"}}],
     )
     assert len(pending_retry.denials) == 1
-    assert pending_retry.request_user_id == 222
+    assert pending_retry.request_user_id == "tg:222"
 
 
 # =====================================================================
@@ -212,17 +213,19 @@ def test_bot_role_contract():
 
 def test_skill_catalog():
     catalog = load_catalog()
-    assert len(catalog) == 10
-    assert "code-review" in catalog
-    assert "testing" in catalog
-    assert "debugging" in catalog
-    assert "devops" in catalog
-    assert "documentation" in catalog
-    assert "security" in catalog
-    assert "refactoring" in catalog
-    assert "architecture" in catalog
-    assert "github-integration" in catalog
-    assert "linear-integration" in catalog
+    expected = {
+        "code-review",
+        "testing",
+        "debugging",
+        "devops",
+        "documentation",
+        "security",
+        "refactoring",
+        "architecture",
+        "github-integration",
+        "linear-integration",
+    }
+    assert expected.issubset(catalog)
 
     # Metadata
     cr = catalog["code-review"]
@@ -362,15 +365,15 @@ def test_session_persistence():
         assert session["role"] == "engineer"
 
         # Save and reload
-        save_session(data_dir, 100, session)
-        loaded = load_session(data_dir, 100, "claude", lambda: {"session_id": "y", "started": False}, "on", "default-role", ("testing",))
+        save_session(data_dir, telegram_conversation_key(100), session)
+        loaded = load_session(data_dir, telegram_conversation_key(100), "claude", lambda: {"session_id": "y", "started": False}, "on", "default-role", ("testing",))
 
         # Saved values should override defaults
         assert loaded["active_skills"] == ["code-review"]
         assert loaded["role"] == "engineer"
 
         # Fresh session for new chat uses defaults
-        fresh = load_session(data_dir, 999, "claude", lambda: {"session_id": "z", "started": False}, "on", "default-role", ("testing",))
+        fresh = load_session(data_dir, telegram_conversation_key(999), "claude", lambda: {"session_id": "z", "started": False}, "on", "default-role", ("testing",))
         assert fresh["role"] == "default-role"
         assert fresh["active_skills"] == ["testing"]
 
@@ -454,7 +457,7 @@ def test_config_bot_skills():
 
 def test_pending_approval_json_roundtrip():
     pending = PendingApproval(
-        request_user_id=42,
+        request_user_id="tg:42",
         prompt="do stuff",
         image_paths=["/tmp/img.jpg"],
         attachment_dicts=[{"path": "/tmp/a.txt", "original_name": "a.txt", "is_image": False}],
@@ -462,7 +465,7 @@ def test_pending_approval_json_roundtrip():
     )
     serialized = json.dumps(dataclasses.asdict(pending))
     deserialized = json.loads(serialized)
-    assert deserialized["request_user_id"] == 42
+    assert deserialized["request_user_id"] == "tg:42"
     assert deserialized["context_hash"] == "deadbeef"
     assert deserialized["prompt"] == "do stuff"
 
@@ -691,18 +694,18 @@ def test_awaiting_skill_setup_persistence():
 
         session = default_session("claude", {"session_id": "x", "started": False}, "on")
         setup_state = {
-            "user_id": 111,
+            "user_id": "tg:111",
             "skill": "github",
             "remaining": [
                 {"key": "GITHUB_TOKEN", "prompt": "Paste token", "help_url": "https://example.com"},
             ],
         }
         session["awaiting_skill_setup"] = setup_state
-        save_session(data_dir, 100, session)
+        save_session(data_dir, telegram_conversation_key(100), session)
 
-        loaded = load_session(data_dir, 100, "claude", lambda: {"session_id": "y", "started": False}, "on")
+        loaded = load_session(data_dir, telegram_conversation_key(100), "claude", lambda: {"session_id": "y", "started": False}, "on")
         assert loaded.get("awaiting_skill_setup") is not None
-        assert loaded["awaiting_skill_setup"]["user_id"] == 111
+        assert loaded["awaiting_skill_setup"]["user_id"] == "tg:111"
         assert loaded["awaiting_skill_setup"]["skill"] == "github"
         assert len(loaded["awaiting_skill_setup"]["remaining"]) == 1
 

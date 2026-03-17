@@ -1144,7 +1144,7 @@ async def test_cancel_foreign_setup_shows_another_user_message():
 
 
 async def test_friendly_validation_errors():
-    from app.skills import _friendly_validation_error
+    from app.credential_validation import _friendly_validation_error
 
     msg401 = _friendly_validation_error(401, 200)
     assert "rejected" in msg401.lower()
@@ -1155,7 +1155,7 @@ async def test_friendly_validation_errors():
 
 async def test_credential_prompt_html_link():
     req = {"key": "TOKEN", "prompt": "Enter your token", "help_url": "https://example.com/guide"}
-    from app.request_flow import format_credential_prompt
+    from app.credential_flow import format_credential_prompt
     result = format_credential_prompt(req)
     assert 'href="https://example.com/guide"' in result
     assert "setup guide" in result
@@ -1184,7 +1184,7 @@ async def test_delete_user_credentials():
 
 async def test_foreign_setup_message_info():
     from app.session_state import AwaitingSkillSetup
-    from app.request_flow import foreign_setup_message
+    from app.credential_flow import foreign_setup_message
     msg = foreign_setup_message(AwaitingSkillSetup(user_id=42, skill="test", remaining=[], started_at=time.time() - 120))
     assert "42" in msg
     assert "min ago" in msg

@@ -65,16 +65,20 @@ class ConversationControlUseCases(ConversationControlPort):
         data_dir: Path,
         conversation_key: str,
         actor_key: str,
+        live_cancel_event=None,
         cancel_request_event_id: str = "",
         allow_override: bool = False,
     ) -> ConversationCancelOutcome:
+        local_live_cancel = live_cancel_event is not None
+        if live_cancel_event is not None:
+            live_cancel_event.set()
         result = work_queue.request_cancel(
             data_dir,
             conversation_key,
             actor_key,
             cancel_request_event_id=cancel_request_event_id,
         )
-        if result == work_queue.CancelRequestResult.claimed_cancel_requested:
+        if result == work_queue.CancelRequestResult.claimed_cancel_requested or local_live_cancel:
             return ConversationCancelOutcome(
                 status="live_cancel_requested",
                 message=_msg.cancel_live_requested(),

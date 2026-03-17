@@ -46,7 +46,7 @@ from app.identity import (
 )
 from app.execution_context import ResolvedExecutionContext, resolve_execution_context
 from app.providers.base import Provider
-from app.request_flow import (
+from app.credential_flow import (
     foreign_setup_message,
     format_credential_prompt,
 )
@@ -81,14 +81,10 @@ from app.transports.admission import (
     record_inbound_envelope,
 )
 from app.transports.types import InboundEnvelope
-from app.skills import (
-    delete_user_credentials, list_user_credential_skills,
-    derive_encryption_key,
-    build_credential_env,
-    validate_credential,
-    cleanup_codex_scripts,
-)
+from app.credential_validation import validate_credential
+from app.skills import cleanup_codex_scripts
 from app.inbound_use_case_factory import (
+    get_credential_management_use_cases,
     get_conversation_control_use_cases,
     get_conversation_settings_use_cases,
     get_pending_request_use_cases,
@@ -414,10 +410,6 @@ def _cfg() -> BotConfig:
 def _prov() -> Provider:
     assert _provider is not None
     return _provider
-
-
-def _encryption_key() -> bytes:
-    return derive_encryption_key(_cfg().telegram_token)
 
 
 def _conversation_key(chat_id: int | str) -> str:
@@ -1307,8 +1299,6 @@ async def _check_credential_satisfaction(
         session,
         user_id=_actor_key(user_id),
         active_skills=active_skills,
-        data_dir=_cfg().data_dir,
-        encryption_key=_encryption_key(),
     )
     if outcome.status == "satisfied":
         return outcome.credential_env or {}
@@ -2146,7 +2136,6 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         session_context = SessionHealthContext(
             session=session_to_dict(session),
             user_id=_actor_key(event.user.id),
-            encryption_key=_encryption_key(),
         )
     report = await collect_runtime_health_report(
         cfg,
@@ -2495,6 +2484,16 @@ async def cancel_chat_operation(
     allow_admin_override: bool = False,
     update_id: int | None = None,
 ) -> None:
+    fast_outcome = _request_cancel_fast_path(
+        chat_id,
+        actor_key=_actor_key(actor_user_id),
+        cancel_request_event_id=_event_key(update_id) if update_id is not None else "",
+        allow_override=allow_admin_override,
+    )
+    if fast_outcome is not None:
+        await message.reply_text(fast_outcome.message)
+        return
+
     async with _chat_lock(chat_id, message=message, update_id=update_id):
         session = _load(chat_id)
         outcome = get_conversation_control_use_cases().cancel_conversation(
@@ -2510,6 +2509,28 @@ async def cancel_chat_operation(
     await message.reply_text(outcome.message)
 
 
+def _request_cancel_fast_path(
+    chat_id: int | str,
+    *,
+    actor_key: str,
+    cancel_request_event_id: str = "",
+    allow_override: bool = False,
+):
+    session = _load(chat_id)
+    outcome = get_conversation_control_use_cases().cancel_conversation(
+        session,
+        data_dir=_cfg().data_dir,
+        conversation_key=_conversation_key(chat_id),
+        actor_key=actor_key,
+        live_cancel_event=_LIVE_CANCEL.get(chat_id),
+        cancel_request_event_id=cancel_request_event_id,
+        allow_override=allow_override,
+    )
+    if outcome.status in {"live_cancel_requested", "queued_cancelled"}:
+        return outcome
+    return None
+
+
 @_command_handler
 async def cmd_clear_credentials(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await _public_guard(event, update):
@@ -2518,8 +2539,7 @@ async def cmd_clear_credentials(event, update: Update, context: ContextTypes.DEF
     args = event.args
     skill_name = args[0] if args else None
 
-    cfg = _cfg()
-    stored = list_user_credential_skills(cfg.data_dir, _actor_key(user_id))
+    stored = list(get_credential_management_use_cases().list_stored_skills(_actor_key(user_id)))
 
     if skill_name:
         if skill_name not in stored:
@@ -2555,34 +2575,25 @@ async def _execute_clear_credentials(
     query, chat_id: int, user_id: int, skill_name: str | None,
 ) -> None:
     """Shared logic for clearing credentials after confirmation."""
-    cfg = _cfg()
-    key = _encryption_key()
-    removed = delete_user_credentials(cfg.data_dir, _actor_key(user_id), key, skill_name)
-
-    # Clear in-progress setup even if no credentials were saved yet
-    setup_cleared = False
     async with _chat_lock(chat_id, query=query) as already_answered:
         if not already_answered:
             await query.answer()
         session = _load(chat_id)
-        outcome = get_runtime_skill_setup_use_cases().apply_cleared_credentials(
+        outcome = get_credential_management_use_cases().clear_credentials(
             session,
-            user_id=_actor_key(user_id),
-            removed_skills=removed,
+            actor_key=_actor_key(user_id),
             skill_name=skill_name,
         )
-        setup_cleared = outcome.setup_cleared
-        deactivated = list(outcome.deactivated_skills)
         if outcome.mutated:
             _save(chat_id, session)
 
     parts = []
-    if removed:
-        parts.append(f"Credentials cleared for: {html.escape(', '.join(removed))}.")
-    if setup_cleared:
+    if outcome.removed_skills:
+        parts.append(f"Credentials cleared for: {html.escape(', '.join(outcome.removed_skills))}.")
+    if outcome.setup_cleared:
         parts.append(_msg.credential_setup_cancelled())
-    if deactivated:
-        parts.append(f"Deactivated in this chat: {html.escape(', '.join(deactivated))}.")
+    if outcome.deactivated_skills:
+        parts.append(f"Deactivated in this chat: {html.escape(', '.join(outcome.deactivated_skills))}.")
     if not parts:
         parts.append("No credentials to clear (may have already been removed).")
     await query.edit_message_text("\n".join(parts), parse_mode=ParseMode.HTML)
@@ -2854,8 +2865,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     session,
                     user_id=_actor_key(user_id),
                     raw_value=raw_value,
-                    data_dir=cfg.data_dir,
-                    encryption_key=_encryption_key(),
                     validator=validate_credential,
                 )
                 if outcome.status == "validation_failed":
@@ -3823,6 +3832,16 @@ async def _execute_worker_action(
         return
 
     if action == "cancel_conversation":
+        live_outcome = _request_cancel_fast_path(
+            runtime_chat,
+            actor_key=_actor_key(event.user.id),
+            cancel_request_event_id=str(item.get("event_id", "")),
+            allow_override=(source != "telegram" or is_admin(event.user)),
+        )
+        if live_outcome is not None:
+            await surface.reply_text(live_outcome.message)
+            return
+
         session = _load(runtime_chat)
         outcome = get_conversation_control_use_cases().cancel_conversation(
             session,
@@ -4219,6 +4238,15 @@ async def _shared_cancel_command(update: Update, event, action: InboundAction) -
     actor_key = _actor_key(event.user.id)
     message = update.effective_message
     del envelope
+    live_outcome = _request_cancel_fast_path(
+        chat_id,
+        actor_key=actor_key,
+        cancel_request_event_id=_event_key(update.update_id),
+        allow_override=is_admin(event.user),
+    )
+    if live_outcome is not None:
+        await message.reply_text(live_outcome.message)
+        return
     async with _chat_lock(chat_id, message=message, update_id=update.update_id):
         session = _load(chat_id)
         outcome = get_conversation_control_use_cases().cancel_conversation(
@@ -4288,8 +4316,10 @@ async def _shared_callback_dispatch(update: Update, context: ContextTypes.DEFAUL
 def build_application(config: BotConfig, provider: Provider) -> Application:
     global _config, _provider, _boot_id, _rate_limiter, _bot_instance
     from app.content_store import init_content_store_for_config
+    from app.credential_store import init_credential_store_for_config
 
     init_content_store_for_config(config)
+    init_credential_store_for_config(config)
     _config = config
     _provider = provider
     _boot_id = _make_boot_id()

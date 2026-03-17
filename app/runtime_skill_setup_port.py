@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
 from app.credential_types import CredentialValidator
@@ -74,8 +73,6 @@ class RuntimeSkillSetupPort(Protocol):
         *,
         user_id: str,
         active_skills: list[str],
-        data_dir: Path,
-        encryption_key: bytes,
     ) -> RuntimeSkillCredentialSatisfactionOutcome: ...
 
     async def submit_credential_value(
@@ -84,8 +81,6 @@ class RuntimeSkillSetupPort(Protocol):
         *,
         user_id: str,
         raw_value: str,
-        data_dir: Path,
-        encryption_key: bytes,
         validator: CredentialValidator,
     ) -> RuntimeSkillSetupAdvanceOutcome: ...
 

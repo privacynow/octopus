@@ -8,21 +8,18 @@ service and only handle rendering plus persistence.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
-from app.request_flow import (
+from app.credential_flow import (
     build_setup_state,
     foreign_skill_setup,
 )
+from app.credential_service import get_credential_service
 from app.session_state import AwaitingSkillSetup, SessionState
 from app.skill_activation_service import get_skill_activation_service
 from app.skill_catalog_service import get_skill_catalog_service
 from app.provider_guidance_service import get_provider_guidance_service
-from app.skills import (
-    PROMPT_SIZE_WARNING_THRESHOLD,
-    load_user_credentials,
-)
+from app.skills import PROMPT_SIZE_WARNING_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -67,6 +64,7 @@ class SkillLifecycleService:
         self._catalog = get_skill_catalog_service()
         self._activation = get_skill_activation_service()
         self._guidance = get_provider_guidance_service()
+        self._credentials = get_credential_service()
 
     def list_active(self, session: SessionState) -> list[str]:
         return self._activation.list_active(session)
@@ -78,7 +76,7 @@ class SkillLifecycleService:
     ):
         requirements = self._catalog.requirements(skill_name)
         skill_creds = user_credentials.get(skill_name, {})
-        return [item for item in requirements if item.key not in skill_creds]
+        return self._credentials.missing_requirements(requirements, skill_creds)
 
     def begin_add(
         self,
@@ -86,8 +84,6 @@ class SkillLifecycleService:
         *,
         user_id: str,
         skill_name: str,
-        data_dir: Path,
-        encryption_key: bytes,
     ) -> SkillAddDecision:
         if not self._catalog.has_skill(skill_name):
             return SkillAddDecision(status="unknown")
@@ -95,7 +91,7 @@ class SkillLifecycleService:
         active = self._activation.list_active(session)
         requirements = self._catalog.requirements(skill_name)
         if requirements:
-            user_creds = load_user_credentials(data_dir, user_id, encryption_key)
+            user_creds = self._credentials.load(user_id)
             missing = self._missing_requirements(skill_name, user_creds)
             if missing:
                 foreign = foreign_skill_setup(session, user_id)

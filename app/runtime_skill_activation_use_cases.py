@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from app.session_state import SessionState
 from app.skill_lifecycle_service import get_skill_lifecycle_service
 from app.runtime_skill_activation_port import (
@@ -57,16 +55,12 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
         *,
         user_id: str,
         skill_name: str,
-        data_dir: Path,
-        encryption_key: bytes,
         confirm: bool = False,
     ) -> ConversationSkillMutationOutcome:
         decision = self._lifecycle().begin_add(
             session,
             user_id=user_id,
             skill_name=skill_name,
-            data_dir=data_dir,
-            encryption_key=encryption_key,
         )
         if decision.status == "needs_confirmation" and confirm:
             decision = self._lifecycle().confirm_add(session, skill_name)

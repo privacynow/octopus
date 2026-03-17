@@ -6,17 +6,15 @@ import html
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 
-from app.request_flow import (
+from app.credential_flow import (
     foreign_setup_message,
     format_credential_prompt,
 )
 from app.inbound_use_case_factory import (
+    get_credential_management_use_cases,
     get_runtime_skill_activation_use_cases,
     get_runtime_skill_catalog_use_cases,
     get_runtime_skill_import_use_cases,
-)
-from app.skills import (
-    load_user_credentials,
 )
 
 
@@ -51,7 +49,9 @@ async def skills_list(event, update: Update) -> None:
     session = th._load(event.chat_id)
     active = set(get_runtime_skill_activation_use_cases().list_conversation_skills(session).active_skills)
     req_user_id = event.user.id
-    user_creds = load_user_credentials(th._cfg().data_dir, req_user_id, th._encryption_key())
+    user_creds = get_credential_management_use_cases().load_credentials(
+        th._actor_key(req_user_id)
+    )
     lines = ["<b>Available skills:</b>"]
     for item in sorted(catalog, key=lambda value: value.name):
         name = item.name
@@ -94,8 +94,6 @@ async def skills_add(event, update: Update, name: str) -> None:
             session,
             user_id=user_id,
             skill_name=name,
-            data_dir=th._cfg().data_dir,
-            encryption_key=th._encryption_key(),
         )
         if decision.mutated:
             th._save(chat_id, session)

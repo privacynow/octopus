@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.credential_management_port import CredentialManagementPort
 from app.conversation_control_port import ConversationControlPort
 from app.conversation_settings_port import ConversationSettingsPort
 from app.pending_request_port import PendingRequestPort
@@ -33,6 +34,12 @@ def get_runtime_skill_import_use_cases() -> RuntimeSkillImportPort:
 
 def get_runtime_skill_setup_use_cases() -> RuntimeSkillSetupPort:
     from app.runtime_skill_setup_use_cases import get_runtime_skill_setup_use_cases as _get
+
+    return _get()
+
+
+def get_credential_management_use_cases() -> CredentialManagementPort:
+    from app.credential_management_use_cases import get_credential_management_use_cases as _get
 
     return _get()
 

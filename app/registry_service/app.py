@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
+from app.agents.bridge import conversation_key_for_ref
 from app.capability_service import CapabilityService
 from app.registry_service.backend import get_registry_store
 from app.registry_service.runtime_surface import get_runtime_surface_context
@@ -27,7 +28,7 @@ from app.skill_lifecycle_service import get_skill_lifecycle_service
 from app.provider_guidance_service import get_provider_guidance_service
 from app.session_state import session_from_dict, session_to_dict
 from app.skills import derive_encryption_key, get_skill_requirements
-from app.storage import load_session, save_session, session_exists
+from app.storage import load_session, save_session
 
 log = logging.getLogger(__name__)
 _SESSION_TTL_SECONDS = 24 * 60 * 60
@@ -50,6 +51,7 @@ class CreateConversationRequest(BaseModel):
 
 class ConversationSkillMutationRequest(BaseModel):
     actor_key: str = Field(..., min_length=1, description="Actor performing the skill mutation")
+    confirm: bool = Field(default=False, description="Confirm activation when the prompt budget warning has already been acknowledged")
 
 
 class ProviderGuidancePreviewRequest(BaseModel):
@@ -101,6 +103,7 @@ def _catalog_skill_summary(name: str) -> dict[str, Any] | None:
         "is_custom": meta.is_custom,
         "is_managed": imports.is_installed(name),
         "has_custom_override": imports.has_custom_override(name),
+        "is_installed": source != "store (not installed)",
         "requires_credentials": bool(get_skill_requirements(name)),
         "providers": _provider_names_for_skill_path(skill_path),
         "source": source,
@@ -143,10 +146,14 @@ def _runtime_prompt_size_warnings(skill_name: str) -> list[str]:
     )
 
 
-def _load_runtime_session_or_404(conversation_key: str):
+def _load_runtime_session_or_404(conversation_id: str):
+    store = get_store()
+    try:
+        store.get_conversation(conversation_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Unknown conversation: {conversation_id}") from exc
     context = get_runtime_surface_context()
-    if not session_exists(context.config.data_dir, conversation_key):
-        raise HTTPException(status_code=404, detail=f"Unknown conversation: {conversation_key}")
+    conversation_key = conversation_key_for_ref(conversation_id)
     raw = load_session(
         context.config.data_dir,
         conversation_key,
@@ -155,7 +162,7 @@ def _load_runtime_session_or_404(conversation_key: str):
         context.config.approval_mode,
         default_skills=context.config.default_skills,
     )
-    return context, session_from_dict(raw)
+    return context, conversation_key, session_from_dict(raw)
 
 
 def load_settings() -> RegistrySettings:
@@ -604,14 +611,15 @@ def catalog_skill_diff(
     return {"name": result.name, "ok": result.ok, "diff": result.message}
 
 
-@app.get("/v1/conversations/{conversation_key:path}/skills")
+@app.get("/v1/conversations/{conversation_id:path}/skills")
 def conversation_skills(
-    conversation_key: str,
+    conversation_id: str,
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    _, session = _load_runtime_session_or_404(conversation_key)
+    _, conversation_key, session = _load_runtime_session_or_404(conversation_id)
     active = get_skill_lifecycle_service().list_active(session)
     return {
+        "conversation_id": conversation_id,
         "conversation_key": conversation_key,
         "active_skills": active,
         "active_skill_details": [
@@ -621,14 +629,14 @@ def conversation_skills(
     }
 
 
-@app.post("/v1/conversations/{conversation_key:path}/skills/{skill_name}/activate")
+@app.post("/v1/conversations/{conversation_id:path}/skills/{skill_name}/activate")
 def conversation_activate_skill(
-    conversation_key: str,
+    conversation_id: str,
     skill_name: str,
     payload: ConversationSkillMutationRequest,
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    context, session = _load_runtime_session_or_404(conversation_key)
+    context, conversation_key, session = _load_runtime_session_or_404(conversation_id)
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
         raise HTTPException(status_code=503, detail="TELEGRAM_BOT_TOKEN is required for registry-driven skill activation")
@@ -641,6 +649,8 @@ def conversation_activate_skill(
     )
     if decision.status == "unknown":
         raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_name}")
+    if decision.status == "needs_confirmation" and payload.confirm:
+        decision = get_skill_lifecycle_service().confirm_add(session, skill_name)
     if decision.mutated:
         save_session(context.config.data_dir, conversation_key, session_to_dict(session))
     response: dict[str, Any] = {"status": decision.status}
@@ -654,14 +664,14 @@ def conversation_activate_skill(
     return response
 
 
-@app.post("/v1/conversations/{conversation_key:path}/skills/{skill_name}/deactivate")
+@app.post("/v1/conversations/{conversation_id:path}/skills/{skill_name}/deactivate")
 def conversation_deactivate_skill(
-    conversation_key: str,
+    conversation_id: str,
     skill_name: str,
     payload: ConversationSkillMutationRequest,
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    context, session = _load_runtime_session_or_404(conversation_key)
+    context, conversation_key, session = _load_runtime_session_or_404(conversation_id)
     decision = get_skill_lifecycle_service().remove(
         session,
         user_id=payload.actor_key,
@@ -674,13 +684,13 @@ def conversation_deactivate_skill(
     return {"status": decision.status}
 
 
-@app.post("/v1/conversations/{conversation_key:path}/skills/clear")
+@app.post("/v1/conversations/{conversation_id:path}/skills/clear")
 def conversation_clear_skills(
-    conversation_key: str,
+    conversation_id: str,
     payload: ConversationSkillMutationRequest,
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    context, session = _load_runtime_session_or_404(conversation_key)
+    context, conversation_key, session = _load_runtime_session_or_404(conversation_id)
     decision = get_skill_lifecycle_service().clear(session, user_id=payload.actor_key)
     if decision.status == "foreign_setup":
         raise HTTPException(status_code=409, detail="credential_setup_in_progress")
@@ -915,7 +925,7 @@ def ui_shell(request: Request) -> str:
         gap: 0.6rem;
         align-items: center;
       }}
-      button, select, textarea {{
+      button, select, textarea, input {{
         font: inherit;
       }}
       button {{
@@ -956,7 +966,7 @@ def ui_shell(request: Request) -> str:
         font-size: 0.92rem;
         color: var(--muted);
       }}
-      select, textarea {{
+      select, textarea, input {{
         width: 100%;
         border-radius: 0.75rem;
         border: 1px solid rgba(255,255,255,0.12);
@@ -1180,6 +1190,19 @@ def ui_shell(request: Request) -> str:
       </section>
       <section class="skills-panel">
         <div class="panel-header">
+          <h2>Runtime Skills</h2>
+          <span class="subtle">Catalog, prompt preview, and conversation activation</span>
+        </div>
+        <div class="toolbar" style="margin-bottom: 0.9rem;">
+          <input id="runtime-skill-search" type="text" placeholder="Search runtime skills…" />
+          <button id="runtime-skill-search-button" type="button">Search</button>
+          <button id="runtime-skill-reset-button" class="secondary" type="button">Reset</button>
+        </div>
+        <div id="runtime-skill-detail" class="detail-card hidden"></div>
+        <div id="runtime-skills"><div class="loading-state">Loading…</div></div>
+      </section>
+      <section class="skills-panel">
+        <div class="panel-header">
           <h2>Capabilities</h2>
           <span class="subtle">Global routing kill switches</span>
         </div>
@@ -1192,17 +1215,23 @@ def ui_shell(request: Request) -> str:
         bots: "No bots connected yet. Start a bot in registry mode and it will appear here.<br><code>./scripts/app/guided_start.sh</code>",
         conversations: "No conversations yet. Send a message to your bot in Telegram to start.",
         tasks: "No routed tasks yet. Delegated tasks appear here in real time.",
+        runtimeSkills: "No runtime skills matched the current filter.",
         capabilities: "No capabilities declared yet. Connect bots with advertised capabilities and they will appear here.",
       }};
+      const REGISTRY_UI_ACTOR_KEY = "reg:ui";
       let bootstrapData = {{ bots: [], conversations: [], tasks: [] }};
       let usageSummary = {{ daily_total: {{ prompt_tokens: 0, completion_tokens: 0, cost_usd: 0 }}, by_conversation: [] }};
       let bootstrapLoaded = false;
+      let runtimeSkillsLoaded = false;
       let capabilitiesLoaded = false;
       let lastSuccessfulLoad = 0;
       let currentDetailKind = "";
       let currentDetailId = "";
       let currentConversationId = "";
       let currentConversationDetail = null;
+      let runtimeCatalog = [];
+      let currentRuntimeSkillDetail = null;
+      let currentRuntimeSkillPreview = null;
       const delegationActionState = Object.create(null);
       const delegationActionError = Object.create(null);
       var _convSearchTimer = null;
@@ -1552,6 +1581,241 @@ def ui_shell(request: Request) -> str:
         }});
       }}
 
+      function renderRuntimeSkillDetail(detail, preview = null) {{
+        const panel = document.getElementById("runtime-skill-detail");
+        if (!panel) return;
+        if (!detail) {{
+          panel.classList.add("hidden");
+          panel.innerHTML = "";
+          return;
+        }}
+        const requirements = (detail.requirement_keys || []).length
+          ? escapeHtml(detail.requirement_keys.join(", "))
+          : "None";
+        const providers = (detail.providers || []).length
+          ? detail.providers.map(provider => `
+              <button type="button" class="secondary" data-runtime-skill-preview="${{escapeHtml(detail.name)}}" data-provider-name="${{escapeHtml(provider)}}">
+                Preview ${{escapeHtml(provider)}}
+              </button>
+            `).join("")
+          : '<span class="subtle">No provider-specific preview available.</span>';
+        const actionButtons = detail.is_installed
+          ? `
+              <button type="button" class="secondary" data-runtime-skill-update="${{escapeHtml(detail.name)}}">Update</button>
+              <button type="button" class="danger" data-runtime-skill-uninstall="${{escapeHtml(detail.name)}}">Uninstall</button>
+            `
+          : `<button type="button" data-runtime-skill-install="${{escapeHtml(detail.name)}}">Install</button>`;
+        const previewBlock = preview
+          ? `
+              <div class="detail-card" style="margin-top: 0.9rem;">
+                <strong>Prompt Preview</strong>
+                <div class="meta"><strong>Provider:</strong> ${{escapeHtml(preview.provider || "")}}</div>
+                <div class="meta"><strong>Prompt weight:</strong> ${{escapeHtml(String(preview.prompt_weight || 0))}}</div>
+                <div class="meta"><strong>Capabilities:</strong> ${{escapeHtml(String(preview.capability_summary || ""))}}</div>
+                <pre class="timeline-body">${{escapeHtml(preview.system_prompt || "")}}</pre>
+              </div>
+            `
+          : "";
+        panel.classList.remove("hidden");
+        panel.innerHTML = `
+          <strong>${{escapeHtml(detail.display_name || detail.name)}}</strong>
+          <div class="meta"><strong>Slug:</strong> ${{escapeHtml(detail.name)}}</div>
+          <div class="meta"><strong>Source:</strong> ${{escapeHtml(detail.source || "unknown")}}</div>
+          <div class="meta"><strong>Requirements:</strong> ${{requirements}}</div>
+          <div class="meta"><strong>Description:</strong> ${{escapeHtml(detail.description || "No description provided.")}}</div>
+          <pre class="timeline-body">${{escapeHtml(detail.body || "")}}</pre>
+          <div class="toolbar" style="margin-top: 0.75rem;">${{actionButtons}}${{providers}}</div>
+          ${{previewBlock}}
+        `;
+        panel.querySelectorAll("[data-runtime-skill-preview]").forEach(node => {{
+          node.addEventListener("click", () => previewRuntimeSkill(node.dataset.providerName, node.dataset.runtimeSkillPreview));
+        }});
+        panel.querySelectorAll("[data-runtime-skill-install]").forEach(node => {{
+          node.addEventListener("click", () => installRuntimeSkill(node.dataset.runtimeSkillInstall));
+        }});
+        panel.querySelectorAll("[data-runtime-skill-update]").forEach(node => {{
+          node.addEventListener("click", () => updateRuntimeSkill(node.dataset.runtimeSkillUpdate));
+        }});
+        panel.querySelectorAll("[data-runtime-skill-uninstall]").forEach(node => {{
+          node.addEventListener("click", () => uninstallRuntimeSkill(node.dataset.runtimeSkillUninstall));
+        }});
+      }}
+
+      function renderRuntimeSkills(items) {{
+        const container = document.getElementById("runtime-skills");
+        if (!container) return;
+        if (!items.length) {{
+          container.innerHTML = `<div class="empty-state">${{EMPTY_STATES.runtimeSkills}}</div>`;
+          return;
+        }}
+        container.innerHTML = `
+          <table class="skills-table">
+            <thead>
+              <tr>
+                <th>Skill</th>
+                <th>Source</th>
+                <th>Providers</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${{
+                items.map(item => {{
+                  const providers = (item.providers || []).length
+                    ? escapeHtml(item.providers.join(", "))
+                    : '<span class="skill-empty">(generic)</span>';
+                  const status = item.is_installed
+                    ? (item.is_managed ? "Installed" : "Available")
+                    : "Not installed";
+                  const rowAction = item.is_installed
+                    ? `<button type="button" class="secondary" data-runtime-skill-update="${{escapeHtml(item.name)}}">Update</button>
+                       <button type="button" class="danger" data-runtime-skill-uninstall="${{escapeHtml(item.name)}}">Uninstall</button>`
+                    : `<button type="button" data-runtime-skill-install="${{escapeHtml(item.name)}}">Install</button>`;
+                  return `
+                    <tr>
+                      <td>
+                        <strong>${{escapeHtml(item.display_name || item.name)}}</strong>
+                        <div class="meta">${{escapeHtml(item.description || "")}}</div>
+                      </td>
+                      <td>${{escapeHtml(item.source || "")}}</td>
+                      <td>${{providers}}</td>
+                      <td>${{escapeHtml(status)}}</td>
+                      <td>
+                        <div class="toolbar">
+                          <button type="button" class="secondary" data-runtime-skill-detail="${{escapeHtml(item.name)}}">Details</button>
+                          ${{rowAction}}
+                        </div>
+                      </td>
+                    </tr>
+                  `;
+                }}).join("")
+              }}
+            </tbody>
+          </table>
+        `;
+        container.querySelectorAll("[data-runtime-skill-detail]").forEach(node => {{
+          node.addEventListener("click", () => loadRuntimeSkillDetail(node.dataset.runtimeSkillDetail));
+        }});
+        container.querySelectorAll("[data-runtime-skill-install]").forEach(node => {{
+          node.addEventListener("click", () => installRuntimeSkill(node.dataset.runtimeSkillInstall));
+        }});
+        container.querySelectorAll("[data-runtime-skill-update]").forEach(node => {{
+          node.addEventListener("click", () => updateRuntimeSkill(node.dataset.runtimeSkillUpdate));
+        }});
+        container.querySelectorAll("[data-runtime-skill-uninstall]").forEach(node => {{
+          node.addEventListener("click", () => uninstallRuntimeSkill(node.dataset.runtimeSkillUninstall));
+        }});
+      }}
+
+      async function loadRuntimeSkills(query = "") {{
+        const suffix = query ? `?q=${{encodeURIComponent(query)}}` : "";
+        const response = await fetch(`/v1/catalog/skills${{suffix}}`, {{
+          headers: authHeaders(),
+        }});
+        if (!response.ok) {{
+          throw new Error(await response.text() || "Failed to load runtime skills.");
+        }}
+        const payload = await response.json();
+        runtimeCatalog = Array.isArray(payload.skills) ? payload.skills : [];
+        runtimeSkillsLoaded = true;
+        renderRuntimeSkills(runtimeCatalog);
+        if (currentConversationDetail && currentConversationDetail.conversation) {{
+          renderConversationDetail(
+            currentConversationDetail.conversation,
+            currentConversationDetail.events || [],
+            currentConversationDetail.skillState || null,
+          );
+        }}
+      }}
+
+      async function loadRuntimeSkillDetail(skillName) {{
+        const response = await fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}`, {{
+          headers: authHeaders(),
+        }});
+        if (!response.ok) {{
+          setStatus(await response.text() || "Failed to load runtime skill detail.");
+          return;
+        }}
+        currentRuntimeSkillDetail = await response.json();
+        currentRuntimeSkillPreview = null;
+        renderRuntimeSkillDetail(currentRuntimeSkillDetail, null);
+      }}
+
+      async function previewRuntimeSkill(providerName, skillName) {{
+        const response = await fetch(`/v1/provider-guidance/${{encodeURIComponent(providerName)}}/preview`, {{
+          method: "POST",
+          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          body: JSON.stringify({{
+            role: "",
+            active_skills: [skillName],
+            compact_mode: false,
+          }}),
+        }});
+        if (!response.ok) {{
+          setStatus(await response.text() || "Preview failed.");
+          return;
+        }}
+        currentRuntimeSkillPreview = await response.json();
+        if (currentRuntimeSkillDetail && currentRuntimeSkillDetail.name === skillName) {{
+          renderRuntimeSkillDetail(currentRuntimeSkillDetail, currentRuntimeSkillPreview);
+        }}
+      }}
+
+      async function installRuntimeSkill(skillName) {{
+        const response = await fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/install`, {{
+          method: "POST",
+          headers: authHeaders(),
+        }});
+        const payload = await response.json();
+        if (!response.ok) {{
+          setStatus(payload.detail || payload.message || "Install failed.");
+          return;
+        }}
+        setStatus(payload.message || `Installed ${{skillName}}.`);
+        await loadRuntimeSkills(document.getElementById("runtime-skill-search")?.value.trim() || "");
+        if (currentRuntimeSkillDetail && currentRuntimeSkillDetail.name === skillName) {{
+          await loadRuntimeSkillDetail(skillName);
+        }}
+        await refreshCurrentDetail();
+      }}
+
+      async function updateRuntimeSkill(skillName) {{
+        const response = await fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/update`, {{
+          method: "POST",
+          headers: authHeaders(),
+        }});
+        const payload = await response.json();
+        if (!response.ok) {{
+          setStatus(payload.detail || payload.message || "Update failed.");
+          return;
+        }}
+        setStatus(payload.message || `Updated ${{skillName}}.`);
+        await loadRuntimeSkills(document.getElementById("runtime-skill-search")?.value.trim() || "");
+        if (currentRuntimeSkillDetail && currentRuntimeSkillDetail.name === skillName) {{
+          await loadRuntimeSkillDetail(skillName);
+        }}
+        await refreshCurrentDetail();
+      }}
+
+      async function uninstallRuntimeSkill(skillName) {{
+        const response = await fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/uninstall`, {{
+          method: "POST",
+          headers: authHeaders(),
+        }});
+        const payload = await response.json();
+        if (!response.ok) {{
+          setStatus(payload.detail || payload.message || "Uninstall failed.");
+          return;
+        }}
+        setStatus(payload.message || `Uninstalled ${{skillName}}.`);
+        await loadRuntimeSkills(document.getElementById("runtime-skill-search")?.value.trim() || "");
+        if (currentRuntimeSkillDetail && currentRuntimeSkillDetail.name === skillName) {{
+          await loadRuntimeSkillDetail(skillName);
+        }}
+        await refreshCurrentDetail();
+      }}
+
       function renderCapabilities(items) {{
         const container = document.getElementById("capabilities");
         if (!container) return;
@@ -1730,11 +1994,63 @@ def ui_shell(request: Request) -> str:
         `;
       }}
 
-      function renderConversationDetail(conversation, events) {{
+      function renderConversationSkills(conversation, skillState) {{
+        if (!runtimeSkillsLoaded) {{
+          return '<div class="detail-card"><strong>Runtime Skills</strong><div class="meta">Loading skill catalog…</div></div>';
+        }}
+        const activeNames = new Set((skillState?.active_skills || []).map(String));
+        const activeDetails = Array.isArray(skillState?.active_skill_details) ? skillState.active_skill_details : [];
+        const activeSummary = activeDetails.length
+          ? activeDetails.map(item => `<span class="badge badge-running">${{escapeHtml(item.display_name || item.name || "")}}</span>`).join(" ")
+          : '<span class="skill-empty">(none active)</span>';
+        const rows = runtimeCatalog.map(skill => {{
+          const active = activeNames.has(skill.name);
+          let actions = `<button type="button" class="secondary" data-runtime-skill-detail="${{escapeHtml(skill.name)}}">Details</button>`;
+          if (active) {{
+            actions += ` <button type="button" class="danger" data-conversation-skill-action="deactivate" data-conversation-id="${{escapeHtml(conversation.conversation_id)}}" data-skill-name="${{escapeHtml(skill.name)}}">Deactivate</button>`;
+          }} else if (skill.is_installed) {{
+            actions += ` <button type="button" data-conversation-skill-action="activate" data-conversation-id="${{escapeHtml(conversation.conversation_id)}}" data-skill-name="${{escapeHtml(skill.name)}}">Activate</button>`;
+          }} else {{
+            actions += ` <button type="button" data-runtime-skill-install="${{escapeHtml(skill.name)}}">Install</button>`;
+          }}
+          return `
+            <tr>
+              <td>
+                <strong>${{escapeHtml(skill.display_name || skill.name)}}</strong>
+                <div class="meta">${{escapeHtml(skill.description || "")}}</div>
+              </td>
+              <td>${{active ? '<span class="skill-status-overridden">Active</span>' : escapeHtml(skill.is_installed ? 'Available' : 'Not installed')}}</td>
+              <td><div class="toolbar">${{actions}}</div></td>
+            </tr>
+          `;
+        }}).join("");
+        const clearButton = activeNames.size
+          ? `<button type="button" class="secondary" data-conversation-skill-action="clear" data-conversation-id="${{escapeHtml(conversation.conversation_id)}}">Clear all</button>`
+          : "";
+        return `
+          <div class="detail-card">
+            <strong>Runtime Skills</strong>
+            <div class="meta"><strong>Active:</strong> ${{activeSummary}}</div>
+            <div class="toolbar" style="margin-top: 0.75rem;">${{clearButton}}</div>
+            <table class="skills-table" style="margin-top: 0.75rem;">
+              <thead>
+                <tr>
+                  <th>Skill</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>${{rows}}</tbody>
+            </table>
+          </div>
+        `;
+      }}
+
+      function renderConversationDetail(conversation, events, skillState = null) {{
         currentDetailKind = "conversation";
         currentDetailId = conversation.conversation_id || "";
         currentConversationId = conversation.conversation_id || "";
-        currentConversationDetail = {{ conversation, events }};
+        currentConversationDetail = {{ conversation, events, skillState }};
         const usage = usageForConversation(conversation.conversation_id);
         const usageTokensLine = usage && (usage.prompt_tokens > 0 || usage.completion_tokens > 0)
           ? `<div class="meta"><strong>Reported tokens:</strong> ${{formatUsageCount(usage.prompt_tokens)}} in / ${{formatUsageCount(usage.completion_tokens)}} out</div>`
@@ -1757,7 +2073,7 @@ def ui_shell(request: Request) -> str:
             ${{usageCostLine}}
           </div>
         `;
-        document.getElementById("conversation-detail-body").innerHTML = events.length
+        const timelineHtml = events.length
           ? `<div id="conversation-detail-timeline" class="timeline">${{events.map((event, index) => `
               <div class="timeline-item">
                 <div class="meta meta-row">
@@ -1774,6 +2090,10 @@ def ui_shell(request: Request) -> str:
               </div>
             `).join("")}}</div>`
           : '<div class="empty-state">No timeline events yet.</div>';
+        document.getElementById("conversation-detail-body").innerHTML = `
+          ${{renderConversationSkills(conversation, skillState)}}
+          ${{timelineHtml}}
+        `;
         document.querySelectorAll("[data-delegation-action]").forEach(node => {{
           node.addEventListener("click", () => submitDelegationAction(
             node.dataset.conversationId,
@@ -1781,21 +2101,36 @@ def ui_shell(request: Request) -> str:
             node.dataset.delegationAction,
           ));
         }});
+        document.querySelectorAll("[data-conversation-skill-action]").forEach(node => {{
+          node.addEventListener("click", () => submitConversationSkillAction(
+            node.dataset.conversationId,
+            node.dataset.conversationSkillAction,
+            node.dataset.skillName || "",
+          ));
+        }});
+        document.querySelectorAll("[data-runtime-skill-detail]").forEach(node => {{
+          node.addEventListener("click", () => loadRuntimeSkillDetail(node.dataset.runtimeSkillDetail));
+        }});
+        document.querySelectorAll("[data-runtime-skill-install]").forEach(node => {{
+          node.addEventListener("click", () => installRuntimeSkill(node.dataset.runtimeSkillInstall));
+        }});
       }}
 
       async function loadConversationDetail(conversationId) {{
         currentConversationId = conversationId;
         try {{
-          const [conversationResponse, timelineResponse] = await Promise.all([
+          const [conversationResponse, timelineResponse, skillsResponse] = await Promise.all([
             fetch(`/v1/ui/conversations/${{conversationId}}`, {{ headers: authHeaders() }}),
             fetch(`/v1/ui/conversations/${{conversationId}}/timeline`, {{ headers: authHeaders() }}),
+            fetch(`/v1/conversations/${{conversationId}}/skills`, {{ headers: authHeaders() }}),
           ]);
-          if (!conversationResponse.ok || !timelineResponse.ok) {{
+          if (!conversationResponse.ok || !timelineResponse.ok || !skillsResponse.ok) {{
             throw new Error("Failed to load conversation detail.");
           }}
           const conversation = await conversationResponse.json();
           const timeline = await timelineResponse.json();
-          renderConversationDetail(conversation, timeline.events || []);
+          const skillState = await skillsResponse.json();
+          renderConversationDetail(conversation, timeline.events || [], skillState);
         }} catch (error) {{
           setStatus(error.message || "Failed to load conversation detail.");
         }}
@@ -1853,6 +2188,9 @@ def ui_shell(request: Request) -> str:
             renderConversations(bootstrapData.conversations || []);
           }}
           renderTasks(bootstrapData.tasks || []);
+          if (!runtimeSkillsLoaded) {{
+            await loadRuntimeSkills();
+          }}
           if (!capabilitiesLoaded) {{
             await loadCapabilities();
           }}
@@ -1914,6 +2252,57 @@ def ui_shell(request: Request) -> str:
         await loadBootstrap();
       }}
 
+      async function submitConversationSkillAction(conversationId, action, skillName = "", confirm = false) {{
+        let endpoint = "";
+        if (action === "activate") {{
+          endpoint = `/v1/conversations/${{conversationId}}/skills/${{encodeURIComponent(skillName)}}/activate`;
+        }} else if (action === "deactivate") {{
+          endpoint = `/v1/conversations/${{conversationId}}/skills/${{encodeURIComponent(skillName)}}/deactivate`;
+        }} else if (action === "clear") {{
+          endpoint = `/v1/conversations/${{conversationId}}/skills/clear`;
+        }} else {{
+          setStatus("Unknown runtime skill action.");
+          return;
+        }}
+        const response = await fetch(endpoint, {{
+          method: "POST",
+          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          body: JSON.stringify({{
+            actor_key: REGISTRY_UI_ACTOR_KEY,
+            confirm,
+          }}),
+        }});
+        const payload = await response.json().catch(() => ({{}}));
+        if (!response.ok) {{
+          setStatus(payload.detail || "Runtime skill update failed.");
+          return;
+        }}
+        if (payload.status === "needs_confirmation" && !confirm) {{
+          const accepted = window.confirm(
+            `Adding ${{skillName}} will increase prompt size to ${{payload.projected_size}} characters. Continue?`
+          );
+          if (accepted) {{
+            await submitConversationSkillAction(conversationId, action, skillName, true);
+          }}
+          return;
+        }}
+        if (payload.status === "needs_setup") {{
+          const requirement = payload.first_requirement?.key || "required credentials";
+          setStatus(`Skill ${{skillName}} needs setup before activation: ${{requirement}}.`);
+          return;
+        }}
+        if (payload.status === "foreign_setup") {{
+          setStatus("Another credential setup flow is already in progress for this conversation.");
+          return;
+        }}
+        setStatus(
+          action === "clear"
+            ? "Conversation runtime skills cleared."
+            : `Skill ${{skillName}}: ${{payload.status}}.`
+        );
+        await loadConversationDetail(conversationId);
+      }}
+
       async function loadCapabilities() {{
         const response = await fetch('/v1/ui/capabilities', {{
           headers: authHeaders(),
@@ -1943,6 +2332,7 @@ def ui_shell(request: Request) -> str:
           renderConversationDetail(
             currentConversationDetail.conversation,
             currentConversationDetail.events || [],
+            currentConversationDetail.skillState || null,
           );
         }}
       }}
@@ -2003,7 +2393,11 @@ def ui_shell(request: Request) -> str:
         delegationActionState[eventId] = action;
         delete delegationActionError[eventId];
         if (currentConversationDetail && currentConversationDetail.conversation.conversation_id === conversationId) {{
-          renderConversationDetail(currentConversationDetail.conversation, currentConversationDetail.events);
+          renderConversationDetail(
+            currentConversationDetail.conversation,
+            currentConversationDetail.events,
+            currentConversationDetail.skillState || null,
+          );
         }}
         const response = await fetch(`/v1/ui/conversations/${{conversationId}}/actions`, {{
           method: "POST",
@@ -2014,14 +2408,22 @@ def ui_shell(request: Request) -> str:
           delete delegationActionState[eventId];
           delegationActionError[eventId] = "Action failed — try again.";
           if (currentConversationDetail && currentConversationDetail.conversation.conversation_id === conversationId) {{
-            renderConversationDetail(currentConversationDetail.conversation, currentConversationDetail.events);
+            renderConversationDetail(
+              currentConversationDetail.conversation,
+              currentConversationDetail.events,
+              currentConversationDetail.skillState || null,
+            );
           }}
           return;
         }}
         delete delegationActionState[eventId];
         delete delegationActionError[eventId];
         if (currentConversationDetail && currentConversationDetail.conversation.conversation_id === conversationId) {{
-          renderConversationDetail(currentConversationDetail.conversation, currentConversationDetail.events);
+          renderConversationDetail(
+            currentConversationDetail.conversation,
+            currentConversationDetail.events,
+            currentConversationDetail.skillState || null,
+          );
         }}
         await loadBootstrap();
       }}
@@ -2033,6 +2435,24 @@ def ui_shell(request: Request) -> str:
       document.getElementById("detail-send-button").addEventListener("click", sendDetailMessage);
       document.getElementById("detail-cancel-button").addEventListener("click", cancelConversation);
       document.getElementById("detail-back-button").addEventListener("click", clearConversationDetail);
+      document.getElementById("runtime-skill-search-button").addEventListener("click", () => {{
+        loadRuntimeSkills(document.getElementById("runtime-skill-search").value.trim()).catch(error => {{
+          setStatus(error.message || "Failed to search runtime skills.");
+        }});
+      }});
+      document.getElementById("runtime-skill-reset-button").addEventListener("click", () => {{
+        document.getElementById("runtime-skill-search").value = "";
+        loadRuntimeSkills().catch(error => {{
+          setStatus(error.message || "Failed to load runtime skills.");
+        }});
+      }});
+      document.getElementById("runtime-skill-search").addEventListener("keydown", event => {{
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        loadRuntimeSkills(document.getElementById("runtime-skill-search").value.trim()).catch(error => {{
+          setStatus(error.message || "Failed to search runtime skills.");
+        }});
+      }});
       var convSearchEl = document.getElementById('conv-search');
       if (convSearchEl) {{
         convSearchEl.addEventListener('input', function() {{

@@ -309,13 +309,26 @@ def test_registry_conversation_skill_activation_surface(monkeypatch, tmp_path: P
     _configure_registry(monkeypatch, tmp_path)
     data_dir = _configure_runtime_surface(monkeypatch, tmp_path)
     client = TestClient(app)
+    _, token = _enroll_and_register(client, "Dev Bot", "dev-bot")
 
     conversation_key = telegram_conversation_key(12345)
+    conversation_id = "telegram:dev-bot:12345"
     session = default_session("claude", {"session_id": "test", "started": False}, "on")
     save_session(data_dir, conversation_key, session)
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": conversation_id,
+            "title": "Telegram chat 12345",
+            "origin_surface": "telegram",
+            "external_id": "12345",
+        },
+    )
+    assert bind.status_code == 200
 
     activate = client.post(
-        f"/v1/conversations/{conversation_key}/skills/code-review/activate",
+        f"/v1/conversations/{conversation_id}/skills/code-review/activate",
         headers={"Authorization": "Bearer ui-secret"},
         json={"actor_key": telegram_actor_key(42)},
     )
@@ -323,19 +336,62 @@ def test_registry_conversation_skill_activation_surface(monkeypatch, tmp_path: P
     assert activate.json()["status"] == "activated"
 
     listed = client.get(
-        f"/v1/conversations/{conversation_key}/skills",
+        f"/v1/conversations/{conversation_id}/skills",
         headers={"Authorization": "Bearer ui-secret"},
     )
     assert listed.status_code == 200
+    assert listed.json()["conversation_key"] == conversation_key
     assert listed.json()["active_skills"] == ["code-review"]
 
     deactivate = client.post(
-        f"/v1/conversations/{conversation_key}/skills/code-review/deactivate",
+        f"/v1/conversations/{conversation_id}/skills/code-review/deactivate",
         headers={"Authorization": "Bearer ui-secret"},
         json={"actor_key": telegram_actor_key(42)},
     )
     assert deactivate.status_code == 200
     assert deactivate.json()["status"] == "removed"
+
+
+def test_registry_conversation_skill_surface_lazy_loads_default_session(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    _configure_runtime_surface(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _, token = _enroll_and_register(client, "Registry Bot", "registry-bot")
+
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": "conv-runtime-1",
+            "title": "Registry runtime conversation",
+            "origin_surface": "registry",
+            "external_id": "conv-runtime-1",
+        },
+    )
+    assert bind.status_code == 200
+
+    listed = client.get(
+        "/v1/conversations/conv-runtime-1/skills",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert listed.status_code == 200
+    assert listed.json()["conversation_key"] == "conv-runtime-1"
+    assert listed.json()["active_skills"] == []
+
+    activate = client.post(
+        "/v1/conversations/conv-runtime-1/skills/code-review/activate",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={"actor_key": "reg:ui"},
+    )
+    assert activate.status_code == 200
+    assert activate.json()["status"] == "activated"
+
+    listed = client.get(
+        "/v1/conversations/conv-runtime-1/skills",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert listed.status_code == 200
+    assert listed.json()["active_skills"] == ["code-review"]
 
 
 def test_registry_catalog_install_and_uninstall(monkeypatch, tmp_path: Path):
@@ -434,6 +490,24 @@ def test_ui_login_with_wrong_password_returns_form_with_error(monkeypatch, tmp_p
     response = client.post("/ui/login", data={"password": "wrong-secret"})
     assert response.status_code == 200
     assert "Incorrect password." in response.text
+
+
+def test_ui_shell_includes_runtime_skills_panel(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    login = client.post(
+        "/ui/login",
+        data={"password": "ui-secret"},
+        follow_redirects=False,
+    )
+    assert login.status_code == 303
+
+    response = client.get("/ui")
+    assert response.status_code == 200
+    assert "Runtime Skills" in response.text
+    assert "runtime-skill-search" in response.text
+    assert "Catalog, prompt preview, and conversation activation" in response.text
 
 
 def test_ui_bootstrap_still_accepts_bearer_token(monkeypatch, tmp_path: Path):

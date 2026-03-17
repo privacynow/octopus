@@ -19,7 +19,15 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.capability_service import CapabilityService
 from app.registry_service.backend import get_registry_store
+from app.registry_service.runtime_surface import get_runtime_surface_context
 from app.registry_service.store_base import AbstractRegistryStore, CapabilityDisabledError
+from app.skill_catalog_service import get_skill_catalog_service
+from app.skill_import_service import get_skill_import_service
+from app.skill_lifecycle_service import get_skill_lifecycle_service
+from app.provider_guidance_service import get_provider_guidance_service
+from app.session_state import session_from_dict, session_to_dict
+from app.skills import derive_encryption_key, get_skill_requirements
+from app.storage import load_session, save_session, session_exists
 
 log = logging.getLogger(__name__)
 _SESSION_TTL_SECONDS = 24 * 60 * 60
@@ -40,6 +48,16 @@ class CreateConversationRequest(BaseModel):
     message_text: str = Field(..., min_length=1, description="Initial message text")
 
 
+class ConversationSkillMutationRequest(BaseModel):
+    actor_key: str = Field(..., min_length=1, description="Actor performing the skill mutation")
+
+
+class ProviderGuidancePreviewRequest(BaseModel):
+    role: str = Field(default="", description="Role/persona text to include")
+    active_skills: list[str] = Field(default_factory=list, description="Active runtime skill slugs")
+    compact_mode: bool = Field(default=False, description="Whether compact-mode instructions should be appended")
+
+
 def _int_value(value: Any) -> int:
     try:
         return int(value or 0)
@@ -52,6 +70,92 @@ def _float_value(value: Any) -> float:
         return float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _runtime_registry_url() -> str:
+    return os.environ.get("BOT_REGISTRY_URL", "").strip()
+
+
+def _provider_names_for_skill_path(path: Path) -> list[str]:
+    providers: list[str] = []
+    if (path / "claude.yaml").is_file():
+        providers.append("claude")
+    if (path / "codex.yaml").is_file():
+        providers.append("codex")
+    return providers
+
+
+def _catalog_skill_summary(name: str) -> dict[str, Any] | None:
+    catalog = get_skill_catalog_service()
+    imports = get_skill_import_service()
+    meta = catalog.catalog().get(name)
+    if meta is None:
+        return None
+    resolved = catalog.resolve_info(name)
+    source = resolved.source if resolved else ""
+    skill_path = resolved.skill_path if resolved else Path()
+    return {
+        "name": name,
+        "display_name": meta.display_name,
+        "description": meta.description,
+        "is_custom": meta.is_custom,
+        "is_managed": imports.is_installed(name),
+        "has_custom_override": imports.has_custom_override(name),
+        "requires_credentials": bool(get_skill_requirements(name)),
+        "providers": _provider_names_for_skill_path(skill_path),
+        "source": source,
+    }
+
+
+def _catalog_skill_detail(name: str) -> dict[str, Any] | None:
+    summary = _catalog_skill_summary(name)
+    if summary is None:
+        return None
+    resolved = get_skill_catalog_service().resolve_info(name)
+    if resolved is None:
+        return summary
+    requirements = get_skill_requirements(name)
+    if requirements:
+        requirement_keys = [item.key for item in requirements]
+    elif resolved.source == "store (not installed)":
+        requirement_keys = get_skill_import_service().requirement_keys(name)
+    else:
+        requirement_keys = []
+    return {
+        **summary,
+        "body": resolved.body,
+        "requirement_keys": requirement_keys,
+        "skill_path": str(resolved.skill_path),
+    }
+
+
+def _runtime_prompt_size_warnings(skill_name: str) -> list[str]:
+    try:
+        context = get_runtime_surface_context()
+    except Exception:
+        return []
+    return get_provider_guidance_service().check_prompt_size_cross_chat(
+        context.config.data_dir,
+        skill_name,
+        context.config.provider_name,
+        context.provider_state_factory,
+        context.config.approval_mode,
+    )
+
+
+def _load_runtime_session_or_404(conversation_key: str):
+    context = get_runtime_surface_context()
+    if not session_exists(context.config.data_dir, conversation_key):
+        raise HTTPException(status_code=404, detail=f"Unknown conversation: {conversation_key}")
+    raw = load_session(
+        context.config.data_dir,
+        conversation_key,
+        context.config.provider_name,
+        context.provider_state_factory,
+        context.config.approval_mode,
+        default_skills=context.config.default_skills,
+    )
+    return context, session_from_dict(raw)
 
 
 def load_settings() -> RegistrySettings:
@@ -367,6 +471,242 @@ def deregister(
         return store.deregister(agent_token)
     except PermissionError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+@app.get("/v1/catalog/skills")
+def catalog_skills(
+    q: str = "",
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    catalog = get_skill_catalog_service().catalog()
+    query = q.strip().lower()
+    skills: list[dict[str, Any]] = []
+    for name, meta in sorted(catalog.items()):
+        if query and query not in name.lower() and query not in meta.display_name.lower() and query not in meta.description.lower():
+            continue
+        item = _catalog_skill_summary(name)
+        if item is not None:
+            skills.append(item)
+    return {"skills": skills}
+
+
+@app.get("/v1/catalog/skills/search")
+def catalog_skill_search(
+    q: str = "",
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    query = q.strip()
+    if len(query) < 2:
+        return {"store": [], "registry": []}
+    imports = get_skill_import_service()
+    store_hits = [
+        {
+            "name": item.name,
+            "display_name": item.display_name,
+            "description": item.description,
+        }
+        for item in imports.bundled_search(query)
+    ]
+    registry_hits: list[dict[str, Any]] = []
+    registry_url = _runtime_registry_url()
+    if registry_url:
+        try:
+            registry_hits = [
+                {
+                    "name": item.name,
+                    "description": item.description,
+                    "publisher": item.publisher,
+                    "version": item.version,
+                }
+                for item in imports.registry_search(registry_url, query)
+            ]
+        except Exception as exc:
+            registry_hits = [{"error": str(exc)[:200]}]
+    return {"store": store_hits, "registry": registry_hits}
+
+
+@app.get("/v1/catalog/skills/{skill_name}")
+def catalog_skill_detail(
+    skill_name: str,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    detail = _catalog_skill_detail(skill_name)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_name}")
+    return detail
+
+
+@app.post("/v1/catalog/skills/{skill_name}/install")
+def catalog_skill_install(
+    skill_name: str,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    imports = get_skill_import_service()
+    if imports.bundled_exists(skill_name):
+        result = imports.install_bundled(skill_name)
+    else:
+        registry_url = _runtime_registry_url()
+        if not registry_url:
+            raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_name}")
+        result = imports.install_from_registry(skill_name, registry_url)
+        if not result.ok:
+            raise HTTPException(status_code=404, detail=result.message)
+    response: dict[str, Any] = {
+        "name": result.name,
+        "ok": result.ok,
+        "message": result.message,
+    }
+    if result.ok:
+        response["prompt_size_warnings"] = _runtime_prompt_size_warnings(skill_name)
+    return response
+
+
+@app.post("/v1/catalog/skills/{skill_name}/uninstall")
+def catalog_skill_uninstall(
+    skill_name: str,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        context = get_runtime_surface_context()
+        default_skills = context.config.default_skills
+    except Exception:
+        default_skills = ()
+    result = get_skill_import_service().uninstall(skill_name, default_skills)
+    if not result.ok:
+        raise HTTPException(status_code=400, detail=result.message)
+    return {"name": result.name, "ok": result.ok, "message": result.message}
+
+
+@app.post("/v1/catalog/skills/{skill_name}/update")
+def catalog_skill_update(
+    skill_name: str,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    result = get_skill_import_service().update(skill_name)
+    if not result.ok:
+        raise HTTPException(status_code=400, detail=result.message)
+    return {
+        "name": result.name,
+        "ok": result.ok,
+        "message": result.message,
+        "prompt_size_warnings": _runtime_prompt_size_warnings(skill_name),
+    }
+
+
+@app.get("/v1/catalog/skills/{skill_name}/diff")
+def catalog_skill_diff(
+    skill_name: str,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    result = get_skill_import_service().diff(skill_name)
+    if not result.ok:
+        raise HTTPException(status_code=400, detail=result.message)
+    return {"name": result.name, "ok": result.ok, "diff": result.message}
+
+
+@app.get("/v1/conversations/{conversation_key:path}/skills")
+def conversation_skills(
+    conversation_key: str,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    _, session = _load_runtime_session_or_404(conversation_key)
+    active = get_skill_lifecycle_service().list_active(session)
+    return {
+        "conversation_key": conversation_key,
+        "active_skills": active,
+        "active_skill_details": [
+            _catalog_skill_summary(name) or {"name": name}
+            for name in active
+        ],
+    }
+
+
+@app.post("/v1/conversations/{conversation_key:path}/skills/{skill_name}/activate")
+def conversation_activate_skill(
+    conversation_key: str,
+    skill_name: str,
+    payload: ConversationSkillMutationRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    context, session = _load_runtime_session_or_404(conversation_key)
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        raise HTTPException(status_code=503, detail="TELEGRAM_BOT_TOKEN is required for registry-driven skill activation")
+    decision = get_skill_lifecycle_service().begin_add(
+        session,
+        user_id=payload.actor_key,
+        skill_name=skill_name,
+        data_dir=context.config.data_dir,
+        encryption_key=derive_encryption_key(token),
+    )
+    if decision.status == "unknown":
+        raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_name}")
+    if decision.mutated:
+        save_session(context.config.data_dir, conversation_key, session_to_dict(session))
+    response: dict[str, Any] = {"status": decision.status}
+    if decision.status == "needs_setup" and decision.first_requirement:
+        response["first_requirement"] = decision.first_requirement
+    if decision.status == "needs_confirmation":
+        response["projected_size"] = decision.projected_size
+        response["prompt_size_threshold"] = decision.prompt_size_threshold
+    if decision.status == "foreign_setup":
+        response["foreign_setup_user"] = decision.foreign_setup.user_id if decision.foreign_setup else ""
+    return response
+
+
+@app.post("/v1/conversations/{conversation_key:path}/skills/{skill_name}/deactivate")
+def conversation_deactivate_skill(
+    conversation_key: str,
+    skill_name: str,
+    payload: ConversationSkillMutationRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    context, session = _load_runtime_session_or_404(conversation_key)
+    decision = get_skill_lifecycle_service().remove(
+        session,
+        user_id=payload.actor_key,
+        skill_name=skill_name,
+    )
+    if decision.status == "foreign_setup":
+        raise HTTPException(status_code=409, detail="credential_setup_in_progress")
+    if decision.mutated:
+        save_session(context.config.data_dir, conversation_key, session_to_dict(session))
+    return {"status": decision.status}
+
+
+@app.post("/v1/conversations/{conversation_key:path}/skills/clear")
+def conversation_clear_skills(
+    conversation_key: str,
+    payload: ConversationSkillMutationRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    context, session = _load_runtime_session_or_404(conversation_key)
+    decision = get_skill_lifecycle_service().clear(session, user_id=payload.actor_key)
+    if decision.status == "foreign_setup":
+        raise HTTPException(status_code=409, detail="credential_setup_in_progress")
+    if decision.mutated:
+        save_session(context.config.data_dir, conversation_key, session_to_dict(session))
+    return {"status": decision.status}
+
+
+@app.post("/v1/provider-guidance/{provider_name}/preview")
+def provider_guidance_preview(
+    provider_name: str,
+    payload: ProviderGuidancePreviewRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    if provider_name not in {"claude", "codex"}:
+        raise HTTPException(status_code=404, detail=f"Unknown provider: {provider_name}")
+    guidance = get_provider_guidance_service()
+    system_prompt = guidance.system_prompt(payload.role, list(payload.active_skills))
+    system_prompt = guidance.apply_compact_mode(system_prompt, payload.compact_mode)
+    return {
+        "provider": provider_name,
+        "system_prompt": system_prompt,
+        "capability_summary": guidance.capability_summary(provider_name, list(payload.active_skills)),
+        "provider_config": guidance.provider_config(provider_name, list(payload.active_skills)),
+        "prompt_weight": len(system_prompt),
+    }
 
 
 @app.get("/ui/login", response_class=HTMLResponse)

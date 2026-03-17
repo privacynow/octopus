@@ -102,8 +102,8 @@ from app.skills import (
     cleanup_codex_scripts,
     SkillRequirement,
 )
-from app.skill_activation_service import get_skill_activation_service
 from app.skill_import_service import get_skill_import_service
+from app.skill_lifecycle_service import get_skill_lifecycle_service
 from app.provider_guidance_service import get_provider_guidance_service
 from app.storage import (
     chat_upload_dir,
@@ -3046,18 +3046,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     await message.delete()
                 except Exception:
                     log.warning("Could not delete credential message for user %d", user_id)
-                setup.remaining.pop(0)
-                if setup.remaining:
-                    next_req = setup.remaining[0]
+                decision = get_skill_lifecycle_service().complete_current_requirement(
+                    session,
+                    user_id=_actor_key(user_id),
+                )
+                if decision.status == "next_requirement" and decision.next_requirement:
                     _save(chat_id, session)
                     await message.reply_text(
-                        format_credential_prompt(next_req),
+                        format_credential_prompt(decision.next_requirement),
                         parse_mode=ParseMode.HTML,
                     )
                 else:
-                    skill_name = setup.skill
-                    session.awaiting_skill_setup = None
-                    get_skill_activation_service().activate(session, skill_name)
+                    skill_name = decision.skill_name or setup.skill
                     _save(chat_id, session)
                     await message.reply_text(
                         f"Skill <code>{html.escape(skill_name)}</code> is ready.",
@@ -3603,7 +3603,7 @@ async def handle_skill_add_callback(event, query) -> None:
             if not already_answered:
                 await query.answer()
             session = _load(chat_id)
-            if get_skill_activation_service().activate(session, name):
+            if get_skill_lifecycle_service().confirm_add(session, name).mutated:
                 _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(
@@ -4087,14 +4087,16 @@ async def _execute_worker_action(
             await surface.reply_text(_msg.cancel_queued_superseded())
             return
         session = _load(runtime_chat)
-        setup = session.awaiting_skill_setup
-        allow_admin_override = source != "telegram" or is_admin(event.user)
-        if setup:
-            if setup.user_id == _actor_key(event.user.id) or allow_admin_override:
-                session.awaiting_skill_setup = None
-                _save(runtime_chat, session)
-                await surface.reply_text(_msg.credential_setup_cancelled())
-                return
+        decision = get_skill_lifecycle_service().cancel_setup(
+            session,
+            user_id=_actor_key(event.user.id),
+            allow_override=(source != "telegram" or is_admin(event.user)),
+        )
+        if decision.status == "cancelled":
+            _save(runtime_chat, session)
+            await surface.reply_text(_msg.credential_setup_cancelled())
+            return
+        if decision.status == "foreign_setup":
             await surface.reply_text(_msg.credential_setup_another_user_in_progress())
             return
         if session.has_pending:
@@ -4518,15 +4520,37 @@ async def _shared_cancel_command(update: Update, event, action: InboundAction) -
     actor_key = _actor_key(event.user.id)
     message = update.effective_message
     session = _load(chat_id)
-    setup = session.awaiting_skill_setup
-    if setup:
-        if setup.user_id == actor_key or is_admin(event.user):
+    decision = get_skill_lifecycle_service().cancel_setup(
+        session,
+        user_id=actor_key,
+        allow_override=is_admin(event.user),
+    )
+    if decision.status == "cancelled":
+        async with _chat_lock(chat_id, message=message, update_id=update.update_id):
+            session = _load(chat_id)
+            decision = get_skill_lifecycle_service().cancel_setup(
+                session,
+                user_id=actor_key,
+                allow_override=is_admin(event.user),
+            )
+            if decision.status == "cancelled":
+                _save(chat_id, session)
+                await message.reply_text(_msg.credential_setup_cancelled())
+                return
+        return
+    if decision.status == "foreign_setup":
+        await message.reply_text(_msg.credential_setup_another_user_in_progress())
+        return
+    if session.awaiting_skill_setup:
+        if session.awaiting_skill_setup.user_id == actor_key or is_admin(event.user):
             async with _chat_lock(chat_id, message=message, update_id=update.update_id):
                 session = _load(chat_id)
-                if session.awaiting_skill_setup and (
-                    session.awaiting_skill_setup.user_id == actor_key or is_admin(event.user)
-                ):
-                    session.awaiting_skill_setup = None
+                decision = get_skill_lifecycle_service().cancel_setup(
+                    session,
+                    user_id=actor_key,
+                    allow_override=is_admin(event.user),
+                )
+                if decision.status == "cancelled":
                     _save(chat_id, session)
                     await message.reply_text(_msg.credential_setup_cancelled())
                     return

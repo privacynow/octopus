@@ -299,6 +299,21 @@ def test_main_calls_run_webhook_in_webhook_mode():
     mock_app.run_polling.assert_not_called()
 
 
+def test_main_allows_shared_runtime_in_webhook_mode():
+    cfg = make_config(
+        runtime_mode="shared",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+        database_url="postgresql://bot:bot@localhost:5432/bot",
+    )
+    mock_app = MagicMock()
+    with _patched_main_runtime(cfg, mock_app):
+        from app.main import main
+
+        main()
+    mock_app.run_webhook.assert_called_once()
+
+
 def test_main_webhook_empty_secret_passes_none():
     """Empty BOT_WEBHOOK_SECRET should pass secret_token=None."""
     cfg = make_config(
@@ -354,10 +369,35 @@ def test_load_config_reads_completion_webhook_url():
         os.unlink(env_path)
 
 
-def test_validate_config_rejects_shared_runtime_mode():
-    """Phase 13: BOT_RUNTIME_MODE=shared is rejected until Phase 18."""
-    errors = validate_config(make_config(runtime_mode="shared"))
-    assert any("shared" in e.lower() and "phase 18" in e.lower() for e in errors)
+def test_validate_config_shared_runtime_requires_webhook_mode():
+    errors = validate_config(make_config(runtime_mode="shared", bot_mode="poll"))
+    assert any("shared" in e.lower() and "requires bot_mode=webhook" in e.lower() for e in errors)
+
+
+def test_validate_config_accepts_shared_runtime_with_webhook_without_database_url():
+    errors = validate_config(
+        make_config(
+            runtime_mode="shared",
+            bot_mode="webhook",
+            webhook_url="https://bot.example.com/webhook",
+            database_url="",
+        )
+    )
+    runtime_errors = [e for e in errors if "runtime" in e.lower()]
+    assert runtime_errors == []
+
+
+def test_validate_config_accepts_shared_runtime_with_webhook_and_database_url():
+    errors = validate_config(
+        make_config(
+            runtime_mode="shared",
+            bot_mode="webhook",
+            webhook_url="https://bot.example.com/webhook",
+            database_url="postgresql://bot:bot@localhost:5432/bot",
+        )
+    )
+    runtime_errors = [e for e in errors if "runtime" in e.lower()]
+    assert runtime_errors == []
 
 
 def test_validate_config_accepts_local_runtime_mode():

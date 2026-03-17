@@ -17,16 +17,27 @@ import logging
 from pathlib import Path
 
 from app import work_queue
-from app.transport import deserialize_inbound, InboundMessage, InboundCommand, InboundCallback
+from app.transport import (
+    InboundAction,
+    InboundCallback,
+    InboundCommand,
+    InboundMessage,
+    deserialize_inbound,
+)
 from app.workflows.results import TransportStateCorruption
 
 log = logging.getLogger(__name__)
 
 # Default interval between queue polls (seconds).
 POLL_INTERVAL = 1.0
+SHARED_POLL_INTERVAL = 0.5
 
 # Maximum items to process per poll cycle before yielding.
 BATCH_SIZE = 10
+
+
+def poll_interval_for_runtime(runtime_mode: str) -> float:
+    return SHARED_POLL_INTERVAL if runtime_mode == "shared" else POLL_INTERVAL
 
 
 async def worker_loop(

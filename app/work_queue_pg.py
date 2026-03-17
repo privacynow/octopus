@@ -18,6 +18,7 @@ from app.workflows.transport_recovery import (
 )
 from app.transport_contract import (
     ApplyResult,
+    CancelRequestResult,
     DiscardResult,
     ReclaimBlocked,
     _validate_work_item_row,
@@ -720,6 +721,74 @@ def cancel_queued_fresh_for_chat(conn, conversation_key: str) -> bool:
             return cur.rowcount > 0
 
 
+def request_cancel(
+    conn,
+    conversation_key: str,
+    actor_key: str,
+    *,
+    cancel_request_event_id: str = "",
+) -> CancelRequestResult:
+    now = datetime.now(timezone.utc).isoformat()
+    with _write_tx(conn):
+        with _cur(conn) as cur:
+            cur.execute(
+                f"""
+                SELECT id, cancel_requested_at FROM {_SCHEMA}.work_items
+                WHERE conversation_key = %s AND state = 'claimed' AND dispatch_mode = 'fresh'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (conversation_key,),
+            )
+            claimed = cur.fetchone()
+            if claimed is not None:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.work_items
+                    SET cancel_requested_at = COALESCE(cancel_requested_at, %s),
+                        cancel_requested_by = %s,
+                        cancel_request_event_id = %s
+                    WHERE id = %s AND state = 'claimed'
+                    """,
+                    (now, actor_key, cancel_request_event_id, claimed["id"]),
+                )
+                return CancelRequestResult.claimed_cancel_requested
+
+            cur.execute(
+                f"""
+                SELECT id FROM {_SCHEMA}.work_items
+                WHERE conversation_key = %s AND state = 'queued' AND dispatch_mode = 'fresh'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (conversation_key,),
+            )
+            queued = cur.fetchone()
+            if queued is not None:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.work_items
+                    SET state = 'failed', completed_at = %s, error = 'cancelled'
+                    WHERE id = %s AND state = 'queued'
+                    """,
+                    (now, queued["id"]),
+                )
+                if cur.rowcount > 0:
+                    return CancelRequestResult.queued_cancelled
+
+        return CancelRequestResult.nothing_to_cancel
+
+
+def is_cancel_requested(conn, item_id: str) -> bool:
+    with _cur(conn) as cur:
+        cur.execute(
+            f"SELECT cancel_requested_at FROM {_SCHEMA}.work_items WHERE id = %s",
+            (item_id,),
+        )
+        row = cur.fetchone()
+    return bool(row and row["cancel_requested_at"])
+
+
 def get_work_items_for_chat(conn, conversation_key: str) -> list[dict[str, Any]]:
     """Return work items for a conversation with id, event_id, state, error, dispatch_mode, kind. Read-only."""
     with _cur(conn) as cur:
@@ -837,7 +906,13 @@ def discard_recovery(conn, item_id: str) -> DiscardResult:
         return DiscardResult.corruption
 
 
-def reclaim_for_replay(conn, item_id: str, worker_id: str) -> dict[str, Any] | None:
+def reclaim_for_replay(
+    conn,
+    item_id: str,
+    worker_id: str,
+    *,
+    ignore_claimed_item_id: str = "",
+) -> dict[str, Any] | None:
     with _write_tx(conn):
         row = _load_work_item_by_id(conn, item_id)
         if row is None or row["state"] != "pending_recovery":
@@ -845,10 +920,20 @@ def reclaim_for_replay(conn, item_id: str, worker_id: str) -> dict[str, Any] | N
         conversation_key = row["conversation_key"]
         _assert_no_invalid_rows_for_conversation(conn, conversation_key)
         with _cur(conn) as cur:
-            cur.execute(
-                f"SELECT 1 FROM {_SCHEMA}.work_items WHERE conversation_key = %s AND state = 'claimed' LIMIT 1",
-                (conversation_key,),
-            )
+            if ignore_claimed_item_id:
+                cur.execute(
+                    f"""
+                    SELECT 1 FROM {_SCHEMA}.work_items
+                    WHERE conversation_key = %s AND state = 'claimed' AND id <> %s
+                    LIMIT 1
+                    """,
+                    (conversation_key, ignore_claimed_item_id),
+                )
+            else:
+                cur.execute(
+                    f"SELECT 1 FROM {_SCHEMA}.work_items WHERE conversation_key = %s AND state = 'claimed' LIMIT 1",
+                    (conversation_key,),
+                )
             has_claimed = cur.fetchone() is not None
         out = _apply_claim_event(
             conn, item_id, "reclaim_for_replay", "pending_recovery", worker_id,
@@ -877,7 +962,8 @@ def recover_stale_claims(conn, current_worker_id: str, max_age_seconds: int = 30
     with _write_tx(conn):
         with _cur(conn) as cur:
             cur.execute(
-                f"SELECT id, state, worker_id, claimed_at, dispatch_mode FROM {_SCHEMA}.work_items WHERE state = 'claimed'"
+                f"SELECT id, state, worker_id, claimed_at, dispatch_mode, cancel_requested_at "
+                f"FROM {_SCHEMA}.work_items WHERE state = 'claimed'"
             )
             rows = cur.fetchall()
         requeued = 0
@@ -906,14 +992,24 @@ def recover_stale_claims(conn, current_worker_id: str, max_age_seconds: int = 30
                         f"{result.disposition} — {result.reason}"
                     )
                 with _cur(conn) as cur:
-                    cur.execute(
-                        f"""
-                        UPDATE {_SCHEMA}.work_items
-                        SET state = %s, worker_id = NULL, claimed_at = NULL, dispatch_mode = 'recovery'
-                        WHERE id = %s AND state = 'claimed' AND worker_id = %s AND claimed_at = %s
-                        """,
-                        (result.new_state, row["id"], row["worker_id"], row["claimed_at"]),
-                    )
+                    if row.get("cancel_requested_at"):
+                        cur.execute(
+                            f"""
+                            UPDATE {_SCHEMA}.work_items
+                            SET state = 'failed', completed_at = %s, error = 'cancelled'
+                            WHERE id = %s AND state = 'claimed' AND worker_id = %s AND claimed_at = %s
+                            """,
+                            (now.isoformat(), row["id"], row["worker_id"], row["claimed_at"]),
+                        )
+                    else:
+                        cur.execute(
+                            f"""
+                            UPDATE {_SCHEMA}.work_items
+                            SET state = %s, worker_id = NULL, claimed_at = NULL, dispatch_mode = 'recovery'
+                            WHERE id = %s AND state = 'claimed' AND worker_id = %s AND claimed_at = %s
+                            """,
+                            (result.new_state, row["id"], row["worker_id"], row["claimed_at"]),
+                        )
                     if cur.rowcount > 0:
                         requeued += 1
                         continue

@@ -5,10 +5,6 @@ from __future__ import annotations
 import logging
 
 from app import work_queue
-from app.agents.delegation import (
-    handle_delegation_approve,
-    handle_delegation_cancel,
-)
 from app.agents.orchestration import (
     apply_routed_result,
     build_resume_prompt,
@@ -17,6 +13,7 @@ from app.agents.orchestration import (
 )
 from app.agents.bridge import (
     admit_registry_delivery,
+    build_registry_action_envelope,
     build_registry_message_delivery,
     conversation_key_for_ref,
     publish_timeline_event,
@@ -24,12 +21,51 @@ from app.agents.bridge import (
 from app.agents.types import RoutedTaskResult
 from app.config import BotConfig
 from app.transports import factory
+from app.transports.admission import enqueue_inbound_envelope, record_inbound_envelope
 
 log = logging.getLogger(__name__)
 
 
+def _registry_semantic_action(
+    *,
+    conversation_ref: str,
+    action: str,
+    payload: dict[str, object],
+    delivery_id: str,
+):
+    semantic = {
+        "approve": "approve_pending",
+        "reject": "reject_pending",
+        "cancel": "cancel_conversation",
+        "retry_skip": "retry_skip",
+        "retry_allow": "retry_allow",
+        "approve_delegation": "delegation_approve",
+        "cancel_delegation": "delegation_cancel",
+        "recovery_discard": "recovery_discard",
+        "recovery_replay": "recovery_replay",
+    }.get(action)
+    if not semantic:
+        return None
+
+    params = dict(payload)
+    if semantic in {"recovery_discard", "recovery_replay"}:
+        update_id = int(payload.get("update_id") or 0)
+        if update_id <= 0:
+            return None
+        params["update_id"] = update_id
+
+    return build_registry_action_envelope(
+        conversation_ref=conversation_ref,
+        action=semantic,
+        action_payload=params,
+        actor_ref=f"registry-ui:{conversation_ref}",
+        delivery_id=delivery_id,
+    )
+
+
 async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object]) -> str:
     kind = str(delivery.get("kind", ""))
+    delivery_id = str(delivery.get("delivery_id", ""))
     if kind in {"surface_input", "routed_task"}:
         return await admit_registry_delivery(config, delivery)
 
@@ -38,16 +74,6 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
         return "rejected"
     from app import telegram_handlers as th
 
-    def _conversation_message(conversation_ref: str):
-        conversation_key = conversation_key_for_ref(conversation_ref)
-        return conversation_key, factory.create_outbound_surface(
-            conversation_ref,
-            config=config,
-            bot=th._bot_instance,
-            conversation_key=conversation_key,
-            source="registry",
-        )
-
     if kind == "surface_action":
         conversation_ref = str(payload.get("conversation_ref", "") or payload.get("conversation_id", ""))
         if not conversation_ref:
@@ -55,47 +81,67 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
         action_payload = payload.get("payload", {})
         if not isinstance(action_payload, dict):
             action_payload = {}
-        chat_id, message = _conversation_message(conversation_ref)
         action = str(payload.get("action", "")).lower()
-        if action == "approve":
-            await th.approve_pending(chat_id, message)
-            return "accepted"
-        if action == "reject":
-            await th.reject_pending(chat_id, message)
-            return "accepted"
+        if action in {"recovery_discard", "recovery_replay"} and "update_id" not in action_payload:
+            action_payload = dict(action_payload)
+            action_payload["update_id"] = payload.get("update_id")
+        envelope = _registry_semantic_action(
+            conversation_ref=conversation_ref,
+            action=action,
+            payload=action_payload,
+            delivery_id=delivery_id,
+        )
+        if envelope is None:
+            return "rejected"
         if action == "cancel":
-            await th.cancel_chat_operation(chat_id, message, actor_user_id=0, allow_admin_override=True)
+            is_new = record_inbound_envelope(config.data_dir, envelope)
+            if not is_new:
+                return "accepted"
+            result = work_queue.request_cancel(
+                config.data_dir,
+                envelope.conversation_key,
+                envelope.actor_key,
+                cancel_request_event_id=envelope.event_id,
+            )
+            if result == work_queue.CancelRequestResult.nothing_to_cancel:
+                work_queue.enqueue_work_item(
+                    config.data_dir,
+                    envelope.conversation_key,
+                    envelope.event_id,
+                )
             return "accepted"
-        if action == "retry_skip":
-            await th.retry_skip_pending(chat_id, message)
-            return "accepted"
-        if action == "retry_allow":
-            await th.retry_allow_pending(chat_id, message)
-            return "accepted"
-        if action == "approve_delegation":
-            await handle_delegation_approve(chat_id, conversation_ref, message)
-            return "accepted"
-        if action == "cancel_delegation":
-            await handle_delegation_cancel(chat_id, conversation_ref, message)
-            return "accepted"
-        if action in {"recovery_discard", "recovery_replay"}:
-            update_id = int(action_payload.get("update_id") or payload.get("update_id") or 0)
-            if update_id <= 0:
-                return "rejected"
-            await th.handle_recovery_action(chat_id, action, update_id, message)
-            return "accepted"
-        return "rejected"
+        enqueue_inbound_envelope(config.data_dir, envelope)
+        return "accepted"
 
     if kind == "control":
         conversation_ref = str(payload.get("conversation_ref", "") or payload.get("conversation_id", ""))
         if not conversation_ref:
             return "rejected"
-        chat_id, message = _conversation_message(conversation_ref)
         action = str(payload.get("action", "")).lower()
-        if action == "cancel":
-            await th.cancel_chat_operation(chat_id, message, actor_user_id=0, allow_admin_override=True)
+        envelope = _registry_semantic_action(
+            conversation_ref=conversation_ref,
+            action=action,
+            payload={},
+            delivery_id=delivery_id,
+        )
+        if envelope is None:
+            return "rejected"
+        is_new = record_inbound_envelope(config.data_dir, envelope)
+        if not is_new:
             return "accepted"
-        return "rejected"
+        result = work_queue.request_cancel(
+            config.data_dir,
+            envelope.conversation_key,
+            envelope.actor_key,
+            cancel_request_event_id=envelope.event_id,
+        )
+        if result == work_queue.CancelRequestResult.nothing_to_cancel:
+            work_queue.enqueue_work_item(
+                config.data_dir,
+                envelope.conversation_key,
+                envelope.event_id,
+            )
+        return "accepted"
 
     if kind == "routed_result":
         routed_task_id = str(payload.get("routed_task_id", ""))

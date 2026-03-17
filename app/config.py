@@ -557,14 +557,15 @@ def validate_config(config: BotConfig) -> list[str]:
         errors.append("BOT_AGENT_POLL_INTERVAL_SECONDS must be greater than 0")
 
     if config.runtime_mode == RuntimeMode.SHARED.value:
-        errors.append(
-            "BOT_RUNTIME_MODE=shared is not supported until Phase 18. "
-            "Use BOT_RUNTIME_MODE=local (default) for Local Runtime."
-        )
+        if config.bot_mode != BotMode.WEBHOOK.value:
+            errors.append(
+                "BOT_RUNTIME_MODE=shared requires BOT_MODE=webhook. "
+                "Shared Runtime uses persist-first webhook ingress; "
+                "polling mode is Local Runtime only."
+            )
     elif config.runtime_mode != RuntimeMode.LOCAL.value:
         errors.append(
-            f"BOT_RUNTIME_MODE must be 'local' or 'shared', got '{config.runtime_mode}'. "
-            "Only 'local' is supported in Phase 13."
+            f"BOT_RUNTIME_MODE must be 'local' or 'shared', got '{config.runtime_mode}'."
         )
 
     if config.bot_mode == BotMode.WEBHOOK.value:

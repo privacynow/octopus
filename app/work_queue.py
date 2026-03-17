@@ -31,6 +31,7 @@ __all__ = [
     "claim_next_any",
     "complete_work_item",
     "discard_recovery",
+    "debug_transport_connection",
     "enqueue_work_item",
     "fail_work_item",
     "get_queue_snapshot",
@@ -52,6 +53,7 @@ __all__ = [
     "record_usage",
     "record_update",
     "recover_stale_claims",
+    "reset_transport_store_for_test",
     "clear_worker_heartbeat",
     "set_user_access",
     "supersede_pending_recovery",
@@ -72,6 +74,16 @@ def close_transport_db(data_dir: Path) -> None:
 
 def close_all_transport_db() -> None:
     _store().close_all_transport_db()
+
+
+def debug_transport_connection(data_dir: Path):
+    """Return a backend-specific transport-store inspection handle. Tests only."""
+    return _store().debug_connection(data_dir)
+
+
+def reset_transport_store_for_test(data_dir: Path) -> None:
+    """Tests only: close and reset the transport store for this data dir."""
+    _store().reset_db_for_test(data_dir)
 
 
 def record_and_admit_message(

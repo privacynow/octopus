@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app import runtime_backend
 from app import work_queue
 from app.agents.bridge import conversation_key_for_ref
 from app.identity import telegram_conversation_key, telegram_actor_key, telegram_event_id
@@ -238,7 +237,7 @@ async def test_simulator_recovery_notice_no_provider_call():
             data_dir, _event(9001), _conv(12345), _actor(42), "message",
             payload='{"actor_key": "tg:42", "username": "", "conversation_key": "tg:12345", "text": "recovered"}',
         )
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "INSERT INTO work_items (id, conversation_key, event_id, state, created_at, dispatch_mode) VALUES (?, ?, ?, 'queued', ?, 'recovery')",

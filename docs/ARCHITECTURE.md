@@ -993,7 +993,7 @@ Runtime durability, crash, and recovery proof remains separate E2E work.
 
 ### Health, admin, and provider notes
 
-**doctor.py**
+**runtime_health.py**
 
 - shared health orchestration for Telegram `/doctor`, CLI `--doctor`, and
   registry mirroring

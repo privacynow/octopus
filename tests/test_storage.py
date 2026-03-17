@@ -6,12 +6,13 @@ from pathlib import Path
 
 from app.identity import telegram_conversation_key
 from app.storage import (
-    _reset_db,
     build_upload_path,
     default_session,
+    debug_session_connection,
     ensure_data_dirs,
     is_image_path,
     load_session,
+    reset_db_for_test,
     resolve_allowed_path,
     sanitize_filename,
     list_sessions,
@@ -116,7 +117,7 @@ def test_session_management():
         assert fresh["provider"] == "codex"
         assert fresh["provider_state"]["thread_id"] is None
 
-        _reset_db(data_dir)
+        reset_db_for_test(data_dir)
 
 
 # -- resolve_allowed_path --
@@ -149,7 +150,7 @@ def test_build_upload_path():
         path = build_upload_path(data_dir, telegram_conversation_key(42), "photo.jpg")
         assert str(path).startswith(str(data_dir / "uploads" / "42"))
         assert path.name.endswith("_photo.jpg")
-        _reset_db(data_dir)
+        reset_db_for_test(data_dir)
 
 
 # -- list_sessions --
@@ -190,7 +191,7 @@ def test_list_sessions():
         assert s111["provider"] == "claude"
         assert s111["has_pending"] is False
 
-        _reset_db(data_dir)
+        reset_db_for_test(data_dir)
 
 
 # -- JSON file migration --
@@ -247,7 +248,7 @@ def test_json_file_migration():
         result = list_sessions(data_dir)
         assert len(result) == 2
 
-        _reset_db(data_dir)
+        reset_db_for_test(data_dir)
 
 
 # -- Session/upload isolation (from test_high_risk.py) --
@@ -375,7 +376,7 @@ def test_load_session_corrupt_provider_state_falls_back_to_defaults():
         assert loaded["provider_state"]["session_id"] == "new"
         # Prove the row was actually found and partially loaded (not a fresh/empty session)
         assert loaded["created_at"] == s["created_at"], "session row was not read — test is blind"
-        _reset_db(data_dir)
+        reset_db_for_test(data_dir)
 
 
 def test_created_at_preserved_on_resave():
@@ -405,7 +406,7 @@ def test_created_at_preserved_on_resave():
             "on",
         )
         assert reloaded["created_at"] == original_created
-        _reset_db(data_dir)
+        reset_db_for_test(data_dir)
 
 
 def test_falsy_created_at_normalized_on_save():
@@ -426,7 +427,7 @@ def test_falsy_created_at_normalized_on_save():
         )
         assert loaded["created_at"] != "", "falsy created_at was not normalized on save"
         assert len(loaded["created_at"]) > 10, "created_at should be an ISO timestamp"
-        _reset_db(data_dir)
+        reset_db_for_test(data_dir)
 
 
 def test_load_session_non_object_json_falls_back_to_defaults():
@@ -458,4 +459,4 @@ def test_load_session_non_object_json_falls_back_to_defaults():
         )
         assert isinstance(loaded["provider_state"], dict)
         assert loaded["provider"] == "claude"
-        _reset_db(data_dir)
+        reset_db_for_test(data_dir)

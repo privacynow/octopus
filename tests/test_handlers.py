@@ -13,7 +13,7 @@ from app.agents.delivery import handle_registry_delivery
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.providers.base import RunContext, RunResult
 from app.transport import InboundMessage, InboundUser
-from app.storage import default_session, save_session
+from app.storage import debug_session_connection, default_session, save_session
 from app import work_queue
 from tests.support.handler_support import (
     FakeCallbackQuery,
@@ -1204,7 +1204,7 @@ async def test_registry_surface_action_recovery_discard_discards_pending_recover
             data_dir, _event(600), _conv(chat_id), _actor(42), "message",
             payload='{"text": "old message"}',
         )
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id,),
@@ -1249,7 +1249,7 @@ async def test_registry_surface_action_recovery_replay_executes_request():
             data_dir, _event(601), _conv(chat_id), _actor(42), "message",
             payload='{"actor_key": "tg:42", "username": "alice", "conversation_key": "tg:12345", "text": "replay me", "attachments": []}',
         )
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id,),
@@ -1968,13 +1968,13 @@ async def test_doctor_no_stale_warning_for_fresh_sessions():
 
 
 async def test_doctor_missing_data_dir():
-    """collect_doctor_report should not crash when data_dir doesn't exist yet.
+    """collect_runtime_health_report should not crash when data_dir doesn't exist yet.
 
     Reproduces: operator runs --doctor before first bot startup, data_dir
     doesn't exist.  Previously crashed in scan_stale_sessions -> SQLite open.
     """
     import tempfile
-    from app.doctor import collect_doctor_report
+    from app.runtime_health import collect_runtime_health_report
 
     with tempfile.TemporaryDirectory() as tmp:
         missing_dir = Path(tmp) / "not-yet-created"
@@ -1984,24 +1984,26 @@ async def test_doctor_missing_data_dir():
         cfg = make_config(missing_dir)
         prov = FakeProvider("claude")
 
-        report = await collect_doctor_report(cfg, prov)
+        report = await collect_runtime_health_report(cfg, prov)
         assert report is not None
-        assert isinstance(report.errors, list)
-        assert isinstance(report.warnings, list)
+        assert isinstance(report.diagnostics, tuple)
         # Stale session scan should have been skipped entirely
-        stale_msgs = [w for w in report.warnings if "stale" in w.lower()]
+        stale_msgs = [
+            item.message for item in report.diagnostics
+            if item.level == "warning" and "stale" in item.message.lower()
+        ]
         assert len(stale_msgs) == 0
 
 
 async def test_doctor_corrupt_session_db():
-    """collect_doctor_report should report corrupt DB, not crash.
+    """collect_runtime_health_report should report corrupt DB, not crash.
 
     Reproduces: operator's sessions.db gets corrupted (disk error, partial
     write, manual edit).  Previously raised DatabaseError: file is not a
     database, crashing the health command instead of reporting the problem.
     """
     import tempfile
-    from app.doctor import collect_doctor_report
+    from app.runtime_health import collect_runtime_health_report
     from app.storage import close_db
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -2014,13 +2016,21 @@ async def test_doctor_corrupt_session_db():
         prov = FakeProvider("claude")
 
         try:
-            report = await collect_doctor_report(cfg, prov)
+            report = await collect_runtime_health_report(cfg, prov)
             assert report is not None
             # Should have caught the corruption and reported it as an error
-            corruption_errors = [e for e in report.errors if "corrupt" in e.lower() or "database" in e.lower()]
+            corruption_errors = [
+                item.message
+                for item in report.diagnostics
+                if item.level == "error"
+                and ("corrupt" in item.message.lower() or "database" in item.message.lower())
+            ]
             assert len(corruption_errors) >= 1
             # Should NOT have stale session warnings (scan couldn't run)
-            stale_msgs = [w for w in report.warnings if "stale" in w.lower()]
+            stale_msgs = [
+                item.message for item in report.diagnostics
+                if item.level == "warning" and "stale" in item.message.lower()
+            ]
             assert len(stale_msgs) == 0
         finally:
             close_db(data_dir)
@@ -2067,22 +2077,20 @@ async def test_cmd_doctor_corrupt_db_telegram():
 
 
 async def test_doctor_schema_mismatch_cli():
-    """collect_doctor_report should report a newer session DB schema, not crash.
+    """collect_runtime_health_report should report a newer session DB schema, not crash.
 
     Reproduces: operator downgrades the bot, sessions.db has schema_version=99.
     Session store raises RuntimeError which was not caught by the stale session
     scan handler (only sqlite3 exceptions were caught).
     """
     import tempfile
-    from app import runtime_backend
-    from app.doctor import collect_doctor_report
+    from app.runtime_health import collect_runtime_health_report
     from app.storage import close_db, ensure_data_dirs
 
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
-        store = runtime_backend.session_store()
-        conn = store._db(data_dir)
+        conn = debug_session_connection(data_dir)
         conn.execute("UPDATE meta SET value='99' WHERE key='schema_version'")
         conn.commit()
         close_db(data_dir)
@@ -2090,9 +2098,14 @@ async def test_doctor_schema_mismatch_cli():
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
 
-        report = await collect_doctor_report(cfg, prov)
+        report = await collect_runtime_health_report(cfg, prov)
         assert report is not None
-        schema_errors = [e for e in report.errors if "schema" in e.lower() or "newer" in e.lower()]
+        schema_errors = [
+            item.message
+            for item in report.diagnostics
+            if item.level == "error"
+            and ("schema" in item.message.lower() or "newer" in item.message.lower())
+        ]
         assert len(schema_errors) >= 1
 
 
@@ -2103,14 +2116,12 @@ async def test_doctor_schema_mismatch_telegram():
     _load() which hits the session store and raises RuntimeError for schema mismatch.
     """
     import tempfile
-    from app import runtime_backend
     from app.storage import close_db, ensure_data_dirs
 
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
-        store = runtime_backend.session_store()
-        conn = store._db(data_dir)
+        conn = debug_session_connection(data_dir)
         conn.execute("UPDATE meta SET value='99' WHERE key='schema_version'")
         conn.commit()
         close_db(data_dir)

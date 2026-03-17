@@ -1102,7 +1102,7 @@ must document the underlying steps clearly first.
   - `app/db/postgres_migrate.py` for the lightweight SQL runner
   - `app/db/postgres_doctor.py` for connectivity/schema validation
   - `app/storage_pg.py` for session-store implementation
-  - `app/work_queue_pg.py` for transport-store implementation
+  - `app/work_queue_postgres_impl.py` for transport-store implementation
 - Keep the existing SQLite modules as the behavioral reference during bring-up.
   Once Postgres passes the same contract tests, switch the runtime path instead
   of maintaining long-term dual behavior.
@@ -2562,7 +2562,7 @@ Affected code paths:
 - `app/worker.py`
 - `app/work_queue.py`
 - `app/work_queue_sqlite_impl.py`
-- `app/work_queue_pg.py`
+- `app/work_queue_postgres_impl.py`
 - `app/work_queue_sqlite.py`
 - `app/work_queue_postgres.py`
 - `app/db/postgres_migrate.py`
@@ -4156,15 +4156,15 @@ M10E introduced three abstraction violations that leave the Postgres runtime bro
 4. **The transport store contract test was not extended.** `tests/contracts/test_transport_store_contract.py` is the enforcement mechanism that runs every transport method against both backends. New methods were added to the SQLite store without simultaneously adding them to the contract test. The Postgres tests appeared green because they were blind to the new surface — not because the surface was correct.
 
 **Root cause pattern.**
-The M10E implementation read `work_queue_sqlite.py` but not `work_queue_postgres.py` or `work_queue_pg.py`, and did not extend the contract test. Every new method on the transport facade must have: (a) a Postgres implementation, (b) a Postgres migration, and (c) a contract test entry — in the same commit. Without (c), breakage is silent.
+The M10E implementation read `work_queue_sqlite.py` but not `work_queue_postgres.py` or `work_queue_postgres_impl.py`, and did not extend the contract test. Every new method on the transport facade must have: (a) a Postgres implementation, (b) a Postgres migration, and (c) a contract test entry — in the same commit. Without (c), breakage is silent.
 
 **Fix.**
 Seven changes across eight files restore the invariant:
 
 1. `app/access.py` — remove all DB access. Become purely policy.
 2. `app/work_queue_sqlite.py` — fix `get_user_access` to not create `transport.db` when the file is absent (i.e., before the first message arrives on first boot).
-3. `app/work_queue_pg.py` — add `get_user_access_override`, `set_user_access`, `list_user_access` as conn-based functions.
-4. `app/work_queue_postgres.py` — add `get_user_access`, `set_user_access`, `list_user_access` wrapper methods delegating to `work_queue_pg`.
+3. `app/work_queue_postgres_impl.py` — add `get_user_access_override`, `set_user_access`, `list_user_access` as conn-based functions.
+4. `app/work_queue_postgres.py` — add `get_user_access`, `set_user_access`, `list_user_access` wrapper methods delegating to `work_queue_postgres_impl`.
 5. `app/db/migrations/postgres/0003_user_access_usage_log.sql` — new migration adding `user_access` and `usage_log` tables to `bot_runtime`.
 6. `app/telegram_handlers.py` — update the `is_allowed()` wrapper to fetch the override through the facade before calling the pure policy function.
 7. `tests/contracts/test_transport_store_contract.py` — add `user_access` contract cases that run against both SQLite and Postgres.
@@ -4250,7 +4250,7 @@ def get_user_access(self, data_dir: Path, user_id: int) -> str | None:
     return work_queue_sqlite_impl.get_user_access_override(conn, user_id)
 ```
 
-**`app/work_queue_pg.py` — three new conn-based functions**
+**`app/work_queue_postgres_impl.py` — three new conn-based functions**
 
 Add after the existing functions, matching the SQLite impl shape exactly:
 
@@ -4318,7 +4318,7 @@ Add after the existing `purge_old` method, following the exact pattern of every 
 ```python
 def get_user_access(self, data_dir: Path, user_id: int) -> str | None:
     with self._conn() as conn:
-        return work_queue_pg.get_user_access_override(conn, user_id)
+        return work_queue_postgres_impl.get_user_access_override(conn, user_id)
 
 def set_user_access(
     self,
@@ -4329,11 +4329,11 @@ def set_user_access(
     granted_by: int = 0,
 ) -> None:
     with self._conn() as conn:
-        work_queue_pg.set_user_access(conn, user_id, access, reason, granted_by)
+        work_queue_postgres_impl.set_user_access(conn, user_id, access, reason, granted_by)
 
 def list_user_access(self, data_dir: Path) -> list[dict]:
     with self._conn() as conn:
-        return work_queue_pg.list_user_access(conn)
+        return work_queue_postgres_impl.list_user_access(conn)
 ```
 
 **`app/db/migrations/postgres/0003_user_access_usage_log.sql`** (new file)
@@ -4364,7 +4364,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_log_chat ON bot_runtime.usage_log (chat_id)
 CREATE INDEX IF NOT EXISTS idx_usage_log_recorded_at ON bot_runtime.usage_log (recorded_at);
 ```
 
-`usage_log` is added here even though M10B has not been implemented yet, because the migration must exist before the application code that writes to it is deployed. The M10B Postgres implementation (`record_usage`, `get_usage_since` in `work_queue_pg.py` and `work_queue_postgres.py`) will be added as part of M10B.
+`usage_log` is added here even though M10B has not been implemented yet, because the migration must exist before the application code that writes to it is deployed. The M10B Postgres implementation (`record_usage`, `get_usage_since` in `work_queue_postgres_impl.py` and `work_queue_postgres.py`) will be added as part of M10B.
 
 **`app/telegram_handlers.py` — `is_allowed()` wrapper**
 
@@ -4424,7 +4424,7 @@ Import `get_user_access`, `set_user_access`, `list_user_access` from `app.work_q
 
 Add a new rule to the "Repo-Specific Process" section:
 
-> **Transport facade parity rule.** Every new method added to `app/work_queue.py` must land in the same commit as: (a) a `work_queue_pg.py` conn-based implementation, (b) a `PostgresTransportStore` wrapper in `work_queue_postgres.py`, (c) a Postgres migration if the method touches a new table, and (d) a contract test case in `tests/contracts/test_transport_store_contract.py`. If Postgres support is genuinely impossible in the same slice, the method must not be added to the facade or `__all__` until it is — a SQLite-only shortcut in the facade is not acceptable.
+> **Transport facade parity rule.** Every new method added to `app/work_queue.py` must land in the same commit as: (a) a `work_queue_postgres_impl.py` conn-based implementation, (b) a `PostgresTransportStore` wrapper in `work_queue_postgres.py`, (c) a Postgres migration if the method touches a new table, and (d) a contract test case in `tests/contracts/test_transport_store_contract.py`. If Postgres support is genuinely impossible in the same slice, the method must not be added to the facade or `__all__` until it is — a SQLite-only shortcut in the facade is not acceptable.
 
 **Files to change.**
 
@@ -4432,7 +4432,7 @@ Add a new rule to the "Repo-Specific Process" section:
 |---|---|
 | `app/access.py` | Remove `sqlite3`, `Path`, `_db_access_override`; add `is_allowed_user_with_override`; make `is_allowed_user` config-only |
 | `app/work_queue_sqlite.py` | Fix `get_user_access` to not create DB when file absent |
-| `app/work_queue_pg.py` | Add `get_user_access_override`, `set_user_access`, `list_user_access` |
+| `app/work_queue_postgres_impl.py` | Add `get_user_access_override`, `set_user_access`, `list_user_access` |
 | `app/work_queue_postgres.py` | Add `get_user_access`, `set_user_access`, `list_user_access` wrappers |
 | `app/db/migrations/postgres/0003_user_access_usage_log.sql` | New file: `user_access` and `usage_log` tables |
 | `app/telegram_handlers.py` | Update `is_allowed()` to fetch override from facade, call pure policy |
@@ -4444,7 +4444,7 @@ Add a new rule to the "Repo-Specific Process" section:
 - The `record_usage` and `get_usage_since` Postgres implementations — these land in M10B, which also implements the SQLite side. The `usage_log` table is added to the Postgres migration here so the migration is available when M10B deploys.
 - Changes to the approval or recovery flow — `is_allowed` wraps only the user identity check, not work-item state transitions.
 - Registry UI or Telegram command behavior changes — the user-facing behavior of `/allowuser`, `/blockuser`, and `is_allowed` is identical after this refactor.
-- The `usage_log` Postgres methods (`record_usage`, `get_usage_since`) in `work_queue_pg.py` — those are M10B.
+- The `usage_log` Postgres methods (`record_usage`, `get_usage_since`) in `work_queue_postgres_impl.py` — those are M10B.
 
 **Acceptance criteria.**
 
@@ -4664,7 +4664,7 @@ Persist user access grants and blocks in SQLite. Add Telegram admin commands to 
   sync path rather than a direct DB read.
 
 **Files to change.**
-- `app/work_queue_sqlite_impl.py`, `app/work_queue_pg.py` — `user_access` table and access methods in backend-specific transport stores.
+- `app/work_queue_sqlite_impl.py`, `app/work_queue_postgres_impl.py` — `user_access` table and access methods in backend-specific transport stores.
 - `app/access.py` — policy helpers.
 - `app/telegram_handlers.py` — `/allowuser`, `/blockuser`, `/listaccess` handlers.
 
@@ -4860,7 +4860,7 @@ The registry service now mirrors the backend seam used by the bot runtime. A sha
 | Scope | Current files of record |
 |-------|-------------------------|
 | Shipped A/C/D/F | `app/registry_service/app.py`, `app/registry_service/store.py`, `VERSION`, `CHANGELOG.md`, `docs/UPGRADE.md`, `scripts/app/guided_start.sh` |
-| Shipped B-0/E | `app/access.py`, `app/work_queue.py`, `app/work_queue_sqlite.py`, `app/work_queue_sqlite_impl.py`, `app/work_queue_pg.py`, `app/work_queue_postgres.py`, `app/db/migrations/postgres/0003_user_access_usage_log.sql`, `app/telegram_handlers.py`, `tests/contracts/test_transport_store_contract.py` |
+| Shipped B-0/E | `app/access.py`, `app/work_queue.py`, `app/work_queue_sqlite.py`, `app/work_queue_sqlite_impl.py`, `app/work_queue_postgres_impl.py`, `app/work_queue_postgres.py`, `app/db/migrations/postgres/0003_user_access_usage_log.sql`, `app/telegram_handlers.py`, `tests/contracts/test_transport_store_contract.py` |
 | Shipped G | `app/config.py`, `app/webhook.py`, `app/telegram_handlers.py`, `scripts/app/guided_start.sh` |
 | Shipped H | `app/registry_service/app.py`, `app/registry_service/store.py`, `tests/test_registry_skills.py` |
 | Shipped H-2 | `app/registry_service/store_base.py`, `app/registry_service/store_postgres.py`, `app/registry_service/backend.py`, `app/registry_service/store.py` (rename), `app/registry_service/app.py` (import update), `app/db/migrations/postgres/0004_registry.sql`, `tests/contracts/test_registry_store_contract.py` |
@@ -5236,12 +5236,12 @@ Add Postgres migration `0005_neutral_identity.sql` that:
 - Uses `UPDATE ... SET conversation_key = 'tg:' || chat_id::text`
 - Recreates the partial unique index
 
-Update `work_queue_sqlite_impl.py` and `work_queue_pg.py` to use new
+Update `work_queue_sqlite_impl.py` and `work_queue_postgres_impl.py` to use new
 column names. Update `_EXPECTED_COLUMNS` validation. Update all facade
 signatures: `chat_id: int` → `conversation_key: str`,
 `update_id: int` → `event_id: str`, `user_id: int` → `actor_key: str`.
 
-Files: `app/work_queue_sqlite_impl.py`, `app/work_queue_pg.py`,
+Files: `app/work_queue_sqlite_impl.py`, `app/work_queue_postgres_impl.py`,
 `app/work_queue_sqlite.py`, `app/work_queue_postgres.py`,
 `app/work_queue.py`, `app/db/migrations/postgres/0005_neutral_identity.sql`.
 
@@ -5256,7 +5256,7 @@ same migration file).
 
 Files: `app/storage_sqlite.py`, `app/storage_postgres.py`,
 `app/work_queue_sqlite_impl.py` (user_access, usage_log columns),
-`app/work_queue_pg.py` (same), Postgres migration.
+`app/work_queue_postgres_impl.py` (same), Postgres migration.
 
 **Commit 4: Config, access policy, attachment paths.**
 Update `BotConfig`: `allowed_user_ids: set[int]` →
@@ -5553,7 +5553,7 @@ duplicate suppression and operator diagnosis — not for replay.
 | `app/worker.py` | `SHARED_POLL_INTERVAL = 0.5`; cancel-watcher task pattern; pass interval based on runtime mode |
 | `app/work_queue.py` | Add `request_cancel` / `is_cancel_requested` (parity rule) |
 | `app/work_queue_sqlite_impl.py` | Durable cancel columns + migration |
-| `app/work_queue_pg.py` | Same |
+| `app/work_queue_postgres_impl.py` | Same |
 | `app/work_queue_postgres.py` | Same |
 | `app/work_queue_sqlite.py` | Same |
 | `app/db/migrations/postgres/0006_durable_cancel.sql` | Cancel metadata columns |
@@ -5756,7 +5756,7 @@ deployments.
 shared-mode inline commands.
 
 **4. Age-based stale predicate** (`app/work_queue_sqlite_impl.py`,
-`app/work_queue_pg.py`). Change `recover_stale_claims()` so
+`app/work_queue_postgres_impl.py`). Change `recover_stale_claims()` so
 staleness is `claimed_at` age only. Remove the
 `worker_id != current_worker_id` check. Keep the optimistic update
 guard. Keep cancel-aware terminal disposition.
@@ -5770,7 +5770,7 @@ without killing the worker loop. Startup recovery in `main.py`
 also passes `lease_ttl`.
 
 **6. Fresh-message queueing** (`app/work_queue_sqlite_impl.py`,
-`app/work_queue_pg.py`). Change `record_and_admit_message()` from
+`app/work_queue_postgres_impl.py`). Change `record_and_admit_message()` from
 `duplicate | admitted | busy` to `duplicate | admitted | queued`.
 Always insert a fresh queued work item. Return `queued` instead of
 inserting a `failed` / `chat_busy` row. No schema change.
@@ -5796,7 +5796,7 @@ tests.
 | `app/worker.py` | Periodic sweep; accept `lease_ttl` + `sweep_interval` |
 | `app/main.py` | Pass `lease_ttl` to startup recovery and worker task |
 | `app/work_queue_sqlite_impl.py` | Age-based stale predicate; `admitted\|queued` admission |
-| `app/work_queue_pg.py` | Same |
+| `app/work_queue_postgres_impl.py` | Same |
 | `app/work_queue_postgres.py` | Forward `lease_ttl` |
 | `app/work_queue_sqlite.py` | Forward `lease_ttl` |
 | `app/work_queue.py` | Update `record_and_admit_message` docstring |
@@ -5807,7 +5807,7 @@ tests.
 | `tests/contracts/test_transport_store_contract.py` | Age-based stale tests; queueing tests |
 | `tests/test_shared_runtime.py` | Lock bypass; sweep; queueing |
 | `tests/test_work_queue.py` | Replace `chat_busy` assertions |
-| `tests/test_work_queue_pg.py` | Same |
+| `tests/test_work_queue_postgres_impl.py` | Same |
 | `tests/test_workitem_integration.py` | Same |
 | `tests/test_cancel.py` | Queue-aware cancel |
 | `tests/test_handlers.py` | Queued acknowledgement |
@@ -6198,13 +6198,11 @@ Rules:
 
 **What M21D must deliver.**
 
-**1. Replace `DoctorReport` as source of truth** (`app/doctor.py`,
-`app/runtime_health.py`).
+**1. Replace `DoctorReport` as source of truth** (`app/runtime_health.py`).
 Refactor so the canonical product of health collection is
 `RuntimeHealthReport`. Extract current checks into a provider
-implementation. `DoctorReport` becomes a compatibility structure
-produced from the canonical report, or is removed if nothing
-external depends on it. All current rules move into the provider:
+implementation. `DoctorReport` was removed once no production
+or test callers depended on it. All current rules move into the provider:
 - Config validation
 - Provider health (role-aware: `webhook` skips provider-runtime)
 - Managed store health
@@ -6332,7 +6330,6 @@ a projector. One abstraction, many surfaces.
 | File | Change |
 |------|--------|
 | `app/runtime_health.py` | Canonical types + protocols + provider + projector + formatter |
-| `app/doctor.py` | Refactor to delegate to `RuntimeHealthProvider` |
 | `app/main.py` | Webhook owns registry runtime in shared mode |
 | `app/agents/runtime.py` | Collect + attach health report to heartbeat |
 | `app/agents/client.py` | Pass `runtime_health` in heartbeat |
@@ -6366,7 +6363,7 @@ a projector. One abstraction, many surfaces.
       owns all evaluation rules
 - [x] `RuntimeHealthProjector` and `RuntimeHealthFormatter` protocols
       defined
-- [x] `DoctorReport` replaced by or derived from canonical report
+- [x] `DoctorReport` removed; canonical report is the only production source of truth
 - [x] Diagnostic codes are stable and machine-parseable
 - [x] Summary computed once by provider, not recomputed by surfaces
 - [x] Webhook role owns registry runtime in shared+registry mode
@@ -6389,36 +6386,184 @@ a projector. One abstraction, many surfaces.
 
 ###### M21E — Durability confidence and E2E proof
 
-**Problem.** The Shared Runtime path must be proven under crash, restart,
-and concurrent-worker conditions. Without explicit durability tests, the
-transport FSM invariants are asserted only in single-process unit tests.
+**Status: Not started.**
 
-**Fix.**
-- Add Compose E2E tests for Shared Runtime, parameterized for both
-  SQLite and Postgres backends where feasible:
-  - `test_shared_runtime_webhook_persists_before_response`: send a
-    Telegram-like POST to the webhook; verify the update is in the
-    database before any worker claims it. Run against both backends.
-  - `test_shared_runtime_multi_worker_parallel_chats`: send updates for
-    3 different chats; verify all 3 are claimed by (potentially
-    different) workers and all complete. Run against both backends.
-  - `test_shared_runtime_per_chat_serialization`: send 2 updates for
-    the same chat; verify only one is `claimed` at a time; second
-    processes after first completes. Run against both backends.
-  - `test_shared_runtime_worker_crash_recovery`: send an update; kill
-    the worker mid-claim; verify the stale-claim sweep moves the item
-    back to `queued`; another worker picks it up and completes it.
-    Run against both backends.
-  - `test_shared_runtime_rolling_deploy`: start 2 workers; stop one;
-    send updates; verify the remaining worker drains the queue; start
-    the stopped worker; verify it resumes claiming.
-- Add contract tests for lease-TTL recovery to
-  `tests/contracts/test_transport_store_contract.py` — these run
-  against both SQLite and Postgres via the existing parameterized
-  fixture.
+**Problem.** The Shared Runtime path must be proven under crash,
+restart, and concurrent-worker conditions. M21A-D shipped the runtime
+semantics, deployment shape, and observability — but the transport
+FSM invariants and multi-worker queue guarantees are asserted only in
+single-process unit tests and contract tests. There is no proof that
+the full Compose deployment (webhook + workers + shared queue)
+actually works end-to-end under realistic conditions.
 
-**Files:** `tests/e2e/test_compose_shared_runtime.py`,
-`tests/contracts/test_transport_store_contract.py`, tests.
+**Goal.** Prove the Shared Runtime contract under real multi-process
+conditions using Compose E2E tests. Each test starts the full split-
+role stack (webhook + worker containers), sends real HTTP requests to
+the webhook, and asserts on durable state in the shared transport
+store.
+
+**Design constraints.**
+- Tests must run against both SQLite and Postgres backends where
+  feasible. SQLite is the default; Postgres runs when
+  `TEST_DATABASE_URL` or Docker Postgres is available.
+- Tests must not depend on provider auth. Use the stub image
+  (`Dockerfile.runnable`) or a test provider that completes
+  immediately.
+- Tests must be deterministic. No log-scraping as the primary oracle.
+  Assert on transport store state (DB queries or inspecting the shared
+  SQLite file).
+- Cleanup discipline: `docker compose down -v || true` before and
+  after every test.
+- Reuse the existing E2E harness: `bot_image_built` fixture, project
+  isolation, artifact dirs, `_compose_down`, shared override
+  generation.
+
+**What M21E must deliver.**
+
+**1. Compose E2E test file**
+(`tests/e2e/test_compose_shared_runtime.py`, new).
+
+All tests use the M21C split-role Compose shape: `bot-webhook`
+service (webhook role) + `bot-worker` service (worker role). Both
+use the same image. The webhook publishes a port for HTTP POSTs.
+Workers drain the shared queue.
+
+The test harness needs:
+- A way to POST fake Telegram update JSON to the webhook endpoint.
+- A way to query the transport store state. For SQLite: mount the
+  shared volume and open the `transport.db` file directly from the
+  test host. For Postgres: connect to the test Postgres instance.
+- A stub or test provider that completes immediately without real
+  CLI auth. Either use `Dockerfile.runnable` (existing stub image)
+  or set env vars that make the bot use a mock provider.
+
+**2. Test cases.**
+
+`test_shared_runtime_webhook_persists_before_worker_claims`:
+- Start webhook + 1 worker.
+- POST a fake Telegram update to the webhook.
+- Immediately query the transport store: verify the `updates` row
+  exists and a `work_items` row is `queued`.
+- Wait for the worker to claim and complete it (poll state or check
+  logs).
+- Verify the work item reaches terminal state (`done` or `failed`).
+
+`test_shared_runtime_multi_worker_parallel_chats`:
+- Start webhook + 2 workers.
+- POST updates for 3 different conversation keys.
+- Wait for all 3 to reach terminal state.
+- Verify all 3 completed (not stuck in `queued` or `claimed`).
+- Verify at least 2 different `worker_id` values in the completed
+  items (proves parallel claiming).
+
+`test_shared_runtime_per_chat_serialization`:
+- Start webhook + 1 worker.
+- POST 2 updates for the same conversation key in quick succession.
+- Verify both are persisted as `queued`.
+- Verify only one is `claimed` at any given time (poll state during
+  execution or check that the second waits).
+- Verify both eventually reach terminal state in FIFO order.
+
+`test_shared_runtime_worker_crash_recovery`:
+- Start webhook + 1 worker.
+- POST an update. Wait for the worker to claim it.
+- Kill the worker container (`docker compose kill bot-worker`).
+- Wait for `claim_lease_ttl_seconds` to elapse (or set a short TTL
+  like 10s for the test).
+- Start a new worker container.
+- Verify the stale-claim sweep recovers the item to
+  `dispatch_mode='recovery'`.
+- Verify the new worker picks it up (as a recovery notice, not
+  auto-rerun — the item should reach `pending_recovery` or be
+  re-dispatched with recovery notice).
+
+`test_shared_runtime_rolling_deploy`:
+- Start webhook + 2 workers.
+- Stop one worker (`docker compose stop bot-worker-1` or scale
+  down to 1).
+- POST updates. Verify the remaining worker drains them.
+- Start the stopped worker (scale back to 2).
+- POST more updates. Verify both workers claim items.
+
+`test_shared_runtime_durable_cancel`:
+- Start webhook + 1 worker.
+- POST a message update. Wait for the worker to claim it.
+- POST a `/cancel` command update (or directly set the durable
+  cancel flag via DB).
+- Verify the worker detects the cancel and the item reaches
+  terminal state.
+
+**3. Contract test additions**
+(`tests/contracts/test_transport_store_contract.py`).
+
+Add if not already present:
+- `test_lease_ttl_recovery_age_only` — claim an item, backdate
+  `claimed_at`, sweep with a different worker, verify recovery.
+  Parameterized for both backends.
+- `test_lease_ttl_recovery_does_not_touch_live_claims` — claim an
+  item (fresh `claimed_at`), sweep, verify item stays claimed.
+- `test_durable_cancel_plus_stale_recovery` — claim, set cancel
+  flag, backdate, sweep, verify item goes to `failed`/`cancelled`
+  not `recovery`.
+- `test_queue_fifo_across_multiple_admits` — admit 5 items, claim
+  them one at a time, verify FIFO ordering.
+
+These may already be partially covered by M21B contract tests.
+Check before adding duplicates.
+
+**4. Test utilities.**
+
+Add shared helpers to the E2E test module:
+
+`_post_telegram_update(ctx, chat_id, text, update_id)`:
+- POST a minimal Telegram update JSON to the webhook endpoint.
+- Return the HTTP response.
+
+`_query_work_items(ctx, conversation_key)`:
+- For SQLite: open the shared volume's `transport.db`, query
+  `work_items WHERE conversation_key = ?`.
+- For Postgres: connect and query `bot_runtime.work_items`.
+- Return list of dicts.
+
+`_wait_for_terminal(ctx, conversation_key, timeout)`:
+- Poll `_query_work_items` until all items for the conversation
+  are in terminal state (`done`, `failed`) or timeout.
+
+**Files to change.**
+
+| File | Change |
+|------|--------|
+| `tests/e2e/test_compose_shared_runtime.py` (new) | All Compose E2E tests |
+| `tests/contracts/test_transport_store_contract.py` | Additional lease/cancel/FIFO contract tests if not already present |
+| `docs/plan.md`, `docs/status.md` | Status update |
+
+**What M21E does NOT include.**
+- New runtime code. M21E is tests only.
+- Changes to the transport FSM, claim semantics, or queue behavior.
+- Changes to the deployment shape or Compose files (beyond test
+  overrides).
+- Performance benchmarks or load testing.
+- Chaos engineering beyond single-worker crash recovery.
+
+**Acceptance criteria.**
+- [ ] Compose E2E tests prove webhook-persist-before-claim on both
+      backends
+- [ ] Multi-worker parallel claiming proven with 2+ workers
+- [ ] Per-conversation FIFO serialization proven under concurrent
+      updates
+- [ ] Worker crash recovery proven: stale claim → recovery → new
+      worker picks up
+- [ ] Rolling deploy proven: scale down, verify drain, scale up,
+      verify resume
+- [ ] Durable cancel proven end-to-end
+- [ ] Contract tests cover lease-TTL recovery, cancel+stale, FIFO
+      for both backends
+- [ ] No duplicate contract tests (check M21B coverage first)
+- [ ] All tests use cleanup discipline (down -v before and after)
+- [ ] Tests do not depend on provider auth
+- [ ] Tests assert on transport store state, not log scraping
+- [ ] Full test suite passes
+- [ ] `git diff --check` clean
 
 #### Implementation rules
 

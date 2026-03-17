@@ -40,10 +40,10 @@ def make_provider(config: BotConfig) -> Provider:
 
 
 async def _run_doctor(config: BotConfig, provider: Provider) -> None:
-    from app.doctor import collect_runtime_health, format_doctor_report_lines
+    from app.runtime_health import collect_runtime_health_report, format_runtime_health_for_doctor
 
-    report = await collect_runtime_health(config, provider)
-    for line in format_doctor_report_lines(report):
+    report = await collect_runtime_health_report(config, provider)
+    for line in format_runtime_health_for_doctor(report):
         if line.startswith("FAIL: "):
             print(f"  {line}", file=sys.stderr)
         elif line.startswith("WARN: "):
@@ -289,7 +289,7 @@ def main() -> None:
             _close_runtime_resources(config)
     else:
         # Fail fast if another process is already polling (Telegram allows only one getUpdates per token).
-        from app.doctor import check_polling_conflict
+        from app.runtime_health import check_polling_conflict
         try:
             conflict_msg = asyncio.run(check_polling_conflict(config.telegram_token))
         except Exception as e:

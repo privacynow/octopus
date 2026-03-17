@@ -60,7 +60,11 @@ class SQLiteTransportStore:
         for data_dir in list(self._connections.keys()):
             self.close_transport_db(data_dir)
 
-    def _reset_transport_db(self, data_dir: Path) -> None:
+    def debug_connection(self, data_dir: Path) -> sqlite3.Connection:
+        """Return the SQLite transport connection for tests/diagnostics."""
+        return self._transport_db(data_dir)
+
+    def reset_db_for_test(self, data_dir: Path) -> None:
         """Close and delete the transport database (tests only)."""
         self.close_transport_db(data_dir)
         db_path = data_dir / "transport.db"

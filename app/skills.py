@@ -786,6 +786,35 @@ def estimate_prompt_size(role: str, current_skills: list[str], new_skill: str) -
     prompt = build_system_prompt(role, projected)
     return len(prompt), len(prompt) > PROMPT_SIZE_WARNING_THRESHOLD
 
+
+def check_prompt_size_cross_chat(
+    data_dir: Path,
+    skill_name: str,
+    provider_name: str,
+    provider_state_factory,
+    approval_mode: str,
+) -> list[str]:
+    """Return prompt-size warnings for chats where the named skill is active."""
+    from app.storage import list_sessions, load_session
+
+    warnings: list[str] = []
+    for info in list_sessions(data_dir):
+        active = filter_resolvable_skills(info.get("active_skills", []))
+        if skill_name not in active:
+            continue
+        session_data = load_session(
+            data_dir,
+            info["conversation_key"],
+            provider_name,
+            provider_state_factory,
+            approval_mode,
+        )
+        role = session_data.get("role", "")
+        warning = check_prompt_size(role, active)
+        if warning:
+            warnings.append(f"  Conversation {info['conversation_key']}: {warning}")
+    return warnings
+
 # ---------------------------------------------------------------------------
 # Context builders
 # ---------------------------------------------------------------------------

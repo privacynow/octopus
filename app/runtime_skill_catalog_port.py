@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.skills import SkillRequirement
+from app.skill_types import SkillRequirement
 
 
 @dataclass(frozen=True)

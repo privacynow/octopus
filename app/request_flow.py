@@ -33,8 +33,8 @@ from app.session_state import (
     PendingRetry,
     SessionState,
 )
+from app.skill_types import SkillRequirement
 from app.skills import (
-    SkillRequirement,
     build_credential_env,
     check_credentials,
     load_user_credentials,

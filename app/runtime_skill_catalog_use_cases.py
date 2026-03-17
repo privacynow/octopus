@@ -10,6 +10,7 @@ from app.runtime_skill_catalog_port import (
 )
 from app.skill_catalog_service import get_skill_catalog_service
 from app.skill_import_service import get_skill_import_service
+from app.skill_types import SkillRequirement
 
 
 class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):

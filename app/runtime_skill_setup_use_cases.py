@@ -17,7 +17,8 @@ from app.runtime_skill_setup_port import (
 )
 from app.skill_activation_service import get_skill_activation_service
 from app.skill_lifecycle_service import get_skill_lifecycle_service
-from app.skills import SkillRequirement, save_user_credential, validate_credential
+from app.skill_types import SkillRequirement
+from app.skills import save_user_credential, validate_credential
 from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_cases
 
 

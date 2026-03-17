@@ -4,7 +4,6 @@ import hashlib
 import json
 import re
 import shutil
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,27 +15,12 @@ from app.identity import filesystem_component_for_key, parse_actor_key
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
 from app.providers.base import PreflightContext, RunContext
+from app.skill_types import SkillMeta, SkillRequirement
 
 
 CATALOG_DIR = Path(__file__).resolve().parent.parent / "skills" / "catalog"
 # Custom and managed dirs are set by the store module
 from app.store import CUSTOM_DIR, resolve_object
-
-
-@dataclass(frozen=True)
-class SkillMeta:
-    name: str
-    display_name: str
-    description: str
-    is_custom: bool = False
-
-
-@dataclass(frozen=True)
-class SkillRequirement:
-    key: str
-    prompt: str
-    help_url: str | None = None
-    validate: dict | None = None
 
 
 class _SkillValidateSpecModel(BaseModel):

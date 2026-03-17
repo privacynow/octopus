@@ -7,21 +7,31 @@ not a changelog. Current implementation status
 lives in [status.md](status.md). For setup and day-to-day use, start with
 [README.md](../README.md).
 
-Current shipped baseline: **Phase 20** runs in **Local Runtime**. The product
-now includes the multi-agent registry surfaces while execution still stays
-bot-local. The normal deployment is SQLite-backed with `BOT_DATABASE_URL`
-unset. Postgres is a supported alternate backend for the same runtime contract
-when `BOT_DATABASE_URL` is set. The registry service has its own backend
-interface and selector: SQLite by default via `REGISTRY_DB_PATH`, or Postgres
-via `REGISTRY_DATABASE_URL`. Shared Runtime is not part of the current product
-surface, but the bot-local runtime now already uses surface-neutral durable
-identity keys (`conversation_key`, `event_id`, `actor_key`) across the
-transport and session stores.
+Current shipped baseline: **Phase 20 is complete and Phase 21 runtime
+hardening is in progress**. The product now includes the multi-agent registry
+surfaces while execution still stays bot-local per bot deployment. The normal
+operator path remains Local Runtime with SQLite and `BOT_DATABASE_URL` unset.
+Postgres is a supported alternate backend for the same runtime contract when
+`BOT_DATABASE_URL` is set. The registry service has its own backend interface
+and selector: SQLite by default via `REGISTRY_DB_PATH`, or Postgres via
+`REGISTRY_DATABASE_URL`.
+
+Shared Runtime is no longer just design intent. The runtime contract is now
+shipped in code: surface-neutral durable identity keys
+(`conversation_key`, `event_id`, `actor_key`), persist-first ingress for
+worker-owned interactions, semantic `InboundAction`, durable cancel,
+queue-first admission (`duplicate` / `admitted` / `queued`), and lease-based
+stale recovery are all part of the current bot runtime. What is still not the
+default operator path is Shared Runtime itself. Local Runtime is still the
+simpler default. The reference Shared Runtime deployment shape is now explicit:
+one `BOT_PROCESS_ROLE=webhook` ingress process plus one or more
+`BOT_PROCESS_ROLE=worker` processes, usually started through
+`infra/compose/docker-compose.shared.yml` or
+`./scripts/app/shared_start.sh`.
 
 If you only remember four things, remember these:
 
-- normal provider-starting requests are admitted durably and executed by the
-  worker
+- worker-owned interactions are admitted durably and executed by the worker
 - credential-setup replies stay inline and off-queue
 - one resolved execution context owns execution-scope truth for each request
 - the registry is a control plane for visibility, delivery, and coordination;
@@ -30,7 +40,9 @@ If you only remember four things, remember these:
 Quick orientation:
 
 - **Runtime matrix:** Local Runtime with SQLite is the default. Local Runtime
-  with Postgres is supported. Shared Runtime is future work.
+  with Postgres is supported. Shared Runtime semantics are shipped for both
+  backends, and the split-role deployment path now exists as a separate
+  operator flow.
 - **Bot backend interface and selector:** `app/runtime_backend.py` chooses the
   session and transport implementations. `storage.py` and `work_queue.py` stay
   backend-neutral.
@@ -74,9 +86,10 @@ flowchart LR
     OB["Operator browser"] <--> REG["Registry service<br/>directory, routing, UI"]
     WHK["Operator webhook endpoint"]
 
-    subgraph BOT["Bot process"]
-        MSG["Message intake"]
-        QUEUE["Work queue"]
+    subgraph BOT["Bot deployment"]
+        IN["Ingress + normalization"]
+        QUEUE["Transport store + queue"]
+        WORKER["Worker execution lane"]
         STATE["Session state"]
         FLOW["Request flow"]
         EXEC["Execution context"]
@@ -85,8 +98,9 @@ flowchart LR
         REGSYNC["Registry sync + routed work"]
         WEBHOOK["Completion webhook"]
 
-        MSG --> QUEUE
-        QUEUE --> FLOW
+        IN --> QUEUE
+        QUEUE --> WORKER
+        WORKER --> FLOW
         FLOW --> EXEC
         EXEC --> STATE
         FLOW --> PROV
@@ -95,7 +109,7 @@ flowchart LR
         WEBHOOK --> WHK
     end
 
-    TG <--> MSG
+    TG <--> IN
     REGSYNC <--> REG
     PROV --> CLI["Provider CLI process"]
 ```
@@ -121,16 +135,25 @@ Registry mode adds coordination without changing where code actually runs.
 ### Runtime matrix
 
 - **Local Runtime + SQLite**
-  - default shipped path
+  - default shipped operator path
   - bot runtime uses `sessions.db` and `transport.db`
   - registry service uses `REGISTRY_DB_PATH` unless configured otherwise
 - **Local Runtime + Postgres**
   - supported alternate backend for the same contracts
   - bot runtime uses `BOT_DATABASE_URL`
   - registry service uses `REGISTRY_DATABASE_URL`
-- **Shared Runtime**
-  - not shipped
-  - no execution subsystem is currently shared across bots
+- **Shared Runtime + SQLite**
+  - shipped runtime contract
+  - requires webhook ingress
+  - same-host only: all processes must share one local `BOT_DATA_DIR`
+  - reference deployment uses one webhook service plus scaled worker services
+- **Shared Runtime + Postgres**
+  - shipped runtime contract over `BOT_DATABASE_URL`
+  - requires webhook ingress
+  - reference deployment uses the same split-role shape with Postgres-backed
+    transport/session state
+  - bot-local files such as provider auth, uploads, and local artifacts still
+    need an intentional deployment layout
 
 ### Registry mode and degraded mode
 
@@ -196,7 +219,7 @@ flowchart TB
 
 **Owns**
 
-- `InboundMessage`, `InboundCommand`, and `InboundCallback`
+- `InboundMessage`, `InboundCommand`, `InboundCallback`, and `InboundAction`
 - `serialize_inbound()` / `deserialize_inbound()`
 - `InboundEnvelope`, `ConversationIO`, `EditableMessageHandle`, and
   transport capability contracts
@@ -214,19 +237,22 @@ flowchart TB
   normalized type exists
 - serialized inbound payload JSON is a stable runtime contract across the
   supported backends
+- worker-owned non-message interactions normalize to semantic actions before
+  worker dispatch; the worker should not depend on Telegram command names or
+  callback payload syntax
 - Telegram numeric IDs are edge-local conveniences for PTB calls; durable
   payloads and stores use prefixed text keys instead
-- fresh plain-message admission and worker-owned outbound output already use
-  the project-owned transport interfaces
-- command and callback entrypoints still have some PTB-direct behavior; that
-  limitation is explicit, not hidden
+- worker-owned message/action ingress and worker-owned outbound output already
+  use the project-owned transport interfaces
+- some inline command and callback entrypoints still have PTB-direct behavior;
+  that limitation is explicit, not hidden
 
 ### 2. Work-queue subsystem
 
 **Owner**
 
-- durable admission, claiming, idempotency, queued cancel, and crash recovery
-  for provider-starting work
+- durable admission, claiming, idempotency, cancel, and crash recovery for
+  worker-owned interactions
 
 **Main modules**
 
@@ -254,13 +280,18 @@ flowchart TB
 **Key guarantees**
 
 - duplicate `event_id` delivery is journaled idempotently, not reprocessed
-- fresh provider work is admitted durably and atomically
-- multiple fresh queued provider-starting work items may coexist per
+- worker-owned fresh work is admitted durably and atomically
+- fresh admission uses the durable contract `duplicate`, `admitted`, or
+  `queued`; queueing is acceptance, not reject-and-redeliver fallback
+- multiple fresh queued worker-owned items may coexist per
   conversation key and drain in FIFO order
-- at most one fresh claimed provider-starting work item may exist per
+- at most one fresh claimed worker-owned item may exist per
   conversation key at a time
+- stale claimed work is recovered by lease age, not by foreign worker ID
+- stale non-cancelled work re-enters through replay/discard notice flow; it
+  does not auto-rerun
 - queued fresh work may be cancelled before claim through the queue; claimed
-  work is cancelled cooperatively through the worker-owned live registry
+  work is cancelled cooperatively through the worker-owned cancel bridge
 - `app/work_queue.py` is the backend-neutral owner across SQLite and Postgres
 
 ### 3. Session subsystem
@@ -465,16 +496,16 @@ flowchart TB
 This section is the main narrative path through the system. The rest of the
 document should elaborate these flows, not restate them from scratch.
 
-### Normal request
+### Normal worker-owned interaction
 
-This is the main request data flow through the bot runtime.
+This is the main worker-owned data flow through the bot runtime.
 
 ```mermaid
 flowchart LR
     U["Telegram update"]
     T["Normalize inbound data"]
     A["Check access<br/>and trust tier"]
-    Q["Journal update<br/>and admit work"]
+    Q["Journal update<br/>and admit or queue work"]
     W["Worker claims work item"]
     X["Resolve execution context"]
     R["Apply request rules<br/>credentials, pending state"]
@@ -491,14 +522,23 @@ Execution order in plain language:
 2. authorize the user and resolve trust tier
 3. handle credential-setup replies inline when setup state owns the next
    message
-4. otherwise journal the update and atomically admit or reject fresh work
-5. return promptly from the handler; the worker later claims runnable work
+4. otherwise journal the update and atomically admit or queue fresh
+   worker-owned work
+5. return promptly from the ingress handler or surface adapter; the worker
+   later claims runnable work
 6. load typed session state in the worker-owned path
 7. resolve the execution context
 8. apply business rules using the resolved context
 9. build provider-facing context and invoke the provider
 10. render transport-safe output, persist session and delivery state, save raw
     response history, and deliver any directed artifacts
+
+The process boundary depends on runtime mode, but the durable contract is the
+same:
+
+- in **Local Runtime**, ingress and worker commonly share one process
+- in **Shared Runtime**, webhook ingress persists and returns promptly while
+  worker execution may run in the same or a different process
 
 ### Approval and retry
 
@@ -745,6 +785,7 @@ the document exists to explain.
 
 The following contracts should change only deliberately:
 
+- `InboundAction`
 - `SessionState`
 - `PendingApproval` / `PendingRetry` (including stored `trust_tier`)
 - `ResolvedExecutionContext`
@@ -756,8 +797,8 @@ The following contracts should change only deliberately:
 - pending-validation contract built on `classify_pending_validation()`
 - work-item state machine and `TransportRecoveryMachine` events / guards
 - transport delivery semantics (`event_id` handling, `conversation_key` /
-  `actor_key` identity rules, fresh-admission rules, queued-cancel rules,
-  recovery routing)
+  `actor_key` identity rules, `duplicate|admitted|queued` admission rules,
+  queued-cancel rules, lease-based recovery routing)
 - managed store layout (`objects/`, `refs/`, `custom/`)
 - registry store contract in `app/registry_service/store_base.py`
 - ring-buffer slot format used by expand/collapse callback data
@@ -772,7 +813,7 @@ If you rework the runtime, preserve this order:
 2. journal updates and enforce transport idempotency
 3. handle credential-setup replies inline and off-queue when setup state owns
    the next message
-4. atomically admit or reject fresh provider-starting work
+4. atomically admit or queue fresh worker-owned work
 5. claim runnable work from the worker-owned execution lane
 6. load typed session state
 7. resolve trust tier and execution context
@@ -871,6 +912,8 @@ Current simulator contract (`tests/support/conversation_simulator.py`):
 - does not yet drive all Telegram ingress through `InboundEnvelope`
   end-to-end; plain-message production admission does, but the simulator still
   enters mostly through handler-owned entrypoints
+- does not yet model the split-role Shared Runtime deployment shape; it is an
+  in-process runtime harness, not a multi-process orchestration harness
 
 The remaining gap is explicit:
 
@@ -931,6 +974,10 @@ The suite is organized around contracts, not just features.
    - Compose-based operator-path validation in
      `tests/e2e/test_compose_flows.py`
 
+Current E2E emphasis is still the primary operator path and registry/UI flows,
+with added Shared Runtime orchestration smoke for split roles. Full Shared
+Runtime durability, crash, and recovery proof remains separate E2E work.
+
 **Postgres harness rules**
 
 - Docker is required
@@ -966,10 +1013,16 @@ The bot’s Python dependencies live in **`requirements.txt`**. The normal
 runtime path is Docker, and the same dependency set also supports host-side
 debugging and tests.
 
-- **Current runtime contract:** Local Runtime is the supported deployment mode.
-  Leave `BOT_DATABASE_URL` unset for SQLite (default), or set it to a Postgres
-  DSN to use Postgres as the bot-runtime backend for the same product/runtime
-  contract. The app validates backend compatibility at startup.
+- **Current runtime contract:** Local Runtime remains the default operator
+  path. Shared Runtime is also a shipped runtime mode when
+  `BOT_RUNTIME_MODE=shared` and `BOT_MODE=webhook` are set. Leave
+  `BOT_DATABASE_URL` unset for SQLite (default), or set it to a Postgres DSN
+  to use Postgres as the bot-runtime backend for the same product/runtime
+  contract. The app validates runtime/backend compatibility at startup.
+- **Process roles:** `BOT_PROCESS_ROLE=all|webhook|worker` selects whether one
+  process runs the full Local Runtime shape (`all`), webhook ingress only
+  (`webhook`), or worker execution only (`worker`). Non-`all` roles are a
+  Shared Runtime deployment feature and require `BOT_RUNTIME_MODE=shared`.
 - **Registry control-plane backend:** the registry service is separate from the
   bot runtime. Use `REGISTRY_DB_PATH` for the default SQLite control-plane
   store, or `REGISTRY_DATABASE_URL` for the Postgres control-plane store.
@@ -990,6 +1043,16 @@ debugging and tests.
   `./scripts/app/guided_start.sh` is the main zero-to-running path for SQLite
   Local Runtime. The canonical Compose entrypoints live under
   `infra/compose/docker-compose.yml` and `infra/compose/docker-compose.e2e.yml`.
+- **Shared Runtime operator path:** `./scripts/app/shared_start.sh` starts the
+  reference split-role deployment over
+  `infra/compose/docker-compose.shared.yml`: one `bot-webhook` service and a
+  scalable `bot-worker` service using the same image and durable backend.
+- **SQLite Shared Runtime constraint:** SQLite-backed Shared Runtime is
+  same-host only because all processes must share one local `BOT_DATA_DIR`.
+  That is a deployment rule, not an application-level validation check.
+- **Registry scope in Shared Runtime:** the reference multi-worker Compose flow
+  is currently standalone-focused. Multi-replica registry-runtime polling and
+  heartbeats are not expanded in this deployment slice.
 - **Supported bot image:** the supported Docker path uses a real
   provider-enabled image built from `infra/docker/Dockerfile.bot`.
   `./scripts/provider/build_bot_image.sh` selects the provider-specific target
@@ -1000,8 +1063,9 @@ debugging and tests.
   runtime/auth health before treating the bot as ready.
 - **Host-run bot:** still supported as a secondary fallback/debug path with the
   same Local Runtime contract above the storage interfaces.
-- **Later environments:** staging and production may still choose Local Runtime
-  while Shared Runtime remains future work.
+- **Later environments:** staging and production may choose either Local
+  Runtime or Shared Runtime depending on the deployment tier they want to run;
+  Local Runtime remains the simpler default.
 
 See [README.md](../README.md) for the operator path, and [status.md](status.md)
 for current shipped-state truth.

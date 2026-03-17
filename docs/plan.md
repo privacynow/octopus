@@ -5339,8 +5339,8 @@ Files: `tests/contracts/test_transport_store_contract.py`,
       `conversation_key` JSON keys)
 - [ ] Contract tests pass against both SQLite and Postgres for
       transport store, session store, and registry store
-- [ ] Full test suite passes
-- [ ] `git diff --check` clean
+- [x] Full test suite passes
+- [x] `git diff --check` clean
 
 ---
 
@@ -5867,37 +5867,241 @@ tests.
 - [x] Compose E2E passes
 - [x] `git diff --check` clean
 
-###### M21C — Compose multi-worker orchestration
+###### M21C — Reference Shared Runtime deployment
+
+**Status: Complete.**
 
 **Problem.** There is no reference deployment for multi-worker Shared
-Runtime. Operators need a working Compose file they can `docker compose
-up` and see webhook ingress + multiple workers draining a shared queue.
+Runtime. `app/main.py` always starts webhook/polling, worker loop, and
+registry runtime together. `infra/compose/docker-compose.yml` only
+defines a single `bot` service. M21A/B shipped the runtime semantics;
+M21C ships the deployment shape.
 
-**Fix.**
-- Add `infra/compose/docker-compose.shared.yml` override that:
-  - Sets `BOT_RUNTIME_MODE=shared`, `BOT_MODE=webhook`
-  - Runs the webhook receiver as a service with port exposure
-  - Runs N worker replicas (default 2) as a separate service with
-    `deploy.replicas`
-  - Supports two backend configurations:
-    - **SQLite mode** (default): shared volume mount for the SQLite DB
-      file. All webhook receiver and worker containers mount the same
-      `BOT_DATA_DIR`. No Postgres dependency.
-    - **Postgres mode**: sets `BOT_DATABASE_URL` pointing to the
-      existing Postgres service. No shared volume needed for transport
-      data (sessions and work items live in Postgres).
-  - Adds an Nginx or Caddy reverse proxy in front of webhook receivers
-    (or uses Compose's built-in load balancing if receivers listen on
-    the same port)
-- Add `scripts/app/shared_start.sh` that validates prerequisites,
-  detects backend choice, optionally runs db-bootstrap (Postgres only),
-  sets the Telegram webhook URL, and starts the Compose stack.
-- Update `docs/UPGRADE.md` with Shared Runtime setup instructions for
-  both SQLite and Postgres backends, including the same-host constraint
-  for SQLite Shared Runtime.
+**Goal.** Ship a real, operator-usable Shared Runtime deployment:
+- one webhook ingress process (persists updates, no provider execution)
+- N worker processes (claim and execute from the shared queue)
+- one shared transport backend (SQLite same-host or Postgres)
+- one documented startup command
+- no fake load-balancing assumptions (no `deploy.replicas` for ingress)
+- Local Runtime preserved unchanged
 
-**Files:** `infra/compose/docker-compose.shared.yml`,
-`scripts/app/shared_start.sh`, `docs/UPGRADE.md`, tests.
+**Correction from earlier plan.** The previous plan treated plain
+Docker Compose like a built-in load balancer and proposed N replicas
+of one all-in-one service. That is wrong. `deploy.replicas` with one
+published port assumes Swarm-style routing, not normal `docker compose
+up`. The correct shape is two named services (`bot-webhook` +
+`bot-worker`) using the same image, with worker scaled via
+`--scale bot-worker=N`.
+
+**Process-role split.** Current `app/main.py` is "all roles in one
+process." To run separate webhook and worker containers, add:
+
+- `BOT_PROCESS_ROLE=all|webhook|worker`
+- Default `all` preserves current Local Runtime behavior exactly.
+- `webhook`: run PTB webhook server with persist-first handlers only.
+  Do NOT start worker loop. Do NOT start registry agent runtime. Skip
+  provider auth check if feasible (webhook only persists, never
+  executes).
+- `worker`: initialize runtime globals needed by `worker_dispatch`
+  (`_config`, `_provider`, `_bot_instance` for outbound replies).
+  Start worker loop. Do NOT run PTB webhook/polling server. Registry
+  runtime participation is scoped deliberately (see below).
+- `all`: existing behavior (both ingress and worker in one process).
+
+One binary (`python -m app.main`), role selected by config. The split
+happens in `app/main.py` startup, not in a second binary or parallel
+runtime.
+
+**Why separate services, not replicas.**
+
+- One webhook receiver is enough. Telegram sends updates sequentially
+  per bot. Multiple receivers add routing complexity without benefit.
+- The scaling axis is workers, not receivers.
+- Provider init (Claude/Codex auth) is expensive and unnecessary for
+  a webhook-only process.
+- Worker-only processes don't need a listening port.
+- Named services have distinct log streams, different env vars,
+  different port exposure, and scale via standard `--scale`.
+
+**Registry participation scope.** Today `app/main.py` always starts
+the registry agent runtime alongside the worker loop. Multiple
+`bot-worker` replicas with the same bot identity would cause ambiguous
+registry behavior (multiple processes heartbeating as the same agent).
+
+M21C scope:
+- Shared Runtime reference deployment targets **standalone execution
+  mode** (`BOT_AGENT_MODE=standalone`).
+- If `BOT_AGENT_MODE=registry` is set, multi-replica registry
+  semantics are **not expanded** in this slice. The safe default: only
+  one worker replica runs the registry runtime, or it is skipped in
+  worker role entirely.
+- Full multi-replica registry support is a separate future slice.
+
+**Backend tiers — honest scope.**
+
+SQLite Shared Runtime:
+- Supported. Same host only. All bot containers share the same local
+  `BOT_DATA_DIR`. Not for network filesystems (NFS/EFS).
+
+Postgres Shared Runtime:
+- Transport/session state is network-safe through Postgres.
+- Provider auth, uploads, credentials, and other bot-local files still
+  require the `bot-home` volume.
+- Accurate wording: "transport and session state can be shared across
+  hosts via Postgres; bot-local files (provider auth, uploads) still
+  need an intentional deployment layout."
+- Do not overclaim arbitrary multi-host support.
+
+**What M21C must deliver.**
+
+**1. Process-role config** (`app/config.py`).
+Add `process_role: str` (env `BOT_PROCESS_ROLE`, values `all` /
+`webhook` / `worker`, default `all`). Validation: `webhook` and
+`worker` require `runtime_mode == "shared"`. `all` is valid in both
+modes.
+
+**2. Role-aware startup** (`app/main.py`).
+
+`all`: current behavior unchanged. Zero changes for Local Runtime.
+
+`webhook`:
+- Call `build_application(config, provider)` for handler registration.
+- Start PTB webhook server.
+- Do NOT start `worker_loop` or `agent_runtime_task`.
+- Do NOT call `recover_stale_claims` or `purge_old`.
+- Skip provider health/auth if feasible (ingress never executes).
+
+`worker`:
+- Initialize runtime globals via `build_application` or a shared init
+  helper extracted from it.
+- Call `recover_stale_claims` and `purge_old`.
+- Start `worker_loop` via `start_worker_task`.
+- Start `agent_runtime_task` only if `agent_mode == "registry"` and
+  this is the designated registry worker (not all replicas).
+- Do NOT call `app.run_webhook()` or `app.run_polling()`.
+- Run as an async event loop that keeps tasks alive until
+  SIGTERM/SIGINT.
+
+If `build_application` is too heavy for a specific role, extract a
+shared init helper first — interfaces before implementations. Do not
+create a second `main()` or a parallel runtime stack.
+
+**3. Compose override** (`infra/compose/docker-compose.shared.yml`).
+Override on top of `infra/compose/docker-compose.yml`:
+
+`bot-webhook` service:
+- Same image as `bot`. Env: `BOT_RUNTIME_MODE=shared`,
+  `BOT_MODE=webhook`, `BOT_PROCESS_ROLE=webhook`, webhook
+  listen/port/URL. Publishes webhook port. Mounts `bot-home`.
+
+`bot-worker` service:
+- Same image. Env: `BOT_RUNTIME_MODE=shared`,
+  `BOT_PROCESS_ROLE=worker`. No published ports. Mounts `bot-home`.
+  Scales via `docker compose ... up --scale bot-worker=N`.
+
+No Nginx/Caddy. No `deploy.replicas`.
+
+**4. Startup script** (`scripts/app/shared_start.sh`).
+- Validates `BOT_WEBHOOK_URL` and `BOT_TELEGRAM_TOKEN` non-empty.
+- Detects backend (SQLite or Postgres from `.env.bot`).
+- If Postgres: runs `db-bootstrap` / `db-update` via Compose tools.
+- Sets Telegram webhook via Bot API curl. Checks `"ok": true` in
+  Telegram JSON response, not just HTTP 200. Includes secret token
+  if configured.
+- Starts Compose stack with
+  `--scale bot-worker=${BOT_WORKER_REPLICAS:-2}`.
+- Prints summary: backend mode, replica count, webhook URL, log
+  command, stop command.
+- Reuses `scripts/lib_env.sh` patterns.
+
+**5. Documentation** (`docs/UPGRADE.md`).
+Shared Runtime section: what it means, prerequisites, SQLite mode
+(same-host, shared volume), Postgres mode (honest scope), startup
+command, scaling, verification (distinct worker IDs), same-host
+constraint, how to revert to Local Runtime.
+
+**6. Tests.**
+
+Config (`tests/test_config.py`):
+- `test_process_role_defaults_to_all`
+- `test_process_role_webhook_requires_shared`
+- `test_process_role_worker_requires_shared`
+- `test_process_role_invalid_rejects`
+
+Runtime roles (`tests/test_main_roles.py`, new):
+- `test_webhook_role_does_not_start_worker_loop`
+- `test_worker_role_does_not_start_webhook_server`
+- `test_worker_role_initializes_config_and_provider`
+- `test_all_role_starts_everything`
+
+Compose smoke (`tests/e2e/test_compose_flows.py`):
+- Reuse `bot_image_built` fixture.
+- Generate temp env with role-specific vars.
+- `docker compose down -v || true` before starting (cleanup).
+- Validate the shared Compose service graph (`bot-webhook`, `bot-worker`)
+  under the override.
+- Run bounded startup smoke for each role:
+  - `bot-webhook` must reach webhook-role startup
+  - `bot-worker` must reach worker-role startup seam or truthful provider-auth
+    failure
+- `docker compose down -v` after test.
+- Do not pretend a fake Telegram token proves real ingress-to-worker webhook
+  delivery; that remains part of later durability proof work.
+
+**7. Doc updates** (`docs/plan.md`, `docs/status.md`,
+`docs/ARCHITECTURE.md`). Reflect actual deployment model: Local
+Runtime (all-in-one, default) vs Shared Runtime (split roles, webhook
++ N workers). Remove stale "Shared Runtime is future work" wording.
+
+**Files to change.**
+
+| File | Change |
+|------|--------|
+| `app/config.py` | Add `process_role` field + validation |
+| `app/main.py` | Role-aware startup split |
+| `infra/compose/docker-compose.shared.yml` (new) | Shared override |
+| `scripts/app/shared_start.sh` (new) | Operator startup script |
+| `docs/UPGRADE.md` | Shared Runtime section |
+| `docs/ARCHITECTURE.md` | Deployment model update |
+| `tests/test_config.py` | Role config tests |
+| `tests/test_config.py` | Role config + startup tests |
+| `tests/e2e/test_compose_flows.py` | Shared smoke test |
+| `docs/plan.md`, `docs/status.md` | Status update |
+
+**What M21C does NOT include.**
+- Nginx/Caddy or multi-receiver HA.
+- Kubernetes manifests.
+- Health endpoints or readiness probes (M21D).
+- Crash recovery / durability proof tests (M21E).
+- Worker health reporting (M21D).
+- Multi-replica registry-runtime expansion.
+- Changes to `telegram_handlers.py`, `worker.py`, transport stores,
+  or the transport FSM.
+
+**Acceptance criteria.**
+- [x] `BOT_PROCESS_ROLE=all` preserves current Local Runtime behavior
+- [x] `BOT_PROCESS_ROLE=webhook` starts webhook server only, no
+      worker loop, no registry runtime
+- [x] `BOT_PROCESS_ROLE=worker` starts worker loop only, no
+      webhook/polling server
+- [x] `webhook` and `worker` roles require `runtime_mode == "shared"`
+- [x] Compose override defines `bot-webhook` and `bot-worker` as
+      separate named services with the same image
+- [x] `--scale bot-worker=N` is the documented horizontal-scaling path
+- [x] SQLite shared mode: all containers share the same volume,
+      documented as same-host only
+- [x] Postgres shared mode: `BOT_DATABASE_URL` configures both
+      services, docs do not overclaim multi-host support
+- [x] `shared_start.sh` validates prereqs, detects backend, checks
+      Telegram webhook response `"ok": true`, starts the stack
+- [x] Compose smoke test verifies the split-role Compose graph and bounded
+      webhook/worker startup behavior, with cleanup
+- [x] Docker state cleaned before and after Compose test runs
+- [x] Registry-runtime multi-replica behavior explicitly scoped
+      (standalone-focused or single-registry-worker)
+- [x] Local Runtime is completely unchanged
+- [ ] Full test suite passes
+- [ ] `git diff --check` clean
 
 ###### M21D — Observability and operator health
 

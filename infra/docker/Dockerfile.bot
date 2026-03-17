@@ -1,5 +1,5 @@
 # Supported bot image: real provider-enabled (Claude or Codex CLI in image).
-# Build with: ./scripts/provider/build_bot_image.sh [claude|codex]  (tags telegram-agent-bot:claude | :codex).
+# Build with: ./scripts/provider/build_bot_image.sh [claude|codex]  (tags octopus-agent:claude | :codex).
 # One shared base; provider-specific install in final stage.
 
 FROM python:3.12-slim AS base
@@ -24,7 +24,7 @@ RUN cp /root/.local/bin/claude /usr/local/bin/ 2>/dev/null || true; \
     cp /root/.local/bin/codex /usr/local/bin/ 2>/dev/null || true; \
     which "${BOT_PROVIDER}" || (echo "Provider binary ${BOT_PROVIDER} not in PATH after install" && exit 1)
 
-LABEL org.telegram-agent-bot.provider="${BOT_PROVIDER}"
+LABEL org.octopus-agent.provider="${BOT_PROVIDER}"
 
 # bot user: persistent home for provider auth (Claude/Codex store state in home)
 RUN useradd -m -d /home/bot -u 1000 bot

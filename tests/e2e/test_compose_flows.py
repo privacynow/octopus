@@ -238,7 +238,7 @@ def _wait_for_registry_ready(ctx: dict[str, object], timeout_seconds: int = 30) 
 def compose_ctx(e2e_skip, tmp_path_factory):
     worker = _worker_id()
     run_id = uuid.uuid4().hex[:10]
-    project = f"telegram-agent-bot-e2e-{worker}-{run_id}"
+    project = f"octopus-agent-e2e-{worker}-{run_id}"
     artifacts_dir = tmp_path_factory.mktemp(f"compose-e2e-{worker}")
     env_file = Path(artifacts_dir) / ".env.bot"
     env_file.write_text(
@@ -252,7 +252,7 @@ def compose_ctx(e2e_skip, tmp_path_factory):
         ),
         encoding="utf-8",
     )
-    bot_image = f"telegram-agent-bot-e2e:{worker}-{run_id}-claude"
+    bot_image = f"octopus-agent-e2e:{worker}-{run_id}-claude"
     generated_override = Path(artifacts_dir) / "docker-compose.e2e.generated.yml"
     generated_override.write_text(
         "\n".join(
@@ -478,7 +478,7 @@ def test_compose_postgres_up_without_env_bot(e2e_skip, tmp_path):
     shutil.copy2(os.path.join(REPO_ROOT, "infra/compose/docker-compose.e2e.yml"), compose_e2e)
     env = {
         **os.environ,
-        "COMPOSE_PROJECT_NAME": f"telegram-agent-bot-e2e-clean-{_worker_id()}-{uuid.uuid4().hex[:8]}",
+        "COMPOSE_PROJECT_NAME": f"octopus-agent-e2e-clean-{_worker_id()}-{uuid.uuid4().hex[:8]}",
     }
     cleanup_ctx = {
         "compose_files": ["-f", str(compose_base), "-f", str(compose_e2e)],

@@ -31,7 +31,7 @@ def load_dotenv_file(path: Path) -> dict[str, str]:
 
 
 def env_path_for_instance(instance: str) -> Path:
-    return Path.home() / ".config" / "telegram-agent-bot" / f"{instance}.env"
+    return Path.home() / ".config" / "octopus-agent" / f"{instance}.env"
 
 
 def derive_agent_slug(raw: str, *, fallback: str = "agent") -> str:
@@ -261,7 +261,7 @@ def _parse_projects(raw: str) -> tuple[ProjectBinding, ...]:
 def load_config(instance: str | None = None) -> BotConfig:
     """Load config from env file + environment variables.
 
-    Instance env file: ~/.config/telegram-agent-bot/<instance>.env
+    Instance env file: ~/.config/octopus-agent/<instance>.env
     Environment variables override the file (env file is the base,
     os.environ wins on conflicts).
 
@@ -295,7 +295,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         except ValueError:
             raise SystemExit(f"CONFIG ERROR: {key} must be a number, got '{raw}'")
 
-    default_data = Path.home() / ".telegram-agent-bot" / instance
+    default_data = Path.home() / ".octopus-agent" / instance
 
     extra_dirs_raw = get("BOT_EXTRA_DIRS")
     extra_dirs = tuple(
@@ -446,7 +446,7 @@ def load_config_provider_health() -> BotConfig:
             return float(default)
 
     instance = get("BOT_INSTANCE", "default")
-    default_data = Path.home() / ".telegram-agent-bot" / instance
+    default_data = Path.home() / ".octopus-agent" / instance
     extra_dirs_raw = get("BOT_EXTRA_DIRS")
     extra_dirs = tuple(
         Path(d.strip()) for d in extra_dirs_raw.split(",") if d.strip()

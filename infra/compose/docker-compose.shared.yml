@@ -7,7 +7,7 @@
 
 services:
   bot-webhook:
-    image: telegram-agent-bot:${BOT_PROVIDER:-claude}
+    image: octopus-agent:${BOT_PROVIDER:-claude}
     profiles:
       - bot
     env_file:
@@ -27,7 +27,7 @@ services:
       - "${BOT_WEBHOOK_PORT:-8443}:8443"
 
   bot-worker:
-    image: telegram-agent-bot:${BOT_PROVIDER:-claude}
+    image: octopus-agent:${BOT_PROVIDER:-claude}
     profiles:
       - bot
     env_file:

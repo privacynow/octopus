@@ -6,7 +6,7 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 INSTANCE="${1:-}"
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-CONFIG_DIR="$XDG_CONFIG_HOME/telegram-agent-bot"
+CONFIG_DIR="$XDG_CONFIG_HOME/octopus-agent"
 
 # --- helpers ---
 
@@ -100,15 +100,15 @@ install_systemd() {
         return 1
     fi
     mkdir -p "$XDG_CONFIG_HOME/systemd/user"
-    sed "s|REPO_DIR|$repo_dir|g" "$repo_dir/infra/systemd/telegram-agent-bot@.service" \
-        > "$XDG_CONFIG_HOME/systemd/user/telegram-agent-bot@.service"
+    sed "s|REPO_DIR|$repo_dir|g" "$repo_dir/infra/systemd/octopus-agent@.service" \
+        > "$XDG_CONFIG_HOME/systemd/user/octopus-agent@.service"
     systemctl --user daemon-reload
-    systemctl --user enable --now "telegram-agent-bot@${instance}.service"
+    systemctl --user enable --now "octopus-agent@${instance}.service"
 }
 
 # --- main ---
 
-echo "=== Telegram Agent Bot Setup ==="
+echo "=== Octopus Agent Platform Setup ==="
 echo
 
 # Step 0: prompt for instance name if not given
@@ -148,19 +148,19 @@ if [ -f "$ENV_FILE" ]; then
     echo "  Edit config: \$EDITOR $ENV_FILE"
 
     # Check if already running
-    if systemctl --user is-active --quiet "telegram-agent-bot@${INSTANCE}.service" 2>/dev/null; then
+    if systemctl --user is-active --quiet "octopus-agent@${INSTANCE}.service" 2>/dev/null; then
         echo
         echo "This bot is currently running."
         read -rp "Restart it? [Y/n]: " RESTART || true
         RESTART="${RESTART:-y}"
         if [[ "$RESTART" =~ ^[Yy]$ ]]; then
-            systemctl --user restart "telegram-agent-bot@${INSTANCE}.service"
+            systemctl --user restart "octopus-agent@${INSTANCE}.service"
             sleep 2
-            if systemctl --user is-active --quiet "telegram-agent-bot@${INSTANCE}.service"; then
+            if systemctl --user is-active --quiet "octopus-agent@${INSTANCE}.service"; then
                 echo "Restarted! Bot: @${BOTNAME:-your bot}"
             else
                 echo "Restart may have failed. Check with:"
-                echo "  journalctl --user -u telegram-agent-bot@${INSTANCE}.service -f"
+                echo "  journalctl --user -u octopus-agent@${INSTANCE}.service -f"
             fi
         fi
     else
@@ -176,11 +176,11 @@ if [ -f "$ENV_FILE" ]; then
                 if install_systemd "$REPO_DIR" "$INSTANCE"; then
                     echo
                     sleep 2
-                    if systemctl --user is-active --quiet "telegram-agent-bot@${INSTANCE}.service"; then
+                    if systemctl --user is-active --quiet "octopus-agent@${INSTANCE}.service"; then
                         echo "Bot is running! Send a message to @${BOTNAME:-your bot} on Telegram."
                     else
                         echo "Service started but may have issues. Check with:"
-                        echo "  journalctl --user -u telegram-agent-bot@${INSTANCE}.service -f"
+                        echo "  journalctl --user -u octopus-agent@${INSTANCE}.service -f"
                     fi
                 fi
             else
@@ -341,11 +341,11 @@ else
             if install_systemd "$REPO_DIR" "$INSTANCE"; then
                 echo
                 sleep 2
-                if systemctl --user is-active --quiet "telegram-agent-bot@${INSTANCE}.service"; then
+                if systemctl --user is-active --quiet "octopus-agent@${INSTANCE}.service"; then
                     echo "Bot is running! Send a message to @${BOTNAME:-your bot} on Telegram."
                 else
                     echo "Service started but may have issues. Check with:"
-                    echo "  journalctl --user -u telegram-agent-bot@${INSTANCE}.service -f"
+                    echo "  journalctl --user -u octopus-agent@${INSTANCE}.service -f"
                 fi
             fi
         else
@@ -361,9 +361,9 @@ else
         echo
         echo "Or as a systemd service:"
         echo "  mkdir -p $XDG_CONFIG_HOME/systemd/user"
-        echo "  sed \"s|REPO_DIR|$REPO_DIR|g\" infra/systemd/telegram-agent-bot@.service \\"
-        echo "    > $XDG_CONFIG_HOME/systemd/user/telegram-agent-bot@.service"
+        echo "  sed \"s|REPO_DIR|$REPO_DIR|g\" infra/systemd/octopus-agent@.service \\"
+        echo "    > $XDG_CONFIG_HOME/systemd/user/octopus-agent@.service"
         echo "  systemctl --user daemon-reload"
-        echo "  systemctl --user enable --now telegram-agent-bot@$INSTANCE.service"
+        echo "  systemctl --user enable --now octopus-agent@$INSTANCE.service"
     fi
 fi

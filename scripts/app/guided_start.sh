@@ -246,7 +246,7 @@ fi
 echo ""
 echo "Step 1/3: Bot image for $env_provider..."
 need_build=0
-if ! docker image inspect "telegram-agent-bot:$env_provider" >/dev/null 2>&1; then
+if ! docker image inspect "octopus-agent:$env_provider" >/dev/null 2>&1; then
   need_build=1
 elif [ -f .bot-image-build-rev ]; then
   current_rev="$(git rev-parse HEAD 2>/dev/null || true)"
@@ -259,7 +259,7 @@ fi
 if [ "$need_build" -eq 1 ]; then
   ./scripts/provider/build_bot_image.sh "$env_provider"
 else
-  echo "Image telegram-agent-bot:$env_provider already present and up to date."
+  echo "Image octopus-agent:$env_provider already present and up to date."
 fi
 
 echo ""

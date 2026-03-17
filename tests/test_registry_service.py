@@ -1,12 +1,14 @@
 """Tests for the FastAPI registry control-plane service."""
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import sqlite3
 
 from fastapi.testclient import TestClient
 
 from app.registry_service.app import app
+from app.registry_service import runtime_surface
 from app.registry_service.store import RegistrySQLiteStore
 from app.runtime_health import (
     QueueSnapshot,
@@ -17,12 +19,81 @@ from app.runtime_health import (
     WorkerHeartbeat,
     report_to_dict,
 )
+from app.storage import default_session, ensure_data_dirs, save_session
+from app.identity import telegram_actor_key, telegram_conversation_key
 
 
 def _configure_registry(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
+
+
+def _configure_runtime_surface(monkeypatch, tmp_path: Path) -> Path:
+    data_dir = tmp_path / "bot-data"
+    monkeypatch.setenv("BOT_PROVIDER", "claude")
+    monkeypatch.setenv("BOT_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("BOT_WORKING_DIR", str(tmp_path))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "telegram-test-token")
+    ensure_data_dirs(data_dir)
+    runtime_surface.reset_for_test()
+    return data_dir
+
+
+def _configure_skill_store(tmp_path: Path):
+    import app.store as store_mod
+    import app.skills as skills_mod
+
+    tmp_store = tmp_path / "store"
+    tmp_custom = tmp_path / "custom"
+    tmp_managed = tmp_path / "managed"
+    tmp_objects = tmp_managed / "objects"
+    tmp_refs = tmp_managed / "refs"
+    tmp_tmp = tmp_managed / "tmp"
+    tmp_version = tmp_managed / "version.json"
+    tmp_lock = tmp_managed / ".lock"
+
+    tmp_store.mkdir()
+    tmp_custom.mkdir()
+    tmp_managed.mkdir()
+    tmp_objects.mkdir()
+    tmp_refs.mkdir()
+    tmp_tmp.mkdir()
+    tmp_version.write_text(json.dumps({"schema": 1}) + "\n")
+
+    original = {
+        "STORE_DIR": store_mod.STORE_DIR,
+        "CUSTOM_DIR": store_mod.CUSTOM_DIR,
+        "MANAGED_DIR": store_mod.MANAGED_DIR,
+        "OBJECTS_DIR": store_mod.OBJECTS_DIR,
+        "REFS_DIR": store_mod.REFS_DIR,
+        "TMP_DIR": store_mod.TMP_DIR,
+        "VERSION_FILE": store_mod.VERSION_FILE,
+        "LOCK_FILE": store_mod.LOCK_FILE,
+        "skills_CUSTOM_DIR": skills_mod.CUSTOM_DIR,
+    }
+    store_mod.STORE_DIR = tmp_store
+    store_mod.CUSTOM_DIR = tmp_custom
+    store_mod.MANAGED_DIR = tmp_managed
+    store_mod.OBJECTS_DIR = tmp_objects
+    store_mod.REFS_DIR = tmp_refs
+    store_mod.TMP_DIR = tmp_tmp
+    store_mod.VERSION_FILE = tmp_version
+    store_mod.LOCK_FILE = tmp_lock
+    skills_mod.CUSTOM_DIR = tmp_custom
+
+    def cleanup():
+        store_mod.STORE_DIR = original["STORE_DIR"]
+        store_mod.CUSTOM_DIR = original["CUSTOM_DIR"]
+        store_mod.MANAGED_DIR = original["MANAGED_DIR"]
+        store_mod.OBJECTS_DIR = original["OBJECTS_DIR"]
+        store_mod.REFS_DIR = original["REFS_DIR"]
+        store_mod.TMP_DIR = original["TMP_DIR"]
+        store_mod.VERSION_FILE = original["VERSION_FILE"]
+        store_mod.LOCK_FILE = original["LOCK_FILE"]
+        skills_mod.CUSTOM_DIR = original["skills_CUSTOM_DIR"]
+
+    return tmp_store, cleanup
 
 
 def _enroll_and_register(client: TestClient, name: str, slug: str) -> tuple[str, str]:
@@ -194,6 +265,114 @@ def test_registry_ui_exposes_runtime_health_summary_and_detail(monkeypatch, tmp_
     payload = detail.json()
     assert payload["report"]["summary"]["claimed_count"] == 1
     assert [row["worker_id"] for row in payload["workers"]] == ["worker-a", "worker-b"]
+
+
+def test_registry_catalog_and_provider_preview(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    _configure_runtime_surface(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    listed = client.get(
+        "/v1/catalog/skills?q=github",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert listed.status_code == 200
+    names = {item["name"] for item in listed.json()["skills"]}
+    assert "github-integration" in names
+
+    detail = client.get(
+        "/v1/catalog/skills/github-integration",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["name"] == "github-integration"
+    assert "GITHUB_TOKEN" in payload["requirement_keys"]
+
+    preview = client.post(
+        "/v1/provider-guidance/claude/preview",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={
+            "role": "Senior engineer",
+            "active_skills": ["github-integration"],
+            "compact_mode": True,
+        },
+    )
+    assert preview.status_code == 200
+    preview_payload = preview.json()
+    assert preview_payload["provider"] == "claude"
+    assert preview_payload["prompt_weight"] > 0
+    assert "summary first" in preview_payload["system_prompt"].lower()
+
+
+def test_registry_conversation_skill_activation_surface(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    data_dir = _configure_runtime_surface(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    conversation_key = telegram_conversation_key(12345)
+    session = default_session("claude", {"session_id": "test", "started": False}, "on")
+    save_session(data_dir, conversation_key, session)
+
+    activate = client.post(
+        f"/v1/conversations/{conversation_key}/skills/code-review/activate",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={"actor_key": telegram_actor_key(42)},
+    )
+    assert activate.status_code == 200
+    assert activate.json()["status"] == "activated"
+
+    listed = client.get(
+        f"/v1/conversations/{conversation_key}/skills",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert listed.status_code == 200
+    assert listed.json()["active_skills"] == ["code-review"]
+
+    deactivate = client.post(
+        f"/v1/conversations/{conversation_key}/skills/code-review/deactivate",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={"actor_key": telegram_actor_key(42)},
+    )
+    assert deactivate.status_code == 200
+    assert deactivate.json()["status"] == "removed"
+
+
+def test_registry_catalog_install_and_uninstall(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    _configure_runtime_surface(monkeypatch, tmp_path)
+    client = TestClient(app)
+    tmp_store, cleanup = _configure_skill_store(tmp_path)
+    try:
+        helper_dir = tmp_store / "helper"
+        helper_dir.mkdir()
+        (helper_dir / "skill.md").write_text(
+            "---\nname: helper\ndisplay_name: Helper\ndescription: registry test\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+
+        install = client.post(
+            "/v1/catalog/skills/helper/install",
+            headers={"Authorization": "Bearer ui-secret"},
+        )
+        assert install.status_code == 200
+        assert install.json()["ok"] is True
+
+        diff = client.get(
+            "/v1/catalog/skills/helper/diff",
+            headers={"Authorization": "Bearer ui-secret"},
+        )
+        assert diff.status_code == 200
+        assert "no differences" in diff.json()["diff"].lower()
+
+        uninstall = client.post(
+            "/v1/catalog/skills/helper/uninstall",
+            headers={"Authorization": "Bearer ui-secret"},
+        )
+        assert uninstall.status_code == 200
+        assert uninstall.json()["ok"] is True
+    finally:
+        cleanup()
 
 
 def test_registry_bind_conversation_is_visible_in_ui(monkeypatch, tmp_path: Path):

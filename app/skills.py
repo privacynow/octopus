@@ -11,6 +11,10 @@ import frontmatter
 import yaml
 from cryptography.fernet import Fernet, InvalidToken
 
+from app.credential_service import get_credential_service
+from app.credential_store import derive_credential_encryption_key
+from app.credential_store_sqlite import SQLiteCredentialStore
+from app.credential_validation import validate_credential
 from app.identity import filesystem_component_for_key, parse_actor_key
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
@@ -198,7 +202,7 @@ def check_credentials(name: str, user_credentials: dict[str, dict[str, str]]) ->
     """Return unsatisfied credential requirements for *name* given stored credentials."""
     requirements = get_skill_requirements(name)
     skill_creds = user_credentials.get(name, {})
-    return [r for r in requirements if r.key not in skill_creds]
+    return get_credential_service().missing_requirements(requirements, skill_creds)
 
 
 # ---------------------------------------------------------------------------
@@ -206,14 +210,8 @@ def check_credentials(name: str, user_credentials: dict[str, dict[str, str]]) ->
 # ---------------------------------------------------------------------------
 
 def derive_fernet_key(telegram_token: str) -> bytes:
-    """Derive a Fernet-compatible key from the bot token.
-
-    Fernet requires a 32-byte URL-safe base64-encoded key.
-    We derive it deterministically from the bot token via SHA-256.
-    """
-    import base64
-    raw = hashlib.sha256(telegram_token.encode()).digest()
-    return base64.urlsafe_b64encode(raw)
+    """Derive a Fernet-compatible key from the bot token using HKDF."""
+    return derive_credential_encryption_key(telegram_token)
 
 
 # Keep old name as alias for backward compatibility in tests/handlers
@@ -239,16 +237,10 @@ def _credential_file(data_dir: Path, actor_key: str) -> Path:
 
 def list_user_credential_skills(data_dir: Path, actor_key: str) -> list[str]:
     """Return skill names that have stored credentials (no decryption)."""
-    path = _credential_file(data_dir, actor_key)
-    if not path.is_file():
-        return []
-    try:
-        stored = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return []
-    if not isinstance(stored, dict):
-        return []
-    return [k for k, v in stored.items() if isinstance(v, dict) and v]
+    sentinel_key = derive_credential_encryption_key("legacy-credential-list")
+    return SQLiteCredentialStore(data_dir / "credentials.db", encryption_key=sentinel_key).list_skill_names(
+        parse_actor_key(actor_key)
+    )
 
 
 def load_user_credentials(data_dir: Path, actor_key: str, key: bytes) -> dict[str, dict[str, str]]:
@@ -256,26 +248,7 @@ def load_user_credentials(data_dir: Path, actor_key: str, key: bytes) -> dict[st
 
     Returns ``{skill_name: {cred_key: value, ...}, ...}``.
     """
-    path = _credential_file(data_dir, actor_key)
-    if not path.is_file():
-        return {}
-    try:
-        stored = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    result: dict[str, dict[str, str]] = {}
-    for skill_name, creds in stored.items():
-        if not isinstance(creds, dict):
-            continue
-        decrypted: dict[str, str] = {}
-        for cred_key, enc_value in creds.items():
-            try:
-                decrypted[cred_key] = _decrypt(str(enc_value), key)
-            except (InvalidToken, Exception):
-                continue  # skip corrupted or tampered entries
-        if decrypted:
-            result[skill_name] = decrypted
-    return result
+    return SQLiteCredentialStore(data_dir / "credentials.db", encryption_key=key).load(parse_actor_key(actor_key))
 
 
 def save_user_credential(
@@ -287,22 +260,12 @@ def save_user_credential(
     key: bytes,
 ) -> None:
     """Encrypt and save a single credential for a user."""
-    path = _credential_file(data_dir, actor_key)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    stored: dict[str, dict[str, str]] = {}
-    if path.is_file():
-        try:
-            stored = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            stored = {}
-
-    skill_creds = stored.setdefault(skill_name, {})
-    skill_creds[cred_key] = _encrypt(value, key)
-
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(stored, indent=2, sort_keys=True), encoding="utf-8")
-    tmp.rename(path)
+    SQLiteCredentialStore(data_dir / "credentials.db", encryption_key=key).save(
+        parse_actor_key(actor_key),
+        skill_name,
+        cred_key,
+        value,
+    )
 
 
 def delete_user_credentials(
@@ -317,33 +280,10 @@ def delete_user_credentials(
     Otherwise delete all credentials.
     Returns list of skill names whose credentials were removed.
     """
-    path = _credential_file(data_dir, actor_key)
-    if not path.is_file():
-        return []
-    try:
-        stored = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return []
-    if not isinstance(stored, dict):
-        return []
-
-    if skill_name:
-        if skill_name not in stored:
-            return []
-        del stored[skill_name]
-        removed = [skill_name]
-    else:
-        removed = list(stored.keys())
-        stored = {}
-
-    if stored:
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(stored, indent=2, sort_keys=True), encoding="utf-8")
-        tmp.rename(path)
-    else:
-        path.unlink(missing_ok=True)
-
-    return removed
+    return SQLiteCredentialStore(data_dir / "credentials.db", encryption_key=key).delete(
+        parse_actor_key(actor_key),
+        skill_name,
+    )
 
 
 def build_credential_env(
@@ -351,77 +291,7 @@ def build_credential_env(
     user_credentials: dict[str, dict[str, str]],
 ) -> dict[str, str]:
     """Flatten per-skill credentials into a single env-var dict for active skills."""
-    env: dict[str, str] = {}
-    for skill in active_skills:
-        creds = user_credentials.get(skill, {})
-        env.update(creds)
-    return env
-
-
-# ---------------------------------------------------------------------------
-# Credential validation (HTTP check from requires.yaml)
-# ---------------------------------------------------------------------------
-
-async def validate_credential(req: SkillRequirement, value: str) -> tuple[bool, str]:
-    """Run HTTP validation if defined. Returns (ok, message).
-
-    If no validate spec, returns (True, "").
-    """
-    if not req.validate:
-        return True, ""
-
-    spec = req.validate
-    url = spec.get("url", "")
-    if not url:
-        return True, ""
-
-    method = spec.get("method", "GET").upper()
-    header_template = spec.get("header", "")
-    try:
-        expect_status = int(spec.get("expect_status", "200"))
-    except (ValueError, TypeError):
-        return False, f"Invalid expect_status in validate spec: {spec.get('expect_status')!r}"
-
-    # Resolve ${KEY} in header with the credential value.
-    # Use a lambda to avoid backref interpretation of special chars in value.
-    header_value = re.sub(
-        r'\$\{' + re.escape(req.key) + r'\}',
-        lambda _m: value,
-        header_template,
-    )
-
-    headers = {}
-    if header_value and ":" in header_value:
-        hname, _, hval = header_value.partition(":")
-        headers[hname.strip()] = hval.strip()
-    elif header_value:
-        # Assume Authorization header if no colon
-        headers["Authorization"] = header_value
-
-    import httpx
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.request(method, url, headers=headers)
-            if resp.status_code == expect_status:
-                return True, ""
-            return False, _friendly_validation_error(resp.status_code, expect_status)
-    except Exception as e:
-        return False, f"Validation request failed: {e}"
-
-
-def _friendly_validation_error(got: int, expected: int) -> str:
-    """Map HTTP status codes to human-readable credential error guidance."""
-    if got in (401, 403):
-        hint = ("Token was rejected. Double-check you copied the full token "
-                "and that it has the required permissions.")
-    elif got == 404:
-        hint = ("The validation endpoint was not found. "
-                "The service may have changed its API.")
-    elif 500 <= got < 600:
-        hint = "The service is temporarily unavailable. Try again in a few minutes."
-    else:
-        hint = "Unexpected response from the service."
-    return f"{hint} (HTTP {got}, expected {expected})"
+    return get_credential_service().build_env(active_skills, user_credentials)
 
 
 # ---------------------------------------------------------------------------

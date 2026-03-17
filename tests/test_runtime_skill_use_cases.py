@@ -5,6 +5,7 @@ from pathlib import Path
 
 import app.content_store as content_store_mod
 from app.content_store import init_content_store_for_config
+from app.credential_store import init_credential_store_for_config
 from app.identity import telegram_actor_key
 from app.provider_guidance_use_cases import get_provider_guidance_use_cases
 from app.runtime_skill_activation_use_cases import get_runtime_skill_activation_use_cases
@@ -27,6 +28,7 @@ def _init_runtime_content(tmp_path: Path):
     content_store_mod.reset_for_test()
     cfg = make_config(data_dir=data_dir, registry_url=REGISTRY_URL)
     init_content_store_for_config(cfg)
+    init_credential_store_for_config(cfg)
     return cfg, data_dir
 
 
@@ -70,8 +72,6 @@ def test_activation_use_cases_list_and_activate_skill(tmp_path: Path):
             session,
             user_id=telegram_actor_key(42),
             skill_name="code-review",
-            data_dir=data_dir,
-            encryption_key=b"test-key",
         )
         assert outcome.status == "activated"
         assert outcome.mutated is True
@@ -130,8 +130,6 @@ async def test_setup_use_case_submits_credential_and_activates_skill(tmp_path: P
             session,
             user_id=actor_key,
             skill_name="github-integration",
-            data_dir=data_dir,
-            encryption_key=derive_encryption_key(cfg.telegram_token),
         )
         assert decision.status == "needs_setup"
 
@@ -142,8 +140,6 @@ async def test_setup_use_case_submits_credential_and_activates_skill(tmp_path: P
             session,
             user_id=actor_key,
             raw_value="ghp_test_token",
-            data_dir=data_dir,
-            encryption_key=derive_encryption_key(cfg.telegram_token),
             validator=fake_validator,
         )
         assert outcome.status == "ready"
@@ -168,8 +164,6 @@ def test_setup_use_case_cancel_and_clear_credential_effects(tmp_path: Path):
             session,
             user_id=actor_key,
             skill_name="github-integration",
-            data_dir=data_dir,
-            encryption_key=derive_encryption_key(cfg.telegram_token),
         )
         assert decision.status == "needs_setup"
 
@@ -204,8 +198,6 @@ def test_setup_use_case_starts_missing_credential_flow(tmp_path: Path):
             session,
             user_id=actor_key,
             active_skills=["github-integration"],
-            data_dir=data_dir,
-            encryption_key=derive_encryption_key(cfg.telegram_token),
         )
 
         assert outcome.status == "needs_setup"

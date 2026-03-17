@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Protocol
 
 from app.session_state import AwaitingSkillSetup, SessionState
@@ -44,8 +43,6 @@ class RuntimeSkillActivationPort(Protocol):
         *,
         user_id: str,
         skill_name: str,
-        data_dir: Path,
-        encryption_key: bytes,
         confirm: bool = False,
     ) -> ConversationSkillMutationOutcome: ...
 

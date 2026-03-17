@@ -113,7 +113,6 @@ class SessionHealthContext:
 
     session: dict[str, Any]
     user_id: str
-    encryption_key: bytes
 
 
 class RuntimeHealthProvider(Protocol):
@@ -338,7 +337,9 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
 
         if session_context is not None:
             from app.skill_catalog_service import get_skill_catalog_service
-            from app.skills import check_credentials, load_user_credentials
+            from app.credential_service import get_credential_service
+
+            credential_service = get_credential_service()
 
             diagnostics.extend(
                 _diag("error", "skills.invalid_active_selection", message)
@@ -346,13 +347,12 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
                     session_context.session.get("active_skills", [])
                 )
             )
-            user_credentials = load_user_credentials(
-                config.data_dir,
-                session_context.user_id,
-                session_context.encryption_key,
-            )
+            user_credentials = credential_service.load(session_context.user_id)
             for skill_name in session_context.session.get("active_skills", []):
-                missing = check_credentials(skill_name, user_credentials)
+                missing = credential_service.missing_requirements(
+                    get_skill_catalog_service().requirements(skill_name),
+                    user_credentials.get(skill_name, {}),
+                )
                 if not missing:
                     continue
                 missing_keys = ", ".join(item.key for item in missing)

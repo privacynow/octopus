@@ -251,6 +251,13 @@ def truncate_content_tables(conn) -> None:
     conn.commit()
 
 
+def truncate_credential_tables(conn) -> None:
+    """Reset the dedicated credential schema in the test database."""
+    with conn.cursor() as cur:
+        cur.execute("DROP SCHEMA IF EXISTS bot_credentials CASCADE")
+    conn.commit()
+
+
 def bootstrap_test_db(conn) -> list[str]:
     """Apply full schema (run_bootstrap). Returns list of errors."""
     return run_bootstrap(conn)

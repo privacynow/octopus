@@ -545,9 +545,9 @@ def test_per_user_credential_storage():
         creds_999 = load_user_credentials(data_dir, 999, key)
         assert creds_999 == {}
 
-        # Credential file for user 111 exists
-        cred_file = data_dir / "credentials" / "111.json"
-        assert cred_file.is_file()
+        # Credential store is materialized for the local runtime backend
+        cred_store = data_dir / "credentials.db"
+        assert cred_store.is_file()
 
         # Overwrite existing credential
         save_user_credential(data_dir, 111, "github", "GITHUB_TOKEN", "ghp_alice_new", key)

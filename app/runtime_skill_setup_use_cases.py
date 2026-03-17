@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from app.request_flow import check_credential_satisfaction, foreign_skill_setup
+from app.credential_flow import build_setup_state, foreign_skill_setup
+from app.credential_service import get_credential_service
 from app.session_state import SessionState
 from app.runtime_skill_setup_port import (
     RuntimeSkillSetupState,
@@ -18,7 +17,7 @@ from app.runtime_skill_setup_port import (
 from app.skill_activation_service import get_skill_activation_service
 from app.skill_lifecycle_service import get_skill_lifecycle_service
 from app.skill_types import SkillRequirement
-from app.skills import save_user_credential, validate_credential
+from app.credential_validation import validate_credential
 from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_cases
 
 
@@ -33,6 +32,9 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
 
     def _catalog(self):
         return get_runtime_skill_catalog_use_cases()
+
+    def _credentials(self):
+        return get_credential_service()
 
     def foreign_setup(
         self,
@@ -70,35 +72,46 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
         *,
         user_id: str,
         active_skills: list[str],
-        data_dir: Path,
-        encryption_key: bytes,
     ) -> RuntimeSkillCredentialSatisfactionOutcome:
-        result = check_credential_satisfaction(
-            active_skills,
-            session,
-            user_id,
-            data_dir,
-            encryption_key,
-        )
-        if result.satisfied:
+        if not active_skills:
             return RuntimeSkillCredentialSatisfactionOutcome(
                 status="satisfied",
-                credential_env=result.credential_env,
+                credential_env={},
             )
-        if result.foreign_setup is not None:
+
+        user_creds = self._credentials().load(user_id)
+        all_missing: list[tuple[str, list[SkillRequirement]]] = []
+        for skill_name in active_skills:
+            requirements = self._catalog().requirements(skill_name)
+            missing = self._credentials().missing_requirements(
+                requirements,
+                user_creds.get(skill_name, {}),
+            )
+            if missing:
+                all_missing.append((skill_name, missing))
+
+        if not all_missing:
+            return RuntimeSkillCredentialSatisfactionOutcome(
+                status="satisfied",
+                credential_env=self._credentials().build_env(active_skills, user_creds),
+            )
+
+        foreign = foreign_skill_setup(session, user_id)
+        if foreign is not None:
             return RuntimeSkillCredentialSatisfactionOutcome(
                 status="foreign_setup",
-                foreign_setup=result.foreign_setup,
+                foreign_setup=foreign,
             )
-        if result.setup_state is None:
-            return RuntimeSkillCredentialSatisfactionOutcome(status="unsatisfied")
-        session.awaiting_skill_setup = result.setup_state
-        first_requirement = result.setup_state.remaining[0] if result.setup_state.remaining else None
+
+        skill_name, missing = all_missing[0]
+        setup_state = build_setup_state(user_id, skill_name, missing)
+        session.awaiting_skill_setup = setup_state
+        first_requirement = setup_state.remaining[0] if setup_state.remaining else None
         return RuntimeSkillCredentialSatisfactionOutcome(
             status="needs_setup",
             mutated=True,
-            setup_state=result.setup_state,
-            missing_skill=result.missing_skill,
+            setup_state=setup_state,
+            missing_skill=skill_name,
             first_requirement=first_requirement,
         )
 
@@ -108,8 +121,6 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
         *,
         user_id: str,
         raw_value: str,
-        data_dir: Path,
-        encryption_key: bytes,
         validator: CredentialValidator = validate_credential,
     ) -> RuntimeSkillSetupAdvanceOutcome:
         setup = session.awaiting_skill_setup
@@ -123,7 +134,7 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
         req = setup.remaining[0]
         validate_spec = req.get("validate")
         if validate_spec:
-            ok, detail = await validator(
+            ok, detail = await self._credentials().validate_value(
                 SkillRequirement(
                     key=str(req["key"]),
                     prompt=str(req["prompt"]),
@@ -131,6 +142,7 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
                     validate=validate_spec if isinstance(validate_spec, dict) else None,
                 ),
                 value,
+                validator=validator,
             )
             if not ok:
                 return RuntimeSkillSetupAdvanceOutcome(
@@ -139,13 +151,11 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
                     validation_error=detail,
                 )
 
-        save_user_credential(
-            data_dir,
+        self._credentials().save(
             user_id,
             setup.skill,
             str(req["key"]),
             value,
-            encryption_key,
         )
         decision = self._lifecycle().complete_current_requirement(session, user_id=user_id)
         if decision.status == "next_requirement":

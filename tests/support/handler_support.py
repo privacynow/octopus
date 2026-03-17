@@ -31,6 +31,8 @@ def reset_handler_test_runtime() -> None:
     _rb.reset_for_test()
     import app.content_store as _cs
     _cs.reset_for_test()
+    import app.credential_store as _creds
+    _creds.reset_for_test()
 
     _th._config = None
     _th._provider = None
@@ -382,10 +384,12 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
     """Set handler runtime globals for tests. Call reset_handler_test_runtime() first if reusing."""
     reset_handler_test_runtime()
     import app.content_store as _cs
+    import app.credential_store as _creds
     from app.content_seed import track_from_skill_dir
     import app.skills as _skills_mod
 
     _cs.init_content_store_for_config(config)
+    _creds.init_credential_store_for_config(config)
     custom_dir = getattr(_skills_mod, "CUSTOM_DIR", None)
     if isinstance(custom_dir, Path) and custom_dir.is_dir():
         store = _cs.get_content_store()

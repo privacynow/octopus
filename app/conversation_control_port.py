@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 
 from app.session_state import SessionState
 
@@ -46,6 +46,7 @@ class ConversationControlPort(Protocol):
         data_dir: Path,
         conversation_key: str,
         actor_key: str,
+        live_cancel_event: Any = None,
         cancel_request_event_id: str = "",
         allow_override: bool = False,
     ) -> ConversationCancelOutcome: ...

@@ -31,10 +31,10 @@ def is_allowed_user(config: BotConfig, user) -> bool:
         return False
     if config.allow_open:
         return True
-    if not config.allowed_user_ids and not config.allowed_usernames:
+    if not config.allowed_actor_keys and not config.allowed_usernames:
         return False
     return (
-        inbound.id in config.allowed_user_ids
+        inbound.id in config.allowed_actor_keys
         or inbound.username in config.allowed_usernames
     )
 
@@ -61,7 +61,7 @@ def is_admin_user(config: BotConfig, user) -> bool:
     if inbound is None:
         return False
     return (
-        inbound.id in config.admin_user_ids
+        inbound.id in config.admin_actor_keys
         or inbound.username in config.admin_usernames
     )
 
@@ -73,10 +73,10 @@ def is_public_user(config: BotConfig, user) -> bool:
         return False
     if not config.allow_open:
         return False
-    if not config.allowed_user_ids and not config.allowed_usernames:
+    if not config.allowed_actor_keys and not config.allowed_usernames:
         return True
     return (
-        inbound.id not in config.allowed_user_ids
+        inbound.id not in config.allowed_actor_keys
         and inbound.username not in config.allowed_usernames
     )
 

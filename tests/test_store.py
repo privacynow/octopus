@@ -673,7 +673,7 @@ def test_admin_gate():
     from app.config import parse_allowed_users
 
     admin_ids, admin_names = parse_allowed_users("111,@adminuser")
-    assert admin_ids == {111}
+    assert admin_ids == {"tg:111"}
     assert admin_names == {"adminuser"}
 
     cfg_explicit = make_config(
@@ -681,13 +681,13 @@ def test_admin_gate():
         admin_user_ids=frozenset({111}),
         admin_usernames=frozenset({"adminuser"}),
     )
-    assert cfg_explicit.admin_user_ids == frozenset({111})
+    assert cfg_explicit.admin_actor_keys == frozenset({"tg:111"})
 
     cfg_fallback = make_config(
         allowed_user_ids=frozenset({111, 222}),
         admin_user_ids=frozenset({111, 222}),
     )
-    assert cfg_fallback.admin_user_ids == frozenset({111, 222})
+    assert cfg_fallback.admin_actor_keys == frozenset({"tg:111", "tg:222"})
 
 
 # ===========================================================================

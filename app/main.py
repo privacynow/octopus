@@ -146,8 +146,8 @@ def main() -> None:
     if config.agent_mode == "registry":
         log.info("Agent registry: %s", config.agent_registry_url or "(degraded: not configured)")
 
-    if config.allowed_user_ids or config.allowed_usernames:
-        log.info("Allowed user IDs: %s", sorted(config.allowed_user_ids))
+    if config.allowed_actor_keys or config.allowed_usernames:
+        log.info("Allowed actor keys: %s", sorted(config.allowed_actor_keys))
         log.info("Allowed usernames: %s", sorted(config.allowed_usernames))
     elif config.allow_open:
         log.warning("Bot is open to everyone (BOT_ALLOW_OPEN=1)")

@@ -1,4 +1,4 @@
-"""Postgres connectivity and schema validation (Phase 12)."""
+"""Postgres connectivity and schema validation."""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ from typing import Any
 
 from app.db.postgres_migrate import current_schema_version, _get_max_applied_version
 
-# Required runtime objects (plan: bot_runtime schema, tables, idx_one_claimed_per_chat)
+# Required runtime objects (bot_runtime schema and the per-conversation claim index)
 _REQUIRED_SCHEMA = "bot_runtime"
 _REQUIRED_TABLES = ("sessions", "updates", "work_items", "schema_migrations")
-_REQUIRED_INDEX = "idx_one_claimed_per_chat"
+_REQUIRED_INDEX = "idx_one_claimed_per_conv"
 
 
 def run_doctor(conn: Any) -> list[str]:
@@ -60,7 +60,7 @@ def run_doctor(conn: Any) -> list[str]:
         if table not in existing:
             errors.append(f"Table bot_runtime.{table} missing. Run DB bootstrap.")
 
-    # Required partial unique index: exactly UNIQUE ON (chat_id) WHERE (state = 'claimed')
+    # Required partial unique index: exactly UNIQUE ON (conversation_key) WHERE (state = 'claimed')
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -86,7 +86,7 @@ def run_doctor(conn: Any) -> list[str]:
         errors.append(
             f"Index bot_runtime.work_items.{_REQUIRED_INDEX} must be UNIQUE. Run DB bootstrap."
         )
-    # Exact column list: must be exactly (chat_id), no extra columns
+    # Exact column list: must be exactly (conversation_key), no extra columns
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -99,9 +99,9 @@ def run_doctor(conn: Any) -> list[str]:
         )
         col_row = cur.fetchone()
     cols = sorted(col_row[0]) if col_row and col_row[0] else []
-    if cols != ["chat_id"]:
+    if cols != ["conversation_key"]:
         errors.append(
-            f"Index bot_runtime.work_items.{_REQUIRED_INDEX} must be on (chat_id) only, got {cols}. Run DB bootstrap."
+            f"Index bot_runtime.work_items.{_REQUIRED_INDEX} must be on (conversation_key) only, got {cols}. Run DB bootstrap."
         )
     # Exact predicate: WHERE (state = 'claimed') only (Postgres may show (state = 'claimed'::text))
     pred_normalized = " ".join((pred or "").split()).strip()

@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from app.db.postgres_migrate import current_schema_version, run_update
+from app.db.postgres_migrate import current_schema_version, run_bootstrap, run_update
 from app.db.postgres_doctor import run_doctor
 
 
@@ -18,6 +18,15 @@ def test_doctor_passes_after_bootstrap(postgres_truncated):
     from app.db.postgres import get_connection
     with get_connection(postgres_truncated) as conn:
         errors = run_doctor(conn)
+    assert errors == []
+
+
+def test_run_bootstrap_is_idempotent_on_bootstrapped_db(postgres_truncated):
+    """run_bootstrap() on an already bootstrapped DB should be a no-op, not replay old SQL."""
+    from app.db.postgres import get_connection
+
+    with get_connection(postgres_truncated) as conn:
+        errors = run_bootstrap(conn)
     assert errors == []
 
 

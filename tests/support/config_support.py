@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from app.config import BotConfig
+from app.identity import telegram_actor_key
 from app.session_state import ProjectBinding
 
 
@@ -31,11 +32,19 @@ def _normalize_projects(projects):
 
 
 def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotConfig:
+    if "allowed_user_ids" in overrides and "allowed_actor_keys" not in overrides:
+        overrides["allowed_actor_keys"] = frozenset(
+            telegram_actor_key(user_id) for user_id in overrides.pop("allowed_user_ids")
+        )
+    if "admin_user_ids" in overrides and "admin_actor_keys" not in overrides:
+        overrides["admin_actor_keys"] = frozenset(
+            telegram_actor_key(user_id) for user_id in overrides.pop("admin_user_ids")
+        )
     defaults = dict(
         instance="test",
         telegram_token="x",
         allow_open=True,
-        allowed_user_ids=frozenset(),
+        allowed_actor_keys=frozenset(),
         allowed_usernames=frozenset(),
         provider_name="claude",
         model="",
@@ -54,7 +63,7 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         codex_full_auto=False,
         codex_dangerous=False,
         codex_profile="",
-        admin_user_ids=frozenset(),
+        admin_actor_keys=frozenset(),
         admin_usernames=frozenset(),
         admin_users_explicit=False,
         compact_mode=False,

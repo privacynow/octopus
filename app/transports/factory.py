@@ -6,6 +6,7 @@ from typing import Any
 
 from app.access import trust_tier
 from app.config import BotConfig
+from app.identity import telegram_conversation_key, telegram_numeric_id
 from app.transports.ports import InteractionSurface
 
 
@@ -21,15 +22,25 @@ def create_outbound_surface(
     *,
     config: BotConfig,
     bot: Any,
-    chat_id: int,
+    conversation_key: str = "",
+    chat_id: int | None = None,
     source: str,
     routed_task_id: str = "",
     output_log: list | None = None,
 ) -> InteractionSurface:
     """Construct the correct outbound surface implementation for a conversation."""
+    if not conversation_key and chat_id is not None:
+        conversation_key = telegram_conversation_key(chat_id)
+    if not conversation_key:
+        conversation_key = conversation_ref
     if conversation_surface_name(conversation_ref) == "telegram":
         if bot is None:
             raise RuntimeError("Telegram surface requires a bot instance")
+        chat_id = telegram_numeric_id(conversation_key)
+        if chat_id is None:
+            raise RuntimeError(
+                f"Telegram surface requires a Telegram conversation key, got {conversation_key!r}"
+            )
         from app.transports.telegram_adapter import TelegramConversationIO
 
         return TelegramConversationIO(

@@ -28,42 +28,42 @@ log = logging.getLogger(__name__)
 
 
 class _DuplicateUpdate(Exception):
-    """Signals duplicate update_id in record_and_admit_message (rollback and return duplicate, None)."""
+    """Signals duplicate event_id in record_and_admit_message (rollback and return duplicate, None)."""
 
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 _CREATE_SQL = """\
 CREATE TABLE IF NOT EXISTS updates (
-    update_id   INTEGER PRIMARY KEY,
-    chat_id     INTEGER NOT NULL,
-    user_id     INTEGER NOT NULL,
-    kind        TEXT    NOT NULL,
-    payload     TEXT    NOT NULL DEFAULT '{}',
-    received_at TEXT    NOT NULL,
-    state       TEXT    NOT NULL DEFAULT 'received'
+    event_id          TEXT PRIMARY KEY,
+    conversation_key  TEXT NOT NULL,
+    actor_key         TEXT NOT NULL,
+    kind              TEXT NOT NULL,
+    payload           TEXT NOT NULL DEFAULT '{}',
+    received_at       TEXT NOT NULL,
+    state             TEXT NOT NULL DEFAULT 'received'
 );
-CREATE INDEX IF NOT EXISTS idx_updates_chat ON updates (chat_id, received_at);
+CREATE INDEX IF NOT EXISTS idx_updates_conv ON updates (conversation_key, received_at);
 
 CREATE TABLE IF NOT EXISTS work_items (
-    id             TEXT    PRIMARY KEY,
-    chat_id        INTEGER NOT NULL,
-    update_id      INTEGER NOT NULL UNIQUE REFERENCES updates(update_id),
-    state          TEXT    NOT NULL DEFAULT 'queued',
-    worker_id      TEXT,
-    claimed_at     TEXT,
-    completed_at   TEXT,
-    error          TEXT,
-    created_at     TEXT    NOT NULL,
-    dispatch_mode  TEXT    NOT NULL DEFAULT 'fresh',
+    id                TEXT PRIMARY KEY,
+    conversation_key  TEXT NOT NULL,
+    event_id          TEXT NOT NULL UNIQUE REFERENCES updates(event_id),
+    state             TEXT NOT NULL DEFAULT 'queued',
+    worker_id         TEXT,
+    claimed_at        TEXT,
+    completed_at      TEXT,
+    error             TEXT,
+    created_at        TEXT NOT NULL,
+    dispatch_mode     TEXT NOT NULL DEFAULT 'fresh',
     CHECK (state IN ('queued','claimed','pending_recovery','done','failed')),
     CHECK (state != 'claimed' OR worker_id IS NOT NULL),
     CHECK (state != 'claimed' OR claimed_at IS NOT NULL),
     CHECK (dispatch_mode IN ('fresh', 'recovery'))
 );
-CREATE INDEX IF NOT EXISTS idx_work_items_state ON work_items (state, chat_id);
-CREATE INDEX IF NOT EXISTS idx_work_items_chat  ON work_items (chat_id, state);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_one_claimed_per_chat ON work_items(chat_id) WHERE state = 'claimed';
+CREATE INDEX IF NOT EXISTS idx_work_items_state ON work_items (state, conversation_key);
+CREATE INDEX IF NOT EXISTS idx_work_items_conv  ON work_items (conversation_key, state);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_claimed_per_conv ON work_items(conversation_key) WHERE state = 'claimed';
 
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS meta (
 
 CREATE TABLE IF NOT EXISTS usage_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id INTEGER NOT NULL,
+    conversation_key TEXT NOT NULL,
     work_item_id TEXT NOT NULL,
     provider TEXT NOT NULL,
     prompt_tokens INTEGER NOT NULL DEFAULT 0,
@@ -80,14 +80,14 @@ CREATE TABLE IF NOT EXISTS usage_log (
     cost_usd REAL NOT NULL DEFAULT 0.0,
     recorded_at REAL NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_usage_log_chat ON usage_log(chat_id);
+CREATE INDEX IF NOT EXISTS idx_usage_log_conv ON usage_log(conversation_key);
 CREATE INDEX IF NOT EXISTS idx_usage_log_recorded_at ON usage_log(recorded_at);
 
 CREATE TABLE IF NOT EXISTS user_access (
-    user_id INTEGER PRIMARY KEY,
+    actor_key TEXT PRIMARY KEY,
     access TEXT NOT NULL CHECK(access IN ('allowed', 'blocked')),
     reason TEXT NOT NULL DEFAULT '',
-    granted_by INTEGER NOT NULL DEFAULT 0,
+    granted_by TEXT NOT NULL DEFAULT '',
     granted_at REAL NOT NULL
 );
 """
@@ -95,13 +95,13 @@ CREATE TABLE IF NOT EXISTS user_access (
 _UNSUPPORTED_SCHEMA_MSG = "Unsupported transport.db schema/layout for this build"
 _EXPECTED_TABLES = ("updates", "work_items", "meta", "usage_log", "user_access")
 _EXPECTED_COLUMNS: dict[str, set[str]] = {
-    "updates": {"update_id", "chat_id", "user_id", "kind", "payload", "received_at", "state"},
-    "work_items": {"id", "chat_id", "update_id", "state", "worker_id", "claimed_at", "completed_at", "error", "created_at", "dispatch_mode"},
+    "updates": {"event_id", "conversation_key", "actor_key", "kind", "payload", "received_at", "state"},
+    "work_items": {"id", "conversation_key", "event_id", "state", "worker_id", "claimed_at", "completed_at", "error", "created_at", "dispatch_mode"},
     "meta": {"key", "value"},
-    "usage_log": {"id", "chat_id", "work_item_id", "provider", "prompt_tokens", "completion_tokens", "cost_usd", "recorded_at"},
-    "user_access": {"user_id", "access", "reason", "granted_by", "granted_at"},
+    "usage_log": {"id", "conversation_key", "work_item_id", "provider", "prompt_tokens", "completion_tokens", "cost_usd", "recorded_at"},
+    "user_access": {"actor_key", "access", "reason", "granted_by", "granted_at"},
 }
-_REQUIRED_INDEX = "idx_one_claimed_per_chat"
+_REQUIRED_INDEX = "idx_one_claimed_per_conv"
 
 _MIGRATIONS: tuple[tuple[int, Callable[[sqlite3.Connection], None]], ...] = ()
 
@@ -162,10 +162,115 @@ def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
+    """Migrate transport DB from schema version 5 to 6: surface-neutral text identities."""
+    conn.executescript(
+        """
+        CREATE TABLE updates_v2 (
+            event_id          TEXT PRIMARY KEY,
+            conversation_key  TEXT NOT NULL,
+            actor_key         TEXT NOT NULL,
+            kind              TEXT NOT NULL,
+            payload           TEXT NOT NULL DEFAULT '{}',
+            received_at       TEXT NOT NULL,
+            state             TEXT NOT NULL DEFAULT 'received'
+        );
+        INSERT INTO updates_v2 (event_id, conversation_key, actor_key, kind, payload, received_at, state)
+            SELECT
+                'tg:' || CAST(update_id AS TEXT),
+                'tg:' || CAST(chat_id AS TEXT),
+                'tg:' || CAST(user_id AS TEXT),
+                kind, payload, received_at, state
+            FROM updates;
+        DROP TABLE updates;
+        ALTER TABLE updates_v2 RENAME TO updates;
+        CREATE INDEX idx_updates_conv ON updates (conversation_key, received_at);
+
+        CREATE TABLE work_items_v2 (
+            id                TEXT PRIMARY KEY,
+            conversation_key  TEXT NOT NULL,
+            event_id          TEXT NOT NULL UNIQUE REFERENCES updates(event_id),
+            state             TEXT NOT NULL DEFAULT 'queued',
+            worker_id         TEXT,
+            claimed_at        TEXT,
+            completed_at      TEXT,
+            error             TEXT,
+            created_at        TEXT NOT NULL,
+            dispatch_mode     TEXT NOT NULL DEFAULT 'fresh',
+            CHECK (state IN ('queued','claimed','pending_recovery','done','failed')),
+            CHECK (state != 'claimed' OR worker_id IS NOT NULL),
+            CHECK (state != 'claimed' OR claimed_at IS NOT NULL),
+            CHECK (dispatch_mode IN ('fresh', 'recovery'))
+        );
+        INSERT INTO work_items_v2 (
+            id, conversation_key, event_id, state, worker_id,
+            claimed_at, completed_at, error, created_at, dispatch_mode
+        )
+            SELECT
+                id,
+                'tg:' || CAST(chat_id AS TEXT),
+                'tg:' || CAST(update_id AS TEXT),
+                state, worker_id, claimed_at, completed_at, error, created_at, dispatch_mode
+            FROM work_items;
+        DROP TABLE work_items;
+        ALTER TABLE work_items_v2 RENAME TO work_items;
+        CREATE INDEX idx_work_items_state ON work_items (state, conversation_key);
+        CREATE INDEX idx_work_items_conv ON work_items (conversation_key, state);
+        CREATE UNIQUE INDEX idx_one_claimed_per_conv ON work_items(conversation_key) WHERE state = 'claimed';
+
+        CREATE TABLE usage_log_v2 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_key TEXT NOT NULL,
+            work_item_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            prompt_tokens INTEGER NOT NULL DEFAULT 0,
+            completion_tokens INTEGER NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0.0,
+            recorded_at REAL NOT NULL
+        );
+        INSERT INTO usage_log_v2 (
+            id, conversation_key, work_item_id, provider, prompt_tokens,
+            completion_tokens, cost_usd, recorded_at
+        )
+            SELECT
+                id,
+                'tg:' || CAST(chat_id AS TEXT),
+                work_item_id, provider, prompt_tokens, completion_tokens, cost_usd, recorded_at
+            FROM usage_log;
+        DROP TABLE usage_log;
+        ALTER TABLE usage_log_v2 RENAME TO usage_log;
+        CREATE INDEX idx_usage_log_conv ON usage_log(conversation_key);
+        CREATE INDEX idx_usage_log_recorded_at ON usage_log(recorded_at);
+
+        CREATE TABLE user_access_v2 (
+            actor_key TEXT PRIMARY KEY,
+            access TEXT NOT NULL CHECK(access IN ('allowed', 'blocked')),
+            reason TEXT NOT NULL DEFAULT '',
+            granted_by TEXT NOT NULL DEFAULT '',
+            granted_at REAL NOT NULL
+        );
+        INSERT INTO user_access_v2 (actor_key, access, reason, granted_by, granted_at)
+            SELECT
+                'tg:' || CAST(user_id AS TEXT),
+                access,
+                reason,
+                CASE
+                    WHEN granted_by = 0 THEN ''
+                    ELSE 'tg:' || CAST(granted_by AS TEXT)
+                END,
+                granted_at
+            FROM user_access;
+        DROP TABLE user_access;
+        ALTER TABLE user_access_v2 RENAME TO user_access;
+        """
+    )
+
+
 _MIGRATIONS = (
     (3, _migrate_v2_to_v3),
     (4, _migrate_v3_to_v4),
     (5, _migrate_v4_to_v5),
+    (6, _migrate_v5_to_v6),
 )
 
 
@@ -216,7 +321,7 @@ def _validate_existing_transport_db(conn: sqlite3.Connection) -> None:
     for r in info_rows:
         col = r["name"] if hasattr(r, "keys") and "name" in r.keys() else r[2]
         index_cols.append(col)
-    if index_cols != ["chat_id"]:
+    if index_cols != ["conversation_key"]:
         raise RuntimeError(_UNSUPPORTED_SCHEMA_MSG)
     sql_row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
@@ -303,14 +408,14 @@ def _load_work_item_by_id(
     return row
 
 
-def _load_work_item_by_chat_update(
-    conn: sqlite3.Connection, chat_id: int, update_id: int
+def _load_work_item_by_conversation_event(
+    conn: sqlite3.Connection, conversation_key: str, event_id: str
 ) -> dict[str, Any] | None:
     row = conn.execute(
         "SELECT w.*, u.kind, u.payload FROM work_items w "
-        "JOIN updates u ON w.update_id = u.update_id "
-        "WHERE w.chat_id = ? AND w.update_id = ?",
-        (chat_id, update_id),
+        "JOIN updates u ON w.event_id = u.event_id "
+        "WHERE w.conversation_key = ? AND w.event_id = ?",
+        (conversation_key, event_id),
     ).fetchone()
     if row is None:
         return None
@@ -319,10 +424,12 @@ def _load_work_item_by_chat_update(
     return row
 
 
-def _assert_no_invalid_rows_for_chat(conn: sqlite3.Connection, chat_id: int) -> None:
+def _assert_no_invalid_rows_for_conversation(
+    conn: sqlite3.Connection, conversation_key: str
+) -> None:
     rows = conn.execute(
-        "SELECT id, state, worker_id, claimed_at, dispatch_mode FROM work_items WHERE chat_id = ?",
-        (chat_id,),
+        "SELECT id, state, worker_id, claimed_at, dispatch_mode FROM work_items WHERE conversation_key = ?",
+        (conversation_key,),
     ).fetchall()
     claimed = 0
     for row in rows:
@@ -332,7 +439,7 @@ def _assert_no_invalid_rows_for_chat(conn: sqlite3.Connection, chat_id: int) -> 
             claimed += 1
     if claimed > 1:
         raise TransportStateCorruption(
-            f"chat {chat_id} has {claimed} claimed work items (at most one allowed)"
+            f"conversation {conversation_key} has {claimed} claimed work items (at most one allowed)"
         )
 
 
@@ -500,15 +607,15 @@ def _insert_initial_work_item(
     conn: sqlite3.Connection,
     *,
     item_id: str,
-    chat_id: int,
-    update_id: int,
+    conversation_key: str,
+    event_id: str,
     worker_id: str | None,
     created_at: str,
 ) -> str:
-    _assert_no_invalid_rows_for_chat(conn, chat_id)
+    _assert_no_invalid_rows_for_conversation(conn, conversation_key)
     has_other_claimed = conn.execute(
-        "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
-        (chat_id,),
+        "SELECT 1 FROM work_items WHERE conversation_key = ? AND state = 'claimed' LIMIT 1",
+        (conversation_key,),
     ).fetchone()
     if bool(worker_id) and not has_other_claimed:
         model = TransportWorkflowModel(
@@ -520,9 +627,9 @@ def _insert_initial_work_item(
         if result.allowed:
             conn.execute(
                 "INSERT INTO work_items "
-                "(id, chat_id, update_id, state, worker_id, claimed_at, created_at, dispatch_mode) "
+                "(id, conversation_key, event_id, state, worker_id, claimed_at, created_at, dispatch_mode) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, 'fresh')",
-                (item_id, chat_id, update_id, result.new_state, worker_id, created_at, created_at),
+                (item_id, conversation_key, event_id, result.new_state, worker_id, created_at, created_at),
             )
             return item_id
         raise TransportStateCorruption(
@@ -530,9 +637,9 @@ def _insert_initial_work_item(
             f"{result.disposition} — {result.reason}"
         )
     conn.execute(
-        "INSERT INTO work_items (id, chat_id, update_id, state, created_at, dispatch_mode) "
+        "INSERT INTO work_items (id, conversation_key, event_id, state, created_at, dispatch_mode) "
         "VALUES (?, ?, ?, 'queued', ?, 'fresh')",
-        (item_id, chat_id, update_id, created_at),
+        (item_id, conversation_key, event_id, created_at),
     )
     return item_id
 
@@ -543,9 +650,9 @@ def _insert_initial_work_item(
 
 def record_and_enqueue(
     conn: sqlite3.Connection,
-    update_id: int,
-    chat_id: int,
-    user_id: int,
+    event_id: str,
+    conversation_key: str,
+    actor_key: str,
     kind: str,
     payload: str = "{}",
     *,
@@ -556,30 +663,30 @@ def record_and_enqueue(
     try:
         with _write_tx(conn):
             conn.execute(
-                "INSERT INTO updates (update_id, chat_id, user_id, kind, payload, received_at) "
+                "INSERT INTO updates (event_id, conversation_key, actor_key, kind, payload, received_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (update_id, chat_id, user_id, kind, payload, now),
+                (event_id, conversation_key, actor_key, kind, payload, now),
             )
             _insert_initial_work_item(
                 conn,
                 item_id=item_id,
-                chat_id=chat_id,
-                update_id=update_id,
+                conversation_key=conversation_key,
+                event_id=event_id,
                 worker_id=worker_id,
                 created_at=now,
             )
         return True, item_id
     except sqlite3.IntegrityError as exc:
-        if "updates.update_id" in str(exc):
+        if "updates.event_id" in str(exc):
             return False, None
         raise
 
 
 def record_and_admit_message(
     conn: sqlite3.Connection,
-    update_id: int,
-    chat_id: int,
-    user_id: int,
+    event_id: str,
+    conversation_key: str,
+    actor_key: str,
     kind: str,
     payload: str = "{}",
 ) -> tuple[str, str | None]:
@@ -590,34 +697,34 @@ def record_and_admit_message(
     try:
         with _write_tx(conn):
             conn.execute(
-                "INSERT INTO updates (update_id, chat_id, user_id, kind, payload, received_at) "
+                "INSERT INTO updates (event_id, conversation_key, actor_key, kind, payload, received_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (update_id, chat_id, user_id, kind, payload, now),
+                (event_id, conversation_key, actor_key, kind, payload, now),
             )
-            if has_fresh_queued_or_claimed(conn, chat_id):
+            if has_fresh_queued_or_claimed(conn, conversation_key):
                 conn.execute(
-                    "INSERT INTO work_items (id, chat_id, update_id, state, error, created_at, dispatch_mode) "
+                    "INSERT INTO work_items (id, conversation_key, event_id, state, error, created_at, dispatch_mode) "
                     "VALUES (?, ?, ?, 'failed', 'chat_busy', ?, 'fresh')",
-                    (item_id, chat_id, update_id, now),
+                    (item_id, conversation_key, event_id, now),
                 )
                 return ("busy", item_id)
             conn.execute(
-                "INSERT INTO work_items (id, chat_id, update_id, state, created_at, dispatch_mode) "
+                "INSERT INTO work_items (id, conversation_key, event_id, state, created_at, dispatch_mode) "
                 "VALUES (?, ?, ?, 'queued', ?, 'fresh')",
-                (item_id, chat_id, update_id, now),
+                (item_id, conversation_key, event_id, now),
             )
             return ("admitted", item_id)
     except sqlite3.IntegrityError as exc:
-        if "updates.update_id" in str(exc) or "UNIQUE" in str(exc):
+        if "updates.event_id" in str(exc) or "UNIQUE" in str(exc):
             raise _DuplicateUpdate from exc
         raise
 
 
 def record_update(
     conn: sqlite3.Connection,
-    update_id: int,
-    chat_id: int,
-    user_id: int,
+    event_id: str,
+    conversation_key: str,
+    actor_key: str,
     kind: str,
     payload: str = "{}",
 ) -> bool:
@@ -625,21 +732,21 @@ def record_update(
     try:
         with _write_tx(conn):
             conn.execute(
-                "INSERT INTO updates (update_id, chat_id, user_id, kind, payload, received_at) "
+                "INSERT INTO updates (event_id, conversation_key, actor_key, kind, payload, received_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (update_id, chat_id, user_id, kind, payload, now),
+                (event_id, conversation_key, actor_key, kind, payload, now),
             )
         return True
     except sqlite3.IntegrityError as exc:
-        if "updates.update_id" in str(exc):
+        if "updates.event_id" in str(exc):
             return False
         raise
 
 
 def enqueue_work_item(
     conn: sqlite3.Connection,
-    chat_id: int,
-    update_id: int,
+    conversation_key: str,
+    event_id: str,
     *,
     worker_id: str | None = None,
 ) -> str:
@@ -649,28 +756,28 @@ def enqueue_work_item(
         _insert_initial_work_item(
             conn,
             item_id=item_id,
-            chat_id=chat_id,
-            update_id=update_id,
+            conversation_key=conversation_key,
+            event_id=event_id,
             worker_id=worker_id,
             created_at=now,
         )
     return item_id
 
 
-def update_payload(conn: sqlite3.Connection, update_id: int, payload: str) -> None:
+def update_payload(conn: sqlite3.Connection, event_id: str, payload: str) -> None:
     with _write_tx(conn):
         conn.execute(
-            "UPDATE updates SET payload = ? WHERE update_id = ?",
-            (payload, update_id),
+            "UPDATE updates SET payload = ? WHERE event_id = ?",
+            (payload, event_id),
         )
 
 
 def claim_for_update(
-    conn: sqlite3.Connection, chat_id: int, update_id: int, worker_id: str
+    conn: sqlite3.Connection, conversation_key: str, event_id: str, worker_id: str
 ) -> dict[str, Any] | None:
     with _write_tx(conn):
-        _assert_no_invalid_rows_for_chat(conn, chat_id)
-        row = _load_work_item_by_chat_update(conn, chat_id, update_id)
+        _assert_no_invalid_rows_for_conversation(conn, conversation_key)
+        row = _load_work_item_by_conversation_event(conn, conversation_key, event_id)
         if row is None:
             return None
         if row["state"] == "claimed" and row.get("worker_id") == worker_id:
@@ -678,8 +785,8 @@ def claim_for_update(
         if row["state"] != "queued":
             return None
         has_other_claimed = conn.execute(
-            "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
-            (chat_id,),
+            "SELECT 1 FROM work_items WHERE conversation_key = ? AND state = 'claimed' LIMIT 1",
+            (conversation_key,),
         ).fetchone()
         out = _claim_queued_item(
             conn,
@@ -691,8 +798,8 @@ def claim_for_update(
         if out is None:
             return None
         u = conn.execute(
-            "SELECT kind, payload FROM updates WHERE update_id = ?",
-            (out["update_id"],),
+            "SELECT kind, payload FROM updates WHERE event_id = ?",
+            (out["event_id"],),
         ).fetchone()
         if u:
             u = dict(u)
@@ -702,18 +809,18 @@ def claim_for_update(
 
 
 def claim_next(
-    conn: sqlite3.Connection, chat_id: int, worker_id: str
+    conn: sqlite3.Connection, conversation_key: str, worker_id: str
 ) -> dict[str, Any] | None:
     with _write_tx(conn):
-        _assert_no_invalid_rows_for_chat(conn, chat_id)
+        _assert_no_invalid_rows_for_conversation(conn, conversation_key)
         row = conn.execute(
             "SELECT id FROM work_items "
-            "WHERE chat_id = ? AND state = 'queued' "
+            "WHERE conversation_key = ? AND state = 'queued' "
             "AND NOT EXISTS ("
-            "  SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed'"
+            "  SELECT 1 FROM work_items WHERE conversation_key = ? AND state = 'claimed'"
             ") "
             "ORDER BY created_at LIMIT 1",
-            (chat_id, chat_id),
+            (conversation_key, conversation_key),
         ).fetchone()
         if row is None:
             return None
@@ -731,17 +838,17 @@ def claim_next(
 def claim_next_any(conn: sqlite3.Connection, worker_id: str) -> dict[str, Any] | None:
     with _write_tx(conn):
         row = conn.execute(
-            "SELECT id, chat_id FROM work_items "
+            "SELECT id, conversation_key FROM work_items "
             "WHERE state = 'queued' "
-            "AND chat_id NOT IN ("
-            "  SELECT DISTINCT chat_id FROM work_items WHERE state = 'claimed'"
+            "AND conversation_key NOT IN ("
+            "  SELECT DISTINCT conversation_key FROM work_items WHERE state = 'claimed'"
             ") "
             "ORDER BY created_at LIMIT 1",
         ).fetchone()
         if row is None:
             return None
         row = dict(row)
-        _assert_no_invalid_rows_for_chat(conn, row["chat_id"])
+        _assert_no_invalid_rows_for_conversation(conn, row["conversation_key"])
         out = _claim_queued_item(
             conn,
             item_id=row["id"],
@@ -753,7 +860,7 @@ def claim_next_any(conn: sqlite3.Connection, worker_id: str) -> dict[str, Any] |
             return None
         item = conn.execute(
             "SELECT w.*, u.kind, u.payload FROM work_items w "
-            "JOIN updates u ON w.update_id = u.update_id WHERE w.id = ?",
+            "JOIN updates u ON w.event_id = u.event_id WHERE w.id = ?",
             (out["id"],),
         ).fetchone()
         if item is None:
@@ -842,42 +949,42 @@ def fail_work_item(conn: sqlite3.Connection, item_id: str, error: str) -> None:
             )
 
 
-def has_claimed_for_chat(conn: sqlite3.Connection, chat_id: int) -> bool:
+def has_claimed_for_chat(conn: sqlite3.Connection, conversation_key: str) -> bool:
     row = conn.execute(
-        "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
-        (chat_id,),
+        "SELECT 1 FROM work_items WHERE conversation_key = ? AND state = 'claimed' LIMIT 1",
+        (conversation_key,),
     ).fetchone()
     return row is not None
 
 
-def has_queued_or_claimed(conn: sqlite3.Connection, chat_id: int) -> bool:
-    _assert_no_invalid_rows_for_chat(conn, chat_id)
+def has_queued_or_claimed(conn: sqlite3.Connection, conversation_key: str) -> bool:
+    _assert_no_invalid_rows_for_conversation(conn, conversation_key)
     row = conn.execute(
-        "SELECT 1 FROM work_items WHERE chat_id = ? AND state IN ('queued', 'claimed') LIMIT 1",
-        (chat_id,),
+        "SELECT 1 FROM work_items WHERE conversation_key = ? AND state IN ('queued', 'claimed') LIMIT 1",
+        (conversation_key,),
     ).fetchone()
     return row is not None
 
 
-def has_fresh_queued_or_claimed(conn: sqlite3.Connection, chat_id: int) -> bool:
-    """True if this chat has any work item in queued or claimed state with dispatch_mode='fresh'."""
-    _assert_no_invalid_rows_for_chat(conn, chat_id)
+def has_fresh_queued_or_claimed(conn: sqlite3.Connection, conversation_key: str) -> bool:
+    """True if this conversation has any work item in queued or claimed state with dispatch_mode='fresh'."""
+    _assert_no_invalid_rows_for_conversation(conn, conversation_key)
     row = conn.execute(
-        "SELECT 1 FROM work_items WHERE chat_id = ? AND state IN ('queued', 'claimed') "
+        "SELECT 1 FROM work_items WHERE conversation_key = ? AND state IN ('queued', 'claimed') "
         "AND dispatch_mode = 'fresh' LIMIT 1",
-        (chat_id,),
+        (conversation_key,),
     ).fetchone()
     return row is not None
 
 
-def cancel_queued_fresh_for_chat(conn: sqlite3.Connection, chat_id: int) -> bool:
-    """If this chat has a queued fresh item, mark it failed with error='cancelled'. Returns True if one was cancelled."""
+def cancel_queued_fresh_for_chat(conn: sqlite3.Connection, conversation_key: str) -> bool:
+    """If this conversation has a queued fresh item, mark it failed with error='cancelled'. Returns True if one was cancelled."""
     now = datetime.now(timezone.utc).isoformat()
     with _write_tx(conn):
         row = conn.execute(
-            "SELECT id FROM work_items WHERE chat_id = ? AND state = 'queued' AND dispatch_mode = 'fresh' "
+            "SELECT id FROM work_items WHERE conversation_key = ? AND state = 'queued' AND dispatch_mode = 'fresh' "
             "ORDER BY created_at ASC LIMIT 1",
-            (chat_id,),
+            (conversation_key,),
         ).fetchone()
         if row is None:
             return False
@@ -889,20 +996,20 @@ def cancel_queued_fresh_for_chat(conn: sqlite3.Connection, chat_id: int) -> bool
         return cur.rowcount > 0
 
 
-def get_work_items_for_chat(conn: sqlite3.Connection, chat_id: int) -> list[dict[str, Any]]:
-    """Return work items for chat with id, update_id, state, error, dispatch_mode, kind. Read-only."""
+def get_work_items_for_chat(conn: sqlite3.Connection, conversation_key: str) -> list[dict[str, Any]]:
+    """Return work items for a conversation with id, event_id, state, error, dispatch_mode, kind. Read-only."""
     rows = conn.execute(
-        "SELECT w.id, w.update_id, w.state, w.error, w.dispatch_mode, u.kind "
-        "FROM work_items w JOIN updates u ON w.update_id = u.update_id "
-        "WHERE w.chat_id = ? ORDER BY w.created_at ASC",
-        (chat_id,),
+        "SELECT w.id, w.event_id, w.state, w.error, w.dispatch_mode, u.kind "
+        "FROM work_items w JOIN updates u ON w.event_id = u.event_id "
+        "WHERE w.conversation_key = ? ORDER BY w.created_at ASC",
+        (conversation_key,),
     ).fetchall()
     return [dict(r) for r in rows]
 
 
-def get_update_payload(conn: sqlite3.Connection, update_id: int) -> str | None:
+def get_update_payload(conn: sqlite3.Connection, event_id: str) -> str | None:
     row = conn.execute(
-        "SELECT payload FROM updates WHERE update_id = ?", (update_id,)
+        "SELECT payload FROM updates WHERE event_id = ?", (event_id,)
     ).fetchone()
     return row["payload"] if row else None
 
@@ -927,23 +1034,23 @@ def mark_pending_recovery(conn: sqlite3.Connection, item_id: str) -> None:
 
 
 def get_pending_recovery_for_update(
-    conn: sqlite3.Connection, chat_id: int, update_id: int
+    conn: sqlite3.Connection, conversation_key: str, event_id: str
 ) -> dict[str, Any] | None:
-    row = _load_work_item_by_chat_update(conn, chat_id, update_id)
+    row = _load_work_item_by_conversation_event(conn, conversation_key, event_id)
     if row is None or row["state"] != "pending_recovery":
         return None
     return row
 
 
 def get_latest_pending_recovery(
-    conn: sqlite3.Connection, chat_id: int
+    conn: sqlite3.Connection, conversation_key: str
 ) -> dict[str, Any] | None:
-    _assert_no_invalid_rows_for_chat(conn, chat_id)
+    _assert_no_invalid_rows_for_conversation(conn, conversation_key)
     rows = conn.execute(
         "SELECT w.*, u.kind, u.payload FROM work_items w "
-        "JOIN updates u ON w.update_id = u.update_id "
-        "WHERE w.chat_id = ? ORDER BY w.created_at DESC",
-        (chat_id,),
+        "JOIN updates u ON w.event_id = u.event_id "
+        "WHERE w.conversation_key = ? ORDER BY w.created_at DESC",
+        (conversation_key,),
     ).fetchall()
     for row in rows:
         r = dict(row)
@@ -953,13 +1060,13 @@ def get_latest_pending_recovery(
     return None
 
 
-def supersede_pending_recovery(conn: sqlite3.Connection, chat_id: int) -> int:
+def supersede_pending_recovery(conn: sqlite3.Connection, conversation_key: str) -> int:
     now = datetime.now(timezone.utc).isoformat()
     with _write_tx(conn):
-        _assert_no_invalid_rows_for_chat(conn, chat_id)
+        _assert_no_invalid_rows_for_conversation(conn, conversation_key)
         rows = conn.execute(
-            "SELECT id FROM work_items WHERE chat_id = ? AND state = 'pending_recovery'",
-            (chat_id,),
+            "SELECT id FROM work_items WHERE conversation_key = ? AND state = 'pending_recovery'",
+            (conversation_key,),
         ).fetchall()
         if not rows:
             return 0
@@ -981,7 +1088,11 @@ def supersede_pending_recovery(conn: sqlite3.Connection, chat_id: int) -> int:
             if res == ApplyResult.success:
                 count += 1
         if count:
-            log.info("Superseded %d pending_recovery items for chat %d", count, chat_id)
+            log.info(
+                "Superseded %d pending_recovery items for conversation %s",
+                count,
+                conversation_key,
+            )
         return count
 
 
@@ -1011,11 +1122,11 @@ def reclaim_for_replay(
         row = _load_work_item_by_id(conn, item_id)
         if row is None or row["state"] != "pending_recovery":
             return None
-        chat_id = row["chat_id"]
-        _assert_no_invalid_rows_for_chat(conn, chat_id)
+        conversation_key = row["conversation_key"]
+        _assert_no_invalid_rows_for_conversation(conn, conversation_key)
         has_claimed = conn.execute(
-            "SELECT 1 FROM work_items WHERE chat_id = ? AND state = 'claimed' LIMIT 1",
-            (chat_id,),
+            "SELECT 1 FROM work_items WHERE conversation_key = ? AND state = 'claimed' LIMIT 1",
+            (conversation_key,),
         ).fetchone()
         out = _apply_claim_event(
             conn,
@@ -1031,7 +1142,7 @@ def reclaim_for_replay(
             return None
         full = conn.execute(
             "SELECT w.*, u.kind, u.payload FROM work_items w "
-            "JOIN updates u ON w.update_id = u.update_id WHERE w.id = ?",
+            "JOIN updates u ON w.event_id = u.event_id WHERE w.id = ?",
             (item_id,),
         ).fetchone()
         if full is None:
@@ -1107,7 +1218,7 @@ def purge_old(conn: sqlite3.Connection, older_than_hours: int = 24) -> int:
         )
         deleted_items = cursor.rowcount
         cursor = conn.execute(
-            "DELETE FROM updates WHERE update_id NOT IN (SELECT update_id FROM work_items) "
+            "DELETE FROM updates WHERE event_id NOT IN (SELECT event_id FROM work_items) "
             "AND received_at < ?",
             (cutoff_iso,),
         )
@@ -1117,33 +1228,33 @@ def purge_old(conn: sqlite3.Connection, older_than_hours: int = 24) -> int:
         return deleted_items
 
 
-def get_user_access_override(conn: sqlite3.Connection, user_id: int) -> str | None:
-    """Return 'allowed', 'blocked', or None when no override exists for user_id."""
+def get_user_access_override(conn: sqlite3.Connection, actor_key: str) -> str | None:
+    """Return 'allowed', 'blocked', or None when no override exists for actor_key."""
     row = conn.execute(
-        "SELECT access FROM user_access WHERE user_id = ?",
-        (user_id,),
+        "SELECT access FROM user_access WHERE actor_key = ?",
+        (actor_key,),
     ).fetchone()
     return row["access"] if row else None
 
 
 def set_user_access(
     conn: sqlite3.Connection,
-    user_id: int,
+    actor_key: str,
     access: str,
     reason: str,
-    granted_by: int,
+    granted_by: str,
 ) -> None:
     """Upsert a user access override row."""
     now = datetime.now(timezone.utc).timestamp()
     conn.execute(
-        """INSERT INTO user_access (user_id, access, reason, granted_by, granted_at)
+        """INSERT INTO user_access (actor_key, access, reason, granted_by, granted_at)
            VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(user_id) DO UPDATE SET
+           ON CONFLICT(actor_key) DO UPDATE SET
                access=excluded.access,
                reason=excluded.reason,
                granted_by=excluded.granted_by,
                granted_at=excluded.granted_at""",
-        (user_id, access, reason, granted_by, now),
+        (actor_key, access, reason, granted_by, now),
     )
     conn.commit()
 
@@ -1151,16 +1262,19 @@ def set_user_access(
 def list_user_access(conn: sqlite3.Connection) -> list[dict]:
     """Return all user access overrides ordered by most recent grant first."""
     rows = conn.execute(
-        "SELECT user_id, access, reason, granted_by, granted_at "
+        "SELECT actor_key, access, reason, granted_by, granted_at "
         "FROM user_access ORDER BY granted_at DESC"
     ).fetchall()
-    return [dict(row) for row in rows]
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        results.append(dict(row))
+    return results
 
 
 def record_usage(
     conn: sqlite3.Connection,
     *,
-    chat_id: int,
+    conversation_key: str,
     work_item_id: str,
     provider: str,
     prompt_tokens: int,
@@ -1169,11 +1283,11 @@ def record_usage(
 ) -> None:
     conn.execute(
         """INSERT INTO usage_log (
-               chat_id, work_item_id, provider, prompt_tokens,
+               conversation_key, work_item_id, provider, prompt_tokens,
                completion_tokens, cost_usd, recorded_at
            ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (
-            chat_id,
+            conversation_key,
             work_item_id,
             provider,
             prompt_tokens,
@@ -1190,7 +1304,7 @@ def get_usage_since(
 ) -> list[dict]:
     rows = conn.execute(
         """SELECT
-               chat_id, work_item_id, provider, prompt_tokens,
+               conversation_key, work_item_id, provider, prompt_tokens,
                completion_tokens, cost_usd, recorded_at
            FROM usage_log
            WHERE recorded_at >= ?

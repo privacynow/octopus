@@ -8,6 +8,8 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.identity import filesystem_component_for_key
+
 log = logging.getLogger(__name__)
 
 # Responses shorter than this are already mobile-friendly — skip summarization.
@@ -31,15 +33,15 @@ Response to summarize:
 
 # -- Ring buffer ---------------------------------------------------------------
 
-def _ring_dir(data_dir: Path, chat_id: int) -> Path:
-    d = data_dir / "raw" / str(chat_id)
+def _ring_dir(data_dir: Path, conversation_key: str) -> Path:
+    d = data_dir / "raw" / filesystem_component_for_key(conversation_key)
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def save_raw(
     data_dir: Path,
-    chat_id: int,
+    conversation_key: str,
     prompt: str,
     raw_text: str,
     kind: str = "request",
@@ -50,7 +52,7 @@ def save_raw(
     "approval" (approval plan or approved execution), "system" (bot-
     generated messages worth preserving such as setup or credential flow).
     """
-    d = _ring_dir(data_dir, chat_id)
+    d = _ring_dir(data_dir, conversation_key)
     entries = sorted(d.glob("*.json"))
 
     # Rotate: delete oldest if at capacity
@@ -77,9 +79,9 @@ def save_raw(
     return new_num
 
 
-def load_raw(data_dir: Path, chat_id: int, n: int = 1) -> str | None:
+def load_raw(data_dir: Path, conversation_key: str, n: int = 1) -> str | None:
     """Load the Nth most recent raw response (1 = latest). Returns None if not found."""
-    d = _ring_dir(data_dir, chat_id)
+    d = _ring_dir(data_dir, conversation_key)
     entries = sorted(d.glob("*.json"))
     if not entries or n < 1 or n > len(entries):
         return None
@@ -90,9 +92,9 @@ def load_raw(data_dir: Path, chat_id: int, n: int = 1) -> str | None:
         return None
 
 
-def load_raw_by_slot(data_dir: Path, chat_id: int, slot: int) -> str | None:
+def load_raw_by_slot(data_dir: Path, conversation_key: str, slot: int) -> str | None:
     """Load a raw response by its ring-buffer slot number. Returns None if evicted."""
-    target = _ring_dir(data_dir, chat_id) / f"{slot:06d}.json"
+    target = _ring_dir(data_dir, conversation_key) / f"{slot:06d}.json"
     if not target.exists():
         return None
     try:
@@ -102,12 +104,12 @@ def load_raw_by_slot(data_dir: Path, chat_id: int, slot: int) -> str | None:
 
 
 
-def export_chat_history(data_dir: Path, chat_id: int) -> str | None:
-    """Export all ring buffer entries for a chat as plain text.
+def export_chat_history(data_dir: Path, conversation_key: str) -> str | None:
+    """Export all ring buffer entries for a conversation as plain text.
 
     Returns formatted text, or None if no history exists.
     """
-    d = _ring_dir(data_dir, chat_id)
+    d = _ring_dir(data_dir, conversation_key)
     entries = sorted(d.glob("*.json"))
     if not entries:
         return None

@@ -11,7 +11,7 @@ from app.agents.types import RoutedTaskRequest
 
 
 async def handle_delegation_approve(
-    chat_id: int,
+    chat_id: int | str,
     conversation_ref: str,
     surface: Any,
     *,
@@ -87,7 +87,7 @@ async def handle_delegation_approve(
 
 
 async def handle_delegation_cancel(
-    chat_id: int,
+    chat_id: int | str,
     conversation_ref: str,
     surface: Any,
 ) -> None:

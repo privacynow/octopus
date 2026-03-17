@@ -57,7 +57,7 @@ SETUP_TIMEOUT_SECONDS = 300  # 5 minutes
 # ---------------------------------------------------------------------------
 
 def build_setup_state(
-    user_id: int,
+    user_id: str,
     skill_name: str,
     missing: list[SkillRequirement],
 ) -> AwaitingSkillSetup:
@@ -100,7 +100,7 @@ def foreign_setup_message(setup: AwaitingSkillSetup) -> str:
 
 def foreign_skill_setup(
     session: SessionState,
-    user_id: int,
+    user_id: str,
     skill_name: str | None = None,
 ) -> AwaitingSkillSetup | None:
     """Return another user's in-progress setup, optionally filtered by skill.
@@ -135,7 +135,7 @@ class CredentialCheckResult:
 def check_credential_satisfaction(
     active_skills: list[str],
     session: SessionState,
-    user_id: int,
+    user_id: str,
     data_dir: Path,
     encryption_key: bytes,
 ) -> CredentialCheckResult:

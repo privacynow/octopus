@@ -67,63 +67,63 @@ def close_all_transport_db() -> None:
 
 def record_and_admit_message(
     data_dir: Path,
-    update_id: int,
-    chat_id: int,
-    user_id: int,
+    event_id: str,
+    conversation_key: str,
+    actor_key: str,
     kind: str,
     payload: str = "{}",
 ) -> tuple[str, str | None]:
     """Record update and admit or reject for provider work. Returns (status, item_id).
     status: 'duplicate' | 'admitted' | 'busy'. item_id set when admitted or busy."""
     return _store().record_and_admit_message(
-        data_dir, update_id, chat_id, user_id, kind, payload,
+        data_dir, event_id, conversation_key, actor_key, kind, payload,
     )
 
 
 def record_and_enqueue(
     data_dir: Path,
-    update_id: int,
-    chat_id: int,
-    user_id: int,
+    event_id: str,
+    conversation_key: str,
+    actor_key: str,
     kind: str,
     payload: str = "{}",
     *,
     worker_id: str | None = None,
 ) -> tuple[bool, str | None]:
     return _store().record_and_enqueue(
-        data_dir, update_id, chat_id, user_id, kind, payload, worker_id=worker_id,
+        data_dir, event_id, conversation_key, actor_key, kind, payload, worker_id=worker_id,
     )
 
 
 def record_update(
     data_dir: Path,
-    update_id: int,
-    chat_id: int,
-    user_id: int,
+    event_id: str,
+    conversation_key: str,
+    actor_key: str,
     kind: str,
     payload: str = "{}",
 ) -> bool:
-    return _store().record_update(data_dir, update_id, chat_id, user_id, kind, payload)
+    return _store().record_update(data_dir, event_id, conversation_key, actor_key, kind, payload)
 
 
 def enqueue_work_item(
-    data_dir: Path, chat_id: int, update_id: int, *, worker_id: str | None = None,
+    data_dir: Path, conversation_key: str, event_id: str, *, worker_id: str | None = None,
 ) -> str:
-    return _store().enqueue_work_item(data_dir, chat_id, update_id, worker_id=worker_id)
+    return _store().enqueue_work_item(data_dir, conversation_key, event_id, worker_id=worker_id)
 
 
-def update_payload(data_dir: Path, update_id: int, payload: str) -> None:
-    _store().update_payload(data_dir, update_id, payload)
+def update_payload(data_dir: Path, event_id: str, payload: str) -> None:
+    _store().update_payload(data_dir, event_id, payload)
 
 
 def claim_for_update(
-    data_dir: Path, chat_id: int, update_id: int, worker_id: str,
+    data_dir: Path, conversation_key: str, event_id: str, worker_id: str,
 ) -> dict[str, Any] | None:
-    return _store().claim_for_update(data_dir, chat_id, update_id, worker_id)
+    return _store().claim_for_update(data_dir, conversation_key, event_id, worker_id)
 
 
-def claim_next(data_dir: Path, chat_id: int, worker_id: str) -> dict[str, Any] | None:
-    return _store().claim_next(data_dir, chat_id, worker_id)
+def claim_next(data_dir: Path, conversation_key: str, worker_id: str) -> dict[str, Any] | None:
+    return _store().claim_next(data_dir, conversation_key, worker_id)
 
 
 def claim_next_any(data_dir: Path, worker_id: str) -> dict[str, Any] | None:
@@ -138,35 +138,35 @@ def fail_work_item(data_dir: Path, item_id: str, error: str) -> None:
     _store().fail_work_item(data_dir, item_id, error)
 
 
-def cancel_queued_fresh_for_chat(data_dir: Path, chat_id: int) -> bool:
-    """If this chat has a queued fresh item, mark it failed with error='cancelled'. Returns True if one was cancelled."""
-    return _store().cancel_queued_fresh_for_chat(data_dir, chat_id)
+def cancel_queued_fresh_for_chat(data_dir: Path, conversation_key: str) -> bool:
+    """If this conversation has a queued fresh item, mark it failed with error='cancelled'."""
+    return _store().cancel_queued_fresh_for_chat(data_dir, conversation_key)
 
 
-def has_claimed_for_chat(data_dir: Path, chat_id: int) -> bool:
-    return _store().has_claimed_for_chat(data_dir, chat_id)
+def has_claimed_for_chat(data_dir: Path, conversation_key: str) -> bool:
+    return _store().has_claimed_for_chat(data_dir, conversation_key)
 
 
-def has_queued_or_claimed(data_dir: Path, chat_id: int) -> bool:
-    return _store().has_queued_or_claimed(data_dir, chat_id)
+def has_queued_or_claimed(data_dir: Path, conversation_key: str) -> bool:
+    return _store().has_queued_or_claimed(data_dir, conversation_key)
 
 
-def get_update_payload(data_dir: Path, update_id: int) -> str | None:
-    return _store().get_update_payload(data_dir, update_id)
+def get_update_payload(data_dir: Path, event_id: str) -> str | None:
+    return _store().get_update_payload(data_dir, event_id)
 
 
-def get_user_access(data_dir: Path, user_id: int) -> str | None:
-    return _store().get_user_access(data_dir, user_id)
+def get_user_access(data_dir: Path, actor_key: str) -> str | None:
+    return _store().get_user_access(data_dir, actor_key)
 
 
 def set_user_access(
     data_dir: Path,
-    user_id: int,
+    actor_key: str,
     access: str,
     reason: str = "",
-    granted_by: int = 0,
+    granted_by: str = "",
 ) -> None:
-    _store().set_user_access(data_dir, user_id, access, reason, granted_by)
+    _store().set_user_access(data_dir, actor_key, access, reason, granted_by)
 
 
 def list_user_access(data_dir: Path) -> list[dict]:
@@ -176,7 +176,7 @@ def list_user_access(data_dir: Path) -> list[dict]:
 def record_usage(
     data_dir: Path,
     *,
-    chat_id: int,
+    conversation_key: str,
     work_item_id: str,
     provider: str,
     prompt_tokens: int,
@@ -185,7 +185,7 @@ def record_usage(
 ) -> None:
     _store().record_usage(
         data_dir,
-        chat_id=chat_id,
+        conversation_key=conversation_key,
         work_item_id=work_item_id,
         provider=provider,
         prompt_tokens=prompt_tokens,
@@ -198,9 +198,9 @@ def get_usage_since(data_dir: Path, *, since_epoch: float) -> list[dict]:
     return _store().get_usage_since(data_dir, since_epoch=since_epoch)
 
 
-def get_work_items_for_chat(data_dir: Path, chat_id: int) -> list[dict[str, Any]]:
-    """Return work items for chat: id, update_id, state, error, dispatch_mode, kind. Read-only; for contract/test assertion."""
-    return _store().get_work_items_for_chat(data_dir, chat_id)
+def get_work_items_for_chat(data_dir: Path, conversation_key: str) -> list[dict[str, Any]]:
+    """Return work items for a conversation: id, event_id, state, error, dispatch_mode, kind."""
+    return _store().get_work_items_for_chat(data_dir, conversation_key)
 
 
 def mark_pending_recovery(data_dir: Path, item_id: str) -> None:
@@ -208,17 +208,17 @@ def mark_pending_recovery(data_dir: Path, item_id: str) -> None:
 
 
 def get_pending_recovery_for_update(
-    data_dir: Path, chat_id: int, update_id: int,
+    data_dir: Path, conversation_key: str, event_id: str,
 ) -> dict[str, Any] | None:
-    return _store().get_pending_recovery_for_update(data_dir, chat_id, update_id)
+    return _store().get_pending_recovery_for_update(data_dir, conversation_key, event_id)
 
 
-def get_latest_pending_recovery(data_dir: Path, chat_id: int) -> dict[str, Any] | None:
-    return _store().get_latest_pending_recovery(data_dir, chat_id)
+def get_latest_pending_recovery(data_dir: Path, conversation_key: str) -> dict[str, Any] | None:
+    return _store().get_latest_pending_recovery(data_dir, conversation_key)
 
 
-def supersede_pending_recovery(data_dir: Path, chat_id: int) -> int:
-    return _store().supersede_pending_recovery(data_dir, chat_id)
+def supersede_pending_recovery(data_dir: Path, conversation_key: str) -> int:
+    return _store().supersede_pending_recovery(data_dir, conversation_key)
 
 
 def discard_recovery(data_dir: Path, item_id: str) -> DiscardResult:

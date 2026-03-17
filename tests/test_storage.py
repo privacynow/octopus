@@ -4,6 +4,7 @@ import json
 import tempfile
 from pathlib import Path
 
+from app.identity import telegram_conversation_key
 from app.storage import (
     _reset_db,
     build_upload_path,
@@ -65,26 +66,38 @@ def test_session_management():
         assert "updated_at" in s
 
         # save + load (first use creates sessions.db)
-        save_session(data_dir, 12345, s)
+        save_session(data_dir, telegram_conversation_key(12345), s)
         assert (data_dir / "sessions.db").exists()
-        assert session_exists(data_dir, 12345)
-        assert not session_exists(data_dir, 99998)
+        assert session_exists(data_dir, telegram_conversation_key(12345))
+        assert not session_exists(data_dir, telegram_conversation_key(99998))
 
-        loaded = load_session(data_dir, 12345, "claude", lambda: {"session_id": "abc", "started": False}, "on")
+        loaded = load_session(
+            data_dir,
+            telegram_conversation_key(12345),
+            "claude",
+            lambda: {"session_id": "abc", "started": False},
+            "on",
+        )
         assert loaded["provider"] == "claude"
         assert loaded["provider_state"]["session_id"] == "abc"
 
         # load with new provider_state keys (migration-safe)
-        loaded2 = load_session(data_dir, 12345, "claude", lambda: {"session_id": "abc", "started": False, "new_key": "default"}, "on")
+        loaded2 = load_session(
+            data_dir,
+            telegram_conversation_key(12345),
+            "claude",
+            lambda: {"session_id": "abc", "started": False, "new_key": "default"},
+            "on",
+        )
         assert loaded2["provider_state"]["new_key"] == "default"
 
         # explicit approval mode survives reload, including its source flag
         s["approval_mode"] = "off"
         s["approval_mode_explicit"] = True
-        save_session(data_dir, 12345, s)
+        save_session(data_dir, telegram_conversation_key(12345), s)
         loaded3 = load_session(
             data_dir,
-            12345,
+            telegram_conversation_key(12345),
             "claude",
             lambda: {"session_id": "abc", "started": False},
             "on",
@@ -93,7 +106,13 @@ def test_session_management():
         assert loaded3["approval_mode_explicit"] is True
 
         # fresh session for new chat
-        fresh = load_session(data_dir, 99999, "codex", lambda: {"thread_id": None}, "off")
+        fresh = load_session(
+            data_dir,
+            telegram_conversation_key(99999),
+            "codex",
+            lambda: {"thread_id": None},
+            "off",
+        )
         assert fresh["provider"] == "codex"
         assert fresh["provider_state"]["thread_id"] is None
 
@@ -127,7 +146,7 @@ def test_build_upload_path():
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
-        path = build_upload_path(data_dir, 42, "photo.jpg")
+        path = build_upload_path(data_dir, telegram_conversation_key(42), "photo.jpg")
         assert str(path).startswith(str(data_dir / "uploads" / "42"))
         assert path.name.endswith("_photo.jpg")
         _reset_db(data_dir)
@@ -146,18 +165,18 @@ def test_list_sessions():
         # Create two sessions
         s1 = default_session("claude", {"session_id": "a", "started": False}, "on")
         s1["active_skills"] = ["code-review"]
-        save_session(data_dir, 111, s1)
+        save_session(data_dir, telegram_conversation_key(111), s1)
 
         s2 = default_session("codex", {"thread_id": None}, "off")
         s2["pending_approval"] = {"prompt": "test", "created_at": 0}
-        save_session(data_dir, 222, s2)
+        save_session(data_dir, telegram_conversation_key(222), s2)
 
         result = list_sessions(data_dir)
         assert len(result) == 2
 
         # Most recently updated should be first
-        assert result[0]["chat_id"] == 222
-        assert result[1]["chat_id"] == 111
+        assert result[0]["conversation_key"] == telegram_conversation_key(222)
+        assert result[1]["conversation_key"] == telegram_conversation_key(111)
 
         # Check fields
         s222 = result[0]
@@ -203,15 +222,27 @@ def test_json_file_migration():
         assert (data_dir / "sessions.db").exists()
 
         # Verify migrated data
-        loaded = load_session(data_dir, 12345, "claude", lambda: {"session_id": "new"}, "on")
+        loaded = load_session(
+            data_dir,
+            telegram_conversation_key(12345),
+            "claude",
+            lambda: {"session_id": "new"},
+            "on",
+        )
         assert loaded["provider_state"]["session_id"] == "migrated"
         assert loaded["active_skills"] == ["github-integration"]
 
-        loaded2 = load_session(data_dir, 67890, "codex", lambda: {"thread_id": None}, "off")
+        loaded2 = load_session(
+            data_dir,
+            telegram_conversation_key(67890),
+            "codex",
+            lambda: {"thread_id": None},
+            "off",
+        )
         assert loaded2["provider_state"]["thread_id"] == "t1"
 
         # Corrupt file was skipped — no session for "bad"
-        assert not session_exists(data_dir, 0)
+        assert not session_exists(data_dir, telegram_conversation_key(0))
 
         result = list_sessions(data_dir)
         assert len(result) == 2
@@ -228,7 +259,7 @@ def test_session_provider_mismatch():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         data_dir = Path(tmpdir)
-        chat_id = 1001
+        conversation_key = telegram_conversation_key(1001)
 
         claude_state_factory = lambda: {"session_id": "new-id", "started": False}
         codex_state_factory = lambda: {"thread_id": None}
@@ -239,17 +270,17 @@ def test_session_provider_mismatch():
         session["provider_state"]["session_id"] = "abc-123"
         session["approval_mode"] = "off"
         session["approval_mode_explicit"] = True
-        save_session(data_dir, chat_id, session)
+        save_session(data_dir, conversation_key, session)
 
         # Reload as Codex — provider_state must be reset
-        loaded_codex = load_session(data_dir, chat_id, "codex", codex_state_factory, "on")
+        loaded_codex = load_session(data_dir, conversation_key, "codex", codex_state_factory, "on")
         assert loaded_codex["provider_state"].get("started") is None
         assert loaded_codex["provider_state"].get("session_id") is None
         # Approval mode from saved session should persist
         assert loaded_codex["approval_mode"] == "off"
 
         # Same provider reload should preserve state
-        loaded_same = load_session(data_dir, chat_id, "claude", claude_state_factory, "on")
+        loaded_same = load_session(data_dir, conversation_key, "claude", claude_state_factory, "on")
         assert loaded_same["provider_state"]["started"] is True
         assert loaded_same["provider_state"]["session_id"] == "abc-123"
         assert loaded_same["approval_mode"] == "off"
@@ -312,22 +343,34 @@ def test_load_session_corrupt_provider_state_falls_back_to_defaults():
         ensure_data_dirs(data_dir)
         # Save a valid session first
         s = default_session("claude", {"session_id": "abc", "started": False}, "on")
-        save_session(data_dir, 55555, s)
+        save_session(data_dir, telegram_conversation_key(55555), s)
         # Corrupt provider_state to a list in the raw JSON
         db_path = data_dir / "sessions.db"
         conn = sqlite3.connect(str(db_path))
-        row = conn.execute("SELECT data FROM sessions WHERE chat_id = 55555").fetchone()
+        row = conn.execute(
+            "SELECT data FROM sessions WHERE conversation_key = ?",
+            (telegram_conversation_key(55555),),
+        ).fetchone()
         import json as _json
         data = _json.loads(row[0])
         data["provider_state"] = [1, 2, 3]  # not a mapping
-        conn.execute("UPDATE sessions SET data = ? WHERE chat_id = 55555", (_json.dumps(data),))
+        conn.execute(
+            "UPDATE sessions SET data = ? WHERE conversation_key = ?",
+            (_json.dumps(data), telegram_conversation_key(55555)),
+        )
         conn.commit()
         conn.close()
         # Close cached connection so load_session re-reads the corrupted file
         from app.storage import close_db
         close_db(data_dir)
         # Must not raise — should fall back to fresh provider_state
-        loaded = load_session(data_dir, 55555, "claude", lambda: {"session_id": "new", "started": False}, "on")
+        loaded = load_session(
+            data_dir,
+            telegram_conversation_key(55555),
+            "claude",
+            lambda: {"session_id": "new", "started": False},
+            "on",
+        )
         assert isinstance(loaded["provider_state"], dict)
         assert loaded["provider_state"]["session_id"] == "new"
         # Prove the row was actually found and partially loaded (not a fresh/empty session)
@@ -342,13 +385,25 @@ def test_created_at_preserved_on_resave():
         ensure_data_dirs(data_dir)
         s = default_session("claude", {"session_id": "abc", "started": False}, "on")
         original_created = s["created_at"]
-        save_session(data_dir, 77777, s)
+        save_session(data_dir, telegram_conversation_key(77777), s)
         # Load, mutate, and re-save
-        loaded = load_session(data_dir, 77777, "claude", lambda: {"session_id": "abc", "started": False}, "on")
+        loaded = load_session(
+            data_dir,
+            telegram_conversation_key(77777),
+            "claude",
+            lambda: {"session_id": "abc", "started": False},
+            "on",
+        )
         loaded["role"] = "test-role"
-        save_session(data_dir, 77777, loaded)
+        save_session(data_dir, telegram_conversation_key(77777), loaded)
         # Reload and verify created_at is unchanged
-        reloaded = load_session(data_dir, 77777, "claude", lambda: {"session_id": "abc", "started": False}, "on")
+        reloaded = load_session(
+            data_dir,
+            telegram_conversation_key(77777),
+            "claude",
+            lambda: {"session_id": "abc", "started": False},
+            "on",
+        )
         assert reloaded["created_at"] == original_created
         _reset_db(data_dir)
 
@@ -361,8 +416,14 @@ def test_falsy_created_at_normalized_on_save():
         ensure_data_dirs(data_dir)
         s = default_session("claude", {"session_id": "abc", "started": False}, "on")
         s["created_at"] = ""  # force falsy
-        save_session(data_dir, 88888, s)
-        loaded = load_session(data_dir, 88888, "claude", lambda: {"session_id": "abc", "started": False}, "on")
+        save_session(data_dir, telegram_conversation_key(88888), s)
+        loaded = load_session(
+            data_dir,
+            telegram_conversation_key(88888),
+            "claude",
+            lambda: {"session_id": "abc", "started": False},
+            "on",
+        )
         assert loaded["created_at"] != "", "falsy created_at was not normalized on save"
         assert len(loaded["created_at"]) > 10, "created_at should be an ISO timestamp"
         _reset_db(data_dir)
@@ -376,16 +437,25 @@ def test_load_session_non_object_json_falls_back_to_defaults():
         data_dir = Path(tmp)
         ensure_data_dirs(data_dir)
         s = default_session("claude", {"session_id": "abc", "started": False}, "on")
-        save_session(data_dir, 66666, s)
+        save_session(data_dir, telegram_conversation_key(66666), s)
         # Overwrite stored data with a valid-JSON non-object
         db_path = data_dir / "sessions.db"
         conn = sqlite3.connect(str(db_path))
-        conn.execute("UPDATE sessions SET data = '[]' WHERE chat_id = 66666")
+        conn.execute(
+            "UPDATE sessions SET data = '[]' WHERE conversation_key = ?",
+            (telegram_conversation_key(66666),),
+        )
         conn.commit()
         conn.close()
         from app.storage import close_db
         close_db(data_dir)
-        loaded = load_session(data_dir, 66666, "claude", lambda: {"session_id": "new", "started": False}, "on")
+        loaded = load_session(
+            data_dir,
+            telegram_conversation_key(66666),
+            "claude",
+            lambda: {"session_id": "new", "started": False},
+            "on",
+        )
         assert isinstance(loaded["provider_state"], dict)
         assert loaded["provider"] == "claude"
         _reset_db(data_dir)

@@ -5,6 +5,7 @@ from app.providers.base import RunContext, RunResult
 from app.session_state import session_from_dict
 from app.skills import derive_encryption_key, get_provider_config_digest, save_user_credential
 from app.storage import default_session, save_session
+from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
@@ -30,7 +31,7 @@ async def test_codex_context_hash_invalidation():
         setup_globals(cfg, prov)
 
         session = default_session("codex", {"thread_id": "old-thread", "context_hash": "stale_hash"}, "off")
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         chat = FakeChat(12345)
         msg = FakeMessage(chat=chat, text="do something")
@@ -44,7 +45,7 @@ async def test_codex_context_hash_invalidation():
         assert len(prov.run_calls) == 1
         assert prov.run_calls[0]["provider_state"].get("thread_id") is None
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session["provider_state"].get("context_hash") is not None
         assert session["provider_state"]["context_hash"] != "stale_hash"
         assert session["provider_state"]["thread_id"] == "new-thread"
@@ -103,7 +104,7 @@ async def test_codex_retry_clears_thread():
             "context_hash": current_hash,
             "denials": [{"tool_name": "Write", "tool_input": {"file_path": "/tmp/x.txt"}}],
         }
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         chat = FakeChat(12345)
         cb_msg = FakeMessage(chat=chat)
@@ -128,7 +129,7 @@ async def test_codex_failed_resume_clears_thread():
 
         current_hash = _default_hash(cfg)
         session = default_session("codex", {"thread_id": "thread-abc", "context_hash": current_hash}, "off")
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
         prov.run_results = [RunResult(text="[Codex error: thread not found]", returncode=1)]
 
         chat = FakeChat(12345)
@@ -142,7 +143,7 @@ async def test_codex_failed_resume_clears_thread():
         )
         await drain_one_worker_item(data_dir)
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session["provider_state"].get("thread_id") is None
 
 
@@ -154,7 +155,7 @@ async def test_codex_timed_out_resume_preserves_thread():
 
         current_hash = _default_hash(cfg)
         session = default_session("codex", {"thread_id": "thread-abc", "context_hash": current_hash}, "off")
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
         prov.run_results = [RunResult(text="", timed_out=True, returncode=124)]
 
         chat = FakeChat(12345)
@@ -168,7 +169,7 @@ async def test_codex_timed_out_resume_preserves_thread():
         )
         await drain_one_worker_item(data_dir)
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session["provider_state"].get("thread_id") == "thread-abc"
 
 
@@ -179,7 +180,7 @@ async def test_codex_new_exec_failure_preserves_no_thread():
         setup_globals(cfg, prov)
 
         session = default_session("codex", {"thread_id": None}, "off")
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
         prov.run_results = [RunResult(text="[Codex error: model overloaded]", returncode=1)]
 
         chat = FakeChat(12345)
@@ -193,7 +194,7 @@ async def test_codex_new_exec_failure_preserves_no_thread():
         )
         await drain_one_worker_item(data_dir)
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session["provider_state"].get("thread_id") is None
 
 
@@ -215,7 +216,7 @@ async def test_codex_error_text_is_html_escaped():
         setup_globals(cfg, prov)
 
         session = default_session("codex", {"thread_id": None}, "off")
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
         prov.run_results = [RunResult(text="[Codex error: Usage: <MODEL>]", returncode=2)]
 
         chat = FakeChat(12345)
@@ -251,7 +252,7 @@ async def test_codex_boot_id_clears_stale_thread():
             {"thread_id": "old-thread", "boot_id": "old-boot", "context_hash": "abc"},
             "off",
         )
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
 
         setup_globals(cfg, prov, boot_id="new-boot")
         prov.run_results = [RunResult(text="done")]
@@ -269,7 +270,7 @@ async def test_codex_boot_id_clears_stale_thread():
 
         call = last_run_call(prov)
         assert call["provider_state"].get("thread_id") is None
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session["provider_state"].get("boot_id") == "new-boot"
 
 
@@ -280,7 +281,7 @@ async def test_codex_same_boot_preserves_thread():
         setup_globals(cfg, prov, boot_id="same-boot")
 
         session = default_session("codex", {"thread_id": "my-thread", "boot_id": "same-boot"}, "off")
-        save_session(data_dir, 12345, session)
+        save_session(data_dir, telegram_conversation_key(12345), session)
         prov.run_results = [RunResult(text="done", provider_state_updates={"thread_id": "my-thread"})]
 
         chat = FakeChat(12345)
@@ -365,7 +366,7 @@ async def test_context_hash_role_sensitivity():
         await drain_one_worker_item(data_dir)
         assert len(prov.run_calls) == 1
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         hash1 = session["provider_state"].get("context_hash")
         assert hash1 is not None
 
@@ -383,6 +384,6 @@ async def test_context_hash_role_sensitivity():
         assert len(prov.run_calls) == 2
         assert prov.run_calls[1]["provider_state"].get("thread_id") is None
 
-        session = load_session_disk(data_dir, 12345, prov)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         hash2 = session["provider_state"].get("context_hash")
         assert hash1 != hash2

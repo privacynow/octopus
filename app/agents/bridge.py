@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import html
 import logging
 import uuid
@@ -13,36 +12,20 @@ from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.state import load_agent_runtime_state
 from app.agents.types import RoutedTaskResult, TimelineEvent
 from app.config import BotConfig
+from app.identity import telegram_conversation_key
 from app.transport import InboundMessage, InboundUser, serialize_inbound
 from app.transports.factory import conversation_surface_name
 
 log = logging.getLogger(__name__)
 
 
-def _stable_int(value: str) -> int:
-    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
-    return int(digest[:15], 16)
-
-
-def registry_chat_id(conversation_ref: str) -> int:
-    return _stable_int(f"registry-chat:{conversation_ref}")
-
-
-def registry_update_id(delivery_id: str) -> int:
-    return _stable_int(f"registry-update:{delivery_id}")
-
-
-def registry_actor_id(actor_ref: str) -> int:
-    return _stable_int(f"registry-actor:{actor_ref}")
-
-
-def local_chat_id_for_conversation(conversation_ref: str) -> int:
+def conversation_key_for_ref(conversation_ref: str) -> str:
     if conversation_surface_name(conversation_ref) == "telegram":
         try:
-            return int(conversation_ref.rsplit(":", 1)[1])
+            return telegram_conversation_key(conversation_ref.rsplit(":", 1)[1])
         except (IndexError, ValueError):
-            return registry_chat_id(conversation_ref)
-    return registry_chat_id(conversation_ref)
+            return conversation_ref
+    return conversation_ref
 
 
 def agent_identity(config: BotConfig) -> str:
@@ -124,14 +107,14 @@ def build_registry_message_delivery(
     delivery_id: str,
     routed_task_id: str = "",
     skip_approval: bool = False,
-) -> tuple[int, int, int, str]:
-    chat_id = local_chat_id_for_conversation(conversation_ref)
-    user_id = registry_actor_id(actor_ref)
-    update_id = registry_update_id(delivery_id)
+) -> tuple[str, str, str, str]:
+    conversation_key = conversation_key_for_ref(conversation_ref)
+    actor_key = f"reg:{actor_ref}"
+    event_id = f"reg:{delivery_id}"
     payload = serialize_inbound(
         InboundMessage(
-            user=InboundUser(id=user_id, username="registry"),
-            chat_id=chat_id,
+            user=InboundUser(id=actor_key, username="registry"),
+            conversation_key=conversation_key,
             text=text,
             attachments=(),
             source="registry",
@@ -140,7 +123,7 @@ def build_registry_message_delivery(
             skip_approval=skip_approval,
         )
     )
-    return chat_id, user_id, update_id, payload
+    return conversation_key, actor_key, event_id, payload
 
 
 async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -> str:
@@ -152,7 +135,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
 
     if kind == "surface_input":
         conversation_ref = payload["conversation_id"]
-        chat_id, user_id, update_id, serialized = build_registry_message_delivery(
+        conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
             conversation_ref=conversation_ref,
             text=payload.get("text", ""),
             actor_ref=f"registry-ui:{conversation_ref}",
@@ -160,9 +143,9 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
         )
         status, _ = work_queue.record_and_admit_message(
             data_dir,
-            update_id,
-            chat_id,
-            user_id,
+            event_id,
+            conversation_key,
+            actor_key,
             "message",
             serialized,
         )
@@ -202,7 +185,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
         if context_lines:
             text = text + "\n\n" + "\n".join(context_lines)
         conversation_ref = request["routed_task_id"]
-        chat_id, user_id, update_id, serialized = build_registry_message_delivery(
+        conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
             conversation_ref=conversation_ref,
             text=text,
             actor_ref=f"agent:{request.get('origin_agent_id', '')}",
@@ -211,9 +194,9 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
         )
         status, _ = work_queue.record_and_admit_message(
             data_dir,
-            update_id,
-            chat_id,
-            user_id,
+            event_id,
+            conversation_key,
+            actor_key,
             "message",
             serialized,
         )

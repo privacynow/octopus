@@ -5,12 +5,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import replace
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.state import AgentRuntimeState, load_agent_runtime_state, save_agent_runtime_state
 from app.agents.types import AgentCard, utcnow_iso
 from app.config import BotConfig
+from app.runtime_health import (
+    RuntimeHealthJsonProjector,
+    RuntimeHealthProjector,
+    RuntimeHealthProvider,
+)
 
 log = logging.getLogger(__name__)
 
@@ -23,10 +28,16 @@ class AgentRuntime:
         config: BotConfig,
         *,
         delivery_handler: Callable[[dict[str, object]], Awaitable[str]] | None = None,
+        runtime_health_provider: RuntimeHealthProvider | None = None,
+        runtime_health_projector: RuntimeHealthProjector[dict[str, Any]] | None = None,
+        provider=None,
     ) -> None:
         self.config = config
         self._delivery_handler = delivery_handler
         self._state = load_agent_runtime_state(config.data_dir)
+        self._runtime_health_provider = runtime_health_provider
+        self._runtime_health_projector = runtime_health_projector or RuntimeHealthJsonProjector()
+        self._provider = provider
 
     @property
     def state(self) -> AgentRuntimeState:
@@ -55,6 +66,19 @@ class AgentRuntime:
             self.config.agent_registry_url,
             agent_token=self._state.agent_token,
         )
+
+    async def _runtime_health_payload(self) -> tuple[dict[str, Any] | None, int]:
+        if self._runtime_health_provider is None or self._provider is None:
+            return None, 0
+        report = await self._runtime_health_provider.collect(
+            self.config,
+            self._provider,
+            caller_is_bot=True,
+            session_context=None,
+        )
+        payload = self._runtime_health_projector.project(report)
+        active_work_count = report.summary.claimed_count
+        return payload, active_work_count
 
     def _save_state(self) -> None:
         save_agent_runtime_state(self.config.data_dir, self._state)
@@ -103,12 +127,24 @@ class AgentRuntime:
                 current_capacity=0,
                 max_capacity=1,
             )
-            await client.heartbeat(
-                connectivity_state="connected",
-                current_capacity=0,
-                max_capacity=1,
-                active_work_count=0,
-            )
+            runtime_health_payload = None
+            active_work_count = 0
+            try:
+                runtime_health_payload, active_work_count = await self._runtime_health_payload()
+            except Exception:
+                log.exception(
+                    "Runtime health collection failed for %s; continuing without mirrored health",
+                    self.config.instance,
+                )
+            heartbeat_kwargs = {
+                "connectivity_state": "connected",
+                "current_capacity": 0,
+                "max_capacity": 1,
+                "active_work_count": active_work_count,
+            }
+            if runtime_health_payload is not None:
+                heartbeat_kwargs["runtime_health"] = runtime_health_payload
+            await client.heartbeat(**heartbeat_kwargs)
         except (RegistryClientError, OSError, asyncio.TimeoutError) as exc:
             log.warning("Agent registry sync degraded for %s: %s", self.config.instance, exc)
             self._mark_state("degraded", error=str(exc))
@@ -196,8 +232,17 @@ def start_agent_runtime_task(
     config: BotConfig,
     *,
     delivery_handler: Callable[[dict[str, object]], Awaitable[str]] | None = None,
+    runtime_health_provider: RuntimeHealthProvider | None = None,
+    runtime_health_projector: RuntimeHealthProjector[dict[str, Any]] | None = None,
+    provider=None,
 ) -> tuple[asyncio.Task[None], asyncio.Event]:
     stop_event = asyncio.Event()
-    runtime = AgentRuntime(config, delivery_handler=delivery_handler)
+    runtime = AgentRuntime(
+        config,
+        delivery_handler=delivery_handler,
+        runtime_health_provider=runtime_health_provider,
+        runtime_health_projector=runtime_health_projector,
+        provider=provider,
+    )
     task = asyncio.create_task(runtime.run_forever(stop_event))
     return task, stop_event

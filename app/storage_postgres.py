@@ -228,5 +228,12 @@ class PostgresSessionStore:
     def close_all_db(self) -> None:
         pass
 
-    def _reset_db(self, data_dir: Path) -> None:
+    def debug_connection(self, data_dir: Path):
+        """Not available via runtime backend; use conn-based helpers in tests."""
+        raise NotImplementedError(
+            "Postgres session store does not expose a runtime debug connection; "
+            "use app.storage_postgres conn-based helpers in tests"
+        )
+
+    def reset_db_for_test(self, data_dir: Path) -> None:
         pass  # Tests use conn-based API and truncate; no per-dir reset

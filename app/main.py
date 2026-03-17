@@ -3,9 +3,10 @@
 import argparse
 import asyncio
 import logging
+import signal
 import sys
 
-from app.config import BotConfig, fail_fast, load_config, load_config_provider_health
+from app.config import BotConfig, ProcessRole, fail_fast, load_config, load_config_provider_health
 from app.providers.base import Provider
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
@@ -13,9 +14,10 @@ from app.agents.delivery import handle_registry_delivery
 from app.agents.runtime import start_agent_runtime_task
 from app.storage import close_db, ensure_data_dirs
 from app.work_queue import close_transport_db, recover_stale_claims, purge_old
-from app.worker import start_worker_task
+from app.worker import poll_interval_for_runtime, start_worker_task
 from app.store import startup_recovery
 from app.telegram_handlers import build_application
+from app.runtime_health import CanonicalRuntimeHealthProvider
 
 PROVIDERS: dict[str, type] = {
     "claude": ClaudeProvider,
@@ -38,15 +40,18 @@ def make_provider(config: BotConfig) -> Provider:
 
 
 async def _run_doctor(config: BotConfig, provider: Provider) -> None:
-    from app.doctor import collect_doctor_report
-    report = await collect_doctor_report(config, provider)
-    if report.errors:
-        for e in report.errors:
-            print(f"  FAIL: {e}", file=sys.stderr)
+    from app.runtime_health import collect_runtime_health_report, format_runtime_health_for_doctor
+
+    report = await collect_runtime_health_report(config, provider)
+    for line in format_runtime_health_for_doctor(report):
+        if line.startswith("FAIL: "):
+            print(f"  {line}", file=sys.stderr)
+        elif line.startswith("WARN: "):
+            print(f"  {line}", file=sys.stderr)
+        else:
+            print(f"  {line}")
+    if report.summary.error_count:
         raise SystemExit(1)
-    if report.warnings:
-        for w in report.warnings:
-            print(f"  WARN: {w}", file=sys.stderr)
     print("All checks passed.")
     raise SystemExit(0)
 
@@ -70,8 +75,60 @@ async def _run_provider_health(provider: Provider) -> None:
     raise SystemExit(0)
 
 
+def _runs_ingress(config: BotConfig) -> bool:
+    return config.process_role in {ProcessRole.ALL.value, ProcessRole.WEBHOOK.value}
+
+
+def _runs_worker(config: BotConfig) -> bool:
+    return config.process_role in {ProcessRole.ALL.value, ProcessRole.WORKER.value}
+
+
+def _runs_registry_runtime(config: BotConfig) -> bool:
+    if config.agent_mode != "registry":
+        return False
+    if config.runtime_mode == "shared":
+        return config.process_role in {ProcessRole.ALL.value, ProcessRole.WEBHOOK.value}
+    return config.process_role == ProcessRole.ALL.value
+
+
+def _should_validate_provider_runtime(config: BotConfig) -> bool:
+    return config.process_role != ProcessRole.WEBHOOK.value
+
+
+def _close_runtime_resources(config: BotConfig) -> None:
+    if config.database_url:
+        from app.db.postgres import close_pools
+
+        close_pools()
+    else:
+        close_transport_db(config.data_dir)
+        close_db(config.data_dir)
+
+
+async def run_worker_process(app) -> None:
+    """Initialize the Telegram app globals and keep worker-owned tasks alive."""
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except NotImplementedError:
+            continue
+
+    await app.initialize()
+    try:
+        if app.post_init:
+            await app.post_init(app)
+        await stop_event.wait()
+    finally:
+        if app.post_shutdown:
+            await app.post_shutdown(app)
+        await app.shutdown()
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Telegram Agent Bot")
+    parser = argparse.ArgumentParser(description="Octopus Agent Platform")
     parser.add_argument("instance", nargs="?", default=None, help="Instance name (default: from BOT_INSTANCE env)")
     parser.add_argument("--doctor", action="store_true", help="Run full health checks (config, DB, provider, Telegram) and exit")
     parser.add_argument("--provider-health", action="store_true", help="Run only provider auth/runtime checks and exit (no DB or Telegram)")
@@ -86,13 +143,6 @@ def main() -> None:
     config = load_config(args.instance)
     provider = make_provider(config)
     fail_fast(config)
-
-    # Phase 13: Only local runtime is supported. Reject shared until Phase 18.
-    if config.runtime_mode != "local":
-        print("Only Local Runtime is supported (BOT_RUNTIME_MODE=local).", file=sys.stderr)
-        if config.runtime_mode == "shared":
-            print("BOT_RUNTIME_MODE=shared (Shared Runtime) is not available until Phase 18.", file=sys.stderr)
-        sys.exit(1)
 
     # Single backend bootstrap seam: SQLite (default) or Postgres when BOT_DATABASE_URL set.
     from app import runtime_backend
@@ -126,14 +176,15 @@ def main() -> None:
     if args.doctor:
         run_doctor(config, provider)
 
-    # Validate provider auth before starting (same check as doctor; clear message if missing)
-    runtime_errors = asyncio.run(provider.check_runtime_health())
-    if runtime_errors:
-        print("Provider not authenticated or unavailable.", file=sys.stderr)
-        for e in runtime_errors:
-            print(f"  {e}", file=sys.stderr)
-        print("Run ./scripts/provider/provider_login.sh to authenticate, or check your subscription.", file=sys.stderr)
-        sys.exit(1)
+    if _should_validate_provider_runtime(config):
+        # Validate provider auth before starting when this process may execute provider work.
+        runtime_errors = asyncio.run(provider.check_runtime_health())
+        if runtime_errors:
+            print("Provider not authenticated or unavailable.", file=sys.stderr)
+            for e in runtime_errors:
+                print(f"  {e}", file=sys.stderr)
+            print("Run ./scripts/provider/provider_login.sh to authenticate, or check your subscription.", file=sys.stderr)
+            sys.exit(1)
 
     ensure_data_dirs(config.data_dir, database_url=config.database_url or "")
     startup_recovery()
@@ -152,12 +203,19 @@ def main() -> None:
     elif config.allow_open:
         log.warning("Bot is open to everyone (BOT_ALLOW_OPEN=1)")
 
+    log.info("Process role: %s", config.process_role)
     app = build_application(config, provider)
 
-    # Recover stale work items from previous boot and purge old transport data
     from app.telegram_handlers import _boot_id as boot_id
-    recover_stale_claims(config.data_dir, boot_id)
-    purge_old(config.data_dir)
+
+    if _runs_worker(config):
+        # Recover stale work items from previous boot and purge old transport data
+        recover_stale_claims(
+            config.data_dir,
+            boot_id,
+            max_age_seconds=config.claim_lease_ttl_seconds,
+        )
+        purge_old(config.data_dir)
 
     # Worker loop: drains orphaned/recovered work items from the durable queue.
     # In single-worker mode the inline handler path handles most items; the
@@ -170,13 +228,24 @@ def main() -> None:
     async def _on_post_init(_app) -> None:
         nonlocal _worker_task, _worker_stop, _agent_task, _agent_stop
         from app.telegram_handlers import worker_dispatch
-        _worker_task, _worker_stop = start_worker_task(
-            config.data_dir, boot_id, worker_dispatch,
-        )
-        _agent_task, _agent_stop = start_agent_runtime_task(
-            config,
-            delivery_handler=lambda delivery: handle_registry_delivery(config, delivery),
-        )
+        if _runs_worker(config):
+            _worker_task, _worker_stop = start_worker_task(
+                config.data_dir,
+                boot_id,
+                worker_dispatch,
+                poll_interval=poll_interval_for_runtime(config.runtime_mode),
+                lease_ttl=config.claim_lease_ttl_seconds,
+                sweep_interval=config.claim_sweep_interval_seconds,
+                process_role=config.process_role,
+                heartbeat_enabled=(config.runtime_mode == "shared"),
+            )
+        if _runs_registry_runtime(config):
+            _agent_task, _agent_stop = start_agent_runtime_task(
+                config,
+                delivery_handler=lambda delivery: handle_registry_delivery(config, delivery),
+                runtime_health_provider=CanonicalRuntimeHealthProvider(),
+                provider=provider,
+            )
 
     async def _on_post_shutdown(_app) -> None:
         if _agent_stop:
@@ -197,7 +266,15 @@ def main() -> None:
     app.post_init = _on_post_init
     app.post_shutdown = _on_post_shutdown
 
-    if config.bot_mode == "webhook":
+    if config.process_role == ProcessRole.WORKER.value:
+        log.info("Bot starting (worker-only)...")
+        try:
+            asyncio.run(run_worker_process(app))
+        except KeyboardInterrupt:
+            pass
+        finally:
+            _close_runtime_resources(config)
+    elif config.bot_mode == "webhook":
         log.info("Bot starting (webhook)...")
         log.info("Webhook URL: %s", config.webhook_url)
         log.info("Listening on %s:%d", config.webhook_listen, config.webhook_port)
@@ -210,15 +287,10 @@ def main() -> None:
                 url_path="/webhook",
             )
         finally:
-            if config.database_url:
-                from app.db.postgres import close_pools
-                close_pools()
-            else:
-                close_transport_db(config.data_dir)
-                close_db(config.data_dir)
+            _close_runtime_resources(config)
     else:
         # Fail fast if another process is already polling (Telegram allows only one getUpdates per token).
-        from app.doctor import check_polling_conflict
+        from app.runtime_health import check_polling_conflict
         try:
             conflict_msg = asyncio.run(check_polling_conflict(config.telegram_token))
         except Exception as e:
@@ -226,7 +298,7 @@ def main() -> None:
             conflict_msg = None
         if conflict_msg:
             log.error(
-                "%s Stop the other instance (e.g. systemctl --user stop telegram-agent-bot@%s.service) or wait a minute, then try again.",
+                "%s Stop the other instance (e.g. systemctl --user stop octopus-agent@%s.service) or wait a minute, then try again.",
                 conflict_msg,
                 config.instance,
             )
@@ -236,12 +308,7 @@ def main() -> None:
         try:
             app.run_polling()
         finally:
-            if config.database_url:
-                from app.db.postgres import close_pools
-                close_pools()
-            else:
-                close_transport_db(config.data_dir)
-                close_db(config.data_dir)
+            _close_runtime_resources(config)
 
 
 if __name__ == "__main__":

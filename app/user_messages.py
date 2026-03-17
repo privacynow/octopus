@@ -470,9 +470,14 @@ def generic_error_try_again() -> str:
     return "Something went wrong. Please try again or contact support."
 
 
+def queue_accepted() -> str:
+    """When a request is durably accepted behind work already in progress."""
+    return "Another request is already running. This request was queued and will run next. Use /cancel to stop current work."
+
+
 def queue_busy() -> str:
-    """When user's message is rejected because another request is already in progress."""
-    return "Another request is already running. This message was not started. Wait for it to finish or use /cancel."
+    """Backward-compatible alias for queued/contended feedback."""
+    return queue_accepted()
 
 
 def callback_wrong_user() -> str:
@@ -517,5 +522,4 @@ def cancel_live_completed() -> str:
 def cancel_queued_superseded() -> str:
     """When a queued plain message is dropped because /cancel was processed (no later run)."""
     return "This request was superseded by a cancellation."
-
 

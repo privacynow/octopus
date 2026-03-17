@@ -299,6 +299,84 @@ def test_main_calls_run_webhook_in_webhook_mode():
     mock_app.run_polling.assert_not_called()
 
 
+def test_main_allows_shared_runtime_in_webhook_mode():
+    cfg = make_config(
+        runtime_mode="shared",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+        database_url="postgresql://bot:bot@localhost:5432/bot",
+    )
+    mock_app = MagicMock()
+    with _patched_main_runtime(cfg, mock_app):
+        from app.main import main
+
+        main()
+    mock_app.run_webhook.assert_called_once()
+
+
+def test_main_worker_role_runs_worker_process_only():
+    cfg = make_config(
+        runtime_mode="shared",
+        process_role="worker",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+        database_url="postgresql://bot:bot@localhost:5432/bot",
+    )
+    mock_app = MagicMock()
+    worker_runner = AsyncMock(return_value=None)
+    with _patched_main_runtime(cfg, mock_app):
+        with patch("app.main.run_worker_process", worker_runner):
+            from app.main import main
+
+            main()
+    worker_runner.assert_awaited_once_with(mock_app)
+    mock_app.run_polling.assert_not_called()
+    mock_app.run_webhook.assert_not_called()
+
+
+def test_main_webhook_role_skips_provider_runtime_validation():
+    cfg = make_config(
+        process_role="webhook",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+        database_url="postgresql://bot:bot@localhost:5432/bot",
+    )
+    provider = _runtime_ok_provider()
+    mock_app = MagicMock()
+    with _patched_main_runtime(cfg, mock_app, provider=provider):
+        from app.main import main
+
+        main()
+    assert provider.check_runtime_health.await_count == 0
+    mock_app.run_webhook.assert_called_once()
+
+
+def test_runs_registry_runtime_moves_to_webhook_role_in_shared_mode():
+    from app.main import _runs_registry_runtime
+
+    cfg = make_config(
+        agent_mode="registry",
+        runtime_mode="shared",
+        process_role="webhook",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+    )
+    assert _runs_registry_runtime(cfg) is True
+
+
+def test_runs_registry_runtime_is_disabled_for_shared_worker_role():
+    from app.main import _runs_registry_runtime
+
+    cfg = make_config(
+        agent_mode="registry",
+        runtime_mode="shared",
+        process_role="worker",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+    )
+    assert _runs_registry_runtime(cfg) is False
+
+
 def test_main_webhook_empty_secret_passes_none():
     """Empty BOT_WEBHOOK_SECRET should pass secret_token=None."""
     cfg = make_config(
@@ -339,6 +417,23 @@ def test_load_config_reads_webhook_env_vars():
         os.unlink(env_path)
 
 
+def test_load_config_reads_telegram_api_base_urls():
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write("TELEGRAM_BOT_TOKEN=tok\n")
+        f.write("BOT_PROVIDER=claude\n")
+        f.write("BOT_ALLOW_OPEN=1\n")
+        f.write("BOT_TELEGRAM_API_BASE_URL=http://telegram-api-stub:8081/bot\n")
+        f.write("BOT_TELEGRAM_FILE_API_BASE_URL=http://telegram-api-stub:8081/file/bot\n")
+        env_path = f.name
+    try:
+        with patch("app.config.env_path_for_instance", return_value=Path(env_path)):
+            cfg = load_config("test-telegram-api")
+        assert cfg.telegram_api_base_url == "http://telegram-api-stub:8081/bot"
+        assert cfg.telegram_file_api_base_url == "http://telegram-api-stub:8081/file/bot"
+    finally:
+        os.unlink(env_path)
+
+
 def test_load_config_reads_completion_webhook_url():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
         f.write("TELEGRAM_BOT_TOKEN=tok\n")
@@ -354,10 +449,35 @@ def test_load_config_reads_completion_webhook_url():
         os.unlink(env_path)
 
 
-def test_validate_config_rejects_shared_runtime_mode():
-    """Phase 13: BOT_RUNTIME_MODE=shared is rejected until Phase 18."""
-    errors = validate_config(make_config(runtime_mode="shared"))
-    assert any("shared" in e.lower() and "phase 18" in e.lower() for e in errors)
+def test_validate_config_shared_runtime_requires_webhook_mode():
+    errors = validate_config(make_config(runtime_mode="shared", bot_mode="poll"))
+    assert any("shared" in e.lower() and "requires bot_mode=webhook" in e.lower() for e in errors)
+
+
+def test_validate_config_accepts_shared_runtime_with_webhook_without_database_url():
+    errors = validate_config(
+        make_config(
+            runtime_mode="shared",
+            bot_mode="webhook",
+            webhook_url="https://bot.example.com/webhook",
+            database_url="",
+        )
+    )
+    runtime_errors = [e for e in errors if "runtime" in e.lower()]
+    assert runtime_errors == []
+
+
+def test_validate_config_accepts_shared_runtime_with_webhook_and_database_url():
+    errors = validate_config(
+        make_config(
+            runtime_mode="shared",
+            bot_mode="webhook",
+            webhook_url="https://bot.example.com/webhook",
+            database_url="postgresql://bot:bot@localhost:5432/bot",
+        )
+    )
+    runtime_errors = [e for e in errors if "runtime" in e.lower()]
+    assert runtime_errors == []
 
 
 def test_validate_config_accepts_local_runtime_mode():
@@ -365,6 +485,81 @@ def test_validate_config_accepts_local_runtime_mode():
     errors = validate_config(make_config(runtime_mode="local"))
     runtime_errors = [e for e in errors if "RUNTIME" in e or "runtime" in e]
     assert runtime_errors == []
+
+
+def test_validate_config_invalid_process_role():
+    errors = validate_config(make_config(process_role="invalid"))
+    assert any("BOT_PROCESS_ROLE" in e for e in errors)
+
+
+def test_validate_config_webhook_process_role_requires_webhook_mode():
+    errors = validate_config(make_config(process_role="webhook", bot_mode="poll"))
+    assert any("BOT_PROCESS_ROLE=webhook requires BOT_MODE=webhook" in e for e in errors)
+
+
+def test_validate_config_webhook_process_role_requires_shared_runtime():
+    errors = validate_config(make_config(process_role="webhook", runtime_mode="local", bot_mode="webhook"))
+    assert any("BOT_PROCESS_ROLE=webhook requires BOT_RUNTIME_MODE=shared" in e for e in errors)
+
+
+def test_validate_config_worker_process_role_requires_shared_runtime():
+    errors = validate_config(make_config(process_role="worker", runtime_mode="local"))
+    assert any("BOT_PROCESS_ROLE=worker requires BOT_RUNTIME_MODE=shared" in e for e in errors)
+
+
+def test_process_role_defaults_to_all():
+    cfg = make_config()
+    assert cfg.process_role == "all"
+
+
+def test_load_config_reads_process_role():
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write("TELEGRAM_BOT_TOKEN=tok\n")
+        f.write("BOT_PROVIDER=claude\n")
+        f.write("BOT_ALLOW_OPEN=1\n")
+        f.write("BOT_PROCESS_ROLE=worker\n")
+        env_path = f.name
+    try:
+        with patch("app.config.env_path_for_instance", return_value=Path(env_path)):
+            cfg = load_config("test-role")
+        assert cfg.process_role == "worker"
+    finally:
+        os.unlink(env_path)
+
+
+def test_claim_lease_ttl_defaults_to_300():
+    cfg = make_config()
+    assert cfg.claim_lease_ttl_seconds == 300
+
+
+def test_claim_lease_ttl_from_env():
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write("TELEGRAM_BOT_TOKEN=tok\n")
+        f.write("BOT_PROVIDER=claude\n")
+        f.write("BOT_ALLOW_OPEN=1\n")
+        f.write("BOT_CLAIM_LEASE_TTL=45\n")
+        env_path = f.name
+    try:
+        with patch("app.config.env_path_for_instance", return_value=Path(env_path)):
+            cfg = load_config("test-lease")
+        assert cfg.claim_lease_ttl_seconds == 45
+    finally:
+        os.unlink(env_path)
+
+
+def test_claim_lease_ttl_must_be_positive():
+    errors = validate_config(make_config(claim_lease_ttl_seconds=0))
+    assert any("BOT_CLAIM_LEASE_TTL must be greater than 0" in e for e in errors)
+
+
+def test_claim_sweep_interval_must_be_positive():
+    errors = validate_config(make_config(claim_sweep_interval_seconds=0))
+    assert any("BOT_CLAIM_SWEEP_INTERVAL_SECONDS must be greater than 0" in e for e in errors)
+
+
+def test_validate_config_rejects_invalid_telegram_api_base_url():
+    errors = validate_config(make_config(telegram_api_base_url="ftp://telegram-api-stub:8081/bot"))
+    assert any("BOT_TELEGRAM_API_BASE_URL" in e for e in errors)
 
 
 def test_load_config_reads_database_url_and_pool_settings():

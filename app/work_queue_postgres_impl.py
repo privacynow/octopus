@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from contextlib import contextmanager
@@ -10,6 +11,7 @@ from typing import Any, Callable
 
 from psycopg.rows import dict_row
 
+from app.runtime_health import QueueSnapshot, WorkerHeartbeat
 from app.workflows.results import TransportDisposition, TransportStateCorruption
 from app.workflows.transport_recovery import (
     TRANSPORT_STATES,
@@ -18,6 +20,7 @@ from app.workflows.transport_recovery import (
 )
 from app.transport_contract import (
     ApplyResult,
+    CancelRequestResult,
     DiscardResult,
     ReclaimBlocked,
     _validate_work_item_row,
@@ -91,8 +94,16 @@ def _load_work_item_by_conversation_event(
     if row is None:
         return None
     row = dict(row)
+    if "payload" in row:
+        row["payload"] = _payload_json_text(row["payload"])
     _validate_work_item_row(row)
     return row
+
+
+def _payload_json_text(value: Any) -> str:
+    if isinstance(value, dict):
+        return json.dumps(value)
+    return str(value) if value is not None else "{}"
 
 
 def _assert_no_invalid_rows_for_conversation(conn, conversation_key: str) -> None:
@@ -376,8 +387,10 @@ def record_and_admit_message(
     kind: str,
     payload: str = "{}",
 ) -> tuple[str, str | None]:
-    """Record update and admit or reject for provider work. Returns (status, item_id).
-    status: 'duplicate' | 'admitted' | 'busy'. item_id set when admitted or busy."""
+    """Record update and durably admit fresh work. Returns (status, item_id).
+
+    status: 'duplicate' | 'admitted' | 'queued'. item_id set when admitted or queued.
+    """
     now = datetime.now(timezone.utc).isoformat()
     item_id = uuid.uuid4().hex
     try:
@@ -400,16 +413,7 @@ def record_and_admit_message(
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                     (conversation_key,),
                 )
-            if has_fresh_queued_or_claimed(conn, conversation_key):
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {_SCHEMA}.work_items (id, conversation_key, event_id, state, error, created_at, dispatch_mode)
-                        VALUES (%s, %s, %s, 'failed', 'chat_busy', %s, 'fresh')
-                        """,
-                        (item_id, conversation_key, event_id, now),
-                    )
-                return ("busy", item_id)
+            had_prior_fresh = has_fresh_queued_or_claimed(conn, conversation_key)
             with _cur(conn) as cur:
                 cur.execute(
                     f"""
@@ -418,7 +422,7 @@ def record_and_admit_message(
                     """,
                     (item_id, conversation_key, event_id, now),
                 )
-            return ("admitted", item_id)
+            return ("queued" if had_prior_fresh else "admitted", item_id)
     except _DuplicateUpdate:
         return ("duplicate", None)
 
@@ -508,7 +512,7 @@ def claim_for_update(
             u = cur.fetchone()
         if u:
             out["kind"] = u["kind"]
-            out["payload"] = u["payload"]
+            out["payload"] = _payload_json_text(u["payload"])
         return out
 
 
@@ -573,6 +577,8 @@ def claim_next_any(conn, worker_id: str) -> dict[str, Any] | None:
         if item is None:
             return None
         out = dict(item)
+        if "payload" in out:
+            out["payload"] = _payload_json_text(out["payload"])
         _validate_work_item_row(out, out["id"])
         return out
 
@@ -720,6 +726,74 @@ def cancel_queued_fresh_for_chat(conn, conversation_key: str) -> bool:
             return cur.rowcount > 0
 
 
+def request_cancel(
+    conn,
+    conversation_key: str,
+    actor_key: str,
+    *,
+    cancel_request_event_id: str = "",
+) -> CancelRequestResult:
+    now = datetime.now(timezone.utc).isoformat()
+    with _write_tx(conn):
+        with _cur(conn) as cur:
+            cur.execute(
+                f"""
+                SELECT id, cancel_requested_at FROM {_SCHEMA}.work_items
+                WHERE conversation_key = %s AND state = 'claimed' AND dispatch_mode = 'fresh'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (conversation_key,),
+            )
+            claimed = cur.fetchone()
+            if claimed is not None:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.work_items
+                    SET cancel_requested_at = COALESCE(cancel_requested_at, %s),
+                        cancel_requested_by = %s,
+                        cancel_request_event_id = %s
+                    WHERE id = %s AND state = 'claimed'
+                    """,
+                    (now, actor_key, cancel_request_event_id, claimed["id"]),
+                )
+                return CancelRequestResult.claimed_cancel_requested
+
+            cur.execute(
+                f"""
+                SELECT id FROM {_SCHEMA}.work_items
+                WHERE conversation_key = %s AND state = 'queued' AND dispatch_mode = 'fresh'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (conversation_key,),
+            )
+            queued = cur.fetchone()
+            if queued is not None:
+                cur.execute(
+                    f"""
+                    UPDATE {_SCHEMA}.work_items
+                    SET state = 'failed', completed_at = %s, error = 'cancelled'
+                    WHERE id = %s AND state = 'queued'
+                    """,
+                    (now, queued["id"]),
+                )
+                if cur.rowcount > 0:
+                    return CancelRequestResult.queued_cancelled
+
+        return CancelRequestResult.nothing_to_cancel
+
+
+def is_cancel_requested(conn, item_id: str) -> bool:
+    with _cur(conn) as cur:
+        cur.execute(
+            f"SELECT cancel_requested_at FROM {_SCHEMA}.work_items WHERE id = %s",
+            (item_id,),
+        )
+        row = cur.fetchone()
+    return bool(row and row["cancel_requested_at"])
+
+
 def get_work_items_for_chat(conn, conversation_key: str) -> list[dict[str, Any]]:
     """Return work items for a conversation with id, event_id, state, error, dispatch_mode, kind. Read-only."""
     with _cur(conn) as cur:
@@ -732,6 +806,123 @@ def get_work_items_for_chat(conn, conversation_key: str) -> list[dict[str, Any]]
         )
         rows = cur.fetchall()
     return [dict(r) for r in rows]
+
+
+def get_queue_snapshot(conn) -> QueueSnapshot:
+    """Return backend-neutral queue counts and oldest timestamps."""
+    with _cur(conn) as cur:
+        cur.execute(
+            f"""
+            SELECT
+                COALESCE(SUM(CASE WHEN state = 'queued' AND dispatch_mode = 'fresh' THEN 1 ELSE 0 END), 0) AS fresh_queued_count,
+                COALESCE(SUM(CASE WHEN state = 'queued' AND dispatch_mode = 'recovery' THEN 1 ELSE 0 END), 0) AS recovery_queued_count,
+                COALESCE(SUM(CASE WHEN state = 'claimed' THEN 1 ELSE 0 END), 0) AS claimed_count,
+                COALESCE(SUM(CASE WHEN state = 'pending_recovery' THEN 1 ELSE 0 END), 0) AS pending_recovery_count,
+                COALESCE(SUM(CASE WHEN state = 'claimed' AND cancel_requested_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS cancel_requested_claimed_count,
+                MIN(CASE WHEN state = 'queued' AND dispatch_mode = 'fresh' THEN created_at END) AS oldest_fresh_queued_at,
+                MIN(CASE WHEN state = 'queued' AND dispatch_mode = 'recovery' THEN created_at END) AS oldest_recovery_queued_at,
+                MIN(CASE WHEN state = 'claimed' THEN claimed_at END) AS oldest_claimed_at,
+                MIN(CASE WHEN state = 'pending_recovery' THEN created_at END) AS oldest_pending_recovery_at
+            FROM {_SCHEMA}.work_items
+            """
+        )
+        row = cur.fetchone()
+    if row is None:
+        return QueueSnapshot()
+    return QueueSnapshot(
+        fresh_queued_count=int(row["fresh_queued_count"] or 0),
+        recovery_queued_count=int(row["recovery_queued_count"] or 0),
+        claimed_count=int(row["claimed_count"] or 0),
+        pending_recovery_count=int(row["pending_recovery_count"] or 0),
+        cancel_requested_claimed_count=int(row["cancel_requested_claimed_count"] or 0),
+        oldest_fresh_queued_at=(
+            row["oldest_fresh_queued_at"].isoformat() if row["oldest_fresh_queued_at"] else None
+        ),
+        oldest_recovery_queued_at=(
+            row["oldest_recovery_queued_at"].isoformat() if row["oldest_recovery_queued_at"] else None
+        ),
+        oldest_claimed_at=(
+            row["oldest_claimed_at"].isoformat() if row["oldest_claimed_at"] else None
+        ),
+        oldest_pending_recovery_at=(
+            row["oldest_pending_recovery_at"].isoformat() if row["oldest_pending_recovery_at"] else None
+        ),
+    )
+
+
+def upsert_worker_heartbeat(conn, heartbeat: WorkerHeartbeat) -> None:
+    with _write_tx(conn):
+        with _cur(conn) as cur:
+            cur.execute(
+                f"""
+                INSERT INTO {_SCHEMA}.worker_heartbeats (
+                    worker_id,
+                    process_role,
+                    started_at,
+                    last_seen_at,
+                    current_item_id,
+                    current_conversation_key,
+                    current_kind,
+                    items_processed,
+                    stale_recoveries_seen,
+                    last_error
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (worker_id) DO UPDATE SET
+                    process_role = EXCLUDED.process_role,
+                    started_at = EXCLUDED.started_at,
+                    last_seen_at = EXCLUDED.last_seen_at,
+                    current_item_id = EXCLUDED.current_item_id,
+                    current_conversation_key = EXCLUDED.current_conversation_key,
+                    current_kind = EXCLUDED.current_kind,
+                    items_processed = EXCLUDED.items_processed,
+                    stale_recoveries_seen = EXCLUDED.stale_recoveries_seen,
+                    last_error = EXCLUDED.last_error
+                """,
+                (
+                    heartbeat.worker_id,
+                    heartbeat.process_role,
+                    heartbeat.started_at,
+                    heartbeat.last_seen_at,
+                    heartbeat.current_item_id,
+                    heartbeat.current_conversation_key,
+                    heartbeat.current_kind,
+                    heartbeat.items_processed,
+                    heartbeat.stale_recoveries_seen,
+                    heartbeat.last_error,
+                ),
+            )
+
+
+def clear_worker_heartbeat(conn, worker_id: str) -> None:
+    with _write_tx(conn):
+        with _cur(conn) as cur:
+            cur.execute(
+                f"DELETE FROM {_SCHEMA}.worker_heartbeats WHERE worker_id = %s",
+                (worker_id,),
+            )
+
+
+def list_worker_heartbeats(conn) -> list[WorkerHeartbeat]:
+    with _cur(conn) as cur:
+        cur.execute(
+            f"SELECT * FROM {_SCHEMA}.worker_heartbeats ORDER BY worker_id ASC"
+        )
+        rows = cur.fetchall()
+    return [
+        WorkerHeartbeat(
+            worker_id=row["worker_id"],
+            process_role=row["process_role"],
+            started_at=row["started_at"].isoformat() if hasattr(row["started_at"], "isoformat") else str(row["started_at"]),
+            last_seen_at=row["last_seen_at"].isoformat() if hasattr(row["last_seen_at"], "isoformat") else str(row["last_seen_at"]),
+            current_item_id=row["current_item_id"],
+            current_conversation_key=row["current_conversation_key"],
+            current_kind=row["current_kind"],
+            items_processed=int(row["items_processed"] or 0),
+            stale_recoveries_seen=int(row["stale_recoveries_seen"] or 0),
+            last_error=row["last_error"],
+        )
+        for row in rows
+    ]
 
 
 def get_update_payload(conn, event_id: str) -> str | None:
@@ -785,6 +976,8 @@ def get_latest_pending_recovery(conn, conversation_key: str) -> dict[str, Any] |
         rows = cur.fetchall()
     for row in rows:
         r = dict(row)
+        if "payload" in r:
+            r["payload"] = _payload_json_text(r["payload"])
         _validate_work_item_row(r, r["id"])
         if r["state"] == "pending_recovery":
             return r
@@ -837,7 +1030,13 @@ def discard_recovery(conn, item_id: str) -> DiscardResult:
         return DiscardResult.corruption
 
 
-def reclaim_for_replay(conn, item_id: str, worker_id: str) -> dict[str, Any] | None:
+def reclaim_for_replay(
+    conn,
+    item_id: str,
+    worker_id: str,
+    *,
+    ignore_claimed_item_id: str = "",
+) -> dict[str, Any] | None:
     with _write_tx(conn):
         row = _load_work_item_by_id(conn, item_id)
         if row is None or row["state"] != "pending_recovery":
@@ -845,10 +1044,20 @@ def reclaim_for_replay(conn, item_id: str, worker_id: str) -> dict[str, Any] | N
         conversation_key = row["conversation_key"]
         _assert_no_invalid_rows_for_conversation(conn, conversation_key)
         with _cur(conn) as cur:
-            cur.execute(
-                f"SELECT 1 FROM {_SCHEMA}.work_items WHERE conversation_key = %s AND state = 'claimed' LIMIT 1",
-                (conversation_key,),
-            )
+            if ignore_claimed_item_id:
+                cur.execute(
+                    f"""
+                    SELECT 1 FROM {_SCHEMA}.work_items
+                    WHERE conversation_key = %s AND state = 'claimed' AND id <> %s
+                    LIMIT 1
+                    """,
+                    (conversation_key, ignore_claimed_item_id),
+                )
+            else:
+                cur.execute(
+                    f"SELECT 1 FROM {_SCHEMA}.work_items WHERE conversation_key = %s AND state = 'claimed' LIMIT 1",
+                    (conversation_key,),
+                )
             has_claimed = cur.fetchone() is not None
         out = _apply_claim_event(
             conn, item_id, "reclaim_for_replay", "pending_recovery", worker_id,
@@ -868,44 +1077,48 @@ def reclaim_for_replay(conn, item_id: str, worker_id: str) -> dict[str, Any] | N
         if full is None:
             return None
         r = dict(full)
+        if "payload" in r:
+            r["payload"] = _payload_json_text(r["payload"])
         _validate_work_item_row(r, item_id)
         return r
 
 
 def recover_stale_claims(conn, current_worker_id: str, max_age_seconds: int = 300) -> int:
     now = datetime.now(timezone.utc)
+    stale_before = now - timedelta(seconds=max_age_seconds)
     with _write_tx(conn):
         with _cur(conn) as cur:
             cur.execute(
-                f"SELECT id, state, worker_id, claimed_at, dispatch_mode FROM {_SCHEMA}.work_items WHERE state = 'claimed'"
+                f"SELECT id, state, worker_id, claimed_at, dispatch_mode, cancel_requested_at "
+                f"FROM {_SCHEMA}.work_items "
+                f"WHERE state = 'claimed' AND claimed_at IS NOT NULL AND claimed_at < %s",
+                (stale_before,),
             )
             rows = cur.fetchall()
         requeued = 0
         for row in rows:
             r = dict(row)
             _validate_work_item_row(r, r["id"])
-            stale = False
-            if row["worker_id"] != current_worker_id:
-                stale = True
-            elif row["claimed_at"]:
-                claimed = row["claimed_at"]
-                if hasattr(claimed, "isoformat"):
-                    claimed_ts = claimed
-                else:
-                    claimed_ts = datetime.fromisoformat(str(claimed).replace("Z", "+00:00"))
-                if (now - claimed_ts).total_seconds() > max_age_seconds:
-                    stale = True
-            if stale:
-                model = TransportWorkflowModel(state="claimed", worker_id=row["worker_id"], is_stale=True)
-                result = run_transport_event(model, "recover_stale_claim")
-                if not result.allowed:
-                    if result.disposition == TransportDisposition.guard_failed:
-                        continue
-                    raise TransportStateCorruption(
-                        f"recover_stale_claims: workflow rejected for item {row['id']}: "
-                        f"{result.disposition} — {result.reason}"
+            model = TransportWorkflowModel(state="claimed", worker_id=row["worker_id"], is_stale=True)
+            result = run_transport_event(model, "recover_stale_claim")
+            if not result.allowed:
+                if result.disposition == TransportDisposition.guard_failed:
+                    continue
+                raise TransportStateCorruption(
+                    f"recover_stale_claims: workflow rejected for item {row['id']}: "
+                    f"{result.disposition} — {result.reason}"
+                )
+            with _cur(conn) as cur:
+                if row.get("cancel_requested_at"):
+                    cur.execute(
+                        f"""
+                        UPDATE {_SCHEMA}.work_items
+                        SET state = 'failed', completed_at = %s, error = 'cancelled'
+                        WHERE id = %s AND state = 'claimed' AND worker_id = %s AND claimed_at = %s
+                        """,
+                        (now.isoformat(), row["id"], row["worker_id"], row["claimed_at"]),
                     )
-                with _cur(conn) as cur:
+                else:
                     cur.execute(
                         f"""
                         UPDATE {_SCHEMA}.work_items
@@ -914,20 +1127,20 @@ def recover_stale_claims(conn, current_worker_id: str, max_age_seconds: int = 30
                         """,
                         (result.new_state, row["id"], row["worker_id"], row["claimed_at"]),
                     )
-                    if cur.rowcount > 0:
-                        requeued += 1
-                        continue
-                re_read = _load_work_item_by_id(conn, row["id"])
-                if re_read is None:
+                if cur.rowcount > 0:
+                    requeued += 1
                     continue
-                if (
-                    re_read["state"] == "claimed"
-                    and re_read["worker_id"] == row["worker_id"]
-                    and re_read["claimed_at"] == row["claimed_at"]
-                ):
-                    raise TransportStateCorruption(
-                        f"recover_stale_claims: update matched 0 rows but item {row['id']} still claimed"
-                    )
+            re_read = _load_work_item_by_id(conn, row["id"])
+            if re_read is None:
+                continue
+            if (
+                re_read["state"] == "claimed"
+                and re_read["worker_id"] == row["worker_id"]
+                and re_read["claimed_at"] == row["claimed_at"]
+            ):
+                raise TransportStateCorruption(
+                    f"recover_stale_claims: update matched 0 rows but item {row['id']} still claimed"
+                )
         if requeued:
             log.info("Recovered %d stale work items", requeued)
         return requeued

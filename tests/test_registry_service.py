@@ -8,6 +8,15 @@ from fastapi.testclient import TestClient
 
 from app.registry_service.app import app
 from app.registry_service.store import RegistrySQLiteStore
+from app.runtime_health import (
+    QueueSnapshot,
+    RuntimeDiagnostic,
+    RuntimeHealthReport,
+    RuntimeHealthSummary,
+    SharedRuntimeSnapshot,
+    WorkerHeartbeat,
+    report_to_dict,
+)
 
 
 def _configure_registry(monkeypatch, tmp_path: Path) -> None:
@@ -64,6 +73,62 @@ def _enroll_and_register(client: TestClient, name: str, slug: str) -> tuple[str,
     return agent_id, token
 
 
+def _runtime_health_payload() -> dict:
+    report = RuntimeHealthReport(
+        generated_at="2026-03-16T00:00:10+00:00",
+        summary=RuntimeHealthSummary(
+            status="degraded",
+            healthy_worker_count=1,
+            stale_worker_count=1,
+            fresh_queued_count=2,
+            claimed_count=1,
+            pending_recovery_count=1,
+            recovery_queued_count=0,
+            oldest_claim_age_seconds=42,
+            warning_count=1,
+            error_count=0,
+        ),
+        snapshot=SharedRuntimeSnapshot(
+            queue=QueueSnapshot(
+                fresh_queued_count=2,
+                claimed_count=1,
+                pending_recovery_count=1,
+                recovery_queued_count=0,
+                oldest_claimed_at="2026-03-16T00:00:00+00:00",
+            ),
+            workers=(
+                WorkerHeartbeat(
+                    worker_id="worker-a",
+                    process_role="worker",
+                    started_at="2026-03-16T00:00:00+00:00",
+                    last_seen_at="2026-03-16T00:00:10+00:00",
+                    current_item_id="item-1",
+                    current_conversation_key="tg:1",
+                    current_kind="message",
+                    items_processed=5,
+                ),
+                WorkerHeartbeat(
+                    worker_id="worker-b",
+                    process_role="worker",
+                    started_at="2026-03-16T00:00:00+00:00",
+                    last_seen_at="2026-03-16T00:00:00+00:00",
+                    items_processed=1,
+                ),
+            ),
+            healthy_worker_count=1,
+            stale_worker_count=1,
+        ),
+        diagnostics=(
+            RuntimeDiagnostic(
+                level="warning",
+                code="shared.pending_recovery_backlog",
+                message="Shared Runtime has 1 item awaiting replay/discard.",
+            ),
+        ),
+    )
+    return report_to_dict(report)
+
+
 def test_registry_enroll_register_heartbeat_and_search(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -92,6 +157,43 @@ def test_registry_enroll_register_heartbeat_and_search(monkeypatch, tmp_path: Pa
     assert len(agents) == 1
     assert agents[0]["slug"] == "dev-bot"
     assert agents[0]["connectivity_state"] == "connected"
+
+
+def test_registry_ui_exposes_runtime_health_summary_and_detail(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    agent_id, token = _enroll_and_register(client, "Dev Bot", "dev-bot")
+
+    heartbeat = client.post(
+        "/v1/agents/heartbeat",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "connectivity_state": "connected",
+            "current_capacity": 1,
+            "max_capacity": 3,
+            "runtime_health": _runtime_health_payload(),
+        },
+    )
+    assert heartbeat.status_code == 200
+
+    bots = client.get(
+        "/v1/ui/bots",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert bots.status_code == 200
+    listed = bots.json()["bots"]
+    assert listed[0]["runtime_health_summary"]["status"] == "degraded"
+    assert listed[0]["runtime_health_summary"]["healthy_worker_count"] == 1
+
+    detail = client.get(
+        f"/v1/ui/bots/{agent_id}/health",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["report"]["summary"]["claimed_count"] == 1
+    assert [row["worker_id"] for row in payload["workers"]] == ["worker-a", "worker-b"]
 
 
 def test_registry_bind_conversation_is_visible_in_ui(monkeypatch, tmp_path: Path):
@@ -814,7 +916,7 @@ def test_registry_store_migrations_are_idempotent_and_add_skills_override_and_ti
 
     conn = sqlite3.connect(db_path)
     version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-    assert version == "2"
+    assert version == "3"
     tables = {
         row[0]
         for row in conn.execute(

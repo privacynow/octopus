@@ -2,12 +2,12 @@
 
 import threading
 
-from app import work_queue_pg
+from app import work_queue_postgres_impl
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 
 
-def test_record_and_admit_message_concurrent_two_connections_one_admitted(postgres_truncated):
-    """Two connections, same conversation, concurrent admission: one admitted, one busy."""
+def test_record_and_admit_message_concurrent_two_connections_one_admitted_one_queued(postgres_truncated):
+    """Two connections, same conversation, concurrent admission: one admitted, one queued."""
     from app.db.postgres import get_connection
 
     results = []
@@ -18,7 +18,7 @@ def test_record_and_admit_message_concurrent_two_connections_one_admitted(postgr
     def run(update_id: int):
         with get_connection(postgres_truncated) as conn:
             barrier.wait()
-            out = work_queue_pg.record_and_admit_message(
+            out = work_queue_postgres_impl.record_and_admit_message(
                 conn,
                 event_id=telegram_event_id(update_id),
                 conversation_key=conversation_key,
@@ -37,7 +37,7 @@ def test_record_and_admit_message_concurrent_two_connections_one_admitted(postgr
 
     statuses = [r[1][0] for r in results]
     assert statuses.count("admitted") == 1, f"Exactly one admitted, got: {statuses}"
-    assert statuses.count("busy") == 1, f"Exactly one busy, got: {statuses}"
+    assert statuses.count("queued") == 1, f"Exactly one queued, got: {statuses}"
 
     with get_connection(postgres_truncated) as conn:
         with conn.cursor() as cur:
@@ -47,7 +47,7 @@ def test_record_and_admit_message_concurrent_two_connections_one_admitted(postgr
                 (conversation_key,),
             )
             (n,) = cur.fetchone()
-    assert n == 1, f"Exactly one fresh runnable item per conversation, got count: {n}"
+    assert n == 2, f"Exactly two fresh runnable items per conversation, got count: {n}"
 
 
 def test_cancel_queued_fresh_for_chat_terminal_state_postgres(postgres_truncated):
@@ -56,7 +56,7 @@ def test_cancel_queued_fresh_for_chat_terminal_state_postgres(postgres_truncated
 
     conversation_key = telegram_conversation_key(88)
     with get_connection(postgres_truncated) as conn:
-        status, item_id = work_queue_pg.record_and_admit_message(
+        status, item_id = work_queue_postgres_impl.record_and_admit_message(
             conn,
             event_id=telegram_event_id(7001),
             conversation_key=conversation_key,
@@ -68,7 +68,7 @@ def test_cancel_queued_fresh_for_chat_terminal_state_postgres(postgres_truncated
     assert item_id is not None
 
     with get_connection(postgres_truncated) as conn:
-        ok = work_queue_pg.cancel_queued_fresh_for_chat(conn, conversation_key)
+        ok = work_queue_postgres_impl.cancel_queued_fresh_for_chat(conn, conversation_key)
     assert ok is True
 
     with get_connection(postgres_truncated) as conn:
@@ -90,7 +90,7 @@ def test_record_and_enqueue_idempotent(postgres_truncated):
     from app.db.postgres import get_connection
 
     with get_connection(postgres_truncated) as conn:
-        is_new, item_id = work_queue_pg.record_and_enqueue(
+        is_new, item_id = work_queue_postgres_impl.record_and_enqueue(
             conn,
             event_id=telegram_event_id(1),
             conversation_key=telegram_conversation_key(100),
@@ -100,7 +100,7 @@ def test_record_and_enqueue_idempotent(postgres_truncated):
         )
         assert is_new is True
         assert item_id is not None
-        is_new2, item_id2 = work_queue_pg.record_and_enqueue(
+        is_new2, item_id2 = work_queue_postgres_impl.record_and_enqueue(
             conn,
             event_id=telegram_event_id(1),
             conversation_key=telegram_conversation_key(100),
@@ -118,7 +118,7 @@ def test_claim_for_update_and_complete(postgres_truncated):
 
     conversation_key = telegram_conversation_key(101)
     with get_connection(postgres_truncated) as conn:
-        work_queue_pg.record_and_enqueue(
+        work_queue_postgres_impl.record_and_enqueue(
             conn,
             event_id=telegram_event_id(2),
             conversation_key=conversation_key,
@@ -127,7 +127,7 @@ def test_claim_for_update_and_complete(postgres_truncated):
             payload='{"text":"hi"}',
             worker_id=None,
         )
-        item = work_queue_pg.claim_for_update(
+        item = work_queue_postgres_impl.claim_for_update(
             conn,
             conversation_key=conversation_key,
             event_id=telegram_event_id(2),
@@ -135,8 +135,8 @@ def test_claim_for_update_and_complete(postgres_truncated):
         )
         assert item is not None
         assert item["state"] == "claimed"
-        work_queue_pg.complete_work_item(conn, item["id"])
-        has = work_queue_pg.has_queued_or_claimed(conn, conversation_key)
+        work_queue_postgres_impl.complete_work_item(conn, item["id"])
+        has = work_queue_postgres_impl.has_queued_or_claimed(conn, conversation_key)
         assert has is False
 
 
@@ -146,8 +146,8 @@ def test_has_queued_or_claimed(postgres_truncated):
 
     conversation_key = telegram_conversation_key(102)
     with get_connection(postgres_truncated) as conn:
-        assert work_queue_pg.has_queued_or_claimed(conn, conversation_key) is False
-        work_queue_pg.record_and_enqueue(
+        assert work_queue_postgres_impl.has_queued_or_claimed(conn, conversation_key) is False
+        work_queue_postgres_impl.record_and_enqueue(
             conn,
             event_id=telegram_event_id(3),
             conversation_key=conversation_key,
@@ -155,7 +155,7 @@ def test_has_queued_or_claimed(postgres_truncated):
             kind="message",
             payload="{}",
         )
-        assert work_queue_pg.has_queued_or_claimed(conn, conversation_key) is True
+        assert work_queue_postgres_impl.has_queued_or_claimed(conn, conversation_key) is True
 
 
 def test_complete_work_item_clears_stale_error(postgres_truncated):
@@ -163,7 +163,7 @@ def test_complete_work_item_clears_stale_error(postgres_truncated):
     from app.db.postgres import get_connection
 
     with get_connection(postgres_truncated) as conn:
-        _, item_id = work_queue_pg.record_and_enqueue(
+        _, item_id = work_queue_postgres_impl.record_and_enqueue(
             conn,
             event_id=telegram_event_id(90010),
             conversation_key=telegram_conversation_key(1),
@@ -178,7 +178,7 @@ def test_complete_work_item_clears_stale_error(postgres_truncated):
                 (item_id,),
             )
         conn.commit()
-        work_queue_pg.complete_work_item(conn, item_id)
+        work_queue_postgres_impl.complete_work_item(conn, item_id)
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT error, state FROM bot_runtime.work_items WHERE id = %s",

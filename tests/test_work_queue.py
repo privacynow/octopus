@@ -9,12 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from app import runtime_backend
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.workflows.results import TransportStateCorruption
 from app.work_queue import (
     DiscardResult,
     LeaveClaimed,
+    debug_transport_connection,
     claim_for_update,
     claim_next,
     claim_next_any,
@@ -69,7 +69,7 @@ def _event(value):
 
 def _transport_db(data_dir):
     """SQLite transport DB for tests; use runtime backend store."""
-    return runtime_backend.transport_store()._transport_db(data_dir)
+    return debug_transport_connection(data_dir)
 
 
 @pytest.fixture
@@ -255,6 +255,7 @@ def test_claim_next_returns_none_when_another_worker_claimed(data_dir):
 def test_shared_claim_helper_raises_corruption_when_reread_still_queued(data_dir):
     """Repository shape: when UPDATE matches 0 rows but reread still shows queued, raise TransportStateCorruption."""
     from unittest.mock import MagicMock, patch
+    from app import runtime_backend
 
     record_update(data_dir, _event(5050), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(5050))
@@ -422,13 +423,18 @@ def test_has_queued_or_claimed(data_dir):
 
 # -- Recovery and retention ------------------------------------------------
 
-def test_recover_stale_claims_different_worker(data_dir):
-    """Stale claims by a different worker are requeued."""
+def test_recover_stale_claims_different_worker_after_ttl(data_dir):
+    """Age-expired claims recover even when owned by another worker."""
     record_update(data_dir, _event(600), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(600))
     claim_next(data_dir, conversation_key=_conv(1), worker_id="old-worker")
 
-    requeued = recover_stale_claims(data_dir, current_worker_id="new-worker")
+    conn = _transport_db(data_dir)
+    old_time = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+    conn.execute("UPDATE work_items SET claimed_at = ? WHERE event_id = ?", (old_time, _event(600)))
+    conn.commit()
+
+    requeued = recover_stale_claims(data_dir, current_worker_id="new-worker", max_age_seconds=300)
     assert requeued == 1
 
     # Item is now claimable again
@@ -459,6 +465,16 @@ def test_recover_stale_claims_fresh_not_touched(data_dir):
     claim_next(data_dir, conversation_key=_conv(1), worker_id="w1")
 
     requeued = recover_stale_claims(data_dir, current_worker_id="w1", max_age_seconds=300)
+    assert requeued == 0
+
+
+def test_recover_stale_claims_live_other_worker_not_touched(data_dir):
+    """A live claim owned by another worker is not stale until the lease expires."""
+    record_update(data_dir, _event(603), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
+    enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(603))
+    claim_next(data_dir, conversation_key=_conv(1), worker_id="worker-a")
+
+    requeued = recover_stale_claims(data_dir, current_worker_id="worker-b", max_age_seconds=300)
     assert requeued == 0
 
 
@@ -824,7 +840,12 @@ def test_recovery_after_crash(data_dir):
     assert claim_next(data_dir, conversation_key=_conv(1), worker_id="new-worker") is None
 
     # New worker starts, recovers stale claims
-    recovered = recover_stale_claims(data_dir, current_worker_id="new-worker")
+    conn = _transport_db(data_dir)
+    old_time = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+    conn.execute("UPDATE work_items SET claimed_at = ? WHERE event_id = ?", (old_time, _event(1900)))
+    conn.commit()
+
+    recovered = recover_stale_claims(data_dir, current_worker_id="new-worker", max_age_seconds=300)
     assert recovered == 1
 
     # Now it's claimable by the new worker
@@ -1178,7 +1199,11 @@ async def test_worker_replay_calls_dispatch_for_message(data_dir):
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(2100))
     # Claim by old worker, then recover
     claim_next(data_dir, conversation_key=_conv(1), worker_id="old-worker")
-    recover_stale_claims(data_dir, current_worker_id="new-worker")
+    conn = _transport_db(data_dir)
+    old_time = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+    conn.execute("UPDATE work_items SET claimed_at = ? WHERE event_id = ?", (old_time, _event(2100)))
+    conn.commit()
+    recover_stale_claims(data_dir, current_worker_id="new-worker", max_age_seconds=300)
 
     dispatched = []
     async def dispatch(kind, event, item):

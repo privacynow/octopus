@@ -8,7 +8,7 @@ from app.db.postgres_migrate import current_schema_version, _get_max_applied_ver
 
 # Required runtime objects (bot_runtime schema and the per-conversation claim index)
 _REQUIRED_SCHEMA = "bot_runtime"
-_REQUIRED_TABLES = ("sessions", "updates", "work_items", "schema_migrations")
+_REQUIRED_TABLES = ("sessions", "updates", "work_items", "worker_heartbeats", "schema_migrations")
 _REQUIRED_INDEX = "idx_one_claimed_per_conv"
 
 

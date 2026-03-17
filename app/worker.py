@@ -14,19 +14,35 @@ item.
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 
 from app import work_queue
-from app.transport import deserialize_inbound, InboundMessage, InboundCommand, InboundCallback
+from app.runtime_health import WorkerHeartbeat
+from app.time_utils import utc_now
+from app.transport import (
+    InboundAction,
+    InboundCallback,
+    InboundCommand,
+    InboundMessage,
+    deserialize_inbound,
+)
 from app.workflows.results import TransportStateCorruption
 
 log = logging.getLogger(__name__)
 
 # Default interval between queue polls (seconds).
 POLL_INTERVAL = 1.0
+SHARED_POLL_INTERVAL = 0.5
+SWEEP_INTERVAL = 60.0
+HEARTBEAT_INTERVAL = 30.0
 
 # Maximum items to process per poll cycle before yielding.
 BATCH_SIZE = 10
+
+
+def poll_interval_for_runtime(runtime_mode: str) -> float:
+    return SHARED_POLL_INTERVAL if runtime_mode == "shared" else POLL_INTERVAL
 
 
 async def worker_loop(
@@ -35,6 +51,11 @@ async def worker_loop(
     dispatch,
     *,
     poll_interval: float = POLL_INTERVAL,
+    lease_ttl: int = 300,
+    sweep_interval: float = SWEEP_INTERVAL,
+    process_role: str = "worker",
+    heartbeat_enabled: bool = False,
+    heartbeat_interval: float = HEARTBEAT_INTERVAL,
     stop_event: asyncio.Event | None = None,
 ) -> None:
     """Continuously claim and dispatch work items from the durable queue.
@@ -48,68 +69,161 @@ async def worker_loop(
         stop_event: When set, the loop exits after the current cycle.
     """
     _stop = stop_event or asyncio.Event()
-    log.info("Worker %s starting (poll_interval=%.1fs)", worker_id, poll_interval)
+    log.info(
+        "Worker %s starting (poll_interval=%.1fs lease_ttl=%ds sweep_interval=%.1fs)",
+        worker_id,
+        poll_interval,
+        lease_ttl,
+        sweep_interval,
+    )
+    last_sweep = 0.0
+    started_at = utc_now().isoformat()
+    items_processed_total = 0
+    stale_recoveries_seen = 0
+    current_item_id = ""
+    current_conversation_key = ""
+    current_kind = ""
+    last_error = ""
+    last_heartbeat = 0.0
+    graceful_shutdown = False
 
-    while not _stop.is_set():
-        processed = 0
+    def _publish_heartbeat(*, force: bool = False) -> None:
+        nonlocal last_heartbeat
+        if not heartbeat_enabled:
+            return
+        now_mono = time.monotonic()
+        if not force and last_heartbeat and (now_mono - last_heartbeat) < heartbeat_interval:
+            return
         try:
-            for _ in range(BATCH_SIZE):
-                item = work_queue.claim_next_any(data_dir, worker_id)
-                if item is None:
-                    break
-
-                item_id = item["id"]
-                kind = item.get("kind", "unknown")
-                payload = item.get("payload", "{}")
-
-                try:
-                    event = deserialize_inbound(kind, payload)
-                except Exception:
-                    log.warning("Failed to deserialize work item %s (kind=%s), marking failed",
-                                item_id, kind)
-                    work_queue.fail_work_item(data_dir, item_id, error="deserialize_error")
-                    processed += 1
-                    continue
-
-                try:
-                    await dispatch(kind, event, item)
-                    work_queue.complete_work_item(data_dir, item_id)
-                except work_queue.PendingRecovery:
-                    log.info("Item %s moved to pending_recovery; user will replay or discard",
-                             item_id)
-                except work_queue.LeaveClaimed:
-                    log.info("Worker interrupted processing item %s; leaving claimed for recovery",
-                             item_id)
-                except TransportStateCorruption as e:
-                    log.exception(
-                        "Transport state corruption for item %s (dispatch path): %s",
-                        item_id, e,
-                    )
-                    raise
-                except Exception as exc:
-                    log.exception("Worker failed processing item %s", item_id)
-                    work_queue.fail_work_item(data_dir, item_id, error=str(exc)[:500])
-                processed += 1
-
-        except TransportStateCorruption as e:
-            log.exception("Transport state corruption in worker loop (claim path): %s", e)
-            raise
+            work_queue.upsert_worker_heartbeat(
+                data_dir,
+                WorkerHeartbeat(
+                    worker_id=worker_id,
+                    process_role=process_role,
+                    started_at=started_at,
+                    last_seen_at=utc_now().isoformat(),
+                    current_item_id=current_item_id,
+                    current_conversation_key=current_conversation_key,
+                    current_kind=current_kind,
+                    items_processed=items_processed_total,
+                    stale_recoveries_seen=stale_recoveries_seen,
+                    last_error=last_error,
+                ),
+            )
+            last_heartbeat = now_mono
         except Exception:
-            log.exception("Worker loop error")
+            log.exception("Worker %s heartbeat update failed", worker_id)
 
-        if processed:
-            log.debug("Worker %s processed %d items", worker_id, processed)
-            # Immediately check for more work
-            continue
+    try:
+        _publish_heartbeat(force=True)
+        while not _stop.is_set():
+            processed = 0
+            try:
+                _publish_heartbeat()
+                now_mono = time.monotonic()
+                if now_mono - last_sweep >= sweep_interval:
+                    try:
+                        recovered = work_queue.recover_stale_claims(
+                            data_dir,
+                            worker_id,
+                            max_age_seconds=lease_ttl,
+                        )
+                        if recovered:
+                            stale_recoveries_seen += recovered
+                            log.info(
+                                "Recovered %d stale claims (lease_ttl=%ds)",
+                                recovered,
+                                lease_ttl,
+                            )
+                            _publish_heartbeat(force=True)
+                    except Exception:
+                        log.exception("Stale-claim sweep error")
+                    last_sweep = now_mono
 
-        # Idle — wait for next poll or stop signal
-        try:
-            await asyncio.wait_for(_stop.wait(), timeout=poll_interval)
-            break  # stop_event was set
-        except asyncio.TimeoutError:
-            pass  # normal poll cycle
+                for _ in range(BATCH_SIZE):
+                    item = work_queue.claim_next_any(data_dir, worker_id)
+                    if item is None:
+                        break
 
-    log.info("Worker %s stopped", worker_id)
+                    item_id = item["id"]
+                    kind = item.get("kind", "unknown")
+                    payload = item.get("payload", "{}")
+                    current_item_id = item_id
+                    current_conversation_key = str(item.get("conversation_key", ""))
+                    current_kind = kind
+                    last_error = ""
+                    _publish_heartbeat(force=True)
+
+                    try:
+                        event = deserialize_inbound(kind, payload)
+                    except Exception:
+                        log.warning("Failed to deserialize work item %s (kind=%s), marking failed",
+                                    item_id, kind)
+                        work_queue.fail_work_item(data_dir, item_id, error="deserialize_error")
+                        current_item_id = ""
+                        current_conversation_key = ""
+                        current_kind = ""
+                        items_processed_total += 1
+                        processed += 1
+                        _publish_heartbeat(force=True)
+                        continue
+
+                    try:
+                        await dispatch(kind, event, item)
+                        work_queue.complete_work_item(data_dir, item_id)
+                    except work_queue.PendingRecovery:
+                        log.info("Item %s moved to pending_recovery; user will replay or discard",
+                                 item_id)
+                    except work_queue.LeaveClaimed:
+                        log.info("Worker interrupted processing item %s; leaving claimed for recovery",
+                                 item_id)
+                    except TransportStateCorruption as e:
+                        log.exception(
+                            "Transport state corruption for item %s (dispatch path): %s",
+                            item_id, e,
+                        )
+                        last_error = f"{type(e).__name__}: {e}"
+                        _publish_heartbeat(force=True)
+                        raise
+                    except Exception as exc:
+                        log.exception("Worker failed processing item %s", item_id)
+                        work_queue.fail_work_item(data_dir, item_id, error=str(exc)[:500])
+                    current_item_id = ""
+                    current_conversation_key = ""
+                    current_kind = ""
+                    items_processed_total += 1
+                    processed += 1
+                    _publish_heartbeat(force=True)
+
+            except TransportStateCorruption as e:
+                log.exception("Transport state corruption in worker loop (claim path): %s", e)
+                last_error = f"{type(e).__name__}: {e}"
+                _publish_heartbeat(force=True)
+                raise
+            except Exception as exc:
+                log.exception("Worker loop error")
+                last_error = f"{type(exc).__name__}: {exc}"
+                _publish_heartbeat(force=True)
+
+            if processed:
+                log.debug("Worker %s processed %d items", worker_id, processed)
+                # Immediately check for more work
+                continue
+
+            # Idle — wait for next poll or stop signal
+            try:
+                await asyncio.wait_for(_stop.wait(), timeout=poll_interval)
+                break  # stop_event was set
+            except asyncio.TimeoutError:
+                pass  # normal poll cycle
+        graceful_shutdown = True
+        log.info("Worker %s stopped", worker_id)
+    finally:
+        if heartbeat_enabled and graceful_shutdown:
+            try:
+                work_queue.clear_worker_heartbeat(data_dir, worker_id)
+            except Exception:
+                log.exception("Worker %s heartbeat cleanup failed", worker_id)
 
 
 def start_worker_task(
@@ -118,6 +232,11 @@ def start_worker_task(
     dispatch,
     *,
     poll_interval: float = POLL_INTERVAL,
+    lease_ttl: int = 300,
+    sweep_interval: float = SWEEP_INTERVAL,
+    process_role: str = "worker",
+    heartbeat_enabled: bool = False,
+    heartbeat_interval: float = HEARTBEAT_INTERVAL,
 ) -> tuple[asyncio.Task, asyncio.Event]:
     """Start the worker loop as a background asyncio task.
 
@@ -126,7 +245,13 @@ def start_worker_task(
     stop_event = asyncio.Event()
     task = asyncio.create_task(
         worker_loop(data_dir, worker_id, dispatch,
-                    poll_interval=poll_interval, stop_event=stop_event),
+                    poll_interval=poll_interval,
+                    lease_ttl=lease_ttl,
+                    sweep_interval=sweep_interval,
+                    process_role=process_role,
+                    heartbeat_enabled=heartbeat_enabled,
+                    heartbeat_interval=heartbeat_interval,
+                    stop_event=stop_event),
         name="work_queue_worker",
     )
     return task, stop_event

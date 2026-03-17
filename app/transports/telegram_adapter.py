@@ -46,12 +46,14 @@ class TelegramConversationIO(InteractionSurface):
         config: BotConfig | None = None,
         conversation_ref: str = "",
         mirror_input_event: bool = True,
+        target_message_id: int | None = None,
     ) -> None:
         self._bot = bot
         self.chat_id = chat_id
         self._config = config
         self.conversation_ref = conversation_ref
         self._mirror_input_event = mirror_input_event
+        self._target_message_id = target_message_id
         self.chat = _ChatShim(self)
         self.text = None
         self.replies: list[str] = []
@@ -169,7 +171,24 @@ class TelegramConversationIO(InteractionSurface):
         return await self.send_text(text, **kwargs)
 
     async def edit_text(self, text: str, **kwargs: Any) -> None:
-        pass  # No single message to edit in worker path
+        if self._target_message_id is None:
+            return
+        await self._bot.edit_message_text(
+            chat_id=self.chat_id,
+            message_id=self._target_message_id,
+            text=text,
+            **kwargs,
+        )
+
+    async def edit_reply_markup(self, reply_markup: Any = None, **kwargs: Any) -> None:
+        if self._target_message_id is None:
+            return
+        await self._bot.edit_message_reply_markup(
+            chat_id=self.chat_id,
+            message_id=self._target_message_id,
+            reply_markup=reply_markup,
+            **kwargs,
+        )
 
     async def delete(self) -> None:
         pass

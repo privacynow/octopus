@@ -1,4 +1,4 @@
-"""SQLite transport implementation with conn-based API (same shape as work_queue_pg)."""
+"""SQLite transport implementation with conn-based API (same shape as work_queue_postgres_impl)."""
 
 from __future__ import annotations
 
@@ -11,8 +11,10 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from app.runtime_health import QueueSnapshot, WorkerHeartbeat
 from app.transport_contract import (
     ApplyResult,
+    CancelRequestResult,
     DiscardResult,
     ReclaimBlocked,
     _validate_work_item_row,
@@ -31,7 +33,7 @@ class _DuplicateUpdate(Exception):
     """Signals duplicate event_id in record_and_admit_message (rollback and return duplicate, None)."""
 
 
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 8
 
 _CREATE_SQL = """\
 CREATE TABLE IF NOT EXISTS updates (
@@ -56,6 +58,9 @@ CREATE TABLE IF NOT EXISTS work_items (
     error             TEXT,
     created_at        TEXT NOT NULL,
     dispatch_mode     TEXT NOT NULL DEFAULT 'fresh',
+    cancel_requested_at TEXT,
+    cancel_requested_by TEXT NOT NULL DEFAULT '',
+    cancel_request_event_id TEXT NOT NULL DEFAULT '',
     CHECK (state IN ('queued','claimed','pending_recovery','done','failed')),
     CHECK (state != 'claimed' OR worker_id IS NOT NULL),
     CHECK (state != 'claimed' OR claimed_at IS NOT NULL),
@@ -64,6 +69,20 @@ CREATE TABLE IF NOT EXISTS work_items (
 CREATE INDEX IF NOT EXISTS idx_work_items_state ON work_items (state, conversation_key);
 CREATE INDEX IF NOT EXISTS idx_work_items_conv  ON work_items (conversation_key, state);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_claimed_per_conv ON work_items(conversation_key) WHERE state = 'claimed';
+
+CREATE TABLE IF NOT EXISTS worker_heartbeats (
+    worker_id                TEXT PRIMARY KEY,
+    process_role             TEXT NOT NULL,
+    started_at               TEXT NOT NULL,
+    last_seen_at             TEXT NOT NULL,
+    current_item_id          TEXT NOT NULL DEFAULT '',
+    current_conversation_key TEXT NOT NULL DEFAULT '',
+    current_kind             TEXT NOT NULL DEFAULT '',
+    items_processed          INTEGER NOT NULL DEFAULT 0,
+    stale_recoveries_seen    INTEGER NOT NULL DEFAULT 0,
+    last_error               TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_seen ON worker_heartbeats (last_seen_at);
 
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -93,11 +112,27 @@ CREATE TABLE IF NOT EXISTS user_access (
 """
 
 _UNSUPPORTED_SCHEMA_MSG = "Unsupported transport.db schema/layout for this build"
-_EXPECTED_TABLES = ("updates", "work_items", "meta", "usage_log", "user_access")
+_EXPECTED_TABLES = ("updates", "work_items", "worker_heartbeats", "meta", "usage_log", "user_access")
 _EXPECTED_COLUMNS: dict[str, set[str]] = {
     "updates": {"event_id", "conversation_key", "actor_key", "kind", "payload", "received_at", "state"},
-    "work_items": {"id", "conversation_key", "event_id", "state", "worker_id", "claimed_at", "completed_at", "error", "created_at", "dispatch_mode"},
+    "work_items": {
+        "id", "conversation_key", "event_id", "state", "worker_id", "claimed_at", "completed_at",
+        "error", "created_at", "dispatch_mode", "cancel_requested_at", "cancel_requested_by",
+        "cancel_request_event_id",
+    },
     "meta": {"key", "value"},
+    "worker_heartbeats": {
+        "worker_id",
+        "process_role",
+        "started_at",
+        "last_seen_at",
+        "current_item_id",
+        "current_conversation_key",
+        "current_kind",
+        "items_processed",
+        "stale_recoveries_seen",
+        "last_error",
+    },
     "usage_log": {"id", "conversation_key", "work_item_id", "provider", "prompt_tokens", "completion_tokens", "cost_usd", "recorded_at"},
     "user_access": {"actor_key", "access", "reason", "granted_by", "granted_at"},
 }
@@ -266,11 +301,45 @@ def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
+    """Migrate transport DB from schema version 6 to 7: durable cancel metadata."""
+    conn.executescript(
+        """
+        ALTER TABLE work_items ADD COLUMN cancel_requested_at TEXT;
+        ALTER TABLE work_items ADD COLUMN cancel_requested_by TEXT NOT NULL DEFAULT '';
+        ALTER TABLE work_items ADD COLUMN cancel_request_event_id TEXT NOT NULL DEFAULT '';
+        """
+    )
+
+
+def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
+    """Migrate transport DB from schema version 7 to 8: durable worker heartbeats."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS worker_heartbeats (
+            worker_id                TEXT PRIMARY KEY,
+            process_role             TEXT NOT NULL,
+            started_at               TEXT NOT NULL,
+            last_seen_at             TEXT NOT NULL,
+            current_item_id          TEXT NOT NULL DEFAULT '',
+            current_conversation_key TEXT NOT NULL DEFAULT '',
+            current_kind             TEXT NOT NULL DEFAULT '',
+            items_processed          INTEGER NOT NULL DEFAULT 0,
+            stale_recoveries_seen    INTEGER NOT NULL DEFAULT 0,
+            last_error               TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_seen ON worker_heartbeats (last_seen_at);
+        """
+    )
+
+
 _MIGRATIONS = (
     (3, _migrate_v2_to_v3),
     (4, _migrate_v3_to_v4),
     (5, _migrate_v4_to_v5),
     (6, _migrate_v5_to_v6),
+    (7, _migrate_v6_to_v7),
+    (8, _migrate_v7_to_v8),
 )
 
 
@@ -690,8 +759,10 @@ def record_and_admit_message(
     kind: str,
     payload: str = "{}",
 ) -> tuple[str, str | None]:
-    """Record update and admit or reject for provider work. Returns (status, item_id).
-    status: 'duplicate' | 'admitted' | 'busy'. item_id set when admitted or busy."""
+    """Record update and durably admit fresh work. Returns (status, item_id).
+
+    status: 'duplicate' | 'admitted' | 'queued'. item_id set when admitted or queued.
+    """
     now = datetime.now(timezone.utc).isoformat()
     item_id = uuid.uuid4().hex
     try:
@@ -701,19 +772,13 @@ def record_and_admit_message(
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (event_id, conversation_key, actor_key, kind, payload, now),
             )
-            if has_fresh_queued_or_claimed(conn, conversation_key):
-                conn.execute(
-                    "INSERT INTO work_items (id, conversation_key, event_id, state, error, created_at, dispatch_mode) "
-                    "VALUES (?, ?, ?, 'failed', 'chat_busy', ?, 'fresh')",
-                    (item_id, conversation_key, event_id, now),
-                )
-                return ("busy", item_id)
+            had_prior_fresh = has_fresh_queued_or_claimed(conn, conversation_key)
             conn.execute(
                 "INSERT INTO work_items (id, conversation_key, event_id, state, created_at, dispatch_mode) "
                 "VALUES (?, ?, ?, 'queued', ?, 'fresh')",
                 (item_id, conversation_key, event_id, now),
             )
-            return ("admitted", item_id)
+            return ("queued" if had_prior_fresh else "admitted", item_id)
     except sqlite3.IntegrityError as exc:
         if "updates.event_id" in str(exc) or "UNIQUE" in str(exc):
             raise _DuplicateUpdate from exc
@@ -996,6 +1061,56 @@ def cancel_queued_fresh_for_chat(conn: sqlite3.Connection, conversation_key: str
         return cur.rowcount > 0
 
 
+def request_cancel(
+    conn: sqlite3.Connection,
+    conversation_key: str,
+    actor_key: str,
+    *,
+    cancel_request_event_id: str = "",
+) -> CancelRequestResult:
+    now = datetime.now(timezone.utc).isoformat()
+    with _write_tx(conn):
+        claimed = conn.execute(
+            "SELECT id, cancel_requested_at FROM work_items "
+            "WHERE conversation_key = ? AND state = 'claimed' AND dispatch_mode = 'fresh' "
+            "ORDER BY created_at ASC LIMIT 1",
+            (conversation_key,),
+        ).fetchone()
+        if claimed is not None:
+            item_id = claimed["id"]
+            conn.execute(
+                "UPDATE work_items SET cancel_requested_at = COALESCE(cancel_requested_at, ?), "
+                "cancel_requested_by = ?, cancel_request_event_id = ? "
+                "WHERE id = ? AND state = 'claimed'",
+                (now, actor_key, cancel_request_event_id, item_id),
+            )
+            return CancelRequestResult.claimed_cancel_requested
+
+        queued = conn.execute(
+            "SELECT id FROM work_items WHERE conversation_key = ? AND state = 'queued' "
+            "AND dispatch_mode = 'fresh' ORDER BY created_at ASC LIMIT 1",
+            (conversation_key,),
+        ).fetchone()
+        if queued is not None:
+            cur = conn.execute(
+                "UPDATE work_items SET state = 'failed', completed_at = ?, error = 'cancelled' "
+                "WHERE id = ? AND state = 'queued'",
+                (now, queued["id"]),
+            )
+            if cur.rowcount > 0:
+                return CancelRequestResult.queued_cancelled
+
+        return CancelRequestResult.nothing_to_cancel
+
+
+def is_cancel_requested(conn: sqlite3.Connection, item_id: str) -> bool:
+    row = conn.execute(
+        "SELECT cancel_requested_at FROM work_items WHERE id = ?",
+        (item_id,),
+    ).fetchone()
+    return bool(row and row["cancel_requested_at"])
+
+
 def get_work_items_for_chat(conn: sqlite3.Connection, conversation_key: str) -> list[dict[str, Any]]:
     """Return work items for a conversation with id, event_id, state, error, dispatch_mode, kind. Read-only."""
     rows = conn.execute(
@@ -1005,6 +1120,109 @@ def get_work_items_for_chat(conn: sqlite3.Connection, conversation_key: str) -> 
         (conversation_key,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_queue_snapshot(conn: sqlite3.Connection) -> QueueSnapshot:
+    """Return backend-neutral queue counts and oldest timestamps."""
+    row = conn.execute(
+        """
+        SELECT
+            COALESCE(SUM(CASE WHEN state = 'queued' AND dispatch_mode = 'fresh' THEN 1 ELSE 0 END), 0) AS fresh_queued_count,
+            COALESCE(SUM(CASE WHEN state = 'queued' AND dispatch_mode = 'recovery' THEN 1 ELSE 0 END), 0) AS recovery_queued_count,
+            COALESCE(SUM(CASE WHEN state = 'claimed' THEN 1 ELSE 0 END), 0) AS claimed_count,
+            COALESCE(SUM(CASE WHEN state = 'pending_recovery' THEN 1 ELSE 0 END), 0) AS pending_recovery_count,
+            COALESCE(SUM(CASE WHEN state = 'claimed' AND cancel_requested_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS cancel_requested_claimed_count,
+            MIN(CASE WHEN state = 'queued' AND dispatch_mode = 'fresh' THEN created_at END) AS oldest_fresh_queued_at,
+            MIN(CASE WHEN state = 'queued' AND dispatch_mode = 'recovery' THEN created_at END) AS oldest_recovery_queued_at,
+            MIN(CASE WHEN state = 'claimed' THEN claimed_at END) AS oldest_claimed_at,
+            MIN(CASE WHEN state = 'pending_recovery' THEN created_at END) AS oldest_pending_recovery_at
+        FROM work_items
+        """
+    ).fetchone()
+    if row is None:
+        return QueueSnapshot()
+    return QueueSnapshot(
+        fresh_queued_count=int(row["fresh_queued_count"] or 0),
+        recovery_queued_count=int(row["recovery_queued_count"] or 0),
+        claimed_count=int(row["claimed_count"] or 0),
+        pending_recovery_count=int(row["pending_recovery_count"] or 0),
+        cancel_requested_claimed_count=int(row["cancel_requested_claimed_count"] or 0),
+        oldest_fresh_queued_at=row["oldest_fresh_queued_at"],
+        oldest_recovery_queued_at=row["oldest_recovery_queued_at"],
+        oldest_claimed_at=row["oldest_claimed_at"],
+        oldest_pending_recovery_at=row["oldest_pending_recovery_at"],
+    )
+
+
+def upsert_worker_heartbeat(conn: sqlite3.Connection, heartbeat: WorkerHeartbeat) -> None:
+    with _write_tx(conn):
+        conn.execute(
+            """
+            INSERT INTO worker_heartbeats (
+                worker_id,
+                process_role,
+                started_at,
+                last_seen_at,
+                current_item_id,
+                current_conversation_key,
+                current_kind,
+                items_processed,
+                stale_recoveries_seen,
+                last_error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(worker_id) DO UPDATE SET
+                process_role = excluded.process_role,
+                started_at = excluded.started_at,
+                last_seen_at = excluded.last_seen_at,
+                current_item_id = excluded.current_item_id,
+                current_conversation_key = excluded.current_conversation_key,
+                current_kind = excluded.current_kind,
+                items_processed = excluded.items_processed,
+                stale_recoveries_seen = excluded.stale_recoveries_seen,
+                last_error = excluded.last_error
+            """,
+            (
+                heartbeat.worker_id,
+                heartbeat.process_role,
+                heartbeat.started_at,
+                heartbeat.last_seen_at,
+                heartbeat.current_item_id,
+                heartbeat.current_conversation_key,
+                heartbeat.current_kind,
+                heartbeat.items_processed,
+                heartbeat.stale_recoveries_seen,
+                heartbeat.last_error,
+            ),
+        )
+
+
+def clear_worker_heartbeat(conn: sqlite3.Connection, worker_id: str) -> None:
+    with _write_tx(conn):
+        conn.execute(
+            "DELETE FROM worker_heartbeats WHERE worker_id = ?",
+            (worker_id,),
+        )
+
+
+def list_worker_heartbeats(conn: sqlite3.Connection) -> list[WorkerHeartbeat]:
+    rows = conn.execute(
+        "SELECT * FROM worker_heartbeats ORDER BY worker_id ASC"
+    ).fetchall()
+    return [
+        WorkerHeartbeat(
+            worker_id=row["worker_id"],
+            process_role=row["process_role"],
+            started_at=row["started_at"],
+            last_seen_at=row["last_seen_at"],
+            current_item_id=row["current_item_id"],
+            current_conversation_key=row["current_conversation_key"],
+            current_kind=row["current_kind"],
+            items_processed=int(row["items_processed"] or 0),
+            stale_recoveries_seen=int(row["stale_recoveries_seen"] or 0),
+            last_error=row["last_error"],
+        )
+        for row in rows
+    ]
 
 
 def get_update_payload(conn: sqlite3.Connection, event_id: str) -> str | None:
@@ -1116,7 +1334,11 @@ def discard_recovery(conn: sqlite3.Connection, item_id: str) -> DiscardResult:
 
 
 def reclaim_for_replay(
-    conn: sqlite3.Connection, item_id: str, worker_id: str
+    conn: sqlite3.Connection,
+    item_id: str,
+    worker_id: str,
+    *,
+    ignore_claimed_item_id: str = "",
 ) -> dict[str, Any] | None:
     with _write_tx(conn):
         row = _load_work_item_by_id(conn, item_id)
@@ -1124,10 +1346,17 @@ def reclaim_for_replay(
             return None
         conversation_key = row["conversation_key"]
         _assert_no_invalid_rows_for_conversation(conn, conversation_key)
-        has_claimed = conn.execute(
-            "SELECT 1 FROM work_items WHERE conversation_key = ? AND state = 'claimed' LIMIT 1",
-            (conversation_key,),
-        ).fetchone()
+        if ignore_claimed_item_id:
+            has_claimed = conn.execute(
+                "SELECT 1 FROM work_items WHERE conversation_key = ? AND state = 'claimed' "
+                "AND id <> ? LIMIT 1",
+                (conversation_key, ignore_claimed_item_id),
+            ).fetchone()
+        else:
+            has_claimed = conn.execute(
+                "SELECT 1 FROM work_items WHERE conversation_key = ? AND state = 'claimed' LIMIT 1",
+                (conversation_key,),
+            ).fetchone()
         out = _apply_claim_event(
             conn,
             item_id,
@@ -1156,54 +1385,56 @@ def recover_stale_claims(
     conn: sqlite3.Connection, current_worker_id: str, max_age_seconds: int = 300
 ) -> int:
     now = datetime.now(timezone.utc)
+    stale_before = (now - timedelta(seconds=max_age_seconds)).isoformat()
     with _write_tx(conn):
         rows = conn.execute(
-            "SELECT id, state, worker_id, claimed_at, dispatch_mode FROM work_items WHERE state = 'claimed'"
+            "SELECT id, state, worker_id, claimed_at, dispatch_mode, cancel_requested_at "
+            "FROM work_items WHERE state = 'claimed' AND claimed_at IS NOT NULL AND claimed_at < ?",
+            (stale_before,),
         ).fetchall()
         requeued = 0
         for row in rows:
             r = dict(row)
             _validate_work_item_row(r, r["id"])
-            stale = False
-            if r["worker_id"] != current_worker_id:
-                stale = True
-            elif r["claimed_at"]:
-                claimed = datetime.fromisoformat(r["claimed_at"])
-                if (now - claimed).total_seconds() > max_age_seconds:
-                    stale = True
-            if stale:
-                model = TransportWorkflowModel(
-                    state="claimed", worker_id=r["worker_id"], is_stale=True
+            model = TransportWorkflowModel(
+                state="claimed", worker_id=r["worker_id"], is_stale=True
+            )
+            result = run_transport_event(model, "recover_stale_claim")
+            if not result.allowed:
+                if result.disposition == TransportDisposition.guard_failed:
+                    continue
+                raise TransportStateCorruption(
+                    f"recover_stale_claims: workflow rejected for item {r['id']}: "
+                    f"{result.disposition} — {result.reason}"
                 )
-                result = run_transport_event(model, "recover_stale_claim")
-                if not result.allowed:
-                    if result.disposition == TransportDisposition.guard_failed:
-                        continue
-                    raise TransportStateCorruption(
-                        f"recover_stale_claims: workflow rejected for item {r['id']}: "
-                        f"{result.disposition} — {result.reason}"
-                    )
+            if r.get("cancel_requested_at"):
+                cursor = conn.execute(
+                    "UPDATE work_items SET state = 'failed', completed_at = ?, error = 'cancelled' "
+                    "WHERE id = ? AND state = 'claimed' AND worker_id = ? AND claimed_at = ?",
+                    (now.isoformat(), r["id"], r["worker_id"], r["claimed_at"]),
+                )
+            else:
                 new_state = result.new_state
                 cursor = conn.execute(
                     "UPDATE work_items SET state = ?, worker_id = NULL, claimed_at = NULL, dispatch_mode = 'recovery' "
                     "WHERE id = ? AND state = 'claimed' AND worker_id = ? AND claimed_at = ?",
                     (new_state, r["id"], r["worker_id"], r["claimed_at"]),
                 )
-                if cursor.rowcount > 0:
-                    requeued += 1
-                    continue
-                re_read = conn.execute(
-                    "SELECT state, worker_id, claimed_at, dispatch_mode FROM work_items WHERE id = ?",
-                    (r["id"],),
-                ).fetchone()
-                if re_read is None:
-                    continue
-                re_read = dict(re_read)
-                _validate_work_item_row(re_read, r["id"])
-                if re_read["state"] == "claimed" and re_read["worker_id"] == r["worker_id"] and re_read["claimed_at"] == r["claimed_at"]:
-                    raise TransportStateCorruption(
-                        f"recover_stale_claims: update matched 0 rows but item {r['id']} still claimed"
-                    )
+            if cursor.rowcount > 0:
+                requeued += 1
+                continue
+            re_read = conn.execute(
+                "SELECT state, worker_id, claimed_at, dispatch_mode, cancel_requested_at FROM work_items WHERE id = ?",
+                (r["id"],),
+            ).fetchone()
+            if re_read is None:
+                continue
+            re_read = dict(re_read)
+            _validate_work_item_row(re_read, r["id"])
+            if re_read["state"] == "claimed" and re_read["worker_id"] == r["worker_id"] and re_read["claimed_at"] == r["claimed_at"]:
+                raise TransportStateCorruption(
+                    f"recover_stale_claims: update matched 0 rows but item {r['id']} still claimed"
+                )
         if requeued:
             log.info("Recovered %d stale work items", requeued)
         return requeued

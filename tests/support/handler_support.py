@@ -344,6 +344,23 @@ class MinimalFakeBot:
         _append_simulator_output_log("send", text)
         return _MinimalFakeSentMessage(self, chat_id)
 
+    async def edit_message_text(self, *, chat_id, message_id, text, **kwargs):
+        self.sent_messages.append(
+            {"chat_id": chat_id, "message_id": message_id, "edit_text": text, **kwargs}
+        )
+        _append_simulator_output_log("edit", text)
+
+    async def edit_message_reply_markup(self, *, chat_id, message_id, reply_markup=None, **kwargs):
+        self.sent_messages.append(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "edit_reply_markup": True,
+                "reply_markup": reply_markup,
+                **kwargs,
+            }
+        )
+
     async def send_chat_action(self, chat_id, action):
         pass
 

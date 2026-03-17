@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from app.transport import InboundCallback, InboundCommand, InboundMessage
+from app.transport import InboundAction, InboundCallback, InboundCommand, InboundMessage
 
 
 @dataclass(frozen=True)
@@ -18,7 +18,7 @@ class InboundEnvelope:
     conversation_key: str
     actor_key: str
     received_at: datetime
-    event: InboundMessage | InboundCommand | InboundCallback
+    event: InboundMessage | InboundCommand | InboundCallback | InboundAction
     conversation_ref: str = ""
     surface_binding_id: str = ""
 
@@ -30,4 +30,6 @@ class InboundEnvelope:
             return "command"
         if isinstance(self.event, InboundCallback):
             return "callback"
+        if isinstance(self.event, InboundAction):
+            return "action"
         return "unknown"

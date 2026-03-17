@@ -8,10 +8,12 @@ from pathlib import Path
 import pytest
 
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from app.runtime_health import WorkerHeartbeat
 from app.storage import ensure_data_dirs
-from app.transport_contract import DiscardResult
+from app.transport_contract import CancelRequestResult, DiscardResult
 from app.work_queue import (
     cancel_queued_fresh_for_chat,
+    clear_worker_heartbeat,
     claim_for_update,
     claim_next,
     claim_next_any,
@@ -19,6 +21,7 @@ from app.work_queue import (
     discard_recovery,
     enqueue_work_item,
     fail_work_item,
+    get_queue_snapshot,
     get_latest_pending_recovery,
     get_pending_recovery_for_update,
     get_update_payload,
@@ -28,7 +31,10 @@ from app.work_queue import (
     has_claimed_for_chat,
     has_queued_or_claimed,
     list_user_access,
+    list_worker_heartbeats,
     mark_pending_recovery,
+    is_cancel_requested,
+    request_cancel,
     reclaim_for_replay,
     record_and_admit_message,
     record_and_enqueue,
@@ -37,6 +43,7 @@ from app.work_queue import (
     recover_stale_claims,
     set_user_access,
     supersede_pending_recovery,
+    upsert_worker_heartbeat,
     update_payload,
 )
 
@@ -217,6 +224,74 @@ def test_fail_work_item(backend_and_data_dir):
     assert has_queued_or_claimed(data_dir, _conv(1)) is False
 
 
+def test_request_cancel_sets_flag_on_claimed_item(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    _, item_id = record_and_enqueue(data_dir, _event(550), _conv(1), _actor(42), "message")
+    claim_for_update(data_dir, conversation_key=_conv(1), event_id=_event(550), worker_id="w1")
+    result = request_cancel(
+        data_dir,
+        conversation_key=_conv(1),
+        actor_key=_actor(42),
+        cancel_request_event_id=_event(551),
+    )
+    assert result == CancelRequestResult.claimed_cancel_requested
+    assert is_cancel_requested(data_dir, item_id) is True
+
+
+def test_request_cancel_returns_nothing_when_idle(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    result = request_cancel(
+        data_dir,
+        conversation_key=_conv(1),
+        actor_key=_actor(42),
+        cancel_request_event_id=_event(552),
+    )
+    assert result == CancelRequestResult.nothing_to_cancel
+
+
+def test_request_cancel_cancels_queued_fresh_item(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    status, item_id = record_and_admit_message(
+        data_dir,
+        _event(553),
+        _conv(1),
+        _actor(42),
+        "message",
+        '{"text":"queued"}',
+    )
+    assert status == "admitted"
+    result = request_cancel(
+        data_dir,
+        conversation_key=_conv(1),
+        actor_key=_actor(42),
+        cancel_request_event_id=_event(554),
+    )
+    assert result == CancelRequestResult.queued_cancelled
+    items = get_work_items_for_chat(data_dir, _conv(1))
+    cancelled = [row for row in items if row["id"] == item_id]
+    assert cancelled and cancelled[0]["state"] == "failed"
+    assert cancelled[0]["error"] == "cancelled"
+
+
+def test_recover_stale_claims_honors_cancel_request(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    _, item_id = record_and_enqueue(data_dir, _event(555), _conv(1), _actor(42), "message")
+    claim_for_update(data_dir, conversation_key=_conv(1), event_id=_event(555), worker_id="w1")
+    result = request_cancel(
+        data_dir,
+        conversation_key=_conv(1),
+        actor_key=_actor(42),
+        cancel_request_event_id=_event(556),
+    )
+    assert result == CancelRequestResult.claimed_cancel_requested
+    recovered = recover_stale_claims(data_dir, current_worker_id="w2", max_age_seconds=0)
+    assert recovered >= 1
+    items = get_work_items_for_chat(data_dir, _conv(1))
+    final = [row for row in items if row["id"] == item_id]
+    assert final and final[0]["state"] == "failed"
+    assert final[0]["error"] == "cancelled"
+
+
 def test_mark_pending_recovery_and_get_latest(backend_and_data_dir):
     _backend, data_dir = backend_and_data_dir
     _, item_id = record_and_enqueue(data_dir, _event(601), _conv(1), _actor(42), "message")
@@ -277,6 +352,16 @@ def test_recover_stale_claims(backend_and_data_dir):
     assert item["event_id"] == _event(801)
 
 
+def test_live_claim_by_other_worker_not_recovered(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    record_update(data_dir, _event(802), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
+    enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(802))
+    claim_next(data_dir, conversation_key=_conv(1), worker_id="worker-a")
+    n = recover_stale_claims(data_dir, current_worker_id="worker-b", max_age_seconds=300)
+    assert n == 0
+    assert has_claimed_for_chat(data_dir, _conv(1)) is True
+
+
 def test_has_queued_or_claimed_false_when_empty(backend_and_data_dir):
     _backend, data_dir = backend_and_data_dir
     assert has_queued_or_claimed(data_dir, _conv(1)) is False
@@ -313,6 +398,128 @@ def test_cancel_queued_fresh_for_chat_terminal_state(backend_and_data_dir):
     assert len(cancelled) == 1, f"Exactly one item must be failed/cancelled, got: {items}"
     assert len(runnable) == 0, f"No runnable items after cancel, got: {items}"
     assert has_queued_or_claimed(data_dir, conversation_key) is False
+
+
+def test_second_fresh_message_queues_not_rejects(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    first_status, first_item_id = record_and_admit_message(
+        data_dir,
+        _event(5002),
+        _conv(7),
+        _actor(42),
+        "message",
+        '{"text":"first"}',
+    )
+    second_status, second_item_id = record_and_admit_message(
+        data_dir,
+        _event(5003),
+        _conv(7),
+        _actor(42),
+        "message",
+        '{"text":"second"}',
+    )
+    assert first_status == "admitted"
+    assert second_status == "queued"
+    items = get_work_items_for_chat(data_dir, _conv(7))
+    by_id = {row["id"]: row for row in items}
+    assert by_id[first_item_id]["state"] == "queued"
+    assert by_id[second_item_id]["state"] == "queued"
+
+
+def test_queue_snapshot_reports_counts_and_oldest_timestamps(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    record_and_admit_message(data_dir, _event(5010), _conv(10), _actor(42), "message", '{"text":"fresh"}')
+    record_and_admit_message(data_dir, _event(5011), _conv(10), _actor(42), "message", '{"text":"fresh-2"}')
+    record_and_enqueue(data_dir, _event(5012), _conv(11), _actor(42), "action", '{"action":"retry_allow"}')
+    claimed = claim_next(data_dir, conversation_key=_conv(10), worker_id="w1")
+    assert claimed is not None
+    queued_recovery = claim_next(data_dir, conversation_key=_conv(11), worker_id="w2")
+    assert queued_recovery is not None
+    mark_pending_recovery(data_dir, queued_recovery["id"])
+
+    snapshot = get_queue_snapshot(data_dir)
+
+    assert snapshot.fresh_queued_count == 1
+    assert snapshot.claimed_count == 1
+    assert snapshot.pending_recovery_count == 1
+    assert snapshot.oldest_fresh_queued_at
+    assert snapshot.oldest_claimed_at
+    assert snapshot.oldest_pending_recovery_at
+
+
+def test_worker_heartbeat_round_trip(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    heartbeat = WorkerHeartbeat(
+        worker_id="host:1234:abc",
+        process_role="worker",
+        started_at="2026-03-16T00:00:00+00:00",
+        last_seen_at="2026-03-16T00:00:30+00:00",
+        current_item_id="item-1",
+        current_conversation_key=_conv(12),
+        current_kind="message",
+        items_processed=3,
+        stale_recoveries_seen=1,
+        last_error="",
+    )
+
+    upsert_worker_heartbeat(data_dir, heartbeat)
+    rows = list_worker_heartbeats(data_dir)
+
+    assert len(rows) == 1
+    assert rows[0].worker_id == heartbeat.worker_id
+    assert rows[0].current_item_id == "item-1"
+    assert rows[0].items_processed == 3
+
+    updated = WorkerHeartbeat(
+        worker_id=heartbeat.worker_id,
+        process_role="worker",
+        started_at=heartbeat.started_at,
+        last_seen_at="2026-03-16T00:01:00+00:00",
+        current_item_id="",
+        current_conversation_key="",
+        current_kind="",
+        items_processed=4,
+        stale_recoveries_seen=2,
+        last_error="fatal",
+    )
+    upsert_worker_heartbeat(data_dir, updated)
+
+    rows = list_worker_heartbeats(data_dir)
+    assert len(rows) == 1
+    assert rows[0].last_seen_at == updated.last_seen_at
+    assert rows[0].items_processed == 4
+    assert rows[0].last_error == "fatal"
+
+    clear_worker_heartbeat(data_dir, heartbeat.worker_id)
+    assert list_worker_heartbeats(data_dir) == []
+
+
+def test_queued_items_drain_fifo(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    statuses = [
+        record_and_admit_message(data_dir, _event(5004), _conv(8), _actor(42), "message", '{"text":"1"}'),
+        record_and_admit_message(data_dir, _event(5005), _conv(8), _actor(42), "message", '{"text":"2"}'),
+        record_and_admit_message(data_dir, _event(5006), _conv(8), _actor(42), "message", '{"text":"3"}'),
+    ]
+    assert [status for status, _item_id in statuses] == ["admitted", "queued", "queued"]
+    first = claim_next(data_dir, conversation_key=_conv(8), worker_id="w1")
+    assert first is not None and first["event_id"] == _event(5004)
+    complete_work_item(data_dir, first["id"])
+    second = claim_next(data_dir, conversation_key=_conv(8), worker_id="w1")
+    assert second is not None and second["event_id"] == _event(5005)
+    complete_work_item(data_dir, second["id"])
+    third = claim_next(data_dir, conversation_key=_conv(8), worker_id="w1")
+    assert third is not None and third["event_id"] == _event(5006)
+
+
+def test_single_claimed_per_conversation_with_queued_backlog(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    record_and_admit_message(data_dir, _event(5007), _conv(9), _actor(42), "message", '{"text":"1"}')
+    record_and_admit_message(data_dir, _event(5008), _conv(9), _actor(42), "message", '{"text":"2"}')
+    first = claim_next(data_dir, conversation_key=_conv(9), worker_id="w1")
+    assert first is not None
+    second = claim_next(data_dir, conversation_key=_conv(9), worker_id="w2")
+    assert second is None
 
 
 def test_user_access_no_row_returns_none(backend_and_data_dir):

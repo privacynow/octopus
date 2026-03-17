@@ -6,8 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from app import runtime_backend
+from app.runtime_health import QueueSnapshot, WorkerHeartbeat
 from app.transport_contract import (
     ApplyResult,
+    CancelRequestResult,
     DiscardResult,
     LeaveClaimed,
     PendingRecovery,
@@ -16,6 +18,7 @@ from app.transport_contract import (
 
 __all__ = [
     "ApplyResult",
+    "CancelRequestResult",
     "DiscardResult",
     "LeaveClaimed",
     "PendingRecovery",
@@ -28,8 +31,10 @@ __all__ = [
     "claim_next_any",
     "complete_work_item",
     "discard_recovery",
+    "debug_transport_connection",
     "enqueue_work_item",
     "fail_work_item",
+    "get_queue_snapshot",
     "get_latest_pending_recovery",
     "get_pending_recovery_for_update",
     "get_update_payload",
@@ -38,17 +43,23 @@ __all__ = [
     "has_claimed_for_chat",
     "has_queued_or_claimed",
     "list_user_access",
+    "list_worker_heartbeats",
     "mark_pending_recovery",
     "purge_old",
+    "request_cancel",
     "reclaim_for_replay",
     "record_and_admit_message",
     "record_and_enqueue",
     "record_usage",
     "record_update",
     "recover_stale_claims",
+    "reset_transport_store_for_test",
+    "clear_worker_heartbeat",
     "set_user_access",
     "supersede_pending_recovery",
+    "is_cancel_requested",
     "get_usage_since",
+    "upsert_worker_heartbeat",
     "update_payload",
 ]
 
@@ -65,6 +76,16 @@ def close_all_transport_db() -> None:
     _store().close_all_transport_db()
 
 
+def debug_transport_connection(data_dir: Path):
+    """Return a backend-specific transport-store inspection handle. Tests only."""
+    return _store().debug_connection(data_dir)
+
+
+def reset_transport_store_for_test(data_dir: Path) -> None:
+    """Tests only: close and reset the transport store for this data dir."""
+    _store().reset_db_for_test(data_dir)
+
+
 def record_and_admit_message(
     data_dir: Path,
     event_id: str,
@@ -73,8 +94,12 @@ def record_and_admit_message(
     kind: str,
     payload: str = "{}",
 ) -> tuple[str, str | None]:
-    """Record update and admit or reject for provider work. Returns (status, item_id).
-    status: 'duplicate' | 'admitted' | 'busy'. item_id set when admitted or busy."""
+    """Record update and durably admit fresh message work. Returns (status, item_id).
+
+    status: 'duplicate' | 'admitted' | 'queued'. item_id set when admitted or queued.
+    'admitted' means no older fresh runnable work existed for the conversation.
+    'queued' means the item was accepted behind existing fresh work.
+    """
     return _store().record_and_admit_message(
         data_dir, event_id, conversation_key, actor_key, kind, payload,
     )
@@ -143,6 +168,25 @@ def cancel_queued_fresh_for_chat(data_dir: Path, conversation_key: str) -> bool:
     return _store().cancel_queued_fresh_for_chat(data_dir, conversation_key)
 
 
+def request_cancel(
+    data_dir: Path,
+    conversation_key: str,
+    actor_key: str,
+    *,
+    cancel_request_event_id: str = "",
+) -> CancelRequestResult:
+    return _store().request_cancel(
+        data_dir,
+        conversation_key,
+        actor_key,
+        cancel_request_event_id=cancel_request_event_id,
+    )
+
+
+def is_cancel_requested(data_dir: Path, item_id: str) -> bool:
+    return _store().is_cancel_requested(data_dir, item_id)
+
+
 def has_claimed_for_chat(data_dir: Path, conversation_key: str) -> bool:
     return _store().has_claimed_for_chat(data_dir, conversation_key)
 
@@ -203,6 +247,23 @@ def get_work_items_for_chat(data_dir: Path, conversation_key: str) -> list[dict[
     return _store().get_work_items_for_chat(data_dir, conversation_key)
 
 
+def get_queue_snapshot(data_dir: Path) -> QueueSnapshot:
+    """Return a backend-neutral queue summary for Shared Runtime observability."""
+    return _store().get_queue_snapshot(data_dir)
+
+
+def upsert_worker_heartbeat(data_dir: Path, heartbeat: WorkerHeartbeat) -> None:
+    _store().upsert_worker_heartbeat(data_dir, heartbeat)
+
+
+def clear_worker_heartbeat(data_dir: Path, worker_id: str) -> None:
+    _store().clear_worker_heartbeat(data_dir, worker_id)
+
+
+def list_worker_heartbeats(data_dir: Path) -> list[WorkerHeartbeat]:
+    return _store().list_worker_heartbeats(data_dir)
+
+
 def mark_pending_recovery(data_dir: Path, item_id: str) -> None:
     _store().mark_pending_recovery(data_dir, item_id)
 
@@ -226,9 +287,18 @@ def discard_recovery(data_dir: Path, item_id: str) -> DiscardResult:
 
 
 def reclaim_for_replay(
-    data_dir: Path, item_id: str, worker_id: str,
+    data_dir: Path,
+    item_id: str,
+    worker_id: str,
+    *,
+    ignore_claimed_item_id: str = "",
 ) -> dict[str, Any] | None:
-    return _store().reclaim_for_replay(data_dir, item_id, worker_id)
+    return _store().reclaim_for_replay(
+        data_dir,
+        item_id,
+        worker_id,
+        ignore_claimed_item_id=ignore_claimed_item_id,
+    )
 
 
 def recover_stale_claims(

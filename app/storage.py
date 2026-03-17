@@ -120,7 +120,13 @@ def close_all_db() -> None:
     runtime_backend.session_store().close_all_db()
 
 
-def _reset_db(data_dir: Path) -> None:
-    """Tests only: close and delete the session database."""
+def debug_session_connection(data_dir: Path):
+    """Return a backend-specific session-store inspection handle. Tests only."""
     from app import runtime_backend
-    runtime_backend.session_store()._reset_db(data_dir)
+    return runtime_backend.session_store().debug_connection(data_dir)
+
+
+def reset_db_for_test(data_dir: Path) -> None:
+    """Tests only: close and reset the session store for this data dir."""
+    from app import runtime_backend
+    runtime_backend.session_store().reset_db_for_test(data_dir)

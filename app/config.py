@@ -31,7 +31,7 @@ def load_dotenv_file(path: Path) -> dict[str, str]:
 
 
 def env_path_for_instance(instance: str) -> Path:
-    return Path.home() / ".config" / "telegram-agent-bot" / f"{instance}.env"
+    return Path.home() / ".config" / "octopus-agent" / f"{instance}.env"
 
 
 def derive_agent_slug(raw: str, *, fallback: str = "agent") -> str:
@@ -80,6 +80,12 @@ class AgentMode(StrEnum):
 class RuntimeMode(StrEnum):
     LOCAL = "local"
     SHARED = "shared"
+
+
+class ProcessRole(StrEnum):
+    ALL = "all"
+    WEBHOOK = "webhook"
+    WORKER = "worker"
 
 
 class FilePolicy(StrEnum):
@@ -138,6 +144,8 @@ class BotConfig:
     webhook_listen: str
     webhook_port: int
     webhook_secret: str
+    telegram_api_base_url: str
+    telegram_file_api_base_url: str
     completion_webhook_url: str
     # Projects — optional named working directories
     projects: tuple[ProjectBinding, ...]  # parsed from BOT_PROJECTS
@@ -160,8 +168,11 @@ class BotConfig:
     agent_registry_url: str
     agent_registry_enroll_token: str
     agent_poll_interval_seconds: float
-    # Runtime (Phase 13). local = only supported mode; shared = rejected until Phase 18.
-    runtime_mode: str  # BOT_RUNTIME_MODE: "local" (default) | "shared" (rejected)
+    # Runtime mode. local = inline/worker hybrid; shared = persist-first worker-owned ingress.
+    runtime_mode: str  # BOT_RUNTIME_MODE: "local" (default) | "shared"
+    process_role: str  # BOT_PROCESS_ROLE: "all" (default) | "webhook" | "worker"
+    claim_lease_ttl_seconds: int  # BOT_CLAIM_LEASE_TTL, max age for claimed work before stale recovery
+    claim_sweep_interval_seconds: float  # BOT_CLAIM_SWEEP_INTERVAL_SECONDS, periodic stale-claim sweep cadence
     # Postgres optional for local runtime. Empty = SQLite (default); set = Postgres as store backend.
     database_url: str  # BOT_DATABASE_URL (postgresql://...)
     db_pool_min_size: int
@@ -250,7 +261,7 @@ def _parse_projects(raw: str) -> tuple[ProjectBinding, ...]:
 def load_config(instance: str | None = None) -> BotConfig:
     """Load config from env file + environment variables.
 
-    Instance env file: ~/.config/telegram-agent-bot/<instance>.env
+    Instance env file: ~/.config/octopus-agent/<instance>.env
     Environment variables override the file (env file is the base,
     os.environ wins on conflicts).
 
@@ -284,7 +295,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         except ValueError:
             raise SystemExit(f"CONFIG ERROR: {key} must be a number, got '{raw}'")
 
-    default_data = Path.home() / ".telegram-agent-bot" / instance
+    default_data = Path.home() / ".octopus-agent" / instance
 
     extra_dirs_raw = get("BOT_EXTRA_DIRS")
     extra_dirs = tuple(
@@ -375,6 +386,8 @@ def load_config(instance: str | None = None) -> BotConfig:
         webhook_listen=get("BOT_WEBHOOK_LISTEN", "127.0.0.1"),
         webhook_port=get_int("BOT_WEBHOOK_PORT", "8443"),
         webhook_secret=get("BOT_WEBHOOK_SECRET"),
+        telegram_api_base_url=get("BOT_TELEGRAM_API_BASE_URL").strip(),
+        telegram_file_api_base_url=get("BOT_TELEGRAM_FILE_API_BASE_URL").strip(),
         completion_webhook_url=get("BOT_COMPLETION_WEBHOOK_URL").strip(),
         projects=_parse_projects(get("BOT_PROJECTS")),
         model_profiles=_parse_model_profiles(get("BOT_MODEL_PROFILES")),
@@ -395,6 +408,9 @@ def load_config(instance: str | None = None) -> BotConfig:
         agent_registry_enroll_token=get("BOT_AGENT_REGISTRY_ENROLL_TOKEN").strip(),
         agent_poll_interval_seconds=max(1.0, get_float("BOT_AGENT_POLL_INTERVAL_SECONDS", "5.0")),
         runtime_mode=get("BOT_RUNTIME_MODE", "local").strip().lower() or "local",
+        process_role=get("BOT_PROCESS_ROLE", "all").strip().lower() or "all",
+        claim_lease_ttl_seconds=get_int("BOT_CLAIM_LEASE_TTL", "300"),
+        claim_sweep_interval_seconds=max(0.1, get_float("BOT_CLAIM_SWEEP_INTERVAL_SECONDS", "60.0")),
         database_url=get("BOT_DATABASE_URL", "").strip(),
         db_pool_min_size=max(0, get_int("BOT_DB_POOL_MIN_SIZE", "1")),
         db_pool_max_size=max(1, get_int("BOT_DB_POOL_MAX_SIZE", "10")),
@@ -430,7 +446,7 @@ def load_config_provider_health() -> BotConfig:
             return float(default)
 
     instance = get("BOT_INSTANCE", "default")
-    default_data = Path.home() / ".telegram-agent-bot" / instance
+    default_data = Path.home() / ".octopus-agent" / instance
     extra_dirs_raw = get("BOT_EXTRA_DIRS")
     extra_dirs = tuple(
         Path(d.strip()) for d in extra_dirs_raw.split(",") if d.strip()
@@ -470,6 +486,8 @@ def load_config_provider_health() -> BotConfig:
         webhook_listen="127.0.0.1",
         webhook_port=8443,
         webhook_secret="",
+        telegram_api_base_url="",
+        telegram_file_api_base_url="",
         completion_webhook_url="",
         projects=(),
         model_profiles={},
@@ -488,6 +506,9 @@ def load_config_provider_health() -> BotConfig:
         agent_registry_enroll_token="",
         agent_poll_interval_seconds=5.0,
         runtime_mode="local",
+        process_role="all",
+        claim_lease_ttl_seconds=300,
+        claim_sweep_interval_seconds=60.0,
         database_url="",
         db_pool_min_size=1,
         db_pool_max_size=10,
@@ -556,20 +577,51 @@ def validate_config(config: BotConfig) -> list[str]:
     if config.agent_poll_interval_seconds <= 0:
         errors.append("BOT_AGENT_POLL_INTERVAL_SECONDS must be greater than 0")
 
+    if config.claim_lease_ttl_seconds <= 0:
+        errors.append("BOT_CLAIM_LEASE_TTL must be greater than 0")
+
+    if config.claim_sweep_interval_seconds <= 0:
+        errors.append("BOT_CLAIM_SWEEP_INTERVAL_SECONDS must be greater than 0")
+
     if config.runtime_mode == RuntimeMode.SHARED.value:
-        errors.append(
-            "BOT_RUNTIME_MODE=shared is not supported until Phase 18. "
-            "Use BOT_RUNTIME_MODE=local (default) for Local Runtime."
-        )
+        if config.bot_mode != BotMode.WEBHOOK.value:
+            errors.append(
+                "BOT_RUNTIME_MODE=shared requires BOT_MODE=webhook. "
+                "Shared Runtime uses persist-first webhook ingress; "
+                "polling mode is Local Runtime only."
+            )
     elif config.runtime_mode != RuntimeMode.LOCAL.value:
         errors.append(
-            f"BOT_RUNTIME_MODE must be 'local' or 'shared', got '{config.runtime_mode}'. "
-            "Only 'local' is supported in Phase 13."
+            f"BOT_RUNTIME_MODE must be 'local' or 'shared', got '{config.runtime_mode}'."
         )
+
+    if config.process_role not in ProcessRole._value2member_map_:
+        errors.append(
+            f"BOT_PROCESS_ROLE must be 'all', 'webhook', or 'worker', got '{config.process_role}'."
+        )
+    elif config.process_role != ProcessRole.ALL.value:
+        if config.runtime_mode != RuntimeMode.SHARED.value:
+            errors.append(
+                f"BOT_PROCESS_ROLE={config.process_role} requires BOT_RUNTIME_MODE=shared."
+            )
+        if config.process_role == ProcessRole.WEBHOOK.value and config.bot_mode != BotMode.WEBHOOK.value:
+            errors.append(
+                "BOT_PROCESS_ROLE=webhook requires BOT_MODE=webhook."
+            )
 
     if config.bot_mode == BotMode.WEBHOOK.value:
         if not config.webhook_url:
             errors.append("BOT_WEBHOOK_URL is required when BOT_MODE=webhook")
+
+    if config.telegram_api_base_url and not _has_valid_http_url(config.telegram_api_base_url):
+        errors.append(
+            "BOT_TELEGRAM_API_BASE_URL must be a valid http:// or https:// URL when set"
+        )
+
+    if config.telegram_file_api_base_url and not _has_valid_http_url(config.telegram_file_api_base_url):
+        errors.append(
+            "BOT_TELEGRAM_FILE_API_BASE_URL must be a valid http:// or https:// URL when set"
+        )
 
     if config.completion_webhook_url and not _has_valid_http_url(config.completion_webhook_url):
         log.warning(

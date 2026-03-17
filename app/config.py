@@ -82,6 +82,12 @@ class RuntimeMode(StrEnum):
     SHARED = "shared"
 
 
+class ProcessRole(StrEnum):
+    ALL = "all"
+    WEBHOOK = "webhook"
+    WORKER = "worker"
+
+
 class FilePolicy(StrEnum):
     INSPECT = "inspect"
     EDIT = "edit"
@@ -161,7 +167,8 @@ class BotConfig:
     agent_registry_enroll_token: str
     agent_poll_interval_seconds: float
     # Runtime mode. local = inline/worker hybrid; shared = persist-first worker-owned ingress.
-    runtime_mode: str  # BOT_RUNTIME_MODE: "local" (default) | "shared" (rejected)
+    runtime_mode: str  # BOT_RUNTIME_MODE: "local" (default) | "shared"
+    process_role: str  # BOT_PROCESS_ROLE: "all" (default) | "webhook" | "worker"
     claim_lease_ttl_seconds: int  # BOT_CLAIM_LEASE_TTL, max age for claimed work before stale recovery
     # Postgres optional for local runtime. Empty = SQLite (default); set = Postgres as store backend.
     database_url: str  # BOT_DATABASE_URL (postgresql://...)
@@ -396,6 +403,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         agent_registry_enroll_token=get("BOT_AGENT_REGISTRY_ENROLL_TOKEN").strip(),
         agent_poll_interval_seconds=max(1.0, get_float("BOT_AGENT_POLL_INTERVAL_SECONDS", "5.0")),
         runtime_mode=get("BOT_RUNTIME_MODE", "local").strip().lower() or "local",
+        process_role=get("BOT_PROCESS_ROLE", "all").strip().lower() or "all",
         claim_lease_ttl_seconds=get_int("BOT_CLAIM_LEASE_TTL", "300"),
         database_url=get("BOT_DATABASE_URL", "").strip(),
         db_pool_min_size=max(0, get_int("BOT_DB_POOL_MIN_SIZE", "1")),
@@ -490,6 +498,7 @@ def load_config_provider_health() -> BotConfig:
         agent_registry_enroll_token="",
         agent_poll_interval_seconds=5.0,
         runtime_mode="local",
+        process_role="all",
         claim_lease_ttl_seconds=300,
         database_url="",
         db_pool_min_size=1,
@@ -573,6 +582,20 @@ def validate_config(config: BotConfig) -> list[str]:
         errors.append(
             f"BOT_RUNTIME_MODE must be 'local' or 'shared', got '{config.runtime_mode}'."
         )
+
+    if config.process_role not in ProcessRole._value2member_map_:
+        errors.append(
+            f"BOT_PROCESS_ROLE must be 'all', 'webhook', or 'worker', got '{config.process_role}'."
+        )
+    elif config.process_role != ProcessRole.ALL.value:
+        if config.runtime_mode != RuntimeMode.SHARED.value:
+            errors.append(
+                f"BOT_PROCESS_ROLE={config.process_role} requires BOT_RUNTIME_MODE=shared."
+            )
+        if config.process_role == ProcessRole.WEBHOOK.value and config.bot_mode != BotMode.WEBHOOK.value:
+            errors.append(
+                "BOT_PROCESS_ROLE=webhook requires BOT_MODE=webhook."
+            )
 
     if config.bot_mode == BotMode.WEBHOOK.value:
         if not config.webhook_url:

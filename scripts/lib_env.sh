@@ -68,3 +68,22 @@ bot_compose() {
   fi
   docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot --env-file "$env_file" "$@"
 }
+
+bot_shared_compose() {
+  local env_file="${BOT_ENV_FILE:-$(current_bot_env_file)}"
+  local project="${BOT_COMPOSE_PROJECT:-}"
+  if [ -z "$project" ] && [ "$env_file" != ".env.bot" ]; then
+    project="telegram-agent-bot-$(current_bot_instance "$env_file")"
+  fi
+  if [ -n "$project" ]; then
+    docker compose --project-directory . -p "$project" \
+      -f infra/compose/docker-compose.yml \
+      -f infra/compose/docker-compose.shared.yml \
+      --env-file "$env_file" "$@"
+    return
+  fi
+  docker compose --project-directory . \
+    -f infra/compose/docker-compose.yml \
+    -f infra/compose/docker-compose.shared.yml \
+    --env-file "$env_file" "$@"
+}

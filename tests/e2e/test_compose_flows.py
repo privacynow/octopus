@@ -404,6 +404,50 @@ def _postgres_bot_override_path(ctx: dict[str, object]) -> str:
     return str(path)
 
 
+def _shared_env_file_path(ctx: dict[str, object]) -> Path:
+    path = Path(ctx["artifacts_dir"]) / ".env.shared.bot"
+    path.write_text(
+        "\n".join(
+            [
+                "BOT_PROVIDER=claude",
+                "TELEGRAM_BOT_TOKEN=123456:ABC-DEFghijklmnopqrstuvwxyz",
+                "BOT_ALLOW_OPEN=1",
+                "BOT_WEBHOOK_URL=https://bot.example.com/webhook",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _shared_runtime_override_path(ctx: dict[str, object]) -> str:
+    env_file = _shared_env_file_path(ctx)
+    path = Path(ctx["artifacts_dir"]) / "docker-compose.e2e.shared.generated.yml"
+    path.write_text(
+        "\n".join(
+            [
+                "services:",
+                "  bot-provider:",
+                f"    image: {ctx['bot_image']}",
+                "    env_file: !override",
+                f"      - {env_file}",
+                "  bot-webhook:",
+                f"    image: {ctx['bot_image']}",
+                "    env_file: !override",
+                f"      - {env_file}",
+                "  bot-worker:",
+                f"    image: {ctx['bot_image']}",
+                "    env_file: !override",
+                f"      - {env_file}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return str(path)
+
+
 @pytest.fixture(scope="module")
 def bot_image_built(compose_ctx):
     """Build the bot image once per module. Shared by SQLite-primary and Postgres-bounded tests."""
@@ -515,8 +559,13 @@ def _run_bot_foreground_and_capture(ctx: dict[str, object], timeout_seconds: int
 
     Single bounded wait — no log polling. On timeout we terminate and still capture what we got.
     """
+    cmd = ["docker", "compose"]
+    project_dir = ctx.get("project_dir")
+    if project_dir:
+        cmd.extend(["--project-directory", str(project_dir)])
+    cmd.extend([*ctx["compose_files"], "--profile", "bot", "run", "--rm", "bot"])
     proc = subprocess.Popen(
-        ["docker", "compose", *ctx["compose_files"], "--profile", "bot", "run", "--rm", "bot"],
+        cmd,
         cwd=ctx.get("cwd", REPO_ROOT),
         env=ctx["env"],
         stdout=subprocess.PIPE,
@@ -532,6 +581,36 @@ def _run_bot_foreground_and_capture(ctx: dict[str, object], timeout_seconds: int
             proc.kill()
             out, err = proc.communicate(timeout=2)
     return (err or b"").decode("utf-8", errors="replace")
+
+
+def _run_service_foreground_and_capture(
+    ctx: dict[str, object],
+    service: str,
+    *,
+    timeout_seconds: int = 30,
+) -> str:
+    cmd = ["docker", "compose"]
+    project_dir = ctx.get("project_dir")
+    if project_dir:
+        cmd.extend(["--project-directory", str(project_dir)])
+    cmd.extend([*ctx["compose_files"], "--profile", "bot", "run", "--rm", service])
+    proc = subprocess.Popen(
+        cmd,
+        cwd=ctx.get("cwd", REPO_ROOT),
+        env=ctx["env"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        try:
+            out, err = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, err = proc.communicate(timeout=2)
+    return ((out or b"") + (err or b"")).decode("utf-8", errors="replace")
 
 
 def test_compose_sqlite_local_runtime_primary(bot_image_built):
@@ -567,6 +646,39 @@ def test_compose_bot_startup_with_postgres(compose_ctx_postgres_bot):
     pytest.fail(
         "Bot (Postgres backend) did not reach startup or emit provider-auth failure. Stderr:\n" + stderr
     )
+
+
+def test_compose_shared_runtime_role_smoke(bot_image_built):
+    """Shared Runtime override defines split roles and each role reaches its bounded startup seam."""
+    ctx = dict(bot_image_built)
+    shared_override = _shared_runtime_override_path(ctx)
+    ctx["compose_files"] = [
+        "-f", os.path.join(REPO_ROOT, "infra/compose/docker-compose.yml"),
+        "-f", os.path.join(REPO_ROOT, "infra/compose/docker-compose.shared.yml"),
+        "-f", os.path.join(REPO_ROOT, "infra/compose/docker-compose.e2e.yml"),
+        "-f", shared_override,
+    ]
+    ctx["env"] = {**ctx["env"], "COMPOSE_PROJECT_NAME": f"{ctx['project']}-shared"}
+
+    _compose_down(ctx, "shared-preclean")
+
+    services = _compose(ctx, "--profile", "bot", "config", "--services")
+    assert services.returncode == 0, (services.stdout, services.stderr)
+    listed = set((services.stdout or "").split())
+    assert "bot-webhook" in listed
+    assert "bot-worker" in listed
+
+    webhook_output = _run_service_foreground_and_capture(ctx, "bot-webhook", timeout_seconds=20)
+    assert "Bot starting (webhook)" in webhook_output, webhook_output
+
+    worker_output = _run_service_foreground_and_capture(ctx, "bot-worker", timeout_seconds=20)
+    assert (
+        "Bot starting (worker-only)" in worker_output
+        or (
+            "Provider not authenticated or unavailable." in worker_output
+            and "Run ./scripts/provider/provider_login.sh" in worker_output
+        )
+    ), worker_output
 
 
 def test_compose_bot_stub_smoke(postgres_up):

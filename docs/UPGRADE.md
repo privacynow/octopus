@@ -59,12 +59,20 @@ Run:
 The script:
 
 - validates `BOT_WEBHOOK_URL` and `TELEGRAM_BOT_TOKEN`
-- rejects registry-mode multi-replica startup for now
 - bootstraps/updates Postgres when `BOT_DATABASE_URL` is set
 - registers the Telegram webhook and checks for `"ok": true`
 - starts the Shared Runtime Compose services:
   - `bot-webhook`
   - `bot-worker` scaled with `BOT_WORKER_REPLICAS`
+
+If `BOT_AGENT_MODE=registry` is set:
+
+- `BOT_AGENT_REGISTRY_URL` must also be set
+- `bot-webhook` is the singleton registry publisher for sync, polling, and
+  mirrored runtime health
+- `bot-worker` processes do not heartbeat the registry directly
+- the registry service must already be running and reachable; `shared_start.sh`
+  does not start it for you
 
 Scale workers with:
 
@@ -85,6 +93,9 @@ BOT_ENV_FILE=.env.bot docker compose --project-directory . \
 
 - confirm distinct worker IDs appear as `host:pid:uuid`
 - in SQLite mode, keep all containers on the same host
+- in registry mode, confirm the Registry UI bot card shows runtime-health
+  summary badges and `GET /v1/ui/bots/{agent_id}/health` returns mirrored
+  queue and worker state
 
 ### Revert to Local Runtime
 

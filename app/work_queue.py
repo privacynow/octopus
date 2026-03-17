@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app import runtime_backend
+from app.runtime_health import QueueSnapshot, WorkerHeartbeat
 from app.transport_contract import (
     ApplyResult,
     CancelRequestResult,
@@ -32,6 +33,7 @@ __all__ = [
     "discard_recovery",
     "enqueue_work_item",
     "fail_work_item",
+    "get_queue_snapshot",
     "get_latest_pending_recovery",
     "get_pending_recovery_for_update",
     "get_update_payload",
@@ -40,6 +42,7 @@ __all__ = [
     "has_claimed_for_chat",
     "has_queued_or_claimed",
     "list_user_access",
+    "list_worker_heartbeats",
     "mark_pending_recovery",
     "purge_old",
     "request_cancel",
@@ -49,10 +52,12 @@ __all__ = [
     "record_usage",
     "record_update",
     "recover_stale_claims",
+    "clear_worker_heartbeat",
     "set_user_access",
     "supersede_pending_recovery",
     "is_cancel_requested",
     "get_usage_since",
+    "upsert_worker_heartbeat",
     "update_payload",
 ]
 
@@ -228,6 +233,23 @@ def get_usage_since(data_dir: Path, *, since_epoch: float) -> list[dict]:
 def get_work_items_for_chat(data_dir: Path, conversation_key: str) -> list[dict[str, Any]]:
     """Return work items for a conversation: id, event_id, state, error, dispatch_mode, kind."""
     return _store().get_work_items_for_chat(data_dir, conversation_key)
+
+
+def get_queue_snapshot(data_dir: Path) -> QueueSnapshot:
+    """Return a backend-neutral queue summary for Shared Runtime observability."""
+    return _store().get_queue_snapshot(data_dir)
+
+
+def upsert_worker_heartbeat(data_dir: Path, heartbeat: WorkerHeartbeat) -> None:
+    _store().upsert_worker_heartbeat(data_dir, heartbeat)
+
+
+def clear_worker_heartbeat(data_dir: Path, worker_id: str) -> None:
+    _store().clear_worker_heartbeat(data_dir, worker_id)
+
+
+def list_worker_heartbeats(data_dir: Path) -> list[WorkerHeartbeat]:
+    return _store().list_worker_heartbeats(data_dir)
 
 
 def mark_pending_recovery(data_dir: Path, item_id: str) -> None:

@@ -6,6 +6,15 @@ import pytest
 
 from app.registry_service.store import RegistrySQLiteStore
 from app.registry_service.store_base import SkillDisabledError
+from app.runtime_health import (
+    QueueSnapshot,
+    RuntimeDiagnostic,
+    RuntimeHealthReport,
+    RuntimeHealthSummary,
+    SharedRuntimeSnapshot,
+    WorkerHeartbeat,
+    report_to_dict,
+)
 
 
 def _card(slug: str, skills: list[str] | None = None) -> dict:
@@ -36,6 +45,60 @@ def _enroll(store, slug: str, skills: list[str] | None = None) -> tuple[str, str
         },
     )
     return enrolled["agent_id"], enrolled["agent_token"]
+
+
+def _runtime_health_payload(*, worker_count: int = 2) -> dict:
+    workers = tuple(
+        WorkerHeartbeat(
+            worker_id=f"worker-{idx}",
+            process_role="worker",
+            started_at="2026-03-16T00:00:00+00:00",
+            last_seen_at=f"2026-03-16T00:00:0{idx}+00:00",
+            current_item_id=f"item-{idx}",
+            current_conversation_key=f"tg:{idx}",
+            current_kind="message",
+            items_processed=idx,
+            stale_recoveries_seen=0,
+            last_error="",
+        )
+        for idx in range(1, worker_count + 1)
+    )
+    snapshot = SharedRuntimeSnapshot(
+        queue=QueueSnapshot(
+            fresh_queued_count=3,
+            claimed_count=1,
+            pending_recovery_count=0,
+            recovery_queued_count=1,
+            oldest_claimed_at="2026-03-16T00:00:00+00:00",
+        ),
+        workers=workers,
+        healthy_worker_count=worker_count,
+        stale_worker_count=0,
+    )
+    report = RuntimeHealthReport(
+        generated_at="2026-03-16T00:00:10+00:00",
+        summary=RuntimeHealthSummary(
+            status="degraded",
+            healthy_worker_count=worker_count,
+            stale_worker_count=0,
+            fresh_queued_count=3,
+            claimed_count=1,
+            pending_recovery_count=0,
+            recovery_queued_count=1,
+            oldest_claim_age_seconds=10,
+            warning_count=1,
+            error_count=0,
+        ),
+        snapshot=snapshot,
+        diagnostics=(
+            RuntimeDiagnostic(
+                level="warning",
+                code="shared.pending_recovery_backlog",
+                message="Something needs review.",
+            ),
+        ),
+    )
+    return report_to_dict(report)
 
 
 @pytest.fixture(params=["sqlite", "postgres"])
@@ -258,6 +321,60 @@ def test_usage_summary_from_timeline(store):
     assert rows[0]["conversation_id"] == "conv-usage"
     assert rows[0]["metadata"]["prompt_tokens"] == 123
     assert rows[0]["metadata"]["completion_tokens"] == 45
+
+
+def test_heartbeat_persists_runtime_health_and_workers(store):
+    agent_id, agent_token = _enroll(store, "alpha-bot")
+
+    store.heartbeat(
+        agent_token,
+        {
+            "connectivity_state": "connected",
+            "current_capacity": 0,
+            "max_capacity": 2,
+            "runtime_health": _runtime_health_payload(worker_count=2),
+        },
+    )
+
+    listed = store.list_agents()
+    assert listed[0]["runtime_health_summary"]["status"] == "degraded"
+    assert listed[0]["runtime_health_summary"]["healthy_worker_count"] == 2
+    detail = store.get_agent_runtime_health(agent_id)
+    assert detail is not None
+    assert detail["report"]["summary"]["claimed_count"] == 1
+    assert len(detail["workers"]) == 2
+
+
+def test_heartbeat_replaces_missing_worker_rows(store):
+    agent_id, agent_token = _enroll(store, "alpha-bot")
+    first = _runtime_health_payload(worker_count=2)
+    second = _runtime_health_payload(worker_count=1)
+    second["generated_at"] = "2026-03-16T00:00:20+00:00"
+    second["summary"]["healthy_worker_count"] = 1
+
+    store.heartbeat(
+        agent_token,
+        {
+            "connectivity_state": "connected",
+            "current_capacity": 0,
+            "max_capacity": 2,
+            "runtime_health": first,
+        },
+    )
+    store.heartbeat(
+        agent_token,
+        {
+            "connectivity_state": "connected",
+            "current_capacity": 0,
+            "max_capacity": 2,
+            "runtime_health": second,
+        },
+    )
+
+    detail = store.get_agent_runtime_health(agent_id)
+    assert detail is not None
+    assert detail["last_mirrored_at"] == "2026-03-16T00:00:20+00:00"
+    assert [row["worker_id"] for row in detail["workers"]] == ["worker-1"]
 
 
 def test_search_conversations_fts(store):

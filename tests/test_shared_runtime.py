@@ -337,3 +337,93 @@ async def test_periodic_stale_sweep_ignores_live_claim():
         conn = work_queue._store()._transport_db(data_dir)  # type: ignore[attr-defined]
         row = conn.execute("SELECT worker_id FROM work_items WHERE id = ?", (item_id,)).fetchone()
         assert row is not None and row["worker_id"] == "worker-a"
+
+
+async def test_worker_loop_writes_and_clears_heartbeat():
+    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, _prov):
+        from app.worker import worker_loop
+
+        stop = asyncio.Event()
+        heartbeat_calls: list[object] = []
+        real_upsert = work_queue.upsert_worker_heartbeat
+
+        def _tracking_upsert(*args, **kwargs):
+            heartbeat_calls.append((args, kwargs))
+            return real_upsert(*args, **kwargs)
+
+        async def stop_soon():
+            await asyncio.sleep(0.05)
+            stop.set()
+
+        async def dispatch(_kind, _event, _item):
+            raise AssertionError("dispatch should not run in idle heartbeat test")
+
+        with patch("app.worker.work_queue.upsert_worker_heartbeat", side_effect=_tracking_upsert), \
+             patch("app.worker.work_queue.claim_next_any", return_value=None):
+            await asyncio.gather(
+                worker_loop(
+                    data_dir,
+                    "host:123:heartbeat",
+                    dispatch,
+                    poll_interval=0.01,
+                    stop_event=stop,
+                    process_role="worker",
+                    heartbeat_enabled=True,
+                    heartbeat_interval=0.01,
+                ),
+                stop_soon(),
+            )
+
+        assert heartbeat_calls
+        assert work_queue.list_worker_heartbeats(data_dir) == []
+
+
+async def test_worker_loop_heartbeat_tracks_current_item():
+    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, _prov):
+        from app.worker import worker_loop
+
+        status, item_id = work_queue.record_and_admit_message(
+            data_dir,
+            "tg:9001",
+            _conv(12345),
+            "tg:42",
+            "message",
+            '{"actor_key":"tg:42","username":"alice","conversation_key":"tg:12345","text":"hello","attachments":[]}',
+        )
+        assert status == "admitted"
+
+        stop = asyncio.Event()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def dispatch(_kind, _event, item):
+            assert item["id"] == item_id
+            entered.set()
+            await release.wait()
+            stop.set()
+
+        task = asyncio.create_task(
+            worker_loop(
+                data_dir,
+                "host:456:item",
+                dispatch,
+                poll_interval=0.01,
+                stop_event=stop,
+                process_role="worker",
+                heartbeat_enabled=True,
+                heartbeat_interval=0.01,
+            )
+        )
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=0.5)
+            heartbeats = work_queue.list_worker_heartbeats(data_dir)
+            assert len(heartbeats) == 1
+            heartbeat = heartbeats[0]
+            assert heartbeat.current_item_id == item_id
+            assert heartbeat.current_conversation_key == _conv(12345)
+            assert heartbeat.current_kind == "message"
+        finally:
+            release.set()
+            await asyncio.wait_for(task, timeout=0.5)
+
+        assert work_queue.list_worker_heartbeats(data_dir) == []

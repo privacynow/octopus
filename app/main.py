@@ -17,6 +17,7 @@ from app.work_queue import close_transport_db, recover_stale_claims, purge_old
 from app.worker import poll_interval_for_runtime, start_worker_task
 from app.store import startup_recovery
 from app.telegram_handlers import build_application
+from app.runtime_health import CanonicalRuntimeHealthProvider
 
 PROVIDERS: dict[str, type] = {
     "claude": ClaudeProvider,
@@ -39,15 +40,18 @@ def make_provider(config: BotConfig) -> Provider:
 
 
 async def _run_doctor(config: BotConfig, provider: Provider) -> None:
-    from app.doctor import collect_doctor_report
-    report = await collect_doctor_report(config, provider)
-    if report.errors:
-        for e in report.errors:
-            print(f"  FAIL: {e}", file=sys.stderr)
+    from app.doctor import collect_runtime_health, format_doctor_report_lines
+
+    report = await collect_runtime_health(config, provider)
+    for line in format_doctor_report_lines(report):
+        if line.startswith("FAIL: "):
+            print(f"  {line}", file=sys.stderr)
+        elif line.startswith("WARN: "):
+            print(f"  {line}", file=sys.stderr)
+        else:
+            print(f"  {line}")
+    if report.summary.error_count:
         raise SystemExit(1)
-    if report.warnings:
-        for w in report.warnings:
-            print(f"  WARN: {w}", file=sys.stderr)
     print("All checks passed.")
     raise SystemExit(0)
 
@@ -80,6 +84,10 @@ def _runs_worker(config: BotConfig) -> bool:
 
 
 def _runs_registry_runtime(config: BotConfig) -> bool:
+    if config.agent_mode != "registry":
+        return False
+    if config.runtime_mode == "shared":
+        return config.process_role in {ProcessRole.ALL.value, ProcessRole.WEBHOOK.value}
     return config.process_role == ProcessRole.ALL.value
 
 
@@ -227,11 +235,15 @@ def main() -> None:
                 worker_dispatch,
                 poll_interval=poll_interval_for_runtime(config.runtime_mode),
                 lease_ttl=config.claim_lease_ttl_seconds,
+                process_role=config.process_role,
+                heartbeat_enabled=(config.runtime_mode == "shared"),
             )
         if _runs_registry_runtime(config):
             _agent_task, _agent_stop = start_agent_runtime_task(
                 config,
                 delivery_handler=lambda delivery: handle_registry_delivery(config, delivery),
+                runtime_health_provider=CanonicalRuntimeHealthProvider(),
+                provider=provider,
             )
 
     async def _on_post_shutdown(_app) -> None:

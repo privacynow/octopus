@@ -52,29 +52,39 @@ telegram_set_webhook() {
 check_env_bot_required "$BOT_ENV_FILE"
 
 agent_mode="$(read_bot_env_value BOT_AGENT_MODE)"
-if [ "${agent_mode:-standalone}" = "registry" ]; then
-  echo "Shared Runtime startup currently supports standalone bot mode only." >&2
-  echo "Set BOT_AGENT_MODE=standalone in $BOT_ENV_FILE before using shared_start.sh." >&2
-  exit 1
-fi
+agent_mode="${agent_mode:-standalone}"
 
 telegram_token="$(read_bot_env_value TELEGRAM_BOT_TOKEN)"
 webhook_url="$(read_bot_env_value BOT_WEBHOOK_URL)"
 webhook_secret="$(read_bot_env_value BOT_WEBHOOK_SECRET)"
 database_url="$(read_bot_env_value BOT_DATABASE_URL)"
+agent_registry_url="$(read_bot_env_value BOT_AGENT_REGISTRY_URL)"
+agent_registry_enroll_token="$(read_bot_env_value BOT_AGENT_REGISTRY_ENROLL_TOKEN)"
 worker_replicas="${BOT_WORKER_REPLICAS:-2}"
 provider="$(get_bot_provider "$BOT_ENV_FILE")"
 
 require_bot_env_value "TELEGRAM_BOT_TOKEN" "$telegram_token"
 require_bot_env_value "BOT_WEBHOOK_URL" "$webhook_url"
+if [ "$agent_mode" = "registry" ]; then
+  require_bot_env_value "BOT_AGENT_REGISTRY_URL" "$agent_registry_url"
+fi
 check_provider_image "$provider" >/dev/null
 
 echo "=== Shared Runtime start ==="
 echo "Instance:      $INSTANCE"
 echo "Config:        $BOT_ENV_FILE"
 echo "Provider:      $provider"
+echo "Agent mode:    $agent_mode"
 echo "Webhook URL:   $webhook_url"
 echo "Workers:       $worker_replicas"
+
+if [ "$agent_mode" = "registry" ]; then
+  echo "Registry URL:  $agent_registry_url"
+  echo "Publisher:     bot-webhook (singleton registry sync + health mirror)"
+  if [ -z "$agent_registry_enroll_token" ]; then
+    echo "Note: BOT_AGENT_REGISTRY_ENROLL_TOKEN is empty. Existing enrollment may still work, but first-time enrollment will fail until a token is provided." >&2
+  fi
+fi
 
 if [ -n "$database_url" ]; then
   echo "Backend:       Postgres"

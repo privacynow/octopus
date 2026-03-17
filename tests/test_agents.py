@@ -8,6 +8,7 @@ from app.agents.delivery import handle_registry_delivery
 from app.agents.runtime import AgentRuntime
 from app.agents.state import load_agent_runtime_state
 from app.config import derive_agent_slug
+from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
 from tests.support.config_support import make_config
 from tests.support.handler_support import drain_one_worker_item, fresh_env
 
@@ -106,6 +107,99 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
         ("enroll", "Product Bot", "enroll-secret"),
         ("register", "agent-123", "connected"),
         ("heartbeat", "connected", "0"),
+    ]
+
+
+async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypatch, tmp_path: Path):
+    calls: list[tuple[str, object]] = []
+
+    class FakeRegistryClient:
+        def __init__(self, base_url: str, *, agent_token: str = "", timeout_seconds: float = 10.0, client=None):
+            self.base_url = base_url
+            self.agent_token = agent_token
+
+        async def enroll(self, card, enrollment_token: str):
+            return {
+                "agent_id": "agent-123",
+                "slug": "product-bot",
+                "agent_token": "secret-token",
+                "poll_cursor": "0",
+            }
+
+        async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
+            return {"ok": True}
+
+        async def heartbeat(
+            self,
+            *,
+            connectivity_state: str,
+            current_capacity: int,
+            max_capacity: int,
+            active_work_count: int = 0,
+            timeline_checkpoint: str = "",
+            runtime_health: dict | None = None,
+        ):
+            calls.append(("heartbeat", runtime_health, active_work_count))
+            return {"ok": True}
+
+    class FakeHealthProvider:
+        async def collect(self, config, provider, *, caller_is_bot=False, session_context=None):
+            assert caller_is_bot is True
+            return RuntimeHealthReport(
+                generated_at="2026-03-16T00:00:00+00:00",
+                summary=RuntimeHealthSummary(
+                    status="degraded",
+                    healthy_worker_count=1,
+                    stale_worker_count=0,
+                    fresh_queued_count=0,
+                    claimed_count=2,
+                    pending_recovery_count=0,
+                    recovery_queued_count=0,
+                    oldest_claim_age_seconds=12,
+                    warning_count=1,
+                    error_count=0,
+                ),
+            )
+
+    monkeypatch.setattr("app.agents.runtime.AgentRegistryClient", FakeRegistryClient)
+    config = make_config(
+        data_dir=tmp_path,
+        provider_name="codex",
+        agent_mode="registry",
+        agent_display_name="Product Bot",
+        agent_registry_url="http://registry.test",
+        agent_registry_enroll_token="enroll-secret",
+    )
+    runtime = AgentRuntime(
+        config,
+        runtime_health_provider=FakeHealthProvider(),
+        provider=object(),
+    )
+
+    assert await runtime.sync_once() == "connected"
+    assert calls == [
+        (
+            "heartbeat",
+            {
+                "schema_version": 1,
+                "generated_at": "2026-03-16T00:00:00+00:00",
+                "summary": {
+                    "status": "degraded",
+                    "healthy_worker_count": 1,
+                    "stale_worker_count": 0,
+                    "fresh_queued_count": 0,
+                    "claimed_count": 2,
+                    "pending_recovery_count": 0,
+                    "recovery_queued_count": 0,
+                    "oldest_claim_age_seconds": 12,
+                    "warning_count": 1,
+                    "error_count": 0,
+                },
+                "snapshot": None,
+                "diagnostics": [],
+            },
+            2,
+        )
     ]
 
 

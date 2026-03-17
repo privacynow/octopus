@@ -17,21 +17,25 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.agents.bridge import conversation_key_for_ref
 from app.capability_service import CapabilityService
-from app.provider_guidance_use_cases import get_provider_guidance_use_cases
 from app.registry_service.backend import get_registry_store
-from app.registry_service.runtime_surface import get_runtime_surface_context
-from app.registry_service.store_base import AbstractRegistryStore, CapabilityDisabledError
-from app.runtime_skill_activation_use_cases import get_runtime_skill_activation_use_cases
-from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_cases
-from app.runtime_skill_import_use_cases import (
-    PromptWarningContext,
-    get_runtime_skill_import_use_cases,
+from app.registry_service.runtime_surface import (
+    RuntimeSurfaceError,
+    activate_conversation_skill,
+    catalog_skill_detail,
+    clear_conversation_skills,
+    conversation_skill_state,
+    deactivate_conversation_skill,
+    diff_catalog_skill,
+    install_catalog_skill,
+    list_catalog_skills,
+    preview_provider_guidance,
+    search_catalog_skills,
+    uninstall_catalog_skill,
+    update_catalog_skill,
 )
-from app.session_state import session_from_dict, session_to_dict
-from app.skills import derive_encryption_key
-from app.storage import load_session, save_session
+from app.registry_service.store_base import AbstractRegistryStore, CapabilityDisabledError
+from app.session_state import session_to_dict
 
 log = logging.getLogger(__name__)
 _SESSION_TTL_SECONDS = 24 * 60 * 60
@@ -75,42 +79,6 @@ def _float_value(value: Any) -> float:
         return float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
-
-
-def _runtime_registry_url() -> str:
-    return os.environ.get("BOT_REGISTRY_URL", "").strip()
-
-
-def _warning_context() -> PromptWarningContext | None:
-    try:
-        context = get_runtime_surface_context()
-    except Exception:
-        return None
-    return PromptWarningContext(
-        data_dir=context.config.data_dir,
-        provider_name=context.config.provider_name,
-        provider_state_factory=context.provider_state_factory,
-        approval_mode=context.config.approval_mode,
-    )
-
-
-def _load_runtime_session_or_404(conversation_id: str):
-    store = get_store()
-    try:
-        store.get_conversation(conversation_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Unknown conversation: {conversation_id}") from exc
-    context = get_runtime_surface_context()
-    conversation_key = conversation_key_for_ref(conversation_id)
-    raw = load_session(
-        context.config.data_dir,
-        conversation_key,
-        context.config.provider_name,
-        context.provider_state_factory,
-        context.config.approval_mode,
-        default_skills=context.config.default_skills,
-    )
-    return context, conversation_key, session_from_dict(raw)
 
 
 def load_settings() -> RegistrySettings:
@@ -429,276 +397,159 @@ def deregister(
 
 
 @app.get("/v1/catalog/skills")
-def catalog_skills(
+def api_catalog_skills(
     q: str = "",
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    return {
-        "skills": [
-            {
-                "name": item.name,
-                "display_name": item.display_name,
-                "description": item.description,
-                "source_kind": item.source_kind,
-                "has_custom_override": item.has_custom_override,
-                "requires_credentials": bool(item.requirement_keys),
-                "requirement_keys": list(item.requirement_keys),
-                "providers": list(item.providers),
-                "can_activate": item.can_activate,
-                "can_update": item.can_update,
-                "can_uninstall": item.can_uninstall,
-            }
-            for item in get_runtime_skill_catalog_use_cases().list_skills(q)
-        ]
-    }
+    return list_catalog_skills(q)
 
 
 @app.get("/v1/catalog/skills/search")
-def catalog_skill_search(
+def api_catalog_skill_search(
     q: str = "",
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    query = q.strip()
-    if len(query) < 2:
-        return {"catalog": [], "registry": []}
-    results = get_runtime_skill_import_use_cases().search(query, registry_url=_runtime_registry_url())
-    return {
-        "catalog": [
-            {
-                "name": item.name,
-                "display_name": item.display_name,
-                "description": item.description,
-                "source_kind": item.source_kind,
-                "can_activate": item.can_activate,
-                "can_update": item.can_update,
-                "can_uninstall": item.can_uninstall,
-            }
-            for item in results.catalog
-        ],
-        "registry": [
-            {
-                "name": item.name,
-                "display_name": item.display_name,
-                "description": item.description,
-                "publisher": item.publisher,
-                "version": item.version,
-                "can_import": item.can_import,
-            }
-            for item in results.registry
-        ],
-        "registry_error": results.registry_error,
-    }
+    return search_catalog_skills(q)
 
 
 @app.get("/v1/catalog/skills/{skill_name}")
-def catalog_skill_detail(
-    skill_name: str,
-    _: None = Depends(require_ui_token),
-) -> dict[str, Any]:
-    detail = get_runtime_skill_catalog_use_cases().get_skill(skill_name)
-    if detail is None:
-        raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_name}")
-    return {
-        "name": detail.name,
-        "display_name": detail.display_name,
-        "description": detail.description,
-        "body": detail.body,
-        "source_kind": detail.source_kind,
-        "has_custom_override": detail.has_custom_override,
-        "providers": list(detail.providers),
-        "requirement_keys": list(detail.requirement_keys),
-        "can_activate": detail.can_activate,
-        "can_update": detail.can_update,
-        "can_uninstall": detail.can_uninstall,
-    }
-
-
-@app.post("/v1/catalog/skills/{skill_name}/install")
-def catalog_skill_install(
-    skill_name: str,
-    _: None = Depends(require_ui_token),
-) -> dict[str, Any]:
-    registry_url = _runtime_registry_url()
-    if not registry_url:
-        raise HTTPException(status_code=404, detail="No skill registry configured.")
-    result = get_runtime_skill_import_use_cases().install_from_registry(
-        skill_name,
-        registry_url,
-        warning_context=_warning_context(),
-    )
-    if not result.ok:
-        raise HTTPException(status_code=404, detail=result.message)
-    response: dict[str, Any] = {
-        "name": result.name,
-        "ok": result.ok,
-        "message": result.message,
-    }
-    if result.prompt_size_warnings:
-        response["prompt_size_warnings"] = list(result.prompt_size_warnings)
-    return response
-
-
-@app.post("/v1/catalog/skills/{skill_name}/uninstall")
-def catalog_skill_uninstall(
+def api_catalog_skill_detail(
     skill_name: str,
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
     try:
-        context = get_runtime_surface_context()
-        default_skills = context.config.default_skills
-    except Exception:
-        default_skills = ()
-    result = get_runtime_skill_import_use_cases().uninstall(skill_name, default_skills=default_skills)
-    if not result.ok:
-        raise HTTPException(status_code=400, detail=result.message)
-    return {"name": result.name, "ok": result.ok, "message": result.message}
+        return catalog_skill_detail(skill_name)
+    except RuntimeSurfaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.post("/v1/catalog/skills/{skill_name}/install")
+def api_catalog_skill_install(
+    skill_name: str,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return install_catalog_skill(skill_name)
+    except RuntimeSurfaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.post("/v1/catalog/skills/{skill_name}/uninstall")
+def api_catalog_skill_uninstall(
+    skill_name: str,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return uninstall_catalog_skill(skill_name)
+    except RuntimeSurfaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @app.post("/v1/catalog/skills/{skill_name}/update")
-def catalog_skill_update(
+def api_catalog_skill_update(
     skill_name: str,
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    result = get_runtime_skill_import_use_cases().update(skill_name, warning_context=_warning_context())
-    if not result.ok:
-        raise HTTPException(status_code=400, detail=result.message)
-    response: dict[str, Any] = {
-        "name": result.name,
-        "ok": result.ok,
-        "message": result.message,
-    }
-    if result.prompt_size_warnings:
-        response["prompt_size_warnings"] = list(result.prompt_size_warnings)
-    return response
+    try:
+        return update_catalog_skill(skill_name)
+    except RuntimeSurfaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @app.get("/v1/catalog/skills/{skill_name}/diff")
-def catalog_skill_diff(
+def api_catalog_skill_diff(
     skill_name: str,
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    result = get_runtime_skill_import_use_cases().diff(skill_name)
-    if not result.ok:
-        raise HTTPException(status_code=400, detail=result.message)
-    return {"name": result.name, "ok": result.ok, "diff": result.message}
+    try:
+        return diff_catalog_skill(skill_name)
+    except RuntimeSurfaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @app.get("/v1/conversations/{conversation_id:path}/skills")
-def conversation_skills(
+def api_conversation_skills(
     conversation_id: str,
+    store: AbstractRegistryStore = Depends(get_store),
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    _, conversation_key, session = _load_runtime_session_or_404(conversation_id)
-    listing = get_runtime_skill_activation_use_cases().list_conversation_skills(session)
-    return {
-        "conversation_id": conversation_id,
-        "conversation_key": conversation_key,
-        "active_skills": list(listing.active_skills),
-        "active_skill_details": [
-            {
-                "name": item.name,
-                "display_name": item.display_name,
-                "description": item.description,
-                "source_kind": item.source_kind,
-                "has_custom_override": item.has_custom_override,
-            }
-            for item in listing.active_skill_details
-        ],
-    }
+    try:
+        return conversation_skill_state(store, conversation_id)
+    except RuntimeSurfaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @app.post("/v1/conversations/{conversation_id:path}/skills/{skill_name}/activate")
-def conversation_activate_skill(
+def api_conversation_activate_skill(
     conversation_id: str,
     skill_name: str,
     payload: ConversationSkillMutationRequest,
+    store: AbstractRegistryStore = Depends(get_store),
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    context, conversation_key, session = _load_runtime_session_or_404(conversation_id)
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    if not token:
-        raise HTTPException(status_code=503, detail="TELEGRAM_BOT_TOKEN is required for registry-driven skill activation")
-    decision = get_runtime_skill_activation_use_cases().begin_activate(
-        session,
-        user_id=payload.actor_key,
-        skill_name=skill_name,
-        data_dir=context.config.data_dir,
-        encryption_key=derive_encryption_key(token),
-        confirm=payload.confirm,
-    )
-    if decision.status == "unknown":
-        raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_name}")
-    if decision.mutated:
-        save_session(context.config.data_dir, conversation_key, session_to_dict(session))
-    response: dict[str, Any] = {"status": decision.status}
-    if decision.status == "needs_setup" and decision.first_requirement:
-        response["first_requirement"] = decision.first_requirement
-    if decision.status == "needs_confirmation":
-        response["projected_size"] = decision.projected_size
-        response["prompt_size_threshold"] = decision.prompt_size_threshold
-    if decision.status == "foreign_setup":
-        response["foreign_setup_user"] = decision.foreign_setup.user_id if decision.foreign_setup else ""
-    return response
+    try:
+        return activate_conversation_skill(
+            store,
+            conversation_id,
+            actor_key=payload.actor_key,
+            skill_name=skill_name,
+            confirm=payload.confirm,
+        )
+    except RuntimeSurfaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @app.post("/v1/conversations/{conversation_id:path}/skills/{skill_name}/deactivate")
-def conversation_deactivate_skill(
+def api_conversation_deactivate_skill(
     conversation_id: str,
     skill_name: str,
     payload: ConversationSkillMutationRequest,
+    store: AbstractRegistryStore = Depends(get_store),
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    context, conversation_key, session = _load_runtime_session_or_404(conversation_id)
-    decision = get_runtime_skill_activation_use_cases().deactivate(
-        session,
-        user_id=payload.actor_key,
-        skill_name=skill_name,
-    )
-    if decision.status == "foreign_setup":
-        raise HTTPException(status_code=409, detail="credential_setup_in_progress")
-    if decision.mutated:
-        save_session(context.config.data_dir, conversation_key, session_to_dict(session))
-    return {"status": decision.status}
+    try:
+        return deactivate_conversation_skill(
+            store,
+            conversation_id,
+            actor_key=payload.actor_key,
+            skill_name=skill_name,
+        )
+    except RuntimeSurfaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @app.post("/v1/conversations/{conversation_id:path}/skills/clear")
-def conversation_clear_skills(
+def api_conversation_clear_skills(
     conversation_id: str,
     payload: ConversationSkillMutationRequest,
+    store: AbstractRegistryStore = Depends(get_store),
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    context, conversation_key, session = _load_runtime_session_or_404(conversation_id)
-    decision = get_runtime_skill_activation_use_cases().clear(session, user_id=payload.actor_key)
-    if decision.status == "foreign_setup":
-        raise HTTPException(status_code=409, detail="credential_setup_in_progress")
-    if decision.mutated:
-        save_session(context.config.data_dir, conversation_key, session_to_dict(session))
-    return {"status": decision.status}
+    try:
+        return clear_conversation_skills(
+            store,
+            conversation_id,
+            actor_key=payload.actor_key,
+        )
+    except RuntimeSurfaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @app.post("/v1/provider-guidance/{provider_name}/preview")
-def provider_guidance_preview(
+def api_provider_guidance_preview(
     provider_name: str,
     payload: ProviderGuidancePreviewRequest,
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
     try:
-        preview = get_provider_guidance_use_cases().preview(
+        return preview_provider_guidance(
             provider_name,
             role=payload.role,
             active_skills=list(payload.active_skills),
             compact_mode=payload.compact_mode,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {
-        "provider": preview.provider,
-        "effective_guidance": preview.effective_guidance,
-        "system_prompt": preview.system_prompt,
-        "capability_summary": preview.capability_summary,
-        "provider_config": preview.provider_config,
-        "prompt_weight": preview.prompt_weight,
-    }
+    except RuntimeSurfaceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @app.get("/ui/login", response_class=HTMLResponse)

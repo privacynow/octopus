@@ -119,6 +119,9 @@ class RuntimeSkillCatalogUseCases:
     def has_skill(self, skill_name: str) -> bool:
         return self._summary(skill_name) is not None
 
+    def filter_resolvable(self, names: list[str]) -> list[str]:
+        return self._catalog().filter_resolvable(names)
+
     def requirements(self, skill_name: str) -> tuple[SkillRequirement, ...]:
         return tuple(self._catalog().requirements(skill_name))
 

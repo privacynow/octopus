@@ -42,6 +42,11 @@ These are no longer future work:
 5. Content-store foundation exists with SQLite/Postgres parity.
 6. Runtime skill reads are cut over to the content store.
 7. Confidence suites were rewritten around the content-store model.
+8. Modular runtime-skill use-case modules now exist for:
+   - catalog reads/draft creation
+   - activation/setup/clear flows
+   - import/update/uninstall/diff
+   - provider-guidance preview
 
 ### Regressions/shortcuts already found during execution
 
@@ -69,6 +74,27 @@ These findings must shape all future work:
 5. Docker/Postgres harness storage pressure can cause false red.
    - Not product code, but a real verification risk.
    - Lesson: test infrastructure must preserve signal.
+
+6. Adapter-owned setup workflow logic survived after the initial use-case split.
+   - `telegram_handlers.py` still kicked off credential setup, cancelled setup,
+     and cleared setup side effects directly.
+   - Fixed by moving those decisions into `RuntimeSkillSetupUseCases`.
+   - Lesson: extracting the “main” use-cases is not enough; setup/cancel side
+     paths must move too.
+
+7. Optional filter defaults can silently break shared workflow checks.
+   - `foreign_setup()` used `""` instead of `None` for the optional skill filter
+     and therefore suppressed real foreign-setup detection.
+   - Fixed.
+   - Lesson: optional workflow filters must use explicit `None` semantics, not
+     sentinel strings.
+
+8. Adapter test seams still matter after workflow extraction.
+   - Handler tests intentionally patch credential validation at the Telegram
+     adapter boundary.
+   - Preserved by keeping validation injectable when the adapter calls the use-case.
+   - Lesson: move workflow ownership out of the surface, but keep legitimate
+     adapter dependency seams available for testing and rendering.
 
 ## Non-Negotiable Principles
 
@@ -358,6 +384,12 @@ It is a Telegram-shaped orchestration monolith.
 
 This must be refactored until it is structurally correct, not merely smaller.
 
+Progress made:
+
+- runtime-skill catalog/import/activation/setup flows no longer own their core
+  business decisions in Telegram handlers
+- Telegram still owns too much non-skill workflow orchestration and application wiring
+
 ### 2. Registry API and UI are better, but still too concentrated
 
 [app/registry_service/app.py](/Users/tinker/output/bots/telegram-agent-bot/app/registry_service/app.py)
@@ -638,11 +670,18 @@ These remain mandatory for any queue/recovery/runtime-state changes in adjacent 
 
 The next implementation slice should be:
 
-1. define the explicit use-case layer
-2. refactor Telegram into a real adapter over it
-3. refactor registry API/UI to the same shape
-4. then complete lifecycle and parity work
-5. then delete the remaining old seed/store residue
+1. finish refactoring Telegram into a real adapter for the remaining inbound workflows
+2. refactor registry API/UI to the same shape for those workflows
+3. then complete the missing lifecycle:
+   - draft editing
+   - revisions/history
+   - submit approval
+   - approve/reject
+   - publish/archive
+   - provider-guidance management
+4. then add rich registry editing
+5. then bring Telegram to full lifecycle capability parity
+6. then delete the remaining old seed/store residue
 
 ## Acceptance Criteria For This Plan
 

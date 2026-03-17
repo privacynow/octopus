@@ -47,11 +47,9 @@ from app.identity import (
 from app.execution_context import ResolvedExecutionContext, resolve_execution_context
 from app.providers.base import Provider
 from app.request_flow import (
-    check_credential_satisfaction,
     classify_pending_validation,
     extra_dirs_from_denials,
     foreign_setup_message,
-    foreign_skill_setup,
     format_credential_prompt,
     pending_expired,
     validate_pending,
@@ -93,18 +91,17 @@ from app.transports.admission import (
 )
 from app.transports.types import InboundEnvelope
 from app.skills import (
-    save_user_credential, delete_user_credentials, list_user_credential_skills,
+    delete_user_credentials, list_user_credential_skills,
     derive_encryption_key,
     build_credential_env,
     validate_credential,
     cleanup_codex_scripts,
-    SkillRequirement,
 )
 from app.runtime_skill_activation_use_cases import get_runtime_skill_activation_use_cases
+from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_cases
 from app.runtime_skill_import_use_cases import get_runtime_skill_import_use_cases
+from app.runtime_skill_setup_use_cases import get_runtime_skill_setup_use_cases
 from app.skill_activation_service import get_skill_activation_service
-from app.skill_catalog_service import get_skill_catalog_service
-from app.skill_lifecycle_service import get_skill_lifecycle_service
 from app.provider_guidance_service import get_provider_guidance_service
 from app.storage import (
     chat_upload_dir,
@@ -1406,27 +1403,27 @@ async def _check_credential_satisfaction(
     Uses resolved.active_skills (not raw session.active_skills) so public users
     with no resolved skills skip credential checks entirely.
 
-    Delegates to request_flow.check_credential_satisfaction for pure logic,
-    then handles transport (message sending, session saving).
+    Delegates to the runtime-skill setup use case and handles only persistence/rendering.
     """
     active_skills = resolved.active_skills if resolved else session.active_skills
-    result = check_credential_satisfaction(
-        active_skills, session, _actor_key(user_id), _cfg().data_dir, _encryption_key(),
+    outcome = get_runtime_skill_setup_use_cases().check_satisfaction(
+        session,
+        user_id=_actor_key(user_id),
+        active_skills=active_skills,
+        data_dir=_cfg().data_dir,
+        encryption_key=_encryption_key(),
     )
-    if result.satisfied:
-        return result.credential_env
-
-    if result.foreign_setup:
-        await message.reply_text(foreign_setup_message(result.foreign_setup))
+    if outcome.status == "satisfied":
+        return outcome.credential_env or {}
+    if outcome.status == "foreign_setup" and outcome.foreign_setup is not None:
+        await message.reply_text(foreign_setup_message(outcome.foreign_setup))
         return None
-
-    # Start credential setup for missing skill
-    session.awaiting_skill_setup = result.setup_state
+    if outcome.status != "needs_setup" or outcome.setup_state is None or outcome.first_requirement is None:
+        return None
     _save(chat_id, session)
-    first_req = result.setup_state.remaining[0]
     await message.reply_text(
-        f"Skill <code>{html.escape(result.missing_skill)}</code> needs setup.\n\n"
-        f"{format_credential_prompt(first_req)}",
+        f"Skill <code>{html.escape(outcome.missing_skill)}</code> needs setup.\n\n"
+        f"{format_credential_prompt(outcome.first_requirement)}",
         parse_mode=ParseMode.HTML,
     )
     return None
@@ -2120,9 +2117,13 @@ async def cmd_new(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         old_session = _load(chat_id)
         user_id = event.user.id
-        if foreign_skill_setup(old_session, _actor_key(user_id)):
+        foreign = get_runtime_skill_setup_use_cases().foreign_setup(
+            old_session,
+            user_id=_actor_key(user_id),
+        )
+        if foreign.setup is not None:
             await update.effective_message.reply_text(
-                foreign_setup_message(old_session.awaiting_skill_setup),
+                foreign_setup_message(foreign.setup),
             )
             return
         if old_session.approval_mode_explicit:
@@ -2520,9 +2521,8 @@ async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     # Filter stale active_skills that no longer resolve
-    catalog_service = get_skill_catalog_service()
     for s in sessions:
-        s["active_skills"] = catalog_service.filter_resolvable(s["active_skills"])
+        s["active_skills"] = get_runtime_skill_catalog_use_cases().filter_resolvable(s["active_skills"])
 
     # Detail view for a specific conversation
     if len(args) >= 2:
@@ -2661,18 +2661,18 @@ async def cancel_chat_operation(
     async with _chat_lock(chat_id, message=message, update_id=update_id):
         session = _load(chat_id)
 
-        setup = session.awaiting_skill_setup
-        if setup:
-            if setup.user_id == _actor_key(actor_user_id) or allow_admin_override:
-                session.awaiting_skill_setup = None
-                _save(chat_id, session)
-                await message.reply_text(_msg.credential_setup_cancelled())
-                return
-            else:
-                await message.reply_text(
-                    _msg.credential_setup_another_user_in_progress(),
-                )
-                return
+        decision = get_runtime_skill_setup_use_cases().cancel(
+            session,
+            user_id=_actor_key(actor_user_id),
+            allow_override=allow_admin_override,
+        )
+        if decision.status == "cancelled":
+            _save(chat_id, session)
+            await message.reply_text(_msg.credential_setup_cancelled())
+            return
+        if decision.status == "foreign_setup":
+            await message.reply_text(_msg.credential_setup_another_user_in_progress())
+            return
 
         if session.has_pending:
             session.clear_pending()
@@ -2738,19 +2738,15 @@ async def _execute_clear_credentials(
         if not already_answered:
             await query.answer()
         session = _load(chat_id)
-        setup = session.awaiting_skill_setup
-        if setup and setup.user_id == _actor_key(user_id):
-            if skill_name is None or setup.skill == skill_name:
-                session.awaiting_skill_setup = None
-                setup_cleared = True
-
-        active = session.active_skills
-        deactivated = []
-        for name in removed:
-            if name in active and get_skill_catalog_service().requirements(name):
-                active.remove(name)
-                deactivated.append(name)
-        if deactivated or setup_cleared:
+        outcome = get_runtime_skill_setup_use_cases().apply_cleared_credentials(
+            session,
+            user_id=_actor_key(user_id),
+            removed_skills=removed,
+            skill_name=skill_name,
+        )
+        setup_cleared = outcome.setup_cleared
+        deactivated = list(outcome.deactivated_skills)
+        if outcome.mutated:
             _save(chat_id, session)
 
     parts = []
@@ -3018,47 +3014,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 if not setup or setup.user_id != _actor_key(user_id):
                     return
                 await message.chat.send_action(ChatAction.TYPING)
-                req = setup.remaining[0]
                 raw_value = (message.text or "").strip()
                 if not raw_value:
                     await message.reply_text("Please send the credential value as a text message.")
                     return
-                if req.get("validate"):
-                    ok, detail = await validate_credential(
-                        SkillRequirement(key=req["key"], prompt=req["prompt"],
-                                         help_url=req.get("help_url"), validate=req["validate"]),
-                        raw_value,
-                    )
-                    if not ok:
-                        try:
-                            await message.delete()
-                        except Exception:
-                            log.warning("Could not delete credential message for user %d", user_id)
-                        await message.reply_text(
-                            f"Credential validation failed for <code>{html.escape(req['key'])}</code>: "
-                            f"{html.escape(detail)}\nPlease try again.",
-                            parse_mode=ParseMode.HTML,
-                        )
-                        return
-                save_user_credential(
-                    cfg.data_dir, user_id, setup.skill, req["key"], raw_value, _encryption_key(),
+                outcome = await get_runtime_skill_setup_use_cases().submit_credential_value(
+                    session,
+                    user_id=_actor_key(user_id),
+                    raw_value=raw_value,
+                    data_dir=cfg.data_dir,
+                    encryption_key=_encryption_key(),
+                    validator=validate_credential,
                 )
+                if outcome.status == "validation_failed":
+                    try:
+                        await message.delete()
+                    except Exception:
+                        log.warning("Could not delete credential message for user %d", user_id)
+                    await message.reply_text(
+                        f"Credential validation failed for <code>{html.escape(outcome.validation_key)}</code>: "
+                        f"{html.escape(outcome.validation_error)}\nPlease try again.",
+                        parse_mode=ParseMode.HTML,
+                    )
+                    return
                 try:
                     await message.delete()
                 except Exception:
                     log.warning("Could not delete credential message for user %d", user_id)
-                decision = get_skill_lifecycle_service().complete_current_requirement(
-                    session,
-                    user_id=_actor_key(user_id),
-                )
-                if decision.status == "next_requirement" and decision.next_requirement:
+                if outcome.status == "next_requirement" and outcome.next_requirement:
                     _save(chat_id, session)
                     await message.reply_text(
-                        format_credential_prompt(decision.next_requirement),
+                        format_credential_prompt(outcome.next_requirement),
                         parse_mode=ParseMode.HTML,
                     )
                 else:
-                    skill_name = decision.skill_name or setup.skill
+                    skill_name = outcome.skill_name or setup.skill
                     _save(chat_id, session)
                     await message.reply_text(
                         f"Skill <code>{html.escape(skill_name)}</code> is ready.",
@@ -3993,9 +3983,13 @@ async def _execute_worker_action(
         prov = _prov()
         old_session = _load(runtime_chat)
         user_id = event.user.id
-        if foreign_skill_setup(old_session, _actor_key(user_id)):
+        foreign = get_runtime_skill_setup_use_cases().foreign_setup(
+            old_session,
+            user_id=_actor_key(user_id),
+        )
+        if foreign.setup is not None:
             await surface.reply_text(
-                foreign_setup_message(old_session.awaiting_skill_setup),
+                foreign_setup_message(foreign.setup),
             )
             return
         approval_mode = old_session.approval_mode if old_session.approval_mode_explicit else cfg.approval_mode
@@ -4090,7 +4084,7 @@ async def _execute_worker_action(
             await surface.reply_text(_msg.cancel_queued_superseded())
             return
         session = _load(runtime_chat)
-        decision = get_skill_lifecycle_service().cancel_setup(
+        decision = get_runtime_skill_setup_use_cases().cancel(
             session,
             user_id=_actor_key(event.user.id),
             allow_override=(source != "telegram" or is_admin(event.user)),
@@ -4523,7 +4517,7 @@ async def _shared_cancel_command(update: Update, event, action: InboundAction) -
     actor_key = _actor_key(event.user.id)
     message = update.effective_message
     session = _load(chat_id)
-    decision = get_skill_lifecycle_service().cancel_setup(
+    decision = get_runtime_skill_setup_use_cases().cancel(
         session,
         user_id=actor_key,
         allow_override=is_admin(event.user),
@@ -4531,7 +4525,7 @@ async def _shared_cancel_command(update: Update, event, action: InboundAction) -
     if decision.status == "cancelled":
         async with _chat_lock(chat_id, message=message, update_id=update.update_id):
             session = _load(chat_id)
-            decision = get_skill_lifecycle_service().cancel_setup(
+            decision = get_runtime_skill_setup_use_cases().cancel(
                 session,
                 user_id=actor_key,
                 allow_override=is_admin(event.user),
@@ -4542,22 +4536,6 @@ async def _shared_cancel_command(update: Update, event, action: InboundAction) -
                 return
         return
     if decision.status == "foreign_setup":
-        await message.reply_text(_msg.credential_setup_another_user_in_progress())
-        return
-    if session.awaiting_skill_setup:
-        if session.awaiting_skill_setup.user_id == actor_key or is_admin(event.user):
-            async with _chat_lock(chat_id, message=message, update_id=update.update_id):
-                session = _load(chat_id)
-                decision = get_skill_lifecycle_service().cancel_setup(
-                    session,
-                    user_id=actor_key,
-                    allow_override=is_admin(event.user),
-                )
-                if decision.status == "cancelled":
-                    _save(chat_id, session)
-                    await message.reply_text(_msg.credential_setup_cancelled())
-                    return
-            return
         await message.reply_text(_msg.credential_setup_another_user_in_progress())
         return
 

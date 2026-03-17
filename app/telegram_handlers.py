@@ -2986,14 +2986,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     payload = serialize_inbound(msg)
 
     cfg = _cfg()
-    if not session_exists(cfg.data_dir, _conversation_key(chat_id)):
-        welcome = "I'm ready. Send me a message or type /help to see what I can do."
-        if cfg.approval_mode == "on":
-            welcome += "\nApproval mode is on \u2014 I'll show a plan before acting."
-        effective_compact = cfg.compact_mode
-        if effective_compact:
-            welcome += "\nCompact mode is on \u2014 long answers are summarized. Use /compact off for full answers."
-        await message.chat.send_message(welcome)
+    needs_welcome = not session_exists(cfg.data_dir, _conversation_key(chat_id))
 
     data_dir = cfg.data_dir
     session = _load(chat_id)
@@ -3079,6 +3072,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     status, item_id = admit_fresh_message(data_dir, envelope)
     if status == "duplicate":
         return
+    if status == "admitted" and needs_welcome:
+        welcome = "I'm ready. Send me a message or type /help to see what I can do."
+        if cfg.approval_mode == "on":
+            welcome += "\nApproval mode is on \u2014 I'll show a plan before acting."
+        effective_compact = cfg.compact_mode
+        if effective_compact:
+            welcome += "\nCompact mode is on \u2014 long answers are summarized. Use /compact off for full answers."
+        await message.chat.send_message(welcome)
     if status == "queued":
         await message.reply_text(
             f"<i>{_msg.queue_accepted()}</i>",
@@ -4615,7 +4616,12 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     _rate_limiter = RateLimiter(per_minute=per_minute, per_hour=per_hour)
 
     # Sequential update processing; live runs are worker-owned so /cancel is delivered promptly.
-    app = Application.builder().token(config.telegram_token).build()
+    builder = Application.builder().token(config.telegram_token)
+    if config.telegram_api_base_url:
+        builder = builder.base_url(config.telegram_api_base_url)
+    if config.telegram_file_api_base_url:
+        builder = builder.base_file_url(config.telegram_file_api_base_url)
+    app = builder.build()
     _bot_instance = app.bot
     if config.runtime_mode == "shared":
         app.add_handler(CommandHandler("start", cmd_start))

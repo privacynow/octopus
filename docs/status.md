@@ -2,6 +2,8 @@
 
 Current as of 2026-03-16. Tracks progress against [plan.md](plan.md).
 
+> **Phase 21 M21E complete (2026-03-16).** Shared Runtime now has end-to-end durability proof instead of inferred confidence. A dedicated split-role Compose proof suite runs every contract on both SQLite and Postgres: persist-before-response, simultaneous cross-chat claims on different workers, same-chat single-claim serialization, stale-claim recovery into replay-notice flow, durable cancel through real ingress, and worker replacement without lost drain. M21E shipped the smallest justified seams to make those proofs deterministic: test-controlled Claude/Codex stubs, a minimal Telegram Bot API stub, shared Compose test helpers, Telegram Bot API base-URL config, sweep-interval config, and two correctness fixes uncovered by the proof runs (persist-first welcome ordering and Postgres payload normalization). Verification on the current tree: dedicated Shared Runtime Compose proof suite `12 passed`; full suite `1452 passed, 23 skipped`; `git diff --check` clean.
+
 > **Phase 21 M21D complete (2026-03-16).** Shared Runtime health is now a unified subsystem instead of a Telegram-only view. The transport facade remains the source of truth for queue state and durable worker heartbeats, but those canonical reports are now projected to every operator surface: Telegram `/doctor`, CLI `--doctor`, registry heartbeat mirroring, and the registry UI. In shared+registry deployments the singleton `BOT_PROCESS_ROLE=webhook` process owns registry sync and health publication, so registry health stays unambiguous across multiple workers. The registry now persists mirrored `runtime_health_json` plus normalized `agent_runtime_workers` rows in both SQLite and Postgres, `/v1/ui/bots/{agent_id}/health` exposes the full mirrored report, and bot cards show compact health summaries without the registry querying the bot transport DB. Verification on the current tree: full suite `1449 passed, 11 skipped`; Compose E2E `9 passed, 1 skipped`; `git diff --check` clean.
 
 > **Phase 21 M21A and M21B complete (2026-03-16).** Shared Runtime is now unlocked behind `BOT_RUNTIME_MODE=shared` with persist-first ingress for worker-owned interactions, semantic `InboundAction`, and durable cross-process cancel. The next queue hardening slice is also shipped: fresh messages are durably accepted as `duplicate` / `admitted` / `queued` instead of terminal `chat_busy`, registry deliveries treat locally queued work as accepted instead of `retry_later`, `_chat_lock` is bypassed on the shared worker path, worker IDs now include host and PID context, and stale-claim recovery is lease-age based with a periodic sweep instead of "foreign worker means stale". Recovery remains replay-notice only: stale claimed work re-enters as `dispatch_mode='recovery'`, never auto-reruns. Verification on the current tree: full suite `1420 passed, 10 skipped`; Compose E2E `8 passed, 1 skipped`.
@@ -236,11 +238,12 @@ Current as of 2026-03-16. Tracks progress against [plan.md](plan.md).
 - Phase 20 is the shipped product baseline.
 - Phases 16-19 are sealed historic artifacts. Their relevant scope is
   captured in Phase 21 or deferred to standalone roadmaps.
-- Phase 21 (Shared Runtime) is active:
+- Phase 21 (Shared Runtime) is complete:
   - M21A persist-first ingress and worker-owned `InboundAction` are complete
   - M21B durable queue admission and lease-based recovery are complete
   - M21C multi-service deployment/orchestration is complete
   - M21D observability and operator health is complete
+  - M21E durability confidence and full Shared Runtime proof is complete
 - The default operator path today is **Local Runtime**, but Shared Runtime
   semantics are also shipped:
   - SQLite is the default backend when `BOT_DATABASE_URL` is unset

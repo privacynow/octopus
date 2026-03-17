@@ -144,6 +144,8 @@ class BotConfig:
     webhook_listen: str
     webhook_port: int
     webhook_secret: str
+    telegram_api_base_url: str
+    telegram_file_api_base_url: str
     completion_webhook_url: str
     # Projects — optional named working directories
     projects: tuple[ProjectBinding, ...]  # parsed from BOT_PROJECTS
@@ -170,6 +172,7 @@ class BotConfig:
     runtime_mode: str  # BOT_RUNTIME_MODE: "local" (default) | "shared"
     process_role: str  # BOT_PROCESS_ROLE: "all" (default) | "webhook" | "worker"
     claim_lease_ttl_seconds: int  # BOT_CLAIM_LEASE_TTL, max age for claimed work before stale recovery
+    claim_sweep_interval_seconds: float  # BOT_CLAIM_SWEEP_INTERVAL_SECONDS, periodic stale-claim sweep cadence
     # Postgres optional for local runtime. Empty = SQLite (default); set = Postgres as store backend.
     database_url: str  # BOT_DATABASE_URL (postgresql://...)
     db_pool_min_size: int
@@ -383,6 +386,8 @@ def load_config(instance: str | None = None) -> BotConfig:
         webhook_listen=get("BOT_WEBHOOK_LISTEN", "127.0.0.1"),
         webhook_port=get_int("BOT_WEBHOOK_PORT", "8443"),
         webhook_secret=get("BOT_WEBHOOK_SECRET"),
+        telegram_api_base_url=get("BOT_TELEGRAM_API_BASE_URL").strip(),
+        telegram_file_api_base_url=get("BOT_TELEGRAM_FILE_API_BASE_URL").strip(),
         completion_webhook_url=get("BOT_COMPLETION_WEBHOOK_URL").strip(),
         projects=_parse_projects(get("BOT_PROJECTS")),
         model_profiles=_parse_model_profiles(get("BOT_MODEL_PROFILES")),
@@ -405,6 +410,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         runtime_mode=get("BOT_RUNTIME_MODE", "local").strip().lower() or "local",
         process_role=get("BOT_PROCESS_ROLE", "all").strip().lower() or "all",
         claim_lease_ttl_seconds=get_int("BOT_CLAIM_LEASE_TTL", "300"),
+        claim_sweep_interval_seconds=max(0.1, get_float("BOT_CLAIM_SWEEP_INTERVAL_SECONDS", "60.0")),
         database_url=get("BOT_DATABASE_URL", "").strip(),
         db_pool_min_size=max(0, get_int("BOT_DB_POOL_MIN_SIZE", "1")),
         db_pool_max_size=max(1, get_int("BOT_DB_POOL_MAX_SIZE", "10")),
@@ -480,6 +486,8 @@ def load_config_provider_health() -> BotConfig:
         webhook_listen="127.0.0.1",
         webhook_port=8443,
         webhook_secret="",
+        telegram_api_base_url="",
+        telegram_file_api_base_url="",
         completion_webhook_url="",
         projects=(),
         model_profiles={},
@@ -500,6 +508,7 @@ def load_config_provider_health() -> BotConfig:
         runtime_mode="local",
         process_role="all",
         claim_lease_ttl_seconds=300,
+        claim_sweep_interval_seconds=60.0,
         database_url="",
         db_pool_min_size=1,
         db_pool_max_size=10,
@@ -571,6 +580,9 @@ def validate_config(config: BotConfig) -> list[str]:
     if config.claim_lease_ttl_seconds <= 0:
         errors.append("BOT_CLAIM_LEASE_TTL must be greater than 0")
 
+    if config.claim_sweep_interval_seconds <= 0:
+        errors.append("BOT_CLAIM_SWEEP_INTERVAL_SECONDS must be greater than 0")
+
     if config.runtime_mode == RuntimeMode.SHARED.value:
         if config.bot_mode != BotMode.WEBHOOK.value:
             errors.append(
@@ -600,6 +612,16 @@ def validate_config(config: BotConfig) -> list[str]:
     if config.bot_mode == BotMode.WEBHOOK.value:
         if not config.webhook_url:
             errors.append("BOT_WEBHOOK_URL is required when BOT_MODE=webhook")
+
+    if config.telegram_api_base_url and not _has_valid_http_url(config.telegram_api_base_url):
+        errors.append(
+            "BOT_TELEGRAM_API_BASE_URL must be a valid http:// or https:// URL when set"
+        )
+
+    if config.telegram_file_api_base_url and not _has_valid_http_url(config.telegram_file_api_base_url):
+        errors.append(
+            "BOT_TELEGRAM_FILE_API_BASE_URL must be a valid http:// or https:// URL when set"
+        )
 
     if config.completion_webhook_url and not _has_valid_http_url(config.completion_webhook_url):
         log.warning(

@@ -47,17 +47,8 @@ from app.identity import (
 from app.execution_context import ResolvedExecutionContext, resolve_execution_context
 from app.providers.base import Provider
 from app.request_flow import (
-    classify_pending_validation,
-    extra_dirs_from_denials,
     foreign_setup_message,
     format_credential_prompt,
-    pending_expired,
-    validate_pending,
-)
-from app.workflows.pending_request import (
-    PendingRequestDisposition,
-    PendingRequestWorkflowModel,
-    run_pending_request_event,
 )
 from app.session_state import (
     DelegatedTask,
@@ -101,6 +92,10 @@ from app.runtime_skill_activation_use_cases import get_runtime_skill_activation_
 from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_cases
 from app.runtime_skill_import_use_cases import get_runtime_skill_import_use_cases
 from app.runtime_skill_setup_use_cases import get_runtime_skill_setup_use_cases
+from app.conversation_control_use_cases import get_conversation_control_use_cases
+from app.conversation_settings_use_cases import get_conversation_settings_use_cases
+from app.pending_request_use_cases import get_pending_request_use_cases
+from app.recovery_use_cases import get_recovery_use_cases
 from app.skill_activation_service import get_skill_activation_service
 from app.provider_guidance_service import get_provider_guidance_service
 from app.storage import (
@@ -895,32 +890,13 @@ def _settings_model_profile_state(
     trust_tier: str,
     effective_model: str,
 ) -> tuple[list[str], str]:
-    """Return (available profile names sorted, current profile name for display/checkmark).
-
-    For public users, current is derived from effective_model over public profiles only,
-    so text and keyboard selection stay consistent when saved/default is restricted.
-    """
-    if trust_tier == "public" and cfg.public_model_profiles and cfg.model_profiles:
-        available = sorted(cfg.public_model_profiles & cfg.model_profiles.keys())
-        current = "(default)"
-        for p in available:
-            if cfg.model_profiles.get(p) == effective_model:
-                current = p
-                break
-        return (available, current)
-    available = sorted(cfg.model_profiles.keys()) if cfg.model_profiles else []
-    if not available:
-        # No profiles configured — don't display a phantom profile name
-        return ([], "(default)")
-    # Resolution: session > project > global default (mirrors resolve_effective_model)
-    project_profile = ""
-    if session.project_id:
-        for proj in cfg.projects:
-            if proj.name == session.project_id:
-                project_profile = proj.model_profile
-                break
-    current = session.model_profile or project_profile or cfg.default_model_profile or "(default)"
-    return (available, current)
+    state = get_conversation_settings_use_cases().model_profile_state(
+        session,
+        cfg,
+        trust_tier,
+        effective_model,
+    )
+    return (list(state.available_profiles), state.current_profile)
 
 
 def _settings_model_buttons(available: list[str], current: str, has_explicit_override: bool = False) -> list[InlineKeyboardButton]:
@@ -998,87 +974,6 @@ def _settings_approval_buttons(approval: str) -> list[InlineKeyboardButton]:
             callback_data="setting_approval:off",
         ),
     ]
-
-
-# -- Setting mutators (single authority per family for command + callback) ----
-
-def _apply_model_change(chat_id: int, session: SessionState, value: str) -> None:
-    """Set session model_profile and persist. Caller sends reply."""
-    session.model_profile = value
-    _save(chat_id, session)
-
-
-def _apply_model_selection(
-    chat_id: int,
-    session: SessionState,
-    profile: str,
-    cfg: BotConfig,
-    trust_tier: str,
-) -> tuple[bool, str]:
-    """Validate model profile for this context, apply if allowed, return (ok, message).
-
-    Single authority for both cmd_model and handle_settings_callback model branch.
-    Caller sends the returned message (reply or edit_text).
-    """
-    resolved = _resolve_context(session, trust_tier=trust_tier)
-    effective = resolved.effective_model or ""
-    available_list, _ = _settings_model_profile_state(session, cfg, trust_tier, effective)
-    available = set(available_list)
-    if profile not in available:
-        return (False, _msg.trust_model_profile_not_available(profile, list(available_list)))
-    _apply_model_change(chat_id, session, profile)
-    return (True, _msg.trust_model_profile_set(profile, cfg.model_profiles[profile]))
-
-
-def _apply_project_change(
-    chat_id: int, session: SessionState, value: str
-) -> tuple[bool, str]:
-    """Apply project change (clear or set). Returns (success, message). Caller sends message."""
-    cfg = _cfg()
-    if value == "clear":
-        if not session.project_id:
-            return (False, _msg.trust_no_project_active())
-        session.project_id = ""
-        session.provider_state = _prov().new_provider_state()
-        session.clear_pending()
-        _save(chat_id, session)
-        return (True, _msg.trust_project_cleared(str(cfg.working_dir)))
-    # value is project name
-    found = any(proj.name == value for proj in cfg.projects)
-    if not found:
-        return (False, _msg.trust_unknown_project(value))
-    if session.project_id == value:
-        return (False, _msg.trust_already_using_project(value))
-    session.project_id = value
-    session.provider_state = _prov().new_provider_state()
-    session.clear_pending()
-    _save(chat_id, session)
-    proj = next(p for p in cfg.projects if p.name == value)
-    return (True, _msg.trust_switched_project(
-        value, str(proj.root_dir),
-        file_policy=proj.file_policy, model_profile=proj.model_profile,
-    ))
-
-
-def _apply_policy_change(chat_id: int, session: SessionState, value: str) -> None:
-    """Set file_policy, reset provider_state and pending, persist. Caller sends reply."""
-    session.file_policy = value
-    session.provider_state = _prov().new_provider_state()
-    session.clear_pending()
-    _save(chat_id, session)
-
-
-def _apply_approval_change(chat_id: int, session: SessionState, value: str) -> None:
-    """Set approval_mode and approval_mode_explicit, persist. Caller sends reply."""
-    session.approval_mode = value
-    session.approval_mode_explicit = True
-    _save(chat_id, session)
-
-
-def _apply_compact_change(chat_id: int, session: SessionState, value: bool) -> None:
-    """Set compact_mode and persist. Caller sends reply."""
-    session.compact_mode = value
-    _save(chat_id, session)
 
 
 # -- Helpers ---------------------------------------------------------------
@@ -1811,69 +1706,43 @@ async def approve_pending(
     cancel_event: asyncio.Event | None = None,
 ) -> None:
     session = _load(chat_id)
-    pending = session.pending_approval or session.pending_retry
-    if not pending:
-        await message.reply_text(_msg.approval_no_pending_approve())
-        return
-
-    state = "pending_approval" if session.pending_approval else "pending_retry"
-    classification = classify_pending_validation(pending, session, _cfg(), _prov().name)
-    event = (
-        "approve_execute" if classification == "ok"
-        else "expire" if classification == "expired"
-        else "invalidate_stale"
+    outcome = get_pending_request_use_cases().approve(
+        session,
+        cfg=_cfg(),
+        provider_name=_prov().name,
     )
-    model = PendingRequestWorkflowModel(state=state, validation_result=classification)
-    result = run_pending_request_event(model, event, validation_result=classification)
-
-    if not result.allowed:
-        session.clear_pending()
+    if outcome.mutated:
         _save(chat_id, session)
-        error = validate_pending(pending, session, _cfg(), _prov().name)
-        await message.reply_text(error or _msg.approval_request_no_longer_valid())
+    if outcome.execution_plan is None:
+        await message.reply_text(outcome.message)
         return
-
-    if result.disposition != PendingRequestDisposition.executed:
-        session.clear_pending()
-        _save(chat_id, session)
-        error = validate_pending(pending, session, _cfg(), _prov().name)
-        await message.reply_text(error or _msg.approval_request_no_longer_valid())
-        return
-
-    denials = getattr(pending, "denials", None) or []
-    denial_dirs = extra_dirs_from_denials(denials) if denials else None
-    request_user_id = pending.request_user_id
-    trust_tier = getattr(pending, "trust_tier", "trusted")
-    session.clear_pending()
-    _save(chat_id, session)
     await execute_request(
-        chat_id, pending.prompt, pending.image_paths, message,
-        extra_dirs=denial_dirs,
-        request_user_id=request_user_id,
+        chat_id,
+        outcome.execution_plan.prompt,
+        list(outcome.execution_plan.image_paths),
+        message,
+        extra_dirs=list(outcome.execution_plan.extra_dirs) or None,
+        request_user_id=outcome.execution_plan.request_user_id,
         skip_permissions=True,
-        trust_tier=trust_tier,
+        trust_tier=outcome.execution_plan.trust_tier,
         cancel_event=cancel_event,
     )
 
 
 async def reject_pending(chat_id: int, message) -> None:
     session = _load(chat_id)
-    if not session.has_pending:
-        await message.reply_text(_msg.approval_no_pending_reject())
-        return
-    state = "pending_approval" if session.pending_approval else "pending_retry"
-    model = PendingRequestWorkflowModel(state=state)
-    run_pending_request_event(model, "reject")
-    session.clear_pending()
-    _save(chat_id, session)
-    await message.reply_text(_msg.approval_rejected())
+    outcome = get_pending_request_use_cases().reject(session)
+    if outcome.mutated:
+        _save(chat_id, session)
+    await message.reply_text(outcome.message)
 
 
 async def retry_skip_pending(chat_id: int, message) -> None:
     session = _load(chat_id)
-    session.clear_pending()
-    _save(chat_id, session)
-    await _edit_or_reply_text(message, _msg.retry_skip_confirmation())
+    outcome = get_pending_request_use_cases().retry_skip(session)
+    if outcome.mutated:
+        _save(chat_id, session)
+    await _edit_or_reply_text(message, outcome.message)
 
 
 async def retry_allow_pending(
@@ -1883,46 +1752,25 @@ async def retry_allow_pending(
     cancel_event: asyncio.Event | None = None,
 ) -> None:
     session = _load(chat_id)
-    pending = session.pending_retry
-    if not pending:
-        await _edit_or_reply_text(message, _msg.retry_nothing_pending())
-        return
-
-    classification = classify_pending_validation(pending, session, _cfg(), _prov().name)
-    event_name = (
-        "approve_execute" if classification == "ok"
-        else "expire" if classification == "expired"
-        else "invalidate_stale"
+    outcome = get_pending_request_use_cases().retry_allow(
+        session,
+        cfg=_cfg(),
+        provider_name=_prov().name,
     )
-    model = PendingRequestWorkflowModel(state="pending_retry", validation_result=classification)
-    result = run_pending_request_event(model, event_name, validation_result=classification)
-
-    if not result.allowed or result.disposition != PendingRequestDisposition.executed:
-        session.clear_pending()
+    if outcome.mutated:
         _save(chat_id, session)
-        error = validate_pending(pending, session, _cfg(), _prov().name)
-        await _edit_or_reply_text(message, error or _msg.approval_request_no_longer_valid())
+    if outcome.execution_plan is None:
+        await _edit_or_reply_text(message, outcome.message)
         return
-
-    prompt = pending.prompt
-    denials = pending.denials or []
-    request_user_id = pending.request_user_id
-    trust_tier = getattr(pending, "trust_tier", "trusted")
-    session.clear_pending()
-
-    denial_dirs = extra_dirs_from_denials(denials)
-
-    if denial_dirs and _prov().name == "codex":
-        session.provider_state["thread_id"] = None
-
-    _save(chat_id, session)
-
     await execute_request(
-        chat_id, prompt, pending.image_paths,
-        message, denial_dirs,
-        request_user_id=request_user_id,
+        chat_id,
+        outcome.execution_plan.prompt,
+        list(outcome.execution_plan.image_paths),
+        message,
+        list(outcome.execution_plan.extra_dirs),
+        request_user_id=outcome.execution_plan.request_user_id,
         skip_permissions=True,
-        trust_tier=trust_tier,
+        trust_tier=outcome.execution_plan.trust_tier,
         cancel_event=cancel_event,
     )
 
@@ -2116,27 +1964,26 @@ async def cmd_new(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     prov = _prov()
     async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         old_session = _load(chat_id)
-        user_id = event.user.id
-        foreign = get_runtime_skill_setup_use_cases().foreign_setup(
+        outcome = get_conversation_control_use_cases().reset_session(
             old_session,
-            user_id=_actor_key(user_id),
+            user_id=_actor_key(event.user.id),
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            approval_mode_default=cfg.approval_mode,
+            default_role=cfg.role,
+            default_skills=cfg.default_skills,
         )
-        if foreign.setup is not None:
+        if outcome.status == "foreign_setup":
             await update.effective_message.reply_text(
-                foreign_setup_message(foreign.setup),
+                foreign_setup_message(old_session.awaiting_skill_setup),
             )
             return
-        if old_session.approval_mode_explicit:
-            approval_mode = old_session.approval_mode
-        else:
-            approval_mode = cfg.approval_mode
-        session = session_from_dict(default_session(prov.name, prov.new_provider_state(), approval_mode, cfg.role, cfg.default_skills))
-        if old_session.approval_mode_explicit:
-            session.approval_mode_explicit = True
-        _save(chat_id, session)
-        # Clean up any staged Codex scripts for this chat
-        cleanup_codex_scripts(cfg.data_dir, _conversation_key(chat_id))
-    await update.effective_message.reply_text(f"Fresh {prov.name} conversation started.")
+        if outcome.replacement_session is None:
+            return
+        _save(chat_id, outcome.replacement_session)
+        if outcome.cleanup_scripts:
+            cleanup_codex_scripts(cfg.data_dir, _conversation_key(chat_id))
+    await update.effective_message.reply_text(outcome.message)
 
 
 @_command_handler
@@ -2234,10 +2081,10 @@ async def cmd_approval(event, update: Update, context: ContextTypes.DEFAULT_TYPE
                 reply_markup=InlineKeyboardMarkup([_settings_approval_buttons(mode)]),
             )
             return
-        _apply_approval_change(chat_id, session, arg)
-    await update.effective_message.reply_text(
-        f"Approval mode set to {arg} for this chat."
-    )
+        outcome = get_conversation_settings_use_cases().set_approval_mode(session, arg)
+        if outcome.mutated:
+            _save(chat_id, session)
+    await update.effective_message.reply_text(outcome.message)
 
 
 @_command_handler
@@ -2646,41 +2493,19 @@ async def cancel_chat_operation(
     allow_admin_override: bool = False,
     update_id: int | None = None,
 ) -> None:
-    # Worker-owned live run: set cancel event so the running execute_request/request_approval sees it.
-    cancel_event = _LIVE_CANCEL.get(chat_id)
-    if cancel_event is not None:
-        cancel_event.set()
-        await message.reply_text(_msg.cancel_live_requested())
-        return
-
-    # Admitted but not yet running: cancel queued fresh item so the worker won't run it.
-    if work_queue.cancel_queued_fresh_for_chat(_cfg().data_dir, _conversation_key(chat_id)):
-        await message.reply_text(_msg.cancel_queued_superseded())
-        return
-
     async with _chat_lock(chat_id, message=message, update_id=update_id):
         session = _load(chat_id)
-
-        decision = get_runtime_skill_setup_use_cases().cancel(
+        outcome = get_conversation_control_use_cases().cancel_conversation(
             session,
-            user_id=_actor_key(actor_user_id),
+            data_dir=_cfg().data_dir,
+            conversation_key=_conversation_key(chat_id),
+            actor_key=_actor_key(actor_user_id),
+            cancel_request_event_id=_event_key(update_id) if update_id is not None else "",
             allow_override=allow_admin_override,
         )
-        if decision.status == "cancelled":
+        if outcome.mutated:
             _save(chat_id, session)
-            await message.reply_text(_msg.credential_setup_cancelled())
-            return
-        if decision.status == "foreign_setup":
-            await message.reply_text(_msg.credential_setup_another_user_in_progress())
-            return
-
-        if session.has_pending:
-            session.clear_pending()
-            _save(chat_id, session)
-            await message.reply_text(_msg.cancel_pending_request())
-            return
-
-    await message.reply_text(_msg.nothing_to_cancel())
+    await message.reply_text(outcome.message)
 
 
 @_command_handler
@@ -2820,12 +2645,10 @@ async def cmd_compact(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = _load(chat_id)
-        _apply_compact_change(chat_id, session, mode == "on")
-
-    label = _msg.settings_compact_on_label() if mode == "on" else _msg.settings_compact_off_label()
-    await update.effective_message.reply_text(
-        f"Compact mode set to <b>{label}</b>.", parse_mode=ParseMode.HTML,
-    )
+        outcome = get_conversation_settings_use_cases().set_compact_mode(session, mode == "on")
+        if outcome.mutated:
+            _save(chat_id, session)
+    await update.effective_message.reply_text(outcome.message, parse_mode=ParseMode.HTML)
 
 
 @_command_handler
@@ -2869,22 +2692,29 @@ async def cmd_role(event, update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if args[0].lower() == "clear":
-        cfg = _cfg()
         async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
             session = _load(chat_id)
-            session.role = cfg.role
-            _save(chat_id, session)
-        await update.effective_message.reply_text("Role reset to instance default.")
+            outcome = get_conversation_settings_use_cases().set_role(
+                session,
+                "",
+                default_role=_cfg().role,
+            )
+            if outcome.mutated:
+                _save(chat_id, session)
+        await update.effective_message.reply_text(outcome.message)
         return
 
     role_text = " ".join(args)
     async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = _load(chat_id)
-        session.role = role_text
-        _save(chat_id, session)
-    await update.effective_message.reply_text(
-        f"Role set to: <code>{html.escape(role_text)}</code>", parse_mode=ParseMode.HTML,
-    )
+        outcome = get_conversation_settings_use_cases().set_role(
+            session,
+            role_text,
+            default_role=_cfg().role,
+        )
+        if outcome.mutated:
+            _save(chat_id, session)
+    await update.effective_message.reply_text(outcome.message, parse_mode=ParseMode.HTML)
 
 
 @_command_handler
@@ -2892,47 +2722,39 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
     cfg = _cfg()
     msg = update.effective_message
     chat_id = event.chat_id
+    settings = get_conversation_settings_use_cases()
+    trust = _trust_tier(event.user)
 
     arg = event.args[0].lower() if event.args else ""
 
     # inherit must run even when model_profiles is empty — clears stale overrides
     if arg == "inherit":
-        trust = _trust_tier(event.user)
         async with _chat_lock(chat_id, message=msg, update_id=update.update_id):
             session = _load(chat_id)
-            if not session.model_profile:
-                await msg.reply_text("Model profile is already inherited.", parse_mode=ParseMode.HTML)
-                return
-            _apply_model_change(chat_id, session, "")
-        resolved = _resolve_context(_load(chat_id), trust)
-        effective = resolved.effective_model or cfg.model
-        _, profile_name = _settings_model_profile_state(_load(chat_id), cfg, trust, effective or "")
-        if effective and profile_name != "(default)":
-            cleared_text = f"Model profile cleared. Effective: <code>{html.escape(profile_name)}</code> ({html.escape(effective)})"
-        elif effective:
-            cleared_text = f"Model profile cleared. Using default model."
-        else:
-            cleared_text = "Model profile cleared. Using default model."
-        await msg.reply_text(
-            cleared_text,
-            parse_mode=ParseMode.HTML,
-        )
+            outcome = settings.set_model_profile(
+                session,
+                "",
+                cfg=cfg,
+                provider_name=_prov().name,
+                trust_tier=trust,
+            )
+            if outcome.mutated:
+                _save(chat_id, session)
+        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
         return
 
     if not cfg.model_profiles:
         session = _load(chat_id)
-        if session.model_profile:
-            await msg.reply_text(
-                f"No model profiles configured, but this chat has a stale override "
-                f"(<code>{html.escape(session.model_profile)}</code>). "
-                "Use /model inherit to clear it.",
-                parse_mode=ParseMode.HTML,
-            )
-        else:
-            await msg.reply_text(_msg.trust_no_model_profiles())
+        outcome = settings.set_model_profile(
+            session,
+            arg if arg and arg != "status" else "fast",
+            cfg=cfg,
+            provider_name=_prov().name,
+            trust_tier=trust,
+        )
+        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
         return
 
-    trust = _trust_tier(event.user)
     session = _load(chat_id)
     resolved = _resolve_context(session, trust)
     effective = resolved.effective_model
@@ -2941,8 +2763,16 @@ async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if arg and arg != "status":
         async with _chat_lock(chat_id, message=msg, update_id=update.update_id):
             session = _load(chat_id)
-            _ok, text = _apply_model_selection(chat_id, session, arg, cfg, trust)
-        await msg.reply_text(text, parse_mode=ParseMode.HTML)
+            outcome = settings.set_model_profile(
+                session,
+                arg,
+                cfg=cfg,
+                provider_name=_prov().name,
+                trust_tier=trust,
+            )
+            if outcome.mutated:
+                _save(chat_id, session)
+        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
         return
 
     # Show current + inline keyboard (same effective-profile source as /settings)
@@ -3189,174 +3019,65 @@ async def handle_recovery_action(
 
     cfg = _cfg()
     data_dir = cfg.data_dir
-
-    try:
-        recovery_item = work_queue.get_pending_recovery_for_update(
-            data_dir,
-            _conversation_key(chat_id),
-            _event_key(update_id),
-        )
-    except TransportStateCorruption as e:
-        log.exception("Transport state corruption in recovery callback for chat %s: %s", chat_id, e)
-        await answer_action(_msg.recovery_error_try_again(), show_alert=True)
-        return
-
-    if recovery_item is None:
-        # Already handled (double-click, superseded, etc.) — idempotent.
-        await answer_action(_msg.recovery_already_handled())
-        return
-
-    # -- Discard path --
-    if action == "recovery_discard":
-        try:
-            discard_outcome = work_queue.discard_recovery(data_dir, recovery_item["id"])
-        except TransportStateCorruption as e:
-            log.exception("Transport state corruption on discard for item %s: %s", recovery_item["id"], e)
-            await answer_action(_msg.recovery_error_try_again(), show_alert=True)
-            return
-        if discard_outcome == work_queue.DiscardResult.already_handled:
-            await answer_action(_msg.recovery_already_handled())
-            return
-        if discard_outcome == work_queue.DiscardResult.corruption:
-            await answer_action(_msg.recovery_error_discard_try_again())
-            return
-        await answer_action(_msg.recovery_discarded_confirm())
+    outcome = get_recovery_use_cases().prepare_action(
+        data_dir=data_dir,
+        conversation_key=_conversation_key(chat_id),
+        event_id=_event_key(update_id),
+        action=action,
+        worker_id=_boot_id,
+        ignore_claimed_item_id=str(getattr(message, "_worker_item_id", "")),
+        config=cfg,
+    )
+    if outcome.toast_message:
+        await answer_action(outcome.toast_message, show_alert=outcome.show_alert)
+    if outcome.edit_message:
         try:
             await _edit_or_reply_text(
                 message,
-                _msg.recovery_discarded_edit(),
+                outcome.edit_message,
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
             pass
+    if outcome.replay_plan is None:
         return
 
-    # -- Replay path --
-    if action != "recovery_replay":
-        await answer_action(_msg.recovery_unknown_action())
-        return
-
-    await answer_action(_msg.recovery_replaying_toast())
-
-    # Reclaim the item for replay execution.
-    try:
-        item = work_queue.reclaim_for_replay(
-            data_dir,
-            recovery_item["id"],
-            _boot_id,
-            ignore_claimed_item_id=str(getattr(message, "_worker_item_id", "")),
-        )
-    except TransportStateCorruption as e:
-        log.exception("Transport state corruption on reclaim for item %s: %s", recovery_item["id"], e)
-        await answer_action(_msg.recovery_error_try_again(), show_alert=True)
-        return
-    except work_queue.ReclaimBlocked:
-        # Another request is in progress — item is still pending_recovery.
-        try:
-            await _edit_or_reply_text(
-                message,
-                _msg.recovery_blocked_replay_edit(),
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception:
-            pass
-        return
-    if item is None:
-        # Race: already handled between our check and reclaim.
-        try:
-            await _edit_or_reply_text(
-                message,
-                _msg.recovery_already_handled_edit(),
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception:
-            pass
-        return
-
-    # Retrieve original payload and deserialize.
-    from app.transport import deserialize_inbound, InboundMessage
-    payload_str = item.get("payload") or work_queue.get_update_payload(data_dir, _event_key(update_id))
-    if not payload_str:
-        work_queue.fail_work_item(data_dir, item["id"], error="payload_missing")
-        try:
-            await _edit_or_reply_text(
-                message,
-                _msg.recovery_payload_missing_edit(),
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception:
-            pass
-        return
-
-    try:
-        event = deserialize_inbound("message", payload_str)
-    except Exception:
-        work_queue.fail_work_item(data_dir, item["id"], error="deserialize_error")
-        try:
-            await _edit_or_reply_text(
-                message,
-                _msg.recovery_replay_failed_edit(),
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception:
-            pass
-        return
-
-    if not isinstance(event, InboundMessage):
-        work_queue.fail_work_item(data_dir, item["id"], error="not_message")
-        try:
-            await _edit_or_reply_text(
-                message,
-                _msg.recovery_replay_failed_edit(),
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception:
-            pass
-        return
-
-    # Update the notice to show replay is in progress.
-    try:
-        await _edit_or_reply_text(
-            message,
-            _msg.recovery_replaying_edit(),
-            parse_mode=ParseMode.HTML,
-        )
-    except Exception:
-        pass
-
-    # Execute through _chat_lock with worker_item (lock-only, no claiming).
-    prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
-    trust = factory.trust_tier_for_source(
-        getattr(event, "source", "telegram"),
-        event.user,
-        config=_cfg(),
+    prompt, image_paths = build_user_prompt(
+        outcome.replay_plan.event.text,
+        list(outcome.replay_plan.event.attachments),
     )
     try:
-        async with _chat_lock(chat_id, message=message, worker_item=item):
+        async with _chat_lock(chat_id, message=message, worker_item={"id": outcome.replay_plan.item_id}):
             session = _load(chat_id)
-            if not getattr(event, "routed_task_id", "") and session.approval_mode == "on":
+            if not getattr(outcome.replay_plan.event, "routed_task_id", "") and session.approval_mode == "on":
                 await request_approval(
-                    chat_id, prompt, image_paths, list(event.attachments),
+                    chat_id, prompt, image_paths, list(outcome.replay_plan.event.attachments),
                     message,
-                    request_user_id=event.user.id,
-                    trust_tier=trust,
+                    request_user_id=outcome.replay_plan.event.user.id,
+                    trust_tier=outcome.replay_plan.trust_tier,
                     cancel_event=cancel_event,
                 )
             else:
                 await execute_request(
                     chat_id, prompt, image_paths, message,
-                    request_user_id=event.user.id,
-                    trust_tier=trust,
+                    request_user_id=outcome.replay_plan.event.user.id,
+                    trust_tier=outcome.replay_plan.trust_tier,
                     cancel_event=cancel_event,
                 )
-        work_queue.complete_work_item(data_dir, item["id"])
+        get_recovery_use_cases().complete_replay(
+            data_dir=data_dir,
+            item_id=outcome.replay_plan.item_id,
+        )
     except work_queue.LeaveClaimed:
         # Replay interrupted by another restart — item stays claimed.
         # Next boot will recover it and send a new notice.
         log.warning("Replay interrupted for chat %d; item stays claimed for re-recovery", chat_id)
     except Exception:
         log.exception("Replay failed for chat %d", chat_id)
-        work_queue.fail_work_item(data_dir, item["id"], error="replay_failed")
+        get_recovery_use_cases().fail_replay(
+            data_dir=data_dir,
+            item_id=outcome.replay_plan.item_id,
+        )
         try:
             await _edit_or_reply_text(
                 message,
@@ -3490,50 +3211,55 @@ async def handle_settings_callback(event, query) -> None:
         if not already_answered:
             await query.answer()
         session = _load(chat_id)
+        settings = get_conversation_settings_use_cases()
 
         if setting == "model":
             if value == "inherit":
-                if not session.model_profile:
-                    await query.edit_message_text("Model profile is already inherited.", parse_mode=ParseMode.HTML)
-                    return
-                _apply_model_change(chat_id, session, "")
                 cfg = _cfg()
                 trust = _trust_tier(event.user)
-                resolved = _resolve_context(session, trust)
-                effective = resolved.effective_model or cfg.model
-                _, profile_name = _settings_model_profile_state(session, cfg, trust, effective or "")
-                if effective and profile_name != "(default)":
-                    cleared_text = f"Model profile cleared. Effective: <code>{html.escape(profile_name)}</code> ({html.escape(effective)})"
-                elif effective:
-                    cleared_text = f"Model profile cleared. Using default model."
-                else:
-                    cleared_text = "Model profile cleared. Using default model."
+                outcome = settings.set_model_profile(
+                    session,
+                    "",
+                    cfg=cfg,
+                    provider_name=_prov().name,
+                    trust_tier=trust,
+                )
+                if outcome.mutated:
+                    _save(chat_id, session)
                 await query.edit_message_reply_markup(reply_markup=None)
-                await query.edit_message_text(cleared_text, parse_mode=ParseMode.HTML)
+                await query.edit_message_text(outcome.message, parse_mode=ParseMode.HTML)
                 return
             cfg = _cfg()
-            if not cfg.model_profiles:
-                await query.edit_message_text(_msg.trust_no_model_profiles())
-                return
             trust = _trust_tier(event.user)
-            _ok, text = _apply_model_selection(chat_id, session, value, cfg, trust)
+            outcome = settings.set_model_profile(
+                session,
+                value,
+                cfg=cfg,
+                provider_name=_prov().name,
+                trust_tier=trust,
+            )
+            if outcome.mutated:
+                _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(text, parse_mode=ParseMode.HTML)
+            await query.edit_message_text(outcome.message, parse_mode=ParseMode.HTML)
 
         elif setting == "approval":
             if value not in {"on", "off"}:
                 return
-            _apply_approval_change(chat_id, session, value)
+            outcome = settings.set_approval_mode(session, value)
+            if outcome.mutated:
+                _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(
-                f"Approval mode set to {value} for this chat.")
+                outcome.message)
 
         elif setting == "compact":
-            _apply_compact_change(chat_id, session, value == "on")
+            outcome = settings.set_compact_mode(session, value == "on")
+            if outcome.mutated:
+                _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
-            label = _msg.settings_compact_on_label() if value == "on" else _msg.settings_compact_off_label()
             await query.edit_message_text(
-                f"Compact mode set to <b>{label}</b>.",
+                outcome.message,
                 parse_mode=ParseMode.HTML,
             )
 
@@ -3541,25 +3267,22 @@ async def handle_settings_callback(event, query) -> None:
             if is_public_user(event.user):
                 await query.edit_message_text(_msg.trust_file_policy_public())
                 return
-            if value == "inherit":
-                if not session.file_policy:
-                    await query.edit_message_text("File policy is already inherited.", parse_mode=ParseMode.HTML)
-                    return
-                _apply_policy_change(chat_id, session, "")
-                resolved = _resolve_context(session, _trust_tier(event.user))
-                effective = resolved.file_policy or "edit"
-                await query.edit_message_reply_markup(reply_markup=None)
-                await query.edit_message_text(
-                    f"File policy cleared. Effective policy: <code>{html.escape(effective)}</code>",
-                    parse_mode=ParseMode.HTML,
-                )
+            mapped = "" if value == "inherit" else value
+            outcome = settings.set_file_policy(
+                session,
+                mapped,
+                cfg=_cfg(),
+                provider_name=_prov().name,
+                trust_tier=_trust_tier(event.user),
+                provider_state_factory=_prov().new_provider_state,
+            )
+            if outcome.status == "invalid":
                 return
-            if value not in {"inspect", "edit"}:
-                return
-            _apply_policy_change(chat_id, session, value)
+            if outcome.mutated:
+                _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(
-                _msg.trust_file_policy_set(value),
+                outcome.message,
                 parse_mode=ParseMode.HTML,
             )
 
@@ -3570,9 +3293,16 @@ async def handle_settings_callback(event, query) -> None:
             if not _cfg().projects:
                 await query.edit_message_text(_msg.no_projects_configured())
                 return
-            ok, reply_text = _apply_project_change(chat_id, session, value)
+            outcome = settings.set_project(
+                session,
+                value,
+                cfg=_cfg(),
+                provider_state_factory=_prov().new_provider_state,
+            )
+            if outcome.mutated:
+                _save(chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(reply_text, parse_mode=ParseMode.HTML)
+            await query.edit_message_text(outcome.message, parse_mode=ParseMode.HTML)
 
 
 # -- Application builder ---------------------------------------------------
@@ -3679,15 +3409,29 @@ async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
         project_name = event.args[1]
         async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
             session = _load(event.chat_id)
-            ok, reply_text = _apply_project_change(event.chat_id, session, project_name)
-        await msg.reply_text(reply_text, parse_mode=ParseMode.HTML)
+            outcome = get_conversation_settings_use_cases().set_project(
+                session,
+                project_name,
+                cfg=cfg,
+                provider_state_factory=_prov().new_provider_state,
+            )
+            if outcome.mutated:
+                _save(event.chat_id, session)
+        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
         return
 
     if arg == "clear":
         async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
             session = _load(event.chat_id)
-            ok, reply_text = _apply_project_change(event.chat_id, session, "clear")
-        await msg.reply_text(reply_text, parse_mode=ParseMode.HTML)
+            outcome = get_conversation_settings_use_cases().set_project(
+                session,
+                "clear",
+                cfg=cfg,
+                provider_state_factory=_prov().new_provider_state,
+            )
+            if outcome.mutated:
+                _save(event.chat_id, session)
+        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
         return
 
 
@@ -3779,31 +3523,33 @@ async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if arg == "inherit":
         async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
             session = _load(event.chat_id)
-            if not session.file_policy:
-                await msg.reply_text("File policy is already inherited.", parse_mode=ParseMode.HTML)
-                return
-            _apply_policy_change(event.chat_id, session, "")
-        resolved = _resolve_context(_load(event.chat_id), _trust_tier(event.user))
-        effective = resolved.file_policy or "edit"
-        await msg.reply_text(
-            f"File policy cleared. Effective policy: <code>{html.escape(effective)}</code>",
-            parse_mode=ParseMode.HTML,
-        )
+            outcome = get_conversation_settings_use_cases().set_file_policy(
+                session,
+                "",
+                cfg=_cfg(),
+                provider_name=_prov().name,
+                trust_tier=_trust_tier(event.user),
+                provider_state_factory=_prov().new_provider_state,
+            )
+            if outcome.mutated:
+                _save(event.chat_id, session)
+        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
         return
 
     if arg in ("inspect", "edit"):
         async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
             session = _load(event.chat_id)
-            resolved = _resolve_context(session, _trust_tier(event.user))
-            old_policy = resolved.file_policy or "edit"
-            if old_policy == arg:
-                await msg.reply_text(f"File policy is already <code>{html.escape(arg)}</code>.", parse_mode=ParseMode.HTML)
-                return
-            _apply_policy_change(event.chat_id, session, arg)
-        await msg.reply_text(
-            _msg.trust_file_policy_set(arg),
-            parse_mode=ParseMode.HTML,
-        )
+            outcome = get_conversation_settings_use_cases().set_file_policy(
+                session,
+                arg,
+                cfg=_cfg(),
+                provider_name=_prov().name,
+                trust_tier=_trust_tier(event.user),
+                provider_state_factory=_prov().new_provider_state,
+            )
+            if outcome.mutated:
+                _save(event.chat_id, session)
+        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
         return
 
     if arg == "" or arg == "status":
@@ -3975,6 +3721,7 @@ async def _execute_worker_action(
 
     surface, runtime_chat, chat_id, conversation_ref, source = _build_action_surface(event, item=item)
     trust = factory.trust_tier_for_source(source, event.user, config=_cfg())
+    settings = get_conversation_settings_use_cases()
     action = event.action
     params = dict(event.params)
 
@@ -3982,35 +3729,38 @@ async def _execute_worker_action(
         cfg = _cfg()
         prov = _prov()
         old_session = _load(runtime_chat)
-        user_id = event.user.id
-        foreign = get_runtime_skill_setup_use_cases().foreign_setup(
+        outcome = get_conversation_control_use_cases().reset_session(
             old_session,
-            user_id=_actor_key(user_id),
+            user_id=_actor_key(event.user.id),
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            approval_mode_default=cfg.approval_mode,
+            default_role=cfg.role,
+            default_skills=cfg.default_skills,
         )
-        if foreign.setup is not None:
+        if outcome.status == "foreign_setup":
             await surface.reply_text(
-                foreign_setup_message(foreign.setup),
+                foreign_setup_message(old_session.awaiting_skill_setup),
             )
             return
-        approval_mode = old_session.approval_mode if old_session.approval_mode_explicit else cfg.approval_mode
-        session = session_from_dict(
-            default_session(prov.name, prov.new_provider_state(), approval_mode, cfg.role, cfg.default_skills)
-        )
-        if old_session.approval_mode_explicit:
-            session.approval_mode_explicit = True
-        _save(runtime_chat, session)
-        cleanup_codex_scripts(cfg.data_dir, _conversation_key(runtime_chat))
-        await surface.reply_text(f"Fresh {prov.name} conversation started.")
+        if outcome.replacement_session is None:
+            return
+        _save(runtime_chat, outcome.replacement_session)
+        if outcome.cleanup_scripts:
+            cleanup_codex_scripts(cfg.data_dir, _conversation_key(runtime_chat))
+        await surface.reply_text(outcome.message)
         return
 
     if action == "set_approval_mode":
         value = str(params.get("value", "")).lower()
-        if value not in {"on", "off"}:
-            return
         session = _load(runtime_chat)
-        _apply_approval_change(runtime_chat, session, value)
+        outcome = settings.set_approval_mode(session, value)
+        if outcome.status == "invalid":
+            return
+        if outcome.mutated:
+            _save(runtime_chat, session)
         await surface.edit_reply_markup(reply_markup=None)
-        await _edit_or_reply_text(surface, f"Approval mode set to {value} for this chat.")
+        await _edit_or_reply_text(surface, outcome.message)
         return
 
     if action == "approve_pending":
@@ -4071,48 +3821,30 @@ async def _execute_worker_action(
         return
 
     if action == "cancel_conversation":
-        result = work_queue.request_cancel(
-            _cfg().data_dir,
-            _conversation_key(runtime_chat),
-            _actor_key(event.user.id),
-            cancel_request_event_id=str(item.get("event_id", "")),
-        )
-        if result == work_queue.CancelRequestResult.claimed_cancel_requested:
-            await surface.reply_text(_msg.cancel_live_requested())
-            return
-        if result == work_queue.CancelRequestResult.queued_cancelled:
-            await surface.reply_text(_msg.cancel_queued_superseded())
-            return
         session = _load(runtime_chat)
-        decision = get_runtime_skill_setup_use_cases().cancel(
+        outcome = get_conversation_control_use_cases().cancel_conversation(
             session,
-            user_id=_actor_key(event.user.id),
+            data_dir=_cfg().data_dir,
+            conversation_key=_conversation_key(runtime_chat),
+            actor_key=_actor_key(event.user.id),
+            cancel_request_event_id=str(item.get("event_id", "")),
             allow_override=(source != "telegram" or is_admin(event.user)),
         )
-        if decision.status == "cancelled":
+        if outcome.mutated:
             _save(runtime_chat, session)
-            await surface.reply_text(_msg.credential_setup_cancelled())
-            return
-        if decision.status == "foreign_setup":
-            await surface.reply_text(_msg.credential_setup_another_user_in_progress())
-            return
-        if session.has_pending:
-            session.clear_pending()
-            _save(runtime_chat, session)
-            await surface.reply_text(_msg.cancel_pending_request())
-            return
-        await surface.reply_text(_msg.nothing_to_cancel())
+        await surface.reply_text(outcome.message)
         return
 
     if action == "set_compact_mode":
         value = bool(params.get("value", False))
         session = _load(runtime_chat)
-        _apply_compact_change(runtime_chat, session, value)
+        outcome = settings.set_compact_mode(session, value)
+        if outcome.mutated:
+            _save(runtime_chat, session)
         await surface.edit_reply_markup(reply_markup=None)
-        label = _msg.settings_compact_on_label() if value else _msg.settings_compact_off_label()
         await _edit_or_reply_text(
             surface,
-            f"Compact mode set to <b>{label}</b>.",
+            outcome.message,
             parse_mode=ParseMode.HTML,
         )
         return
@@ -4123,15 +3855,11 @@ async def _execute_worker_action(
             return
         value = str(params.get("value", ""))
         session = _load(runtime_chat)
-        if not value:
-            session.role = _cfg().role
+        outcome = settings.set_role(session, value, default_role=_cfg().role)
+        if outcome.mutated:
             _save(runtime_chat, session)
-            await surface.reply_text("Role reset to instance default.")
-            return
-        session.role = value
-        _save(runtime_chat, session)
         await surface.reply_text(
-            f"Role set to: <code>{html.escape(value)}</code>",
+            outcome.message,
             parse_mode=ParseMode.HTML,
         )
         return
@@ -4140,38 +3868,17 @@ async def _execute_worker_action(
         cfg = _cfg()
         session = _load(runtime_chat)
         profile = str(params.get("profile", ""))
-        if profile == "":
-            if not session.model_profile:
-                await _edit_or_reply_text(surface, "Model profile is already inherited.", parse_mode=ParseMode.HTML)
-                return
-            _apply_model_change(runtime_chat, session, "")
-            resolved = _resolve_context(_load(runtime_chat), trust)
-            effective = resolved.effective_model or cfg.model
-            _, profile_name = _settings_model_profile_state(_load(runtime_chat), cfg, trust, effective or "")
-            if effective and profile_name != "(default)":
-                text = (
-                    "Model profile cleared. Effective: "
-                    f"<code>{html.escape(profile_name)}</code> ({html.escape(effective)})"
-                )
-            else:
-                text = "Model profile cleared. Using default model."
-            await surface.edit_reply_markup(reply_markup=None)
-            await _edit_or_reply_text(surface, text, parse_mode=ParseMode.HTML)
-            return
-        if not cfg.model_profiles:
-            stale = session.model_profile
-            if stale:
-                await surface.reply_text(
-                    "No model profiles configured, but this chat has a stale override "
-                    f"(<code>{html.escape(stale)}</code>). Use /model inherit to clear it.",
-                    parse_mode=ParseMode.HTML,
-                )
-            else:
-                await surface.reply_text(_msg.trust_no_model_profiles())
-            return
-        ok, text = _apply_model_selection(runtime_chat, session, profile, cfg, trust)
+        outcome = settings.set_model_profile(
+            session,
+            profile,
+            cfg=cfg,
+            provider_name=_prov().name,
+            trust_tier=trust,
+        )
+        if outcome.mutated:
+            _save(runtime_chat, session)
         await surface.edit_reply_markup(reply_markup=None)
-        await _edit_or_reply_text(surface, text, parse_mode=ParseMode.HTML)
+        await _edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
         return
 
     if action == "set_project":
@@ -4183,9 +3890,16 @@ async def _execute_worker_action(
             await _edit_or_reply_text(surface, _msg.no_projects_configured())
             return
         session = _load(runtime_chat)
-        _ok, reply_text = _apply_project_change(runtime_chat, session, str(params.get("value", "")))
+        outcome = settings.set_project(
+            session,
+            str(params.get("value", "")),
+            cfg=cfg,
+            provider_state_factory=_prov().new_provider_state,
+        )
+        if outcome.mutated:
+            _save(runtime_chat, session)
         await surface.edit_reply_markup(reply_markup=None)
-        await _edit_or_reply_text(surface, reply_text, parse_mode=ParseMode.HTML)
+        await _edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
         return
 
     if action == "set_file_policy":
@@ -4194,34 +3908,20 @@ async def _execute_worker_action(
             return
         value = str(params.get("value", ""))
         session = _load(runtime_chat)
-        if not value:
-            if not session.file_policy:
-                await _edit_or_reply_text(surface, "File policy is already inherited.", parse_mode=ParseMode.HTML)
-                return
-            _apply_policy_change(runtime_chat, session, "")
-            resolved = _resolve_context(_load(runtime_chat), trust)
-            effective = resolved.file_policy or "edit"
-            await surface.edit_reply_markup(reply_markup=None)
-            await _edit_or_reply_text(
-                surface,
-                f"File policy cleared. Effective policy: <code>{html.escape(effective)}</code>",
-                parse_mode=ParseMode.HTML,
-            )
+        outcome = settings.set_file_policy(
+            session,
+            value,
+            cfg=_cfg(),
+            provider_name=_prov().name,
+            trust_tier=trust,
+            provider_state_factory=_prov().new_provider_state,
+        )
+        if outcome.status == "invalid":
             return
-        if value not in {"inspect", "edit"}:
-            return
-        resolved = _resolve_context(session, trust)
-        old_policy = resolved.file_policy or "edit"
-        if old_policy == value:
-            await _edit_or_reply_text(
-                surface,
-                f"File policy is already <code>{html.escape(value)}</code>.",
-                parse_mode=ParseMode.HTML,
-            )
-            return
-        _apply_policy_change(runtime_chat, session, value)
+        if outcome.mutated:
+            _save(runtime_chat, session)
         await surface.edit_reply_markup(reply_markup=None)
-        await _edit_or_reply_text(surface, _msg.trust_file_policy_set(value), parse_mode=ParseMode.HTML)
+        await _edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
         return
 
     if action in {"skills_add", "skills_remove", "skills_setup", "skills_clear"}:
@@ -4516,47 +4216,20 @@ async def _shared_cancel_command(update: Update, event, action: InboundAction) -
     chat_id = event.chat_id
     actor_key = _actor_key(event.user.id)
     message = update.effective_message
-    session = _load(chat_id)
-    decision = get_runtime_skill_setup_use_cases().cancel(
-        session,
-        user_id=actor_key,
-        allow_override=is_admin(event.user),
-    )
-    if decision.status == "cancelled":
-        async with _chat_lock(chat_id, message=message, update_id=update.update_id):
-            session = _load(chat_id)
-            decision = get_runtime_skill_setup_use_cases().cancel(
-                session,
-                user_id=actor_key,
-                allow_override=is_admin(event.user),
-            )
-            if decision.status == "cancelled":
-                _save(chat_id, session)
-                await message.reply_text(_msg.credential_setup_cancelled())
-                return
-        return
-    if decision.status == "foreign_setup":
-        await message.reply_text(_msg.credential_setup_another_user_in_progress())
-        return
-
-    result = work_queue.request_cancel(
-        _cfg().data_dir,
-        _conversation_key(chat_id),
-        actor_key,
-        cancel_request_event_id=_event_key(update.update_id),
-    )
-    if result == work_queue.CancelRequestResult.claimed_cancel_requested:
-        await message.reply_text(_msg.cancel_live_requested())
-        return
-    if result == work_queue.CancelRequestResult.queued_cancelled:
-        await message.reply_text(_msg.cancel_queued_superseded())
-        return
-
-    work_queue.enqueue_work_item(
-        _cfg().data_dir,
-        envelope.conversation_key,
-        envelope.event_id,
-    )
+    del envelope
+    async with _chat_lock(chat_id, message=message, update_id=update.update_id):
+        session = _load(chat_id)
+        outcome = get_conversation_control_use_cases().cancel_conversation(
+            session,
+            data_dir=_cfg().data_dir,
+            conversation_key=_conversation_key(chat_id),
+            actor_key=actor_key,
+            cancel_request_event_id=_event_key(update.update_id),
+            allow_override=is_admin(event.user),
+        )
+        if outcome.mutated:
+            _save(chat_id, session)
+    await message.reply_text(outcome.message)
 
 
 async def _shared_command_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -47,6 +47,14 @@ These are no longer future work:
    - activation/setup/clear flows
    - import/update/uninstall/diff
    - provider-guidance preview
+9. Additional concern-owned inbound modules now exist for:
+   - conversation settings mutations
+   - conversation reset/cancel control
+   - pending approval/retry decisions
+   - recovery replay/discard preparation
+10. Registry runtime-skill and guidance routes now go through a dedicated
+    runtime-surface adapter module rather than loading/saving runtime sessions
+    directly inside `registry_service/app.py`.
 
 ### Regressions/shortcuts already found during execution
 
@@ -95,6 +103,13 @@ These findings must shape all future work:
    - Preserved by keeping validation injectable when the adapter calls the use-case.
    - Lesson: move workflow ownership out of the surface, but keep legitimate
      adapter dependency seams available for testing and rendering.
+
+9. Naming workarounds can hide structural drift.
+   - Import aliasing fixed a route/helper name collision, but it made the
+     adapter boundary look like two implementations.
+   - Fixed by renaming the HTTP entrypoints to explicit `api_...` adapter names
+     and keeping the runtime-surface helper names canonical.
+   - Lesson: local naming shortcuts can obscure whether there is truly one path.
 
 ## Non-Negotiable Principles
 

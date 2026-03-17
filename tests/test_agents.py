@@ -264,15 +264,22 @@ async def test_agent_runtime_run_forever_survives_unexpected_poll_error(tmp_path
     await runtime.run_forever(stop_event)
 
 
-async def test_admit_registry_delivery_busy_returns_retry_later(monkeypatch, tmp_path: Path):
-    async def should_not_run(*args, **kwargs):
-        raise AssertionError("bind/timeline should not run for busy delivery")
+async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path: Path):
+    seen: list[tuple[str, str]] = []
 
-    monkeypatch.setattr("app.agents.bridge.bind_conversation", should_not_run)
-    monkeypatch.setattr("app.agents.bridge.publish_timeline_event", should_not_run)
+    async def fake_bind(*args, **kwargs):
+        del args
+        seen.append(("bind", str(kwargs.get("conversation_ref", ""))))
+
+    async def fake_timeline(*args, **kwargs):
+        del args
+        seen.append(("timeline", str(kwargs.get("conversation_ref", ""))))
+
+    monkeypatch.setattr("app.agents.bridge.bind_conversation", fake_bind)
+    monkeypatch.setattr("app.agents.bridge.publish_timeline_event", fake_timeline)
     monkeypatch.setattr(
         "app.agents.bridge.work_queue.record_and_admit_message",
-        lambda *args, **kwargs: ("busy", None),
+        lambda *args, **kwargs: ("queued", "queued-item"),
     )
     config = make_config(
         data_dir=tmp_path,
@@ -304,8 +311,12 @@ async def test_admit_registry_delivery_busy_returns_retry_later(monkeypatch, tmp
         },
     )
 
-    assert outcome_message == "retry_later"
-    assert outcome_task == "retry_later"
+    assert outcome_message == "accepted"
+    assert outcome_task == "accepted"
+    assert ("bind", "conv-1") in seen
+    assert ("timeline", "conv-1") in seen
+    assert ("bind", "task-1") in seen
+    assert ("timeline", "task-1") in seen
 
 
 async def test_handle_registry_routed_result_publishes_parent_timeline_before_retry_on_startup_race(monkeypatch, tmp_path: Path):

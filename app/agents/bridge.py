@@ -181,9 +181,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
             "message",
             serialized,
         )
-        if status == "busy":
-            return "retry_later"
-        if status in {"admitted", "duplicate"}:
+        if status in {"admitted", "queued", "duplicate"}:
             await bind_conversation(
                 config,
                 conversation_ref=conversation_ref,
@@ -232,9 +230,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
             "message",
             serialized,
         )
-        if status == "busy":
-            return "retry_later"
-        if status in {"admitted", "duplicate"}:
+        if status in {"admitted", "queued", "duplicate"}:
             await bind_conversation(
                 config,
                 conversation_ref=conversation_ref,

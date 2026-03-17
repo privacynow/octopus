@@ -407,6 +407,31 @@ def test_validate_config_accepts_local_runtime_mode():
     assert runtime_errors == []
 
 
+def test_claim_lease_ttl_defaults_to_300():
+    cfg = make_config()
+    assert cfg.claim_lease_ttl_seconds == 300
+
+
+def test_claim_lease_ttl_from_env():
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write("TELEGRAM_BOT_TOKEN=tok\n")
+        f.write("BOT_PROVIDER=claude\n")
+        f.write("BOT_ALLOW_OPEN=1\n")
+        f.write("BOT_CLAIM_LEASE_TTL=45\n")
+        env_path = f.name
+    try:
+        with patch("app.config.env_path_for_instance", return_value=Path(env_path)):
+            cfg = load_config("test-lease")
+        assert cfg.claim_lease_ttl_seconds == 45
+    finally:
+        os.unlink(env_path)
+
+
+def test_claim_lease_ttl_must_be_positive():
+    errors = validate_config(make_config(claim_lease_ttl_seconds=0))
+    assert any("BOT_CLAIM_LEASE_TTL must be greater than 0" in e for e in errors)
+
+
 def test_load_config_reads_database_url_and_pool_settings():
     """load_config picks up BOT_DATABASE_URL and pool settings from .env."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:

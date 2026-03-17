@@ -810,8 +810,8 @@ class TestCancelConcurrency:
             assert prov2.run_calls[0]["provider_state"]["started"] is True
             assert 12345 not in th._LIVE_CANCEL
 
-    async def test_second_message_while_run_active_is_rejected_and_not_executed(self):
-        """Second plain message while a run is active gets busy reply; no second runnable item."""
+    async def test_second_message_while_run_active_is_queued_and_runs_next(self):
+        """Second plain message while a run is active is durably queued and runs after the first item clears."""
         with fresh_data_dir() as data_dir:
             prov = _GatedProvider("claude")
             cfg = make_config(data_dir)
@@ -835,22 +835,20 @@ class TestCancelConcurrency:
                 await asyncio.wait_for(prov.provider_started.wait(), timeout=2.0)
                 await th.handle_message(update_b, FakeContext())
                 reply_b = last_reply(msg_b)
-                assert _msg.queue_busy() in reply_b, f"B must get busy reply. Got: {reply_b}"
+                assert _msg.queue_accepted() in reply_b, f"B must get queued reply. Got: {reply_b}"
 
                 conn = runtime_backend.transport_store()._transport_db(data_dir)
                 rows = conn.execute(
                     "SELECT id, state, error FROM work_items "
                     "WHERE conversation_key = 'tg:12345' ORDER BY id"
                 ).fetchall()
-                runnable = [r for r in rows if r["state"] in ("queued", "claimed") and (r["error"] if "error" in r.keys() else "") != "chat_busy"]
-                busy_items = [r for r in rows if (r["error"] if "error" in r.keys() else None) == "chat_busy"]
-                assert len(runnable) == 1, f"Exactly one runnable item for chat. Got: {rows}"
-                assert len(busy_items) == 1, f"Busy item must be terminal with chat_busy. Got: {rows}"
+                runnable = [r for r in rows if r["state"] in ("queued", "claimed")]
+                assert len(runnable) == 2, f"Expected claimed current item plus queued backlog item. Got: {rows}"
 
                 await send_command(th.cmd_cancel, chat, user, "/cancel")
                 prov.gate.set()
 
-            assert len(prov.run_calls) == 1
+            assert len(prov.run_calls) == 2
 
     async def test_cancel_sets_event_when_run_active(self):
         """/cancel sets the worker-owned cancel event so the run can exit."""

@@ -347,6 +347,16 @@ def test_recover_stale_claims(backend_and_data_dir):
     assert item["event_id"] == _event(801)
 
 
+def test_live_claim_by_other_worker_not_recovered(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    record_update(data_dir, _event(802), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
+    enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(802))
+    claim_next(data_dir, conversation_key=_conv(1), worker_id="worker-a")
+    n = recover_stale_claims(data_dir, current_worker_id="worker-b", max_age_seconds=300)
+    assert n == 0
+    assert has_claimed_for_chat(data_dir, _conv(1)) is True
+
+
 def test_has_queued_or_claimed_false_when_empty(backend_and_data_dir):
     _backend, data_dir = backend_and_data_dir
     assert has_queued_or_claimed(data_dir, _conv(1)) is False
@@ -383,6 +393,60 @@ def test_cancel_queued_fresh_for_chat_terminal_state(backend_and_data_dir):
     assert len(cancelled) == 1, f"Exactly one item must be failed/cancelled, got: {items}"
     assert len(runnable) == 0, f"No runnable items after cancel, got: {items}"
     assert has_queued_or_claimed(data_dir, conversation_key) is False
+
+
+def test_second_fresh_message_queues_not_rejects(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    first_status, first_item_id = record_and_admit_message(
+        data_dir,
+        _event(5002),
+        _conv(7),
+        _actor(42),
+        "message",
+        '{"text":"first"}',
+    )
+    second_status, second_item_id = record_and_admit_message(
+        data_dir,
+        _event(5003),
+        _conv(7),
+        _actor(42),
+        "message",
+        '{"text":"second"}',
+    )
+    assert first_status == "admitted"
+    assert second_status == "queued"
+    items = get_work_items_for_chat(data_dir, _conv(7))
+    by_id = {row["id"]: row for row in items}
+    assert by_id[first_item_id]["state"] == "queued"
+    assert by_id[second_item_id]["state"] == "queued"
+
+
+def test_queued_items_drain_fifo(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    statuses = [
+        record_and_admit_message(data_dir, _event(5004), _conv(8), _actor(42), "message", '{"text":"1"}'),
+        record_and_admit_message(data_dir, _event(5005), _conv(8), _actor(42), "message", '{"text":"2"}'),
+        record_and_admit_message(data_dir, _event(5006), _conv(8), _actor(42), "message", '{"text":"3"}'),
+    ]
+    assert [status for status, _item_id in statuses] == ["admitted", "queued", "queued"]
+    first = claim_next(data_dir, conversation_key=_conv(8), worker_id="w1")
+    assert first is not None and first["event_id"] == _event(5004)
+    complete_work_item(data_dir, first["id"])
+    second = claim_next(data_dir, conversation_key=_conv(8), worker_id="w1")
+    assert second is not None and second["event_id"] == _event(5005)
+    complete_work_item(data_dir, second["id"])
+    third = claim_next(data_dir, conversation_key=_conv(8), worker_id="w1")
+    assert third is not None and third["event_id"] == _event(5006)
+
+
+def test_single_claimed_per_conversation_with_queued_backlog(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    record_and_admit_message(data_dir, _event(5007), _conv(9), _actor(42), "message", '{"text":"1"}')
+    record_and_admit_message(data_dir, _event(5008), _conv(9), _actor(42), "message", '{"text":"2"}')
+    first = claim_next(data_dir, conversation_key=_conv(9), worker_id="w1")
+    assert first is not None
+    second = claim_next(data_dir, conversation_key=_conv(9), worker_id="w2")
+    assert second is None
 
 
 def test_user_access_no_row_returns_none(backend_and_data_dir):

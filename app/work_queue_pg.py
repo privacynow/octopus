@@ -377,8 +377,10 @@ def record_and_admit_message(
     kind: str,
     payload: str = "{}",
 ) -> tuple[str, str | None]:
-    """Record update and admit or reject for provider work. Returns (status, item_id).
-    status: 'duplicate' | 'admitted' | 'busy'. item_id set when admitted or busy."""
+    """Record update and durably admit fresh work. Returns (status, item_id).
+
+    status: 'duplicate' | 'admitted' | 'queued'. item_id set when admitted or queued.
+    """
     now = datetime.now(timezone.utc).isoformat()
     item_id = uuid.uuid4().hex
     try:
@@ -401,16 +403,7 @@ def record_and_admit_message(
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                     (conversation_key,),
                 )
-            if has_fresh_queued_or_claimed(conn, conversation_key):
-                with _cur(conn) as cur:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {_SCHEMA}.work_items (id, conversation_key, event_id, state, error, created_at, dispatch_mode)
-                        VALUES (%s, %s, %s, 'failed', 'chat_busy', %s, 'fresh')
-                        """,
-                        (item_id, conversation_key, event_id, now),
-                    )
-                return ("busy", item_id)
+            had_prior_fresh = has_fresh_queued_or_claimed(conn, conversation_key)
             with _cur(conn) as cur:
                 cur.execute(
                     f"""
@@ -419,7 +412,7 @@ def record_and_admit_message(
                     """,
                     (item_id, conversation_key, event_id, now),
                 )
-            return ("admitted", item_id)
+            return ("queued" if had_prior_fresh else "admitted", item_id)
     except _DuplicateUpdate:
         return ("duplicate", None)
 
@@ -959,71 +952,62 @@ def reclaim_for_replay(
 
 def recover_stale_claims(conn, current_worker_id: str, max_age_seconds: int = 300) -> int:
     now = datetime.now(timezone.utc)
+    stale_before = now - timedelta(seconds=max_age_seconds)
     with _write_tx(conn):
         with _cur(conn) as cur:
             cur.execute(
                 f"SELECT id, state, worker_id, claimed_at, dispatch_mode, cancel_requested_at "
-                f"FROM {_SCHEMA}.work_items WHERE state = 'claimed'"
+                f"FROM {_SCHEMA}.work_items "
+                f"WHERE state = 'claimed' AND claimed_at IS NOT NULL AND claimed_at < %s",
+                (stale_before,),
             )
             rows = cur.fetchall()
         requeued = 0
         for row in rows:
             r = dict(row)
             _validate_work_item_row(r, r["id"])
-            stale = False
-            if row["worker_id"] != current_worker_id:
-                stale = True
-            elif row["claimed_at"]:
-                claimed = row["claimed_at"]
-                if hasattr(claimed, "isoformat"):
-                    claimed_ts = claimed
-                else:
-                    claimed_ts = datetime.fromisoformat(str(claimed).replace("Z", "+00:00"))
-                if (now - claimed_ts).total_seconds() > max_age_seconds:
-                    stale = True
-            if stale:
-                model = TransportWorkflowModel(state="claimed", worker_id=row["worker_id"], is_stale=True)
-                result = run_transport_event(model, "recover_stale_claim")
-                if not result.allowed:
-                    if result.disposition == TransportDisposition.guard_failed:
-                        continue
-                    raise TransportStateCorruption(
-                        f"recover_stale_claims: workflow rejected for item {row['id']}: "
-                        f"{result.disposition} — {result.reason}"
-                    )
-                with _cur(conn) as cur:
-                    if row.get("cancel_requested_at"):
-                        cur.execute(
-                            f"""
-                            UPDATE {_SCHEMA}.work_items
-                            SET state = 'failed', completed_at = %s, error = 'cancelled'
-                            WHERE id = %s AND state = 'claimed' AND worker_id = %s AND claimed_at = %s
-                            """,
-                            (now.isoformat(), row["id"], row["worker_id"], row["claimed_at"]),
-                        )
-                    else:
-                        cur.execute(
-                            f"""
-                            UPDATE {_SCHEMA}.work_items
-                            SET state = %s, worker_id = NULL, claimed_at = NULL, dispatch_mode = 'recovery'
-                            WHERE id = %s AND state = 'claimed' AND worker_id = %s AND claimed_at = %s
-                            """,
-                            (result.new_state, row["id"], row["worker_id"], row["claimed_at"]),
-                        )
-                    if cur.rowcount > 0:
-                        requeued += 1
-                        continue
-                re_read = _load_work_item_by_id(conn, row["id"])
-                if re_read is None:
+            model = TransportWorkflowModel(state="claimed", worker_id=row["worker_id"], is_stale=True)
+            result = run_transport_event(model, "recover_stale_claim")
+            if not result.allowed:
+                if result.disposition == TransportDisposition.guard_failed:
                     continue
-                if (
-                    re_read["state"] == "claimed"
-                    and re_read["worker_id"] == row["worker_id"]
-                    and re_read["claimed_at"] == row["claimed_at"]
-                ):
-                    raise TransportStateCorruption(
-                        f"recover_stale_claims: update matched 0 rows but item {row['id']} still claimed"
+                raise TransportStateCorruption(
+                    f"recover_stale_claims: workflow rejected for item {row['id']}: "
+                    f"{result.disposition} — {result.reason}"
+                )
+            with _cur(conn) as cur:
+                if row.get("cancel_requested_at"):
+                    cur.execute(
+                        f"""
+                        UPDATE {_SCHEMA}.work_items
+                        SET state = 'failed', completed_at = %s, error = 'cancelled'
+                        WHERE id = %s AND state = 'claimed' AND worker_id = %s AND claimed_at = %s
+                        """,
+                        (now.isoformat(), row["id"], row["worker_id"], row["claimed_at"]),
                     )
+                else:
+                    cur.execute(
+                        f"""
+                        UPDATE {_SCHEMA}.work_items
+                        SET state = %s, worker_id = NULL, claimed_at = NULL, dispatch_mode = 'recovery'
+                        WHERE id = %s AND state = 'claimed' AND worker_id = %s AND claimed_at = %s
+                        """,
+                        (result.new_state, row["id"], row["worker_id"], row["claimed_at"]),
+                    )
+                if cur.rowcount > 0:
+                    requeued += 1
+                    continue
+            re_read = _load_work_item_by_id(conn, row["id"])
+            if re_read is None:
+                continue
+            if (
+                re_read["state"] == "claimed"
+                and re_read["worker_id"] == row["worker_id"]
+                and re_read["claimed_at"] == row["claimed_at"]
+            ):
+                raise TransportStateCorruption(
+                    f"recover_stale_claims: update matched 0 rows but item {row['id']} still claimed"
+                )
         if requeued:
             log.info("Recovered %d stale work items", requeued)
         return requeued

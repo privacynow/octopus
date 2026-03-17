@@ -12,7 +12,7 @@ from app.transports.types import InboundEnvelope
 def admit_fresh_message(data_dir: Path, envelope: InboundEnvelope) -> tuple[str, str | None]:
     """Admit a fresh message from the transport boundary. Returns (status, item_id).
 
-    status: 'duplicate' | 'admitted' | 'busy'. item_id set when admitted or busy.
+    status: 'duplicate' | 'admitted' | 'queued'. item_id set when admitted or queued.
     This is the authoritative request seam: all fresh plain-message admission
     goes through the project-owned envelope type.
     """

@@ -20,6 +20,7 @@ import asyncio
 import os
 import tempfile
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -862,7 +863,7 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
 #
 # A provider child killed by service shutdown (rc=-15) must not be turned
 # into a normal provider error and marked done. The durable work item must
-# remain claimed so the next boot can recover and replay it.
+# remain claimed until its lease expires so the next boot can recover and replay it.
 # =====================================================================
 
 class _StickyReplyMessage(FakeMessage):
@@ -903,7 +904,20 @@ async def test_interrupted_message_run_stays_claimed_for_recovery():
         assert row["state"] == "claimed"
         assert row["worker_id"] == "test-boot"
 
-        recovered = recover_stale_claims(data_dir, current_worker_id="next-boot")
+        conn.execute(
+            "UPDATE work_items SET claimed_at = ? WHERE event_id = ?",
+            (
+                (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat(),
+                _event(upd.update_id),
+            ),
+        )
+        conn.commit()
+
+        recovered = recover_stale_claims(
+            data_dir,
+            current_worker_id="next-boot",
+            max_age_seconds=300,
+        )
         assert recovered == 1
         row = conn.execute(
             "SELECT state, worker_id FROM work_items WHERE event_id = ?",

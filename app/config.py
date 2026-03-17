@@ -657,14 +657,15 @@ def validate_config(config: BotConfig) -> list[str]:
 
     # Validate default_skills against catalog
     if config.default_skills:
-        from app.skill_catalog_service import get_skill_catalog_service
         try:
-            catalog = get_skill_catalog_service()
+            from app.content_seed import builtin_skill_tracks
+
+            known = {record.slug for record in builtin_skill_tracks()}
             for skill_name in config.default_skills:
-                if not catalog.has_skill(skill_name):
-                    errors.append(f"BOT_SKILLS references unknown skill: '{skill_name}'")
+                if skill_name not in known:
+                    errors.append(f"BOT_SKILLS references unknown built-in skill: '{skill_name}'")
         except Exception:
-            pass  # Don't block startup if catalog can't load
+            pass
 
     # Validate data dir writability
     data_dir = config.data_dir

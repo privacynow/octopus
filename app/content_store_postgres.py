@@ -248,6 +248,37 @@ class PostgresContentStore(AbstractContentStore):
                 )
             conn.commit()
 
+    def delete_skill_track(
+        self,
+        slug: str,
+        *,
+        source_kind: str,
+        source_uri: str = "",
+        owner_actor: str = "",
+    ) -> bool:
+        track_id = "|".join((slug, source_kind, source_uri, owner_actor))
+        with self._connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    f"DELETE FROM {_SCHEMA}.skill_tracks WHERE track_id = %s",
+                    (track_id,),
+                )
+                deleted = cur.rowcount > 0
+                cur.execute(
+                    f"""
+                    DELETE FROM {_SCHEMA}.skill_namespaces ns
+                    WHERE ns.slug = %s
+                      AND NOT EXISTS (
+                            SELECT 1
+                            FROM {_SCHEMA}.skill_tracks tr
+                            WHERE tr.skill_id = ns.skill_id
+                      )
+                    """,
+                    (slug,),
+                )
+            conn.commit()
+        return deleted
+
     def _rows_for_slug(self, slug: str):
         with self._connect() as conn:
             with conn.cursor(row_factory=dict_row) as cur:

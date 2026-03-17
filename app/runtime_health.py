@@ -322,14 +322,13 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
         )
 
         try:
-            from app.store import check_schema, ensure_managed_dirs
+            from app.content_store import get_content_store
 
-            ensure_managed_dirs()
-            check_schema()
+            get_content_store()
         except RuntimeError as exc:
-            diagnostics.append(_diag("error", "managed_store.health_failed", str(exc)))
+            diagnostics.append(_diag("error", "content_store.health_failed", str(exc)))
         except Exception as exc:
-            diagnostics.append(_diag("error", "managed_store.health_failed", f"Managed store check failed: {exc}"))
+            diagnostics.append(_diag("error", "content_store.health_failed", f"Content store check failed: {exc}"))
 
         if not any(item.level == "error" for item in diagnostics) and config.process_role != ProcessRole.WEBHOOK.value:
             diagnostics.extend(
@@ -338,15 +337,12 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
             )
 
         if session_context is not None:
-            from app.skills import validate_active_skills
+            from app.skill_catalog_service import get_skill_catalog_service
 
             diagnostics.extend(
                 _diag("error", "skills.invalid_active_selection", message)
-                for message in validate_active_skills(
-                    session_context.session.get("active_skills", []),
-                    user_id=session_context.user_id,
-                    data_dir=config.data_dir,
-                    encryption_key=session_context.encryption_key,
+                for message in get_skill_catalog_service().validate_active(
+                    session_context.session.get("active_skills", [])
                 )
             )
 

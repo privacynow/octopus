@@ -17,6 +17,17 @@ class AbstractContentStore(ABC):
         """Upsert one skill track and set its active revision."""
 
     @abstractmethod
+    def delete_skill_track(
+        self,
+        slug: str,
+        *,
+        source_kind: str,
+        source_uri: str = "",
+        owner_actor: str = "",
+    ) -> bool:
+        """Delete one exact skill track. Returns True when a row was removed."""
+
+    @abstractmethod
     def list_skill_summaries(self) -> list[RuntimeSkillSummary]:
         """Return effective runtime skill summaries after precedence resolution."""
 

@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 
 from fastapi.testclient import TestClient
@@ -397,38 +398,59 @@ def test_registry_conversation_skill_surface_lazy_loads_default_session(monkeypa
 def test_registry_catalog_install_and_uninstall(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     _configure_runtime_surface(monkeypatch, tmp_path)
+    monkeypatch.setenv("BOT_REGISTRY_URL", "https://registry.example.test/index.json")
     client = TestClient(app)
-    tmp_store, cleanup = _configure_skill_store(tmp_path)
-    try:
-        helper_dir = tmp_store / "helper"
-        helper_dir.mkdir()
-        (helper_dir / "skill.md").write_text(
-            "---\nname: helper\ndisplay_name: Helper\ndescription: registry test\n---\n\nbody\n",
-            encoding="utf-8",
-        )
+    helper_dir = tmp_path / "registry-helper"
+    helper_dir.mkdir()
+    (helper_dir / "skill.md").write_text(
+        "---\nname: helper\ndisplay_name: Helper\ndescription: registry test\n---\n\nbody\n",
+        encoding="utf-8",
+    )
 
-        install = client.post(
-            "/v1/catalog/skills/helper/install",
-            headers={"Authorization": "Bearer ui-secret"},
-        )
-        assert install.status_code == 200
-        assert install.json()["ok"] is True
+    from app.registry import RegistrySkill
+    import app.skill_import_service as import_service
 
-        diff = client.get(
-            "/v1/catalog/skills/helper/diff",
-            headers={"Authorization": "Bearer ui-secret"},
-        )
-        assert diff.status_code == 200
-        assert "no differences" in diff.json()["diff"].lower()
+    monkeypatch.setattr(
+        import_service.registry_client,
+        "fetch_index",
+        lambda registry_url: {
+            "helper": RegistrySkill(
+                name="helper",
+                display_name="Helper",
+                description="registry test",
+                version="1.0.0",
+                publisher="tests",
+                digest="unused",
+                artifact_url="https://registry.example.test/artifacts/helper.tar.gz",
+            )
+        },
+    )
+    monkeypatch.setattr(
+        import_service.registry_client,
+        "download_artifact",
+        lambda artifact_url, dest_dir: shutil.copytree(helper_dir, dest_dir, dirs_exist_ok=True),
+    )
 
-        uninstall = client.post(
-            "/v1/catalog/skills/helper/uninstall",
-            headers={"Authorization": "Bearer ui-secret"},
-        )
-        assert uninstall.status_code == 200
-        assert uninstall.json()["ok"] is True
-    finally:
-        cleanup()
+    install = client.post(
+        "/v1/catalog/skills/helper/install",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert install.status_code == 200
+    assert install.json()["ok"] is True
+
+    diff = client.get(
+        "/v1/catalog/skills/helper/diff",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert diff.status_code == 200
+    assert "no differences" in diff.json()["diff"].lower()
+
+    uninstall = client.post(
+        "/v1/catalog/skills/helper/uninstall",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert uninstall.status_code == 200
+    assert uninstall.json()["ok"] is True
 
 
 def test_registry_bind_conversation_is_visible_in_ui(monkeypatch, tmp_path: Path):

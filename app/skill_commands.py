@@ -7,14 +7,12 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 
 from app.request_flow import (
-    build_setup_state,
     foreign_setup_message,
-    foreign_skill_setup,
     format_credential_prompt,
 )
-from app.skill_activation_service import get_skill_activation_service
 from app.skill_catalog_service import get_skill_catalog_service
 from app.skill_import_service import get_skill_import_service
+from app.skill_lifecycle_service import get_skill_lifecycle_service
 from app.provider_guidance_service import get_provider_guidance_service
 from app.skills import (
     check_credentials,
@@ -32,7 +30,7 @@ def _th():
 async def skills_show(event, update: Update) -> None:
     catalog = get_skill_catalog_service().catalog()
     session = _th()._load(event.chat_id)
-    active = get_skill_activation_service().list_active(session)
+    active = get_skill_lifecycle_service().list_active(session)
     if active:
         lines = [f"<b>Active skills ({len(active)}):</b>"]
         for name in active:
@@ -53,7 +51,7 @@ async def skills_list(event, update: Update) -> None:
         return
     th = _th()
     session = th._load(event.chat_id)
-    active = set(get_skill_activation_service().list_active(session))
+    active = set(get_skill_lifecycle_service().list_active(session))
     req_user_id = event.user.id
     user_creds = load_user_credentials(th._cfg().data_dir, req_user_id, th._encryption_key())
     lines = ["<b>Available skills:</b>"]
@@ -82,7 +80,7 @@ async def skills_list(event, update: Update) -> None:
 
 async def skills_add(event, update: Update, name: str) -> None:
     catalog = get_skill_catalog_service().catalog()
-    guidance = get_provider_guidance_service()
+    lifecycle = get_skill_lifecycle_service()
     if name not in catalog:
         await update.effective_message.reply_text(
             f"Unknown skill: {html.escape(name)}. Use /skills list to see available.",
@@ -94,48 +92,39 @@ async def skills_add(event, update: Update, name: str) -> None:
     chat_id = event.chat_id
     async with th.CHAT_LOCKS[chat_id]:
         session = th._load(chat_id)
-        active = get_skill_activation_service().list_active(session)
-
-        requirements = get_skill_requirements(name)
-        if requirements:
-            key = th._encryption_key()
-            user_creds = load_user_credentials(th._cfg().data_dir, user_id, key)
-            missing = check_credentials(name, user_creds)
-            if missing:
-                if foreign_skill_setup(session, user_id):
-                    await update.effective_message.reply_text(
-                        foreign_setup_message(session.awaiting_skill_setup),
-                    )
-                    return
-                setup = build_setup_state(user_id, name, missing)
-                session.awaiting_skill_setup = setup
-                th._save(chat_id, session)
-                first_req = setup.remaining[0]
-                await update.effective_message.reply_text(
-                    f"Skill <code>{html.escape(name)}</code> needs setup before activation.\n\n"
-                    f"{format_credential_prompt(first_req)}",
-                    parse_mode=ParseMode.HTML,
-                )
-                return
-
-        if name not in active:
-            projected_size, over = guidance.estimate_prompt_size(
-                session.role, active, name)
-            if over:
-                from app.skills import PROMPT_SIZE_WARNING_THRESHOLD
-                kb = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("Yes", callback_data=f"skill_add_confirm:{name}"),
-                    InlineKeyboardButton("No", callback_data="skill_add_cancel"),
-                ]])
-                await update.effective_message.reply_text(
-                    f"Adding <code>{html.escape(name)}</code> would bring total "
-                    f"prompt context to ~{projected_size:,} chars "
-                    f"(threshold: {PROMPT_SIZE_WARNING_THRESHOLD:,}). "
-                    f"This may reduce response quality. Continue?",
-                    parse_mode=ParseMode.HTML, reply_markup=kb)
-                return
-            get_skill_activation_service().activate(session, name)
+        decision = lifecycle.begin_add(
+            session,
+            user_id=user_id,
+            skill_name=name,
+            data_dir=th._cfg().data_dir,
+            encryption_key=th._encryption_key(),
+        )
+        if decision.mutated:
             th._save(chat_id, session)
+        if decision.status == "foreign_setup":
+            await update.effective_message.reply_text(
+                foreign_setup_message(decision.foreign_setup or session.awaiting_skill_setup),
+            )
+            return
+        if decision.status == "needs_setup" and decision.first_requirement:
+            await update.effective_message.reply_text(
+                f"Skill <code>{html.escape(name)}</code> needs setup before activation.\n\n"
+                f"{format_credential_prompt(decision.first_requirement)}",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        if decision.status == "needs_confirmation":
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("Yes", callback_data=f"skill_add_confirm:{name}"),
+                InlineKeyboardButton("No", callback_data="skill_add_cancel"),
+            ]])
+            await update.effective_message.reply_text(
+                f"Adding <code>{html.escape(name)}</code> would bring total "
+                f"prompt context to ~{decision.projected_size:,} chars "
+                f"(threshold: {decision.prompt_size_threshold:,}). "
+                f"This may reduce response quality. Continue?",
+                parse_mode=ParseMode.HTML, reply_markup=kb)
+            return
         await update.effective_message.reply_text(
             f"Skill <code>{html.escape(name)}</code> activated.",
             parse_mode=ParseMode.HTML)
@@ -143,63 +132,54 @@ async def skills_add(event, update: Update, name: str) -> None:
 
 async def skills_remove(event, update: Update, name: str) -> None:
     th = _th()
+    lifecycle = get_skill_lifecycle_service()
     chat_id = event.chat_id
     async with th.CHAT_LOCKS[chat_id]:
         session = th._load(chat_id)
-        req_user_id = event.user.id
-        had_setup = session.awaiting_skill_setup is not None
-        if foreign_skill_setup(session, req_user_id, skill_name=name):
+        decision = lifecycle.remove(session, user_id=event.user.id, skill_name=name)
+        if decision.status == "foreign_setup":
             await update.effective_message.reply_text(
-                foreign_setup_message(session.awaiting_skill_setup),
+                foreign_setup_message(decision.foreign_setup or session.awaiting_skill_setup),
             )
             return
-        setup_expired = had_setup and session.awaiting_skill_setup is None
-        active = get_skill_activation_service().list_active(session)
-        removed = False
-        removed = get_skill_activation_service().deactivate(session, name)
-        setup = session.awaiting_skill_setup
-        setup_cleared = False
-        if setup and setup.skill == name:
-            if setup.user_id == req_user_id:
-                session.awaiting_skill_setup = None
-                setup_cleared = True
-        if removed or setup_cleared or setup_expired:
+        if decision.mutated:
             th._save(chat_id, session)
-        if removed:
+        if decision.status == "removed":
             await update.effective_message.reply_text(f"Skill <code>{html.escape(name)}</code> deactivated.", parse_mode=ParseMode.HTML)
         else:
             await update.effective_message.reply_text(f"Skill <code>{html.escape(name)}</code> is not active.", parse_mode=ParseMode.HTML)
 
 
 async def skills_setup(event, update: Update, name: str) -> None:
-    catalog = get_skill_catalog_service().catalog()
-    if name not in catalog:
+    lifecycle = get_skill_lifecycle_service()
+    if not get_skill_catalog_service().has_skill(name):
         await update.effective_message.reply_text(
             f"Unknown skill: {html.escape(name)}. Use /skills list to see available.",
             parse_mode=ParseMode.HTML,
         )
         return
-    requirements = get_skill_requirements(name)
-    if not requirements:
-        await update.effective_message.reply_text(
-            f"Skill <code>{html.escape(name)}</code> has no credential requirements.",
-            parse_mode=ParseMode.HTML,
-        )
-        return
     th = _th()
-    user_id = event.user.id
     chat_id = event.chat_id
     async with th.CHAT_LOCKS[chat_id]:
         session = th._load(chat_id)
-        if foreign_skill_setup(session, user_id):
+        decision = lifecycle.begin_setup(session, user_id=event.user.id, skill_name=name)
+        if decision.status == "foreign_setup":
             await update.effective_message.reply_text(
-                foreign_setup_message(session.awaiting_skill_setup),
+                foreign_setup_message(decision.foreign_setup or session.awaiting_skill_setup),
             )
             return
-        setup = build_setup_state(user_id, name, requirements)
-        session.awaiting_skill_setup = setup
-        th._save(chat_id, session)
-    first_req = setup.remaining[0]
+        if decision.status == "no_requirements":
+            await update.effective_message.reply_text(
+                f"Skill <code>{html.escape(name)}</code> has no credential requirements.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        if decision.mutated:
+            th._save(chat_id, session)
+    first_req = decision.first_requirement
+    if not first_req:
+        await update.effective_message.reply_text("Setup could not be started.")
+        return
     await update.effective_message.reply_text(
         f"Setting up <code>{html.escape(name)}</code>.\n\n"
         f"{format_credential_prompt(first_req)}",
@@ -209,18 +189,18 @@ async def skills_setup(event, update: Update, name: str) -> None:
 
 async def skills_clear(event, update: Update) -> None:
     th = _th()
+    lifecycle = get_skill_lifecycle_service()
     chat_id = event.chat_id
     async with th.CHAT_LOCKS[chat_id]:
         session = th._load(chat_id)
-        req_user_id = event.user.id
-        if foreign_skill_setup(session, req_user_id):
+        decision = lifecycle.clear(session, user_id=event.user.id)
+        if decision.status == "foreign_setup":
             await update.effective_message.reply_text(
-                foreign_setup_message(session.awaiting_skill_setup),
+                foreign_setup_message(decision.foreign_setup or session.awaiting_skill_setup),
             )
             return
-        get_skill_activation_service().clear(session)
-        session.awaiting_skill_setup = None
-        th._save(chat_id, session)
+        if decision.mutated:
+            th._save(chat_id, session)
     await update.effective_message.reply_text("All skills removed.")
 
 

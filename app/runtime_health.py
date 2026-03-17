@@ -338,6 +338,7 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
 
         if session_context is not None:
             from app.skill_catalog_service import get_skill_catalog_service
+            from app.skills import check_credentials, load_user_credentials
 
             diagnostics.extend(
                 _diag("error", "skills.invalid_active_selection", message)
@@ -345,6 +346,23 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
                     session_context.session.get("active_skills", [])
                 )
             )
+            user_credentials = load_user_credentials(
+                config.data_dir,
+                session_context.user_id,
+                session_context.encryption_key,
+            )
+            for skill_name in session_context.session.get("active_skills", []):
+                missing = check_credentials(skill_name, user_credentials)
+                if not missing:
+                    continue
+                missing_keys = ", ".join(item.key for item in missing)
+                diagnostics.append(
+                    _diag(
+                        "warning",
+                        "skills.missing_credentials",
+                        f"Missing credentials for {skill_name}: {missing_keys}",
+                    )
+                )
 
         total_users = len(config.allowed_actor_keys) + len(config.allowed_usernames)
         if total_users > 1 and not config.admin_users_explicit:

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 import sqlite3
 from pathlib import Path
+import threading
 
 from app.content_models import (
     ProviderGuidanceRevisionRecord,
@@ -110,18 +111,23 @@ def _parse_json(raw: str, default):
 class SQLiteContentStore(AbstractContentStore):
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
-        self._conn: sqlite3.Connection | None = None
+        self._local = threading.local()
 
     def _db(self) -> sqlite3.Connection:
-        if self._conn is not None:
-            return self._conn
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            return conn
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self._db_path), isolation_level="DEFERRED")
+        conn = sqlite3.connect(
+            str(self._db_path),
+            isolation_level="DEFERRED",
+            check_same_thread=False,
+        )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         conn.executescript(_CREATE_SQL)
         conn.commit()
-        self._conn = conn
+        self._local.conn = conn
         return conn
 
     def _skill_id(self, slug: str) -> str:

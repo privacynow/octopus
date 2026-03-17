@@ -251,8 +251,9 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
     with patch("app.main.load_config", return_value=cfg), \
          patch("app.main.make_provider", return_value=provider), \
          patch("app.main.fail_fast"), \
+         patch("app.runtime_backend.init"), \
          patch("app.main.ensure_data_dirs"), \
-         patch("app.main.startup_recovery"), \
+         patch("app.main.init_content_store_for_config"), \
          patch("app.main.build_application", return_value=mock_app), \
          patch("app.main.close_db"), \
          patch("app.main.close_transport_db"), \

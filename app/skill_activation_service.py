@@ -7,10 +7,21 @@ surfaces a shared seam instead of mutating ``session.active_skills`` directly.
 from __future__ import annotations
 
 from app.session_state import SessionState
+from app.skill_catalog_service import get_skill_catalog_service
 
 
 class SkillActivationService:
     """Session-state backed runtime skill activation service."""
+
+    def normalize(self, session: SessionState) -> list[str]:
+        catalog = get_skill_catalog_service()
+        active = list(session.active_skills)
+        kept = catalog.filter_resolvable(active)
+        if kept == active:
+            return []
+        pruned = [name for name in active if name not in kept]
+        session.active_skills = kept
+        return pruned
 
     def list_active(self, session: SessionState) -> list[str]:
         return list(session.active_skills)

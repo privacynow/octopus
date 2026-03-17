@@ -115,6 +115,36 @@ def _compute_execution_config_digest(config: "BotConfig", effective_model: str =
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _resolved_skill_digests(skill_names: list[str]) -> dict[str, str]:
+    from app.skill_catalog_service import get_skill_catalog_service
+
+    catalog = get_skill_catalog_service()
+    digests: dict[str, str] = {}
+    for name in skill_names:
+        if (record := catalog.resolve_track(name)) is not None:
+            digests[name] = record.revision.digest
+    return digests
+
+
+def _resolved_provider_config_digest(skill_names: list[str], provider_name: str = "") -> str:
+    from app.skill_catalog_service import get_skill_catalog_service
+
+    catalog = get_skill_catalog_service()
+    providers = (provider_name,) if provider_name else ("claude", "codex")
+    parts: list[str] = []
+    for name in sorted(skill_names):
+        record = catalog.resolve_track(name)
+        if record is None:
+            continue
+        for provider in providers:
+            config = record.revision.provider_config.get(provider)
+            if config:
+                parts.append(f"{name}/{provider}:{json.dumps(config, sort_keys=True, separators=(',', ':'))}")
+    if not parts:
+        return ""
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+
 def resolve_execution_context(
     session: "SessionState",
     config: "BotConfig",
@@ -131,7 +161,6 @@ def resolve_execution_context(
     approval validation, and provider context automatically.
     """
     from app.session_state import ProjectBinding
-    from app.skills import get_provider_config_digest, get_skill_digests
 
     # Resolve project binding first (needed for model and policy inheritance).
     # Disabled for public users.
@@ -180,9 +209,10 @@ def resolve_execution_context(
     return ResolvedExecutionContext(
         role=session.role,
         active_skills=active_skills,
-        skill_digests=get_skill_digests(active_skills),
-        provider_config_digest=get_provider_config_digest(
-            active_skills, provider_name=provider_name,
+        skill_digests=_resolved_skill_digests(active_skills),
+        provider_config_digest=_resolved_provider_config_digest(
+            active_skills,
+            provider_name=provider_name,
         ),
         execution_config_digest=_compute_execution_config_digest(config, effective_model),
         base_extra_dirs=base_extra_dirs,

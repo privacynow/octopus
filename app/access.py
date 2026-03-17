@@ -56,7 +56,7 @@ def is_allowed_user_with_override(
 
 
 def is_admin_user(config: BotConfig, user) -> bool:
-    """Return True when the user is allowed to manage store skills."""
+    """Return True when the user is allowed to manage imported runtime skills."""
     inbound = to_inbound_user(user)
     if inbound is None:
         return False

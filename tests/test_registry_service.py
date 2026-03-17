@@ -1,7 +1,6 @@
 """Tests for the FastAPI registry control-plane service."""
 
 from datetime import datetime, timezone
-import json
 from pathlib import Path
 import shutil
 import sqlite3
@@ -39,62 +38,6 @@ def _configure_runtime_surface(monkeypatch, tmp_path: Path) -> Path:
     ensure_data_dirs(data_dir)
     runtime_surface.reset_for_test()
     return data_dir
-
-
-def _configure_skill_store(tmp_path: Path):
-    import app.store as store_mod
-    import app.skills as skills_mod
-
-    tmp_store = tmp_path / "store"
-    tmp_custom = tmp_path / "custom"
-    tmp_managed = tmp_path / "managed"
-    tmp_objects = tmp_managed / "objects"
-    tmp_refs = tmp_managed / "refs"
-    tmp_tmp = tmp_managed / "tmp"
-    tmp_version = tmp_managed / "version.json"
-    tmp_lock = tmp_managed / ".lock"
-
-    tmp_store.mkdir()
-    tmp_custom.mkdir()
-    tmp_managed.mkdir()
-    tmp_objects.mkdir()
-    tmp_refs.mkdir()
-    tmp_tmp.mkdir()
-    tmp_version.write_text(json.dumps({"schema": 1}) + "\n")
-
-    original = {
-        "STORE_DIR": store_mod.STORE_DIR,
-        "CUSTOM_DIR": store_mod.CUSTOM_DIR,
-        "MANAGED_DIR": store_mod.MANAGED_DIR,
-        "OBJECTS_DIR": store_mod.OBJECTS_DIR,
-        "REFS_DIR": store_mod.REFS_DIR,
-        "TMP_DIR": store_mod.TMP_DIR,
-        "VERSION_FILE": store_mod.VERSION_FILE,
-        "LOCK_FILE": store_mod.LOCK_FILE,
-        "skills_CUSTOM_DIR": skills_mod.CUSTOM_DIR,
-    }
-    store_mod.STORE_DIR = tmp_store
-    store_mod.CUSTOM_DIR = tmp_custom
-    store_mod.MANAGED_DIR = tmp_managed
-    store_mod.OBJECTS_DIR = tmp_objects
-    store_mod.REFS_DIR = tmp_refs
-    store_mod.TMP_DIR = tmp_tmp
-    store_mod.VERSION_FILE = tmp_version
-    store_mod.LOCK_FILE = tmp_lock
-    skills_mod.CUSTOM_DIR = tmp_custom
-
-    def cleanup():
-        store_mod.STORE_DIR = original["STORE_DIR"]
-        store_mod.CUSTOM_DIR = original["CUSTOM_DIR"]
-        store_mod.MANAGED_DIR = original["MANAGED_DIR"]
-        store_mod.OBJECTS_DIR = original["OBJECTS_DIR"]
-        store_mod.REFS_DIR = original["REFS_DIR"]
-        store_mod.TMP_DIR = original["TMP_DIR"]
-        store_mod.VERSION_FILE = original["VERSION_FILE"]
-        store_mod.LOCK_FILE = original["LOCK_FILE"]
-        skills_mod.CUSTOM_DIR = original["skills_CUSTOM_DIR"]
-
-    return tmp_store, cleanup
 
 
 def _enroll_and_register(client: TestClient, name: str, slug: str) -> tuple[str, str]:
@@ -407,7 +350,7 @@ def test_registry_catalog_install_and_uninstall(monkeypatch, tmp_path: Path):
         encoding="utf-8",
     )
 
-    from app.registry import RegistrySkill
+    from app.registry import RegistrySkill, skill_artifact_digest
     import app.skill_import_service as import_service
 
     monkeypatch.setattr(
@@ -420,7 +363,7 @@ def test_registry_catalog_install_and_uninstall(monkeypatch, tmp_path: Path):
                 description="registry test",
                 version="1.0.0",
                 publisher="tests",
-                digest="unused",
+                digest=skill_artifact_digest(helper_dir),
                 artifact_url="https://registry.example.test/artifacts/helper.tar.gz",
             )
         },

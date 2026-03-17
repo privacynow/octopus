@@ -69,7 +69,7 @@ async def skills_list(event, update: Update) -> None:
         elif meta.is_custom:
             custom_tag = " (custom)"
         elif imports.is_installed(name):
-            custom_tag = " (managed)"
+            custom_tag = " (imported)"
         else:
             custom_tag = ""
         desc = f" \u2014 {html.escape(meta.description)}" if meta.description else ""
@@ -312,7 +312,7 @@ async def skills_install(event, update: Update, name: str) -> None:
 async def skills_uninstall(event, update: Update, name: str) -> None:
     th = _th()
     if not th.is_admin(event.user):
-        await update.effective_message.reply_text("Only admins can uninstall store skills.")
+        await update.effective_message.reply_text("Only admins can uninstall imported skills.")
         return
     cfg = th._cfg()
     result = get_skill_import_service().uninstall(name, cfg.default_skills)
@@ -322,9 +322,9 @@ async def skills_uninstall(event, update: Update, name: str) -> None:
 async def skills_updates(event, update: Update) -> None:
     updates = get_skill_import_service().list_updates()
     if not updates:
-        await update.effective_message.reply_text("No store-installed skills found.")
+        await update.effective_message.reply_text("No imported skills found.")
         return
-    lines = ["<b>Store skill status:</b>"]
+    lines = ["<b>Imported skill status:</b>"]
     for item in updates:
         name = item.name
         status = item.status
@@ -349,12 +349,12 @@ async def skills_update(event, update: Update, target: str) -> None:
     guidance = get_provider_guidance_service()
     imports = get_skill_import_service()
     if not th.is_admin(event.user):
-        await update.effective_message.reply_text("Only admins can update store skills.")
+        await update.effective_message.reply_text("Only admins can update imported skills.")
         return
     if target == "all":
         results = imports.update_all()
         if not results:
-            await update.effective_message.reply_text("No store skills need updating.")
+            await update.effective_message.reply_text("No imported skills need updating.")
             return
         lines = ["<b>Update results:</b>"]
         cfg = th._cfg()

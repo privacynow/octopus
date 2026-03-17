@@ -1078,16 +1078,24 @@ After this milestone:
 Credential boundary definition:
 
 - the credential store owns persistence only
-- the credential service owns encryption/decryption, validation dispatch, and environment materialization
+- the credential store owns encryption/decryption as part of persistence
+- the credential service owns plaintext credential operations, validation dispatch, and environment materialization
 - credential use-cases own setup/clear/satisfaction orchestration across the credential service, runtime skill requirements, and session/setup state
 - handlers/routes do not own credential workflow decisions
 
+Encryption tightening:
+
+- Fernet remains the battle-tested authenticated-encryption library
+- key derivation at credential store construction must use HKDF from `cryptography`, not raw `hashlib.sha256`
+- callers and use-cases must never derive keys themselves
+- the credential store factory/construction site is the only allowed place where derivation happens
+
 Specific ownership changes required in this milestone:
 
-- `check_credential_satisfaction` moves out of [app/request_flow.py](/Users/tinker/output/bots/telegram-agent-bot/app/request_flow.py) into the credential service
-- `AwaitingSkillSetup` transition ownership moves to the credential service
+- `check_credential_satisfaction` moves out of [app/request_flow.py](/Users/tinker/output/bots/telegram-agent-bot/app/request_flow.py) into credential use-cases
+- `AwaitingSkillSetup` transition ownership moves into credential use-cases operating over the credential service
 - `validate_credential` moves out of [app/skills.py](/Users/tinker/output/bots/telegram-agent-bot/app/skills.py) into a dedicated credential-validation module
-- `derive_fernet_key` / encryption-key construction becomes a factory concern, not a caller concern
+- key derivation for the credential store becomes a factory concern, not a caller concern
 - [app/registry_service/runtime_surface.py](/Users/tinker/output/bots/telegram-agent-bot/app/registry_service/runtime_surface.py) must consume the shared credential store/service and must not derive keys independently
 
 #### Work
@@ -1099,6 +1107,7 @@ Specific ownership changes required in this milestone:
 - move setup/clear side effects behind credential-aware use-cases
 - define and use a `CredentialValidator` protocol at the credential boundary
 - move the default HTTP credential validator into a dedicated credential-validation module
+- construct the credential store once with HKDF-derived key material
 - state explicitly whether this milestone lands:
   - full backend parity, or
   - a filesystem-backed implementation with the shared-runtime/Postgres seam explicitly named and deferred
@@ -1123,6 +1132,8 @@ Named contract-test scope for the credential seam:
 - no silent omission of parity language for the credential seam
 - no independent encryption-key derivation outside credential store construction/factory wiring
 - no `data_dir` or `encryption_key` parameters in credential use-case signatures after this milestone
+- no raw SHA-256 key derivation for credential encryption; HKDF is the required KDF
+- the credential service must not expand into unrelated runtime-skill orchestration
 
 #### Watchouts
 
@@ -1130,6 +1141,7 @@ Named contract-test scope for the credential seam:
 - this is a cross-cutting seam; partial migration is unacceptable
 - `AwaitingSkillSetup` is currently written by multiple modules; that split ownership must end in this milestone
 - the existing injectable validator seam in tests must be preserved via the credential validator protocol, not lost by hardwiring validation into the service
+- `AwaitingSkillSetup` is session state: credential use-cases own the transition decision, adapters persist the returned session mutation
 
 #### Exit criteria
 
@@ -1139,7 +1151,7 @@ Named contract-test scope for the credential seam:
 - parity status is explicit, scoped, and tested or deliberately deferred as named debt
 - the credential service vs credential use-case boundary is implemented as defined above, not left to adapter interpretation
 - `request_flow.py` no longer owns execution-path credential satisfaction logic
-- `AwaitingSkillSetup` writes occur through one owner: the credential service
+- `AwaitingSkillSetup` transition decisions occur through one owner: credential use-cases operating over the credential service
 - registry runtime surface no longer derives credential keys independently
 
 ### Milestone 4. Make Resolved Skills Authoritative Everywhere
@@ -1202,12 +1214,17 @@ Do not refactor Telegram fully and registry later. That creates a temporary para
 
 The required sequencing is per workflow, across both surfaces in the same slice.
 
-Example workflow slices:
+Current workflow slices covered by this milestone:
 
+- skill catalog reads/detail/search
 - skill activation
+- skill deactivation/clear
 - skill setup
 - skill import/update/uninstall/diff
+- conversation settings mutations
 - conversation control/cancel
+- pending approval/retry actions
+- recovery replay/discard
 - provider-guidance preview
 
 For each workflow:

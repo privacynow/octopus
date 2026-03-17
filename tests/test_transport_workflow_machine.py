@@ -168,6 +168,15 @@ def test_claim_worker_blocked_when_other_claimed_for_chat():
     assert result.disposition == TransportDisposition.other_claimed_for_chat
 
 
+def test_claim_worker_succeeds_when_no_other_claimed():
+    """Multiple queued items are legal; claiming depends only on claimed-item presence."""
+    m = model("queued", has_other_claimed=False)
+    result = run_transport_event(m, "claim_worker")
+    assert result.allowed is True
+    assert result.new_state == "claimed"
+    assert result.disposition == TransportDisposition.ok
+
+
 def test_reclaim_for_replay_blocked_when_other_claimed_for_chat():
     """Replay button clicked but another item for same chat is already claimed."""
     m = model("pending_recovery", has_other_claimed=True)

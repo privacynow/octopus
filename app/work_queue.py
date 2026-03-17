@@ -77,8 +77,12 @@ def record_and_admit_message(
     kind: str,
     payload: str = "{}",
 ) -> tuple[str, str | None]:
-    """Record update and admit or reject for provider work. Returns (status, item_id).
-    status: 'duplicate' | 'admitted' | 'busy'. item_id set when admitted or busy."""
+    """Record update and durably admit fresh message work. Returns (status, item_id).
+
+    status: 'duplicate' | 'admitted' | 'queued'. item_id set when admitted or queued.
+    'admitted' means no older fresh runnable work existed for the conversation.
+    'queued' means the item was accepted behind existing fresh work.
+    """
     return _store().record_and_admit_message(
         data_dir, event_id, conversation_key, actor_key, kind, payload,
     )

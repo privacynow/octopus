@@ -255,7 +255,9 @@ flowchart TB
 
 - duplicate `event_id` delivery is journaled idempotently, not reprocessed
 - fresh provider work is admitted durably and atomically
-- at most one fresh runnable provider-starting work item may exist per
+- multiple fresh queued provider-starting work items may coexist per
+  conversation key and drain in FIFO order
+- at most one fresh claimed provider-starting work item may exist per
   conversation key at a time
 - queued fresh work may be cancelled before claim through the queue; claimed
   work is cancelled cooperatively through the worker-owned live registry
@@ -559,6 +561,7 @@ Transport recovery is specialized enough to live mostly in the appendix, but
 the narrative contract is simple:
 
 - stale claimed items are requeued as `dispatch_mode='recovery'`
+- stale claimed items are detected by lease age, not by foreign worker ID
 - recovery work must surface replay/discard decisions to the user before
   pretending execution succeeded
 - replay/discard/supersede are explicit workflow outcomes, not implicit
@@ -903,9 +906,10 @@ Runtime invariants:
 - `dispatch_mode` must be `fresh` or `recovery`
 - `claimed` rows must have `worker_id` and `claimed_at`
 - at most one `claimed` row may exist per conversation key
-- at most one fresh runnable (`queued` or `claimed`) row may exist per
-  conversation key
+- multiple fresh `queued` rows may exist per conversation key
+- fresh queued rows must drain in FIFO order
 - stale claims must requeue as `dispatch_mode='recovery'`
+- stale claims must be recovered by lease age, not by foreign worker identity
 - queued fresh cancel must terminate the item visibly as cancelled; it must not
   silently disappear
 

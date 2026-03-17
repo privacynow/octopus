@@ -93,6 +93,7 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         agent_registry_enroll_token="",
         agent_poll_interval_seconds=5.0,
         runtime_mode="local",
+        claim_lease_ttl_seconds=300,
         database_url="",
         db_pool_min_size=1,
         db_pool_max_size=10,

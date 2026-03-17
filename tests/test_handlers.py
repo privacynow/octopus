@@ -850,7 +850,7 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
 
         monkeypatch.setattr(
             "app.agents.delivery.work_queue.record_and_admit_message",
-            lambda *args, **kwargs: ("busy", "item-busy"),
+            lambda *args, **kwargs: ("queued", "item-queued"),
         )
 
         outcome = await handle_registry_delivery(
@@ -869,7 +869,7 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
             },
         )
 
-        assert outcome == "retry_later"
+        assert outcome == "accepted"
         assert len(prov.run_calls) == 0
         session_after = load_session_disk(data_dir, _conv(chat_id), prov)
         pending = session_after.get("pending_delegation")

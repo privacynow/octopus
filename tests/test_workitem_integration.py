@@ -11,6 +11,7 @@ locks, no mock work_queue.
 """
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -66,7 +67,7 @@ async def test_fresh_message_does_not_consume_stale_recovered_item():
         work_queue.record_and_enqueue(data_dir, _event(100), _conv(chat_id), _actor(42), "message")
 
         # A fresh message arrives through the real handler path; chat already has queued item 100
-        # so record_and_admit_message returns busy and creates terminal item for fresh
+        # so record_and_admit_message accepts it behind the existing fresh backlog.
         chat = FakeChat(chat_id=chat_id)
         user = FakeUser(uid=42)
         msg = FakeMessage(chat=chat, text="fresh message")
@@ -79,8 +80,8 @@ async def test_fresh_message_does_not_consume_stale_recovered_item():
             (_event(upd.update_id),),
         ).fetchone()
         assert fresh_item is not None
-        assert fresh_item["state"] == "failed" and fresh_item["error"] == "chat_busy", (
-            f"Fresh message should be rejected as busy (terminal chat_busy), got: {dict(fresh_item)}"
+        assert fresh_item["state"] == "queued" and fresh_item["error"] is None, (
+            f"Fresh message should be durably queued behind existing work, got: {dict(fresh_item)}"
         )
 
         # Stale item 100 must still be queued — available for worker_loop (not consumed by fresh)
@@ -444,14 +445,14 @@ async def test_live_message_blocked_by_worker_claimed_item():
         ).fetchone()
         assert row_100["state"] == "claimed"
 
-        # The message is rejected as busy (terminal item, not runnable)
+        # The message is queued behind the worker-owned claimed item
         msg_item = conn.execute(
             "SELECT state, error FROM work_items WHERE event_id = ?",
             (_event(upd.update_id),),
         ).fetchone()
         assert msg_item is not None, "Message work item should exist"
-        assert msg_item["state"] == "failed" and msg_item["error"] == "chat_busy", (
-            f"Message item should be terminal chat_busy (blocked by worker), "
+        assert msg_item["state"] == "queued" and msg_item["error"] is None, (
+            f"Message item should stay queued while the worker holds the claim, "
             f"got: state={msg_item['state']} error={msg_item['error']}"
         )
 
@@ -460,14 +461,14 @@ async def test_live_message_blocked_by_worker_claimed_item():
 
 
 # ---------------------------------------------------------------------------
-# 9. After worker finishes, the blocked item becomes claimable
+# 9. After worker finishes, the queued item becomes claimable
 #
 # End-to-end: worker claimed → live message blocked → worker completes
 # → message can now be claimed and processed normally.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_blocked_item_processable_after_worker_completes():
+async def test_queued_item_processable_after_worker_completes():
     import app.telegram_handlers as th
 
     with fresh_env() as (data_dir, cfg, prov):
@@ -478,7 +479,7 @@ async def test_blocked_item_processable_after_worker_completes():
         worker_item = work_queue.claim_next(data_dir, _conv(chat_id), "worker-1")
         assert worker_item is not None
 
-        # Live message arrives — blocked
+        # Live message arrives — queued behind the claimed worker item
         prov.run_results = [RunResult(text="response after unblock")]
         chat = FakeChat(chat_id=chat_id)
         user = FakeUser(uid=42)
@@ -491,36 +492,24 @@ async def test_blocked_item_processable_after_worker_completes():
             "SELECT state, error FROM work_items WHERE event_id = ?",
             (_event(upd1.update_id),),
         ).fetchone()
-        assert item1["state"] == "failed" and item1["error"] == "chat_busy", (
-            "Should be terminal chat_busy while worker holds claim"
+        assert item1["state"] == "queued" and item1["error"] is None, (
+            "Should remain queued while worker holds claim"
         )
 
         # Worker finishes
         work_queue.complete_work_item(data_dir, worker_item["id"])
 
-        # Now a new message can be admitted and processed
-        prov.run_results = [RunResult(text="now it works")]
-        msg2 = FakeMessage(chat=chat, text="blocked message")
-        upd2 = FakeUpdate(message=msg2, user=user, chat=chat)
-        await th.handle_message(upd2, FakeContext())
+        # The queued message can now be claimed and processed.
         await drain_one_worker_item(data_dir)
 
-        # The new message's item should be done
-        item2 = conn.execute(
-            "SELECT state FROM work_items WHERE event_id = ?",
-            (_event(upd2.update_id),),
-        ).fetchone()
-        assert item2["state"] == "done", (
-            f"After worker finished, new message should complete normally, "
-            f"got: {item2['state']}"
-        )
-
-        # Original blocked message's item stays terminal (rejected as busy)
         item1_after = conn.execute(
             "SELECT state FROM work_items WHERE event_id = ?",
             (_event(upd1.update_id),),
         ).fetchone()
-        assert item1_after["state"] == "failed"
+        assert item1_after["state"] == "done", (
+            f"After worker finished, queued message should complete normally, "
+            f"got: {item1_after['state']}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1550,9 +1539,13 @@ async def test_handler_crash_leaves_item_claimed_for_recovery():
         stolen = work_queue.claim_next_any(data_dir, "worker-1")
         assert stolen is None
 
-        # Stale claim detection: a new boot sees a claimed item from the
-        # old boot and requeues it (different worker_id = stale).
-        requeued = work_queue.recover_stale_claims(data_dir, "new-boot-id")
+        # Stale claim detection is age-based; backdate the claim and
+        # recover it under a new boot.
+        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        old_time = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+        conn.execute("UPDATE work_items SET claimed_at = ? WHERE id = ?", (old_time, item_id))
+        conn.commit()
+        requeued = work_queue.recover_stale_claims(data_dir, "new-boot-id", max_age_seconds=300)
         assert requeued == 1
 
         # After recovery the item is queued again — worker can claim it
@@ -1641,7 +1634,7 @@ async def test_complete_work_item_does_not_overwrite_terminal_state():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_preclaim_falls_back_to_queued_when_chat_busy():
+async def test_preclaim_falls_back_to_queued_when_item_already_claimed():
     """If another item is already claimed for the chat, new items are
     created as 'queued' to preserve per-chat serialization."""
     with fresh_env() as (data_dir, cfg, prov):
@@ -1670,16 +1663,15 @@ async def test_preclaim_falls_back_to_queued_when_chat_busy():
 
 
 # ---------------------------------------------------------------------------
-# Durable anti-fan-out: second message while chat has runnable item is busy
+# Durable per-conversation queue: second message while chat has runnable item queues
 #
-# Admitting A then B (before worker runs A) must reject B as busy and
-# create exactly one terminal item with error=chat_busy. No second
-# runnable item — closes the cost-explosion class of bug.
+# Admitting A then B (before worker runs A) must queue B behind A while
+# preserving the single-claimed invariant.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_second_message_while_chat_has_runnable_is_busy_no_fan_out():
-    """Admit A, then B before worker runs A. B gets busy; exactly one runnable item for chat."""
+async def test_second_message_while_chat_has_runnable_queues_fifo():
+    """Admit A, then B before worker runs A. B is accepted into the durable queue behind A."""
     import app.telegram_handlers as th
     from tests.support.handler_support import last_reply
     from app import user_messages as _msg
@@ -1698,7 +1690,7 @@ async def test_second_message_while_chat_has_runnable_is_busy_no_fan_out():
         await th.handle_message(upd_b, FakeContext())
 
         reply_b = last_reply(msg_b)
-        assert _msg.queue_busy() in reply_b, f"B must get busy reply. Got: {reply_b}"
+        assert _msg.queue_accepted() in reply_b, f"B must get queued reply. Got: {reply_b}"
 
         conn = runtime_backend.transport_store()._transport_db(data_dir)
         rows = conn.execute(
@@ -1706,6 +1698,4 @@ async def test_second_message_while_chat_has_runnable_is_busy_no_fan_out():
             (_conv(chat_id),),
         ).fetchall()
         runnable = [r for r in rows if r["state"] in ("queued", "claimed")]
-        busy_terminal = [r for r in rows if (r["error"] if "error" in r.keys() else None) == "chat_busy"]
-        assert len(runnable) == 1, f"Exactly one runnable item for chat. Got: {rows}"
-        assert len(busy_terminal) == 1, f"Exactly one terminal chat_busy item. Got: {rows}"
+        assert len(runnable) == 2, f"Expected both messages to remain runnable in FIFO order. Got: {rows}"

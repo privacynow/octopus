@@ -6,6 +6,8 @@ import contextvars
 import dataclasses
 import html
 import logging
+import os
+import platform
 import re
 import time
 import uuid
@@ -250,12 +252,20 @@ async def _chat_lock(chat_id: int | str, *, message=None, query=None, update_id:
     consumed), ``False`` otherwise.  Callback handlers should skip their
     own ``query.answer()`` when the yielded value is ``True``.
     """
+    data_dir = _cfg().data_dir
+    conversation_key = _conversation_key(chat_id)
+    if _cfg().runtime_mode == "shared" and worker_item is not None:
+        work_queue.supersede_pending_recovery(data_dir, conversation_key)
+        try:
+            yield False
+        except work_queue.LeaveClaimed:
+            raise
+        return
+
     lock = CHAT_LOCKS[chat_id]
     sent_feedback = False
     # In-memory lock is the primary contention signal.  The durable check
     # only matters on restart recovery (lock not held but stale work items exist).
-    data_dir = _cfg().data_dir
-    conversation_key = _conversation_key(chat_id)
     is_busy = lock.locked()
     if is_busy:
         sent_feedback = True
@@ -352,6 +362,10 @@ _rate_limiter: RateLimiter | None = None
 # Tracks work item ID per update_id so each handler can complete its own item.
 # Keyed by update_id (not chat_id) to prevent same-chat overlap corruption.
 _pending_work_items: dict[int, str] = {}  # update_id -> work_item_id
+
+
+def _make_boot_id() -> str:
+    return f"{platform.node()}:{os.getpid()}:{uuid.uuid4().hex[:12]}"
 
 
 def _dedup_update(update: Update, kind: str = "unknown", payload: str = "{}") -> bool:
@@ -3049,13 +3063,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     status, item_id = admit_fresh_message(data_dir, envelope)
     if status == "duplicate":
         return
-    if status == "busy":
+    if status == "queued":
         await message.reply_text(
-            f"<i>{_msg.queue_busy()}</i>",
+            f"<i>{_msg.queue_accepted()}</i>",
             parse_mode=ParseMode.HTML,
         )
         return
-    if status != "admitted" or item_id is None:
+    if status not in {"admitted", "queued"} or item_id is None:
         return
 
     # Enqueued for worker; return so /cancel can be processed without blocking.
@@ -4574,7 +4588,7 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     global _config, _provider, _boot_id, _rate_limiter, _bot_instance
     _config = config
     _provider = provider
-    _boot_id = uuid.uuid4().hex
+    _boot_id = _make_boot_id()
     # Apply conservative rate-limit defaults for public mode
     per_minute = config.rate_limit_per_minute
     per_hour = config.rate_limit_per_hour

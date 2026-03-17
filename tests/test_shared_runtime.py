@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
+from unittest.mock import patch
 
 from app import work_queue
 from app.providers.base import RunResult
@@ -187,3 +189,151 @@ async def test_shared_cancel_records_action_and_sets_durable_flag():
         items = work_queue.get_work_items_for_chat(data_dir, _conv(chat_id))
         assert len(items) == 1
         assert any("cancel" in reply.get("text", "").lower() for reply in message.replies)
+
+
+async def test_shared_chat_lock_skips_asyncio_lock_for_worker_path():
+    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, _cfg, _prov):
+        import app.telegram_handlers as th
+
+        lock = th.CHAT_LOCKS[12345]
+        await lock.acquire()
+        try:
+            async def run_lock():
+                async with th._chat_lock(12345, worker_item={"id": "claimed-item"}):
+                    return "ok"
+
+            result = await asyncio.wait_for(run_lock(), timeout=0.1)
+            assert result == "ok"
+            assert lock.locked() is True
+        finally:
+            lock.release()
+
+
+async def test_shared_chat_lock_still_locks_for_inline_commands():
+    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, _cfg, _prov):
+        import app.telegram_handlers as th
+
+        lock = th.CHAT_LOCKS[12345]
+        await lock.acquire()
+        entered = asyncio.Event()
+
+        async def waiter():
+            async with th._chat_lock(12345):
+                entered.set()
+
+        task = asyncio.create_task(waiter())
+        try:
+            await asyncio.sleep(0.05)
+            assert entered.is_set() is False
+        finally:
+            lock.release()
+        await asyncio.wait_for(task, timeout=0.2)
+        assert entered.is_set() is True
+
+
+async def test_worker_id_is_traceable():
+    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, cfg, prov):
+        import app.telegram_handlers as th
+
+        th.build_application(cfg, prov)
+        parts = th._boot_id.split(":")
+        assert len(parts) == 3
+        assert parts[1].isdigit()
+        assert len(parts[2]) == 12
+
+
+async def test_periodic_stale_sweep_recovers_expired_claim():
+    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, _prov):
+        from app.worker import worker_loop
+
+        status, item_id = work_queue.record_and_admit_message(
+            data_dir,
+            "tg:778",
+            _conv(12345),
+            "tg:42",
+            "message",
+            '{"text":"stale"}',
+        )
+        assert status == "admitted"
+        claimed = work_queue.claim_next_any(data_dir, "old-worker")
+        assert claimed is not None and claimed["id"] == item_id
+
+        conn = work_queue._store()._transport_db(data_dir)  # type: ignore[attr-defined]
+        backdated = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - 600))
+        conn.execute("UPDATE work_items SET claimed_at = ? WHERE id = ?", (backdated, item_id))
+        conn.commit()
+
+        stop = asyncio.Event()
+
+        async def stop_soon():
+            await asyncio.sleep(0.05)
+            stop.set()
+
+        async def dispatch(_kind, _event, _item):
+            raise AssertionError("dispatch should not run in sweep-only test")
+
+        with patch("app.worker.work_queue.claim_next_any", return_value=None):
+            await asyncio.gather(
+                worker_loop(
+                    data_dir,
+                    "sweeper",
+                    dispatch,
+                    poll_interval=0.01,
+                    lease_ttl=300,
+                    sweep_interval=0.0,
+                    stop_event=stop,
+                ),
+                stop_soon(),
+            )
+
+        items = work_queue.get_work_items_for_chat(data_dir, _conv(12345))
+        recovered = [row for row in items if row["id"] == item_id]
+        assert recovered and recovered[0]["state"] == "queued"
+        assert recovered[0]["dispatch_mode"] == "recovery"
+
+
+async def test_periodic_stale_sweep_ignores_live_claim():
+    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, _prov):
+        from app.worker import worker_loop
+
+        status, item_id = work_queue.record_and_admit_message(
+            data_dir,
+            "tg:779",
+            _conv(12345),
+            "tg:42",
+            "message",
+            '{"text":"live"}',
+        )
+        assert status == "admitted"
+        claimed = work_queue.claim_next_any(data_dir, "worker-a")
+        assert claimed is not None and claimed["id"] == item_id
+
+        stop = asyncio.Event()
+
+        async def stop_soon():
+            await asyncio.sleep(0.05)
+            stop.set()
+
+        async def dispatch(_kind, _event, _item):
+            raise AssertionError("dispatch should not run in sweep-only test")
+
+        with patch("app.worker.work_queue.claim_next_any", return_value=None):
+            await asyncio.gather(
+                worker_loop(
+                    data_dir,
+                    "worker-b",
+                    dispatch,
+                    poll_interval=0.01,
+                    lease_ttl=300,
+                    sweep_interval=0.0,
+                    stop_event=stop,
+                ),
+                stop_soon(),
+            )
+
+        items = work_queue.get_work_items_for_chat(data_dir, _conv(12345))
+        live = [row for row in items if row["id"] == item_id]
+        assert live and live[0]["state"] == "claimed"
+        conn = work_queue._store()._transport_db(data_dir)  # type: ignore[attr-defined]
+        row = conn.execute("SELECT worker_id FROM work_items WHERE id = ?", (item_id,)).fetchone()
+        assert row is not None and row["worker_id"] == "worker-a"

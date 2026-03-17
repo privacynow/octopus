@@ -5346,7 +5346,7 @@ Files: `tests/contracts/test_transport_store_contract.py`,
 
 ###### M21A — Surface-neutral persist-first ingress for worker-owned interactions
 
-**Status: Not started.**
+**Status: Complete.**
 
 **Problem.** `BOT_RUNTIME_MODE=shared` is rejected at startup
 (`app/config.py:559`). In Local Runtime, webhook mode enters the same
@@ -5584,35 +5584,35 @@ duplicate suppression and operator diagnosis — not for replay.
   on `config.runtime_mode == "shared"`.
 
 **Acceptance criteria.**
-- [ ] `BOT_RUNTIME_MODE=shared` with `BOT_MODE=webhook` starts
+- [x] `BOT_RUNTIME_MODE=shared` with `BOT_MODE=webhook` starts
       successfully (with or without `BOT_DATABASE_URL`)
-- [ ] `BOT_RUNTIME_MODE=shared` with `BOT_MODE=poll` is rejected
-- [ ] All conversation-scoped state mutations and execution-affecting
+- [x] `BOT_RUNTIME_MODE=shared` with `BOT_MODE=poll` is rejected
+- [x] All conversation-scoped state mutations and execution-affecting
       interactions are persisted as `InboundAction` and worker-executed
       in shared mode
-- [ ] Read-only and admin commands respond inline in shared mode
-- [ ] `worker_dispatch` handles `InboundAction` items using extracted
+- [x] Read-only and admin commands respond inline in shared mode
+- [x] `worker_dispatch` handles `InboundAction` items using extracted
       core helpers, not raw Telegram command/callback parsing
-- [ ] `/cancel` persists as `InboundAction(action="cancel_conversation")`
+- [x] `/cancel` persists as `InboundAction(action="cancel_conversation")`
       and the worker clears active work, pending approval/retry, or
       queued items as appropriate
-- [ ] Durable cancel metadata (not just boolean) on work_items with
+- [x] Durable cancel metadata (not just boolean) on work_items with
       SQLite + Postgres impls + contract tests
-- [ ] Cancel watcher task polls `is_cancel_requested` at 0.5s and
+- [x] Cancel watcher task polls `is_cancel_requested` at 0.5s and
       shuts down cleanly when provider exits
-- [ ] Stale-claim recovery skips cancelled items (no replay UI for
+- [x] Stale-claim recovery skips cancelled items (no replay UI for
       explicitly cancelled work)
-- [ ] Shared-mode worker poll interval is 0.5s
-- [ ] Local Runtime is completely unchanged
-- [ ] All Telegram updates journaled for auditability
-- [ ] Credential-setup replies remain inline (documented exception)
-- [ ] Full test suite passes
-- [ ] Compose E2E passes
-- [ ] `git diff --check` clean
+- [x] Shared-mode worker poll interval is 0.5s
+- [x] Local Runtime is completely unchanged
+- [x] All Telegram updates journaled for auditability
+- [x] Credential-setup replies remain inline (documented exception)
+- [x] Full test suite passes
+- [x] Compose E2E passes
+- [x] `git diff --check` clean
 
 ###### M21B — Durable per-conversation queue, lease-based recovery, multi-worker isolation
 
-**Status: Not started.**
+**Status: Complete.**
 
 **Problem.** Three pre-multi-worker assumptions remain after M21A:
 
@@ -5843,29 +5843,29 @@ tests.
 - New surfaces.
 
 **Acceptance criteria.**
-- [ ] Transport FSM verified: multiple queued items per conversation
+- [x] Transport FSM verified: multiple queued items per conversation
       are legal under the existing machine (no FSM changes needed)
-- [ ] Sending a second message during active work creates a second
+- [x] Sending a second message during active work creates a second
       fresh queued work item, not a `failed` / `chat_busy` item
-- [ ] Workers drain queued fresh items in FIFO order per conversation
-- [ ] At most one fresh item per conversation is `claimed` at a time
+- [x] Workers drain queued fresh items in FIFO order per conversation
+- [x] At most one fresh item per conversation is `claimed` at a time
       (database-enforced)
-- [ ] A crashed claimed item returns as a recovery notice after lease
+- [x] A crashed claimed item returns as a recovery notice after lease
       TTL expires, not automatic rerun
-- [ ] `recover_stale_claims` uses age-only staleness — a healthy
+- [x] `recover_stale_claims` uses age-only staleness — a healthy
       worker's live claim is never recovered by another worker
-- [ ] Periodic stale sweep runs every 60s in the worker loop
-- [ ] `BOT_CLAIM_LEASE_TTL` defaults to 300, configurable via env
-- [ ] Worker IDs include hostname + PID + UUID suffix
-- [ ] `_chat_lock` is bypassed for the worker path in shared mode
-- [ ] Registry deliveries return `"accepted"` instead of
+- [x] Periodic stale sweep runs every 60s in the worker loop
+- [x] `BOT_CLAIM_LEASE_TTL` defaults to 300, configurable via env
+- [x] Worker IDs include hostname + PID + UUID suffix
+- [x] `_chat_lock` is bypassed for the worker path in shared mode
+- [x] Registry deliveries return `"accepted"` instead of
       `"retry_later"` when local queue accepts the work
-- [ ] `/cancel` still cancels one item at a time (claimed first,
+- [x] `/cancel` still cancels one item at a time (claimed first,
       then oldest queued)
-- [ ] Local Runtime is completely unchanged
-- [ ] Full test suite passes (no `chat_busy` assertions remain)
-- [ ] Compose E2E passes
-- [ ] `git diff --check` clean
+- [x] Local Runtime is completely unchanged
+- [x] Full test suite passes (no `chat_busy` assertions remain)
+- [x] Compose E2E passes
+- [x] `git diff --check` clean
 
 ###### M21C — Compose multi-worker orchestration
 

@@ -160,8 +160,9 @@ class BotConfig:
     agent_registry_url: str
     agent_registry_enroll_token: str
     agent_poll_interval_seconds: float
-    # Runtime (Phase 13). local = only supported mode; shared = rejected until Phase 18.
+    # Runtime mode. local = inline/worker hybrid; shared = persist-first worker-owned ingress.
     runtime_mode: str  # BOT_RUNTIME_MODE: "local" (default) | "shared" (rejected)
+    claim_lease_ttl_seconds: int  # BOT_CLAIM_LEASE_TTL, max age for claimed work before stale recovery
     # Postgres optional for local runtime. Empty = SQLite (default); set = Postgres as store backend.
     database_url: str  # BOT_DATABASE_URL (postgresql://...)
     db_pool_min_size: int
@@ -395,6 +396,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         agent_registry_enroll_token=get("BOT_AGENT_REGISTRY_ENROLL_TOKEN").strip(),
         agent_poll_interval_seconds=max(1.0, get_float("BOT_AGENT_POLL_INTERVAL_SECONDS", "5.0")),
         runtime_mode=get("BOT_RUNTIME_MODE", "local").strip().lower() or "local",
+        claim_lease_ttl_seconds=get_int("BOT_CLAIM_LEASE_TTL", "300"),
         database_url=get("BOT_DATABASE_URL", "").strip(),
         db_pool_min_size=max(0, get_int("BOT_DB_POOL_MIN_SIZE", "1")),
         db_pool_max_size=max(1, get_int("BOT_DB_POOL_MAX_SIZE", "10")),
@@ -488,6 +490,7 @@ def load_config_provider_health() -> BotConfig:
         agent_registry_enroll_token="",
         agent_poll_interval_seconds=5.0,
         runtime_mode="local",
+        claim_lease_ttl_seconds=300,
         database_url="",
         db_pool_min_size=1,
         db_pool_max_size=10,
@@ -555,6 +558,9 @@ def validate_config(config: BotConfig) -> list[str]:
 
     if config.agent_poll_interval_seconds <= 0:
         errors.append("BOT_AGENT_POLL_INTERVAL_SECONDS must be greater than 0")
+
+    if config.claim_lease_ttl_seconds <= 0:
+        errors.append("BOT_CLAIM_LEASE_TTL must be greater than 0")
 
     if config.runtime_mode == RuntimeMode.SHARED.value:
         if config.bot_mode != BotMode.WEBHOOK.value:

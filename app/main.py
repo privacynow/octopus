@@ -149,7 +149,11 @@ def main() -> None:
 
     # Recover stale work items from previous boot and purge old transport data
     from app.telegram_handlers import _boot_id as boot_id
-    recover_stale_claims(config.data_dir, boot_id)
+    recover_stale_claims(
+        config.data_dir,
+        boot_id,
+        max_age_seconds=config.claim_lease_ttl_seconds,
+    )
     purge_old(config.data_dir)
 
     # Worker loop: drains orphaned/recovered work items from the durable queue.
@@ -168,6 +172,7 @@ def main() -> None:
             boot_id,
             worker_dispatch,
             poll_interval=poll_interval_for_runtime(config.runtime_mode),
+            lease_ttl=config.claim_lease_ttl_seconds,
         )
         _agent_task, _agent_stop = start_agent_runtime_task(
             config,

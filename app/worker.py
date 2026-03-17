@@ -14,6 +14,7 @@ item.
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 
 from app import work_queue
@@ -31,6 +32,7 @@ log = logging.getLogger(__name__)
 # Default interval between queue polls (seconds).
 POLL_INTERVAL = 1.0
 SHARED_POLL_INTERVAL = 0.5
+SWEEP_INTERVAL = 60.0
 
 # Maximum items to process per poll cycle before yielding.
 BATCH_SIZE = 10
@@ -46,6 +48,8 @@ async def worker_loop(
     dispatch,
     *,
     poll_interval: float = POLL_INTERVAL,
+    lease_ttl: int = 300,
+    sweep_interval: float = SWEEP_INTERVAL,
     stop_event: asyncio.Event | None = None,
 ) -> None:
     """Continuously claim and dispatch work items from the durable queue.
@@ -59,11 +63,36 @@ async def worker_loop(
         stop_event: When set, the loop exits after the current cycle.
     """
     _stop = stop_event or asyncio.Event()
-    log.info("Worker %s starting (poll_interval=%.1fs)", worker_id, poll_interval)
+    log.info(
+        "Worker %s starting (poll_interval=%.1fs lease_ttl=%ds sweep_interval=%.1fs)",
+        worker_id,
+        poll_interval,
+        lease_ttl,
+        sweep_interval,
+    )
+    last_sweep = 0.0
 
     while not _stop.is_set():
         processed = 0
         try:
+            now_mono = time.monotonic()
+            if now_mono - last_sweep >= sweep_interval:
+                try:
+                    recovered = work_queue.recover_stale_claims(
+                        data_dir,
+                        worker_id,
+                        max_age_seconds=lease_ttl,
+                    )
+                    if recovered:
+                        log.info(
+                            "Recovered %d stale claims (lease_ttl=%ds)",
+                            recovered,
+                            lease_ttl,
+                        )
+                except Exception:
+                    log.exception("Stale-claim sweep error")
+                last_sweep = now_mono
+
             for _ in range(BATCH_SIZE):
                 item = work_queue.claim_next_any(data_dir, worker_id)
                 if item is None:
@@ -129,6 +158,8 @@ def start_worker_task(
     dispatch,
     *,
     poll_interval: float = POLL_INTERVAL,
+    lease_ttl: int = 300,
+    sweep_interval: float = SWEEP_INTERVAL,
 ) -> tuple[asyncio.Task, asyncio.Event]:
     """Start the worker loop as a background asyncio task.
 
@@ -137,7 +168,10 @@ def start_worker_task(
     stop_event = asyncio.Event()
     task = asyncio.create_task(
         worker_loop(data_dir, worker_id, dispatch,
-                    poll_interval=poll_interval, stop_event=stop_event),
+                    poll_interval=poll_interval,
+                    lease_ttl=lease_ttl,
+                    sweep_interval=sweep_interval,
+                    stop_event=stop_event),
         name="work_queue_worker",
     )
     return task, stop_event

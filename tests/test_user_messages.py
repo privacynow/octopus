@@ -145,15 +145,19 @@ def test_trust_model_profile_not_available_canonical():
 
 
 # ---------------------------------------------------------------------------
-# E. Bucket C — no-op / busy / wrong-user clarity
+# E. Bucket C — no-op / queue / wrong-user clarity
 # ---------------------------------------------------------------------------
 
-def test_queue_busy_plain_and_actionable():
-    """queue_busy: message was not started; user should wait or use /cancel."""
-    text = msg.queue_busy()
-    assert "not started" in text.lower() or "another request" in text.lower()
-    assert "wait" in text.lower() or "cancel" in text.lower()
-    assert "queued" not in text.lower(), "busy means rejected, not queued for next"
+def test_queue_accepted_plain_and_actionable():
+    """queue_accepted: request is accepted behind current work and /cancel remains discoverable."""
+    text = msg.queue_accepted()
+    assert "another request" in text.lower() or "already running" in text.lower()
+    assert "queued" in text.lower()
+    assert "cancel" in text.lower()
+
+
+def test_queue_busy_alias_matches_queue_accepted():
+    assert msg.queue_busy() == msg.queue_accepted()
 
 
 def test_callback_wrong_user_specific_to_button_owner():

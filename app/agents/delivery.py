@@ -200,8 +200,6 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
             "message",
             serialized,
         )
-        if admit_status == "busy":
-            return "retry_later"
         if admit_status == "admitted":
             surface = factory.create_outbound_surface(
                 parent_conversation_id,

@@ -6,8 +6,8 @@ from app import work_queue_pg
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 
 
-def test_record_and_admit_message_concurrent_two_connections_one_admitted(postgres_truncated):
-    """Two connections, same conversation, concurrent admission: one admitted, one busy."""
+def test_record_and_admit_message_concurrent_two_connections_one_admitted_one_queued(postgres_truncated):
+    """Two connections, same conversation, concurrent admission: one admitted, one queued."""
     from app.db.postgres import get_connection
 
     results = []
@@ -37,7 +37,7 @@ def test_record_and_admit_message_concurrent_two_connections_one_admitted(postgr
 
     statuses = [r[1][0] for r in results]
     assert statuses.count("admitted") == 1, f"Exactly one admitted, got: {statuses}"
-    assert statuses.count("busy") == 1, f"Exactly one busy, got: {statuses}"
+    assert statuses.count("queued") == 1, f"Exactly one queued, got: {statuses}"
 
     with get_connection(postgres_truncated) as conn:
         with conn.cursor() as cur:
@@ -47,7 +47,7 @@ def test_record_and_admit_message_concurrent_two_connections_one_admitted(postgr
                 (conversation_key,),
             )
             (n,) = cur.fetchone()
-    assert n == 1, f"Exactly one fresh runnable item per conversation, got count: {n}"
+    assert n == 2, f"Exactly two fresh runnable items per conversation, got count: {n}"
 
 
 def test_cancel_queued_fresh_for_chat_terminal_state_postgres(postgres_truncated):

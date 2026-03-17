@@ -19,13 +19,16 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.agents.bridge import conversation_key_for_ref
 from app.capability_service import CapabilityService
+from app.provider_guidance_use_cases import get_provider_guidance_use_cases
 from app.registry_service.backend import get_registry_store
 from app.registry_service.runtime_surface import get_runtime_surface_context
 from app.registry_service.store_base import AbstractRegistryStore, CapabilityDisabledError
-from app.skill_catalog_service import get_skill_catalog_service
-from app.skill_import_service import get_skill_import_service
-from app.skill_lifecycle_service import get_skill_lifecycle_service
-from app.provider_guidance_service import get_provider_guidance_service
+from app.runtime_skill_activation_use_cases import get_runtime_skill_activation_use_cases
+from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_cases
+from app.runtime_skill_import_use_cases import (
+    PromptWarningContext,
+    get_runtime_skill_import_use_cases,
+)
 from app.session_state import session_from_dict, session_to_dict
 from app.skills import derive_encryption_key
 from app.storage import load_session, save_session
@@ -78,53 +81,16 @@ def _runtime_registry_url() -> str:
     return os.environ.get("BOT_REGISTRY_URL", "").strip()
 
 
-def _catalog_skill_summary(name: str) -> dict[str, Any] | None:
-    catalog = get_skill_catalog_service()
-    imports = get_skill_import_service()
-    meta = catalog.catalog().get(name)
-    if meta is None:
-        return None
-    resolved = catalog.resolve_info(name)
-    source = resolved.source if resolved else ""
-    return {
-        "name": name,
-        "display_name": meta.display_name,
-        "description": meta.description,
-        "is_custom": meta.is_custom,
-        "is_managed": imports.is_installed(name),
-        "has_custom_override": imports.has_custom_override(name),
-        "is_installed": bool(resolved),
-        "requires_credentials": bool(resolved and resolved.requirement_keys),
-        "providers": list(resolved.providers) if resolved else [],
-        "source": source,
-    }
-
-
-def _catalog_skill_detail(name: str) -> dict[str, Any] | None:
-    summary = _catalog_skill_summary(name)
-    if summary is None:
-        return None
-    resolved = get_skill_catalog_service().resolve_info(name)
-    if resolved is None:
-        return summary
-    return {
-        **summary,
-        "body": resolved.body,
-        "requirement_keys": list(resolved.requirement_keys),
-    }
-
-
-def _runtime_prompt_size_warnings(skill_name: str) -> list[str]:
+def _warning_context() -> PromptWarningContext | None:
     try:
         context = get_runtime_surface_context()
     except Exception:
-        return []
-    return get_provider_guidance_service().check_prompt_size_cross_chat(
-        context.config.data_dir,
-        skill_name,
-        context.config.provider_name,
-        context.provider_state_factory,
-        context.config.approval_mode,
+        return None
+    return PromptWarningContext(
+        data_dir=context.config.data_dir,
+        provider_name=context.config.provider_name,
+        provider_state_factory=context.provider_state_factory,
+        approval_mode=context.config.approval_mode,
     )
 
 
@@ -467,16 +433,24 @@ def catalog_skills(
     q: str = "",
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    catalog = get_skill_catalog_service().catalog()
-    query = q.strip().lower()
-    skills: list[dict[str, Any]] = []
-    for name, meta in sorted(catalog.items()):
-        if query and query not in name.lower() and query not in meta.display_name.lower() and query not in meta.description.lower():
-            continue
-        item = _catalog_skill_summary(name)
-        if item is not None:
-            skills.append(item)
-    return {"skills": skills}
+    return {
+        "skills": [
+            {
+                "name": item.name,
+                "display_name": item.display_name,
+                "description": item.description,
+                "source_kind": item.source_kind,
+                "has_custom_override": item.has_custom_override,
+                "requires_credentials": bool(item.requirement_keys),
+                "requirement_keys": list(item.requirement_keys),
+                "providers": list(item.providers),
+                "can_activate": item.can_activate,
+                "can_update": item.can_update,
+                "can_uninstall": item.can_uninstall,
+            }
+            for item in get_runtime_skill_catalog_use_cases().list_skills(q)
+        ]
+    }
 
 
 @app.get("/v1/catalog/skills/search")
@@ -487,31 +461,33 @@ def catalog_skill_search(
     query = q.strip()
     if len(query) < 2:
         return {"catalog": [], "registry": []}
-    imports = get_skill_import_service()
-    catalog_hits = [
-        {
-            "name": item.name,
-            "display_name": item.display_name,
-            "description": item.description,
-        }
-        for item in imports.bundled_search(query)
-    ]
-    registry_hits: list[dict[str, Any]] = []
-    registry_url = _runtime_registry_url()
-    if registry_url:
-        try:
-            registry_hits = [
-                {
-                    "name": item.name,
-                    "description": item.description,
-                    "publisher": item.publisher,
-                    "version": item.version,
-                }
-                for item in imports.registry_search(registry_url, query)
-            ]
-        except Exception as exc:
-            registry_hits = [{"error": str(exc)[:200]}]
-    return {"catalog": catalog_hits, "registry": registry_hits}
+    results = get_runtime_skill_import_use_cases().search(query, registry_url=_runtime_registry_url())
+    return {
+        "catalog": [
+            {
+                "name": item.name,
+                "display_name": item.display_name,
+                "description": item.description,
+                "source_kind": item.source_kind,
+                "can_activate": item.can_activate,
+                "can_update": item.can_update,
+                "can_uninstall": item.can_uninstall,
+            }
+            for item in results.catalog
+        ],
+        "registry": [
+            {
+                "name": item.name,
+                "display_name": item.display_name,
+                "description": item.description,
+                "publisher": item.publisher,
+                "version": item.version,
+                "can_import": item.can_import,
+            }
+            for item in results.registry
+        ],
+        "registry_error": results.registry_error,
+    }
 
 
 @app.get("/v1/catalog/skills/{skill_name}")
@@ -519,10 +495,22 @@ def catalog_skill_detail(
     skill_name: str,
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    detail = _catalog_skill_detail(skill_name)
+    detail = get_runtime_skill_catalog_use_cases().get_skill(skill_name)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_name}")
-    return detail
+    return {
+        "name": detail.name,
+        "display_name": detail.display_name,
+        "description": detail.description,
+        "body": detail.body,
+        "source_kind": detail.source_kind,
+        "has_custom_override": detail.has_custom_override,
+        "providers": list(detail.providers),
+        "requirement_keys": list(detail.requirement_keys),
+        "can_activate": detail.can_activate,
+        "can_update": detail.can_update,
+        "can_uninstall": detail.can_uninstall,
+    }
 
 
 @app.post("/v1/catalog/skills/{skill_name}/install")
@@ -530,11 +518,14 @@ def catalog_skill_install(
     skill_name: str,
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    imports = get_skill_import_service()
     registry_url = _runtime_registry_url()
     if not registry_url:
         raise HTTPException(status_code=404, detail="No skill registry configured.")
-    result = imports.install_from_registry(skill_name, registry_url)
+    result = get_runtime_skill_import_use_cases().install_from_registry(
+        skill_name,
+        registry_url,
+        warning_context=_warning_context(),
+    )
     if not result.ok:
         raise HTTPException(status_code=404, detail=result.message)
     response: dict[str, Any] = {
@@ -542,8 +533,8 @@ def catalog_skill_install(
         "ok": result.ok,
         "message": result.message,
     }
-    if result.ok:
-        response["prompt_size_warnings"] = _runtime_prompt_size_warnings(skill_name)
+    if result.prompt_size_warnings:
+        response["prompt_size_warnings"] = list(result.prompt_size_warnings)
     return response
 
 
@@ -557,7 +548,7 @@ def catalog_skill_uninstall(
         default_skills = context.config.default_skills
     except Exception:
         default_skills = ()
-    result = get_skill_import_service().uninstall(skill_name, default_skills)
+    result = get_runtime_skill_import_use_cases().uninstall(skill_name, default_skills=default_skills)
     if not result.ok:
         raise HTTPException(status_code=400, detail=result.message)
     return {"name": result.name, "ok": result.ok, "message": result.message}
@@ -568,15 +559,17 @@ def catalog_skill_update(
     skill_name: str,
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    result = get_skill_import_service().update(skill_name)
+    result = get_runtime_skill_import_use_cases().update(skill_name, warning_context=_warning_context())
     if not result.ok:
         raise HTTPException(status_code=400, detail=result.message)
-    return {
+    response: dict[str, Any] = {
         "name": result.name,
         "ok": result.ok,
         "message": result.message,
-        "prompt_size_warnings": _runtime_prompt_size_warnings(skill_name),
     }
+    if result.prompt_size_warnings:
+        response["prompt_size_warnings"] = list(result.prompt_size_warnings)
+    return response
 
 
 @app.get("/v1/catalog/skills/{skill_name}/diff")
@@ -584,7 +577,7 @@ def catalog_skill_diff(
     skill_name: str,
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    result = get_skill_import_service().diff(skill_name)
+    result = get_runtime_skill_import_use_cases().diff(skill_name)
     if not result.ok:
         raise HTTPException(status_code=400, detail=result.message)
     return {"name": result.name, "ok": result.ok, "diff": result.message}
@@ -596,14 +589,20 @@ def conversation_skills(
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
     _, conversation_key, session = _load_runtime_session_or_404(conversation_id)
-    active = get_skill_lifecycle_service().list_active(session)
+    listing = get_runtime_skill_activation_use_cases().list_conversation_skills(session)
     return {
         "conversation_id": conversation_id,
         "conversation_key": conversation_key,
-        "active_skills": active,
+        "active_skills": list(listing.active_skills),
         "active_skill_details": [
-            _catalog_skill_summary(name) or {"name": name}
-            for name in active
+            {
+                "name": item.name,
+                "display_name": item.display_name,
+                "description": item.description,
+                "source_kind": item.source_kind,
+                "has_custom_override": item.has_custom_override,
+            }
+            for item in listing.active_skill_details
         ],
     }
 
@@ -619,17 +618,16 @@ def conversation_activate_skill(
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
         raise HTTPException(status_code=503, detail="TELEGRAM_BOT_TOKEN is required for registry-driven skill activation")
-    decision = get_skill_lifecycle_service().begin_add(
+    decision = get_runtime_skill_activation_use_cases().begin_activate(
         session,
         user_id=payload.actor_key,
         skill_name=skill_name,
         data_dir=context.config.data_dir,
         encryption_key=derive_encryption_key(token),
+        confirm=payload.confirm,
     )
     if decision.status == "unknown":
         raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_name}")
-    if decision.status == "needs_confirmation" and payload.confirm:
-        decision = get_skill_lifecycle_service().confirm_add(session, skill_name)
     if decision.mutated:
         save_session(context.config.data_dir, conversation_key, session_to_dict(session))
     response: dict[str, Any] = {"status": decision.status}
@@ -651,7 +649,7 @@ def conversation_deactivate_skill(
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
     context, conversation_key, session = _load_runtime_session_or_404(conversation_id)
-    decision = get_skill_lifecycle_service().remove(
+    decision = get_runtime_skill_activation_use_cases().deactivate(
         session,
         user_id=payload.actor_key,
         skill_name=skill_name,
@@ -670,7 +668,7 @@ def conversation_clear_skills(
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
     context, conversation_key, session = _load_runtime_session_or_404(conversation_id)
-    decision = get_skill_lifecycle_service().clear(session, user_id=payload.actor_key)
+    decision = get_runtime_skill_activation_use_cases().clear(session, user_id=payload.actor_key)
     if decision.status == "foreign_setup":
         raise HTTPException(status_code=409, detail="credential_setup_in_progress")
     if decision.mutated:
@@ -684,18 +682,22 @@ def provider_guidance_preview(
     payload: ProviderGuidancePreviewRequest,
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
-    if provider_name not in {"claude", "codex"}:
-        raise HTTPException(status_code=404, detail=f"Unknown provider: {provider_name}")
-    guidance = get_provider_guidance_service()
-    system_prompt = guidance.system_prompt(payload.role, list(payload.active_skills))
-    system_prompt = guidance.apply_compact_mode(system_prompt, payload.compact_mode)
+    try:
+        preview = get_provider_guidance_use_cases().preview(
+            provider_name,
+            role=payload.role,
+            active_skills=list(payload.active_skills),
+            compact_mode=payload.compact_mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {
-        "provider": provider_name,
-        "effective_guidance": guidance.effective_guidance_preview(provider_name),
-        "system_prompt": system_prompt,
-        "capability_summary": guidance.capability_summary(provider_name, list(payload.active_skills)),
-        "provider_config": guidance.provider_config(provider_name, list(payload.active_skills)),
-        "prompt_weight": len(system_prompt),
+        "provider": preview.provider,
+        "effective_guidance": preview.effective_guidance,
+        "system_prompt": preview.system_prompt,
+        "capability_summary": preview.capability_summary,
+        "provider_config": preview.provider_config,
+        "prompt_weight": preview.prompt_weight,
     }
 
 
@@ -1579,12 +1581,12 @@ def ui_shell(request: Request) -> str:
               </button>
             `).join("")
           : '<span class="subtle">No provider-specific preview available.</span>';
-        const actionButtons = detail.is_installed
+        const actionButtons = detail.can_update || detail.can_uninstall
           ? `
               <button type="button" class="secondary" data-runtime-skill-update="${{escapeHtml(detail.name)}}">Update</button>
               <button type="button" class="danger" data-runtime-skill-uninstall="${{escapeHtml(detail.name)}}">Uninstall</button>
             `
-          : `<button type="button" data-runtime-skill-install="${{escapeHtml(detail.name)}}">Install</button>`;
+          : "";
         const previewBlock = preview
           ? `
               <div class="detail-card" style="margin-top: 0.9rem;">
@@ -1600,7 +1602,7 @@ def ui_shell(request: Request) -> str:
         panel.innerHTML = `
           <strong>${{escapeHtml(detail.display_name || detail.name)}}</strong>
           <div class="meta"><strong>Slug:</strong> ${{escapeHtml(detail.name)}}</div>
-          <div class="meta"><strong>Source:</strong> ${{escapeHtml(detail.source || "unknown")}}</div>
+          <div class="meta"><strong>Source:</strong> ${{escapeHtml(detail.source_kind || "unknown")}}</div>
           <div class="meta"><strong>Requirements:</strong> ${{requirements}}</div>
           <div class="meta"><strong>Description:</strong> ${{escapeHtml(detail.description || "No description provided.")}}</div>
           <pre class="timeline-body">${{escapeHtml(detail.body || "")}}</pre>
@@ -1645,26 +1647,26 @@ def ui_shell(request: Request) -> str:
                   const providers = (item.providers || []).length
                     ? escapeHtml(item.providers.join(", "))
                     : '<span class="skill-empty">(generic)</span>';
-                  const status = item.is_installed
-                    ? (item.is_managed ? "Installed" : "Available")
-                    : "Not installed";
-                  const rowAction = item.is_installed
+                  const sourceKind = item.source_kind || "unknown";
+                  const status = sourceKind === "imported"
+                    ? "Imported"
+                    : (sourceKind === "custom" ? "Custom" : "Built-in");
+                  const rowAction = item.can_update || item.can_uninstall
                     ? `<button type="button" class="secondary" data-runtime-skill-update="${{escapeHtml(item.name)}}">Update</button>
                        <button type="button" class="danger" data-runtime-skill-uninstall="${{escapeHtml(item.name)}}">Uninstall</button>`
-                    : `<button type="button" data-runtime-skill-install="${{escapeHtml(item.name)}}">Install</button>`;
+                    : "";
                   return `
                     <tr>
                       <td>
                         <strong>${{escapeHtml(item.display_name || item.name)}}</strong>
                         <div class="meta">${{escapeHtml(item.description || "")}}</div>
                       </td>
-                      <td>${{escapeHtml(item.source || "")}}</td>
+                      <td>${{escapeHtml(sourceKind)}}</td>
                       <td>${{providers}}</td>
                       <td>${{escapeHtml(status)}}</td>
                       <td>
                         <div class="toolbar">
-                          <button type="button" class="secondary" data-runtime-skill-detail="${{escapeHtml(item.name)}}">Details</button>
-                          ${{rowAction}}
+                          <button type="button" class="secondary" data-runtime-skill-detail="${{escapeHtml(item.name)}}">Details</button>${{rowAction ? ` ${{rowAction}}` : ""}}
                         </div>
                       </td>
                     </tr>
@@ -1988,7 +1990,7 @@ def ui_shell(request: Request) -> str:
           let actions = `<button type="button" class="secondary" data-runtime-skill-detail="${{escapeHtml(skill.name)}}">Details</button>`;
           if (active) {{
             actions += ` <button type="button" class="danger" data-conversation-skill-action="deactivate" data-conversation-id="${{escapeHtml(conversation.conversation_id)}}" data-skill-name="${{escapeHtml(skill.name)}}">Deactivate</button>`;
-          }} else if (skill.is_installed) {{
+          }} else if (skill.can_activate) {{
             actions += ` <button type="button" data-conversation-skill-action="activate" data-conversation-id="${{escapeHtml(conversation.conversation_id)}}" data-skill-name="${{escapeHtml(skill.name)}}">Activate</button>`;
           }} else {{
             actions += ` <button type="button" data-runtime-skill-install="${{escapeHtml(skill.name)}}">Install</button>`;
@@ -1999,7 +2001,7 @@ def ui_shell(request: Request) -> str:
                 <strong>${{escapeHtml(skill.display_name || skill.name)}}</strong>
                 <div class="meta">${{escapeHtml(skill.description || "")}}</div>
               </td>
-              <td>${{active ? '<span class="skill-status-overridden">Active</span>' : escapeHtml(skill.is_installed ? 'Available' : 'Not installed')}}</td>
+              <td>${{active ? '<span class="skill-status-overridden">Active</span>' : escapeHtml(skill.can_activate ? 'Available' : 'Not available')}}</td>
               <td><div class="toolbar">${{actions}}</div></td>
             </tr>
           `;

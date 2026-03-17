@@ -221,8 +221,14 @@ def test_registry_catalog_and_provider_preview(monkeypatch, tmp_path: Path):
         headers={"Authorization": "Bearer ui-secret"},
     )
     assert listed.status_code == 200
-    names = {item["name"] for item in listed.json()["skills"]}
+    listed_payload = listed.json()["skills"]
+    names = {item["name"] for item in listed_payload}
     assert "github-integration" in names
+    github_summary = next(item for item in listed_payload if item["name"] == "github-integration")
+    assert github_summary["source_kind"] == "builtin"
+    assert github_summary["can_activate"] is True
+    assert github_summary["can_update"] is False
+    assert github_summary["can_uninstall"] is False
 
     detail = client.get(
         "/v1/catalog/skills/github-integration",
@@ -231,6 +237,7 @@ def test_registry_catalog_and_provider_preview(monkeypatch, tmp_path: Path):
     assert detail.status_code == 200
     payload = detail.json()
     assert payload["name"] == "github-integration"
+    assert payload["source_kind"] == "builtin"
     assert "GITHUB_TOKEN" in payload["requirement_keys"]
 
     preview = client.post(
@@ -380,6 +387,15 @@ def test_registry_catalog_install_and_uninstall(monkeypatch, tmp_path: Path):
     )
     assert install.status_code == 200
     assert install.json()["ok"] is True
+
+    detail = client.get(
+        "/v1/catalog/skills/helper",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert detail.status_code == 200
+    assert detail.json()["source_kind"] == "imported"
+    assert detail.json()["can_update"] is True
+    assert detail.json()["can_uninstall"] is True
 
     diff = client.get(
         "/v1/catalog/skills/helper/diff",

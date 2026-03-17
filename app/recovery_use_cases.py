@@ -2,33 +2,21 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 from app import user_messages as _msg
+from app.recovery_port import (
+    RecoveryActionOutcome,
+    RecoveryReplayPlan,
+    RecoveryPort,
+)
 from app import work_queue
 from app.transports import factory
 from app.transport import InboundMessage, deserialize_inbound
 from app.workflows.results import TransportStateCorruption
 
 
-@dataclass(frozen=True)
-class RecoveryReplayPlan:
-    item_id: str
-    event: InboundMessage
-    trust_tier: str
-
-
-@dataclass(frozen=True)
-class RecoveryActionOutcome:
-    status: str
-    toast_message: str = ""
-    edit_message: str = ""
-    show_alert: bool = False
-    replay_plan: RecoveryReplayPlan | None = None
-
-
-class RecoveryUseCases:
+class RecoveryUseCases(RecoveryPort):
     """Canonical replay/discard flows shared by surfaces."""
 
     def prepare_action(

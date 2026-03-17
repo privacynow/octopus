@@ -2,23 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
-
+from app.provider_guidance_port import ProviderGuidancePreview, ProviderGuidancePort
 from app.provider_guidance_service import get_provider_guidance_service
 
 
-@dataclass(frozen=True)
-class ProviderGuidancePreview:
-    provider: str
-    effective_guidance: str
-    system_prompt: str
-    capability_summary: str
-    provider_config: dict[str, Any]
-    prompt_weight: int
-
-
-class ProviderGuidanceUseCases:
+class ProviderGuidanceUseCases(ProviderGuidancePort):
     """Canonical provider-guidance preview operations."""
 
     def _guidance(self):

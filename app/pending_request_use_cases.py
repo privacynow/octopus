@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from app import user_messages as _msg
 from app.config import BotConfig
+from app.pending_request_port import (
+    PendingExecutionPlan,
+    PendingRequestOutcome,
+    PendingRequestPort,
+)
 from app.request_flow import classify_pending_validation, extra_dirs_from_denials, validate_pending
 from app.session_state import PendingApproval, PendingRetry, SessionState
 from app.workflows.pending_request import (
@@ -15,24 +18,7 @@ from app.workflows.pending_request import (
 )
 
 
-@dataclass(frozen=True)
-class PendingExecutionPlan:
-    prompt: str
-    image_paths: tuple[str, ...]
-    request_user_id: str
-    trust_tier: str
-    extra_dirs: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class PendingRequestOutcome:
-    status: str
-    mutated: bool = False
-    message: str = ""
-    execution_plan: PendingExecutionPlan | None = None
-
-
-class PendingRequestUseCases:
+class PendingRequestUseCases(PendingRequestPort):
     """Canonical pending approval/retry flows shared by surfaces."""
 
     def _invalid_result(

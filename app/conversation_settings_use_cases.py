@@ -2,35 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable
-
 from app import user_messages as _msg
 from app.config import BotConfig
+from app.conversation_settings_port import (
+    ModelProfileState,
+    SettingMutationOutcome,
+    ConversationSettingsPort,
+)
 from app.execution_context import resolve_execution_context
 from app.session_state import SessionState
 
-ProviderStateFactory = Callable[[], dict]
 
-
-@dataclass(frozen=True)
-class ModelProfileState:
-    available_profiles: tuple[str, ...]
-    current_profile: str
-
-
-@dataclass(frozen=True)
-class SettingMutationOutcome:
-    status: str
-    mutated: bool = False
-    message: str = ""
-    effective_policy: str = ""
-    effective_model: str = ""
-    current_profile: str = ""
-    compact_enabled: bool | None = None
-
-
-class ConversationSettingsUseCases:
+class ConversationSettingsUseCases(ConversationSettingsPort):
     """Canonical conversation settings flows shared by Telegram and registry actions."""
 
     def model_profile_state(

@@ -116,10 +116,12 @@ def test_container_provider_login_banners_explain_exit_steps():
     repo = Path(__file__).resolve().parent.parent
     script = repo / "scripts" / "provider" / "container_provider_login.sh"
     text = script.read_text()
-    assert "You MUST exit the CLI to return to setup." in text
+    assert "codex login --device-auth" in text
+    assert "device code" in text
+    assert "removed flag:  codex --login" in text
     assert "/login" in text, "Claude banner should tell the user to run /login"
-    assert "q  or  Ctrl-C" in text or "q or Ctrl-C" in text, (
-        "Codex banner should tell the user how to return to setup"
+    assert "press Ctrl-C" in text or "Ctrl-C" in text, (
+        "Codex banner should tell the user how to recover if the login command does not exit cleanly"
     )
 
 

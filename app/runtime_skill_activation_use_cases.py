@@ -2,42 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-from app.session_state import AwaitingSkillSetup, SessionState
+from app.session_state import SessionState
 from app.skill_lifecycle_service import get_skill_lifecycle_service
+from app.runtime_skill_activation_port import (
+    ConversationSkillItem,
+    ConversationSkillListing,
+    ConversationSkillMutationOutcome,
+    RuntimeSkillActivationPort,
+)
 from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_cases
 
 
-@dataclass(frozen=True)
-class ConversationSkillItem:
-    name: str
-    display_name: str
-    description: str
-    source_kind: str
-    has_custom_override: bool
-
-
-@dataclass(frozen=True)
-class ConversationSkillListing:
-    active_skills: tuple[str, ...]
-    active_skill_details: tuple[ConversationSkillItem, ...]
-
-
-@dataclass(frozen=True)
-class ConversationSkillMutationOutcome:
-    status: str
-    mutated: bool = False
-    first_requirement: dict[str, Any] | None = None
-    projected_size: int = 0
-    prompt_size_threshold: int = 0
-    foreign_setup_user: str = ""
-    foreign_setup: AwaitingSkillSetup | None = None
-
-
-class RuntimeSkillActivationUseCases:
+class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
     """Canonical activation flows shared by Telegram and registry."""
 
     def _lifecycle(self):

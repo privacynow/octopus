@@ -88,14 +88,16 @@ from app.skills import (
     validate_credential,
     cleanup_codex_scripts,
 )
-from app.runtime_skill_activation_use_cases import get_runtime_skill_activation_use_cases
-from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_cases
-from app.runtime_skill_import_use_cases import get_runtime_skill_import_use_cases
-from app.runtime_skill_setup_use_cases import get_runtime_skill_setup_use_cases
-from app.conversation_control_use_cases import get_conversation_control_use_cases
-from app.conversation_settings_use_cases import get_conversation_settings_use_cases
-from app.pending_request_use_cases import get_pending_request_use_cases
-from app.recovery_use_cases import get_recovery_use_cases
+from app.inbound_use_case_factory import (
+    get_conversation_control_use_cases,
+    get_conversation_settings_use_cases,
+    get_pending_request_use_cases,
+    get_recovery_use_cases,
+    get_runtime_skill_activation_use_cases,
+    get_runtime_skill_catalog_use_cases,
+    get_runtime_skill_import_use_cases,
+    get_runtime_skill_setup_use_cases,
+)
 from app.skill_activation_service import get_skill_activation_service
 from app.provider_guidance_service import get_provider_guidance_service
 from app.storage import (

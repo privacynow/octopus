@@ -736,14 +736,22 @@ def request_cancel(
     now = datetime.now(timezone.utc).isoformat()
     with _write_tx(conn):
         with _cur(conn) as cur:
+            claimed_extra = ""
+            claimed_params: tuple[object, ...]
+            if cancel_request_event_id:
+                claimed_extra = " AND event_id != %s"
+                claimed_params = (conversation_key, cancel_request_event_id)
+            else:
+                claimed_params = (conversation_key,)
             cur.execute(
                 f"""
                 SELECT id, cancel_requested_at FROM {_SCHEMA}.work_items
                 WHERE conversation_key = %s AND state = 'claimed' AND dispatch_mode = 'fresh'
+                {claimed_extra}
                 ORDER BY created_at ASC
                 LIMIT 1
                 """,
-                (conversation_key,),
+                claimed_params,
             )
             claimed = cur.fetchone()
             if claimed is not None:
@@ -759,14 +767,22 @@ def request_cancel(
                 )
                 return CancelRequestResult.claimed_cancel_requested
 
+            queued_extra = ""
+            queued_params: tuple[object, ...]
+            if cancel_request_event_id:
+                queued_extra = " AND event_id != %s"
+                queued_params = (conversation_key, cancel_request_event_id)
+            else:
+                queued_params = (conversation_key,)
             cur.execute(
                 f"""
                 SELECT id FROM {_SCHEMA}.work_items
                 WHERE conversation_key = %s AND state = 'queued' AND dispatch_mode = 'fresh'
+                {queued_extra}
                 ORDER BY created_at ASC
                 LIMIT 1
                 """,
-                (conversation_key,),
+                queued_params,
             )
             queued = cur.fetchone()
             if queued is not None:

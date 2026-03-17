@@ -262,7 +262,11 @@ class SQLiteSessionStore:
         for data_dir in list(self._connections.keys()):
             self.close_db(data_dir)
 
-    def _reset_db(self, data_dir: Path) -> None:
+    def debug_connection(self, data_dir: Path) -> sqlite3.Connection:
+        """Return the SQLite session connection for tests/diagnostics."""
+        return self._db(data_dir)
+
+    def reset_db_for_test(self, data_dir: Path) -> None:
         """Tests only: close and delete the database."""
         self.close_db(data_dir)
         db_path = data_dir / "sessions.db"

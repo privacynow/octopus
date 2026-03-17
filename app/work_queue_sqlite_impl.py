@@ -1,4 +1,4 @@
-"""SQLite transport implementation with conn-based API (same shape as work_queue_pg)."""
+"""SQLite transport implementation with conn-based API (same shape as work_queue_postgres_impl)."""
 
 from __future__ import annotations
 

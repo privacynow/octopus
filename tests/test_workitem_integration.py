@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app import runtime_backend, work_queue
+from app import work_queue
 from app.identity import (
     telegram_actor_key,
     telegram_conversation_key,
@@ -74,7 +74,7 @@ async def test_fresh_message_does_not_consume_stale_recovered_item():
         upd = FakeUpdate(message=msg, user=user, chat=chat)
         await th.handle_message(upd, FakeContext())
 
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         fresh_item = conn.execute(
             "SELECT state, error FROM work_items WHERE event_id = ?",
             (_event(upd.update_id),),
@@ -131,7 +131,7 @@ async def test_concurrent_messages_each_claim_own_item():
         await drain_one_worker_item(data_dir)
 
         # Both items should be done
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         for upd in [upd1, upd2]:
             row = conn.execute(
                 "SELECT state FROM work_items WHERE event_id = ?",
@@ -178,7 +178,7 @@ async def test_claim_for_update_blocked_by_existing_claimed_item():
         assert second is None, "Must not claim while another item is claimed"
 
         # Verify only one claimed item exists
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         claimed_count = conn.execute(
             "SELECT count(*) as n FROM work_items WHERE conversation_key = ? AND state = 'claimed'",
             (_conv(chat_id),),
@@ -232,7 +232,7 @@ async def test_approval_callback_does_not_consume_stale_item():
         await th.handle_callback(upd2, FakeContext())
 
         # Step 4: verify stale item 500 is still queued
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         stale = conn.execute(
             "SELECT state FROM work_items WHERE event_id = ?",
             (_event(500),),
@@ -380,7 +380,7 @@ async def test_live_command_blocked_by_worker_claimed_item():
         user = FakeUser(uid=42)
         await send_command(th.cmd_new, chat, user, "/new")
 
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
 
         # Worker's item must still be claimed — not touched by the command
         row_100 = conn.execute(
@@ -436,7 +436,7 @@ async def test_live_message_blocked_by_worker_claimed_item():
         upd = FakeUpdate(message=msg, user=user, chat=chat)
         await th.handle_message(upd, FakeContext())
 
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
 
         # Worker's item stays claimed
         row_100 = conn.execute(
@@ -487,7 +487,7 @@ async def test_queued_item_processable_after_worker_completes():
         upd1 = FakeUpdate(message=msg1, user=user, chat=chat)
         await th.handle_message(upd1, FakeContext())
 
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         item1 = conn.execute(
             "SELECT state, error FROM work_items WHERE event_id = ?",
             (_event(upd1.update_id),),
@@ -561,7 +561,7 @@ async def test_live_callback_blocked_by_worker_and_query_answered():
             "Callback query must be answered even when ClaimBlocked fires"
         )
 
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
 
         # Worker's item stays claimed
         row_600 = conn.execute(
@@ -623,7 +623,7 @@ async def test_worker_dispatch_sends_recovery_notice():
             data_dir, _event(500), _conv(chat_id), _actor(42), "message",
             payload='{"text": "do something dangerous"}',
         )
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'claimed', worker_id = 'test', claimed_at = ? WHERE id = ?",
             ("2025-01-01T00:00:00", item_id),
@@ -684,7 +684,7 @@ async def test_recovery_discard_callback_finalizes_item():
             data_dir, _event(600), _conv(chat_id), _actor(42), "message",
             payload='{"text": "old message"}',
         )
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id,),
@@ -751,7 +751,7 @@ async def test_recovery_replay_callback_executes_original():
         _, item_id = work_queue.record_and_enqueue(
             data_dir, _event(700), _conv(chat_id), _actor(42), "message", payload=payload,
         )
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id,),
@@ -814,7 +814,7 @@ async def test_fresh_message_supersedes_pending_recovery():
             data_dir, _event(800), _conv(chat_id), _actor(42), "message",
             payload='{"text": "old message"}',
         )
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id,),
@@ -863,7 +863,7 @@ async def test_recovery_double_click_is_idempotent():
             data_dir, _event(900), _conv(chat_id), _actor(42), "message",
             payload='{"text": "test"}',
         )
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id,),
@@ -971,7 +971,7 @@ async def test_failed_notice_delivery_marks_item_failed_via_worker_loop():
                               stop_event=stop, poll_interval=0)
 
             # Item must be failed — not done, not pending_recovery.
-            conn = runtime_backend.transport_store()._transport_db(data_dir)
+            conn = work_queue.debug_transport_connection(data_dir)
             row = conn.execute(
                 "SELECT state, error FROM work_items WHERE id = ?", (item_id,)
             ).fetchone()
@@ -1007,7 +1007,7 @@ async def test_multiple_pending_recovery_items_each_addressable():
             data_dir, _event(1701), _conv(chat_id), _actor(42), "message",
             payload='{"text": "second recovered"}',
         )
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id IN (?, ?)",
             (item_id_1, item_id_2),
@@ -1087,7 +1087,7 @@ async def test_discard_race_after_replay_answers_already_handled():
             data_dir, _event(1800), _conv(chat_id), _actor(42), "message",
             payload='{"text": "raced"}',
         )
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id,),
@@ -1158,7 +1158,7 @@ async def test_replay_reclaim_blocked_by_existing_claimed_item():
             data_dir, _event(1901), _conv(chat_id), _actor(42), "message",
             payload='{"text": "fresh in-flight"}',
         )
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id_recovery,),
@@ -1212,7 +1212,7 @@ async def test_replay_callback_blocked_by_claimed_item_answers_user():
         _, item_id_worker = work_queue.record_and_enqueue(
             data_dir, _event(1911), _conv(chat_id), _actor(42), "message",
         )
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id_recovery,),
@@ -1278,7 +1278,7 @@ async def test_command_does_not_supersede_pending_recovery():
             data_dir, _event(2100), _conv(chat_id), _actor(42), "message",
             payload='{"text": "interrupted request"}',
         )
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id_recovery,),
@@ -1325,7 +1325,7 @@ async def test_reclaim_distinguishes_gone_from_blocked():
         _, item_id_claimed = work_queue.record_and_enqueue(
             data_dir, _event(2201), _conv(chat_id), _actor(42), "message",
         )
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         conn.execute(
             "UPDATE work_items SET state = 'pending_recovery' WHERE id = ?",
             (item_id_recovery,),
@@ -1379,7 +1379,7 @@ async def test_fresh_command_item_created_as_claimed():
         # Send a lock-free command through the real decorator
         await send_command(th.cmd_session, chat, user, "/session")
 
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
 
         # The work item must be 'done' (handler completed it), and its
         # worker_id must be the inline handler's _boot_id, not a worker.
@@ -1415,7 +1415,7 @@ async def test_worker_cannot_steal_handler_owned_item():
         )
 
         # The item is still claimed by the handler
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         row = conn.execute(
             "SELECT state, worker_id FROM work_items WHERE id = ?", (item_id,)
         ).fetchone()
@@ -1458,7 +1458,7 @@ async def test_no_false_recovery_for_compact():
         assert stolen is None
 
         # Work item completed by handler
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         row = conn.execute(
             "SELECT state FROM work_items WHERE conversation_key = ?", (_conv(chat_id),),
         ).fetchone()
@@ -1541,7 +1541,7 @@ async def test_handler_crash_leaves_item_claimed_for_recovery():
 
         # Stale claim detection is age-based; backdate the claim and
         # recover it under a new boot.
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         old_time = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
         conn.execute("UPDATE work_items SET claimed_at = ? WHERE id = ?", (old_time, item_id))
         conn.commit()
@@ -1607,7 +1607,7 @@ async def test_complete_work_item_does_not_overwrite_terminal_state():
         # Complete it
         work_queue.complete_work_item(data_dir, item_id)
 
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         row = conn.execute(
             "SELECT state, completed_at FROM work_items WHERE id = ?", (item_id,)
         ).fetchone()
@@ -1653,7 +1653,7 @@ async def test_preclaim_falls_back_to_queued_when_item_already_claimed():
 
         # New item must be 'queued' (not 'claimed') because the chat
         # already has a claimed item
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         row = conn.execute(
             "SELECT state FROM work_items WHERE id = ?", (item_id,)
         ).fetchone()
@@ -1692,7 +1692,7 @@ async def test_second_message_while_chat_has_runnable_queues_fifo():
         reply_b = last_reply(msg_b)
         assert _msg.queue_accepted() in reply_b, f"B must get queued reply. Got: {reply_b}"
 
-        conn = runtime_backend.transport_store()._transport_db(data_dir)
+        conn = work_queue.debug_transport_connection(data_dir)
         rows = conn.execute(
             "SELECT id, event_id, state, error FROM work_items WHERE conversation_key = ? ORDER BY id",
             (_conv(chat_id),),

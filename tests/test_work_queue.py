@@ -9,12 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from app import runtime_backend
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.workflows.results import TransportStateCorruption
 from app.work_queue import (
     DiscardResult,
     LeaveClaimed,
+    debug_transport_connection,
     claim_for_update,
     claim_next,
     claim_next_any,
@@ -69,7 +69,7 @@ def _event(value):
 
 def _transport_db(data_dir):
     """SQLite transport DB for tests; use runtime backend store."""
-    return runtime_backend.transport_store()._transport_db(data_dir)
+    return debug_transport_connection(data_dir)
 
 
 @pytest.fixture
@@ -255,6 +255,7 @@ def test_claim_next_returns_none_when_another_worker_claimed(data_dir):
 def test_shared_claim_helper_raises_corruption_when_reread_still_queued(data_dir):
     """Repository shape: when UPDATE matches 0 rows but reread still shows queued, raise TransportStateCorruption."""
     from unittest.mock import MagicMock, patch
+    from app import runtime_backend
 
     record_update(data_dir, _event(5050), conversation_key=_conv(1), actor_key=_actor(42), kind="message")
     enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(5050))

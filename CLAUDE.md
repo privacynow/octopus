@@ -117,7 +117,7 @@ When writing a bug report for this repo:
   behavior.
 - **Transport facade parity rule.** Every new method added to
   `app/work_queue.py` must land in the same commit as: (a) a
-  `work_queue_pg.py` conn-based implementation, (b) a
+  `work_queue_postgres_impl.py` conn-based implementation, (b) a
   `PostgresTransportStore` wrapper in `work_queue_postgres.py`, (c) a
   Postgres migration if the method touches a new table, and (d) a
   contract test case in `tests/contracts/test_transport_store_contract.py`.

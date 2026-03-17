@@ -8,8 +8,7 @@ import pytest
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
 from app import user_messages as _msg
-from app import runtime_backend
-from app.work_queue import get_work_items_for_chat
+from app.work_queue import debug_transport_connection, get_work_items_for_chat
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeChat,
@@ -818,8 +817,6 @@ class TestCancelConcurrency:
             setup_globals(cfg, prov)
 
             import app.telegram_handlers as th
-            from app import runtime_backend
-
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
@@ -837,7 +834,7 @@ class TestCancelConcurrency:
                 reply_b = last_reply(msg_b)
                 assert _msg.queue_accepted() in reply_b, f"B must get queued reply. Got: {reply_b}"
 
-                conn = runtime_backend.transport_store()._transport_db(data_dir)
+                conn = debug_transport_connection(data_dir)
                 rows = conn.execute(
                     "SELECT id, state, error FROM work_items "
                     "WHERE conversation_key = 'tg:12345' ORDER BY id"

@@ -56,8 +56,8 @@ def test_reset_closes_session_and_transport_db_caches():
         storage_mod.ensure_data_dirs(data_dir)
         session_store = runtime_backend.session_store()
         transport_store = runtime_backend.transport_store()
-        session_store._db(data_dir)
-        transport_store._transport_db(data_dir)
+        storage_mod.debug_session_connection(data_dir)
+        work_queue_mod.debug_transport_connection(data_dir)
         assert len(session_store._connections) >= 1
         assert len(transport_store._connections) >= 1
         reset_handler_test_runtime()

@@ -258,7 +258,7 @@ async def test_periodic_stale_sweep_recovers_expired_claim():
         claimed = work_queue.claim_next_any(data_dir, "old-worker")
         assert claimed is not None and claimed["id"] == item_id
 
-        conn = work_queue._store()._transport_db(data_dir)  # type: ignore[attr-defined]
+        conn = work_queue.debug_transport_connection(data_dir)
         backdated = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - 600))
         conn.execute("UPDATE work_items SET claimed_at = ? WHERE id = ?", (backdated, item_id))
         conn.commit()
@@ -334,7 +334,7 @@ async def test_periodic_stale_sweep_ignores_live_claim():
         items = work_queue.get_work_items_for_chat(data_dir, _conv(12345))
         live = [row for row in items if row["id"] == item_id]
         assert live and live[0]["state"] == "claimed"
-        conn = work_queue._store()._transport_db(data_dir)  # type: ignore[attr-defined]
+        conn = work_queue.debug_transport_connection(data_dir)
         row = conn.execute("SELECT worker_id FROM work_items WHERE id = ?", (item_id,)).fetchone()
         assert row is not None and row["worker_id"] == "worker-a"
 

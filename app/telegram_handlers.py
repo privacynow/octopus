@@ -861,7 +861,7 @@ def _callback_handler(fn):
 
 def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
     """Check prompt size in all chats where skill_name is active."""
-    from app.doctor import check_prompt_size_cross_chat
+    from app.skills import check_prompt_size_cross_chat
     cfg = _cfg()
     return check_prompt_size_cross_chat(
         data_dir, skill_name, cfg.provider_name,
@@ -2275,20 +2275,31 @@ async def cmd_id(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 @_command_handler
 async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     import sqlite3
-    from app.doctor import collect_runtime_health, format_doctor_report_lines
+    from app.runtime_health import (
+        SessionHealthContext,
+        collect_runtime_health_report,
+        format_runtime_health_for_doctor,
+    )
     try:
         session = _load(event.chat_id)
     except (sqlite3.DatabaseError, sqlite3.OperationalError, RuntimeError):
         session = None
     cfg = _cfg()
-    kwargs: dict[str, Any] = {}
+    session_context = None
     if session is not None:
-        kwargs.update(session=session_to_dict(session), user_id=event.user.id,
-                      encryption_key=_encryption_key())
-    report = await collect_runtime_health(
-        cfg, _prov(), caller_is_bot=True, **kwargs)
+        session_context = SessionHealthContext(
+            session=session_to_dict(session),
+            user_id=str(event.user.id),
+            encryption_key=_encryption_key(),
+        )
+    report = await collect_runtime_health_report(
+        cfg,
+        _prov(),
+        caller_is_bot=True,
+        session_context=session_context,
+    )
     parts: list[str] = []
-    for line in format_doctor_report_lines(report):
+    for line in format_runtime_health_for_doctor(report):
         if line.startswith("INFO: "):
             parts.append(f"\u2139\ufe0f {html.escape(line[6:])}")
         elif line.startswith("FAIL: "):

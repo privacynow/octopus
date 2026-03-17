@@ -9,7 +9,7 @@ from app.providers.base import RunResult
 from app.skills import derive_encryption_key, load_user_credentials, save_user_credential
 from app.storage import default_session, ensure_data_dirs, save_session
 import app.telegram_handlers as _th
-from app import runtime_backend
+from app import work_queue
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeCallbackQuery,
@@ -183,7 +183,7 @@ async def test_credential_reply_while_worker_alive_no_provider_run():
                 await asyncio.sleep(0.05)
 
             assert len(prov.run_calls) == 0, "Credential reply must not be run as provider work"
-            conn = runtime_backend.transport_store()._transport_db(data_dir)
+            conn = work_queue.debug_transport_connection(data_dir)
             row = conn.execute(
                 "SELECT 1 FROM work_items WHERE event_id = ?", (telegram_event_id(credential_update_id),)
             ).fetchone()

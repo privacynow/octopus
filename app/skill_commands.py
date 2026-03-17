@@ -10,9 +10,11 @@ from app.request_flow import (
     foreign_setup_message,
     format_credential_prompt,
 )
-from app.runtime_skill_activation_use_cases import get_runtime_skill_activation_use_cases
-from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_cases
-from app.runtime_skill_import_use_cases import get_runtime_skill_import_use_cases
+from app.inbound_use_case_factory import (
+    get_runtime_skill_activation_use_cases,
+    get_runtime_skill_catalog_use_cases,
+    get_runtime_skill_import_use_cases,
+)
 from app.skills import (
     load_user_credentials,
 )

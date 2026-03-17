@@ -2,35 +2,21 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from app import user_messages as _msg
 from app import work_queue
+from app.conversation_control_port import (
+    ConversationCancelOutcome,
+    ConversationResetOutcome,
+    ConversationControlPort,
+)
 from app.session_state import SessionState, session_from_dict
 from app.runtime_skill_setup_use_cases import get_runtime_skill_setup_use_cases
 from app.storage import default_session
 
-ProviderStateFactory = Callable[[], dict]
 
-
-@dataclass(frozen=True)
-class ConversationResetOutcome:
-    status: str
-    message: str = ""
-    replacement_session: SessionState | None = None
-    cleanup_scripts: bool = False
-
-
-@dataclass(frozen=True)
-class ConversationCancelOutcome:
-    status: str
-    mutated: bool = False
-    message: str = ""
-
-
-class ConversationControlUseCases:
+class ConversationControlUseCases(ConversationControlPort):
     """Canonical conversation-level control flows shared by surfaces."""
 
     def _setup(self):

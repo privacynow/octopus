@@ -2,49 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from app.skills import SkillRequirement
+from app.runtime_skill_catalog_port import (
+    RuntimeSkillCatalogItem,
+    RuntimeSkillDetail,
+    RuntimeSkillDraftRecord,
+    RuntimeSkillCatalogPort,
+)
 from app.skill_catalog_service import get_skill_catalog_service
 from app.skill_import_service import get_skill_import_service
 
 
-@dataclass(frozen=True)
-class RuntimeSkillCatalogItem:
-    name: str
-    display_name: str
-    description: str
-    source_kind: str
-    providers: tuple[str, ...]
-    requirement_keys: tuple[str, ...]
-    has_custom_override: bool
-    can_activate: bool
-    can_update: bool
-    can_uninstall: bool
-
-
-@dataclass(frozen=True)
-class RuntimeSkillDetail:
-    name: str
-    display_name: str
-    description: str
-    body: str
-    source_kind: str
-    providers: tuple[str, ...]
-    requirement_keys: tuple[str, ...]
-    has_custom_override: bool
-    can_activate: bool
-    can_update: bool
-    can_uninstall: bool
-
-
-@dataclass(frozen=True)
-class RuntimeSkillDraftRecord:
-    name: str
-    visibility: str
-
-
-class RuntimeSkillCatalogUseCases:
+class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
     """Canonical catalog read operations shared by Telegram and registry."""
 
     def _catalog(self):

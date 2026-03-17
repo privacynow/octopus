@@ -2,59 +2,22 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Callable
-
 from app.provider_guidance_service import get_provider_guidance_service
 from app.runtime_skill_catalog_use_cases import (
-    RuntimeSkillCatalogItem,
     get_runtime_skill_catalog_use_cases,
+)
+from app.runtime_skill_import_port import (
+    PromptWarningContext,
+    RegistryRuntimeSkillSearchHit,
+    RuntimeSkillSearchResults,
+    RuntimeSkillMutationOutcome,
+    RuntimeSkillUpdateStatusItem,
+    RuntimeSkillImportPort,
 )
 from app.skill_import_service import get_skill_import_service
 
 
-@dataclass(frozen=True)
-class PromptWarningContext:
-    data_dir: Path
-    provider_name: str
-    provider_state_factory: Callable[[], dict[str, Any]]
-    approval_mode: str
-
-
-@dataclass(frozen=True)
-class RegistryRuntimeSkillSearchHit:
-    name: str
-    display_name: str
-    description: str
-    publisher: str
-    version: str
-    can_import: bool
-
-
-@dataclass(frozen=True)
-class RuntimeSkillSearchResults:
-    catalog: tuple[RuntimeSkillCatalogItem, ...]
-    registry: tuple[RegistryRuntimeSkillSearchHit, ...]
-    registry_error: str = ""
-
-
-@dataclass(frozen=True)
-class RuntimeSkillMutationOutcome:
-    name: str
-    ok: bool
-    message: str
-    prompt_size_warnings: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class RuntimeSkillUpdateStatusItem:
-    name: str
-    status: str
-    has_custom_override: bool
-
-
-class RuntimeSkillImportUseCases:
+class RuntimeSkillImportUseCases(RuntimeSkillImportPort):
     """Canonical import/update operations shared by Telegram and registry."""
 
     def _imports(self):

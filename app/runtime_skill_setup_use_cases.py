@@ -2,63 +2,26 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Awaitable, Callable
 
 from app.request_flow import check_credential_satisfaction, foreign_skill_setup
-from app.session_state import AwaitingSkillSetup, SessionState
+from app.session_state import SessionState
+from app.runtime_skill_setup_port import (
+    RuntimeSkillSetupState,
+    RuntimeSkillSetupCancellationOutcome,
+    RuntimeSkillSetupAdvanceOutcome,
+    RuntimeSkillCredentialSatisfactionOutcome,
+    RuntimeSkillCredentialClearOutcome,
+    CredentialValidator,
+    RuntimeSkillSetupPort,
+)
 from app.skill_activation_service import get_skill_activation_service
 from app.skill_lifecycle_service import get_skill_lifecycle_service
 from app.skills import SkillRequirement, save_user_credential, validate_credential
 from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_cases
 
 
-Validator = Callable[[SkillRequirement, str], Awaitable[tuple[bool, str]]]
-
-
-@dataclass(frozen=True)
-class RuntimeSkillSetupState:
-    status: str
-    setup: AwaitingSkillSetup | None = None
-
-
-@dataclass(frozen=True)
-class RuntimeSkillSetupCancellationOutcome:
-    status: str
-    mutated: bool = False
-    foreign_setup: AwaitingSkillSetup | None = None
-
-
-@dataclass(frozen=True)
-class RuntimeSkillSetupAdvanceOutcome:
-    status: str
-    mutated: bool = False
-    validation_key: str = ""
-    validation_error: str = ""
-    next_requirement: dict[str, object] | None = None
-    skill_name: str = ""
-
-
-@dataclass(frozen=True)
-class RuntimeSkillCredentialSatisfactionOutcome:
-    status: str
-    mutated: bool = False
-    credential_env: dict[str, str] | None = None
-    foreign_setup: AwaitingSkillSetup | None = None
-    setup_state: AwaitingSkillSetup | None = None
-    missing_skill: str = ""
-    first_requirement: dict[str, object] | None = None
-
-
-@dataclass(frozen=True)
-class RuntimeSkillCredentialClearOutcome:
-    mutated: bool
-    setup_cleared: bool
-    deactivated_skills: tuple[str, ...]
-
-
-class RuntimeSkillSetupUseCases:
+class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
     """Canonical setup workflows shared by Telegram and other surfaces."""
 
     def _lifecycle(self):
@@ -146,7 +109,7 @@ class RuntimeSkillSetupUseCases:
         raw_value: str,
         data_dir: Path,
         encryption_key: bytes,
-        validator: Validator = validate_credential,
+        validator: CredentialValidator = validate_credential,
     ) -> RuntimeSkillSetupAdvanceOutcome:
         setup = session.awaiting_skill_setup
         if not setup or setup.user_id != user_id or not setup.remaining:

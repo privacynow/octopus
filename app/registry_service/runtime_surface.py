@@ -13,18 +13,18 @@ from typing import Any, Callable
 
 from app.content_store import init_content_store_for_config, reset_for_test as reset_content_store_for_test
 from app.agents.bridge import conversation_key_for_ref
-from app.provider_guidance_use_cases import get_provider_guidance_use_cases
+from app.inbound_use_case_factory import (
+    get_provider_guidance_use_cases,
+    get_runtime_skill_activation_use_cases,
+    get_runtime_skill_catalog_use_cases,
+    get_runtime_skill_import_use_cases,
+)
 from app.registry_service.store_base import AbstractRegistryStore
 from app import runtime_backend
 from app.config import BotConfig, load_config_provider_health
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
-from app.runtime_skill_activation_use_cases import get_runtime_skill_activation_use_cases
-from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_cases
-from app.runtime_skill_import_use_cases import (
-    PromptWarningContext,
-    get_runtime_skill_import_use_cases,
-)
+from app.runtime_skill_import_port import PromptWarningContext
 from app.session_state import SessionState, session_from_dict, session_to_dict
 from app.skills import derive_encryption_key
 from app.storage import load_session, save_session

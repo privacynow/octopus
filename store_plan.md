@@ -1134,6 +1134,11 @@ Named contract-test scope for the credential seam:
 - no `data_dir` or `encryption_key` parameters in credential use-case signatures after this milestone
 - no raw SHA-256 key derivation for credential encryption; HKDF is the required KDF
 - the credential service must not expand into unrelated runtime-skill orchestration
+- if full backend parity is deferred in this milestone, the plan and implementation must name:
+  - the exact deferred seam
+  - the reason for deferral
+  - the closure milestone
+  - the blocking condition that prevents the deferred seam from surviving into later shared-runtime/lifecycle work unchecked
 
 #### Watchouts
 
@@ -1149,6 +1154,7 @@ Named contract-test scope for the credential seam:
 - all credential reads/writes/validation/env building flow through that subsystem
 - the credential seam has explicit contract coverage
 - parity status is explicit, scoped, and tested or deliberately deferred as named debt
+- any deferred credential-backend seam has an explicit closure milestone and blocking rule recorded in the same slice
 - the credential service vs credential use-case boundary is implemented as defined above, not left to adapter interpretation
 - `request_flow.py` no longer owns execution-path credential satisfaction logic
 - `AwaitingSkillSetup` transition decisions occur through one owner: credential use-cases operating over the credential service
@@ -1197,6 +1203,7 @@ After the previous milestones, remove central authority from [app/skills.py](/Us
 - `app/skills.py` may not remain a hidden dependency root
 - no “utility graveyard” that new code starts importing from again
 - no compatibility wrapper that preserves the old authority shape
+- no module under `app/` may import from `app/skills.py` after this milestone completes
 
 #### Watchouts
 
@@ -1205,6 +1212,7 @@ After the previous milestones, remove central authority from [app/skills.py](/Us
 #### Exit criteria
 
 - `app/skills.py` is no longer central to runtime-skill or credential architecture
+- zero modules under `app/` import from `app/skills.py`
 - `app/store.py` is removed or reduced to zero live architectural responsibility, with no filesystem fallback path left
 - prompt/config assembly is owned by `ProviderGuidanceService`, not `app/skills.py`
 
@@ -1226,6 +1234,9 @@ Current workflow slices covered by this milestone:
 - pending approval/retry actions
 - recovery replay/discard
 - provider-guidance preview
+
+This list is the complete scope of Milestone 6.
+Any workflow addition requires explicit re-scoping in the plan before implementation.
 
 For each workflow:
 
@@ -1255,6 +1266,7 @@ Treat both Telegram-facing modules as adapter code:
 - no handler-local lifecycle state machines
 - no adapter-specific fallbacks that bypass shared use-cases
 - no “Telegram first, registry later” sequencing for a shared workflow
+- no workflow may be added to this milestone’s scope implicitly during implementation; any addition must be named and re-scoped explicitly first
 
 #### Watchouts
 

@@ -1070,11 +1070,20 @@ def request_cancel(
 ) -> CancelRequestResult:
     now = datetime.now(timezone.utc).isoformat()
     with _write_tx(conn):
-        claimed = conn.execute(
+        claimed_sql = (
             "SELECT id, cancel_requested_at FROM work_items "
             "WHERE conversation_key = ? AND state = 'claimed' AND dispatch_mode = 'fresh' "
-            "ORDER BY created_at ASC LIMIT 1",
-            (conversation_key,),
+        )
+        claimed_params: tuple[object, ...]
+        if cancel_request_event_id:
+            claimed_sql += "AND event_id != ? "
+            claimed_params = (conversation_key, cancel_request_event_id)
+        else:
+            claimed_params = (conversation_key,)
+        claimed_sql += "ORDER BY created_at ASC LIMIT 1"
+        claimed = conn.execute(
+            claimed_sql,
+            claimed_params,
         ).fetchone()
         if claimed is not None:
             item_id = claimed["id"]
@@ -1086,11 +1095,18 @@ def request_cancel(
             )
             return CancelRequestResult.claimed_cancel_requested
 
-        queued = conn.execute(
+        queued_sql = (
             "SELECT id FROM work_items WHERE conversation_key = ? AND state = 'queued' "
-            "AND dispatch_mode = 'fresh' ORDER BY created_at ASC LIMIT 1",
-            (conversation_key,),
-        ).fetchone()
+            "AND dispatch_mode = 'fresh' "
+        )
+        queued_params: tuple[object, ...]
+        if cancel_request_event_id:
+            queued_sql += "AND event_id != ? "
+            queued_params = (conversation_key, cancel_request_event_id)
+        else:
+            queued_params = (conversation_key,)
+        queued_sql += "ORDER BY created_at ASC LIMIT 1"
+        queued = conn.execute(queued_sql, queued_params).fetchone()
         if queued is not None:
             cur = conn.execute(
                 "UPDATE work_items SET state = 'failed', completed_at = ?, error = 'cancelled' "

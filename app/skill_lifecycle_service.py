@@ -21,8 +21,6 @@ from app.skill_catalog_service import get_skill_catalog_service
 from app.provider_guidance_service import get_provider_guidance_service
 from app.skills import (
     PROMPT_SIZE_WARNING_THRESHOLD,
-    check_credentials,
-    get_skill_requirements,
     load_user_credentials,
 )
 
@@ -73,6 +71,15 @@ class SkillLifecycleService:
     def list_active(self, session: SessionState) -> list[str]:
         return self._activation.list_active(session)
 
+    def _missing_requirements(
+        self,
+        skill_name: str,
+        user_credentials: dict[str, dict[str, str]],
+    ):
+        requirements = self._catalog.requirements(skill_name)
+        skill_creds = user_credentials.get(skill_name, {})
+        return [item for item in requirements if item.key not in skill_creds]
+
     def begin_add(
         self,
         session: SessionState,
@@ -86,10 +93,10 @@ class SkillLifecycleService:
             return SkillAddDecision(status="unknown")
 
         active = self._activation.list_active(session)
-        requirements = get_skill_requirements(skill_name)
+        requirements = self._catalog.requirements(skill_name)
         if requirements:
             user_creds = load_user_credentials(data_dir, user_id, encryption_key)
-            missing = check_credentials(skill_name, user_creds)
+            missing = self._missing_requirements(skill_name, user_creds)
             if missing:
                 foreign = foreign_skill_setup(session, user_id)
                 if foreign:
@@ -139,7 +146,15 @@ class SkillLifecycleService:
     ) -> SkillSetupDecision:
         if not self._catalog.has_skill(skill_name):
             return SkillSetupDecision(status="unknown")
-        requirements = get_skill_requirements(skill_name)
+        requirements = [
+            {
+                "key": item.key,
+                "prompt": item.prompt,
+                "help_url": item.help_url,
+                "validate": item.validate,
+            }
+            for item in self._catalog.requirements(skill_name)
+        ]
         if not requirements:
             return SkillSetupDecision(status="no_requirements")
         foreign = foreign_skill_setup(session, user_id)

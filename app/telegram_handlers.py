@@ -2519,9 +2519,11 @@ async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     # Filter stale active_skills that no longer resolve
-    from app.skills import filter_resolvable_skills
+    from app.skill_catalog_service import get_skill_catalog_service
+
+    catalog_service = get_skill_catalog_service()
     for s in sessions:
-        s["active_skills"] = filter_resolvable_skills(s["active_skills"])
+        s["active_skills"] = catalog_service.filter_resolvable(s["active_skills"])
 
     # Detail view for a specific conversation
     if len(args) >= 2:
@@ -4631,6 +4633,9 @@ async def _shared_callback_dispatch(update: Update, context: ContextTypes.DEFAUL
 
 def build_application(config: BotConfig, provider: Provider) -> Application:
     global _config, _provider, _boot_id, _rate_limiter, _bot_instance
+    from app.content_store import init_content_store_for_config
+
+    init_content_store_for_config(config)
     _config = config
     _provider = provider
     _boot_id = _make_boot_id()

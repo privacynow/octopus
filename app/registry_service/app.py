@@ -27,7 +27,7 @@ from app.skill_import_service import get_skill_import_service
 from app.skill_lifecycle_service import get_skill_lifecycle_service
 from app.provider_guidance_service import get_provider_guidance_service
 from app.session_state import session_from_dict, session_to_dict
-from app.skills import derive_encryption_key, get_skill_requirements
+from app.skills import derive_encryption_key
 from app.storage import load_session, save_session
 
 log = logging.getLogger(__name__)
@@ -78,15 +78,6 @@ def _runtime_registry_url() -> str:
     return os.environ.get("BOT_REGISTRY_URL", "").strip()
 
 
-def _provider_names_for_skill_path(path: Path) -> list[str]:
-    providers: list[str] = []
-    if (path / "claude.yaml").is_file():
-        providers.append("claude")
-    if (path / "codex.yaml").is_file():
-        providers.append("codex")
-    return providers
-
-
 def _catalog_skill_summary(name: str) -> dict[str, Any] | None:
     catalog = get_skill_catalog_service()
     imports = get_skill_import_service()
@@ -95,7 +86,6 @@ def _catalog_skill_summary(name: str) -> dict[str, Any] | None:
         return None
     resolved = catalog.resolve_info(name)
     source = resolved.source if resolved else ""
-    skill_path = resolved.skill_path if resolved else Path()
     return {
         "name": name,
         "display_name": meta.display_name,
@@ -103,9 +93,9 @@ def _catalog_skill_summary(name: str) -> dict[str, Any] | None:
         "is_custom": meta.is_custom,
         "is_managed": imports.is_installed(name),
         "has_custom_override": imports.has_custom_override(name),
-        "is_installed": source != "store (not installed)",
-        "requires_credentials": bool(get_skill_requirements(name)),
-        "providers": _provider_names_for_skill_path(skill_path),
+        "is_installed": bool(resolved),
+        "requires_credentials": bool(resolved and resolved.requirement_keys),
+        "providers": list(resolved.providers) if resolved else [],
         "source": source,
     }
 
@@ -117,18 +107,10 @@ def _catalog_skill_detail(name: str) -> dict[str, Any] | None:
     resolved = get_skill_catalog_service().resolve_info(name)
     if resolved is None:
         return summary
-    requirements = get_skill_requirements(name)
-    if requirements:
-        requirement_keys = [item.key for item in requirements]
-    elif resolved.source == "store (not installed)":
-        requirement_keys = get_skill_import_service().requirement_keys(name)
-    else:
-        requirement_keys = []
     return {
         **summary,
         "body": resolved.body,
-        "requirement_keys": requirement_keys,
-        "skill_path": str(resolved.skill_path),
+        "requirement_keys": list(resolved.requirement_keys),
     }
 
 
@@ -504,9 +486,9 @@ def catalog_skill_search(
 ) -> dict[str, Any]:
     query = q.strip()
     if len(query) < 2:
-        return {"store": [], "registry": []}
+        return {"catalog": [], "registry": []}
     imports = get_skill_import_service()
-    store_hits = [
+    catalog_hits = [
         {
             "name": item.name,
             "display_name": item.display_name,
@@ -529,7 +511,7 @@ def catalog_skill_search(
             ]
         except Exception as exc:
             registry_hits = [{"error": str(exc)[:200]}]
-    return {"store": store_hits, "registry": registry_hits}
+    return {"catalog": catalog_hits, "registry": registry_hits}
 
 
 @app.get("/v1/catalog/skills/{skill_name}")
@@ -549,15 +531,12 @@ def catalog_skill_install(
     _: None = Depends(require_ui_token),
 ) -> dict[str, Any]:
     imports = get_skill_import_service()
-    if imports.bundled_exists(skill_name):
-        result = imports.install_bundled(skill_name)
-    else:
-        registry_url = _runtime_registry_url()
-        if not registry_url:
-            raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_name}")
-        result = imports.install_from_registry(skill_name, registry_url)
-        if not result.ok:
-            raise HTTPException(status_code=404, detail=result.message)
+    registry_url = _runtime_registry_url()
+    if not registry_url:
+        raise HTTPException(status_code=404, detail="No skill registry configured.")
+    result = imports.install_from_registry(skill_name, registry_url)
+    if not result.ok:
+        raise HTTPException(status_code=404, detail=result.message)
     response: dict[str, Any] = {
         "name": result.name,
         "ok": result.ok,
@@ -712,6 +691,7 @@ def provider_guidance_preview(
     system_prompt = guidance.apply_compact_mode(system_prompt, payload.compact_mode)
     return {
         "provider": provider_name,
+        "effective_guidance": guidance.effective_guidance_preview(provider_name),
         "system_prompt": system_prompt,
         "capability_summary": guidance.capability_summary(provider_name, list(payload.active_skills)),
         "provider_config": guidance.provider_config(provider_name, list(payload.active_skills)),

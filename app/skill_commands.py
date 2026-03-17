@@ -15,8 +15,6 @@ from app.skill_import_service import get_skill_import_service
 from app.skill_lifecycle_service import get_skill_lifecycle_service
 from app.provider_guidance_service import get_provider_guidance_service
 from app.skills import (
-    check_credentials,
-    get_skill_requirements,
     load_user_credentials,
 )
 
@@ -56,12 +54,13 @@ async def skills_list(event, update: Update) -> None:
     user_creds = load_user_credentials(th._cfg().data_dir, req_user_id, th._encryption_key())
     lines = ["<b>Available skills:</b>"]
     for name, meta in sorted(catalog.items()):
+        requirements = get_skill_catalog_service().requirements(name)
         if name in active:
             status = " [active]"
         else:
-            reqs = get_skill_requirements(name)
-            if reqs:
-                missing = check_credentials(name, user_creds)
+            if requirements:
+                skill_creds = user_creds.get(name, {})
+                missing = [item for item in requirements if item.key not in skill_creds]
                 status = " [needs setup]" if missing else " [ready]"
             else:
                 status = ""
@@ -206,10 +205,14 @@ async def skills_clear(event, update: Update) -> None:
 
 async def skills_create(event, update: Update, name: str) -> None:
     try:
-        skill_dir = get_skill_catalog_service().create_custom_draft(name)
+        record = get_skill_catalog_service().create_custom_draft(
+            name,
+            owner_actor=str(event.user.id),
+        )
         await update.effective_message.reply_text(
             f"Created custom skill <code>{html.escape(name)}</code>\n"
-            f"Edit: <code>{html.escape(str(skill_dir / 'skill.md'))}</code>",
+            f"Draft visibility: <code>{html.escape(record.visibility)}</code>\n"
+            "Use the registry UI or upcoming guided edit flow to update its instructions.",
             parse_mode=ParseMode.HTML,
         )
     except ValueError as e:
@@ -221,7 +224,7 @@ async def skills_search(event, update: Update, query: str) -> None:
     results = imports.bundled_search(query)
     lines: list[str] = []
     if results:
-        lines.append(f"<b>Store skills matching '{html.escape(query)}':</b>")
+        lines.append(f"<b>Catalog skills matching '{html.escape(query)}':</b>")
         for info in results:
             desc = f" \u2014 {html.escape(info.description)}" if info.description else ""
             lines.append(f"  <code>{html.escape(info.name)}</code>{desc}")
@@ -249,7 +252,7 @@ async def skills_search(event, update: Update, query: str) -> None:
             parse_mode=ParseMode.HTML,
         )
         return
-    lines.append("\nUse /skills info <name> for details, /skills install <name> to install.")
+    lines.append("\nUse /skills info <name> for details, /skills install <name> to import from the registry.")
     await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
@@ -266,21 +269,11 @@ async def skills_info(event, update: Update, name: str) -> None:
     parts = [f"<b>{html.escape(display_name)}</b>"]
     if description:
         parts.append(html.escape(description))
-    reqs = get_skill_requirements(name)
-    if reqs:
-        req_keys = ", ".join(r.key for r in reqs)
+    if result.requirement_keys:
+        req_keys = ", ".join(result.requirement_keys)
         parts.append(f"Requires: {html.escape(req_keys)}")
-    elif result.source == "store (not installed)":
-        store_keys = get_skill_import_service().requirement_keys(name)
-        if store_keys:
-            parts.append(f"Requires: {html.escape(', '.join(store_keys))}")
-    providers = []
-    if (result.skill_path / "claude.yaml").is_file():
-        providers.append("Claude")
-    if (result.skill_path / "codex.yaml").is_file():
-        providers.append("Codex")
-    if providers:
-        parts.append(f"Providers: {', '.join(providers)}")
+    if result.providers:
+        parts.append(f"Providers: {', '.join(sorted(result.providers))}")
     parts.append(f"Resolves to: {result.source}")
     if len(result.body) > 1000:
         cut = result.body.rfind("\n\n", 0, 1000)
@@ -300,19 +293,10 @@ async def skills_install(event, update: Update, name: str) -> None:
         await update.effective_message.reply_text("Only admins can install skills.")
         return
 
-    # Try bundled store first
-    if imports.bundled_exists(name):
-        result = imports.install_bundled(name)
-        await update.effective_message.reply_text(html.escape(result.message), parse_mode=ParseMode.HTML)
-        return
-
     # Fall back to registry
     registry_url = th._cfg().registry_url
     if not registry_url:
-        await update.effective_message.reply_text(
-            f"Skill '{html.escape(name)}' not found in bundled store and no registry configured.",
-            parse_mode=ParseMode.HTML,
-        )
+        await update.effective_message.reply_text("No skill registry configured.", parse_mode=ParseMode.HTML)
         return
 
     try:

@@ -9,6 +9,7 @@ durable storage without baking in today's mistakes.
 
 - One abstraction, multiple implementations.
 - No parallel paths for the same concern.
+- No backward-compatibility shims that keep old runtime paths alive.
 - Interfaces before implementations.
 - Registry is the only public HTTP API.
 - Telegram remains a first-class UI surface.
@@ -86,6 +87,21 @@ Current abstraction is only partial:
   - `app/skill_commands.py`
 
 Registry UI is not yet another implementation of the same inbound lifecycle seam.
+
+## Hard Cutover Rule
+
+This repo is still under development and has not been deployed to production.
+That means the migration strategy is a hard cutover, not a compatibility
+bridge.
+
+- Built-in skills are seeded into the content store at startup.
+- Provider guidance is seeded into the content store at startup.
+- Repo skill files are seed inputs only, never live runtime inputs.
+- If content seeding fails, startup fails.
+- Runtime reads must go through the content store only.
+- There is no `if content store empty, fall back to files` behavior.
+- Old filesystem-backed skill/store paths must be removed from active runtime
+  services, not retained behind compatibility flags.
 
 ## Locked Decisions
 

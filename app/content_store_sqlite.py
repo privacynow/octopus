@@ -233,6 +233,33 @@ class SQLiteContentStore(AbstractContentStore):
         )
         conn.commit()
 
+    def delete_skill_track(
+        self,
+        slug: str,
+        *,
+        source_kind: str,
+        source_uri: str = "",
+        owner_actor: str = "",
+    ) -> bool:
+        conn = self._db()
+        track_id = "|".join((slug, source_kind, source_uri, owner_actor))
+        before = conn.total_changes
+        conn.execute("DELETE FROM skill_tracks WHERE track_id = ?", (track_id,))
+        conn.execute(
+            """
+            DELETE FROM skill_namespaces
+            WHERE slug = ?
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM skill_tracks tr
+                    WHERE tr.skill_id = skill_namespaces.skill_id
+              )
+            """,
+            (slug,),
+        )
+        conn.commit()
+        return conn.total_changes > before
+
     def _rows_for_slug(self, slug: str) -> list[sqlite3.Row]:
         conn = self._db()
         return conn.execute(

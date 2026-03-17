@@ -28,6 +28,8 @@ def reset_handler_test_runtime() -> None:
     """
     import app.runtime_backend as _rb
     _rb.reset_for_test()
+    import app.content_store as _cs
+    _cs.reset_for_test()
 
     _th._config = None
     _th._provider = None
@@ -378,6 +380,28 @@ class MinimalFakeBot:
 def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
     """Set handler runtime globals for tests. Call reset_handler_test_runtime() first if reusing."""
     reset_handler_test_runtime()
+    import app.content_store as _cs
+    from app.content_seed import track_from_skill_dir
+    import app.skills as _skills_mod
+
+    _cs.init_content_store_for_config(config)
+    custom_dir = getattr(_skills_mod, "CUSTOM_DIR", None)
+    if isinstance(custom_dir, Path) and custom_dir.is_dir():
+        store = _cs.get_content_store()
+        for skill_dir in sorted(custom_dir.iterdir()):
+            if skill_dir.is_dir() and (skill_dir / "skill.md").is_file():
+                store.replace_skill_track(
+                    track_from_skill_dir(
+                        skill_dir,
+                        source_kind="custom",
+                        source_uri=f"test-custom/{skill_dir.name}",
+                        owner_actor="test",
+                        visibility="private",
+                        is_mutable=True,
+                        version_label="draft",
+                        created_by="test",
+                    )
+                )
     _th._config = config
     _th._provider = provider
     _th._boot_id = boot_id

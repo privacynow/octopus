@@ -1,24 +1,33 @@
-"""Shared service layer for runtime skill catalog access.
-
-The current implementation is file-backed. Callers should depend on this
-service rather than hard-coding repo or filesystem paths so the later content
-store migration has a stable seam.
-"""
+"""Shared service layer for runtime skill catalog access."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
-from app.content_models import RuntimeSkillTrackRecord
+from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.content_seed import builtin_skill_tracks
-from app.skills import (
-    SkillMeta,
-    get_skill_requirements,
-    load_catalog,
-    scaffold_skill,
-    skill_info_resolved,
-)
+from app.content_store import get_content_store
+from app.skills import SkillMeta, SkillRequirement
+
+
+def _requirements_from_track(record: RuntimeSkillTrackRecord) -> list[SkillRequirement]:
+    requirements: list[SkillRequirement] = []
+    for item in record.revision.requirements:
+        key = str(item.get("key", "") or "")
+        if not key:
+            continue
+        prompt = str(item.get("prompt", "") or "")
+        help_url = item.get("help_url")
+        validate = item.get("validate")
+        requirements.append(
+            SkillRequirement(
+                key=key,
+                prompt=prompt,
+                help_url=str(help_url) if help_url else None,
+                validate=validate if isinstance(validate, dict) else None,
+            )
+        )
+    return requirements
 
 
 @dataclass(frozen=True)
@@ -26,30 +35,106 @@ class SkillInfoRecord:
     meta: dict[str, str]
     body: str
     source: str
-    skill_path: Path
+    providers: tuple[str, ...]
+    requirement_keys: tuple[str, ...]
 
 
 class SkillCatalogService:
     """Surface-neutral runtime skill catalog service."""
 
+    _SOURCE_LABELS = {
+        "builtin": "builtin",
+        "imported": "imported",
+        "custom": "custom",
+    }
+
+    def _store(self):
+        return get_content_store()
+
     def catalog(self) -> dict[str, SkillMeta]:
-        return load_catalog()
+        catalog: dict[str, SkillMeta] = {}
+        for item in self._store().list_skill_summaries():
+            catalog[item.slug] = SkillMeta(
+                name=item.slug,
+                display_name=item.display_name,
+                description=item.description,
+                is_custom=(item.source_kind == "custom"),
+            )
+        return catalog
+
+    def list_tracks(self, skill_name: str) -> list[RuntimeSkillTrackRecord]:
+        return self._store().list_skill_tracks(skill_name)
+
+    def resolve_track(self, skill_name: str) -> RuntimeSkillTrackRecord | None:
+        return self._store().resolve_skill(skill_name)
 
     def has_skill(self, skill_name: str) -> bool:
-        return skill_name in self.catalog()
+        return self.resolve_track(skill_name) is not None
 
-    def requirements(self, skill_name: str):
-        return get_skill_requirements(skill_name)
+    def requirements(self, skill_name: str) -> list[SkillRequirement]:
+        record = self.resolve_track(skill_name)
+        if record is None:
+            return []
+        return _requirements_from_track(record)
 
     def resolve_info(self, skill_name: str) -> SkillInfoRecord | None:
-        result = skill_info_resolved(skill_name)
-        if not result:
+        record = self.resolve_track(skill_name)
+        if record is None:
             return None
-        meta, body, source, skill_path = result
-        return SkillInfoRecord(meta=meta, body=body, source=source, skill_path=skill_path)
+        provider_names = tuple(
+            provider
+            for provider in ("claude", "codex")
+            if isinstance(record.revision.provider_config.get(provider), dict)
+        )
+        return SkillInfoRecord(
+            meta={
+                "display_name": record.display_name,
+                "description": record.description,
+            },
+            body=record.revision.instruction_body,
+            source=self._SOURCE_LABELS.get(record.source_kind, record.source_kind),
+            providers=provider_names,
+            requirement_keys=tuple(item.key for item in _requirements_from_track(record)),
+        )
 
-    def create_custom_draft(self, skill_name: str) -> Path:
-        return scaffold_skill(skill_name)
+    def create_custom_draft(self, skill_name: str, *, owner_actor: str = "") -> RuntimeSkillTrackRecord:
+        if not skill_name or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-" for ch in skill_name):
+            raise ValueError(f"Skill name must be lowercase letters, digits, and hyphens: {skill_name}")
+        if not skill_name[0].isalpha():
+            raise ValueError(f"Skill name must be lowercase letters, digits, and hyphens: {skill_name}")
+        if self.has_skill(skill_name):
+            raise ValueError(f"Skill '{skill_name}' already exists")
+        display_name = skill_name.replace("-", " ").title()
+        record = RuntimeSkillTrackRecord(
+            slug=skill_name,
+            display_name=display_name,
+            description="Custom skill",
+            source_kind="custom",
+            source_uri=f"custom/{skill_name}",
+            owner_actor=owner_actor,
+            visibility="private",
+            is_mutable=True,
+            revision=SkillRevisionRecord(
+                instruction_body="Add your instructions here.",
+                version_label="draft",
+                created_by=owner_actor or "draft",
+            ),
+        )
+        self._store().replace_skill_track(record)
+        resolved = self.resolve_track(skill_name)
+        if resolved is None:
+            raise RuntimeError(f"Failed to create draft skill '{skill_name}'")
+        return resolved
+
+    def filter_resolvable(self, names: list[str]) -> list[str]:
+        return [name for name in names if self.has_skill(name)]
+
+    def validate_active(self, skill_names: list[str]) -> list[str]:
+        errors: list[str] = []
+        for name in skill_names:
+            if not self.has_skill(name):
+                errors.append(f"Active skill '{name}' not found in catalog")
+        return errors
 
     def builtin_seed_tracks(self) -> list[RuntimeSkillTrackRecord]:
         return builtin_skill_tracks()

@@ -12,10 +12,10 @@ from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
 from app.agents.delivery import handle_registry_delivery
 from app.agents.runtime import start_agent_runtime_task
+from app.content_store import init_content_store_for_config
 from app.storage import close_db, ensure_data_dirs
 from app.work_queue import close_transport_db, recover_stale_claims, purge_old
 from app.worker import poll_interval_for_runtime, start_worker_task
-from app.store import startup_recovery
 from app.telegram_handlers import build_application
 from app.runtime_health import CanonicalRuntimeHealthProvider
 
@@ -187,7 +187,7 @@ def main() -> None:
             sys.exit(1)
 
     ensure_data_dirs(config.data_dir, database_url=config.database_url or "")
-    startup_recovery()
+    init_content_store_for_config(config)
 
     log.info("Instance: %s", config.instance)
     log.info("Provider: %s", provider.name)

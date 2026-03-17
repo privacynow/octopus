@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from app.content_store import init_content_store_for_config, reset_for_test as reset_content_store_for_test
 from app import runtime_backend
 from app.config import BotConfig, load_config_provider_health
 from app.providers.claude import ClaudeProvider
@@ -31,6 +32,7 @@ def get_runtime_surface_context() -> RuntimeSurfaceContext:
     if _context is None:
         config = load_config_provider_health()
         runtime_backend.init(config)
+        init_content_store_for_config(config)
         if config.provider_name == "codex":
             provider_state_factory = CodexProvider(config).new_provider_state
         else:
@@ -46,3 +48,4 @@ def reset_for_test() -> None:
     global _context
     _context = None
     runtime_backend.reset_for_test()
+    reset_content_store_for_test()

@@ -34,7 +34,7 @@ def _enroll_and_register(client: TestClient, name: str, slug: str) -> tuple[str,
                 "display_name": name,
                 "slug": slug,
                 "role": "developer",
-                "skills": ["python", "tests"],
+                "capabilities": ["python", "tests"],
                 "tags": ["backend"],
                 "description": "Writes and tests code",
                 "provider": "codex",
@@ -56,7 +56,7 @@ def _enroll_and_register(client: TestClient, name: str, slug: str) -> tuple[str,
                 "display_name": name,
                 "slug": slug,
                 "role": "developer",
-                "skills": ["python", "tests"],
+                "capabilities": ["python", "tests"],
                 "tags": ["backend"],
                 "description": "Writes and tests code",
                 "provider": "codex",
@@ -150,7 +150,7 @@ def test_registry_enroll_register_heartbeat_and_search(monkeypatch, tmp_path: Pa
     search = client.post(
         "/v1/agents/discovery/search",
         headers={"Authorization": f"Bearer {token}"},
-        json={"role": "developer", "skills": ["python"], "required_state": "connected"},
+        json={"role": "developer", "capabilities": ["python"], "required_state": "connected"},
     )
     assert search.status_code == 200
     agents = search.json()["agents"]

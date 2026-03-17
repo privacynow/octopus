@@ -22,6 +22,19 @@ def test_derive_agent_slug_normalizes_display_name():
     assert derive_agent_slug("!!!", fallback="fallback-agent") == "fallback-agent"
 
 
+def test_requested_card_uses_agent_capabilities_without_default_skill_fallback(tmp_path: Path):
+    config = make_config(
+        data_dir=tmp_path,
+        default_skills=("github-integration",),
+        agent_capabilities=(),
+        agent_display_name="Product Bot",
+    )
+
+    card = AgentRuntime(config).requested_card()
+
+    assert card.capabilities == ()
+
+
 async def test_agent_runtime_standalone_marks_state(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,
@@ -90,7 +103,7 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
         agent_display_name="Product Bot",
         agent_slug="product-bot",
         agent_role="product",
-        agent_skills=("planning", "delegation"),
+        agent_capabilities=("planning", "delegation"),
         agent_registry_url="http://registry.test",
         agent_registry_enroll_token="enroll-secret",
     )

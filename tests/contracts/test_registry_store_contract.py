@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.registry_service.store import RegistrySQLiteStore
-from app.registry_service.store_base import SkillDisabledError
+from app.registry_service.store_base import CapabilityDisabledError
 from app.runtime_health import (
     QueueSnapshot,
     RuntimeDiagnostic,
@@ -17,12 +17,12 @@ from app.runtime_health import (
 )
 
 
-def _card(slug: str, skills: list[str] | None = None) -> dict:
+def _card(slug: str, capabilities: list[str] | None = None) -> dict:
     return {
         "display_name": slug,
         "slug": slug,
         "role": "developer",
-        "skills": skills or ["python"],
+        "capabilities": capabilities or ["python"],
         "tags": ["backend"],
         "description": f"{slug} description",
         "provider": "codex",
@@ -33,12 +33,12 @@ def _card(slug: str, skills: list[str] | None = None) -> dict:
     }
 
 
-def _enroll(store, slug: str, skills: list[str] | None = None) -> tuple[str, str]:
-    enrolled = store.enroll(_card(slug, skills))
+def _enroll(store, slug: str, capabilities: list[str] | None = None) -> tuple[str, str]:
+    enrolled = store.enroll(_card(slug, capabilities))
     store.register(
         enrolled["agent_token"],
         {
-            "agent_card": _card(slug, skills),
+            "agent_card": _card(slug, capabilities),
             "connectivity_state": "connected",
             "current_capacity": 0,
             "max_capacity": 2,
@@ -154,11 +154,11 @@ def test_ack_marks_delivery_done(store):
     assert store.poll(agent_token, cursor=0, limit=20)["deliveries"] == []
 
 
-def test_search_agents_by_skill(store):
+def test_search_agents_by_capability(store):
     _enroll(store, "rust-bot", ["rust"])
 
-    hits = store.search_agents({"skills": ["rust"], "required_state": "connected"})
-    misses = store.search_agents({"skills": ["python"], "required_state": "connected"})
+    hits = store.search_agents({"capabilities": ["rust"], "required_state": "connected"})
+    misses = store.search_agents({"capabilities": ["python"], "required_state": "connected"})
 
     assert [item["slug"] for item in hits] == ["rust-bot"]
     assert misses == []
@@ -199,12 +199,12 @@ def test_create_routed_task_and_lookup(store):
     assert deliveries[0]["kind"] == "routed_task"
 
 
-def test_create_routed_task_disabled_skill_raises(store):
+def test_create_routed_task_disabled_capability_raises(store):
     origin_id, _ = _enroll(store, "origin-bot")
     target_id, _ = _enroll(store, "target-bot", ["reviewer"])
-    store.set_skill_override("reviewer", enabled=False)
+    store.set_capability_override("reviewer", enabled=False)
 
-    with pytest.raises(SkillDisabledError):
+    with pytest.raises(CapabilityDisabledError):
         store.create_routed_task(
             {
                 "routed_task_id": "task-disabled",
@@ -408,29 +408,29 @@ def test_search_conversations_fts(store):
     assert results[0]["snippet"]
 
 
-def test_skill_override_disabled_excludes_from_search(store):
+def test_capability_override_disabled_excludes_from_search(store):
     _enroll(store, "rust-bot", ["rust"])
-    store.set_skill_override("rust", enabled=False)
+    store.set_capability_override("rust", enabled=False)
 
-    assert store.search_agents({"skills": ["rust"], "required_state": "connected"}) == []
+    assert store.search_agents({"capabilities": ["rust"], "required_state": "connected"}) == []
 
 
-def test_list_skills_aggregates_declared(store):
+def test_list_capabilities_aggregates_declared(store):
     _enroll(store, "alpha-bot", ["python"])
     _enroll(store, "beta-bot", ["python"])
 
-    skills = {item["skill_name"]: item for item in store.list_skills()}
+    capabilities = {item["capability_name"]: item for item in store.list_capabilities()}
 
-    assert "python" in skills
-    assert skills["python"]["declared_by_agents"] == ["alpha-bot", "beta-bot"]
+    assert "python" in capabilities
+    assert capabilities["python"]["declared_by_agents"] == ["alpha-bot", "beta-bot"]
 
 
-def test_skill_override_survives_agent_deregistration(store):
+def test_capability_override_survives_agent_deregistration(store):
     _, agent_token = _enroll(store, "go-bot", ["go"])
-    store.set_skill_override("go", enabled=False)
+    store.set_capability_override("go", enabled=False)
     store.deregister(agent_token)
 
-    skills = {item["skill_name"]: item for item in store.list_skills()}
+    capabilities = {item["capability_name"]: item for item in store.list_capabilities()}
 
-    assert skills["go"]["enabled"] is False
-    assert skills["go"]["declared_by_agents"] == []
+    assert capabilities["go"]["enabled"] is False
+    assert capabilities["go"]["declared_by_agents"] == []

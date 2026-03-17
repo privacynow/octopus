@@ -13,10 +13,15 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.agents.types import TimelineEvent
+from app.capability_service import (
+    declared_capabilities,
+    query_capabilities,
+    requested_routed_capabilities,
+)
 from app.db.postgres import get_connection
 from app.registry_service.store_base import (
     AbstractRegistryStore,
-    SkillDisabledError,
+    CapabilityDisabledError,
     conversation_status_for_event,
     decode_json_field,
     effective_connectivity_state,
@@ -106,7 +111,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "display_name": row["display_name"],
             "slug": row["slug"],
             "role": row["role"],
-            "skills": decode_json_field(row["skills_json"], []),
+            "capabilities": decode_json_field(row["skills_json"], []),
             "tags": decode_json_field(row["tags_json"], []),
             "description": row["description"],
             "provider": row["provider"],
@@ -324,7 +329,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         requested_card.get("display_name") or slug,
                         slug,
                         requested_card.get("role", ""),
-                        _jsonb(requested_card.get("skills", [])),
+                        _jsonb(declared_capabilities(requested_card)),
                         _jsonb(requested_card.get("tags", [])),
                         requested_card.get("description", ""),
                         requested_card.get("provider", ""),
@@ -366,7 +371,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     (
                         card.get("display_name", row["display_name"]),
                         card.get("role", row["role"]),
-                        _jsonb(card.get("skills", [])),
+                        _jsonb(declared_capabilities(card)),
                         _jsonb(card.get("tags", [])),
                         card.get("description", row["description"]),
                         card.get("provider", row["provider"]),
@@ -505,8 +510,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 )
         return self.get_conversation(payload["conversation_id"])
 
-    def get_skill_override(self, skill_name: str) -> bool | None:
-        normalized = skill_name.strip().lower()
+    def get_capability_override(self, capability_name: str) -> bool | None:
+        normalized = capability_name.strip().lower()
         with self._connect() as conn:
             with _cur(conn) as cur:
                 cur.execute(
@@ -518,8 +523,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
             return None
         return bool(row["enabled"])
 
-    def set_skill_override(self, skill_name: str, enabled: bool, set_by: str = "ui") -> None:
-        normalized = skill_name.strip().lower()
+    def set_capability_override(self, capability_name: str, enabled: bool, set_by: str = "ui") -> None:
+        normalized = capability_name.strip().lower()
         with self._connect() as conn, _write_tx(conn):
             with _cur(conn) as cur:
                 cur.execute(
@@ -534,7 +539,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     (normalized, 1 if enabled else 0, set_by, datetime.now(timezone.utc).timestamp()),
                 )
 
-    def list_skills(self) -> list[dict[str, Any]]:
+    def list_capabilities(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             with _cur(conn) as cur:
                 cur.execute(
@@ -550,15 +555,15 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         END != 'offline'
                     ),
                     declared AS (
-                        SELECT lower(je.value) AS skill_key, je.value AS skill_name, live_agents.slug
+                        SELECT lower(je.value) AS capability_key, je.value AS capability_name, live_agents.slug
                         FROM live_agents
                         CROSS JOIN LATERAL jsonb_array_elements_text(live_agents.skills_json) AS je(value)
                     )
-                    SELECT skill_key, MIN(skill_name) AS skill_name,
+                    SELECT capability_key, MIN(capability_name) AS capability_name,
                            array_agg(DISTINCT slug ORDER BY slug) AS declared_by_agents
                     FROM declared
-                    GROUP BY skill_key
-                    ORDER BY skill_key
+                    GROUP BY capability_key
+                    ORDER BY capability_key
                     """,
                     (self._offline_before(),),
                 )
@@ -573,8 +578,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 override_rows = cur.fetchall()
         merged: dict[str, dict[str, Any]] = {}
         for row in declared_rows:
-            merged[row["skill_key"]] = {
-                "skill_name": row["skill_name"],
+            merged[row["capability_key"]] = {
+                "capability_name": row["capability_name"],
                 "declared_by_agents": row["declared_by_agents"] or [],
                 "enabled": None,
             }
@@ -583,15 +588,15 @@ class RegistryPostgresStore(AbstractRegistryStore):
             item = merged.setdefault(
                 key,
                 {
-                    "skill_name": row["skill_name"],
+                    "capability_name": row["skill_name"],
                     "declared_by_agents": [],
                     "enabled": None,
                 },
             )
             item["enabled"] = bool(row["enabled"])
-        return sorted(merged.values(), key=lambda item: item["skill_name"].lower())
+        return sorted(merged.values(), key=lambda item: item["capability_name"].lower())
 
-    def _disabled_skills(self, conn) -> set[str]:
+    def _disabled_capabilities(self, conn) -> set[str]:
         with _cur(conn) as cur:
             cur.execute(
                 f"SELECT skill_name FROM {_SCHEMA}.skills_override WHERE enabled = 0"
@@ -602,14 +607,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
     def search_agents(self, query: dict[str, Any]) -> list[dict[str, Any]]:
         role = query.get("role", "").strip().lower()
         required_state = query.get("required_state", "connected")
-        skills = {s.lower() for s in query.get("skills", []) if s}
+        capabilities = query_capabilities(query)
         tags = {t.lower() for t in query.get("tags", []) if t}
         free_text = query.get("free_text", "").strip()
         exclude = sorted(set(query.get("exclude_agent_ids", [])))
         with self._connect() as conn:
-            disabled_skills = self._disabled_skills(conn)
-            skills = skills - disabled_skills
-            if query.get("skills") and not skills:
+            disabled_capabilities = self._disabled_capabilities(conn)
+            capabilities = capabilities - disabled_capabilities
+            if (query.get("capabilities") or query.get("skills")) and not capabilities:
                 return []
             sql = [
                 f"""
@@ -639,7 +644,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             if role:
                 sql.append(" AND role ILIKE %s")
                 params.append(f"%{role}%")
-            for skill in sorted(skills):
+            for capability in sorted(capabilities):
                 sql.append(
                     """
                     AND EXISTS (
@@ -649,7 +654,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     )
                     """
                 )
-                params.append(skill)
+                params.append(capability)
             for tag in sorted(tags):
                 sql.append(
                     """
@@ -744,9 +749,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
     def create_routed_task(self, request: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
         with self._connect() as conn, _write_tx(conn):
-            requested_skill = str(request.get("skill") or "").strip()
-            if requested_skill and requested_skill.lower() in self._disabled_skills(conn):
-                raise SkillDisabledError(requested_skill)
+            disabled_capabilities = self._disabled_capabilities(conn)
+            for capability in requested_routed_capabilities(request):
+                if capability.lower() in disabled_capabilities:
+                    raise CapabilityDisabledError(capability)
             with _cur(conn) as cur:
                 cur.execute(
                     f"""

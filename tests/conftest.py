@@ -129,3 +129,14 @@ def postgres_registry_truncated(postgres_db_url):
     with get_connection(postgres_db_url) as conn:
         truncate_registry_tables(conn)
     yield postgres_db_url
+
+
+@pytest.fixture
+def postgres_content_truncated(postgres_db_url):
+    """Postgres URL for current worker with dedicated content schema reset."""
+    from app.db.postgres import get_connection
+    from tests.support.postgres_support import truncate_content_tables
+
+    with get_connection(postgres_db_url) as conn:
+        truncate_content_tables(conn)
+    yield postgres_db_url

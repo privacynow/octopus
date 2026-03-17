@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Awaitable, Callable, Protocol
+from typing import Protocol
 
+from app.credential_types import CredentialValidator
 from app.session_state import AwaitingSkillSetup, SessionState
-from app.skills import SkillRequirement
-
-CredentialValidator = Callable[[SkillRequirement, str], Awaitable[tuple[bool, str]]]
 
 
 @dataclass(frozen=True)

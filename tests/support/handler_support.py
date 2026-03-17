@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 
 import app.telegram_handlers as _th
+from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.providers.base import RunResult
 from app.ratelimit import RateLimiter
 from app.storage import close_db, ensure_data_dirs, load_session
@@ -574,11 +575,42 @@ def make_skill(custom_dir, name, *, body, requires=None):
     return d
 
 
-def make_store_skill(store_dir, name, *, body):
-    d = store_dir / name
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "skill.md").write_text(
-        f"---\nname: {name}\ndisplay_name: {name}\n"
-        f"description: test fixture\n---\n\n{body}\n"
+def seed_runtime_skill(
+    name,
+    *,
+    body,
+    requires=None,
+    source_kind="custom",
+    description="test fixture",
+    owner_actor="test",
+):
+    import app.content_store as _cs
+
+    requirement_rows = []
+    for requirement in requires or []:
+        requirement_rows.append(
+            {
+                "key": requirement["key"],
+                "prompt": requirement.get("prompt", f'enter {requirement["key"]}'),
+                "help_url": requirement.get("help_url"),
+                "validate": requirement.get("validate"),
+            }
+        )
+    track = RuntimeSkillTrackRecord(
+        slug=name,
+        display_name=name,
+        description=description,
+        source_kind=source_kind,
+        source_uri=f"test-{source_kind}/{name}",
+        owner_actor=owner_actor if source_kind == "custom" else "",
+        visibility="private" if source_kind == "custom" else "shared",
+        is_mutable=(source_kind == "custom"),
+        revision=SkillRevisionRecord(
+            instruction_body=body,
+            requirements=requirement_rows,
+            version_label="draft" if source_kind == "custom" else source_kind,
+            created_by=owner_actor,
+        ),
     )
-    return d
+    _cs.get_content_store().replace_skill_track(track)
+    return track

@@ -30,7 +30,7 @@ from app.providers.base import (
 )
 from app.progress import render as render_progress
 from app.providers.codex import CodexProvider
-from app.storage import default_session, save_session
+from app.storage import close_db, default_session, ensure_data_dirs, save_session
 from app.work_queue import debug_transport_connection
 from tests.support.config_support import make_config as _make_config
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
@@ -82,75 +82,39 @@ def _event(value):
 # =====================================================================
 
 def test_registry_digest_mismatch_leaves_no_residue():
-    """Digest mismatch must not leave refs, objects, or staging dirs."""
-    import http.server
-    import json
-    import shutil
-    import tarfile
-    import threading
-
-    from app.registry import RegistrySkill
-    from app.store import (
-        OBJECTS_DIR, REFS_DIR, TMP_DIR,
-        ensure_managed_dirs, install_from_registry, read_ref,
-    )
+    """Digest mismatch must not create any runtime skill track or summary."""
+    import app.content_store as content_store_mod
+    from app.content_store import get_content_store, init_content_store_for_config
+    from app.skill_catalog_service import get_skill_catalog_service
+    from app.skill_import_service import get_skill_import_service
+    from tests.support.runtime_skill_registry import FakeRuntimeSkillRegistry
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
+        data_dir = tmp_path / "data"
+        ensure_data_dirs(data_dir)
+        content_store_mod.reset_for_test()
+        cfg = make_config(data_dir=data_dir, registry_url="https://registry.example.test/index.json")
+        init_content_store_for_config(cfg)
+        registry = FakeRuntimeSkillRegistry(tmp_path / "registry", registry_url=cfg.registry_url)
+        registry.add_skill("tampered-skill", body="Tampered", digest="0" * 64)
 
-        # Create skill and tarball
-        skill_src = tmp_path / "skill_src"
-        skill_src.mkdir()
-        (skill_src / "skill.md").write_text("---\ndisplay_name: Bad\n---\nTampered")
-
-        tarball = tmp_path / "skill.tar.gz"
-        with tarfile.open(tarball, "w:gz") as tf:
-            for item in skill_src.iterdir():
-                tf.add(item, arcname=item.name)
-
-        handler = http.server.SimpleHTTPRequestHandler
-        try:
-            server = http.server.HTTPServer(
-                ("127.0.0.1", 0),
-                lambda *args, directory=tmp, **kwargs: handler(*args, directory=directory, **kwargs),
-            )
-        except PermissionError as exc:
-            pytest.skip(f"Local HTTPServer bind not permitted in this environment: {exc}")
-        port = server.server_address[1]
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        from unittest.mock import patch
 
         try:
-            ensure_managed_dirs()
-            objects_before = set(OBJECTS_DIR.iterdir()) if OBJECTS_DIR.is_dir() else set()
+            before = {item.slug for item in get_content_store().list_skill_summaries()}
+            with patch("app.skill_import_service.registry_client.fetch_index", registry.fetch_index):
+                with patch("app.skill_import_service.registry_client.download_artifact", registry.download_artifact):
+                    result = get_skill_import_service().install_from_registry("tampered-skill", cfg.registry_url)
 
-            reg_skill = RegistrySkill(
-                name="tampered-skill",
-                display_name="Tampered",
-                description="Bad digest",
-                version="1.0",
-                publisher="attacker",
-                digest="0" * 64,
-                artifact_url=f"http://127.0.0.1:{port}/skill.tar.gz",
-            )
-            ok, msg = install_from_registry("tampered-skill", reg_skill)
-            assert not ok
-            assert "mismatch" in msg.lower()
-
-            # Contract: no ref
-            assert read_ref("tampered-skill") is None
-
-            # Contract: no new objects
-            objects_after = set(OBJECTS_DIR.iterdir()) if OBJECTS_DIR.is_dir() else set()
-            assert objects_after - objects_before == set()
-
-            # Contract: no staging dirs left
-            staging_dirs = [
-                d for d in TMP_DIR.iterdir()
-                if d.is_dir() and "tampered" in d.name
-            ] if TMP_DIR.is_dir() else []
-            assert staging_dirs == []
+            assert result.ok is False
+            assert "digest mismatch" in result.message.lower()
+            assert get_skill_catalog_service().resolve_track("tampered-skill") is None
+            assert get_content_store().list_skill_tracks("tampered-skill") == []
+            assert {item.slug for item in get_content_store().list_skill_summaries()} == before
         finally:
-            server.shutdown()
+            close_db(data_dir)
+            content_store_mod.reset_for_test()
 
 
 # =====================================================================

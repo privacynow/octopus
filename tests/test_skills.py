@@ -612,12 +612,16 @@ other:
 # =====================================================================
 
 def test_check_credentials():
-    # Create a temp skill with requires.yaml
+    # Create temp skills and seed them into the content store.
     with tempfile.TemporaryDirectory() as tmpdir:
-        import app.skills as skills_mod
-        orig_catalog = skills_mod.CATALOG_DIR
+        import app.content_store as content_store_mod
+        from app.content_seed import track_from_skill_dir
+        from app.content_store import get_content_store, init_content_store_for_config
+        from app.storage import ensure_data_dirs, close_db
 
         catalog_dir = Path(tmpdir) / "catalog"
+        data_dir = Path(tmpdir) / "data"
+        ensure_data_dirs(data_dir)
         (catalog_dir / "test-cred-skill").mkdir(parents=True)
         (catalog_dir / "test-cred-skill" / "skill.md").write_text(
             "---\nname: test-cred-skill\ndisplay_name: Test Cred\ndescription: test\n---\nInstructions here.\n"
@@ -630,8 +634,29 @@ def test_check_credentials():
             "---\nname: test-no-cred\ndisplay_name: No Cred\ndescription: no creds\n---\nSimple.\n"
         )
 
-        skills_mod.CATALOG_DIR = catalog_dir
+        content_store_mod.reset_for_test()
         try:
+            init_content_store_for_config(make_config(data_dir=data_dir))
+            store = get_content_store()
+            store.replace_skill_track(
+                track_from_skill_dir(
+                    catalog_dir / "test-cred-skill",
+                    source_kind="builtin",
+                    source_uri="catalog/test-cred-skill",
+                    created_by="test",
+                    version_label="builtin",
+                )
+            )
+            store.replace_skill_track(
+                track_from_skill_dir(
+                    catalog_dir / "test-no-cred",
+                    source_kind="builtin",
+                    source_uri="catalog/test-no-cred",
+                    created_by="test",
+                    version_label="builtin",
+                )
+            )
+
             # No credentials → both missing
             missing = check_credentials("test-cred-skill", {})
             assert len(missing) == 2
@@ -653,7 +678,8 @@ def test_check_credentials():
             missing_unknown = check_credentials("nonexistent", {})
             assert len(missing_unknown) == 0
         finally:
-            skills_mod.CATALOG_DIR = orig_catalog
+            close_db(data_dir)
+            content_store_mod.reset_for_test()
 
 
 # =====================================================================

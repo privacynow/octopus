@@ -204,15 +204,10 @@ def _parse_requires_yaml(text: str) -> list[SkillRequirement]:
 
 
 def get_skill_requirements(name: str) -> list[SkillRequirement]:
-    """Load requirements from the skill's requires.yaml."""
-    skill = _skill_dir(name)
-    if not skill:
-        return []
-    requires_file = skill / "requires.yaml"
-    if not requires_file.is_file():
-        return []
-    text = requires_file.read_text(encoding="utf-8")
-    return _parse_requires_yaml(text)
+    """Load credential requirements from the resolved runtime skill track."""
+    from app.skill_catalog_service import get_skill_catalog_service
+
+    return get_skill_catalog_service().requirements(name)
 
 
 def check_credentials(name: str, user_credentials: dict[str, dict[str, str]]) -> list[SkillRequirement]:
@@ -574,36 +569,34 @@ def skill_info_resolved(name: str) -> tuple[dict, str, str, Path] | None:
 
 
 def get_provider_config_digest(skill_names: list[str], provider_name: str = "") -> str:
-    """Return a SHA-256 digest of provider YAML content for the given skills.
+    """Return a SHA-256 digest of resolved provider config for the given skills."""
+    from app.skill_catalog_service import get_skill_catalog_service
 
-    If provider_name is given, only hash that provider's YAML files.
-    This avoids cross-provider invalidation (editing claude.yaml won't
-    invalidate Codex threads, and vice versa).
-    """
+    catalog = get_skill_catalog_service()
     providers = (provider_name,) if provider_name else ("claude", "codex")
     parts: list[str] = []
     for name in sorted(skill_names):
-        skill = _skill_dir(name)
-        if not skill:
+        record = catalog.resolve_track(name)
+        if record is None:
             continue
         for provider in providers:
-            yaml_file = skill / f"{provider}.yaml"
-            if yaml_file.is_file():
-                parts.append(f"{name}/{provider}:" + yaml_file.read_text(encoding="utf-8"))
+            config = record.revision.provider_config.get(provider)
+            if config:
+                parts.append(f"{name}/{provider}:{json.dumps(config, sort_keys=True, separators=(',', ':'))}")
     if not parts:
         return ""
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 
 def get_skill_digests(skill_names: list[str]) -> dict[str, str]:
-    """Return {name: sha256_hex_of_skill.md_content} for each named skill."""
+    """Return {name: revision_digest} for each resolved runtime skill."""
+    from app.skill_catalog_service import get_skill_catalog_service
+
+    catalog = get_skill_catalog_service()
     digests: dict[str, str] = {}
     for name in skill_names:
-        skill = _skill_dir(name)
-        if not skill:
-            continue
-        content = (skill / "skill.md").read_bytes()
-        digests[name] = hashlib.sha256(content).hexdigest()
+        if (record := catalog.resolve_track(name)) is not None:
+            digests[name] = record.revision.digest
     return digests
 
 
@@ -977,20 +970,17 @@ def filter_resolvable_skills(names: list[str]) -> list[str]:
 
 
 def normalize_active_skills(session, save_fn=None) -> list[str]:
-    """Prune active skills whose directories no longer resolve.
+    """Prune active skills whose runtime catalog entries no longer resolve.
 
     Mutates session.active_skills.  Calls save_fn(session) if
     any skills were removed and save_fn is provided.
     Returns list of pruned skill names.
     """
-    active = session.active_skills
-    pruned: list[str] = []
-    kept: list[str] = []
-    for name in active:
-        if _skill_dir(name) is not None:
-            kept.append(name)
-        else:
-            pruned.append(name)
+    from app.skill_catalog_service import get_skill_catalog_service
+
+    active = list(session.active_skills)
+    kept = get_skill_catalog_service().filter_resolvable(active)
+    pruned = [name for name in active if name not in kept]
     if pruned:
         session.active_skills = kept
         if save_fn:

@@ -25,6 +25,7 @@ import logging
 import shutil
 import tarfile
 import tempfile
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,6 +51,23 @@ class RegistrySkill:
     publisher: str
     digest: str
     artifact_url: str
+
+
+def skill_artifact_digest(path: Path) -> str:
+    """Return the stable digest for an extracted skill artifact directory."""
+    h = hashlib.sha256()
+    exclude = {"_store.json", "_ref.json"}
+    for fpath in sorted(path.rglob("*")):
+        if not fpath.is_file() or fpath.name in exclude:
+            continue
+        rel = fpath.relative_to(path).as_posix()
+        mode = oct(fpath.stat().st_mode & 0o777)
+        h.update(rel.encode("utf-8"))
+        h.update(b"\0")
+        h.update(mode.encode("utf-8"))
+        h.update(b"\0")
+        h.update(fpath.read_bytes())
+    return h.hexdigest()
 
 
 def fetch_index(registry_url: str) -> dict[str, RegistrySkill]:

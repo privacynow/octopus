@@ -146,15 +146,7 @@ class SkillLifecycleService:
     ) -> SkillSetupDecision:
         if not self._catalog.has_skill(skill_name):
             return SkillSetupDecision(status="unknown")
-        requirements = [
-            {
-                "key": item.key,
-                "prompt": item.prompt,
-                "help_url": item.help_url,
-                "validate": item.validate,
-            }
-            for item in self._catalog.requirements(skill_name)
-        ]
+        requirements = self._catalog.requirements(skill_name)
         if not requirements:
             return SkillSetupDecision(status="no_requirements")
         foreign = foreign_skill_setup(session, user_id)

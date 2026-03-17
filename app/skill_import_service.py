@@ -134,6 +134,12 @@ class SkillImportService:
         with tempfile.TemporaryDirectory() as tmp:
             staging = Path(tmp) / skill_name
             registry_client.download_artifact(skill.artifact_url, staging)
+            artifact_digest = registry_client.skill_artifact_digest(staging)
+            if artifact_digest != skill.digest:
+                raise ValueError(
+                    f"Digest mismatch for skill '{skill_name}': "
+                    f"expected {skill.digest}, got {artifact_digest}"
+                )
             return track_from_skill_dir(
                 staging,
                 source_kind="imported",

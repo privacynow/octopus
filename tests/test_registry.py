@@ -1,9 +1,7 @@
-"""Tests for skill registry — index parsing, artifact handling, store integration."""
+"""Tests for registry index parsing, artifact handling, and import integration."""
 
 import http.server
 import json
-import os
-import shutil
 import tarfile
 import tempfile
 import threading
@@ -11,23 +9,28 @@ from pathlib import Path
 
 import pytest
 
-from app.registry import RegistrySkill, fetch_index, search_index, download_artifact
-from app.store import hash_directory
+import app.content_store as content_store_mod
+from app.content_store import get_content_store, init_content_store_for_config
+from app.registry import (
+    RegistrySkill,
+    download_artifact,
+    fetch_index,
+    search_index,
+    skill_artifact_digest,
+)
+from app.skill_catalog_service import get_skill_catalog_service
+from app.skill_import_service import get_skill_import_service
+from app.storage import close_db, ensure_data_dirs
+from tests.support.config_support import make_config
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _make_skill_tarball(skill_dir: Path, tarball_path: Path) -> None:
-    """Create a .tar.gz from a skill directory."""
     with tarfile.open(tarball_path, "w:gz") as tf:
         for item in skill_dir.iterdir():
             tf.add(item, arcname=item.name)
 
 
 def _serve_dir(directory: str) -> tuple[http.server.HTTPServer, str]:
-    """Start a simple HTTP server serving files from directory. Returns (server, base_url)."""
     handler = http.server.SimpleHTTPRequestHandler
     try:
         server = http.server.HTTPServer(
@@ -36,18 +39,21 @@ def _serve_dir(directory: str) -> tuple[http.server.HTTPServer, str]:
         )
     except PermissionError as exc:
         pytest.skip(f"Local HTTPServer bind not permitted in this environment: {exc}")
-    port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    return server, f"http://127.0.0.1:{port}"
+    return server, f"http://127.0.0.1:{server.server_address[1]}"
 
 
-# ---------------------------------------------------------------------------
-# Index parsing
-# ---------------------------------------------------------------------------
+def _init_runtime_content(tmp_path: Path, *, registry_url: str):
+    data_dir = tmp_path / "data"
+    ensure_data_dirs(data_dir)
+    content_store_mod.reset_for_test()
+    cfg = make_config(data_dir=data_dir, registry_url=registry_url)
+    init_content_store_for_config(cfg)
+    return cfg, data_dir
+
 
 def test_fetch_index_valid():
-    """Parse a well-formed registry index."""
     with tempfile.TemporaryDirectory() as tmp:
         index_data = {
             "version": 1,
@@ -60,13 +66,11 @@ def test_fetch_index_valid():
                     "digest": "abc123",
                     "artifact_url": "https://example.com/test-skill.tar.gz",
                 },
-                "incomplete": {
-                    "display_name": "Missing Digest",
-                },
+                "incomplete": {"display_name": "Missing Digest"},
             },
         }
         index_path = Path(tmp) / "index.json"
-        index_path.write_text(json.dumps(index_data))
+        index_path.write_text(json.dumps(index_data), encoding="utf-8")
 
         server, base_url = _serve_dir(tmp)
         try:
@@ -75,235 +79,176 @@ def test_fetch_index_valid():
             assert result["test-skill"].display_name == "Test Skill"
             assert result["test-skill"].publisher == "test-org"
             assert result["test-skill"].digest == "abc123"
-            # incomplete skill should be skipped (no digest)
             assert "incomplete" not in result
         finally:
             server.shutdown()
 
 
 def test_fetch_index_bad_version():
-    """Reject index with unsupported version."""
     with tempfile.TemporaryDirectory() as tmp:
         index_path = Path(tmp) / "index.json"
-        index_path.write_text(json.dumps({"version": 99, "skills": {}}))
+        index_path.write_text(json.dumps({"version": 99, "skills": {}}), encoding="utf-8")
 
         server, base_url = _serve_dir(tmp)
         try:
-            try:
+            with pytest.raises(ValueError):
                 fetch_index(f"{base_url}/index.json")
-                assert False, "Should have raised ValueError"
-            except ValueError as e:
-                assert "version" in str(e).lower()
         finally:
             server.shutdown()
 
 
 def test_fetch_index_not_json():
-    """Reject non-JSON response."""
     with tempfile.TemporaryDirectory() as tmp:
-        (Path(tmp) / "index.json").write_text("not json at all")
+        (Path(tmp) / "index.json").write_text("not json at all", encoding="utf-8")
         server, base_url = _serve_dir(tmp)
         try:
-            try:
+            with pytest.raises(json.JSONDecodeError):
                 fetch_index(f"{base_url}/index.json")
-                assert False, "Should have raised"
-            except json.JSONDecodeError:
-                pass
         finally:
             server.shutdown()
 
 
-# ---------------------------------------------------------------------------
-# Search
-# ---------------------------------------------------------------------------
-
 def test_search_index():
-    """Search matches name and description."""
     index = {
         "deploy": RegistrySkill("deploy", "Deploy Helper", "Deploy to production", "1.0", "pub", "d1", "url1"),
         "lint": RegistrySkill("lint", "Linter", "Code quality checks", "1.0", "pub", "d2", "url2"),
     }
-    results = search_index(index, "deploy")
-    assert len(results) == 1
-    assert results[0].name == "deploy"
-
-    # Search by description
-    results2 = search_index(index, "quality")
-    assert len(results2) == 1
-    assert results2[0].name == "lint"
-
-    # No match
+    assert [item.name for item in search_index(index, "deploy")] == ["deploy"]
+    assert [item.name for item in search_index(index, "quality")] == ["lint"]
     assert search_index(index, "xyz") == []
 
 
-# ---------------------------------------------------------------------------
-# Artifact download and extraction
-# ---------------------------------------------------------------------------
-
-def test_download_artifact_valid():
-    """Download and extract a valid skill tarball."""
+def test_download_artifact_valid_and_digest_stable():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-
-        # Create a fake skill directory
         skill_src = tmp_path / "src"
         skill_src.mkdir()
-        (skill_src / "skill.md").write_text("---\ndisplay_name: Test\n---\nInstructions here")
-        (skill_src / "claude.yaml").write_text("allowed_tools: []\n")
+        (skill_src / "skill.md").write_text("---\ndisplay_name: Test\n---\nInstructions here", encoding="utf-8")
+        (skill_src / "claude.yaml").write_text("allowed_tools: []\n", encoding="utf-8")
+        expected_digest = skill_artifact_digest(skill_src)
 
-        # Create tarball
         tarball = tmp_path / "skill.tar.gz"
         _make_skill_tarball(skill_src, tarball)
 
-        # Serve
         server, base_url = _serve_dir(tmp)
         try:
             dest = tmp_path / "extracted"
             download_artifact(f"{base_url}/skill.tar.gz", dest)
             assert (dest / "skill.md").exists()
             assert (dest / "claude.yaml").exists()
+            assert skill_artifact_digest(dest) == expected_digest
         finally:
             server.shutdown()
 
 
 def test_download_artifact_no_skill_md():
-    """Reject artifact that lacks skill.md."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-
-        # Create dir without skill.md
         src = tmp_path / "src"
         src.mkdir()
-        (src / "readme.txt").write_text("not a skill")
+        (src / "readme.txt").write_text("not a skill", encoding="utf-8")
 
         tarball = tmp_path / "bad.tar.gz"
         _make_skill_tarball(src, tarball)
 
         server, base_url = _serve_dir(tmp)
         try:
-            dest = tmp_path / "extracted"
-            try:
-                download_artifact(f"{base_url}/bad.tar.gz", dest)
-                assert False, "Should have raised"
-            except ValueError as e:
-                assert "skill.md" in str(e)
+            with pytest.raises(ValueError):
+                download_artifact(f"{base_url}/bad.tar.gz", tmp_path / "extracted")
         finally:
             server.shutdown()
 
 
-# ---------------------------------------------------------------------------
-# Store integration: install_from_registry
-# ---------------------------------------------------------------------------
-
-def test_install_from_registry_success():
-    """Install a registry skill: download, verify digest, create ref."""
-    from app.store import (
-        install_from_registry, read_ref, object_dir,
-        ensure_managed_dirs, OBJECTS_DIR, REFS_DIR, _store_lock, gc,
+def test_install_from_registry_success(tmp_path: Path):
+    skill_src = tmp_path / "skill_src"
+    skill_src.mkdir()
+    (skill_src / "skill.md").write_text(
+        "---\nname: reg-test\ndisplay_name: Registry Test\ndescription: registry fixture\n---\n\nDo things\n",
+        encoding="utf-8",
     )
+    expected_digest = skill_artifact_digest(skill_src)
+    tarball = tmp_path / "skill.tar.gz"
+    _make_skill_tarball(skill_src, tarball)
+    index_data = {
+        "version": 1,
+        "skills": {
+            "reg-test": {
+                "display_name": "Registry Test",
+                "description": "registry fixture",
+                "version": "1.0.0",
+                "publisher": "test-pub",
+                "digest": expected_digest,
+                "artifact_url": "ARTIFACT_URL_PLACEHOLDER",
+            }
+        },
+    }
+    index_path = tmp_path / "index.json"
+    index_path.write_text(json.dumps(index_data), encoding="utf-8")
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-
-        # Create skill source
-        skill_src = tmp_path / "skill_src"
-        skill_src.mkdir()
-        (skill_src / "skill.md").write_text("---\ndisplay_name: Registry Test\n---\nDo things")
-
-        # Create tarball
-        tarball = tmp_path / "skill.tar.gz"
-        _make_skill_tarball(skill_src, tarball)
-
-        # Compute expected digest by extracting the tarball (same as install will do)
-        verify_dir = tmp_path / "verify"
-        with tarfile.open(tarball, "r:gz") as tf:
-            tf.extractall(verify_dir, filter="data")
-        expected_digest = hash_directory(verify_dir)
-
-        server, base_url = _serve_dir(tmp)
+    server, base_url = _serve_dir(str(tmp_path))
+    try:
+        index_data["skills"]["reg-test"]["artifact_url"] = f"{base_url}/skill.tar.gz"
+        index_path.write_text(json.dumps(index_data), encoding="utf-8")
+        registry_url = f"{base_url}/index.json"
+        cfg, data_dir = _init_runtime_content(tmp_path, registry_url=registry_url)
         try:
-            ensure_managed_dirs()
-            reg_skill = RegistrySkill(
-                name="reg-test",
-                display_name="Registry Test",
-                description="A registry skill",
-                version="1.0.0",
-                publisher="test-pub",
-                digest=expected_digest,
-                artifact_url=f"{base_url}/skill.tar.gz",
-            )
-            ok, msg = install_from_registry("reg-test", reg_skill)
-            assert ok, msg
-            assert "installed" in msg
+            result = get_skill_import_service().install_from_registry("reg-test", cfg.registry_url)
+            assert result.ok is True
 
-            # Verify ref was created
-            ref = read_ref("reg-test")
-            assert ref is not None
-            assert ref.source == "registry"
-            assert ref.publisher == "test-pub"
-            assert ref.version == "1.0.0"
-            assert ref.digest == expected_digest
-
-            # Verify object exists
-            obj = object_dir(ref.digest)
-            assert obj.is_dir()
-            assert (obj / "skill.md").exists()
+            resolved = get_skill_catalog_service().resolve_track("reg-test")
+            assert resolved is not None
+            assert resolved.source_kind == "imported"
+            assert resolved.source_uri == f"{registry_url}#reg-test"
+            assert resolved.revision.instruction_body == "Do things"
+            assert any(item.slug == "reg-test" for item in get_content_store().list_skill_summaries())
         finally:
-            server.shutdown()
-            # Cleanup managed store refs/objects
-            ref_file = REFS_DIR / "reg-test.json"
-            if ref_file.exists():
-                ref_file.unlink()
-            obj_dir = OBJECTS_DIR / expected_digest
-            if obj_dir.exists():
-                shutil.rmtree(obj_dir)
+            close_db(data_dir)
+            content_store_mod.reset_for_test()
+    finally:
+        server.shutdown()
 
 
-def test_install_from_registry_digest_mismatch():
-    """Reject artifact with wrong digest and leave no orphan objects."""
-    from app.store import install_from_registry, ensure_managed_dirs, OBJECTS_DIR, read_ref
+def test_install_from_registry_digest_mismatch(tmp_path: Path):
+    skill_src = tmp_path / "skill_src"
+    skill_src.mkdir()
+    (skill_src / "skill.md").write_text(
+        "---\nname: bad-digest\ndisplay_name: Bad\n---\n\nWrong digest\n",
+        encoding="utf-8",
+    )
+    tarball = tmp_path / "skill.tar.gz"
+    _make_skill_tarball(skill_src, tarball)
+    index_path = tmp_path / "index.json"
+    index_data = {
+        "version": 1,
+        "skills": {
+            "bad-digest": {
+                "display_name": "Bad",
+                "description": "Wrong digest",
+                "version": "1.0.0",
+                "publisher": "evil",
+                "digest": "0" * 64,
+                "artifact_url": "ARTIFACT_URL_PLACEHOLDER",
+            }
+        },
+    }
+    index_path.write_text(json.dumps(index_data), encoding="utf-8")
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-
-        skill_src = tmp_path / "skill_src"
-        skill_src.mkdir()
-        (skill_src / "skill.md").write_text("---\ndisplay_name: Bad\n---\nWrong digest")
-
-        tarball = tmp_path / "skill.tar.gz"
-        _make_skill_tarball(skill_src, tarball)
-
-        # Compute the real digest so we can check it does NOT appear in objects/
-        verify_dir = tmp_path / "verify"
-        with tarfile.open(tarball, "r:gz") as tf:
-            tf.extractall(verify_dir, filter="data")
-        real_digest = hash_directory(verify_dir)
-
-        server, base_url = _serve_dir(tmp)
+    server, base_url = _serve_dir(str(tmp_path))
+    try:
+        index_data["skills"]["bad-digest"]["artifact_url"] = f"{base_url}/skill.tar.gz"
+        index_path.write_text(json.dumps(index_data), encoding="utf-8")
+        registry_url = f"{base_url}/index.json"
+        cfg, data_dir = _init_runtime_content(tmp_path, registry_url=registry_url)
         try:
-            ensure_managed_dirs()
-            objects_before = set(OBJECTS_DIR.iterdir()) if OBJECTS_DIR.is_dir() else set()
-            reg_skill = RegistrySkill(
-                name="bad-digest",
-                display_name="Bad",
-                description="Wrong digest",
-                version="1.0",
-                publisher="evil",
-                digest="0000000000000000000000000000000000000000000000000000000000000000",
-                artifact_url=f"{base_url}/skill.tar.gz",
-            )
-            ok, msg = install_from_registry("bad-digest", reg_skill)
-            assert not ok
-            assert "mismatch" in msg.lower()
-
-            # No ref should have been written
-            assert read_ref("bad-digest") is None
-
-            # No new objects should have been created by this install attempt
-            objects_after = set(OBJECTS_DIR.iterdir()) if OBJECTS_DIR.is_dir() else set()
-            new_objects = objects_after - objects_before
-            assert len(new_objects) == 0, (
-                f"Digest mismatch should not leave orphan objects, found: {new_objects}"
-            )
+            before = {item.slug for item in get_content_store().list_skill_summaries()}
+            result = get_skill_import_service().install_from_registry("bad-digest", cfg.registry_url)
+            assert result.ok is False
+            assert "digest mismatch" in result.message.lower()
+            assert get_skill_catalog_service().resolve_track("bad-digest") is None
+            assert get_content_store().list_skill_tracks("bad-digest") == []
+            assert {item.slug for item in get_content_store().list_skill_summaries()} == before
         finally:
-            server.shutdown()
+            close_db(data_dir)
+            content_store_mod.reset_for_test()
+    finally:
+        server.shutdown()

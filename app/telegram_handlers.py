@@ -93,8 +93,6 @@ from app.transports.admission import (
 )
 from app.transports.types import InboundEnvelope
 from app.skills import (
-    get_provider_config_digest, get_skill_digests,
-    get_skill_requirements,
     save_user_credential, delete_user_credentials, list_user_credential_skills,
     derive_encryption_key,
     build_credential_env,
@@ -103,6 +101,8 @@ from app.skills import (
     SkillRequirement,
 )
 from app.skill_import_service import get_skill_import_service
+from app.skill_activation_service import get_skill_activation_service
+from app.skill_catalog_service import get_skill_catalog_service
 from app.skill_lifecycle_service import get_skill_lifecycle_service
 from app.provider_guidance_service import get_provider_guidance_service
 from app.storage import (
@@ -762,7 +762,7 @@ def is_allowed(user) -> bool:
 
 
 def is_admin(user) -> bool:
-    """Check if user is an admin (can install/uninstall/update store skills)."""
+    """Check if user is an admin (can import/uninstall/update runtime skills)."""
     return access.is_admin_user(_cfg(), user)
 
 
@@ -1384,9 +1384,9 @@ def _load(chat_id: int) -> SessionState:
         cfg.role, cfg.default_skills,
     )
     session = session_from_dict(raw)
-    # Self-heal: prune active skills whose refs/dirs no longer exist
-    from app.skills import normalize_active_skills
-    normalize_active_skills(session, save_fn=lambda s: _save(chat_id, s))
+    # Self-heal: prune active skills that no longer resolve through the content catalog.
+    if get_skill_activation_service().normalize(session):
+        _save(chat_id, session)
     return session
 
 
@@ -2294,7 +2294,7 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if session is not None:
         session_context = SessionHealthContext(
             session=session_to_dict(session),
-            user_id=str(event.user.id),
+            user_id=_actor_key(event.user.id),
             encryption_key=_encryption_key(),
         )
     report = await collect_runtime_health_report(
@@ -2519,8 +2519,6 @@ async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     # Filter stale active_skills that no longer resolve
-    from app.skill_catalog_service import get_skill_catalog_service
-
     catalog_service = get_skill_catalog_service()
     for s in sessions:
         s["active_skills"] = catalog_service.filter_resolvable(s["active_skills"])
@@ -2748,7 +2746,7 @@ async def _execute_clear_credentials(
         active = session.active_skills
         deactivated = []
         for name in removed:
-            if name in active and get_skill_requirements(name):
+            if name in active and get_skill_catalog_service().requirements(name):
                 active.remove(name)
                 deactivated.append(name)
         if deactivated or setup_cleared:
@@ -3643,7 +3641,7 @@ async def handle_skill_update_callback(event, query) -> None:
         results = get_skill_import_service().update_all()
         if not results:
             await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text("No store skills need updating.")
+            await query.edit_message_text("No imported skills need updating.")
             return
         lines = ["<b>Update results:</b>"]
         cfg = _cfg()

@@ -59,18 +59,37 @@ SETUP_TIMEOUT_SECONDS = 300  # 5 minutes
 def build_setup_state(
     user_id: str,
     skill_name: str,
-    missing: list[SkillRequirement],
+    missing: list[SkillRequirement | dict[str, object]],
 ) -> AwaitingSkillSetup:
     """Build credential-collection state for a skill."""
+    remaining: list[dict[str, object]] = []
+    for item in missing:
+        if isinstance(item, dict):
+            key = str(item.get("key", "") or "")
+            if not key:
+                continue
+            remaining.append(
+                {
+                    "key": key,
+                    "prompt": str(item.get("prompt", "") or ""),
+                    "help_url": item.get("help_url"),
+                    "validate": item.get("validate"),
+                }
+            )
+            continue
+        remaining.append(
+            {
+                "key": item.key,
+                "prompt": item.prompt,
+                "help_url": item.help_url,
+                "validate": item.validate,
+            }
+        )
     return AwaitingSkillSetup(
         user_id=user_id,
         skill=skill_name,
         started_at=utc_now_timestamp(),
-        remaining=[
-            {"key": r.key, "prompt": r.prompt, "help_url": r.help_url,
-             "validate": r.validate}
-            for r in missing
-        ],
+        remaining=remaining,
     )
 
 

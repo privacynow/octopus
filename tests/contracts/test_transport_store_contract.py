@@ -8,10 +8,12 @@ from pathlib import Path
 import pytest
 
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from app.runtime_health import WorkerHeartbeat
 from app.storage import ensure_data_dirs
 from app.transport_contract import CancelRequestResult, DiscardResult
 from app.work_queue import (
     cancel_queued_fresh_for_chat,
+    clear_worker_heartbeat,
     claim_for_update,
     claim_next,
     claim_next_any,
@@ -19,6 +21,7 @@ from app.work_queue import (
     discard_recovery,
     enqueue_work_item,
     fail_work_item,
+    get_queue_snapshot,
     get_latest_pending_recovery,
     get_pending_recovery_for_update,
     get_update_payload,
@@ -28,6 +31,7 @@ from app.work_queue import (
     has_claimed_for_chat,
     has_queued_or_claimed,
     list_user_access,
+    list_worker_heartbeats,
     mark_pending_recovery,
     is_cancel_requested,
     request_cancel,
@@ -39,6 +43,7 @@ from app.work_queue import (
     recover_stale_claims,
     set_user_access,
     supersede_pending_recovery,
+    upsert_worker_heartbeat,
     update_payload,
 )
 
@@ -419,6 +424,74 @@ def test_second_fresh_message_queues_not_rejects(backend_and_data_dir):
     by_id = {row["id"]: row for row in items}
     assert by_id[first_item_id]["state"] == "queued"
     assert by_id[second_item_id]["state"] == "queued"
+
+
+def test_queue_snapshot_reports_counts_and_oldest_timestamps(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    record_and_admit_message(data_dir, _event(5010), _conv(10), _actor(42), "message", '{"text":"fresh"}')
+    record_and_admit_message(data_dir, _event(5011), _conv(10), _actor(42), "message", '{"text":"fresh-2"}')
+    record_and_enqueue(data_dir, _event(5012), _conv(11), _actor(42), "action", '{"action":"retry_allow"}')
+    claimed = claim_next(data_dir, conversation_key=_conv(10), worker_id="w1")
+    assert claimed is not None
+    queued_recovery = claim_next(data_dir, conversation_key=_conv(11), worker_id="w2")
+    assert queued_recovery is not None
+    mark_pending_recovery(data_dir, queued_recovery["id"])
+
+    snapshot = get_queue_snapshot(data_dir)
+
+    assert snapshot.fresh_queued_count == 1
+    assert snapshot.claimed_count == 1
+    assert snapshot.pending_recovery_count == 1
+    assert snapshot.oldest_fresh_queued_at
+    assert snapshot.oldest_claimed_at
+    assert snapshot.oldest_pending_recovery_at
+
+
+def test_worker_heartbeat_round_trip(backend_and_data_dir):
+    _backend, data_dir = backend_and_data_dir
+    heartbeat = WorkerHeartbeat(
+        worker_id="host:1234:abc",
+        process_role="worker",
+        started_at="2026-03-16T00:00:00+00:00",
+        last_seen_at="2026-03-16T00:00:30+00:00",
+        current_item_id="item-1",
+        current_conversation_key=_conv(12),
+        current_kind="message",
+        items_processed=3,
+        stale_recoveries_seen=1,
+        last_error="",
+    )
+
+    upsert_worker_heartbeat(data_dir, heartbeat)
+    rows = list_worker_heartbeats(data_dir)
+
+    assert len(rows) == 1
+    assert rows[0].worker_id == heartbeat.worker_id
+    assert rows[0].current_item_id == "item-1"
+    assert rows[0].items_processed == 3
+
+    updated = WorkerHeartbeat(
+        worker_id=heartbeat.worker_id,
+        process_role="worker",
+        started_at=heartbeat.started_at,
+        last_seen_at="2026-03-16T00:01:00+00:00",
+        current_item_id="",
+        current_conversation_key="",
+        current_kind="",
+        items_processed=4,
+        stale_recoveries_seen=2,
+        last_error="fatal",
+    )
+    upsert_worker_heartbeat(data_dir, updated)
+
+    rows = list_worker_heartbeats(data_dir)
+    assert len(rows) == 1
+    assert rows[0].last_seen_at == updated.last_seen_at
+    assert rows[0].items_processed == 4
+    assert rows[0].last_error == "fatal"
+
+    clear_worker_heartbeat(data_dir, heartbeat.worker_id)
+    assert list_worker_heartbeats(data_dir) == []
 
 
 def test_queued_items_drain_fifo(backend_and_data_dir):

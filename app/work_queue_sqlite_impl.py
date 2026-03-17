@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from app.runtime_health import QueueSnapshot, WorkerHeartbeat
 from app.transport_contract import (
     ApplyResult,
     CancelRequestResult,
@@ -32,7 +33,7 @@ class _DuplicateUpdate(Exception):
     """Signals duplicate event_id in record_and_admit_message (rollback and return duplicate, None)."""
 
 
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 8
 
 _CREATE_SQL = """\
 CREATE TABLE IF NOT EXISTS updates (
@@ -69,6 +70,20 @@ CREATE INDEX IF NOT EXISTS idx_work_items_state ON work_items (state, conversati
 CREATE INDEX IF NOT EXISTS idx_work_items_conv  ON work_items (conversation_key, state);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_claimed_per_conv ON work_items(conversation_key) WHERE state = 'claimed';
 
+CREATE TABLE IF NOT EXISTS worker_heartbeats (
+    worker_id                TEXT PRIMARY KEY,
+    process_role             TEXT NOT NULL,
+    started_at               TEXT NOT NULL,
+    last_seen_at             TEXT NOT NULL,
+    current_item_id          TEXT NOT NULL DEFAULT '',
+    current_conversation_key TEXT NOT NULL DEFAULT '',
+    current_kind             TEXT NOT NULL DEFAULT '',
+    items_processed          INTEGER NOT NULL DEFAULT 0,
+    stale_recoveries_seen    INTEGER NOT NULL DEFAULT 0,
+    last_error               TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_seen ON worker_heartbeats (last_seen_at);
+
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -97,7 +112,7 @@ CREATE TABLE IF NOT EXISTS user_access (
 """
 
 _UNSUPPORTED_SCHEMA_MSG = "Unsupported transport.db schema/layout for this build"
-_EXPECTED_TABLES = ("updates", "work_items", "meta", "usage_log", "user_access")
+_EXPECTED_TABLES = ("updates", "work_items", "worker_heartbeats", "meta", "usage_log", "user_access")
 _EXPECTED_COLUMNS: dict[str, set[str]] = {
     "updates": {"event_id", "conversation_key", "actor_key", "kind", "payload", "received_at", "state"},
     "work_items": {
@@ -106,6 +121,18 @@ _EXPECTED_COLUMNS: dict[str, set[str]] = {
         "cancel_request_event_id",
     },
     "meta": {"key", "value"},
+    "worker_heartbeats": {
+        "worker_id",
+        "process_role",
+        "started_at",
+        "last_seen_at",
+        "current_item_id",
+        "current_conversation_key",
+        "current_kind",
+        "items_processed",
+        "stale_recoveries_seen",
+        "last_error",
+    },
     "usage_log": {"id", "conversation_key", "work_item_id", "provider", "prompt_tokens", "completion_tokens", "cost_usd", "recorded_at"},
     "user_access": {"actor_key", "access", "reason", "granted_by", "granted_at"},
 }
@@ -285,12 +312,34 @@ def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
+    """Migrate transport DB from schema version 7 to 8: durable worker heartbeats."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS worker_heartbeats (
+            worker_id                TEXT PRIMARY KEY,
+            process_role             TEXT NOT NULL,
+            started_at               TEXT NOT NULL,
+            last_seen_at             TEXT NOT NULL,
+            current_item_id          TEXT NOT NULL DEFAULT '',
+            current_conversation_key TEXT NOT NULL DEFAULT '',
+            current_kind             TEXT NOT NULL DEFAULT '',
+            items_processed          INTEGER NOT NULL DEFAULT 0,
+            stale_recoveries_seen    INTEGER NOT NULL DEFAULT 0,
+            last_error               TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_seen ON worker_heartbeats (last_seen_at);
+        """
+    )
+
+
 _MIGRATIONS = (
     (3, _migrate_v2_to_v3),
     (4, _migrate_v3_to_v4),
     (5, _migrate_v4_to_v5),
     (6, _migrate_v5_to_v6),
     (7, _migrate_v6_to_v7),
+    (8, _migrate_v7_to_v8),
 )
 
 
@@ -1071,6 +1120,109 @@ def get_work_items_for_chat(conn: sqlite3.Connection, conversation_key: str) -> 
         (conversation_key,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_queue_snapshot(conn: sqlite3.Connection) -> QueueSnapshot:
+    """Return backend-neutral queue counts and oldest timestamps."""
+    row = conn.execute(
+        """
+        SELECT
+            COALESCE(SUM(CASE WHEN state = 'queued' AND dispatch_mode = 'fresh' THEN 1 ELSE 0 END), 0) AS fresh_queued_count,
+            COALESCE(SUM(CASE WHEN state = 'queued' AND dispatch_mode = 'recovery' THEN 1 ELSE 0 END), 0) AS recovery_queued_count,
+            COALESCE(SUM(CASE WHEN state = 'claimed' THEN 1 ELSE 0 END), 0) AS claimed_count,
+            COALESCE(SUM(CASE WHEN state = 'pending_recovery' THEN 1 ELSE 0 END), 0) AS pending_recovery_count,
+            COALESCE(SUM(CASE WHEN state = 'claimed' AND cancel_requested_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS cancel_requested_claimed_count,
+            MIN(CASE WHEN state = 'queued' AND dispatch_mode = 'fresh' THEN created_at END) AS oldest_fresh_queued_at,
+            MIN(CASE WHEN state = 'queued' AND dispatch_mode = 'recovery' THEN created_at END) AS oldest_recovery_queued_at,
+            MIN(CASE WHEN state = 'claimed' THEN claimed_at END) AS oldest_claimed_at,
+            MIN(CASE WHEN state = 'pending_recovery' THEN created_at END) AS oldest_pending_recovery_at
+        FROM work_items
+        """
+    ).fetchone()
+    if row is None:
+        return QueueSnapshot()
+    return QueueSnapshot(
+        fresh_queued_count=int(row["fresh_queued_count"] or 0),
+        recovery_queued_count=int(row["recovery_queued_count"] or 0),
+        claimed_count=int(row["claimed_count"] or 0),
+        pending_recovery_count=int(row["pending_recovery_count"] or 0),
+        cancel_requested_claimed_count=int(row["cancel_requested_claimed_count"] or 0),
+        oldest_fresh_queued_at=row["oldest_fresh_queued_at"],
+        oldest_recovery_queued_at=row["oldest_recovery_queued_at"],
+        oldest_claimed_at=row["oldest_claimed_at"],
+        oldest_pending_recovery_at=row["oldest_pending_recovery_at"],
+    )
+
+
+def upsert_worker_heartbeat(conn: sqlite3.Connection, heartbeat: WorkerHeartbeat) -> None:
+    with _write_tx(conn):
+        conn.execute(
+            """
+            INSERT INTO worker_heartbeats (
+                worker_id,
+                process_role,
+                started_at,
+                last_seen_at,
+                current_item_id,
+                current_conversation_key,
+                current_kind,
+                items_processed,
+                stale_recoveries_seen,
+                last_error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(worker_id) DO UPDATE SET
+                process_role = excluded.process_role,
+                started_at = excluded.started_at,
+                last_seen_at = excluded.last_seen_at,
+                current_item_id = excluded.current_item_id,
+                current_conversation_key = excluded.current_conversation_key,
+                current_kind = excluded.current_kind,
+                items_processed = excluded.items_processed,
+                stale_recoveries_seen = excluded.stale_recoveries_seen,
+                last_error = excluded.last_error
+            """,
+            (
+                heartbeat.worker_id,
+                heartbeat.process_role,
+                heartbeat.started_at,
+                heartbeat.last_seen_at,
+                heartbeat.current_item_id,
+                heartbeat.current_conversation_key,
+                heartbeat.current_kind,
+                heartbeat.items_processed,
+                heartbeat.stale_recoveries_seen,
+                heartbeat.last_error,
+            ),
+        )
+
+
+def clear_worker_heartbeat(conn: sqlite3.Connection, worker_id: str) -> None:
+    with _write_tx(conn):
+        conn.execute(
+            "DELETE FROM worker_heartbeats WHERE worker_id = ?",
+            (worker_id,),
+        )
+
+
+def list_worker_heartbeats(conn: sqlite3.Connection) -> list[WorkerHeartbeat]:
+    rows = conn.execute(
+        "SELECT * FROM worker_heartbeats ORDER BY worker_id ASC"
+    ).fetchall()
+    return [
+        WorkerHeartbeat(
+            worker_id=row["worker_id"],
+            process_role=row["process_role"],
+            started_at=row["started_at"],
+            last_seen_at=row["last_seen_at"],
+            current_item_id=row["current_item_id"],
+            current_conversation_key=row["current_conversation_key"],
+            current_kind=row["current_kind"],
+            items_processed=int(row["items_processed"] or 0),
+            stale_recoveries_seen=int(row["stale_recoveries_seen"] or 0),
+            last_error=row["last_error"],
+        )
+        for row in rows
+    ]
 
 
 def get_update_payload(conn: sqlite3.Connection, event_id: str) -> str | None:

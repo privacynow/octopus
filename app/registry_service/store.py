@@ -19,10 +19,13 @@ from app.registry_service.store_base import (
     decode_json_field,
     effective_connectivity_state,
     ensure_json,
+    runtime_health_detail,
+    runtime_health_generated_at,
+    runtime_health_summary,
     utcnow_iso,
 )
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _BASE_SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -48,10 +51,29 @@ CREATE TABLE IF NOT EXISTS agents (
     max_capacity INTEGER NOT NULL DEFAULT 1,
     surface_capabilities_json TEXT NOT NULL DEFAULT '[]',
     version TEXT NOT NULL DEFAULT '',
+    runtime_health_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_heartbeat_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS agent_runtime_workers (
+    agent_id TEXT NOT NULL,
+    worker_id TEXT NOT NULL,
+    process_role TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL DEFAULT '',
+    last_seen_at TEXT NOT NULL DEFAULT '',
+    current_item_id TEXT NOT NULL DEFAULT '',
+    current_conversation_key TEXT NOT NULL DEFAULT '',
+    current_kind TEXT NOT NULL DEFAULT '',
+    items_processed INTEGER NOT NULL DEFAULT 0,
+    stale_recoveries_seen INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    mirrored_at TEXT NOT NULL,
+    PRIMARY KEY (agent_id, worker_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runtime_workers_seen
+    ON agent_runtime_workers (agent_id, last_seen_at DESC);
 
 CREATE TABLE IF NOT EXISTS deliveries (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -179,6 +201,34 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             """
         )
 
+    def _migrate_v3_runtime_health(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(agents)").fetchall()}
+        if "runtime_health_json" not in columns:
+            conn.execute(
+                "ALTER TABLE agents ADD COLUMN runtime_health_json TEXT NOT NULL DEFAULT '{}'"
+            )
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS agent_runtime_workers (
+                agent_id TEXT NOT NULL,
+                worker_id TEXT NOT NULL,
+                process_role TEXT NOT NULL DEFAULT '',
+                started_at TEXT NOT NULL DEFAULT '',
+                last_seen_at TEXT NOT NULL DEFAULT '',
+                current_item_id TEXT NOT NULL DEFAULT '',
+                current_conversation_key TEXT NOT NULL DEFAULT '',
+                current_kind TEXT NOT NULL DEFAULT '',
+                items_processed INTEGER NOT NULL DEFAULT 0,
+                stale_recoveries_seen INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                mirrored_at TEXT NOT NULL,
+                PRIMARY KEY (agent_id, worker_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_runtime_workers_seen
+                ON agent_runtime_workers (agent_id, last_seen_at DESC);
+            """
+        )
+
     def _run_migrations(self, conn: sqlite3.Connection) -> None:
         current = self._current_schema_version(conn)
         if current > _SCHEMA_VERSION:
@@ -193,6 +243,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         if current < 2:
             self._migrate_v2_timeline_fts(conn)
             self._set_schema_version(conn, 2)
+            conn.commit()
+            current = 2
+        if current < 3:
+            self._migrate_v3_runtime_health(conn)
+            self._set_schema_version(conn, 3)
             conn.commit()
 
     def _ensure_unique_slug(self, conn: sqlite3.Connection, requested: str) -> str:
@@ -227,7 +282,71 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "version": row["version"],
             "last_heartbeat_at": row["last_heartbeat_at"],
             "updated_at": row["updated_at"],
+            "runtime_health_summary": runtime_health_summary(row["runtime_health_json"]),
+            "runtime_health_generated_at": runtime_health_generated_at(row["runtime_health_json"]),
         }
+
+    def _replace_runtime_health_workers(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        agent_id: str,
+        runtime_health_payload: dict[str, Any],
+        mirrored_at: str,
+    ) -> None:
+        workers = []
+        snapshot = runtime_health_payload.get("snapshot")
+        if isinstance(snapshot, dict):
+            raw_workers = snapshot.get("workers") or []
+            if isinstance(raw_workers, list):
+                workers = [worker for worker in raw_workers if isinstance(worker, dict)]
+        conn.execute("DELETE FROM agent_runtime_workers WHERE agent_id = ?", (agent_id,))
+        for worker in workers:
+            conn.execute(
+                """
+                INSERT INTO agent_runtime_workers (
+                    agent_id, worker_id, process_role, started_at, last_seen_at,
+                    current_item_id, current_conversation_key, current_kind,
+                    items_processed, stale_recoveries_seen, last_error, mirrored_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    agent_id,
+                    str(worker.get("worker_id", "")),
+                    str(worker.get("process_role", "")),
+                    str(worker.get("started_at", "")),
+                    str(worker.get("last_seen_at", "")),
+                    str(worker.get("current_item_id", "")),
+                    str(worker.get("current_conversation_key", "")),
+                    str(worker.get("current_kind", "")),
+                    int(worker.get("items_processed", 0) or 0),
+                    int(worker.get("stale_recoveries_seen", 0) or 0),
+                    str(worker.get("last_error", "")),
+                    mirrored_at,
+                ),
+            )
+
+    def _runtime_worker_rows(self, conn: sqlite3.Connection, agent_id: str) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            "SELECT * FROM agent_runtime_workers WHERE agent_id = ? ORDER BY worker_id ASC",
+            (agent_id,),
+        ).fetchall()
+        return [
+            {
+                "worker_id": row["worker_id"],
+                "process_role": row["process_role"],
+                "started_at": row["started_at"],
+                "last_seen_at": row["last_seen_at"],
+                "current_item_id": row["current_item_id"],
+                "current_conversation_key": row["current_conversation_key"],
+                "current_kind": row["current_kind"],
+                "items_processed": row["items_processed"],
+                "stale_recoveries_seen": row["stale_recoveries_seen"],
+                "last_error": row["last_error"],
+                "mirrored_at": row["mirrored_at"],
+            }
+            for row in rows
+        ]
 
     def _token_row(self, conn: sqlite3.Connection, token: str) -> sqlite3.Row | None:
         return conn.execute(
@@ -432,11 +551,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            runtime_health_payload = payload.get("runtime_health")
             conn.execute(
                 """
                 UPDATE agents
                 SET connectivity_state = ?, current_capacity = ?, max_capacity = ?,
-                    updated_at = ?, last_heartbeat_at = ?
+                    updated_at = ?, last_heartbeat_at = ?,
+                    runtime_health_json = ?
                 WHERE agent_token = ?
                 """,
                 (
@@ -445,9 +566,21 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     max(1, int(payload.get("max_capacity", row["max_capacity"]))),
                     now,
                     now,
+                    (
+                        ensure_json(runtime_health_payload)
+                        if isinstance(runtime_health_payload, dict)
+                        else row["runtime_health_json"]
+                    ),
                     agent_token,
                 ),
             )
+            if isinstance(runtime_health_payload, dict):
+                self._replace_runtime_health_workers(
+                    conn,
+                    agent_id=row["agent_id"],
+                    runtime_health_payload=runtime_health_payload,
+                    mirrored_at=now,
+                )
             row = self._token_row(conn, agent_token)
             assert row is not None
             return {
@@ -982,6 +1115,19 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "conversations": self.list_conversations(),
             "tasks": self.list_tasks(),
         }
+
+    def get_agent_runtime_health(self, agent_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM agents WHERE agent_id = ?",
+                (agent_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return runtime_health_detail(
+                row["runtime_health_json"],
+                self._runtime_worker_rows(conn, agent_id),
+            )
 
     def create_conversation(self, *, target_agent_id: str, title: str, message_text: str) -> dict[str, Any]:
         now = utcnow_iso()

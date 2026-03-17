@@ -21,9 +21,14 @@ shipped in code: surface-neutral durable identity keys
 (`conversation_key`, `event_id`, `actor_key`), persist-first ingress for
 worker-owned interactions, semantic `InboundAction`, durable cancel,
 queue-first admission (`duplicate` / `admitted` / `queued`), and lease-based
-stale recovery are all part of the current bot runtime. What is still not the
-default operator path is Shared Runtime itself. Local Runtime is still the
-simpler default. The reference Shared Runtime deployment shape is now explicit:
+stale recovery are all part of the current bot runtime. Shared Runtime
+observability is also now part of the shipped contract: queue summary and
+worker liveness live in the transport store, one canonical runtime-health
+report is projected to `/doctor`, CLI `--doctor`, registry heartbeat
+mirroring, and the registry UI, and the registry never queries the bot
+transport DB directly. What is still not the default operator path is Shared
+Runtime itself. Local Runtime is still the simpler default. The reference
+Shared Runtime deployment shape is now explicit:
 one `BOT_PROCESS_ROLE=webhook` ingress process plus one or more
 `BOT_PROCESS_ROLE=worker` processes, usually started through
 `infra/compose/docker-compose.shared.yml` or
@@ -990,9 +995,20 @@ Runtime durability, crash, and recovery proof remains separate E2E work.
 
 **doctor.py**
 
-- shared health orchestration for Telegram `/doctor` and CLI entry points
+- shared health orchestration for Telegram `/doctor`, CLI `--doctor`, and
+  registry mirroring
 - covers config validation, provider health, managed-store health, stale
   session scanning, public-mode diagnostics, and transport diagnostics
+- in Shared Runtime, the primary health source is the transport store:
+  queue snapshots are derived from `work_items`, and worker liveness comes
+  from durable `worker_heartbeats`
+- provider runtime checks are role-aware: `BOT_PROCESS_ROLE=webhook`
+  validates ingress health but does not require provider auth to report
+  the process healthy
+- the canonical `RuntimeHealthReport` is projected into the registry
+  heartbeat when `BOT_AGENT_MODE=registry` is active; the registry UI
+  renders mirrored health from that report instead of computing a second
+  health view
 
 **Admin views**
 
@@ -1050,9 +1066,12 @@ debugging and tests.
 - **SQLite Shared Runtime constraint:** SQLite-backed Shared Runtime is
   same-host only because all processes must share one local `BOT_DATA_DIR`.
   That is a deployment rule, not an application-level validation check.
-- **Registry scope in Shared Runtime:** the reference multi-worker Compose flow
-  is currently standalone-focused. Multi-replica registry-runtime polling and
-  heartbeats are not expanded in this deployment slice.
+- **Registry scope in Shared Runtime:** when `BOT_AGENT_MODE=registry` is set,
+  the singleton `bot-webhook` / `BOT_PROCESS_ROLE=webhook` process owns
+  registry sync, delivery polling, and mirrored runtime-health publication.
+  `BOT_PROCESS_ROLE=worker` processes never heartbeat the registry directly.
+  The registry remains a mirrored control-plane view; it does not read the bot
+  transport DB directly.
 - **Supported bot image:** the supported Docker path uses a real
   provider-enabled image built from `infra/docker/Dockerfile.bot`.
   `./scripts/provider/build_bot_image.sh` selects the provider-specific target
@@ -1060,7 +1079,9 @@ debugging and tests.
 - **Provider authentication contract:** provider auth state is not baked into
   the image. Login runs inside the same bot image, persists in a dedicated
   Docker volume mounted at `/home/bot`, and startup plus `/doctor` validate
-  runtime/auth health before treating the bot as ready.
+  runtime/auth health before treating worker or all-in-one roles as ready.
+  Webhook-only role still reports Shared Runtime queue/worker health, but
+  does not fail health solely on missing provider runtime auth.
 - **Host-run bot:** still supported as a secondary fallback/debug path with the
   same Local Runtime contract above the storage interfaces.
 - **Later environments:** staging and production may choose either Local

@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 from psycopg.rows import dict_row
 
+from app.runtime_health import QueueSnapshot, WorkerHeartbeat
 from app.workflows.results import TransportDisposition, TransportStateCorruption
 from app.workflows.transport_recovery import (
     TRANSPORT_STATES,
@@ -794,6 +795,123 @@ def get_work_items_for_chat(conn, conversation_key: str) -> list[dict[str, Any]]
         )
         rows = cur.fetchall()
     return [dict(r) for r in rows]
+
+
+def get_queue_snapshot(conn) -> QueueSnapshot:
+    """Return backend-neutral queue counts and oldest timestamps."""
+    with _cur(conn) as cur:
+        cur.execute(
+            f"""
+            SELECT
+                COALESCE(SUM(CASE WHEN state = 'queued' AND dispatch_mode = 'fresh' THEN 1 ELSE 0 END), 0) AS fresh_queued_count,
+                COALESCE(SUM(CASE WHEN state = 'queued' AND dispatch_mode = 'recovery' THEN 1 ELSE 0 END), 0) AS recovery_queued_count,
+                COALESCE(SUM(CASE WHEN state = 'claimed' THEN 1 ELSE 0 END), 0) AS claimed_count,
+                COALESCE(SUM(CASE WHEN state = 'pending_recovery' THEN 1 ELSE 0 END), 0) AS pending_recovery_count,
+                COALESCE(SUM(CASE WHEN state = 'claimed' AND cancel_requested_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS cancel_requested_claimed_count,
+                MIN(CASE WHEN state = 'queued' AND dispatch_mode = 'fresh' THEN created_at END) AS oldest_fresh_queued_at,
+                MIN(CASE WHEN state = 'queued' AND dispatch_mode = 'recovery' THEN created_at END) AS oldest_recovery_queued_at,
+                MIN(CASE WHEN state = 'claimed' THEN claimed_at END) AS oldest_claimed_at,
+                MIN(CASE WHEN state = 'pending_recovery' THEN created_at END) AS oldest_pending_recovery_at
+            FROM {_SCHEMA}.work_items
+            """
+        )
+        row = cur.fetchone()
+    if row is None:
+        return QueueSnapshot()
+    return QueueSnapshot(
+        fresh_queued_count=int(row["fresh_queued_count"] or 0),
+        recovery_queued_count=int(row["recovery_queued_count"] or 0),
+        claimed_count=int(row["claimed_count"] or 0),
+        pending_recovery_count=int(row["pending_recovery_count"] or 0),
+        cancel_requested_claimed_count=int(row["cancel_requested_claimed_count"] or 0),
+        oldest_fresh_queued_at=(
+            row["oldest_fresh_queued_at"].isoformat() if row["oldest_fresh_queued_at"] else None
+        ),
+        oldest_recovery_queued_at=(
+            row["oldest_recovery_queued_at"].isoformat() if row["oldest_recovery_queued_at"] else None
+        ),
+        oldest_claimed_at=(
+            row["oldest_claimed_at"].isoformat() if row["oldest_claimed_at"] else None
+        ),
+        oldest_pending_recovery_at=(
+            row["oldest_pending_recovery_at"].isoformat() if row["oldest_pending_recovery_at"] else None
+        ),
+    )
+
+
+def upsert_worker_heartbeat(conn, heartbeat: WorkerHeartbeat) -> None:
+    with _write_tx(conn):
+        with _cur(conn) as cur:
+            cur.execute(
+                f"""
+                INSERT INTO {_SCHEMA}.worker_heartbeats (
+                    worker_id,
+                    process_role,
+                    started_at,
+                    last_seen_at,
+                    current_item_id,
+                    current_conversation_key,
+                    current_kind,
+                    items_processed,
+                    stale_recoveries_seen,
+                    last_error
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (worker_id) DO UPDATE SET
+                    process_role = EXCLUDED.process_role,
+                    started_at = EXCLUDED.started_at,
+                    last_seen_at = EXCLUDED.last_seen_at,
+                    current_item_id = EXCLUDED.current_item_id,
+                    current_conversation_key = EXCLUDED.current_conversation_key,
+                    current_kind = EXCLUDED.current_kind,
+                    items_processed = EXCLUDED.items_processed,
+                    stale_recoveries_seen = EXCLUDED.stale_recoveries_seen,
+                    last_error = EXCLUDED.last_error
+                """,
+                (
+                    heartbeat.worker_id,
+                    heartbeat.process_role,
+                    heartbeat.started_at,
+                    heartbeat.last_seen_at,
+                    heartbeat.current_item_id,
+                    heartbeat.current_conversation_key,
+                    heartbeat.current_kind,
+                    heartbeat.items_processed,
+                    heartbeat.stale_recoveries_seen,
+                    heartbeat.last_error,
+                ),
+            )
+
+
+def clear_worker_heartbeat(conn, worker_id: str) -> None:
+    with _write_tx(conn):
+        with _cur(conn) as cur:
+            cur.execute(
+                f"DELETE FROM {_SCHEMA}.worker_heartbeats WHERE worker_id = %s",
+                (worker_id,),
+            )
+
+
+def list_worker_heartbeats(conn) -> list[WorkerHeartbeat]:
+    with _cur(conn) as cur:
+        cur.execute(
+            f"SELECT * FROM {_SCHEMA}.worker_heartbeats ORDER BY worker_id ASC"
+        )
+        rows = cur.fetchall()
+    return [
+        WorkerHeartbeat(
+            worker_id=row["worker_id"],
+            process_role=row["process_role"],
+            started_at=row["started_at"].isoformat() if hasattr(row["started_at"], "isoformat") else str(row["started_at"]),
+            last_seen_at=row["last_seen_at"].isoformat() if hasattr(row["last_seen_at"], "isoformat") else str(row["last_seen_at"]),
+            current_item_id=row["current_item_id"],
+            current_conversation_key=row["current_conversation_key"],
+            current_kind=row["current_kind"],
+            items_processed=int(row["items_processed"] or 0),
+            stale_recoveries_seen=int(row["stale_recoveries_seen"] or 0),
+            last_error=row["last_error"],
+        )
+        for row in rows
+    ]
 
 
 def get_update_payload(conn, event_id: str) -> str | None:

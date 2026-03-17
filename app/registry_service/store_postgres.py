@@ -20,6 +20,9 @@ from app.registry_service.store_base import (
     conversation_status_for_event,
     decode_json_field,
     effective_connectivity_state,
+    runtime_health_detail,
+    runtime_health_generated_at,
+    runtime_health_summary,
     utcnow_iso,
 )
 
@@ -115,7 +118,82 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "version": row["version"],
             "last_heartbeat_at": row["last_heartbeat_at"],
             "updated_at": row["updated_at"],
+            "runtime_health_summary": runtime_health_summary(row.get("runtime_health_json")),
+            "runtime_health_generated_at": runtime_health_generated_at(row.get("runtime_health_json")),
         }
+
+    def _replace_runtime_health_workers(
+        self,
+        conn,
+        *,
+        agent_id: str,
+        runtime_health_payload: dict[str, Any],
+        mirrored_at: str,
+    ) -> None:
+        workers = []
+        snapshot = runtime_health_payload.get("snapshot")
+        if isinstance(snapshot, dict):
+            raw_workers = snapshot.get("workers") or []
+            if isinstance(raw_workers, list):
+                workers = [worker for worker in raw_workers if isinstance(worker, dict)]
+        with _cur(conn) as cur:
+            cur.execute(
+                f"DELETE FROM {_SCHEMA}.agent_runtime_workers WHERE agent_id = %s",
+                (agent_id,),
+            )
+            for worker in workers:
+                cur.execute(
+                    f"""
+                    INSERT INTO {_SCHEMA}.agent_runtime_workers (
+                        agent_id, worker_id, process_role, started_at, last_seen_at,
+                        current_item_id, current_conversation_key, current_kind,
+                        items_processed, stale_recoveries_seen, last_error, mirrored_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        agent_id,
+                        str(worker.get("worker_id", "")),
+                        str(worker.get("process_role", "")),
+                        str(worker.get("started_at", "")),
+                        str(worker.get("last_seen_at", "")),
+                        str(worker.get("current_item_id", "")),
+                        str(worker.get("current_conversation_key", "")),
+                        str(worker.get("current_kind", "")),
+                        int(worker.get("items_processed", 0) or 0),
+                        int(worker.get("stale_recoveries_seen", 0) or 0),
+                        str(worker.get("last_error", "")),
+                        mirrored_at,
+                    ),
+                )
+
+    def _runtime_worker_rows(self, conn, agent_id: str) -> list[dict[str, Any]]:
+        with _cur(conn) as cur:
+            cur.execute(
+                f"""
+                SELECT *
+                FROM {_SCHEMA}.agent_runtime_workers
+                WHERE agent_id = %s
+                ORDER BY worker_id ASC
+                """,
+                (agent_id,),
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "worker_id": row["worker_id"],
+                "process_role": row["process_role"],
+                "started_at": row["started_at"],
+                "last_seen_at": row["last_seen_at"],
+                "current_item_id": row["current_item_id"],
+                "current_conversation_key": row["current_conversation_key"],
+                "current_kind": row["current_kind"],
+                "items_processed": row["items_processed"],
+                "stale_recoveries_seen": row["stale_recoveries_seen"],
+                "last_error": row["last_error"],
+                "mirrored_at": row["mirrored_at"],
+            }
+            for row in rows
+        ]
 
     def _upsert_timeline_event(
         self,
@@ -313,12 +391,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            runtime_health_payload = payload.get("runtime_health")
             with _cur(conn) as cur:
                 cur.execute(
                     f"""
                     UPDATE {_SCHEMA}.agents
                     SET connectivity_state = %s, current_capacity = %s, max_capacity = %s,
-                        updated_at = %s, last_heartbeat_at = %s
+                        updated_at = %s, last_heartbeat_at = %s, runtime_health_json = %s
                     WHERE agent_token = %s
                     """,
                     (
@@ -327,8 +406,20 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         max(1, int(payload.get("max_capacity", row["max_capacity"]))),
                         now,
                         now,
+                        (
+                            _jsonb(runtime_health_payload)
+                            if isinstance(runtime_health_payload, dict)
+                            else _jsonb(decode_json_field(row.get("runtime_health_json"), {}))
+                        ),
                         agent_token,
                     ),
+                )
+            if isinstance(runtime_health_payload, dict):
+                self._replace_runtime_health_workers(
+                    conn,
+                    agent_id=row["agent_id"],
+                    runtime_health_payload=runtime_health_payload,
+                    mirrored_at=now,
                 )
             row = self._token_row(conn, agent_token)
             assert row is not None
@@ -873,6 +964,21 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "conversations": self.list_conversations(),
             "tasks": self.list_tasks(),
         }
+
+    def get_agent_runtime_health(self, agent_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            with _cur(conn) as cur:
+                cur.execute(
+                    f"SELECT * FROM {_SCHEMA}.agents WHERE agent_id = %s",
+                    (agent_id,),
+                )
+                row = cur.fetchone()
+            if row is None:
+                return None
+            return runtime_health_detail(
+                row.get("runtime_health_json"),
+                self._runtime_worker_rows(conn, agent_id),
+            )
 
     def create_conversation(self, *, target_agent_id: str, title: str, message_text: str) -> dict[str, Any]:
         now = utcnow_iso()

@@ -559,6 +559,15 @@ def ui_shell(request: Request) -> str:
       .badge-open       {{ background: #22c55e; color: #fff; border-color: transparent; }}
       .badge-cancelling {{ background: #f59e0b; color: #fff; border-color: transparent; }}
       .badge-completed  {{ background: #6b7280; color: #fff; border-color: transparent; }}
+      .diag-info {{
+        color: var(--muted);
+      }}
+      .diag-warning {{
+        color: var(--amber);
+      }}
+      .diag-error {{
+        color: var(--red);
+      }}
       .toolbar {{
         display: flex;
         flex-wrap: wrap;
@@ -877,6 +886,22 @@ def ui_shell(request: Request) -> str:
         return date.toLocaleString();
       }}
 
+      function formatAgeSeconds(value) {{
+        if (value === null || value === undefined || value === "") return "";
+        const total = Math.max(0, Number(value || 0));
+        if (!Number.isFinite(total)) return "";
+        if (total < 60) return `${{Math.floor(total)}}s`;
+        const minutes = Math.floor(total / 60);
+        const seconds = Math.floor(total % 60);
+        if (minutes < 60) return `${{minutes}}m ${{seconds}}s`;
+        const hours = Math.floor(minutes / 60);
+        const remMinutes = minutes % 60;
+        if (hours < 24) return `${{hours}}h ${{remMinutes}}m`;
+        const days = Math.floor(hours / 24);
+        const remHours = hours % 24;
+        return `${{days}}d ${{remHours}}h`;
+      }}
+
       function formatUsageCount(value) {{
         return Number(value || 0).toLocaleString();
       }}
@@ -907,6 +932,8 @@ def ui_shell(request: Request) -> str:
           open: "badge-open",
           cancelling: "badge-cancelling",
           completed: "badge-completed",
+          healthy: "badge-connected",
+          unhealthy: "badge-failed",
         }};
         return map[s] || "";
       }}
@@ -914,6 +941,72 @@ def ui_shell(request: Request) -> str:
       function stateBadge(item) {{
         const state = item?.connectivity_state || item?.status || "unknown";
         return `<span class="badge ${{getBadgeClass(state)}}">${{escapeHtml(state)}}</span>`;
+      }}
+
+      function renderRuntimeHealthSummary(summary) {{
+        if (!summary || Object.keys(summary).length === 0) return "";
+        const oldestClaim = formatAgeSeconds(summary.oldest_claim_age_seconds);
+        return `
+          <div class="meta meta-row">
+            <span class="badge ${{getBadgeClass(summary.status || "healthy")}}">${{escapeHtml(summary.status || "healthy")}}</span>
+            <span>${{escapeHtml(String(summary.healthy_worker_count || 0))}} healthy</span>
+            <span>${{escapeHtml(String(summary.stale_worker_count || 0))}} stale</span>
+            <span>${{escapeHtml(String(summary.fresh_queued_count || 0))}} queued</span>
+            <span>${{escapeHtml(String(summary.claimed_count || 0))}} claimed</span>
+            <span>${{escapeHtml(String(summary.warning_count || 0))}} warn</span>
+            <span>${{escapeHtml(String(summary.error_count || 0))}} fail</span>
+          </div>
+          ${{
+            oldestClaim
+              ? `<div class="meta"><strong>Oldest claim:</strong> ${{escapeHtml(oldestClaim)}}</div>`
+              : ""
+          }}
+        `;
+      }}
+
+      function renderRuntimeHealthDiagnostics(report) {{
+        const diagnostics = Array.isArray(report?.diagnostics) ? report.diagnostics : [];
+        if (!diagnostics.length) {{
+          return '<div class="meta">No mirrored diagnostics.</div>';
+        }}
+        return diagnostics.map(item => `
+          <div class="meta diag-${{escapeHtml(item.level || "info")}}">
+            <strong>${{escapeHtml((item.level || "info").toUpperCase())}}:</strong>
+            ${{escapeHtml(item.message || "")}}
+          </div>
+        `).join("");
+      }}
+
+      function renderRuntimeHealthWorkers(rows) {{
+        if (!Array.isArray(rows) || rows.length === 0) {{
+          return '<div class="meta">No mirrored worker rows.</div>';
+        }}
+        return `
+          <table class="skills-table">
+            <thead>
+              <tr>
+                <th>Worker</th>
+                <th>Role</th>
+                <th>Last Seen</th>
+                <th>Current</th>
+                <th>Processed</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${{
+                rows.map(row => `
+                  <tr>
+                    <td><strong>${{escapeHtml(row.worker_id || "")}}</strong></td>
+                    <td>${{escapeHtml(row.process_role || "")}}</td>
+                    <td>${{escapeHtml(formatTime(row.last_seen_at) || "")}}</td>
+                    <td>${{escapeHtml(row.current_kind || row.current_item_id || "idle")}}</td>
+                    <td>${{escapeHtml(String(row.items_processed || 0))}}</td>
+                  </tr>
+                `).join("")
+              }}
+            </tbody>
+          </table>
+        `;
       }}
 
       function usageForConversation(conversationId) {{
@@ -1085,12 +1178,12 @@ def ui_shell(request: Request) -> str:
             <strong>${{escapeHtml(item.display_name)}}</strong>
             <div class="meta meta-row">${{stateBadge(item)}}<span>${{escapeHtml(item.role || "unassigned role")}}</span></div>
             <div class="meta">${{escapeHtml(item.description || (item.skills || []).join(", ") || "no skills declared")}}</div>
+            ${{renderRuntimeHealthSummary(item.runtime_health_summary)}}
           </button>
         `, "bots");
         document.querySelectorAll("[data-bot-id]").forEach(node => {{
           node.addEventListener("click", () => {{
-            const bot = (bootstrapData.bots || []).find(item => item.agent_id === node.dataset.botId);
-            if (bot) renderBotDetail(bot);
+            loadBotDetail(node.dataset.botId);
           }});
         }});
       }}
@@ -1177,13 +1270,33 @@ def ui_shell(request: Request) -> str:
         }});
       }}
 
-      function renderBotDetail(bot) {{
+      async function loadBotDetail(agentId) {{
+        const bot = (bootstrapData.bots || []).find(item => item.agent_id === agentId);
+        if (!bot) return;
+        renderBotDetail(bot);
+        try {{
+          const response = await fetch(`/v1/ui/bots/${{agentId}}/health`, {{
+            headers: authHeaders(),
+          }});
+          if (!response.ok) {{
+            return;
+          }}
+          const detail = await response.json();
+          renderBotDetail(bot, detail);
+        }} catch (_error) {{
+          // Keep the summary-only bot detail on transient failures.
+        }}
+      }}
+
+      function renderBotDetail(bot, runtimeHealthDetail = null) {{
         currentDetailKind = "bot";
         currentDetailId = bot.agent_id || "";
         currentConversationId = "";
         currentConversationDetail = null;
         showDetailPanel("Bot Detail");
         setConversationActionsVisible(false);
+        const healthReport = runtimeHealthDetail?.report || null;
+        const healthSummary = healthReport?.summary || bot.runtime_health_summary || null;
         document.getElementById("conversation-detail-header").innerHTML = `
           <div class="detail-card">
             <strong>${{escapeHtml(bot.display_name || bot.agent_id)}}</strong>
@@ -1191,6 +1304,7 @@ def ui_shell(request: Request) -> str:
               ${{stateBadge(bot)}}
               <span>${{escapeHtml(bot.role || "unassigned role")}}</span>
             </div>
+            ${{renderRuntimeHealthSummary(healthSummary)}}
           </div>
         `;
         document.getElementById("conversation-detail-body").innerHTML = `
@@ -1200,6 +1314,15 @@ def ui_shell(request: Request) -> str:
             <div class="meta"><strong>Tags:</strong> ${{escapeHtml((bot.tags || []).join(", ") || "No tags declared")}}</div>
             <div class="meta"><strong>Version:</strong> ${{escapeHtml(bot.version || "unknown")}}</div>
             <div class="meta"><strong>Last heartbeat:</strong> ${{escapeHtml(formatTime(bot.last_heartbeat_at) || "unknown")}}</div>
+            <div class="meta"><strong>Mirrored runtime health:</strong> ${{escapeHtml(formatTime(bot.runtime_health_generated_at) || "not mirrored")}}</div>
+          </div>
+          <div class="detail-card">
+            <strong>Diagnostics</strong>
+            ${{healthReport ? renderRuntimeHealthDiagnostics(healthReport) : '<div class="meta">No mirrored diagnostics.</div>'}}
+          </div>
+          <div class="detail-card">
+            <strong>Workers</strong>
+            ${{renderRuntimeHealthWorkers(runtimeHealthDetail?.workers || [])}}
           </div>
         `;
       }}
@@ -1349,12 +1472,12 @@ def ui_shell(request: Request) -> str:
           return;
         }}
         if (currentDetailKind === "bot") {{
-          const bot = (bootstrapData.bots || []).find(item => item.agent_id === currentDetailId);
-          if (!bot) {{
+          const exists = (bootstrapData.bots || []).some(item => item.agent_id === currentDetailId);
+          if (!exists) {{
             clearConversationDetail();
             return;
           }}
-          renderBotDetail(bot);
+          await loadBotDetail(currentDetailId);
           return;
         }}
         if (currentDetailKind === "task") {{
@@ -1630,6 +1753,18 @@ def ui_bootstrap(_: None = Depends(require_ui_token), store: AbstractRegistrySto
 @app.get("/v1/ui/bots")
 def ui_bots(_: None = Depends(require_ui_token), store: AbstractRegistryStore = Depends(get_store)) -> dict[str, Any]:
     return {"bots": store.list_agents()}
+
+
+@app.get("/v1/ui/bots/{agent_id}/health")
+def ui_bot_health(
+    agent_id: str,
+    _: None = Depends(require_ui_token),
+    store: AbstractRegistryStore = Depends(get_store),
+) -> dict[str, Any]:
+    detail = store.get_agent_runtime_health(agent_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Unknown bot or no mirrored runtime health")
+    return detail
 
 
 @app.get("/v1/ui/conversations")

@@ -7,6 +7,8 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
+from app.runtime_health import report_from_dict, report_to_dict
+
 _OFFLINE_AFTER_SECONDS = 60
 
 
@@ -69,6 +71,34 @@ def effective_connectivity_state(connectivity_state: str, last_heartbeat_at: str
     return effective_state
 
 
+def runtime_health_summary(value: Any) -> dict[str, Any]:
+    """Return the canonical mirrored health summary, or an empty dict."""
+    report = report_from_dict(decode_json_field(value, {}))
+    if report is None:
+        return {}
+    return asdict(report.summary)
+
+
+def runtime_health_generated_at(value: Any) -> str:
+    """Return the mirrored health timestamp, or empty string when absent."""
+    report = report_from_dict(decode_json_field(value, {}))
+    if report is None:
+        return ""
+    return report.generated_at
+
+
+def runtime_health_detail(value: Any, workers: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return a UI-ready mirrored health detail payload."""
+    report = report_from_dict(decode_json_field(value, {}))
+    if report is None:
+        return None
+    return {
+        "report": report_to_dict(report),
+        "workers": workers,
+        "last_mirrored_at": report.generated_at,
+    }
+
+
 class AbstractRegistryStore(Protocol):
     """Backend-neutral contract for the registry service persistence layer."""
 
@@ -129,6 +159,9 @@ class AbstractRegistryStore(Protocol):
 
     def ui_bootstrap(self) -> dict[str, Any]:
         """Return the aggregated UI bootstrap payload."""
+
+    def get_agent_runtime_health(self, agent_id: str) -> dict[str, Any] | None:
+        """Return mirrored runtime-health detail for a registered agent."""
 
     def create_conversation(self, *, target_agent_id: str, title: str, message_text: str) -> dict[str, Any]:
         """Create a new registry-originated conversation and queue the first surface_input."""

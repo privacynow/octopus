@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from app.runtime_health import QueueSnapshot, WorkerHeartbeat
 from app import work_queue_sqlite_impl
 from app.transport_contract import CancelRequestResult, DiscardResult
 
@@ -195,6 +196,22 @@ class SQLiteTransportStore:
     def get_work_items_for_chat(self, data_dir: Path, conversation_key: str) -> list[dict[str, Any]]:
         conn = self._transport_db(data_dir)
         return work_queue_sqlite_impl.get_work_items_for_chat(conn, conversation_key)
+
+    def get_queue_snapshot(self, data_dir: Path) -> QueueSnapshot:
+        conn = self._transport_db(data_dir)
+        return work_queue_sqlite_impl.get_queue_snapshot(conn)
+
+    def upsert_worker_heartbeat(self, data_dir: Path, heartbeat: WorkerHeartbeat) -> None:
+        conn = self._transport_db(data_dir)
+        work_queue_sqlite_impl.upsert_worker_heartbeat(conn, heartbeat)
+
+    def clear_worker_heartbeat(self, data_dir: Path, worker_id: str) -> None:
+        conn = self._transport_db(data_dir)
+        work_queue_sqlite_impl.clear_worker_heartbeat(conn, worker_id)
+
+    def list_worker_heartbeats(self, data_dir: Path) -> list[WorkerHeartbeat]:
+        conn = self._transport_db(data_dir)
+        return work_queue_sqlite_impl.list_worker_heartbeats(conn)
 
     def mark_pending_recovery(self, data_dir: Path, item_id: str) -> None:
         conn = self._transport_db(data_dir)

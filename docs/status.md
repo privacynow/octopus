@@ -2,6 +2,8 @@
 
 Current as of 2026-03-16. Tracks progress against [plan.md](plan.md).
 
+> **Phase 21 M21D complete (2026-03-16).** Shared Runtime health is now a unified subsystem instead of a Telegram-only view. The transport facade remains the source of truth for queue state and durable worker heartbeats, but those canonical reports are now projected to every operator surface: Telegram `/doctor`, CLI `--doctor`, registry heartbeat mirroring, and the registry UI. In shared+registry deployments the singleton `BOT_PROCESS_ROLE=webhook` process owns registry sync and health publication, so registry health stays unambiguous across multiple workers. The registry now persists mirrored `runtime_health_json` plus normalized `agent_runtime_workers` rows in both SQLite and Postgres, `/v1/ui/bots/{agent_id}/health` exposes the full mirrored report, and bot cards show compact health summaries without the registry querying the bot transport DB. Verification on the current tree: full suite `1449 passed, 11 skipped`; Compose E2E `9 passed, 1 skipped`; `git diff --check` clean.
+
 > **Phase 21 M21A and M21B complete (2026-03-16).** Shared Runtime is now unlocked behind `BOT_RUNTIME_MODE=shared` with persist-first ingress for worker-owned interactions, semantic `InboundAction`, and durable cross-process cancel. The next queue hardening slice is also shipped: fresh messages are durably accepted as `duplicate` / `admitted` / `queued` instead of terminal `chat_busy`, registry deliveries treat locally queued work as accepted instead of `retry_later`, `_chat_lock` is bypassed on the shared worker path, worker IDs now include host and PID context, and stale-claim recovery is lease-age based with a periodic sweep instead of "foreign worker means stale". Recovery remains replay-notice only: stale claimed work re-enters as `dispatch_mode='recovery'`, never auto-reruns. Verification on the current tree: full suite `1420 passed, 10 skipped`; Compose E2E `8 passed, 1 skipped`.
 
 > **Phase 21 M21C complete (2026-03-16).** Shared Runtime now has a reference deployment shape instead of just runtime semantics. `BOT_PROCESS_ROLE=all|webhook|worker` is live; `app.main` starts ingress and worker roles cleanly from the same binary; `infra/compose/docker-compose.shared.yml` defines `bot-webhook` plus scalable `bot-worker`; and `./scripts/app/shared_start.sh` is the operator entrypoint for standalone Shared Runtime. SQLite Shared Runtime remains same-host only, while Postgres-backed transport/session state is documented honestly without overstating arbitrary multi-host support. Compose E2E now includes bounded split-role smoke; full crash/durability proof remains M21E. Verification on the current tree: full suite `1428 passed, 11 skipped`; Compose E2E `9 passed, 1 skipped`; `git diff --check` clean.
@@ -238,7 +240,7 @@ Current as of 2026-03-16. Tracks progress against [plan.md](plan.md).
   - M21A persist-first ingress and worker-owned `InboundAction` are complete
   - M21B durable queue admission and lease-based recovery are complete
   - M21C multi-service deployment/orchestration is complete
-  - M21D observability and operator health is next
+  - M21D observability and operator health is complete
 - The default operator path today is **Local Runtime**, but Shared Runtime
   semantics are also shipped:
   - SQLite is the default backend when `BOT_DATABASE_URL` is unset
@@ -249,6 +251,10 @@ Current as of 2026-03-16. Tracks progress against [plan.md](plan.md).
   - Shared Runtime has a reference split-role operator path via
     `./scripts/app/shared_start.sh` and
     `infra/compose/docker-compose.shared.yml`
+  - Shared Runtime health is collected once and projected to `/doctor`,
+    CLI `--doctor`, registry heartbeat mirroring, and the registry UI
+  - In shared+registry deployments, `BOT_PROCESS_ROLE=webhook` is the
+    singleton registry publisher for mirrored health and poll/sync state
 - Phase 20 milestone truth today:
   - M1 shared-surface refactor is complete, including the factory-owned
     dispatch-point surface selection and registry-surface simulator path

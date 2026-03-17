@@ -2,8 +2,11 @@ import datetime
 import time
 from pathlib import Path
 
+from app import runtime_backend, work_queue
 from app.agents.state import AgentRuntimeState, save_agent_runtime_state
 from app.doctor import collect_doctor_report, scan_stale_delegations
+from app.runtime_health import WorkerHeartbeat
+from app.storage import ensure_data_dirs
 from app.storage import default_session, save_session
 from tests.support.config_support import make_config
 from tests.support.handler_support import FakeProvider
@@ -214,3 +217,86 @@ async def test_doctor_standalone_mode_no_registry_warnings_if_mode_is_standalone
     report = await collect_doctor_report(config, provider)
 
     assert not any("Registry" in warning for warning in report.warnings)
+
+
+async def test_doctor_skips_provider_runtime_health_for_webhook_role(tmp_path: Path):
+    class RuntimeFailProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__("claude")
+            self.runtime_checks = 0
+
+        async def check_runtime_health(self):
+            self.runtime_checks += 1
+            return ["provider runtime unavailable"]
+
+    config = make_config(
+        data_dir=tmp_path / "shared-not-initialized",
+        runtime_mode="shared",
+        process_role="webhook",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+    )
+    provider = RuntimeFailProvider()
+
+    report = await collect_doctor_report(config, provider)
+
+    assert provider.runtime_checks == 0
+    assert not any("provider runtime unavailable" in err for err in report.errors)
+
+
+async def test_doctor_reports_shared_runtime_summary(tmp_path: Path):
+    ensure_data_dirs(tmp_path)
+    config = make_config(
+        data_dir=tmp_path,
+        runtime_mode="shared",
+        process_role="worker",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+    )
+    provider = FakeProvider()
+    runtime_backend.init(config)
+    try:
+        work_queue.upsert_worker_heartbeat(
+            tmp_path,
+            WorkerHeartbeat(
+                worker_id="host:123:abc",
+                process_role="worker",
+                started_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                last_seen_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                items_processed=2,
+                stale_recoveries_seen=1,
+            ),
+        )
+        work_queue.record_and_admit_message(
+            tmp_path,
+            telegram_event_id(5001),
+            telegram_conversation_key(100),
+            telegram_actor_key(42),
+            "message",
+            '{"text":"hello"}',
+        )
+
+        report = await collect_doctor_report(config, provider)
+
+        assert any("Shared Runtime workers: 1 healthy, 0 stale" in info for info in report.infos)
+        assert any("Queue: 1 fresh queued, 0 claimed, 0 pending recovery, 0 recovery queued" in info for info in report.infos)
+    finally:
+        runtime_backend.reset_for_test()
+
+
+async def test_doctor_errors_when_no_healthy_shared_workers(tmp_path: Path):
+    ensure_data_dirs(tmp_path)
+    config = make_config(
+        data_dir=tmp_path,
+        runtime_mode="shared",
+        process_role="worker",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+    )
+    provider = FakeProvider()
+    runtime_backend.init(config)
+    try:
+        report = await collect_doctor_report(config, provider)
+        assert any("no healthy worker heartbeats" in err.lower() for err in report.errors)
+    finally:
+        runtime_backend.reset_for_test()

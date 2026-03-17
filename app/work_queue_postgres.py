@@ -6,8 +6,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from app.transport_contract import CancelRequestResult, DiscardResult
 from app import work_queue_pg
+from app.runtime_health import QueueSnapshot, WorkerHeartbeat
+from app.transport_contract import CancelRequestResult, DiscardResult
 
 
 class PostgresTransportStore:
@@ -155,6 +156,22 @@ class PostgresTransportStore:
     def get_work_items_for_chat(self, data_dir: Path, conversation_key: str) -> list[dict[str, Any]]:
         with self._conn() as conn:
             return work_queue_pg.get_work_items_for_chat(conn, conversation_key)
+
+    def get_queue_snapshot(self, data_dir: Path) -> QueueSnapshot:
+        with self._conn() as conn:
+            return work_queue_pg.get_queue_snapshot(conn)
+
+    def upsert_worker_heartbeat(self, data_dir: Path, heartbeat: WorkerHeartbeat) -> None:
+        with self._conn() as conn:
+            work_queue_pg.upsert_worker_heartbeat(conn, heartbeat)
+
+    def clear_worker_heartbeat(self, data_dir: Path, worker_id: str) -> None:
+        with self._conn() as conn:
+            work_queue_pg.clear_worker_heartbeat(conn, worker_id)
+
+    def list_worker_heartbeats(self, data_dir: Path) -> list[WorkerHeartbeat]:
+        with self._conn() as conn:
+            return work_queue_pg.list_worker_heartbeats(conn)
 
     def mark_pending_recovery(self, data_dir: Path, item_id: str) -> None:
         with self._conn() as conn:

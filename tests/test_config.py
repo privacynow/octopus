@@ -351,6 +351,32 @@ def test_main_webhook_role_skips_provider_runtime_validation():
     mock_app.run_webhook.assert_called_once()
 
 
+def test_runs_registry_runtime_moves_to_webhook_role_in_shared_mode():
+    from app.main import _runs_registry_runtime
+
+    cfg = make_config(
+        agent_mode="registry",
+        runtime_mode="shared",
+        process_role="webhook",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+    )
+    assert _runs_registry_runtime(cfg) is True
+
+
+def test_runs_registry_runtime_is_disabled_for_shared_worker_role():
+    from app.main import _runs_registry_runtime
+
+    cfg = make_config(
+        agent_mode="registry",
+        runtime_mode="shared",
+        process_role="worker",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+    )
+    assert _runs_registry_runtime(cfg) is False
+
+
 def test_main_webhook_empty_secret_passes_none():
     """Empty BOT_WEBHOOK_SECRET should pass secret_token=None."""
     cfg = make_config(

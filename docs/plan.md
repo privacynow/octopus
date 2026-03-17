@@ -6103,32 +6103,289 @@ Runtime (all-in-one, default) vs Shared Runtime (split roles, webhook
 - [ ] Full test suite passes
 - [ ] `git diff --check` clean
 
-###### M21D — Observability and operator health
+###### M21D — Unified Runtime health with registry mirroring
 
-**Problem.** In a multi-worker deployment, operators need visibility
-into queue depth, claim ages, worker health, and lease recovery events.
+**Status: Complete.**
 
-**Fix.**
-- Add `GET /v1/ui/queue` to the registry service that queries
-  `bot_runtime.work_items` aggregate state. Wait — the registry must
-  not query the bot runtime DB directly. Instead: workers publish
-  periodic `worker_health` timeline events to the registry with queue
-  metrics (depth, oldest claim age, worker uptime, items processed
-  since last report). The registry aggregates these for display.
-- Add worker health reporting: every N seconds (default 30), each
-  worker publishes a `worker_health` timeline event to the registry
-  with its `worker_id`, items processed, current claim (if any), and
-  uptime.
-- Add `/doctor` shared-runtime checks: database reachable (Postgres
-  connection or SQLite file accessible and not locked), webhook URL
-  configured, at least one worker reported health within TTL, queue
-  depth within threshold.
-- Add queue metrics to the Registry UI: queue depth, active workers,
-  oldest pending item, lease recovery count.
+**Problem.** Shared Runtime observability is incomplete. Layer 1
+shipped transport-store-backed health (`QueueSnapshot`,
+`WorkerHeartbeat`, durable `worker_heartbeats` table, worker
+instrumentation, role-aware `/doctor`). But:
+- The registry UI has zero awareness of Shared Runtime health.
+- `/doctor` and the registry each compute their own health view
+  from different data, risking drift.
+- There is no single canonical health report type — Telegram, CLI,
+  and registry would each need to reimplement evaluation rules.
+- `DoctorReport` is string-list-based with no stable codes.
 
-**Files:** `app/worker.py` (health reporting), `app/registry_service/app.py`
-(queue panel), `app/telegram_handlers.py` (`/doctor` shared-runtime
-checks), tests.
+**Goal.** Make health and observability a single surface-neutral
+subsystem. Define one canonical `RuntimeHealthReport` produced once,
+then project it to every operator surface: Telegram `/doctor`, CLI
+`--doctor`, registry heartbeat mirroring, and registry UI. The
+transport store remains the source of truth. The registry never
+reads the bot transport DB directly; the bot publishes a mirrored
+report through the existing agent heartbeat.
+
+**Registry runtime ownership in shared mode.** In shared+registry
+deployments, the singleton `webhook` role owns registry
+sync/poll/heartbeat. That process reads the shared transport store,
+builds the canonical health report, publishes it to the registry,
+and avoids multi-worker heartbeat ambiguity. This is safe because
+registry deliveries already go through persist-first admission.
+
+| Runtime mode | Process role | Registry runtime |
+|---|---|---|
+| local | `all` | Yes (as today) |
+| shared + registry | `webhook` | Yes — singleton publisher |
+| shared + registry | `worker` | No |
+| shared + standalone | `webhook` | No |
+| shared + standalone | `worker` | No |
+
+**Core abstractions** (`app/runtime_health.py`).
+
+Keep the already-shipped durable-state types as the snapshot
+substrate: `QueueSnapshot`, `WorkerHeartbeat`, `SharedRuntimeSnapshot`.
+
+Add canonical health report types:
+
+`RuntimeDiagnostic`:
+- `level: "info" | "warning" | "error"`
+- `code: str` (stable, machine-parseable, e.g. `shared.no_healthy_workers`)
+- `message: str`
+
+`RuntimeHealthSummary`:
+- `status: "healthy" | "degraded" | "unhealthy"`
+- `healthy_worker_count: int`
+- `stale_worker_count: int`
+- `fresh_queued_count: int`
+- `claimed_count: int`
+- `pending_recovery_count: int`
+- `recovery_queued_count: int`
+- `oldest_claim_age_seconds: float | None`
+- `warning_count: int`
+- `error_count: int`
+
+`RuntimeHealthReport`:
+- `schema_version: int = 1`
+- `generated_at: str`
+- `summary: RuntimeHealthSummary`
+- `snapshot: SharedRuntimeSnapshot | None`
+- `diagnostics: tuple[RuntimeDiagnostic, ...]`
+
+**Interfaces** (`app/runtime_health.py`).
+
+`RuntimeHealthProvider` protocol:
+- `async collect(config, provider, *, caller_is_bot=False,
+  session_context=None) -> RuntimeHealthReport`
+- Single owner of all health evaluation rules.
+
+`RuntimeHealthProjector[T]` protocol:
+- `project(report: RuntimeHealthReport) -> T`
+- Transport-specific wire/persistence projections (registry
+  heartbeat payload, future Slack payloads).
+
+`RuntimeHealthFormatter` protocol:
+- `format(report: RuntimeHealthReport) -> str | list[str]`
+- Human-readable surfaces (Telegram `/doctor`, CLI `--doctor`).
+
+Rules:
+- Telegram `/doctor` is a formatter over `RuntimeHealthReport`.
+- Registry mirroring is a projector over `RuntimeHealthReport`.
+- Registry UI reads the mirrored report data; it does not run a
+  second health-evaluation pass.
+- Future Slack adds another projector/formatter without changing
+  health collection logic.
+
+**What M21D must deliver.**
+
+**1. Replace `DoctorReport` as source of truth** (`app/doctor.py`,
+`app/runtime_health.py`).
+Refactor so the canonical product of health collection is
+`RuntimeHealthReport`. Extract current checks into a provider
+implementation. `DoctorReport` becomes a compatibility structure
+produced from the canonical report, or is removed if nothing
+external depends on it. All current rules move into the provider:
+- Config validation
+- Provider health (role-aware: `webhook` skips provider-runtime)
+- Managed store health
+- Registry connectivity advisories
+- Stale session/delegation checks
+- Shared Runtime queue/worker checks from transport facade
+
+**2. Compute summary once in the provider.**
+Do not let registry UI or Telegram recompute headline health state.
+Provider builds `SharedRuntimeSnapshot` from transport facade,
+derives `RuntimeHealthSummary` once, emits normalized
+`RuntimeDiagnostic` rows with stable codes.
+
+Example diagnostic codes:
+- `shared.no_healthy_workers`
+- `shared.stale_worker_heartbeats`
+- `shared.high_queue_depth`
+- `shared.pending_recovery_backlog`
+- `shared.stale_claims`
+- `registry.degraded_connectivity`
+- `provider.runtime_unavailable`
+
+**3. Webhook owns registry runtime in shared mode**
+(`app/main.py`).
+Update `_runs_registry_runtime`:
+```python
+def _runs_registry_runtime(config: BotConfig) -> bool:
+    if config.process_role == ProcessRole.ALL.value:
+        return True
+    if (config.process_role == ProcessRole.WEBHOOK.value
+            and config.agent_mode == "registry"):
+        return True
+    return False
+```
+No `BOT_REGISTRY_WORKER` env var needed — the webhook is already
+a singleton. Workers never start registry runtime.
+
+**4. Reuse existing registry heartbeat path**
+(`app/agents/runtime.py`, `app/agents/client.py`).
+Do not invent a second mirroring loop. `AgentRuntime` accepts an
+optional `runtime_health_provider`. During `sync_once()`, after
+register and with heartbeat, it collects the canonical report.
+`AgentRegistryClient.heartbeat(...)` gets optional `runtime_health`
+payload. Heartbeat wire payload carries the projected report:
+```python
+{
+    "runtime_health": {
+        "schema_version": 1,
+        "generated_at": "...",
+        "summary": { ... },
+        "snapshot": { ... },
+        "diagnostics": [ ... ],
+    }
+}
+```
+Projection uses a `RuntimeHealthProjector[dict]` that serializes
+the canonical report.
+
+**5. Persist mirrored health in registry store.**
+Extend both registry store backends in the same slice.
+
+Agent row — add `runtime_health_json`:
+- SQLite: `TEXT NOT NULL DEFAULT '{}'`
+- Postgres: `JSONB NOT NULL DEFAULT '{}'::jsonb`
+- Stores the full canonical mirrored report.
+
+Normalized worker rows — add `agent_runtime_workers` table:
+- Key: `(agent_id, worker_id)`
+- Columns: `agent_id`, `worker_id`, `process_role`, `started_at`,
+  `last_seen_at`, `current_item_id`, `current_conversation_key`,
+  `current_kind`, `items_processed`, `stale_recoveries_seen`,
+  `last_error`, `mirrored_at`
+
+Heartbeat reconciliation:
+- Upsert `runtime_health_json` on the agent row.
+- Upsert all worker rows from `report.snapshot.workers`.
+- Delete worker rows for that agent absent from the latest payload.
+- Preserve staleness semantics from the mirrored report; registry
+  does not invent its own worker-health rules.
+
+Migrations:
+- Registry SQLite schema bump (version 3).
+- Registry Postgres migration for `agent_registry` namespace.
+
+Registry store parity rule applies: both impls + contract tests.
+
+Add to `AbstractRegistryStore`:
+- `heartbeat(...)` accepts optional `runtime_health`
+- `get_agent_runtime_health(agent_id) -> dict | None`
+
+**6. Registry UI and API** (`app/registry_service/app.py`).
+
+API:
+- Extend `/v1/ui/bootstrap` and agent list so each bot includes
+  `runtime_health_summary`.
+- Add `GET /v1/ui/bots/{agent_id}/health` returning:
+  - Canonical mirrored report
+  - Normalized worker rows
+  - Last mirrored timestamp
+
+UI — bot list/card summary:
+- Healthy/stale worker counts
+- Queue counts
+- Oldest claim age
+- Warning/error badge counts
+
+UI — dedicated health panel:
+- Queue snapshot
+- Worker table
+- Diagnostics list
+- Mirrored timestamp
+
+Rule: registry summary badges come from
+`RuntimeHealthReport.summary`. Registry UI does not recompute
+warnings from raw rows.
+
+**7. Telegram and CLI become adapters.**
+Telegram `/doctor` uses a `RuntimeHealthFormatter`. CLI `--doctor`
+uses the same or a CLI-specific formatter. Both render from the
+canonical report without recomputing health logic. Registry uses
+a projector. One abstraction, many surfaces.
+
+**Files to change.**
+
+| File | Change |
+|------|--------|
+| `app/runtime_health.py` | Canonical types + protocols + provider + projector + formatter |
+| `app/doctor.py` | Refactor to delegate to `RuntimeHealthProvider` |
+| `app/main.py` | Webhook owns registry runtime in shared mode |
+| `app/agents/runtime.py` | Collect + attach health report to heartbeat |
+| `app/agents/client.py` | Pass `runtime_health` in heartbeat |
+| `app/registry_service/store_base.py` | `runtime_health_json` + `agent_runtime_workers` + `get_agent_runtime_health` |
+| `app/registry_service/store.py` | SQLite impl + migration |
+| `app/registry_service/store_postgres.py` | Postgres impl |
+| Registry Postgres migration | New file |
+| `app/registry_service/app.py` | `/v1/ui/bots/{agent_id}/health` + UI panel |
+| `app/telegram_handlers.py` | `/doctor` uses formatter |
+| `infra/compose/docker-compose.shared.yml` | Webhook owns registry in shared+registry mode |
+| `docs/UPGRADE.md` | Registry health docs |
+| `tests/test_runtime_health.py` (new) | Provider, formatter, projector tests |
+| `tests/test_agents.py` | Heartbeat carries health report |
+| `tests/test_doctor.py` | Doctor delegates to provider |
+| `tests/contracts/test_registry_store_contract.py` | Health persistence parity |
+| `tests/test_registry_service.py` | Health endpoint + bootstrap |
+| `docs/plan.md`, `docs/status.md` | Status update |
+
+**What M21D does NOT include.**
+- Prometheus/Grafana/OpenTelemetry metrics export.
+- Historical health dashboards or retention.
+- Worker auto-scaling.
+- Registry service HA.
+- Multi-replica registry runtime.
+- Changes to the transport FSM, claim semantics, or deployment shape.
+
+**Acceptance criteria.**
+- [x] `RuntimeHealthReport` with `schema_version`, summary,
+      snapshot, and diagnostics defined in `app/runtime_health.py`
+- [x] `RuntimeHealthProvider` protocol with single `collect` method
+      owns all evaluation rules
+- [x] `RuntimeHealthProjector` and `RuntimeHealthFormatter` protocols
+      defined
+- [x] `DoctorReport` replaced by or derived from canonical report
+- [x] Diagnostic codes are stable and machine-parseable
+- [x] Summary computed once by provider, not recomputed by surfaces
+- [x] Webhook role owns registry runtime in shared+registry mode
+- [x] Worker role does not start registry runtime
+- [x] Agent heartbeat carries versioned `runtime_health` payload
+- [x] Registry persists `runtime_health_json` on agent row + worker
+      rows in `agent_runtime_workers` (both backends + migration)
+- [x] Worker rows reconciled: present upserted, absent deleted
+- [x] `GET /v1/ui/bots/{agent_id}/health` returns full report
+- [x] Registry UI bot cards show health summary badges
+- [x] Registry UI health panel shows queue, workers, diagnostics
+- [x] Telegram `/doctor` renders via formatter, not raw string lists
+- [x] CLI `--doctor` renders from same canonical report
+- [x] `process_role=webhook` skips provider-runtime checks
+- [x] Standalone Shared Runtime diagnosable via `/doctor` without
+      registry
+- [x] Local Runtime unchanged
+- [x] Full test suite passes
+- [x] `git diff --check` clean
 
 ###### M21E — Durability confidence and E2E proof
 

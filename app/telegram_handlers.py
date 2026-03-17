@@ -2275,7 +2275,7 @@ async def cmd_id(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 @_command_handler
 async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     import sqlite3
-    from app.doctor import collect_doctor_report
+    from app.doctor import collect_runtime_health, format_doctor_report_lines
     try:
         session = _load(event.chat_id)
     except (sqlite3.DatabaseError, sqlite3.OperationalError, RuntimeError):
@@ -2285,13 +2285,18 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if session is not None:
         kwargs.update(session=session_to_dict(session), user_id=event.user.id,
                       encryption_key=_encryption_key())
-    report = await collect_doctor_report(
+    report = await collect_runtime_health(
         cfg, _prov(), caller_is_bot=True, **kwargs)
     parts: list[str] = []
-    if report.errors:
-        parts.extend(f"\u274c {html.escape(e)}" for e in report.errors)
-    if report.warnings:
-        parts.extend(f"\u26a0\ufe0f {html.escape(w)}" for w in report.warnings)
+    for line in format_doctor_report_lines(report):
+        if line.startswith("INFO: "):
+            parts.append(f"\u2139\ufe0f {html.escape(line[6:])}")
+        elif line.startswith("FAIL: "):
+            parts.append(f"\u274c {html.escape(line[6:])}")
+        elif line.startswith("WARN: "):
+            parts.append(f"\u26a0\ufe0f {html.escape(line[6:])}")
+        else:
+            parts.append(html.escape(line))
     # Prompt weight from resolved execution context (respects trust tier)
     if session is not None:
         from app.skills import build_system_prompt

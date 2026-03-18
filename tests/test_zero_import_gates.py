@@ -36,3 +36,10 @@ def test_deleted_legacy_module_references_are_gone_from_app_code() -> None:
         text = path.read_text()
         for forbidden in FORBIDDEN_APP_REFERENCES:
             assert forbidden not in text, f"{forbidden} still referenced in {path}"
+
+
+def test_access_module_has_no_channel_imports() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    access_path = repo_root / "app" / "access.py"
+    text = access_path.read_text()
+    assert "app.channels" not in text, f"channel import still referenced in {access_path}"

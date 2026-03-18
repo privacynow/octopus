@@ -5,10 +5,11 @@ from pathlib import Path
 
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.telegram.egress import TelegramChannelEgress
+from app.identity import telegram_actor_key
 from app.runtime import composition
+from app.runtime.inbound_types import InboundUser
 from tests.support.handler_support import (
     FakeProvider,
-    FakeUser,
     MinimalFakeBot,
     make_config,
     setup_globals,
@@ -71,7 +72,7 @@ def test_factory_trust_tier_telegram_source_uses_user_tier():
     try:
         tier = composition.trust_tier_for_source(
             "telegram",
-            user=FakeUser(uid=999, username="stranger"),
+            user=InboundUser(id=telegram_actor_key(999), username="stranger"),
             config=cfg,
         )
         assert tier == "public"

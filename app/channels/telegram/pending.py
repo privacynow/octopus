@@ -8,6 +8,7 @@ from telegram import Update
 from telegram.constants import ParseMode
 
 from app import access, user_messages as _msg
+from app.channels.telegram.normalization import normalize_user
 from app.runtime import composition
 from app import work_queue
 
@@ -132,7 +133,7 @@ async def handle_pending_callback(event, query) -> None:
 async def handle_recovery_callback(update: Update, context) -> None:
     del context
     query = update.callback_query
-    user = access.to_inbound_user(update.effective_user)
+    user = normalize_user(update.effective_user)
     if user is None or not _th().is_allowed(user):
         await query.answer(_msg.trust_not_authorized(), show_alert=True)
         return

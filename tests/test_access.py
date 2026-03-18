@@ -58,6 +58,21 @@ def test_is_allowed_user_with_override_none_falls_through_to_config():
     assert access.is_allowed_user_with_override(cfg, stranger, None) is False
 
 
+def test_access_helpers_require_inbound_user() -> None:
+    cfg = _config()
+
+    class RawUser:
+        id = 100
+        username = "trusted"
+
+    try:
+        access.is_allowed_user(cfg, RawUser())
+    except TypeError as exc:
+        assert str(exc) == "access helpers require InboundUser"
+    else:
+        raise AssertionError("raw channel-native user should be rejected")
+
+
 def test_get_user_access_override_missing_returns_none():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

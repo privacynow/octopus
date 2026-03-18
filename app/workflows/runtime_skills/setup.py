@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from app.credential_flow import build_setup_state, foreign_skill_setup
 from app.credential_service import get_credential_service
 from app.credential_types import CredentialValidator
 from app.credential_validation import validate_credential
@@ -16,16 +15,22 @@ from app.workflows.runtime_skills.contracts import (
     RuntimeSkillSetupPort,
 )
 from app.skill_activation_service import get_skill_activation_service
-from app.skill_lifecycle_service import get_skill_lifecycle_service
 from app.skill_types import SkillRequirement
 from app.workflows.runtime_skills.catalog import get_runtime_skill_catalog_use_cases
+from app.workflows.runtime_skills.setup_machine import (
+    AdvanceSetupAction,
+    CancelSetupAction,
+    ClearSkillSetupAction,
+    InspectForeignSetupAction,
+    SetupDecision,
+    SetupSnapshot,
+    StartSetupAction,
+    decide_setup_action,
+)
 
 
 class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
     """Canonical setup workflows shared by Telegram and other surfaces."""
-
-    def _lifecycle(self):
-        return get_skill_lifecycle_service()
 
     def _activation(self):
         return get_skill_activation_service()
@@ -36,6 +41,47 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
     def _credentials(self):
         return get_credential_service()
 
+    def _snapshot(self, session: SessionState) -> SetupSnapshot:
+        return SetupSnapshot(setup=session.awaiting_skill_setup)
+
+    def _apply_machine_decision(self, session: SessionState, decision: SetupDecision) -> bool:
+        mutated = False
+        if decision.effects.clear_setup and session.awaiting_skill_setup is not None:
+            session.awaiting_skill_setup = None
+            mutated = True
+        if decision.effects.set_setup is not None:
+            session.awaiting_skill_setup = decision.effects.set_setup
+            mutated = True
+        if decision.effects.activate_skill:
+            mutated = self._activation().activate(session, decision.effects.activate_skill) or mutated
+        return mutated
+
+    def begin_setup(
+        self,
+        session: SessionState,
+        *,
+        user_id: str,
+        skill_name: str,
+        requirements: list[SkillRequirement | dict[str, object]],
+    ) -> RuntimeSkillCredentialSatisfactionOutcome:
+        decision = decide_setup_action(
+            self._snapshot(session),
+            StartSetupAction(
+                user_id=user_id,
+                skill_name=skill_name,
+                requirements=tuple(requirements),
+            ),
+        )
+        mutated = self._apply_machine_decision(session, decision)
+        return RuntimeSkillCredentialSatisfactionOutcome(
+            status=("needs_setup" if decision.status == "started" else decision.status),
+            mutated=mutated,
+            foreign_setup=decision.foreign_setup,
+            setup_state=decision.setup_state,
+            missing_skill=skill_name,
+            first_requirement=decision.next_requirement,
+        )
+
     def foreign_setup(
         self,
         session: SessionState,
@@ -43,10 +89,14 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
         user_id: str,
         skill_name: str | None = None,
     ) -> RuntimeSkillSetupState:
-        setup = foreign_skill_setup(session, user_id, skill_name=skill_name)
-        if setup is None:
+        decision = decide_setup_action(
+            self._snapshot(session),
+            InspectForeignSetupAction(user_id=user_id, skill_name=skill_name),
+        )
+        self._apply_machine_decision(session, decision)
+        if decision.status != "foreign_setup":
             return RuntimeSkillSetupState(status="none")
-        return RuntimeSkillSetupState(status="foreign_setup", setup=setup)
+        return RuntimeSkillSetupState(status="foreign_setup", setup=decision.foreign_setup)
 
     def cancel(
         self,
@@ -55,14 +105,17 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
         user_id: str,
         allow_override: bool = False,
     ) -> RuntimeSkillSetupCancellationOutcome:
-        decision = self._lifecycle().cancel_setup(
-            session,
-            user_id=user_id,
-            allow_override=allow_override,
+        decision = decide_setup_action(
+            self._snapshot(session),
+            CancelSetupAction(
+                user_id=user_id,
+                allow_override=allow_override,
+            ),
         )
+        mutated = self._apply_machine_decision(session, decision)
         return RuntimeSkillSetupCancellationOutcome(
             status=decision.status,
-            mutated=decision.mutated,
+            mutated=mutated,
             foreign_setup=decision.foreign_setup,
         )
 
@@ -96,23 +149,12 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
                 credential_env=self._credentials().build_env(active_skills, user_creds),
             )
 
-        foreign = foreign_skill_setup(session, user_id)
-        if foreign is not None:
-            return RuntimeSkillCredentialSatisfactionOutcome(
-                status="foreign_setup",
-                foreign_setup=foreign,
-            )
-
         skill_name, missing = all_missing[0]
-        setup_state = build_setup_state(user_id, skill_name, missing)
-        session.awaiting_skill_setup = setup_state
-        first_requirement = setup_state.remaining[0] if setup_state.remaining else None
-        return RuntimeSkillCredentialSatisfactionOutcome(
-            status="needs_setup",
-            mutated=True,
-            setup_state=setup_state,
-            missing_skill=skill_name,
-            first_requirement=first_requirement,
+        return self.begin_setup(
+            session,
+            user_id=user_id,
+            skill_name=skill_name,
+            requirements=list(missing),
         )
 
     async def submit_credential_value(
@@ -157,21 +199,25 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
             str(req["key"]),
             value,
         )
-        decision = self._lifecycle().complete_current_requirement(session, user_id=user_id)
+        decision = decide_setup_action(
+            self._snapshot(session),
+            AdvanceSetupAction(user_id=user_id),
+        )
+        mutated = self._apply_machine_decision(session, decision)
         if decision.status == "next_requirement":
             return RuntimeSkillSetupAdvanceOutcome(
                 status="next_requirement",
-                mutated=decision.mutated,
+                mutated=mutated,
                 next_requirement=decision.next_requirement,
                 skill_name=decision.skill_name,
             )
         if decision.status == "ready":
             return RuntimeSkillSetupAdvanceOutcome(
                 status="ready",
-                mutated=decision.mutated,
+                mutated=mutated,
                 skill_name=decision.skill_name or setup.skill,
             )
-        return RuntimeSkillSetupAdvanceOutcome(status=decision.status, mutated=decision.mutated)
+        return RuntimeSkillSetupAdvanceOutcome(status=decision.status, mutated=mutated)
 
     def apply_cleared_credentials(
         self,
@@ -181,11 +227,11 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
         removed_skills: list[str],
         skill_name: str | None,
     ) -> RuntimeSkillCredentialClearOutcome:
-        setup_cleared = False
-        setup = session.awaiting_skill_setup
-        if setup and setup.user_id == user_id and (skill_name is None or setup.skill == skill_name):
-            session.awaiting_skill_setup = None
-            setup_cleared = True
+        decision = decide_setup_action(
+            self._snapshot(session),
+            ClearSkillSetupAction(user_id=user_id, skill_name=skill_name),
+        )
+        setup_cleared = self._apply_machine_decision(session, decision)
 
         deactivated: list[str] = []
         for name in removed_skills:

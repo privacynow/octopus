@@ -84,19 +84,22 @@ handoff, but they do not own durable business transitions.
 
 - Concern: `awaiting_skill_setup` lifecycle, foreign-setup detection, requirement progression, ready/cancel/clear
 - Current owners:
+  - `app/workflows/runtime_skills/setup_machine.py`
   - `app/workflows/runtime_skills/setup.py`
-  - `app/skill_lifecycle_service.py`
-  - `app/credential_flow.py`
-- Current style: procedural orchestration split across a workflow, a service, and a root helper module
+  - `app/credential_flow.py` for rendering helpers only
+- Current style: functional decision machine plus workflow consumer
 - Classification: `explicit machine required`
 - Authoritative destination:
   - `app/workflows/runtime_skills/setup_machine.py`
   - `app/workflows/runtime_skills/setup.py` as the consumer/orchestrator only
 - Why:
   - the state is conversational and durable in session storage
-  - the concern already has split ownership over `session.awaiting_skill_setup`
+  - the concern previously had split ownership over `session.awaiting_skill_setup`
   - cancellation, foreign-setup, completion, and credential-clear semantics need one authoritative transition owner
 - Follow-on owner: Track F / F3
+- Resolved split owners removed by F3:
+  - `app/skill_lifecycle_service.py`
+  - `app/credential_flow.py` no longer owns setup-state transitions
 
 ### 5. Delegation Progression
 

@@ -152,7 +152,7 @@ Completed slices:
    - Added guard tests proving the inventory names the required live modules and
      does not leave placeholder or unclassified entries behind.
 
-18. `this commit` `Track F / F2: commit machine conventions standard`
+18. `f274448` `Track F / F2: commit machine conventions standard`
    - Added `docs/machine_conventions.md` as the repo-standard functional
      decision-machine contract for future machine migrations.
    - Declared the standard shape:
@@ -166,12 +166,32 @@ Completed slices:
    - Added guard tests proving the standard document includes the required
      shape, migration-state rule, and anti-drift constraints.
 
+19. `pending commit` `Track F / F3: extract the runtime-skill setup machine`
+   - Added `app/workflows/runtime_skills/setup_machine.py` as the single
+     setup-transition owner for:
+     - start
+     - foreign-setup inspection
+     - cancel
+     - advance
+     - clear-on-credential-removal
+   - Deleted `app/skill_lifecycle_service.py`.
+   - Reduced `app/credential_flow.py` to rendering helpers only.
+   - Moved `apply_cleared_credentials(...)` onto the runtime-skill setup port.
+   - Updated activation and setup workflows to consume the machine and apply
+     its effects at the workflow boundary.
+   - Added positive and negative coverage proving:
+     - stale foreign setup can be replaced
+     - active foreign setup blocks new setup
+     - the legacy service path is gone
+     - `app/workflows/runtime_skills/setup.py` is the only app owner writing
+       `session.awaiting_skill_setup`
+
 ## Latest Verified Test Baseline
 
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1525 passed, 23 skipped`
+- result: `1538 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -282,10 +302,10 @@ Completed:
 
 - `F1` committed orchestration inventory in `docs/orchestration_inventory.md`
 - `F2` committed the repo-standard functional decision-machine conventions
+- `F3` runtime-skill setup machine with deleted legacy setup service
 
 Remaining:
 
-- `F3` runtime skill setup machine
 - `F4` delegation machine/workflow
 - `F5` pending/recovery migration off `python-statemachine`
 - `F6` dispatch ownership cleanup
@@ -303,12 +323,12 @@ status.
 - [ ] `access.py` has no channel imports.
 - [ ] Telegram presenters own Telegram rendering.
 - [ ] Registry `http.py` is a thin HTTP boundary and `ui.py` owns UI rendering.
-- [ ] Setup progression has one explicit machine owner.
+- [x] Setup progression has one explicit machine owner.
 - [ ] Delegation progression has one explicit workflow/machine owner.
 - [ ] Pending and recovery machines live under concern-owned workflow packages.
 - [ ] `runtime/dispatch.py` is channel-agnostic plumbing and not a shadow
   workflow owner.
-- [ ] The repo-standard explicit machine style is declared and used for
+- [x] The repo-standard explicit machine style is declared and used for
   remediated durable workflows.
 - [ ] Lifecycle snapshot and latest-approval ownership are cleaned up.
 - [ ] `workflows/__init__.py` and `transport_contract.py` no longer carry
@@ -320,7 +340,7 @@ status.
 
 Next required slice:
 
-- `Track F / F3: extract the runtime-skill setup machine`
+- `Track F / F4: extract the delegation machine/workflow`
 
 Completed:
 
@@ -330,23 +350,38 @@ Completed:
 - `D2` add explicit latest-approval store queries
 - `D3` remove private cross-workflow latest-action access
 - `F1` commit the orchestration inventory
+- `F2` commit the repo-standard machine conventions
+- `F3` extract the runtime-skill setup machine and delete the legacy setup service
 
 Remaining:
 
 - all Phase 4-6 remediation slices after Phase 3 completes
 
+Completed in `F3`:
+
+- `app/workflows/runtime_skills/setup_machine.py` now owns setup-state transitions
+- `app/workflows/runtime_skills/setup.py` is now the only app writer of
+  `session.awaiting_skill_setup`
+- `app/skill_lifecycle_service.py` is deleted
+- `app/credential_flow.py` no longer owns setup-state helpers
+- focused verification passed:
+  - `75 passed`
+- full suite passed:
+  - `1538 passed, 23 skipped`
+
 Before-state:
 
-- `awaiting_skill_setup` progression is still split across
-  `app/workflows/runtime_skills/setup.py`, `app/skill_lifecycle_service.py`,
-  and `app/credential_flow.py`.
+- delegation progression is still split across `app/agents/orchestration.py`,
+  `app/agents/delegation.py`, and session status-string mutation paths.
 
 After-state required next:
 
-- `app/workflows/runtime_skills/setup_machine.py` becomes the one owner of
-  setup-state transitions
-- `credential_flow.py` no longer survives as a parallel setup-state helper path
-- `skill_lifecycle_service.py` no longer owns setup transitions
+- `app/workflows/delegation/machine.py` becomes the explicit delegation
+  transition owner
+- `app/workflows/delegation/coordination.py` becomes the concern-owned
+  workflow consumer/orchestrator
+- `app/agents/delivery.py` and `app/agents/delegation.py` become thin bridges
+  over the delegation workflow package
 
 ## Working Rules
 

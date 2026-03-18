@@ -166,7 +166,7 @@ Completed slices:
    - Added guard tests proving the standard document includes the required
      shape, migration-state rule, and anti-drift constraints.
 
-19. `pending commit` `Track F / F3: extract the runtime-skill setup machine`
+19. `3ce052e` `Track F / F3: extract the runtime-skill setup machine`
    - Added `app/workflows/runtime_skills/setup_machine.py` as the single
      setup-transition owner for:
      - start
@@ -186,12 +186,31 @@ Completed slices:
      - `app/workflows/runtime_skills/setup.py` is the only app owner writing
        `session.awaiting_skill_setup`
 
+20. `pending commit` `Track F / F4: move delegation into concern-owned workflows`
+   - Added the real delegation workflow package:
+     - `app/workflows/delegation/contracts.py`
+     - `app/workflows/delegation/machine.py`
+     - `app/workflows/delegation/coordination.py`
+   - Deleted `app/agents/orchestration.py`.
+   - Moved plan creation, task progression, routed-result application,
+     resume-readiness, completion-summary building, and post-resume clearing
+     into the workflow package.
+   - Reduced `app/agents/delegation.py` and `app/agents/delivery.py` to thin
+     bridge adapters over the workflow package.
+   - Moved Telegram ingress delegation plan creation/finalize-resume behavior
+     to the workflow owner.
+   - Added:
+     - delegation machine tests
+     - updated workflow tests
+     - negative gates proving the deleted owner path is gone and `app/agents/*`
+       no longer edits delegation status strings directly
+
 ## Latest Verified Test Baseline
 
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1538 passed, 23 skipped`
+- result: `1547 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -303,10 +322,10 @@ Completed:
 - `F1` committed orchestration inventory in `docs/orchestration_inventory.md`
 - `F2` committed the repo-standard functional decision-machine conventions
 - `F3` runtime-skill setup machine with deleted legacy setup service
+- `F4` delegation workflow/machine with thin bridge adapters in `app/agents/*`
 
 Remaining:
 
-- `F4` delegation machine/workflow
 - `F5` pending/recovery migration off `python-statemachine`
 - `F6` dispatch ownership cleanup
 
@@ -324,7 +343,7 @@ status.
 - [ ] Telegram presenters own Telegram rendering.
 - [ ] Registry `http.py` is a thin HTTP boundary and `ui.py` owns UI rendering.
 - [x] Setup progression has one explicit machine owner.
-- [ ] Delegation progression has one explicit workflow/machine owner.
+- [x] Delegation progression has one explicit workflow/machine owner.
 - [ ] Pending and recovery machines live under concern-owned workflow packages.
 - [ ] `runtime/dispatch.py` is channel-agnostic plumbing and not a shadow
   workflow owner.
@@ -340,7 +359,7 @@ status.
 
 Next required slice:
 
-- `Track F / F4: extract the delegation machine/workflow`
+- `Track F / F5: migrate pending and recovery to the repo-standard machine style`
 
 Completed:
 
@@ -352,36 +371,53 @@ Completed:
 - `F1` commit the orchestration inventory
 - `F2` commit the repo-standard machine conventions
 - `F3` extract the runtime-skill setup machine and delete the legacy setup service
+- `F4` move delegation progression under `app/workflows/delegation/*`
 
 Remaining:
 
 - all Phase 4-6 remediation slices after Phase 3 completes
 
-Completed in `F3`:
+Completed in `F4`:
 
-- `app/workflows/runtime_skills/setup_machine.py` now owns setup-state transitions
-- `app/workflows/runtime_skills/setup.py` is now the only app writer of
-  `session.awaiting_skill_setup`
-- `app/skill_lifecycle_service.py` is deleted
-- `app/credential_flow.py` no longer owns setup-state helpers
+- `app/workflows/delegation/machine.py` now owns delegation transition rules
+- `app/workflows/delegation/coordination.py` now owns delegation workflow
+  orchestration and message shaping
+- `app/agents/orchestration.py` is deleted
+- `app/agents/delegation.py` and `app/agents/delivery.py` no longer edit
+  delegation status strings directly
+- Telegram ingress now consumes delegation workflow owners for plan creation and
+  completed-plan finalization
 - focused verification passed:
-  - `75 passed`
+  - `24 passed`
 - full suite passed:
-  - `1538 passed, 23 skipped`
+  - `1547 passed, 23 skipped`
 
 Before-state:
 
-- delegation progression is still split across `app/agents/orchestration.py`,
-  `app/agents/delegation.py`, and session status-string mutation paths.
+- pending approval/retry and transport recovery are still split across root
+  machine files and the old `python-statemachine` style.
 
 After-state required next:
 
-- `app/workflows/delegation/machine.py` becomes the explicit delegation
-  transition owner
-- `app/workflows/delegation/coordination.py` becomes the concern-owned
-  workflow consumer/orchestrator
-- `app/agents/delivery.py` and `app/agents/delegation.py` become thin bridges
-  over the delegation workflow package
+- `app/workflows/pending/machine.py` becomes the pending approval/retry owner
+- `app/workflows/recovery/machine.py` and `app/workflows/recovery/results.py`
+  become the recovery owners
+- `app/workflows/recovery/transport_contract.py` replaces the root
+  `app/transport_contract.py`
+- no production pending/recovery logic remains on `python-statemachine`
+
+Current in-progress audit for `F5`:
+
+- root machine owners still present:
+  - `app/workflows/pending_request.py`
+  - `app/workflows/transport_recovery.py`
+  - `app/workflows/results.py`
+  - `app/transport_contract.py`
+- pre-commit verification required for `F5`:
+  - functional-machine parity tests for pending and recovery
+  - import-path updates everywhere those root modules are still imported
+  - negative gates proving production code no longer depends on
+    `python-statemachine` or the root recovery contract paths
 
 ## Working Rules
 

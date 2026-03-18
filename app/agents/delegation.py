@@ -13,6 +13,11 @@ from app.agents.types import RoutedTaskRequest
 from app.config import BotConfig
 from app.identity import parse_conversation_key
 from app.runtime.session_runtime import load_runtime_session, save_runtime_session
+from app.workflows.delegation.coordination import (
+    cancel_delegation,
+    mark_task_submitted,
+    prepare_delegation_approval,
+)
 
 
 @dataclass(frozen=True)
@@ -72,14 +77,14 @@ async def handle_delegation_approve(
         return
 
     session = _load_session(runtime, chat_id)
-    delegation = session.pending_delegation
-    if (
-        delegation is None
-        or not any(task.status == "proposed" for task in delegation.tasks)
-        or (conversation_ref and delegation.conversation_ref and delegation.conversation_ref != conversation_ref)
-    ):
+    approval = prepare_delegation_approval(
+        session.pending_delegation,
+        conversation_ref=conversation_ref,
+    )
+    if approval.status != "approve_ready" or approval.pending is None:
         await surface.send_text("Nothing to approve.")
         return
+    delegation = approval.pending
 
     client = registry_client(cfg)
     if client is None:
@@ -92,9 +97,7 @@ async def handle_delegation_approve(
     origin_agent_id = state.agent_id or ""
     submitted_ids: list[str] = []
     try:
-        for task in delegation.tasks:
-            if task.status != "proposed":
-                continue
+        for task in approval.tasks_to_submit:
             request = RoutedTaskRequest(
                 routed_task_id=task.routed_task_id,
                 parent_conversation_id=delegation.conversation_ref,
@@ -104,13 +107,13 @@ async def handle_delegation_approve(
                 instructions=task.instructions,
             )
             await client.submit_routed_task(request)
-            task.status = "submitted"
             submitted_ids.append(task.routed_task_id)
-        if submitted_ids:
-            delegation.status = "submitted"
+            submission = mark_task_submitted(
+                session.pending_delegation,
+                routed_task_id=task.routed_task_id,
+            )
+            session.pending_delegation = submission.pending
     except Exception as exc:
-        if submitted_ids:
-            delegation.status = "submitted"
         _save_session(runtime, chat_id, session)
         await surface.send_text(
             f"Delegation submission failed after {len(submitted_ids)} request(s)."
@@ -135,11 +138,11 @@ async def handle_delegation_cancel(
 ) -> None:
     """Cancel a pending delegation plan on any conversation surface."""
     session = _load_session(runtime, chat_id)
-    delegation = session.pending_delegation
-    if (
-        delegation is None
-        or (conversation_ref and delegation.conversation_ref and delegation.conversation_ref != conversation_ref)
-    ):
+    outcome = cancel_delegation(
+        session.pending_delegation,
+        conversation_ref=conversation_ref,
+    )
+    if outcome.status != "cancelled":
         await surface.send_text("Nothing to cancel.")
         return
     session.pending_delegation = None

@@ -205,7 +205,7 @@ Completed slices:
      - negative gates proving the deleted owner path is gone and `app/agents/*`
        no longer edits delegation status strings directly
 
-21. `pending commit` `Track F / F5: migrate pending and recovery to concern-owned functional machines`
+21. `845aed3` `Track F / F5: migrate pending and recovery to concern-owned functional machines`
    - Before-state inventory captured before editing:
      - `app/workflows/pending_request.py`
        - still owns the pending approval/retry machine
@@ -306,12 +306,67 @@ Completed slices:
      - full suite:
        - `1547 passed, 23 skipped`
 
+22. `pending commit` `Track F / F6: enforce runtime dispatch ownership`
+   - Before-state inventory captured before editing:
+     - `app/runtime/dispatch.py`
+       - still owned:
+         - `RequestExecutionOutcome`
+         - `check_prompt_size_cross_chat(...)`
+         - `prompt_weight(...)`
+         - `check_credential_satisfaction(...)`
+         - `execute_request(...)`
+         - `request_approval(...)`
+       - still mixed:
+         - runtime provider-call plumbing
+         - request/preflight workflow decisions
+         - session mutation
+         - progress/reply branching
+         - Telegram-specific keyboard construction
+   - Required after-state for F6:
+     - `app/runtime/dispatch.py` remains only provider-run plumbing
+     - execution/preflight orchestration moves to a concern-owned workflow
+       package under `app/workflows/execution/*`
+     - Telegram-specific rendering and prompt/keyboard decisions leave
+       `app/runtime/dispatch.py` in the same slice
+     - `runtime/*` remains free of channel imports and Telegram-library
+       rendering objects
+   - Completed implementation in the current worktree:
+     - `app/runtime/dispatch.py` now owns only:
+       - `RuntimeDispatchRuntime`
+       - `ProviderDispatchOutcome`
+       - `run_provider_request(...)`
+       - `run_provider_preflight(...)`
+     - added concern-owned execution workflow package:
+       - `app/workflows/execution/__init__.py`
+       - `app/workflows/execution/contracts.py`
+       - `app/workflows/execution/requests.py`
+     - moved execution/preflight ownership out of runtime and into
+       `app/workflows/execution/requests.py`:
+       - `RequestExecutionOutcome`
+       - `check_prompt_size_cross_chat(...)`
+       - `prompt_weight(...)`
+       - `check_credential_satisfaction(...)`
+       - `execute_request(...)`
+       - `request_approval(...)`
+     - updated ingress to consume the execution workflow owner and provide
+       explicit execution runtime collaborators instead of treating
+       `app/runtime/dispatch.py` as a mixed workflow/runtime module
+     - updated focused boundary tests:
+       - `tests/test_runtime_dispatch_boundary.py`
+       - `tests/test_architecture_skeleton.py`
+       - `tests/test_zero_import_gates.py`
+   - Verification completed before commit:
+     - focused F6 suite:
+       - `66 passed`
+     - full suite:
+       - `1550 passed, 23 skipped`
+
 ## Latest Verified Test Baseline
 
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1547 passed, 23 skipped`
+- result: `1550 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -427,7 +482,7 @@ Completed:
 
 Remaining:
 
-- `F6` dispatch ownership cleanup
+- none
 
 ## Acceptance Gate Checklist
 
@@ -445,7 +500,7 @@ status.
 - [x] Setup progression has one explicit machine owner.
 - [x] Delegation progression has one explicit workflow/machine owner.
 - [x] Pending and recovery machines live under concern-owned workflow packages.
-- [ ] `runtime/dispatch.py` is channel-agnostic plumbing and not a shadow
+- [x] `runtime/dispatch.py` is channel-agnostic plumbing and not a shadow
   workflow owner.
 - [x] The repo-standard explicit machine style is declared and used for
   remediated durable workflows.
@@ -459,7 +514,7 @@ status.
 
 Next required slice:
 
-- `Track F / F5: migrate pending and recovery to the repo-standard machine style`
+- `Track E / E1-E4: remove stale transitional ownership and extend zero-import gates`
 
 Completed:
 
@@ -472,52 +527,26 @@ Completed:
 - `F2` commit the repo-standard machine conventions
 - `F3` extract the runtime-skill setup machine and delete the legacy setup service
 - `F4` move delegation progression under `app/workflows/delegation/*`
+- `F5` migrate pending and recovery to concern-owned functional machines
+- `F6` separate execution workflow ownership from runtime dispatch
 
 Remaining:
 
-- all Phase 4-6 remediation slices after Phase 3 completes
+- Track E cleanup slices
+- Track B Telegram presenter extraction
+- final acceptance-gate audit
 
-Completed in `F4`:
+Completed in `F6`:
 
-- `app/workflows/delegation/machine.py` now owns delegation transition rules
-- `app/workflows/delegation/coordination.py` now owns delegation workflow
-  orchestration and message shaping
-- `app/agents/orchestration.py` is deleted
-- `app/agents/delegation.py` and `app/agents/delivery.py` no longer edit
-  delegation status strings directly
-- Telegram ingress now consumes delegation workflow owners for plan creation and
-  completed-plan finalization
+- `app/runtime/dispatch.py` now contains only channel-agnostic provider-call
+  plumbing
+- `app/workflows/execution/*` now owns request/preflight workflow logic
+- Telegram ingress now consumes explicit execution runtime collaborators instead
+  of treating runtime dispatch as a workflow owner
 - focused verification passed:
-  - `24 passed`
+  - `66 passed`
 - full suite passed:
-  - `1547 passed, 23 skipped`
-
-Before-state:
-
-- pending approval/retry and transport recovery are still split across root
-  machine files and the old `python-statemachine` style.
-
-After-state required next:
-
-- `app/workflows/pending/machine.py` becomes the pending approval/retry owner
-- `app/workflows/recovery/machine.py` and `app/workflows/recovery/results.py`
-  become the recovery owners
-- `app/workflows/recovery/transport_contract.py` replaces the root
-  `app/transport_contract.py`
-- no production pending/recovery logic remains on `python-statemachine`
-
-Current in-progress audit for `F5`:
-
-- root machine owners still present:
-  - `app/workflows/pending_request.py`
-  - `app/workflows/transport_recovery.py`
-  - `app/workflows/results.py`
-  - `app/transport_contract.py`
-- pre-commit verification required for `F5`:
-  - functional-machine parity tests for pending and recovery
-  - import-path updates everywhere those root modules are still imported
-  - negative gates proving production code no longer depends on
-    `python-statemachine` or the root recovery contract paths
+  - `1550 passed, 23 skipped`
 
 ## Working Rules
 

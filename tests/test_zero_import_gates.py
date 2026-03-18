@@ -95,6 +95,30 @@ def test_runtime_dispatch_has_no_channel_imports() -> None:
     )
 
 
+def test_runtime_dispatch_has_no_telegram_rendering_or_workflow_branches() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    dispatch_path = repo_root / "app" / "runtime" / "dispatch.py"
+    text = dispatch_path.read_text()
+    forbidden = (
+        "from telegram",
+        "import telegram",
+        "InlineKeyboardButton",
+        "InlineKeyboardMarkup",
+        "ParseMode",
+        "app.approvals",
+        "app.credential_flow",
+        "app.provider_guidance_service",
+        "app.storage",
+        "app.summarize",
+        "app.work_queue",
+        "PendingApproval",
+        "PendingRetry",
+        "RequestExecutionOutcome",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in {dispatch_path}"
+
+
 def test_agents_delivery_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     delivery_path = repo_root / "app" / "agents" / "delivery.py"

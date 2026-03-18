@@ -85,6 +85,7 @@ from app.channels.telegram.runtime_skills import (
     handle_skill_update_callback as runtime_skill_handle_skill_update_callback,
     handle_worker_skill_action as runtime_skill_handle_worker_skill_action,
     maybe_handle_setup_message as runtime_skill_maybe_handle_setup_message,
+    TelegramRuntimeSkillsRuntime,
 )
 from app.channels.telegram.guidance import (
     guidance_approve as channel_guidance_approve,
@@ -396,6 +397,14 @@ def _conversation_runtime() -> TelegramConversationRuntime:
         cancellations=get_cancellation_registry(),
         chat_lock=_chat_lock,
         edit_or_reply_text=_edit_or_reply_text,
+    )
+
+
+def _runtime_skill_runtime() -> TelegramRuntimeSkillsRuntime:
+    return TelegramRuntimeSkillsRuntime(
+        state=_state(),
+        chat_lock=_chat_lock,
+        validate_credential=validate_credential,
     )
 
 
@@ -2011,8 +2020,9 @@ async def cmd_skills(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         skills_archive,
     )
     args = event.args
+    runtime = _runtime_skill_runtime()
     if not args:
-        await skills_show(event, update)
+        await skills_show(event, update, runtime=runtime)
         return
 
     sub = args[0].lower()
@@ -2024,25 +2034,25 @@ async def cmd_skills(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         "reject": skills_reject, "publish": skills_publish, "archive": skills_archive,
     }
     if sub in _SUBS_WITH_ARG and len(args) >= 2:
-        await _SUBS_WITH_ARG[sub](event, update, args[1])
+        await _SUBS_WITH_ARG[sub](event, update, args[1], runtime=runtime)
         return
     if sub == "list":
-        await skills_list(event, update)
+        await skills_list(event, update, runtime=runtime)
         return
     if sub == "clear":
-        await skills_clear(event, update)
+        await skills_clear(event, update, runtime=runtime)
         return
     if sub == "search" and len(args) >= 2:
-        await skills_search(event, update, " ".join(args[1:]))
+        await skills_search(event, update, " ".join(args[1:]), runtime=runtime)
         return
     if sub == "updates":
-        await skills_updates(event, update)
+        await skills_updates(event, update, runtime=runtime)
         return
     if sub == "update" and len(args) >= 2:
-        await skills_update(event, update, args[1])
+        await skills_update(event, update, args[1], runtime=runtime)
         return
     if sub == "edit" and len(args) >= 3:
-        await skills_edit(event, update, args[1], " ".join(args[2:]))
+        await skills_edit(event, update, args[1], " ".join(args[2:]), runtime=runtime)
         return
 
     await update.effective_message.reply_text(
@@ -2110,12 +2120,21 @@ async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 @_command_handler
 async def cmd_clear_credentials(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await runtime_skill_cmd_clear_credentials(event, update, context)
+    await runtime_skill_cmd_clear_credentials(
+        event,
+        update,
+        context,
+        runtime=_runtime_skill_runtime(),
+    )
 
 
 @_callback_handler
 async def handle_clear_cred_callback(event, query) -> None:
-    await runtime_skill_handle_clear_cred_callback(event, query)
+    await runtime_skill_handle_clear_cred_callback(
+        event,
+        query,
+        runtime=_runtime_skill_runtime(),
+    )
 
 
 @_command_handler
@@ -2190,7 +2209,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     needs_welcome = not session_exists(cfg.data_dir, _conversation_key(chat_id))
 
     data_dir = cfg.data_dir
-    if await runtime_skill_maybe_handle_setup_message(update, msg, payload):
+    if await runtime_skill_maybe_handle_setup_message(
+        update,
+        msg,
+        payload,
+        runtime=_runtime_skill_runtime(),
+    ):
         return
 
     envelope = InboundEnvelope(
@@ -2386,12 +2410,20 @@ async def handle_settings_callback(event, query) -> None:
 
 @_callback_handler
 async def handle_skill_add_callback(event, query) -> None:
-    await runtime_skill_handle_skill_add_callback(event, query)
+    await runtime_skill_handle_skill_add_callback(
+        event,
+        query,
+        runtime=_runtime_skill_runtime(),
+    )
 
 
 @_callback_handler
 async def handle_skill_update_callback(event, query) -> None:
-    await runtime_skill_handle_skill_update_callback(event, query)
+    await runtime_skill_handle_skill_update_callback(
+        event,
+        query,
+        runtime=_runtime_skill_runtime(),
+    )
 
 @_command_handler
 async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2594,7 +2626,11 @@ async def _execute_worker_action(
 
     if action in {"skills_add", "skills_remove", "skills_setup", "skills_clear"}:
         worker_event = dataclasses.replace(event, conversation_key=_conversation_key(runtime_chat))
-        if await runtime_skill_handle_worker_skill_action(worker_event, surface):
+        if await runtime_skill_handle_worker_skill_action(
+            worker_event,
+            surface,
+            runtime=_runtime_skill_runtime(),
+        ):
             return
         return
 

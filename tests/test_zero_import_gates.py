@@ -52,3 +52,12 @@ def test_telegram_conversation_module_has_no_ingress_import() -> None:
     assert "app.channels.telegram.ingress" not in text, (
         f"telegram ingress import still referenced in {conversation_path}"
     )
+
+
+def test_telegram_runtime_skills_module_has_no_ingress_import() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    runtime_skills_path = repo_root / "app" / "channels" / "telegram" / "runtime_skills.py"
+    text = runtime_skills_path.read_text()
+    assert "app.channels.telegram.ingress" not in text, (
+        f"telegram ingress import still referenced in {runtime_skills_path}"
+    )

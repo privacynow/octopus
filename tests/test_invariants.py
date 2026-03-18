@@ -127,6 +127,7 @@ def test_registry_digest_mismatch_leaves_no_residue():
 
 async def test_registry_search_does_not_block_event_loop():
     """Slow registry fetch must not prevent another command from running."""
+    import contextlib
     import unittest.mock
 
     with fresh_data_dir() as data_dir:
@@ -135,6 +136,9 @@ async def test_registry_search_does_not_block_event_loop():
         setup_globals(cfg, prov)
 
         import app.channels.telegram.runtime_skills as sc
+        from app.channels.telegram.state import get_channel_state
+        from app.credential_validation import validate_credential
+        from app.runtime.inbound_types import InboundCommand, InboundUser
 
         # Track whether another coroutine can run during the registry fetch
         other_ran = False
@@ -160,12 +164,32 @@ async def test_registry_search_does_not_block_event_loop():
 
         from unittest.mock import patch
 
-        fake_event = type("FakeEvent", (), {"chat_id": 12345, "user": user, "args": []})()
+        fake_event = InboundCommand(
+            user=InboundUser(id=telegram_actor_key(42), username=user.username),
+            conversation_key=telegram_conversation_key(12345),
+            command="skills",
+        )
+
+        @contextlib.asynccontextmanager
+        async def noop_chat_lock(*args, **kwargs):
+            del args, kwargs
+            yield False
+
+        runtime = sc.TelegramRuntimeSkillsRuntime(
+            state=get_channel_state(),
+            chat_lock=noop_chat_lock,
+            validate_credential=validate_credential,
+        )
 
         with patch("app.channels.telegram.runtime_skills.asyncio.to_thread", side_effect=slow_to_thread):
             with patch("app.registry.fetch_index", side_effect=slow_fetch_index):
                 search_task = asyncio.create_task(
-                    sc.skills_search(fake_event, FakeUpdate(message=msg, user=user, chat=chat), "test")
+                    sc.skills_search(
+                        fake_event,
+                        FakeUpdate(message=msg, user=user, chat=chat),
+                        "test",
+                        runtime=runtime,
+                    )
                 )
                 other_task = asyncio.create_task(other_command())
 

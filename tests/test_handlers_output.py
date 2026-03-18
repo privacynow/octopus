@@ -2,7 +2,7 @@
 
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
-from app.channels.telegram.ingress import _extract_summary
+from app.channels.telegram.presenters import extract_summary
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     current_bot_instance,
@@ -198,11 +198,11 @@ async def test_e2e_compact_mode_short_response_no_blockquote():
         assert "blockquote" not in all_replies
 
 
-# -- _extract_summary unit tests --
+# -- extract_summary unit tests --
 
 def test_extract_summary_splits_at_line_boundary():
     text = "Line one\nLine two\nLine three\nLine four\nLine five\nLine six"
-    summary, rest = _extract_summary(text, max_lines=3)
+    summary, rest = extract_summary(text, max_lines=3)
     assert "Line one" in summary
     assert "Line three" in summary
     assert "Line five" in rest
@@ -210,7 +210,7 @@ def test_extract_summary_splits_at_line_boundary():
 
 def test_extract_summary_short_text():
     text = "Just one line"
-    summary, rest = _extract_summary(text, max_lines=4)
+    summary, rest = extract_summary(text, max_lines=4)
     assert summary == "Just one line"
     assert rest == ""
 
@@ -271,7 +271,7 @@ def _button_path_response() -> str:
     """Generate a response that forces the expand-button path.
 
     _send_compact_reply uses blockquote when compact HTML ≤ 4000.
-    _extract_summary splits on non-empty lines (default max_lines=4).
+    extract_summary splits on non-empty lines (default max_lines=4).
     """
     summary = ["Summary one.", "Summary two.", "Summary three.", "Summary four."]
     detail_lines = [f"Detail {i}: " + "Detailed explanation with plenty of content here. " * 5 for i in range(25)]

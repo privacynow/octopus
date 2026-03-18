@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -12,6 +13,8 @@ from telegram.constants import ParseMode
 from app import user_messages as _msg
 from app.approvals import format_denials_html
 from app.credential_flow import foreign_setup_message, format_credential_prompt
+from app.formatting import md_to_telegram_html, split_html
+from app.session_state import PendingDelegation
 from app.workflows.provider_guidance.contracts import (
     ProviderGuidanceLifecycleDetail,
     ProviderGuidancePreview,
@@ -779,3 +782,101 @@ def recovery_invalid_action_message() -> TelegramRenderedMessage:
 
 def recovery_failed_edit_message() -> TelegramRenderedMessage:
     return _html_message(_msg.recovery_replay_failed_edit())
+
+
+def ingress_setup_prompt_message(missing_skill: str, first_requirement: dict[str, object]) -> TelegramRenderedMessage:
+    return _html_message(
+        f"Skill <code>{html.escape(missing_skill)}</code> needs setup.\n\n"
+        f"{format_credential_prompt(first_requirement)}"
+    )
+
+
+def formatted_reply_messages(text: str) -> list[TelegramRenderedMessage]:
+    formatted = md_to_telegram_html(text) if text else "<i>[empty]</i>"
+    return [
+        TelegramRenderedMessage(
+            text=chunk,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        for chunk in split_html(formatted, 4096)
+    ]
+
+
+def formatted_reply_fallback_text(rendered_chunk: str) -> str:
+    return re.sub(r"<[^>]+>", "", rendered_chunk)[:4096]
+
+
+def compact_reply_blockquote_message(text: str) -> TelegramRenderedMessage | None:
+    summary, detail = extract_summary(text)
+    formatted_summary = md_to_telegram_html(summary) if summary else ""
+    if not detail:
+        return None
+    formatted_detail = md_to_telegram_html(detail)
+    compact_html = (
+        f"{formatted_summary}\n\n"
+        f"<blockquote expandable>{formatted_detail}</blockquote>"
+    )
+    if len(compact_html) > 4000:
+        return None
+    return TelegramRenderedMessage(
+        text=compact_html,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+def compact_reply_button_message(text: str, chat_id: int, slot: int) -> TelegramRenderedMessage:
+    summary, _ = extract_summary(text)
+    formatted_summary = md_to_telegram_html(summary) if summary else ""
+    return collapsed_response_message(formatted_summary, chat_id, slot)
+
+
+def expanded_response_message(text: str, chat_id: int, slot: int) -> TelegramRenderedMessage | None:
+    formatted = md_to_telegram_html(text)
+    if len(formatted) > 4000:
+        return None
+    return TelegramRenderedMessage(
+        text=formatted,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+        reply_markup=expanded_response_reply_markup(chat_id, slot),
+    )
+
+
+def cannot_send_path_message(raw_path: str) -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=f"[Cannot send: {raw_path}]")
+
+
+def delegation_plan_message(delegation: PendingDelegation) -> TelegramRenderedMessage:
+    lines = [
+        "<b>Delegation plan</b>",
+        "",
+        "I'd like to delegate the following to specialist bots:",
+        "",
+    ]
+    for index, task in enumerate(delegation.tasks, start=1):
+        lines.extend([
+            f"<b>{index}. {html.escape(task.title or task.routed_task_id)}</b>",
+            f"\u2192 {html.escape(task.target_agent_id or 'unassigned')}",
+            "",
+        ])
+    lines.append("Approve to send these requests, or cancel to continue without delegation.")
+    return _html_message("\n".join(lines))
+
+
+def welcome_message(*, approval_mode: str, compact_mode: bool) -> TelegramRenderedMessage:
+    text = "I'm ready. Send me a message or type /help to see what I can do."
+    if approval_mode == "on":
+        text += "\nApproval mode is on — I'll show a plan before acting."
+    if compact_mode:
+        text += "\nCompact mode is on — long answers are summarized. Use /compact off for full answers."
+    return TelegramRenderedMessage(text=text)
+
+
+def raw_usage_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text="Usage: /raw [N] — N is the Nth most recent response (default: 1)")
+
+
+def raw_missing_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text="No stored responses found.")

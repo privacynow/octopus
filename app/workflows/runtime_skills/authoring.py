@@ -5,7 +5,11 @@ from __future__ import annotations
 from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.content_store import get_content_store
 from app.skill_catalog_service import get_skill_catalog_service
-from app.workflows.lifecycle_machine import LifecycleDecision, LifecycleSnapshot, decide_lifecycle_action
+from app.workflows.lifecycle_machine import (
+    LifecycleDecision,
+    build_lifecycle_snapshot,
+    decide_lifecycle_action,
+)
 from app.workflows.runtime_skills.contracts import (
     RuntimeSkillAuthoringPort,
     RuntimeSkillLifecycleApproval,
@@ -73,13 +77,10 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
                 return item.action
         return ""
 
-    def _snapshot(self, track: RuntimeSkillTrackRecord) -> LifecycleSnapshot:
-        published_revision_id = track.published_revision_id or ""
-        return LifecycleSnapshot(
-            revision_status=track.revision.status,
-            latest_action=self._latest_action_for_revision(track.slug, track.active_revision_id),
-            has_published_revision=bool(published_revision_id),
-            published_revision_matches_active=(published_revision_id == track.active_revision_id and bool(published_revision_id)),
+    def _lifecycle_snapshot(self, track: RuntimeSkillTrackRecord):
+        return build_lifecycle_snapshot(
+            track,
+            self._latest_action_for_revision(track.slug, track.active_revision_id),
         )
 
     def _transition_message(self, skill_name: str, action: str, decision: LifecycleDecision, track: RuntimeSkillTrackRecord) -> str:
@@ -111,7 +112,7 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
         actor_key: str,
         note: str = "",
     ) -> RuntimeSkillLifecycleMutation:
-        decision = decide_lifecycle_action(self._snapshot(track), action)
+        decision = decide_lifecycle_action(self._lifecycle_snapshot(track), action)
         if not decision.ok:
             return RuntimeSkillLifecycleMutation(
                 status=decision.status,

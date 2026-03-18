@@ -36,6 +36,7 @@ def catalog_item(item: RuntimeSkillCatalogItem) -> dict[str, Any]:
         "can_activate": item.can_activate,
         "can_update": item.can_update,
         "can_uninstall": item.can_uninstall,
+        "lifecycle_status": item.lifecycle_status,
     }
 
 
@@ -48,6 +49,7 @@ def search_catalog_item(item: RuntimeSkillCatalogItem) -> dict[str, Any]:
         "can_activate": item.can_activate,
         "can_update": item.can_update,
         "can_uninstall": item.can_uninstall,
+        "lifecycle_status": item.lifecycle_status,
     }
 
 
@@ -83,6 +85,7 @@ def catalog_detail(detail: RuntimeSkillDetail) -> dict[str, Any]:
         "can_activate": detail.can_activate,
         "can_update": detail.can_update,
         "can_uninstall": detail.can_uninstall,
+        "lifecycle_status": detail.lifecycle_status,
     }
 
 

@@ -80,6 +80,8 @@ REMOVED_TOP_LEVEL_PORT_MODULES = (
     "app/telegram_pending_request_surface.py",
     "app/transport.py",
     "app/transports/admission.py",
+    "app/transports/__init__.py",
+    "app/transports/types.py",
 )
 
 

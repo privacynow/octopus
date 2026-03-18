@@ -611,7 +611,7 @@ status.
 
 Next required slice:
 
-- `Track B / B2b: move runtime-skill Telegram text and HTML rendering into presenters.py`
+- `Track B / B2c: move remaining conversation, pending, and ingress Telegram rendering into presenters.py`
 
 Completed:
 
@@ -674,8 +674,32 @@ Completed in `Track B / B1`:
        inline HTML formatting
    - focused verification passed:
      - `46 passed`
+ - full suite passed:
+   - `1567 passed, 23 skipped`
+
+26. `pending` `Track B / B2b: move runtime-skill Telegram rendering into presenters.py`
+   - Added named runtime-skill presenter functions in
+     `app/channels/telegram/presenters.py` for:
+     - active-skill summary
+     - catalog listing
+     - setup/activation/deactivation outcomes
+     - lifecycle history and lifecycle mutation messages
+     - search/info/import/update/diff/update-all outputs
+     - clear-credential prompts and results
+     - setup-step validation and completion messages
+   - `app/channels/telegram/runtime_skills.py` now applies presenter output
+     instead of owning inline HTML, credential-prompt formatting, or direct
+     lifecycle text construction.
+   - Added:
+     - runtime-skill presenter unit tests
+     - regression tests proving `runtime_skills.py` calls presenters for
+       summary, setup, and lifecycle rendering
+     - a negative structural guard proving `runtime_skills.py` no longer owns
+       inline HTML or credential-formatting helpers
+   - focused verification passed:
+     - `96 passed`
    - full suite passed:
-     - `1567 passed, 23 skipped`
+     - `1573 passed, 23 skipped`
 
 Before-state for `Track B / B2`:
 
@@ -737,6 +761,50 @@ Before-state for `Track B / B2b`:
   - `tests/test_telegram_presenters.py`
   - `tests/test_handlers_store.py`
   - `tests/test_telegram_runtime_skills.py`
+  - `tests/test_zero_import_gates.py`
+
+Completed in `Track B / B2b`:
+
+- `app/channels/telegram/runtime_skills.py` no longer owns inline HTML or
+  credential-prompt formatting for runtime-skill channel replies
+- `app/channels/telegram/presenters.py` is now the owner for runtime-skill
+  catalog, setup, lifecycle, import, update, diff, and clear-credential
+  rendering
+- structural guards now prove `runtime_skills.py` does not import
+  `app.credential_flow` or contain inline HTML formatting tokens
+
+Before-state for `Track B / B2c`:
+
+- files that will change:
+  - `app/channels/telegram/conversation.py`
+  - `app/channels/telegram/pending.py`
+  - `app/channels/telegram/ingress.py`
+  - `app/channels/telegram/presenters.py`
+  - `tests/test_telegram_presenters.py`
+  - `tests/test_handlers.py`
+  - `tests/test_handlers_output.py`
+  - `tests/test_request_flow.py`
+  - `tests/test_zero_import_gates.py`
+- current caller and owner inventory:
+  - `conversation.py` still formats role/project/status and callback outcome
+    replies inline
+  - `pending.py` still formats recovery replay/discard status replies inline
+  - `ingress.py` still formats compact/full-answer replies, setup prompts,
+    delegation-plan output, and several help/session/discover/admin replies
+    inline
+- after-state required by this slice:
+  - remaining Telegram channel text/HTML rendering moves into
+    `app/channels/telegram/presenters.py`
+  - `conversation.py`, `pending.py`, and `ingress.py` orchestrate calls and
+    apply presenter output only
+  - focused regression coverage proves these modules call presenters instead of
+    formatting inline
+  - negative structural guards prove the removed inline-rendering seams are gone
+- contract tests for this slice:
+  - `tests/test_telegram_presenters.py`
+  - `tests/test_handlers.py`
+  - `tests/test_handlers_output.py`
+  - `tests/test_request_flow.py`
   - `tests/test_zero_import_gates.py`
 
 Completed in `F6`:

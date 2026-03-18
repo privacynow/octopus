@@ -18,6 +18,7 @@ from app.agents.bridge import (
 from app.agents.types import RoutedTaskResult
 from app.config import BotConfig
 from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
+from app.channel_egress_factory import create_channel_egress
 from app.runtime import composition
 from app.runtime.session_runtime import load_runtime_session, save_runtime_session
 from app.skill_activation_service import get_skill_activation_service
@@ -224,7 +225,7 @@ async def handle_registry_delivery(
             serialized,
         )
         if admit_status == "admitted":
-            surface = composition.create_channel_egress(
+            surface = create_channel_egress(
                 parent_conversation_id,
                 config=config,
                 bot=runtime.bot,

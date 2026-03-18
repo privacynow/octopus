@@ -436,7 +436,7 @@ Completed slices:
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1603 passed, 23 skipped`
+- result: `1605 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -592,14 +592,14 @@ Remaining:
 These gates are copied from the active plan and tracked here with current
 status.
 
-- [ ] No app module outside Telegram ingress imports Telegram ingress.
-- [ ] Telegram channel runtime state is explicit and no longer
+- [x] No app module outside Telegram ingress imports Telegram ingress.
+- [x] Telegram channel runtime state is explicit and no longer
   global-module-owned.
-- [ ] `runtime/*` has no channel imports.
-- [ ] `agents/*` has no channel imports.
-- [ ] `access.py` has no channel imports.
-- [ ] Telegram presenters own Telegram rendering.
-- [ ] Registry `http.py` is a thin HTTP boundary and `ui.py` owns UI rendering.
+- [x] `runtime/*` has no channel imports.
+- [x] `agents/*` has no channel imports.
+- [x] `access.py` has no channel imports.
+- [x] Telegram presenters own Telegram rendering.
+- [x] Registry `http.py` is a thin HTTP boundary and `ui.py` owns UI rendering.
 - [x] Setup progression has one explicit machine owner.
 - [x] Delegation progression has one explicit workflow/machine owner.
 - [x] Pending and recovery machines live under concern-owned workflow packages.
@@ -617,7 +617,7 @@ status.
 
 Next required slice:
 
-- `Final acceptance audit and remediation closure`
+- none
 
 Committed Track B slices after `B1`:
 
@@ -648,116 +648,40 @@ Committed Track B slices after `B1`:
    - Focused verification passed: `118 passed`
    - Full suite passed: `1592 passed, 23 skipped`
 
-Worktree now in progress for `Track B / B2c2b`:
+29. `65843b1` `Track B / B2c2b: move ingress help rendering into presenters`
+   - `app/channels/telegram/presenters.py` now owns the remaining help/session/
+     discover/admin/access/usage rendering that previously lived in the
+     Telegram entrypoint owner.
+   - Focused verification passed: `277 passed`
+   - Full suite passed: `1603 passed, 23 skipped`
 
-29. `pending` `Track B / B2c2b: move ingress help/session/discover/admin/reporting rendering into presenters`
-   - `app/channels/telegram/presenters.py` now owns named rendering helpers for:
-     - main help and help-topic output
-     - session overview output
-     - `/send`, `/id`, and `/doctor` responses
-     - `/discover` usage, degraded-state, failure, and results output
-     - `/admin sessions` usage/detail/summary output
-     - access-command usage and override summaries
-     - `/skills` and `/guidance` usage/admin-only output
-     - queue/rate-limit/orphan-recovery user-facing status text
-   - `app/channels/telegram/ingress.py` now applies presenter output for those
-     flows instead of formatting text or HTML inline.
-   - Added:
-     - presenter unit tests for help/session/discover/admin/access rendering
-     - ingress regression tests proving presenter ownership for:
-       - `/help`
-       - `/session`
-       - `/discover`
-       - `/admin`
-       - `/guidance` admin-only output
-     - negative structural guards proving the removed help/discover/admin usage
-       text and helper builders are gone from ingress
-   - focused verification passed:
-     - `277 passed`
-   - full suite passed:
-     - `1603 passed, 23 skipped`
+Worktree now in progress for final acceptance closure:
+
+30. `complete in current worktree` `Final acceptance audit and closure`
+   - deleted the old Telegram entrypoint path:
+     - `app/channels/telegram/ingress.py`
+   - moved the Telegram routing owner to:
+     - `app/channels/telegram/routing.py`
+   - kept Telegram boot wiring under:
+     - `app/channels/telegram/bootstrap.py`
+   - moved the concrete outbound egress factory out of `runtime/*` and into:
+     - `app/channel_egress_factory.py`
+   - `app/runtime/composition.py` is now channel-agnostic and no longer
+     imports concrete channel packages
+   - app and test imports were rewritten away from the deleted Telegram
+     ingress path
+   - structural tests now prove:
+     - the old Telegram ingress path is gone
+     - `runtime/*`, `agents/*`, and `access.py` have no channel imports
+     - the Telegram routing owner remains presenter-owned for rendering
+   - focused closure verification passed:
+     - `246 passed`
+   - final full-suite verification passed:
+     - `1605 passed, 23 skipped`
 
 ## Remaining Work
 
-- run the final architecture acceptance audit against `store_plan.md`
-- add any last guard/fix required by the acceptance gates
-- rerun the full suite
-- commit remediation closure
-
-Before-state for `Track B / B2c`:
-
-- files that will change:
-  - `app/channels/telegram/conversation.py`
-  - `app/channels/telegram/pending.py`
-  - `app/channels/telegram/ingress.py`
-  - `app/channels/telegram/presenters.py`
-  - `tests/test_telegram_presenters.py`
-  - `tests/test_handlers.py`
-  - `tests/test_handlers_output.py`
-  - `tests/test_request_flow.py`
-  - `tests/test_zero_import_gates.py`
-- current caller and owner inventory:
-  - `conversation.py` still formats role/project/status and callback outcome
-    replies inline
-  - `pending.py` still formats recovery replay/discard status replies inline
-  - `ingress.py` still formats compact/full-answer replies, setup prompts,
-    delegation-plan output, and several help/session/discover/admin replies
-    inline
-- after-state required by this slice:
-  - remaining Telegram channel text/HTML rendering moves into
-    `app/channels/telegram/presenters.py`
-  - `conversation.py`, `pending.py`, and `ingress.py` orchestrate calls and
-    apply presenter output only
-  - focused regression coverage proves these modules call presenters instead of
-    formatting inline
-  - negative structural guards prove the removed inline-rendering seams are gone
-- contract tests for this slice:
-  - `tests/test_telegram_presenters.py`
-  - `tests/test_handlers.py`
-  - `tests/test_handlers_output.py`
-  - `tests/test_request_flow.py`
-  - `tests/test_zero_import_gates.py`
-
-Before-state for `Track B / B2c1`:
-
-- files that will change:
-  - `app/channels/telegram/conversation.py`
-  - `app/channels/telegram/pending.py`
-  - `app/channels/telegram/presenters.py`
-  - `tests/test_telegram_presenters.py`
-  - `tests/test_handlers.py`
-  - `tests/test_zero_import_gates.py`
-- current caller and owner inventory:
-  - `conversation.py` still owns role/project/status and callback response
-    formatting inline
-  - `pending.py` still owns pending/retry/recovery response formatting inline
-- after-state required by this slice:
-  - conversation-control/settings and pending/recovery rendering live in
-    `app/channels/telegram/presenters.py`
-  - `conversation.py` and `pending.py` orchestrate workflow calls and apply
-    presenter output only
-  - focused regression coverage proves both modules call presenters
-  - negative structural guards prove the removed inline rendering is gone
-- contract tests for this slice:
-  - `tests/test_telegram_presenters.py`
-  - `tests/test_handlers.py`
-  - `tests/test_zero_import_gates.py`
-
-27. `pending` `Track B / B2c1: move conversation and pending Telegram rendering into presenters.py`
-   - Added named conversation/pending presenter functions in
-     `app/channels/telegram/presenters.py` for:
-     - plain vs HTML conversation outcome rendering
-     - role/project/status messages
-     - public/trust/no-project/policy usage messages
-     - pending/retry plain and HTML outcome rendering
-     - recovery invalid-action and replay-failed messages
-   - `app/channels/telegram/conversation.py` and
-     `app/channels/telegram/pending.py` now apply presenter output instead of
-     owning inline HTML, `ParseMode`, or `html.escape(...)` formatting.
-   - Added:
-     - presenter unit tests for conversation and pending helpers
-     - regression tests proving `conversation.py` and `pending.py` call
-       presenters
+- none
      - negative structural guards proving inline rendering is gone from both
        channel modules
    - focused verification passed:

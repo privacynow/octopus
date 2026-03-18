@@ -134,7 +134,7 @@ class TestCancelLiveExecution:
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -161,7 +161,7 @@ class TestCancelLiveExecution:
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -180,7 +180,7 @@ class TestCancelLiveExecution:
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -206,7 +206,7 @@ class TestCancelLiveExecution:
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -246,7 +246,7 @@ class TestCancelledOutcome:
             prov.run_results = [RunResult(text="partial output", cancelled=True)]
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
             from app.user_messages import cancel_live_completed
 
             chat = FakeChat(12345)
@@ -278,7 +278,7 @@ class TestCancelledOutcome:
             prov.preflight_results = [RunResult(text="", cancelled=True)]
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
             # load_session_disk already imported at module level
 
             chat = FakeChat(12345)
@@ -309,7 +309,7 @@ class TestCancelRegressions:
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -331,7 +331,7 @@ class TestCancelRegressions:
             prov.run_results = [RunResult(text="error", returncode=1)]
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -351,7 +351,7 @@ class TestCancelRegressions:
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -385,7 +385,7 @@ class TestCancelRegressions:
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -420,7 +420,7 @@ class TestCancelRegressions:
             ]
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -453,7 +453,7 @@ class TestCancelRegressions:
             ]
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -657,7 +657,7 @@ class TestCancelConcurrency:
             cfg = make_config(data_dir)
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -701,7 +701,7 @@ class TestCancelConcurrency:
             bot = _OrderedFakeBot()
             setup_globals(cfg, prov, bot_instance=bot)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
             from app.user_messages import cancel_live_completed, cancel_live_requested
 
             chat = FakeChat(12345)
@@ -738,7 +738,7 @@ class TestCancelConcurrency:
             cfg = make_config(data_dir)
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
             from app.user_messages import cancel_live_completed
 
             chat = FakeChat(12345)
@@ -775,7 +775,7 @@ class TestCancelConcurrency:
             cfg = make_config(data_dir)
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
 
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -819,7 +819,7 @@ class TestCancelConcurrency:
             cfg = make_config(data_dir)
             setup_globals(cfg, prov)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
             chat = FakeChat(12345)
             user = FakeUser(42)
             session = default_session(prov.name, prov.new_provider_state(), "off")
@@ -856,7 +856,7 @@ class TestCancelConcurrency:
             cfg = make_config(data_dir)
             setup_globals(cfg, FakeProvider("claude"))
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
 
             chat_id = 12345
             cancel_event = asyncio.Event()

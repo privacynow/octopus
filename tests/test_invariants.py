@@ -269,7 +269,7 @@ async def test_doctor_no_public_warnings_when_closed():
 
 async def test_duplicate_update_id_skipped():
     """Same update_id should be processed only once."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         prov.run_results = [RunResult(text="first"), RunResult(text="second")]
@@ -295,7 +295,7 @@ async def test_duplicate_update_id_skipped():
 
 async def test_duplicate_update_id_skipped_for_commands():
     """Same update_id on a decorated command should be processed only once."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=8002)
@@ -320,7 +320,7 @@ async def test_duplicate_update_id_skipped_for_commands():
 
 async def test_duplicate_update_id_skipped_for_help():
     """Same update_id on /help (non-decorated handler) should be processed only once."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=8004)
@@ -344,7 +344,7 @@ async def test_duplicate_update_id_skipped_for_help():
 
 async def test_duplicate_update_id_skipped_for_callbacks():
     """Same update_id on a callback should be processed only once."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import send_callback
 
     with fresh_env() as (data_dir, cfg, prov):
@@ -488,7 +488,7 @@ async def test_doctor_conflict_check_survives_network_error():
 @pytest.mark.asyncio
 async def test_doctor_reports_prompt_weight():
     """/doctor shows prompt weight when session has a role (non-empty system prompt)."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         session = default_session(prov.name, prov.new_provider_state(), "off")
@@ -506,7 +506,7 @@ async def test_doctor_reports_prompt_weight():
 @pytest.mark.asyncio
 async def test_doctor_prompt_weight_uses_resolved_context():
     """Public user's /doctor prompt weight reflects resolved (stripped) context, not raw session."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -541,7 +541,7 @@ async def test_doctor_prompt_weight_uses_resolved_context():
 @pytest.mark.asyncio
 async def test_chat_lock_sends_message_feedback_when_locked():
     """_chat_lock sends visible queued feedback via message when lock is held."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(1)
@@ -572,7 +572,7 @@ async def test_chat_lock_sends_message_feedback_when_locked():
 @pytest.mark.asyncio
 async def test_chat_lock_sends_callback_feedback_when_locked():
     """_chat_lock sends visible queued feedback via callback answer when lock is held."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         query = FakeCallbackQuery("test", message=FakeMessage(chat=FakeChat(1)))
@@ -603,7 +603,7 @@ async def test_chat_lock_sends_callback_feedback_when_locked():
 @pytest.mark.asyncio
 async def test_chat_lock_no_feedback_when_free():
     """_chat_lock does NOT send feedback when lock is free."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         msg = FakeMessage(chat=FakeChat(1))
@@ -627,7 +627,7 @@ async def test_chat_lock_no_feedback_when_free():
 @pytest.mark.asyncio
 async def test_contended_approval_callback_single_answer():
     """Approval callback under contention produces exactly one callback answer."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 1
@@ -670,7 +670,7 @@ async def test_contended_approval_callback_single_answer():
 @pytest.mark.asyncio
 async def test_contended_settings_callback_single_answer():
     """Settings callback under contention produces exactly one callback answer."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 1
@@ -703,7 +703,7 @@ async def test_contended_settings_callback_single_answer():
 @pytest.mark.asyncio
 async def test_contended_clear_cred_callback_single_answer():
     """Clear-credentials callback under contention produces exactly one callback answer."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 1
@@ -745,7 +745,7 @@ async def test_same_chat_overlapping_updates_complete_correctly():
     so the second update overwrote the first's entry and the first item was
     left queued forever.
     """
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         prov.run_results = [RunResult(text="reply1"), RunResult(text="reply2")]
@@ -811,7 +811,7 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
     with Replay/Discard buttons instead of auto-replaying through the
     provider.  The item transitions to pending_recovery and PendingRecovery
     is raised so worker_loop skips completion."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app.runtime.inbound_types import InboundMessage, InboundUser
     from app.work_queue import PendingRecovery, record_and_enqueue
 
@@ -883,7 +883,7 @@ class _StickyReplyMessage(FakeMessage):
 
 @pytest.mark.asyncio
 async def test_interrupted_message_run_stays_claimed_for_recovery():
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app.work_queue import recover_stale_claims
 
     with fresh_env() as (data_dir, cfg, prov):
@@ -945,7 +945,7 @@ async def test_interrupted_message_run_stays_claimed_for_recovery():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rc", [-2, -6, -9, -15])
 async def test_any_signal_treated_as_interrupted(rc):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         prov.run_results = [RunResult(text="killed", returncode=rc)]
@@ -982,7 +982,7 @@ async def test_any_signal_treated_as_interrupted(rc):
 
 @pytest.mark.asyncio
 async def test_provider_error_empty_output_still_shows_message():
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         prov.run_results = [RunResult(text="", returncode=1)]
@@ -1004,7 +1004,7 @@ async def test_provider_error_empty_output_still_shows_message():
 
 @pytest.mark.asyncio
 async def test_provider_error_long_output_truncated():
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         long_error = "E" * 5000
@@ -1036,7 +1036,7 @@ async def test_provider_error_long_output_truncated():
 
 @pytest.mark.asyncio
 async def test_global_error_handler_suppresses_stale_callback():
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from telegram.error import BadRequest
 
     handler = th._global_error_handler
@@ -1053,7 +1053,7 @@ async def test_global_error_handler_suppresses_stale_callback():
 async def test_global_error_handler_notifies_user_on_unknown_error():
     """The handler tries to notify via context.bot — if the update isn't a
     real telegram.Update it gracefully skips notification without raising."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     class FakeErrorContext:
         error = RuntimeError("unexpected boom")
@@ -1066,7 +1066,7 @@ async def test_global_error_handler_notifies_user_on_unknown_error():
 @pytest.mark.asyncio
 async def test_global_error_handler_sends_message_on_real_update():
     """When given a real Update with effective_chat, the handler sends feedback."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from telegram import Update, Chat, Message, User as TgUser
 
     sent_messages = []
@@ -1102,7 +1102,7 @@ async def test_global_error_handler_sends_message_on_real_update():
 @pytest.mark.asyncio
 async def test_command_exception_marks_work_item_failed():
     """A command handler that raises must leave the work item as failed."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=9500)
@@ -1133,7 +1133,7 @@ async def test_command_exception_marks_work_item_failed():
 @pytest.mark.asyncio
 async def test_callback_exception_marks_work_item_failed():
     """A callback handler that raises must leave the work item as failed."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=9501)
@@ -1172,7 +1172,7 @@ async def test_callback_exception_marks_work_item_failed():
 
 @pytest.mark.asyncio
 async def test_format_provider_error_kills_subprocess_on_timeout():
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     killed = []
 
@@ -1216,7 +1216,7 @@ async def test_format_provider_error_kills_subprocess_on_timeout():
 @pytest.mark.asyncio
 async def test_callback_none_event_completes_work_item():
     """When normalize_callback returns None, the work item must be completed (not leaked)."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=9600)
@@ -1252,7 +1252,7 @@ async def test_callback_none_event_completes_work_item():
 async def test_initial_status_no_provider_name_claude():
     """Worker path: Claude shows 'Working...' not 'Starting claude...'."""
     with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
         await send_text(chat, user, "hello")
@@ -1268,7 +1268,7 @@ async def test_initial_status_no_provider_name_claude():
 async def test_initial_status_no_provider_name_codex():
     """Worker path: Codex shows 'Working...' not 'Starting codex...'."""
     with fresh_env(provider_name="codex") as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
         await send_text(chat, user, "hello")
@@ -1284,7 +1284,7 @@ async def test_initial_status_no_provider_name_codex():
 async def test_resume_status_no_provider_name():
     """Resuming a session shows 'Resuming...' not 'Resuming claude...' (worker path)."""
     with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
 
@@ -1307,7 +1307,7 @@ async def test_resume_status_no_provider_name():
 
 async def test_timeout_message_no_provider_name():
     """Timeout shows 'Request timed out' not 'claude timed out' (worker path)."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import bot_texts
 
     with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
@@ -1326,7 +1326,7 @@ async def test_timeout_message_no_provider_name():
 
 async def test_terminal_status_says_completed():
     """Successful run shows 'Completed.' not 'Done.' (worker path)."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import bot_texts
 
     with fresh_env() as (data_dir, cfg, prov):
@@ -1425,7 +1425,7 @@ async def test_codex_compaction_wording():
 
 async def test_heartbeat_fires_on_idle():
     """Heartbeat updates progress after the initial delay when no content arrives."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from unittest.mock import patch
 
     progress = FakeProgress()
@@ -1446,7 +1446,7 @@ async def test_heartbeat_fires_on_idle():
 
 async def test_heartbeat_stops_when_content_starts():
     """Heartbeat stops firing once content_started event is set."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from unittest.mock import patch
 
     progress = FakeProgress()
@@ -1473,7 +1473,7 @@ async def test_heartbeat_stops_when_content_starts():
 
 async def test_heartbeat_cancelled_on_completion():
     """Heartbeat task is cancelled cleanly without raising."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from unittest.mock import patch
 
     progress = FakeProgress()
@@ -1586,7 +1586,7 @@ async def test_codex_sets_content_started_on_draft():
 
 async def test_heartbeat_respects_recent_progress():
     """Heartbeat does not overwrite a recent non-content progress update."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from unittest.mock import patch
 
     progress = FakeProgress()
@@ -1619,10 +1619,10 @@ async def test_heartbeat_respects_recent_progress():
 
 async def test_approval_initial_status_neutral():
     """request_approval sends neutral 'Preparing approval...' not internal terminology."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
         await send_text(chat, user, "do work with approval")
@@ -1647,7 +1647,7 @@ async def test_approval_no_preflight_in_any_user_text():
     are visible in the reply chain, not just the initial reply_text calls.
     Positive assertion proves the test actually observes the status edit path.
     """
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
         chat = FakeChat(12345)
@@ -1687,7 +1687,7 @@ async def test_approval_error_no_preflight():
     are visible in the reply chain. Positive assertion proves the test
     observes the error edit path.
     """
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
         prov.preflight_results = [RunResult(text="", returncode=1)]
@@ -1727,7 +1727,7 @@ async def test_content_first_update_bypasses_rate_limit():
     content_started fires and the first text update arrives within the
     rate-limit window.  Without the fix, the text is silently dropped.
     """
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     msg = FakeMessage()
     cfg_overrides = {"stream_update_interval_seconds": 1.0}
@@ -1770,7 +1770,7 @@ async def test_content_first_update_bypasses_rate_limit():
 async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
     """worker_dispatch for a disallowed user returns normally without
     sending a recovery notice — the item completes silently."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app.runtime.inbound_types import InboundMessage, InboundUser
 
     with fresh_env(config_overrides={
@@ -1806,7 +1806,7 @@ async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
 async def test_worker_dispatch_command_still_notifies():
     """worker_dispatch for InboundCommand still sends a notification
     that the command was lost (commands are not replay-safe)."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app.runtime.inbound_types import InboundCommand, InboundUser
 
     with fresh_env(config_overrides={
@@ -1850,7 +1850,7 @@ async def test_worker_dispatch_command_still_notifies():
 @pytest.mark.asyncio
 async def test_claude_resume_error_resets_provider_state():
     """Claude resume failure resets started/session_id so next request is fresh."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
         # First request succeeds — sets started=True
@@ -1913,7 +1913,7 @@ async def test_claude_resume_error_resets_provider_state():
 @pytest.mark.asyncio
 async def test_codex_resume_error_still_clears_thread():
     """Codex resume error still clears thread_id (existing behavior preserved)."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(provider_name="codex") as (data_dir, cfg, prov):
         # Simulate a session with an existing thread_id
@@ -1945,7 +1945,7 @@ async def test_claude_generic_error_during_resume_does_not_reset():
     This is the false-positive test: resume_failed is False, so the session
     should keep its started=True and session_id intact for the next retry.
     """
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
         # First request succeeds — sets started=True

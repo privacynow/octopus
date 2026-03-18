@@ -3,10 +3,10 @@
 import tempfile
 from pathlib import Path
 
+import app.channel_egress_factory as channel_factory
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.telegram.egress import TelegramChannelEgress
 from app.identity import telegram_actor_key
-from app.runtime import composition
 from app.runtime.inbound_types import InboundUser
 from app.runtime.work_admission import trust_tier_for_source
 from tests.support.handler_support import (
@@ -32,7 +32,7 @@ def _setup_runtime(*, allow_open: bool = False, allowed_user_ids=frozenset({1}))
 def test_factory_telegram_ref_produces_telegram_surface():
     tmp, cfg = _setup_runtime()
     try:
-        surface = composition.create_channel_egress(
+        surface = channel_factory.create_channel_egress(
             "telegram:mybot:12345",
             bot=MinimalFakeBot(),
             chat_id=12345,
@@ -47,7 +47,7 @@ def test_factory_telegram_ref_produces_telegram_surface():
 def test_factory_registry_ref_produces_registry_surface():
     tmp, cfg = _setup_runtime()
     try:
-        surface = composition.create_channel_egress(
+        surface = channel_factory.create_channel_egress(
             "registry:abc123",
             bot=MinimalFakeBot(),
             chat_id=0,

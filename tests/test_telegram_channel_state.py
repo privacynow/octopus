@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-import app.channels.telegram.ingress as th
+import app.channels.telegram.routing as th
 from app.channels.telegram.cancellation import (
     TelegramCancellationRegistry,
     get_cancellation_registry,

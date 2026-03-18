@@ -17,7 +17,7 @@ from app.credential_store import init_credential_store_for_config
 from app.storage import close_db, ensure_data_dirs
 from app.work_queue import close_transport_db, recover_stale_claims, purge_old
 from app.worker import poll_interval_for_runtime, start_worker_task
-from app.channels.telegram.bootstrap import build_application
+from app.channels.telegram.bootstrap import build_application, worker_dispatch
 from app.runtime_health import CanonicalRuntimeHealthProvider
 
 PROVIDERS: dict[str, type] = {
@@ -239,7 +239,6 @@ def main() -> None:
 
     async def _on_post_init(_app) -> None:
         nonlocal _worker_task, _worker_stop, _agent_task, _agent_stop
-        from app.channels.telegram.ingress import worker_dispatch
         if _runs_worker(config):
             _worker_task, _worker_stop = start_worker_task(
                 config.data_dir,

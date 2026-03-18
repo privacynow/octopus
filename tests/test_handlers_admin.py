@@ -1,6 +1,6 @@
 """Tests for /admin sessions handler."""
 
-import app.channels.telegram.ingress as th
+import app.channels.telegram.routing as th
 from app.storage import default_session, save_session
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (

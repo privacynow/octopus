@@ -12,7 +12,7 @@ from tests.support.skill_test_helpers import (
     save_user_credential,
 )
 from app.storage import default_session, ensure_data_dirs, save_session
-import app.channels.telegram.ingress as _th
+import app.channels.telegram.routing as _th
 from app import work_queue
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (

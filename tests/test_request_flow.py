@@ -189,7 +189,7 @@ def test_public_vs_trusted_different_context_hash():
 
 def test_is_public_user_open_with_allowed_list():
     """User not in allowed list + allow_open=True -> public."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(
@@ -206,7 +206,7 @@ def test_is_public_user_open_with_allowed_list():
 
 def test_is_public_user_open_no_allowed_list():
     """allow_open=True with no allowed list -> everyone is public."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, allow_open=True,
@@ -219,7 +219,7 @@ def test_is_public_user_open_no_allowed_list():
 
 def test_is_public_user_closed():
     """allow_open=False -> no one is public (they wouldn't pass is_allowed)."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(
@@ -252,7 +252,7 @@ _GATED_COMMANDS = [
                          ids=[c[0] for c in _GATED_COMMANDS])
 async def test_public_user_blocked_from_restricted_command(cmd_name, args):
     """Public users get a denial message from restricted commands."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(
@@ -273,7 +273,7 @@ async def test_public_user_blocked_from_restricted_command(cmd_name, args):
 
 async def test_trusted_user_not_blocked_from_restricted_command():
     """Trusted users can invoke restricted commands normally."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=7002)
@@ -345,7 +345,7 @@ def test_compact_mode_works_for_public_users():
 def test_public_mode_applies_default_rate_limits():
     """build_application should apply conservative rate-limit defaults when
     allow_open=True and no explicit limits are set."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(
@@ -367,7 +367,7 @@ def test_public_mode_applies_default_rate_limits():
 
 def test_explicit_rate_limits_not_overridden():
     """When operator sets explicit rate limits, they should not be overridden."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(
@@ -393,7 +393,7 @@ def test_explicit_rate_limits_not_overridden():
 @pytest.mark.asyncio
 async def test_is_allowed_mixed_mode_admits_stranger():
     """Stranger admitted when allow_open + allow-lists both set."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -411,7 +411,7 @@ async def test_is_allowed_mixed_mode_admits_stranger():
 @pytest.mark.asyncio
 async def test_is_allowed_closed_mode_rejects_stranger():
     """Stranger rejected when allow_open=False, even with allow-lists."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={
         "allow_open": False,
@@ -431,7 +431,7 @@ async def test_is_allowed_closed_mode_rejects_stranger():
 @pytest.mark.asyncio
 async def test_execute_request_public_user_gets_inspect_policy():
     """execute_request with trust_tier='public' resolves inspect file_policy."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -471,7 +471,7 @@ async def test_execute_request_public_user_gets_inspect_policy():
 @pytest.mark.asyncio
 async def test_execute_request_trusted_user_gets_edit_policy():
     """execute_request with trust_tier='trusted' preserves session file_policy."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -506,7 +506,7 @@ async def test_execute_request_trusted_user_gets_edit_policy():
 @pytest.mark.asyncio
 async def test_handle_message_public_user_threads_trust_tier():
     """Full handle_message path for a public user passes trust_tier through."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -528,7 +528,7 @@ async def test_handle_message_public_user_threads_trust_tier():
 @pytest.mark.asyncio
 async def test_handle_message_trusted_user_not_forced_inspect():
     """Full handle_message path for a trusted user does NOT force inspect."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -821,7 +821,7 @@ def test_extra_dirs_from_denials_mixed():
 @pytest.mark.asyncio
 async def test_compact_long_reply_public_user():
     """Public user + compact mode + long response -> blockquote/expand, inspect enforced."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -860,7 +860,7 @@ async def test_compact_long_reply_public_user():
 @pytest.mark.asyncio
 async def test_export_uses_resolved_skills_not_raw_session():
     """/export header shows resolved skills, not raw session.active_skills."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={
         "allow_open": True,

@@ -6,6 +6,10 @@ EXPECTED_MODULES = (
     "app.channels",
     "app.channels.telegram",
     "app.channels.registry",
+    "app.channels.registry.ingress",
+    "app.channels.registry.http",
+    "app.channels.registry.presenters",
+    "app.channels.registry.ui",
     "app.ports",
     "app.runtime",
     "app.runtime.inbound_types",
@@ -36,6 +40,8 @@ REMOVED_TOP_LEVEL_PORT_MODULES = (
     "app/runtime_skill_catalog_port.py",
     "app/runtime_skill_import_port.py",
     "app/runtime_skill_setup_port.py",
+    "app/registry_service/app.py",
+    "app/registry_service/runtime_surface.py",
 )
 
 

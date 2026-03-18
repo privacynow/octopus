@@ -44,7 +44,7 @@ from app.identity import (
     telegram_event_id,
     telegram_numeric_id,
 )
-from app.execution_context import ResolvedExecutionContext, resolve_execution_context
+from app.execution_context import ResolvedExecutionContext
 from app.providers.base import Provider
 from app.credential_flow import (
     foreign_setup_message,
@@ -56,7 +56,6 @@ from app.session_state import (
     PendingApproval,
     PendingRetry,
     SessionState,
-    session_from_dict,
     session_to_dict,
 )
 from app.agents.bridge import (
@@ -74,15 +73,7 @@ from app.agents.delegation import (
 from app.agents.orchestration import build_delegation_plan
 from app.agents.state import load_agent_runtime_state
 from app.agents.types import AgentDiscoveryQuery, RoutedTaskResult, TimelineEvent
-from app.channels.telegram.normalization import (
-    InboundAction,
-    InboundAttachment,
-    normalize_callback,
-    normalize_command,
-    normalize_message,
-    normalize_user,
-    serialize_inbound,
-)
+from app.channels.telegram.normalization import normalize_callback, normalize_command, normalize_message, normalize_user
 from app.channels.telegram.presenters import extract_summary as _extract_summary
 from app.channels.telegram.runtime_skills import (
     cmd_clear_credentials as runtime_skill_cmd_clear_credentials,
@@ -116,28 +107,35 @@ from app.channels.telegram.pending import (
     retry_allow_pending as pending_retry_allow_pending,
     retry_skip_pending as pending_retry_skip_pending,
 )
-from app.transports.admission import (
-    admit_fresh_message,
-    enqueue_inbound_envelope,
-    record_inbound_envelope,
-)
-from app.transports.types import InboundEnvelope
 from app.runtime import composition
-from app.credential_validation import validate_credential
-from app.skill_activation_service import get_skill_activation_service
-from app.request_runtime import (
+from app.runtime.dispatch import (
     check_prompt_size_cross_chat as runtime_check_prompt_size_cross_chat,
     execute_request as runtime_execute_request,
     prompt_weight as runtime_prompt_weight,
     request_approval as runtime_request_approval,
 )
+from app.runtime.inbound_types import (
+    InboundAction,
+    InboundAttachment,
+    InboundEnvelope,
+    serialize_inbound,
+)
+from app.runtime.session_runtime import (
+    load_runtime_session,
+    resolve_session_context,
+    save_runtime_session,
+)
+from app.runtime.work_admission import (
+    admit_fresh_message,
+    enqueue_inbound_envelope,
+    record_inbound_envelope,
+)
+from app.credential_validation import validate_credential
+from app.skill_activation_service import get_skill_activation_service
 from app.storage import (
     chat_upload_dir,
-    default_session,
     is_image_path,
-    load_session,
     resolve_allowed_path,
-    save_session,
     session_exists,
     list_sessions,
 )
@@ -894,7 +892,12 @@ def _resolve_project(session: SessionState):
 
 def _resolve_context(session: SessionState, trust_tier: str = "trusted") -> ResolvedExecutionContext:
     """Build the single authoritative execution identity from session + config."""
-    return resolve_execution_context(session, _cfg(), _prov().name, trust_tier=trust_tier)
+    return resolve_session_context(
+        session,
+        config=_cfg(),
+        provider_name=_prov().name,
+        trust_tier=trust_tier,
+    )
 
 
 def _settings_model_profile_state(
@@ -1263,12 +1266,15 @@ async def _heartbeat(progress, content_started: asyncio.Event) -> None:
 
 def _load(chat_id: int) -> SessionState:
     cfg = _cfg()
-    raw = load_session(
-        cfg.data_dir, _conversation_key(chat_id), _prov().name,
-        _prov().new_provider_state, cfg.approval_mode,
-        cfg.role, cfg.default_skills,
+    session = load_runtime_session(
+        cfg.data_dir,
+        _conversation_key(chat_id),
+        provider_name=_prov().name,
+        provider_state_factory=_prov().new_provider_state,
+        approval_mode=cfg.approval_mode,
+        default_role=cfg.role,
+        default_skills=cfg.default_skills,
     )
-    session = session_from_dict(raw)
     # Self-heal: prune active skills that no longer resolve through the content catalog.
     if get_skill_activation_service().normalize(session):
         _save(chat_id, session)
@@ -1276,7 +1282,7 @@ def _load(chat_id: int) -> SessionState:
 
 
 def _save(chat_id: int, session: SessionState) -> None:
-    save_session(_cfg().data_dir, _conversation_key(chat_id), session_to_dict(session))
+    save_runtime_session(_cfg().data_dir, _conversation_key(chat_id), session)
 
 
 # -- Credential helpers ----------------------------------------------------
@@ -1285,7 +1291,7 @@ async def _check_credential_satisfaction(
     chat_id: int | str, user_id: int | str, session: SessionState, message,
     resolved: ResolvedExecutionContext,
 ) -> dict[str, str] | None:
-    from app.request_runtime import check_credential_satisfaction as runtime_check_credential_satisfaction
+    from app.runtime.dispatch import check_credential_satisfaction as runtime_check_credential_satisfaction
 
     return await runtime_check_credential_satisfaction(
         chat_id,
@@ -2527,7 +2533,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
     here: execute_request or request_approval; they register _LIVE_CANCEL so
     /cancel works.
     """
-    from app.channels.telegram.normalization import InboundAction, InboundCallback, InboundCommand, InboundMessage
+    from app.runtime.inbound_types import InboundAction, InboundCallback, InboundCommand, InboundMessage
 
     bot = _bot_instance
     cfg = _cfg()

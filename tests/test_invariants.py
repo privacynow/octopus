@@ -786,7 +786,7 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
     provider.  The item transitions to pending_recovery and PendingRecovery
     is raised so worker_loop skips completion."""
     import app.channels.telegram.ingress as th
-    from app.channels.telegram.normalization import InboundMessage, InboundUser
+    from app.runtime.inbound_types import InboundMessage, InboundUser
     from app.work_queue import PendingRecovery, record_and_enqueue
 
     with fresh_env(config_overrides={
@@ -1744,7 +1744,7 @@ async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
     """worker_dispatch for a disallowed user returns normally without
     sending a recovery notice — the item completes silently."""
     import app.channels.telegram.ingress as th
-    from app.channels.telegram.normalization import InboundMessage, InboundUser
+    from app.runtime.inbound_types import InboundMessage, InboundUser
 
     with fresh_env(config_overrides={
         "allowed_user_ids": frozenset({99}),  # user 42 is not allowed
@@ -1780,7 +1780,7 @@ async def test_worker_dispatch_command_still_notifies():
     """worker_dispatch for InboundCommand still sends a notification
     that the command was lost (commands are not replay-safe)."""
     import app.channels.telegram.ingress as th
-    from app.channels.telegram.normalization import InboundCommand, InboundUser
+    from app.runtime.inbound_types import InboundCommand, InboundUser
 
     with fresh_env(config_overrides={
         "allowed_user_ids": frozenset({42}),

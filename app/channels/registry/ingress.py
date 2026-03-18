@@ -18,16 +18,19 @@ from app.credential_store import (
 )
 from app.agents.bridge import conversation_key_for_ref
 from app.channels.registry import presenters
-from app.execution_context import resolve_execution_context
 from app.registry_service.store_base import AbstractRegistryStore
 from app import runtime_backend
 from app.config import BotConfig, load_config_provider_health
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
 from app.runtime import composition
+from app.runtime.session_runtime import (
+    load_runtime_session,
+    resolve_session_context,
+    save_runtime_session,
+)
 from app.workflows.runtime_skills.contracts import PromptWarningContext
-from app.session_state import SessionState, session_from_dict, session_to_dict
-from app.storage import load_session, save_session
+from app.session_state import SessionState
 
 ProviderStateFactory = Callable[[], dict[str, Any]]
 
@@ -100,18 +103,17 @@ def load_runtime_conversation(store: AbstractRegistryStore, conversation_id: str
         raise RegistryIngressError(404, f"Unknown conversation: {conversation_id}") from exc
     context = get_runtime_surface_context()
     conversation_key = conversation_key_for_ref(conversation_id)
-    raw = load_session(
-        context.config.data_dir,
-        conversation_key,
-        context.config.provider_name,
-        context.provider_state_factory,
-        context.config.approval_mode,
-        default_skills=context.config.default_skills,
-    )
     return RuntimeConversationContext(
         context=context,
         conversation_key=conversation_key,
-        session=session_from_dict(raw),
+        session=load_runtime_session(
+            context.config.data_dir,
+            conversation_key,
+            provider_name=context.config.provider_name,
+            provider_state_factory=context.provider_state_factory,
+            approval_mode=context.config.approval_mode,
+            default_skills=context.config.default_skills,
+        ),
     )
 
 
@@ -181,10 +183,10 @@ def diff_catalog_skill(skill_name: str) -> dict[str, Any]:
 
 def conversation_skill_state(store: AbstractRegistryStore, conversation_id: str) -> dict[str, Any]:
     loaded = load_runtime_conversation(store, conversation_id)
-    resolved = resolve_execution_context(
+    resolved = resolve_session_context(
         loaded.session,
-        loaded.context.config,
-        loaded.context.config.provider_name,
+        config=loaded.context.config,
+        provider_name=loaded.context.config.provider_name,
         trust_tier="trusted",
     )
     listing = _flows().runtime_skills.activation.list_conversation_skills(
@@ -211,7 +213,7 @@ def activate_conversation_skill(
     if decision.status == "unknown":
         raise RegistryIngressError(404, f"Unknown skill: {skill_name}")
     if decision.mutated:
-        save_session(loaded.context.config.data_dir, loaded.conversation_key, session_to_dict(loaded.session))
+        save_runtime_session(loaded.context.config.data_dir, loaded.conversation_key, loaded.session)
     return presenters.activation_result(decision)
 
 
@@ -231,7 +233,7 @@ def deactivate_conversation_skill(
     if decision.status == "foreign_setup":
         raise RegistryIngressError(409, "credential_setup_in_progress")
     if decision.mutated:
-        save_session(loaded.context.config.data_dir, loaded.conversation_key, session_to_dict(loaded.session))
+        save_runtime_session(loaded.context.config.data_dir, loaded.conversation_key, loaded.session)
     return presenters.status_result(decision)
 
 
@@ -246,7 +248,7 @@ def clear_conversation_skills(
     if decision.status == "foreign_setup":
         raise RegistryIngressError(409, "credential_setup_in_progress")
     if decision.mutated:
-        save_session(loaded.context.config.data_dir, loaded.conversation_key, session_to_dict(loaded.session))
+        save_runtime_session(loaded.context.config.data_dir, loaded.conversation_key, loaded.session)
     return presenters.status_result(decision)
 
 

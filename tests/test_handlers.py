@@ -12,7 +12,7 @@ from app.agents.state import AgentRuntimeState, save_agent_runtime_state
 from app.agents.delivery import handle_registry_delivery
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.providers.base import RunContext, RunResult
-from app.channels.telegram.normalization import InboundMessage, InboundUser
+from app.runtime.inbound_types import InboundMessage, InboundUser
 from app.storage import debug_session_connection, default_session, save_session
 from app import work_queue
 from tests.support.handler_support import (

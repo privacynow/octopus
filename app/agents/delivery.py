@@ -20,7 +20,7 @@ from app.agents.bridge import (
 )
 from app.agents.types import RoutedTaskResult
 from app.config import BotConfig
-from app.transports.admission import enqueue_inbound_envelope, record_inbound_envelope
+from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
 from app.runtime import composition
 
 log = logging.getLogger(__name__)

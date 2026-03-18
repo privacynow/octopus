@@ -44,7 +44,7 @@ from app.work_queue_sqlite_impl import (
     _validate_work_item_row,
     _write_tx,
 )
-from app.channels.telegram.normalization import (
+from app.runtime.inbound_types import (
     InboundCallback,
     InboundCommand,
     InboundMessage,

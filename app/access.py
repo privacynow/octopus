@@ -9,7 +9,8 @@ handler layer.
 from __future__ import annotations
 
 from app.config import BotConfig
-from app.channels.telegram.normalization import InboundUser, normalize_user
+from app.channels.telegram.normalization import normalize_user
+from app.runtime.inbound_types import InboundUser
 
 
 def to_inbound_user(user) -> InboundUser | None:

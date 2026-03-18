@@ -450,7 +450,7 @@ async def drain_one_worker_item(data_dir: Path) -> bool:
     Use after send_text when the test needs the provider to run. Returns True if
     an item was drained, False if queue was empty.
     """
-    from app.channels.telegram.normalization import deserialize_inbound
+    from app.runtime.inbound_types import deserialize_inbound
     from app.workflows.results import TransportStateCorruption
 
     boot_id = _th._boot_id

@@ -154,6 +154,15 @@ def test_telegram_execution_module_has_no_ingress_import() -> None:
     )
 
 
+def test_telegram_worker_module_has_no_ingress_import() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
+    text = worker_path.read_text()
+    assert "app.channels.telegram.ingress" not in text, (
+        f"telegram ingress import still referenced in {worker_path}"
+    )
+
+
 def test_ingress_no_longer_defines_session_io_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
@@ -231,6 +240,23 @@ def test_ingress_no_longer_defines_execution_helpers() -> None:
         assert token not in text, f"{token} still defined in {ingress_path}"
 
 
+def test_ingress_no_longer_defines_worker_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    text = ingress_path.read_text()
+    forbidden_defs = (
+        "async def _poll_cancel_requested(",
+        "async def _run_with_cancel_watch(",
+        "def _action_target_message_id(",
+        "def _build_action_surface(",
+        "async def _execute_worker_action(",
+        "async def worker_dispatch(",
+        "def _maybe_fire_webhook(",
+    )
+    for token in forbidden_defs:
+        assert token not in text, f"{token} still defined in {ingress_path}"
+
+
 def test_telegram_runtime_owner_modules_do_not_define_singletons() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_path = repo_root / "app" / "channels" / "telegram" / "state.py"
@@ -287,6 +313,8 @@ def test_telegram_bootstrap_owns_application_construction_and_handler_registrati
         "app.add_handler(",
         "def build_bootstrap(",
         "from app.channels.telegram import ingress",
+        "from app.channels.telegram import worker as telegram_worker",
+        "worker_dispatch=functools.partial(telegram_worker.worker_dispatch, runtime=runtime)",
     )
     for token in required:
         assert token in text, f"{token} missing from {bootstrap_path}"

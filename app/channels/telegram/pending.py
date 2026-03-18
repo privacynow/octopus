@@ -283,9 +283,9 @@ async def handle_recovery_action(
             item_id=outcome.replay_plan.item_id,
         )
     except work_queue.LeaveClaimed:
-        log.warning("Replay interrupted for chat %d; item stays claimed for re-recovery", chat_id)
+        log.warning("Replay interrupted for chat %s; item stays claimed for re-recovery", chat_id)
     except Exception:
-        log.exception("Replay failed for chat %d", chat_id)
+        log.exception("Replay failed for chat %s", chat_id)
         _flows().recovery.replay.fail_replay(
             data_dir=data_dir,
             item_id=outcome.replay_plan.item_id,

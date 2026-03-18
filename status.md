@@ -70,19 +70,26 @@ Phase 8 is now active.
       callback parsing, or callback-approve/cancel helpers
     - focused suite: `90 passed`
     - verified against the full suite: `1628 passed, 23 skipped`
-- Remaining verified-but-uncommitted Phase 8 work in this branch state:
-  - `Phase 8 / H1 execution slice` is complete in the current branch state:
+  - `9594e84` `Phase 8 / H1: extract execution from ingress`
     - Telegram execution, approval, context resolution, send helpers, and
       runtime builders now live in `app/channels/telegram/execution.py`
     - `app/channels/telegram/ingress.py` no longer defines execution/runtime
       builder helpers, prompt-size helpers, context-resolution helpers, or the
       extracted send/approval helpers
-    - execution-focused suites:
-      - `300 passed`
-    - verified against the full suite:
-      - `1632 passed, 23 skipped`
+    - execution-focused suites: `300 passed`
+    - verified against the full suite: `1632 passed, 23 skipped`
+- Remaining verified-but-uncommitted Phase 8 work in this branch state:
+  - `Phase 8 / H1 worker slice` is complete in the current branch state:
+    - Telegram worker dispatch and action execution now live in
+      `app/channels/telegram/worker.py`
+    - `app/channels/telegram/bootstrap.py` now wires
+      `telegram_worker.worker_dispatch` directly
+    - `app/channels/telegram/ingress.py` no longer defines worker dispatch,
+      worker action execution, cancel polling, or completion webhook helpers
+    - worker-focused suites: `376 passed`
+    - verified against the full suite: `1634 passed, 23 skipped`
 - Remaining Phase 8 work is still pending:
-  - H1 worker / shared dispatch extraction and final ingress cleanup
+  - H1 shared dispatch extraction and final ingress cleanup
   - H2 presenter rendering blind-spot closure
   - H3 Telegram test-boundary hardening
   - H4 documentation and structural gate tightening

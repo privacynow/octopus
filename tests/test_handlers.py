@@ -7,10 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from app.agents.bridge import conversation_key_for_ref
+from app.agents.bridge import conversation_key_for_ref, telegram_conversation_ref
 from app.agents.state import AgentRuntimeState, save_agent_runtime_state
 from app.agents.delivery import handle_registry_delivery
 from app.channels.telegram.bootstrap import build_bootstrap
+import app.channels.telegram.worker as telegram_worker
 from app.channels.telegram.session_io import (
     load as telegram_load_session,
     save as telegram_save_session,
@@ -134,7 +135,7 @@ async def test_worker_dispatch_schedules_completion_webhook_for_terminal_outcome
         )
         item = {"id": "webhook-item-1", "conversation_key": _conv(12345), "event_id": _event(7001), "dispatch_mode": "fresh"}
 
-        await th.worker_dispatch("message", event, item, runtime=current_runtime())
+        await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
         await asyncio.sleep(0)
 
         assert len(called) == 1
@@ -193,7 +194,7 @@ async def test_worker_dispatch_skips_completion_webhook_for_delegation_proposed(
         )
         item = {"id": "webhook-item-2", "conversation_key": _reg_conv("registry:conv-webhook"), "event_id": _event(7002), "dispatch_mode": "fresh"}
 
-        await th.worker_dispatch("message", event, item, runtime=current_runtime())
+        await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
         await asyncio.sleep(0)
 
         assert called == []
@@ -364,7 +365,7 @@ async def test_registry_surface_input_respects_approval_mode():
         )
         item = {"id": "registry-item-1", "conversation_key": _reg_conv("registry-conv-1"), "event_id": _event(7001), "dispatch_mode": "fresh"}
 
-        await th.worker_dispatch("message", event, item, runtime=current_runtime())
+        await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
 
         session = load_session_disk(data_dir, _reg_conv("registry-conv-1"), prov)
         assert len(prov.preflight_calls) == 1
@@ -535,7 +536,7 @@ async def test_delegation_proposed_event_published(monkeypatch):
         )
         item = {"id": "registry-item-proposed", "conversation_key": _reg_conv("registry:conv-proposed"), "event_id": _event(7101), "dispatch_mode": "fresh"}
 
-        await th.worker_dispatch("message", event, item, runtime=current_runtime())
+        await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
 
         assert any(kind == "delegation_proposed" for kind, _title, _body in published)
 
@@ -569,8 +570,8 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
                 reported.append(("result", routed_task_id, result))
                 return {"ok": True}
 
-        monkeypatch.setattr(th, "registry_client", lambda config: FakeRegistryClient())
         monkeypatch.setattr(bridge, "registry_client", lambda config: FakeRegistryClient())
+        monkeypatch.setattr(telegram_worker, "registry_client", lambda config: FakeRegistryClient())
         monkeypatch.setattr("app.channels.registry.egress.bind_conversation", async_noop)
 
         async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
@@ -590,7 +591,7 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
         )
         item = {"id": "registry-item-2", "conversation_key": _reg_conv("routed-task-1"), "event_id": _event(7002), "dispatch_mode": "fresh"}
 
-        await th.worker_dispatch("message", event, item, runtime=current_runtime())
+        await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
 
         assert len(prov.preflight_calls) == 0
         assert len(prov.run_calls) == 1
@@ -634,8 +635,8 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
                 del routed_task_id, result
                 raise RuntimeError("registry unavailable")
 
-        monkeypatch.setattr(th, "registry_client", lambda config: FakeRegistryClient())
         monkeypatch.setattr(bridge, "registry_client", lambda config: FakeRegistryClient())
+        monkeypatch.setattr(telegram_worker, "registry_client", lambda config: FakeRegistryClient())
         prov.run_results = [RunResult(text="Delegated review complete.")]
 
         event = InboundMessage(
@@ -648,7 +649,7 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
         )
         item = {"id": "registry-item-3", "conversation_key": _reg_conv("routed-task-2"), "event_id": _event(7003), "dispatch_mode": "fresh"}
 
-        await th.worker_dispatch("message", event, item, runtime=current_runtime())
+        await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
 
         assert len(prov.run_calls) == 1
 
@@ -662,10 +663,8 @@ async def test_registry_routed_result_resumes_parent_conversation_without_new_ap
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
-
         chat_id = 12345
-        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        conversation_ref = telegram_conversation_ref(cfg, chat_id)
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
@@ -721,10 +720,8 @@ async def test_delegation_completion_sends_final_message_all_completed():
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
-
         chat_id = 12345
-        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        conversation_ref = telegram_conversation_ref(cfg, chat_id)
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
@@ -774,10 +771,8 @@ async def test_delegation_completion_sends_final_message_partial_failed():
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
-
         chat_id = 12345
-        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        conversation_ref = telegram_conversation_ref(cfg, chat_id)
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
@@ -848,10 +843,8 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
-
         chat_id = 12345
-        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        conversation_ref = telegram_conversation_ref(cfg, chat_id)
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
@@ -906,10 +899,8 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
-
         chat_id = 12345
-        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        conversation_ref = telegram_conversation_ref(cfg, chat_id)
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
@@ -966,10 +957,8 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
-
         chat_id = 12345
-        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        conversation_ref = telegram_conversation_ref(cfg, chat_id)
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_delegation"] = {
             "conversation_ref": conversation_ref,
@@ -1131,8 +1120,6 @@ async def test_registry_surface_action_retry_skip_clears_pending_retry():
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
-
         chat_id = 12345
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_retry"] = {
@@ -1152,7 +1139,7 @@ async def test_registry_surface_action_retry_skip_clears_pending_retry():
                 "delivery_id": "registry-retry-skip",
                 "kind": "surface_action",
                 "payload": {
-                    "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
+                    "conversation_id": telegram_conversation_ref(cfg, chat_id),
                     "action": "retry_skip",
                     "payload": {},
                 },
@@ -1175,8 +1162,6 @@ async def test_registry_surface_action_retry_allow_executes_request():
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
-
         chat_id = 12345
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_retry"] = {
@@ -1197,7 +1182,7 @@ async def test_registry_surface_action_retry_allow_executes_request():
                 "delivery_id": "registry-retry-allow",
                 "kind": "surface_action",
                 "payload": {
-                    "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
+                    "conversation_id": telegram_conversation_ref(cfg, chat_id),
                     "action": "retry_allow",
                     "payload": {},
                 },
@@ -1221,7 +1206,6 @@ async def test_registry_surface_action_recovery_discard_discards_pending_recover
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
         import app.runtime_backend as runtime_backend
 
         chat_id = 12345
@@ -1242,7 +1226,7 @@ async def test_registry_surface_action_recovery_discard_discards_pending_recover
                 "delivery_id": "registry-recovery-discard",
                 "kind": "surface_action",
                 "payload": {
-                    "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
+                    "conversation_id": telegram_conversation_ref(cfg, chat_id),
                     "action": "recovery_discard",
                     "payload": {"update_id": 600},
                 },
@@ -1267,7 +1251,6 @@ async def test_registry_surface_action_recovery_replay_executes_request():
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
         import app.runtime_backend as runtime_backend
 
         chat_id = 12345
@@ -1289,7 +1272,7 @@ async def test_registry_surface_action_recovery_replay_executes_request():
                 "delivery_id": "registry-recovery-replay",
                 "kind": "surface_action",
                 "payload": {
-                    "conversation_id": th.telegram_conversation_ref(cfg, chat_id),
+                    "conversation_id": telegram_conversation_ref(cfg, chat_id),
                     "action": "recovery_replay",
                     "payload": {"update_id": 601},
                 },
@@ -1338,7 +1321,7 @@ async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch)
             item = {"id": "registry-item-4", "conversation_key": event.conversation_key, "event_id": _event(8123), "dispatch_mode": "recovery"}
 
             with pytest.raises(work_queue.PendingRecovery):
-                await th.worker_dispatch("message", event, item, runtime=current_runtime())
+                await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
 
             recovery_events = [item for item in published if item["kind"] == "recovery_notice"]
             assert recovery_events

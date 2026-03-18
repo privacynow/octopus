@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app import work_queue
+import app.channels.telegram.worker as telegram_worker
 from app.channels.telegram.session_io import (
     load as telegram_load_session,
     save as telegram_save_session,
@@ -653,7 +654,7 @@ async def test_worker_dispatch_sends_recovery_notice():
             }
 
             with pytest.raises(work_queue.PendingRecovery):
-                await th.worker_dispatch("message", event, item, runtime=current_runtime())
+                await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
 
             # Provider must NOT have been called
             assert len(prov.run_calls) == 0, "No auto-replay allowed"
@@ -964,7 +965,7 @@ async def test_failed_notice_delivery_marks_item_failed_via_worker_loop():
         try:
             # Wrap worker_dispatch to stop the loop after one dispatch.
             stop = asyncio.Event()
-            original_dispatch = th.worker_dispatch
+            original_dispatch = telegram_worker.worker_dispatch
             async def dispatch_then_stop(kind, event, item):
                 try:
                     return await original_dispatch(kind, event, item)

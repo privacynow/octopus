@@ -2,12 +2,10 @@
 
 This package will own the complete Telegram channel implementation:
 
-- inbound update normalization and admission
-- ingress translation into workflow calls
-- egress delivery
-- Telegram-specific presentation
-- PTB bootstrap/wiring
-
-During Milestone 1 this package is structural only. Existing Telegram behavior
-remains in legacy modules until later milestones move ownership here.
+- `normalization.py` for inbound update normalization and admission
+- `ingress.py` for PTB entrypoints and workflow translation
+- `runtime_skills.py`, `conversation.py`, and `pending.py` for concern-local handlers
+- `presenters.py` for Telegram-specific presentation helpers
+- `egress.py` for outbound delivery
+- `bootstrap.py` for app construction entrypoints
 """

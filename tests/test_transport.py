@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 
 from app.identity import telegram_actor_key, telegram_conversation_key
-from app.transport import (
+from app.channels.telegram.normalization import (
     InboundAttachment,
     InboundCallback,
     InboundCommand,
@@ -377,7 +377,7 @@ def test_message_default_attachments_are_tuple():
 
 async def test_handlers_receive_normalized_user():
     """Verify that handlers receive InboundUser through normalization, not raw Telegram objects."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -408,7 +408,7 @@ async def test_handlers_receive_normalized_user():
 async def test_callback_handler_uses_normalized_data():
     """Verify callback handlers use event.data not query.data for routing."""
     from app.storage import save_session, default_session
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
     import time
 
     with fresh_data_dir() as data_dir:
@@ -442,7 +442,7 @@ async def test_callback_handler_uses_normalized_data():
 
 async def test_command_normalization_strips_bot_mention():
     """Verify /command@botname still works through normalization."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -466,7 +466,7 @@ async def test_command_normalization_strips_bot_mention():
 
 async def test_command_handler_no_user_no_crash():
     """A command handler receiving an update with no user returns silently."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -484,7 +484,7 @@ async def test_command_handler_no_user_no_crash():
 
 async def test_message_handler_no_user_no_crash():
     """The message handler receiving an update with no user returns silently."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -502,7 +502,7 @@ async def test_message_handler_no_user_no_crash():
 
 async def test_callback_handler_no_user_no_crash():
     """A callback handler receiving an update with no user returns silently."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -529,7 +529,7 @@ async def test_handle_message_empty_content_skipped():
     This proves the empty-content decision from normalize_message() is the one
     that governs the runtime path (normalize_message returns None, handler exits).
     """
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -553,7 +553,7 @@ async def test_handle_message_caption_reaches_provider():
     This proves the caption fallback in normalize_message() governs the runtime path.
     """
     from app.providers.base import RunResult
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)

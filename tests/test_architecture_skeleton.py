@@ -5,6 +5,13 @@ from pathlib import Path
 EXPECTED_MODULES = (
     "app.channels",
     "app.channels.telegram",
+    "app.channels.telegram.bootstrap",
+    "app.channels.telegram.conversation",
+    "app.channels.telegram.ingress",
+    "app.channels.telegram.normalization",
+    "app.channels.telegram.pending",
+    "app.channels.telegram.presenters",
+    "app.channels.telegram.runtime_skills",
     "app.channels.registry",
     "app.channels.registry.ingress",
     "app.channels.registry.http",
@@ -42,6 +49,12 @@ REMOVED_TOP_LEVEL_PORT_MODULES = (
     "app/runtime_skill_setup_port.py",
     "app/registry_service/app.py",
     "app/registry_service/runtime_surface.py",
+    "app/telegram_handlers.py",
+    "app/skill_commands.py",
+    "app/telegram_runtime_skill_surface.py",
+    "app/telegram_conversation_surface.py",
+    "app/telegram_pending_request_surface.py",
+    "app/transport.py",
 )
 
 

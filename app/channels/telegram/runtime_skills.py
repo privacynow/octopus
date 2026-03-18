@@ -1,4 +1,4 @@
-"""Telegram surface handlers for runtime-skill workflows."""
+"""Telegram runtime-skill channel handlers."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from app.runtime import composition
 
 
 def _th():
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     return th
 

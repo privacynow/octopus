@@ -18,7 +18,7 @@ from app import work_queue
 
 
 def _th():
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     return th
 

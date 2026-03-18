@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from app.transport import InboundMessage
+from app.channels.telegram.normalization import InboundMessage
 
 
 @dataclass(frozen=True)

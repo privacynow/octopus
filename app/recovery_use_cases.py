@@ -12,7 +12,7 @@ from app.workflows.recovery.contracts import (
 )
 from app import work_queue
 from app.runtime import composition
-from app.transport import InboundMessage, deserialize_inbound
+from app.channels.telegram.normalization import InboundMessage, deserialize_inbound
 from app.workflows.results import TransportStateCorruption
 
 

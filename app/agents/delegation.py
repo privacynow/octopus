@@ -18,7 +18,7 @@ async def handle_delegation_approve(
     retry_markup: Any = None,
 ) -> None:
     """Approve a pending delegation plan on any conversation surface."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     cfg = th._cfg()
     state = load_agent_runtime_state(cfg.data_dir)
@@ -92,7 +92,7 @@ async def handle_delegation_cancel(
     surface: Any,
 ) -> None:
     """Cancel a pending delegation plan on any conversation surface."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     session = th._load(chat_id)
     delegation = session.pending_delegation

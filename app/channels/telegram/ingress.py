@@ -1,4 +1,4 @@
-"""Telegram command handlers, message handler, progress display, and app wiring."""
+"""Telegram channel ingress, progress display, and PTB wiring."""
 
 import asyncio
 import contextlib
@@ -74,6 +74,48 @@ from app.agents.delegation import (
 from app.agents.orchestration import build_delegation_plan
 from app.agents.state import load_agent_runtime_state
 from app.agents.types import AgentDiscoveryQuery, RoutedTaskResult, TimelineEvent
+from app.channels.telegram.normalization import (
+    InboundAction,
+    InboundAttachment,
+    normalize_callback,
+    normalize_command,
+    normalize_message,
+    normalize_user,
+    serialize_inbound,
+)
+from app.channels.telegram.presenters import extract_summary as _extract_summary
+from app.channels.telegram.runtime_skills import (
+    cmd_clear_credentials as runtime_skill_cmd_clear_credentials,
+    handle_clear_cred_callback as runtime_skill_handle_clear_cred_callback,
+    handle_skill_add_callback as runtime_skill_handle_skill_add_callback,
+    handle_skill_update_callback as runtime_skill_handle_skill_update_callback,
+    handle_worker_skill_action as runtime_skill_handle_worker_skill_action,
+    maybe_handle_setup_message as runtime_skill_maybe_handle_setup_message,
+)
+from app.channels.telegram.conversation import (
+    cancel_chat_operation as conversation_cancel_chat_operation,
+    cmd_approval as conversation_cmd_approval,
+    cmd_cancel as conversation_cmd_cancel,
+    cmd_compact as conversation_cmd_compact,
+    cmd_model as conversation_cmd_model,
+    cmd_new as conversation_cmd_new,
+    cmd_policy as conversation_cmd_policy,
+    cmd_project as conversation_cmd_project,
+    cmd_role as conversation_cmd_role,
+    cmd_settings as conversation_cmd_settings,
+    handle_settings_callback as conversation_handle_settings_callback,
+    handle_worker_conversation_action as conversation_handle_worker_action,
+)
+from app.channels.telegram.pending import (
+    approve_pending as pending_approve_pending,
+    handle_pending_callback as pending_handle_callback,
+    handle_recovery_action as pending_handle_recovery_action,
+    handle_recovery_callback as pending_handle_recovery_callback,
+    handle_worker_pending_action as pending_handle_worker_action,
+    reject_pending as pending_reject_pending,
+    retry_allow_pending as pending_retry_allow_pending,
+    retry_skip_pending as pending_retry_skip_pending,
+)
 from app.transports.admission import (
     admit_fresh_message,
     enqueue_inbound_envelope,
@@ -103,47 +145,6 @@ from app.ratelimit import RateLimiter
 from app.summarize import export_chat_history, load_raw, save_raw
 from app import work_queue
 from app.workflows.results import TransportStateCorruption
-from app.transport import (
-    InboundAction,
-    InboundAttachment,
-    normalize_callback,
-    normalize_command,
-    normalize_message,
-    normalize_user,
-    serialize_inbound,
-)
-from app.telegram_runtime_skill_surface import (
-    cmd_clear_credentials as runtime_skill_cmd_clear_credentials,
-    handle_clear_cred_callback as runtime_skill_handle_clear_cred_callback,
-    handle_skill_add_callback as runtime_skill_handle_skill_add_callback,
-    handle_skill_update_callback as runtime_skill_handle_skill_update_callback,
-    handle_worker_skill_action as runtime_skill_handle_worker_skill_action,
-    maybe_handle_setup_message as runtime_skill_maybe_handle_setup_message,
-)
-from app.telegram_conversation_surface import (
-    cancel_chat_operation as conversation_cancel_chat_operation,
-    cmd_approval as conversation_cmd_approval,
-    cmd_cancel as conversation_cmd_cancel,
-    cmd_compact as conversation_cmd_compact,
-    cmd_model as conversation_cmd_model,
-    cmd_new as conversation_cmd_new,
-    cmd_policy as conversation_cmd_policy,
-    cmd_project as conversation_cmd_project,
-    cmd_role as conversation_cmd_role,
-    cmd_settings as conversation_cmd_settings,
-    handle_settings_callback as conversation_handle_settings_callback,
-    handle_worker_conversation_action as conversation_handle_worker_action,
-)
-from app.telegram_pending_request_surface import (
-    approve_pending as pending_approve_pending,
-    handle_pending_callback as pending_handle_callback,
-    handle_recovery_action as pending_handle_recovery_action,
-    handle_recovery_callback as pending_handle_recovery_callback,
-    handle_worker_pending_action as pending_handle_worker_action,
-    reject_pending as pending_reject_pending,
-    retry_allow_pending as pending_retry_allow_pending,
-    retry_skip_pending as pending_retry_skip_pending,
-)
 from app.worker import poll_interval_for_runtime
 
 log = logging.getLogger(__name__)
@@ -671,7 +672,7 @@ def _worker_owned_callback_action(update: Update, event) -> InboundAction | None
 
 # -- Data classes ----------------------------------------------------------
 
-# Attachment is now InboundAttachment from app.transport.
+# Attachment is now InboundAttachment from app.channels.telegram.normalization.
 # Alias kept for internal signature compatibility.
 Attachment = InboundAttachment
 
@@ -1048,27 +1049,6 @@ async def _edit_or_reply_text(message, text: str, **kwargs) -> None:
         await message.edit_text(text, **kwargs)
         return
     await message.reply_text(text, **kwargs)
-
-
-def _extract_summary(text: str, max_lines: int = 4) -> tuple[str, str]:
-    """Split text into a short summary (first few lines) and the rest."""
-    lines = text.split("\n")
-    # Take up to max_lines non-empty lines as summary
-    summary_lines = []
-    rest_start = 0
-    for i, line in enumerate(lines):
-        if line.strip():
-            summary_lines.append(line)
-        if len(summary_lines) >= max_lines:
-            rest_start = i + 1
-            break
-    else:
-        rest_start = len(lines)
-
-    summary = "\n".join(lines[:rest_start])
-    rest = "\n".join(lines[rest_start:]).strip()
-    return summary, rest
-
 
 async def _send_compact_reply(message, text: str, chat_id: int, slot: int) -> None:
     """Send a compact response using expandable blockquote or expand button."""
@@ -2000,7 +1980,7 @@ async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def cmd_skills(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await _public_guard(event, update):
         return
-    from app.skill_commands import (
+    from app.channels.telegram.runtime_skills import (
         skills_show, skills_list, skills_add, skills_remove,
         skills_setup, skills_clear, skills_create, skills_search,
         skills_info, skills_install, skills_uninstall, skills_updates,
@@ -2547,7 +2527,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
     here: execute_request or request_approval; they register _LIVE_CANCEL so
     /cancel works.
     """
-    from app.transport import InboundAction, InboundCallback, InboundCommand, InboundMessage
+    from app.channels.telegram.normalization import InboundAction, InboundCallback, InboundCommand, InboundMessage
 
     bot = _bot_instance
     cfg = _cfg()

@@ -755,7 +755,7 @@ async def test_heartbeat_does_not_overwrite_provider_liveness():
     Heartbeat must not overwrite a recent Liveness update (same as for
     tool/command updates). Proves only one visible update per interval.
     """
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
     from unittest.mock import patch
 
     progress = FakeProgress()
@@ -799,7 +799,7 @@ async def test_rate_limit_preserves_semantic_command_events():
     command/tool events. Sends a burst so that some updates are suppressed;
     asserts CommandStart and CommandFinish still appear (plan Priority 3b).
     """
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     msg = FakeMessage()
     cfg = make_bot_config(stream_update_interval_seconds=0.2)

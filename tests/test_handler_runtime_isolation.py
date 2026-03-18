@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 import app.storage as storage_mod
-import app.telegram_handlers as th
+import app.channels.telegram.ingress as th
 import app.work_queue as work_queue_mod
 from tests.support.handler_support import reset_handler_test_runtime, setup_globals
 from tests.support.config_support import make_config as make_bot_config

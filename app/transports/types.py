@@ -1,4 +1,4 @@
-"""Transport-layer types. Reuses inbound event types from app.transport."""
+"""Transport-layer types. Reuses inbound event types from app.channels.telegram.normalization."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from app.transport import InboundAction, InboundCallback, InboundCommand, InboundMessage
+from app.channels.telegram.normalization import InboundAction, InboundCallback, InboundCommand, InboundMessage
 
 
 @dataclass(frozen=True)

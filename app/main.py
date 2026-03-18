@@ -17,7 +17,7 @@ from app.credential_store import init_credential_store_for_config
 from app.storage import close_db, ensure_data_dirs
 from app.work_queue import close_transport_db, recover_stale_claims, purge_old
 from app.worker import poll_interval_for_runtime, start_worker_task
-from app.telegram_handlers import build_application
+from app.channels.telegram.bootstrap import build_application
 from app.runtime_health import CanonicalRuntimeHealthProvider
 
 PROVIDERS: dict[str, type] = {
@@ -208,7 +208,7 @@ def main() -> None:
     log.info("Process role: %s", config.process_role)
     app = build_application(config, provider)
 
-    from app.telegram_handlers import _boot_id as boot_id
+    from app.channels.telegram.ingress import _boot_id as boot_id
 
     if _runs_worker(config):
         # Recover stale work items from previous boot and purge old transport data
@@ -229,7 +229,7 @@ def main() -> None:
 
     async def _on_post_init(_app) -> None:
         nonlocal _worker_task, _worker_stop, _agent_task, _agent_stop
-        from app.telegram_handlers import worker_dispatch
+        from app.channels.telegram.ingress import worker_dispatch
         if _runs_worker(config):
             _worker_task, _worker_stop = start_worker_task(
                 config.data_dir,

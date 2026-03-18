@@ -87,10 +87,14 @@ from app.inbound_use_case_factory import (
     get_runtime_skill_activation_use_cases,
     get_runtime_skill_catalog_use_cases,
     get_runtime_skill_import_use_cases,
-    get_runtime_skill_setup_use_cases,
 )
 from app.skill_activation_service import get_skill_activation_service
-from app.provider_guidance_service import get_provider_guidance_service
+from app.request_runtime import (
+    check_prompt_size_cross_chat as runtime_check_prompt_size_cross_chat,
+    execute_request as runtime_execute_request,
+    prompt_weight as runtime_prompt_weight,
+    request_approval as runtime_request_approval,
+)
 from app.storage import (
     chat_upload_dir,
     default_session,
@@ -877,14 +881,7 @@ def _callback_handler(fn):
 
 def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
     """Telegram-side helper for prompt-size impact warnings."""
-    cfg = _cfg()
-    return get_provider_guidance_service().check_prompt_size_cross_chat(
-        data_dir,
-        skill_name,
-        cfg.provider_name,
-        _prov().new_provider_state,
-        cfg.approval_mode,
-    )
+    return runtime_check_prompt_size_cross_chat(data_dir, skill_name)
 
 
 # -- Project helpers -------------------------------------------------------
@@ -1314,32 +1311,15 @@ async def _check_credential_satisfaction(
     chat_id: int | str, user_id: int | str, session: SessionState, message,
     resolved: ResolvedExecutionContext,
 ) -> dict[str, str] | None:
-    """Check credentials for active skills. Returns credential_env if satisfied, None if not.
+    from app.request_runtime import check_credential_satisfaction as runtime_check_credential_satisfaction
 
-    Uses resolved.active_skills (not raw session.active_skills) so public users
-    with no resolved skills skip credential checks entirely.
-
-    Delegates to the runtime-skill setup use case and handles only persistence/rendering.
-    """
-    outcome = get_runtime_skill_setup_use_cases().check_satisfaction(
+    return await runtime_check_credential_satisfaction(
+        chat_id,
+        user_id,
         session,
-        user_id=_actor_key(user_id),
-        active_skills=resolved.active_skills,
+        message,
+        resolved=resolved,
     )
-    if outcome.status == "satisfied":
-        return outcome.credential_env or {}
-    if outcome.status == "foreign_setup" and outcome.foreign_setup is not None:
-        await message.reply_text(foreign_setup_message(outcome.foreign_setup))
-        return None
-    if outcome.status != "needs_setup" or outcome.setup_state is None or outcome.first_requirement is None:
-        return None
-    _save(chat_id, session)
-    await message.reply_text(
-        f"Skill <code>{html.escape(outcome.missing_skill)}</code> needs setup.\n\n"
-        f"{format_credential_prompt(outcome.first_requirement)}",
-        parse_mode=ParseMode.HTML,
-    )
-    return None
 
 
 # -- Core execution --------------------------------------------------------
@@ -1355,238 +1335,16 @@ async def execute_request(
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
 ) -> RequestExecutionOutcome:
-    cfg = _cfg()
-    prov = _prov()
-    guidance = get_provider_guidance_service()
-    session = _load(chat_id)
-
-    # Resolve the authoritative execution identity once
-    resolved = _resolve_context(session, trust_tier=trust_tier)
-
-    # Check credential satisfaction using resolved active_skills
-    credential_env = await _check_credential_satisfaction(
-        chat_id, request_user_id, session, message, resolved=resolved,
-    )
-    if credential_env is None:
-        return
-
-    # Always include the chat-specific upload dir (not the shared uploads tree)
-    # plus resolved extra_dirs from execution context and any denial dirs from retries
-    upload_dir = str(chat_upload_dir(cfg.data_dir, _conversation_key(chat_id)))
-    all_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs) + (extra_dirs or [])
-
-    # Stage Codex scripts before building context so scripts_dir is in extra_dirs
-    if prov.name == "codex":
-        scripts_dir = guidance.stage_codex_scripts(
-            cfg.data_dir,
-            _conversation_key(chat_id),
-            resolved.active_skills,
-        )
-        if scripts_dir:
-            all_extra_dirs.append(str(scripts_dir))
-
-    # Build execution context (includes all extra_dirs, including staged scripts)
-    context = guidance.build_run_context(
-        resolved.role,
-        resolved.active_skills,
-        all_extra_dirs,
-        provider_name=prov.name,
-        credential_env=credential_env,
-        working_dir=resolved.working_dir,
-        file_policy=resolved.file_policy,
-        effective_model=resolved.effective_model,
-    )
-    context.skip_permissions = skip_permissions
-
-    # Compact mode: add summary-first instruction to system prompt
-    compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
-    context.system_prompt = guidance.apply_compact_mode(context.system_prompt, compact)
-
-    # Use the single authoritative context hash
-    context_hash = resolved.context_hash
-
-    # Codex thread invalidation: start fresh thread when context drifted or bot restarted.
-    if prov.name == "codex":
-        stored_hash = session.provider_state.get("context_hash")
-        stored_boot = session.provider_state.get("boot_id")
-        stale_thread = (
-            (stored_hash and stored_hash != context_hash)
-            or (stored_boot and stored_boot != _boot_id)
-        )
-        if stale_thread and session.provider_state.get("thread_id"):
-            log.info("Clearing stale codex thread for chat %d (hash_match=%s, boot_match=%s)",
-                     chat_id, stored_hash == context_hash, stored_boot == _boot_id)
-            session.provider_state["thread_id"] = None
-        session.provider_state["context_hash"] = context_hash
-        session.provider_state["boot_id"] = _boot_id
-        _save(chat_id, session)
-
-    is_resume = bool(session.provider_state.get("thread_id") or session.provider_state.get("started"))
-    label = _msg.progress_resuming() if is_resume else _msg.progress_working()
-    conversation_ref = ""
-    routed_task_id = ""
-    if getattr(message, "capabilities", None) and getattr(message.capabilities, "surface_name", "") == "registry":
-        conversation_ref = getattr(message, "conversation_ref", "")
-        routed_task_id = getattr(message, "routed_task_id", "")
-    elif cfg.agent_mode == "registry":
-        conversation_ref = telegram_conversation_ref(cfg, chat_id)
-
-    timeline_cb = None
-    surface_name = getattr(getattr(message, "capabilities", None), "surface_name", "telegram")
-    if conversation_ref and surface_name != "registry":
-        timeline_cb = lambda html_text, force=False: _progress_timeline_callback(
-            conversation_ref, routed_task_id, html_text, force=force
-        )
-
-    status_msg = await message.reply_text(label)
-    progress = TelegramProgress(status_msg, cfg, timeline_callback=timeline_cb)
-    content_started = asyncio.Event()
-    progress.content_started = content_started  # providers set this when real text arrives
-    typing_task = asyncio.create_task(keep_typing(message.chat))
-    heartbeat_task = asyncio.create_task(_heartbeat(progress, content_started))
-
-    local_cancel_event = cancel_event or asyncio.Event()
-    _LIVE_CANCEL[chat_id] = local_cancel_event
-    try:
-        result = await prov.run(
-            session.provider_state,
-            prompt,
-            image_paths,
-            progress,
-            context=context,
-            cancel=local_cancel_event,
-        )
-    finally:
-        _LIVE_CANCEL.pop(chat_id, None)
-        heartbeat_task.cancel()
-        typing_task.cancel()
-        await asyncio.gather(heartbeat_task, typing_task, return_exceptions=True)
-
-    if result.cancelled:
-        # Persist provider_state_updates so thread/session continuity is not lost.
-        session = _load(chat_id)
-        session.provider_state.update(result.provider_state_updates)
-        _save(chat_id, session)
-        await progress.update(_msg.cancel_live_completed(), force=True)
-        return RequestExecutionOutcome(status="cancelled")
-
-    if _run_result_was_interrupted(result.returncode):
-        log.info("%s interrupted for chat %d (rc=%s); leaving work item claimed",
-                 prov.name, chat_id, result.returncode)
-        raise work_queue.LeaveClaimed()
-
-    # Re-load session to pick up any changes made while the provider was running
-    session = _load(chat_id)
-    session.provider_state.update(result.provider_state_updates)
-
-    # Typed resume failure: provider proved the resume target is dead/invalid.
-    # Generic errors during a healthy resumed session do NOT trigger a reset.
-    if result.resume_failed:
-        log.warning("%s resume target invalid (rc=%s) for chat %d — resetting session state",
-                     prov.name, result.returncode, chat_id)
-        if prov.name == "codex":
-            session.provider_state["thread_id"] = None
-        else:
-            session.provider_state.update(prov.new_provider_state())
-
-    # Codex also clears thread_id on any resume error (existing behavior).
-    elif (
-        prov.name == "codex"
-        and is_resume
-        and not result.timed_out
-        and result.returncode and result.returncode != 0
-    ):
-        log.warning("codex resume error (rc=%s) for chat %d — clearing thread_id",
-                     result.returncode, chat_id)
-        session.provider_state["thread_id"] = None
-
-    _save(chat_id, session)
-
-    if result.timed_out:
-        await progress.update(_msg.progress_request_timed_out(cfg.timeout_seconds), force=True)
-        return RequestExecutionOutcome(status="timed_out")
-
-    if result.returncode != 0:
-        error_text = await _format_provider_error(result.text, result.returncode)
-        if result.resume_failed:
-            error_text += _msg.progress_session_not_resumed()
-        await progress.update(error_text, force=True)
-        return RequestExecutionOutcome(status="failed", error_text=error_text)
-
-    # Claude denial/retry flow — show denials BEFORE output so the user
-    # understands the result is partial before reading it.
-    if result.denials:
-        await progress.update(_msg.progress_completed_with_blocked(), force=True)
-
-        session = _load(chat_id)
-        session.pending_retry = PendingRetry(
-            request_user_id=request_user_id,
-            prompt=prompt,
-            image_paths=image_paths,
-            context_hash=context_hash,
-            denials=result.denials,
-            trust_tier=trust_tier,
-            created_at=time.time(),
-        )
-        _save(chat_id, session)
-
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("\u2705 " + _msg.retry_button_grant(), callback_data="retry_allow"),
-            InlineKeyboardButton("\u274c " + _msg.retry_button_skip(), callback_data="retry_skip"),
-        ]])
-        await message.chat.send_message(
-            f"\u26a0\ufe0f <b>{_msg.retry_permission_prompt()}</b>\n"
-            f"{format_denials_html(result.denials)}\n\n"
-            f"{_msg.retry_grant_and_retry_question()}",
-            parse_mode=ParseMode.HTML,
-            reply_markup=keyboard,
-        )
-
-        cleaned_reply, directives = extract_send_directives(result.text)
-        if cleaned_reply.strip():
-            await send_formatted_reply(message, cleaned_reply)
-            await send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
-        return RequestExecutionOutcome(
-            status="completed_with_denials",
-            reply_text=cleaned_reply,
-            denials=tuple(result.denials),
-            prompt_tokens=result.prompt_tokens,
-            completion_tokens=result.completion_tokens,
-            cost_usd=result.cost_usd,
-        )
-
-    if result.delegation_tasks:
-        await progress.update("Delegation plan ready.", force=True)
-        session = _load(chat_id)
-        return await _propose_delegation_plan(
-            chat_id,
-            message,
-            session,
-            conversation_ref=conversation_ref or telegram_conversation_ref(cfg, chat_id),
-            result=result,
-        )
-
-    await progress.update(_msg.progress_completed(), force=True)
-
-    cleaned_reply, directives = extract_send_directives(result.text)
-
-    # Save raw response to ring buffer for /raw retrieval
-    from app.summarize import load_raw_by_slot
-    slot = save_raw(cfg.data_dir, _conversation_key(chat_id), prompt, cleaned_reply)
-
-    # Compact mode: use expandable blockquote or inline expand for long responses
-    compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
-    if compact and len(cleaned_reply) > 800:
-        await _send_compact_reply(message, cleaned_reply, chat_id, slot)
-    else:
-        await send_formatted_reply(message, cleaned_reply)
-    await send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
-    return RequestExecutionOutcome(
-        status="completed",
-        reply_text=cleaned_reply,
-        prompt_tokens=result.prompt_tokens,
-        completion_tokens=result.completion_tokens,
-        cost_usd=result.cost_usd,
+    return await runtime_execute_request(
+        chat_id,
+        prompt,
+        image_paths,
+        message,
+        extra_dirs=extra_dirs,
+        request_user_id=request_user_id,
+        skip_permissions=skip_permissions,
+        trust_tier=trust_tier,
+        cancel_event=cancel_event,
     )
 
 
@@ -1600,121 +1358,16 @@ async def request_approval(
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
 ) -> None:
-    cfg = _cfg()
-    prov = _prov()
-    guidance = get_provider_guidance_service()
-    session = _load(chat_id)
-
-    if session.has_pending:
-        await message.reply_text(_msg.approval_already_waiting())
-        return
-
-    # Resolve the authoritative execution identity once
-    resolved = _resolve_context(session, trust_tier=trust_tier)
-
-    # Check credential satisfaction using resolved active_skills
-    credential_env = await _check_credential_satisfaction(
-        chat_id, request_user_id, session, message, resolved=resolved,
-    )
-    if credential_env is None:
-        return
-
-    # Build preflight context (include config extra_dirs + upload dir)
-    upload_dir = str(chat_upload_dir(cfg.data_dir, _conversation_key(chat_id)))
-    preflight_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs)
-    preflight_context = guidance.build_preflight_context(
-        resolved.role,
-        resolved.active_skills,
-        preflight_extra_dirs,
-        provider_name=prov.name,
-        working_dir=resolved.working_dir,
-        file_policy=resolved.file_policy,
-        effective_model=resolved.effective_model,
-    )
-
-    # Use the single authoritative context hash
-    context_hash = resolved.context_hash
-
-    status_msg = await message.reply_text(_msg.approval_preparing())
-    conversation_ref = ""
-    if getattr(message, "capabilities", None) and getattr(message.capabilities, "surface_name", "") == "registry":
-        conversation_ref = getattr(message, "conversation_ref", "")
-    elif cfg.agent_mode == "registry":
-        conversation_ref = telegram_conversation_ref(cfg, _telegram_chat_id(chat_id))
-    timeline_cb = None
-    surface_name = getattr(getattr(message, "capabilities", None), "surface_name", "telegram")
-    if conversation_ref and surface_name != "registry":
-        timeline_cb = lambda html_text, force=False: _progress_timeline_callback(
-            conversation_ref, "", html_text, force=force
-        )
-    progress = TelegramProgress(status_msg, cfg, timeline_callback=timeline_cb)
-    content_started = asyncio.Event()
-    progress.content_started = content_started
-    typing_task = asyncio.create_task(keep_typing(message.chat))
-    heartbeat_task = asyncio.create_task(_heartbeat(progress, content_started))
-
-    preflight_prompt = build_preflight_prompt(prompt, prov.name)
-    local_cancel_event = cancel_event or asyncio.Event()
-    _LIVE_CANCEL[chat_id] = local_cancel_event
-    try:
-        plan_result = await prov.run_preflight(
-            preflight_prompt,
-            image_paths,
-            progress,
-            context=preflight_context,
-            cancel=local_cancel_event,
-        )
-    finally:
-        _LIVE_CANCEL.pop(chat_id, None)
-        heartbeat_task.cancel()
-        typing_task.cancel()
-        await asyncio.gather(heartbeat_task, typing_task, return_exceptions=True)
-
-    if plan_result.cancelled:
-        await progress.update(_msg.cancel_live_completed(), force=True)
-        return
-
-    if _run_result_was_interrupted(plan_result.returncode):
-        log.info("Preflight interrupted for chat %d (rc=%s); leaving work item claimed",
-                 chat_id, plan_result.returncode)
-        raise work_queue.LeaveClaimed()
-
-    if plan_result.timed_out:
-        await progress.update(_msg.approval_timeout(), force=True)
-        return
-
-    if plan_result.returncode != 0:
-        error_text = await _format_provider_error(plan_result.text, plan_result.returncode)
-        await progress.update(f"{_msg.approval_check_failed_prefix()}\n{error_text}", force=True)
-        return
-
-    attachment_dicts = [
-        {"path": str(a.path), "original_name": a.original_name, "is_image": a.is_image}
-        for a in attachments
-    ]
-    session.pending_approval = PendingApproval(
-        request_user_id=request_user_id,
-        prompt=prompt,
-        image_paths=image_paths,
-        attachment_dicts=attachment_dicts,
-        context_hash=context_hash,
-        trust_tier=trust_tier,
-        created_at=time.time(),
-    )
-    _save(chat_id, session)
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("\u2705 " + _msg.approval_button_approve(), callback_data="approval_approve"),
-        InlineKeyboardButton("\u274c " + _msg.approval_button_reject(), callback_data="approval_reject"),
-    ]])
-    await progress.update(_msg.approval_required(), force=True)
-    plan_text = plan_result.text or "[empty plan]"
-    save_raw(cfg.data_dir, _conversation_key(chat_id), prompt, plan_text, kind="approval")
-    await send_formatted_reply(
+    await runtime_request_approval(
+        chat_id,
+        prompt,
+        image_paths,
+        attachments,
         message,
-        "**Approval plan:**\n\n" + plan_text,
+        request_user_id=request_user_id,
+        trust_tier=trust_tier,
+        cancel_event=cancel_event,
     )
-    await message.chat.send_message(_msg.approval_plan_question(), reply_markup=keyboard)
 
 
 async def approve_pending(
@@ -1968,11 +1621,8 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     compact_display = "on" if compact else "off"
 
     # Prompt weight estimate (chars of system prompt)
-    sys_prompt = get_provider_guidance_service().system_prompt(
-        resolved.role,
-        resolved.active_skills,
-    )
-    prompt_weight = f"~{len(sys_prompt)} chars" if sys_prompt else "minimal"
+    prompt_weight_count = runtime_prompt_weight(resolved.role, resolved.active_skills)
+    prompt_weight = f"~{prompt_weight_count} chars" if prompt_weight_count else "minimal"
 
     body = (
         f"Provider: <code>{html.escape(_prov().name)}</code>\n"
@@ -2091,12 +1741,9 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Prompt weight from resolved execution context (respects trust tier)
     if session is not None:
         resolved = _resolve_context(session, trust_tier=_trust_tier(event.user))
-        sys_prompt = get_provider_guidance_service().system_prompt(
-            resolved.role,
-            resolved.active_skills,
-        )
-        if sys_prompt:
-            parts.append(f"Prompt weight: ~{len(sys_prompt)} chars")
+        prompt_weight_count = runtime_prompt_weight(resolved.role, resolved.active_skills)
+        if prompt_weight_count:
+            parts.append(f"Prompt weight: ~{prompt_weight_count} chars")
     if parts:
         await update.effective_message.reply_text(
             "\n".join(parts), parse_mode=ParseMode.HTML)

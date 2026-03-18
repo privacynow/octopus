@@ -1,4 +1,5 @@
 from app.identity import telegram_actor_key, telegram_conversation_key
+from app.channels.telegram.progress import TelegramProgress, heartbeat, keep_typing
 from app.runtime.dispatch import (
     RuntimeDispatchRuntime,
     run_provider_preflight,
@@ -30,9 +31,9 @@ def _dispatch_runtime(th) -> RuntimeDispatchRuntime:
         provider=state.provider,
         boot_id=state.boot_id,
         cancellations=state.cancellation_registry,
-        progress_factory=th.TelegramProgress,
-        keep_typing=lambda chat: th.keep_typing(chat, runtime=state),
-        heartbeat=th._heartbeat,
+        progress_factory=TelegramProgress,
+        keep_typing=lambda chat: keep_typing(chat, runtime=state),
+        heartbeat=heartbeat,
         format_provider_error=th._format_provider_error,
         run_result_was_interrupted=th._run_result_was_interrupted,
     )

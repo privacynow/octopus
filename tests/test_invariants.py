@@ -1428,15 +1428,15 @@ async def test_codex_compaction_wording():
 
 async def test_heartbeat_fires_on_idle():
     """Heartbeat updates progress after the initial delay when no content arrives."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.progress as telegram_progress
     from unittest.mock import patch
 
     progress = FakeProgress()
     content_started = progress.content_started
 
-    with patch.object(th, "_HEARTBEAT_FIRST", 0.05), \
-         patch.object(th, "_HEARTBEAT_SUBSEQUENT", 0.05):
-        task = asyncio.create_task(th._heartbeat(progress, content_started))
+    with patch.object(telegram_progress, "_HEARTBEAT_FIRST", 0.05), \
+         patch.object(telegram_progress, "_HEARTBEAT_SUBSEQUENT", 0.05):
+        task = asyncio.create_task(telegram_progress.heartbeat(progress, content_started))
         await asyncio.sleep(0.2)  # Let a few beats fire
         task.cancel()
         await task
@@ -1449,15 +1449,15 @@ async def test_heartbeat_fires_on_idle():
 
 async def test_heartbeat_stops_when_content_starts():
     """Heartbeat stops firing once content_started event is set."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.progress as telegram_progress
     from unittest.mock import patch
 
     progress = FakeProgress()
     content_started = progress.content_started
 
-    with patch.object(th, "_HEARTBEAT_FIRST", 0.05), \
-         patch.object(th, "_HEARTBEAT_SUBSEQUENT", 0.05):
-        task = asyncio.create_task(th._heartbeat(progress, content_started))
+    with patch.object(telegram_progress, "_HEARTBEAT_FIRST", 0.05), \
+         patch.object(telegram_progress, "_HEARTBEAT_SUBSEQUENT", 0.05):
+        task = asyncio.create_task(telegram_progress.heartbeat(progress, content_started))
         await asyncio.sleep(0.1)  # Let at least one beat fire
         count_before = len(progress.updates)
         assert count_before >= 1
@@ -1476,14 +1476,14 @@ async def test_heartbeat_stops_when_content_starts():
 
 async def test_heartbeat_cancelled_on_completion():
     """Heartbeat task is cancelled cleanly without raising."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.progress as telegram_progress
     from unittest.mock import patch
 
     progress = FakeProgress()
     content_started = progress.content_started
 
-    with patch.object(th, "_HEARTBEAT_FIRST", 10.0):
-        task = asyncio.create_task(th._heartbeat(progress, content_started))
+    with patch.object(telegram_progress, "_HEARTBEAT_FIRST", 10.0):
+        task = asyncio.create_task(telegram_progress.heartbeat(progress, content_started))
         await asyncio.sleep(0.01)
         task.cancel()
         # Should not raise — CancelledError is caught internally
@@ -1589,15 +1589,15 @@ async def test_codex_sets_content_started_on_draft():
 
 async def test_heartbeat_respects_recent_progress():
     """Heartbeat does not overwrite a recent non-content progress update."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.progress as telegram_progress
     from unittest.mock import patch
 
     progress = FakeProgress()
     content_started = progress.content_started
 
-    with patch.object(th, "_HEARTBEAT_FIRST", 0.05), \
-         patch.object(th, "_HEARTBEAT_SUBSEQUENT", 0.10):
-        task = asyncio.create_task(th._heartbeat(progress, content_started))
+    with patch.object(telegram_progress, "_HEARTBEAT_FIRST", 0.05), \
+         patch.object(telegram_progress, "_HEARTBEAT_SUBSEQUENT", 0.10):
+        task = asyncio.create_task(telegram_progress.heartbeat(progress, content_started))
 
         # Wait for first heartbeat to potentially fire
         await asyncio.sleep(0.07)
@@ -1730,12 +1730,12 @@ async def test_content_first_update_bypasses_rate_limit():
     content_started fires and the first text update arrives within the
     rate-limit window.  Without the fix, the text is silently dropped.
     """
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.progress as telegram_progress
 
     msg = FakeMessage()
     cfg_overrides = {"stream_update_interval_seconds": 1.0}
     with fresh_env(config_overrides=cfg_overrides) as (data_dir, cfg, prov):
-        progress = th.TelegramProgress(msg, cfg)
+        progress = telegram_progress.TelegramProgress(msg, cfg)
         progress.content_started = asyncio.Event()
 
         # Forced tool update — sets last_update to now

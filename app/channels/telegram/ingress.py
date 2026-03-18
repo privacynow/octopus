@@ -5,13 +5,11 @@ import contextlib
 import dataclasses
 import html
 import logging
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from telegram import Update
-from telegram.constants import ChatAction, ParseMode
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
@@ -19,7 +17,7 @@ from app import access
 from app import user_messages as _msg
 from app.channels.telegram import presenters as telegram_presenters
 from app.config import BotConfig
-from app.formatting import extract_send_directives, trim_text
+from app.formatting import extract_send_directives
 from app.identity import (
     parse_actor_key,
     parse_conversation_key,
@@ -54,6 +52,12 @@ from app.channels.telegram.session_io import (
     load as load_session,
     save as save_session,
     telegram_chat_id,
+)
+from app.channels.telegram.progress import (
+    TelegramProgress,
+    heartbeat,
+    keep_typing,
+    progress_timeline_callback,
 )
 from app.channels.telegram.state import TelegramRuntime
 from app.channels.telegram.runtime_skills import (
@@ -418,7 +422,7 @@ def _dispatch_runtime(runtime: TelegramRuntime) -> RuntimeDispatchRuntime:
         cancellations=runtime.cancellation_registry,
         progress_factory=TelegramProgress,
         keep_typing=lambda chat: keep_typing(chat, runtime=runtime),
-        heartbeat=_heartbeat,
+        heartbeat=heartbeat,
         format_provider_error=_format_provider_error,
         run_result_was_interrupted=_run_result_was_interrupted,
     )
@@ -439,7 +443,7 @@ def _execution_surface_context(
     channel_name = getattr(getattr(message, "capabilities", None), "channel_name", "telegram")
     if conversation_ref and channel_name != "registry":
         async def timeline_callback(html_text: str, force: bool = False) -> None:
-            await _progress_timeline_callback(
+            await progress_timeline_callback(
                 runtime,
                 conversation_ref,
                 routed_task_id,
@@ -782,66 +786,6 @@ def _worker_owned_callback_action(update: Update, event) -> InboundAction | None
 # Attachment is now InboundAttachment from app.channels.telegram.normalization.
 # Alias kept for internal signature compatibility.
 Attachment = InboundAttachment
-
-
-# -- TelegramProgress (rate-limited HTML editor) ---------------------------
-
-class TelegramProgress:
-    def __init__(self, message, config: BotConfig, *, timeline_callback=None) -> None:
-        self.message = message
-        self.last_text = ""
-        self.last_update = 0.0
-        self._interval = config.stream_update_interval_seconds
-        self._content_delivered = False
-        self._timeline_callback = timeline_callback
-
-    async def update(self, html_text: str, *, force: bool = False) -> None:
-        html_text = trim_text(html_text, 3500)
-        if not html_text or html_text == self.last_text:
-            return
-        now = time.monotonic()
-        # After content_started is set, the first real (non-forced) update
-        # must bypass rate limiting so the user sees reply text instead of a
-        # stale tool/heartbeat message.
-        cs = getattr(self, "content_started", None)
-        if not force and not self._content_delivered and cs and cs.is_set():
-            force = True
-        if not force and now - self.last_update < self._interval:
-            return
-        try:
-            await self.message.edit_text(html_text, parse_mode=ParseMode.HTML)
-        except BadRequest as exc:
-            if "message is not modified" not in str(exc).lower():
-                log.debug("progress update failed: %s", exc)
-                return
-        self.last_text = html_text
-        self.last_update = now
-        if cs and cs.is_set():
-            self._content_delivered = True
-        if self._timeline_callback is not None:
-            try:
-                await self._timeline_callback(html_text, force=force)
-            except Exception as exc:
-                log.debug("registry timeline callback failed: %s", exc)
-
-
-async def _progress_timeline_callback(
-    runtime: TelegramRuntime,
-    conversation_ref: str,
-    routed_task_id: str,
-    html_text: str,
-    *,
-    force: bool = False,
-) -> None:
-    del force
-    await publish_timeline_event(
-        runtime.config,
-        conversation_ref=conversation_ref,
-        kind="progress",
-        title="Progress",
-        body=html_text,
-        metadata={"routed_task_id": routed_task_id} if routed_task_id else {},
-    )
 
 
 def _maybe_fire_webhook(cfg: BotConfig, chat_id: int, conversation_ref: str, outcome: RequestExecutionOutcome | None) -> None:
@@ -1245,47 +1189,6 @@ async def _propose_delegation_plan(
         reply_markup=_delegation_keyboard(chat_id),
     )
     return RequestExecutionOutcome(status="delegation_proposed")
-
-
-async def keep_typing(chat, *, runtime: TelegramRuntime) -> None:
-    try:
-        while True:
-            await chat.send_action(ChatAction.TYPING)
-            await asyncio.sleep(runtime.config.typing_interval_seconds)
-    except asyncio.CancelledError:
-        pass
-
-
-# Heartbeat cadence: first beat at 5s, then every 10s.
-_HEARTBEAT_FIRST = 5.0
-_HEARTBEAT_SUBSEQUENT = 10.0
-
-
-async def _heartbeat(progress, content_started: asyncio.Event) -> None:
-    """Show elapsed time on the progress message while idle.
-
-    Stops firing once *content_started* is set (meaning the provider has
-    begun streaming real reply text).  Only fires after a period of visible
-    silence — if the provider recently pushed a tool/command status update,
-    the heartbeat waits until that update goes stale before overwriting it.
-    Uses the same background-task lifecycle pattern as keep_typing().
-    """
-    try:
-        start = time.monotonic()
-        await asyncio.sleep(_HEARTBEAT_FIRST)
-        while not content_started.is_set():
-            # Check if a recent progress update was made — don't overwrite it
-            last = getattr(progress, "last_update", 0.0)
-            since_last = time.monotonic() - last if last else _HEARTBEAT_FIRST
-            if since_last < _HEARTBEAT_SUBSEQUENT:
-                # Recent update exists; wait for the remaining silence period
-                await asyncio.sleep(_HEARTBEAT_SUBSEQUENT - since_last)
-                continue
-            elapsed = int(time.monotonic() - start)
-            await progress.update(_msg.progress_still_working(elapsed), force=True)
-            await asyncio.sleep(_HEARTBEAT_SUBSEQUENT)
-    except asyncio.CancelledError:
-        pass
 
 
 # -- Core execution --------------------------------------------------------

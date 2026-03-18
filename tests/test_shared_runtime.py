@@ -11,6 +11,7 @@ from app.providers.base import RunResult
 from app.storage import default_session, save_session
 from app.runtime.inbound_types import deserialize_inbound
 from tests.support.handler_support import (
+    current_boot_id,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -171,7 +172,7 @@ async def test_shared_cancel_records_action_and_sets_durable_flag():
             payload,
         )
         assert status == "admitted"
-        claimed = work_queue.claim_next_any(data_dir, th._boot_id)
+        claimed = work_queue.claim_next_any(data_dir, current_boot_id())
         assert claimed is not None
 
         chat = FakeChat(chat_id)
@@ -236,7 +237,7 @@ async def test_worker_id_is_traceable():
         import app.channels.telegram.ingress as th
 
         th.build_application(cfg, prov)
-        parts = th._boot_id.split(":")
+        parts = current_boot_id().split(":")
         assert len(parts) == 3
         assert parts[1].isdigit()
         assert len(parts[2]) == 12

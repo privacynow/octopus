@@ -6,6 +6,7 @@ from app.providers.base import PreflightContext, RunResult
 from app.storage import default_session, save_session
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
+    current_bot_instance,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -55,13 +56,13 @@ async def test_approval_flow():
         assert len(prov.preflight_calls[0]["prompt"]) > 0
 
         # Worker sends approval UI via bot
-        bot_texts = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
+        bot_texts = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "Approval plan" in bot_texts or "Plan:" in bot_texts
         assert "Approve this plan?" in bot_texts or "Approve" in bot_texts
 
         # Verify approval buttons (worker sends via bot)
         cb_values = []
-        for m in th._bot_instance.sent_messages:
+        for m in current_bot_instance().sent_messages:
             cb_values = get_callback_data_values(m)
             if "approval_approve" in cb_values:
                 break
@@ -148,13 +149,13 @@ async def test_denial_retry_flow():
 
         assert len(prov.run_calls) == 1
         # Worker sends via bot
-        reply_texts = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
+        reply_texts = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "partial" in reply_texts
         assert "Permission needed" in reply_texts or "Grant access" in reply_texts or "retry" in reply_texts.lower()
 
         # Verify retry buttons (worker sends via bot)
         retry_cbs = []
-        for m in th._bot_instance.sent_messages:
+        for m in current_bot_instance().sent_messages:
             retry_cbs = get_callback_data_values(m)
             if retry_cbs:
                 break

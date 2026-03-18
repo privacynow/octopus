@@ -6,11 +6,8 @@ import contextvars
 import dataclasses
 import html
 import logging
-import os
-import platform
 import re
 import time
-import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,8 +70,14 @@ from app.agents.delegation import (
 from app.agents.orchestration import build_delegation_plan
 from app.agents.state import load_agent_runtime_state
 from app.agents.types import AgentDiscoveryQuery, RoutedTaskResult, TimelineEvent
+from app.channels.telegram.cancellation import get_cancellation_registry
 from app.channels.telegram.normalization import normalize_callback, normalize_command, normalize_message, normalize_user
 from app.channels.telegram.presenters import extract_summary as _extract_summary
+from app.channels.telegram.state import (
+    build_channel_state,
+    get_channel_state,
+    install_channel_state,
+)
 from app.channels.telegram.runtime_skills import (
     cmd_clear_credentials as runtime_skill_cmd_clear_credentials,
     handle_clear_cred_callback as runtime_skill_handle_clear_cred_callback,
@@ -160,12 +163,6 @@ from app.worker import poll_interval_for_runtime
 log = logging.getLogger(__name__)
 
 CHAT_LOCKS: dict[int | str, asyncio.Lock] = defaultdict(asyncio.Lock)
-
-# Worker-owned live execution: chat_id -> cancel Event for the active provider run.
-# Populated by worker_dispatch when it starts execute_request/request_approval;
-# /cancel sets the event so the running provider can exit. Busy/admission gating
-# is done at the store (record_and_admit_message), not via this registry.
-_LIVE_CANCEL: dict[int | str, asyncio.Event] = {}
 
 
 def _run_result_was_interrupted(returncode: int) -> bool:
@@ -281,9 +278,9 @@ async def _chat_lock(chat_id: int | str, *, message=None, query=None, update_id:
     consumed), ``False`` otherwise.  Callback handlers should skip their
     own ``query.answer()`` when the yielded value is ``True``.
     """
-    data_dir = _cfg().data_dir
+    data_dir = _state().config.data_dir
     conversation_key = _conversation_key(chat_id)
-    if _cfg().runtime_mode == "shared" and worker_item is not None:
+    if _state().config.runtime_mode == "shared" and worker_item is not None:
         work_queue.supersede_pending_recovery(data_dir, conversation_key)
         try:
             yield False
@@ -322,10 +319,10 @@ async def _chat_lock(chat_id: int | str, *, message=None, query=None, update_id:
                     data_dir,
                     conversation_key,
                     _event_key(effective_update_id),
-                    _boot_id,
+                    _state().boot_id,
                 )
             else:
-                item = work_queue.claim_next(data_dir, conversation_key, _boot_id)
+                item = work_queue.claim_next(data_dir, conversation_key, _state().boot_id)
         except TransportStateCorruption as e:
             log.exception(
                 "Transport state corruption in claim path for conversation %s: %s",
@@ -383,18 +380,13 @@ _current_update_id: contextvars.ContextVar[int | None] = contextvars.ContextVar(
     "_current_update_id", default=None,
 )
 
-# These get set by build_application()
-_config: BotConfig | None = None
-_provider: Provider | None = None
-_boot_id: str = ""  # unique per process; detects restart to clear stale threads
-_rate_limiter: RateLimiter | None = None
 # Tracks work item ID per update_id so each handler can complete its own item.
 # Keyed by update_id (not chat_id) to prevent same-chat overlap corruption.
 _pending_work_items: dict[int, str] = {}  # update_id -> work_item_id
 
 
-def _make_boot_id() -> str:
-    return f"{platform.node()}:{os.getpid()}:{uuid.uuid4().hex[:12]}"
+def _state():
+    return get_channel_state()
 
 
 def _dedup_update(update: Update, kind: str = "unknown", payload: str = "{}") -> bool:
@@ -402,13 +394,14 @@ def _dedup_update(update: Update, kind: str = "unknown", payload: str = "{}") ->
 
     Atomically records the update AND enqueues a work item in a single
     SQLite transaction.  The item is created as ``claimed`` (owned by
-    the inline handler via ``_boot_id``) so the background worker cannot
+    the inline handler via the current boot id so the background worker cannot
     steal it before the handler finishes.
     """
     uid = update.update_id
     chat_id = update.effective_chat.id if update.effective_chat else 0
     user_id = update.effective_user.id if update.effective_user else 0
-    data_dir = _cfg().data_dir
+    state = _state()
+    data_dir = state.config.data_dir
     is_new, item_id = work_queue.record_and_enqueue(
         data_dir,
         _event_key(uid),
@@ -416,7 +409,7 @@ def _dedup_update(update: Update, kind: str = "unknown", payload: str = "{}") ->
         _actor_key(user_id),
         kind,
         payload=payload,
-        worker_id=_boot_id,
+        worker_id=state.boot_id,
     )
     if not is_new:
         log.debug("Skipping duplicate update_id %d", uid)
@@ -431,21 +424,11 @@ def _complete_pending_work_item(update_id: int, state: str = "done", error: str 
     if item_id:
         try:
             if state == "done":
-                work_queue.complete_work_item(_cfg().data_dir, item_id)
+                work_queue.complete_work_item(_state().config.data_dir, item_id)
             else:
-                work_queue.fail_work_item(_cfg().data_dir, item_id, error=error or "failed")
+                work_queue.fail_work_item(_state().config.data_dir, item_id, error=error or "failed")
         except Exception:
             log.debug("Work item %s already completed", item_id)
-
-
-def _cfg() -> BotConfig:
-    assert _config is not None
-    return _config
-
-
-def _prov() -> Provider:
-    assert _provider is not None
-    return _provider
 
 
 def _conversation_key(chat_id: int | str) -> str:
@@ -742,7 +725,7 @@ class RequestExecutionOutcome:
 async def _progress_timeline_callback(conversation_ref: str, routed_task_id: str, html_text: str, *, force: bool = False) -> None:
     del force
     await publish_timeline_event(
-        _cfg(),
+        _state().config,
         conversation_ref=conversation_ref,
         kind="progress",
         title="Progress",
@@ -776,7 +759,7 @@ def _maybe_fire_webhook(cfg: BotConfig, chat_id: int, conversation_ref: str, out
 # -- Auth ------------------------------------------------------------------
 
 def is_allowed(user) -> bool:
-    cfg = _cfg()
+    cfg = _state().config
     inbound = user if isinstance(user, InboundUser) else normalize_user(user)
     if inbound is None:
         return False
@@ -787,7 +770,7 @@ def is_allowed(user) -> bool:
 def is_admin(user) -> bool:
     """Check if user is an admin (can import/uninstall/update runtime skills)."""
     inbound = user if isinstance(user, InboundUser) else normalize_user(user)
-    return access.is_admin_user(_cfg(), inbound)
+    return access.is_admin_user(_state().config, inbound)
 
 
 def is_public_user(user) -> bool:
@@ -798,13 +781,13 @@ def is_public_user(user) -> bool:
     wouldn't have passed is_allowed at all).
     """
     inbound = user if isinstance(user, InboundUser) else normalize_user(user)
-    return access.is_public_user(_cfg(), inbound)
+    return access.is_public_user(_state().config, inbound)
 
 
 def _trust_tier(user) -> str:
     """Resolve the trust tier for a user: 'trusted' or 'public'."""
     inbound = user if isinstance(user, InboundUser) else normalize_user(user)
-    return access.trust_tier(_cfg(), inbound)
+    return access.trust_tier(_state().config, inbound)
 
 
 async def _public_guard(event, update: Update) -> bool:
@@ -899,7 +882,7 @@ def _resolve_project(session: SessionState):
     project_id = session.project_id
     if not project_id:
         return None
-    for proj in _cfg().projects:
+    for proj in _state().config.projects:
         if proj.name == project_id:
             return proj
     return None
@@ -909,8 +892,8 @@ def _resolve_context(session: SessionState, trust_tier: str = "trusted") -> Reso
     """Build the single authoritative execution identity from session + config."""
     return resolve_session_context(
         session,
-        config=_cfg(),
-        provider_name=_prov().name,
+        config=_state().config,
+        provider_name=_state().provider.name,
         trust_tier=trust_tier,
     )
 
@@ -1016,7 +999,7 @@ def _allowed_roots(chat_id: int | str, resolved: ResolvedExecutionContext | None
     so public users get public roots and project-bound chats get project roots.
     Falls back to config defaults only when no resolved context is available.
     """
-    cfg = _cfg()
+    cfg = _state().config
     if resolved:
         roots: list[Path] = [Path(resolved.working_dir)]
         roots.extend(Path(d) for d in resolved.base_extra_dirs)
@@ -1200,7 +1183,7 @@ async def _publish_delegation_proposed_event(message, delegation: PendingDelegat
         await publisher(event)
         return
     await publish_timeline_event(
-        _cfg(),
+        _state().config,
         conversation_ref=delegation.conversation_ref,
         kind=event.kind,
         title=event.title,
@@ -1242,7 +1225,7 @@ async def keep_typing(chat) -> None:
     try:
         while True:
             await chat.send_action(ChatAction.TYPING)
-            await asyncio.sleep(_cfg().typing_interval_seconds)
+            await asyncio.sleep(_state().config.typing_interval_seconds)
     except asyncio.CancelledError:
         pass
 
@@ -1280,12 +1263,12 @@ async def _heartbeat(progress, content_started: asyncio.Event) -> None:
 
 
 def _load(chat_id: int) -> SessionState:
-    cfg = _cfg()
+    cfg = _state().config
     session = load_runtime_session(
         cfg.data_dir,
         _conversation_key(chat_id),
-        provider_name=_prov().name,
-        provider_state_factory=_prov().new_provider_state,
+        provider_name=_state().provider.name,
+        provider_state_factory=_state().provider.new_provider_state,
         approval_mode=cfg.approval_mode,
         default_role=cfg.role,
         default_skills=cfg.default_skills,
@@ -1297,7 +1280,7 @@ def _load(chat_id: int) -> SessionState:
 
 
 def _save(chat_id: int, session: SessionState) -> None:
-    save_runtime_session(_cfg().data_dir, _conversation_key(chat_id), session)
+    save_runtime_session(_state().config.data_dir, _conversation_key(chat_id), session)
 
 
 # -- Credential helpers ----------------------------------------------------
@@ -1402,7 +1385,7 @@ def _parse_delegation_callback(data: str) -> tuple[str, int] | None:
 
 
 async def _handle_delegation_approve(chat_id: int, query) -> None:
-    conversation_ref = telegram_conversation_ref(_cfg(), chat_id)
+    conversation_ref = telegram_conversation_ref(_state().config, chat_id)
     await handle_surface_delegation_approve(
         chat_id,
         conversation_ref,
@@ -1412,7 +1395,7 @@ async def _handle_delegation_approve(chat_id: int, query) -> None:
 
 
 async def _handle_delegation_cancel(chat_id: int, query) -> None:
-    conversation_ref = telegram_conversation_ref(_cfg(), chat_id)
+    conversation_ref = telegram_conversation_ref(_state().config, chat_id)
     await handle_surface_delegation_cancel(
         chat_id,
         conversation_ref,
@@ -1440,16 +1423,16 @@ def _help_command_lines(user) -> list[str]:
         "/send &lt;path&gt; — retrieve a file from the server",
         "/compact on|off — toggle short/full answers",
     ]
-    if _cfg().model_profiles:
+    if _state().config.model_profiles:
         lines.append("/model — switch model profile (fast/balanced/best)")
-    if _cfg().agent_mode == "registry":
+    if _state().config.agent_mode == "registry":
         lines.append("/discover — find available specialist bots by role, skill, or tag")
     if not is_public_user(user):
         lines.append("/policy inspect|edit — set file access policy")
     lines.extend([
         "/settings — view and change chat settings",
     ])
-    if not is_public_user(user) and _cfg().projects:
+    if not is_public_user(user) and _state().config.projects:
         lines.append("/project — show or change project binding")
     lines.extend([
         "/session — show current session info",
@@ -1464,8 +1447,8 @@ def _help_command_lines(user) -> list[str]:
 
 def _build_main_help(user) -> str:
     """Build the full main help text for the given user (trust- and admin-aware)."""
-    cfg = _cfg()
-    provider = _prov().name.capitalize()
+    cfg = _state().config
+    provider = _state().provider.name.capitalize()
     instance = cfg.instance
     header = (
         "<b>Agent Bot</b> (instance: <code>{instance}</code>, provider: {provider})\n\n"
@@ -1589,13 +1572,13 @@ async def cmd_new(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 @_command_handler
 async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     session = _load(event.chat_id)
-    cfg = _cfg()
+    cfg = _state().config
     trust = _trust_tier(event.user)
     resolved = _resolve_context(session, trust_tier=trust)
     pstate = session.provider_state
 
     # Show provider-relevant session ID
-    if _prov().name == "claude":
+    if _state().provider.name == "claude":
         sid = pstate.get("session_id", "[none]")
         active = pstate.get("started", False)
         session_line = f"Session: <code>{html.escape(sid[:12])}\u2026</code>\nActive: <code>{active}</code>"
@@ -1628,7 +1611,7 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     prompt_weight = f"~{prompt_weight_count} chars" if prompt_weight_count else "minimal"
 
     body = (
-        f"Provider: <code>{html.escape(_prov().name)}</code>\n"
+        f"Provider: <code>{html.escape(_state().provider.name)}</code>\n"
         f"Instance: <code>{html.escape(cfg.instance)}</code>\n"
         f"Working dir: <code>{html.escape(wd_display)}</code>\n"
         f"File policy: <code>{html.escape(file_policy)}</code>\n"
@@ -1643,7 +1626,7 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     if trust == "public":
         body += "\n\n" + _msg.trust_settings_managed_public()
-    cfg = _cfg()
+    cfg = _state().config
     session_cmds = ["/settings"]
     if trust != "public" and cfg.projects:
         session_cmds.append("/project")
@@ -1716,7 +1699,7 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         session = _load(event.chat_id)
     except (sqlite3.DatabaseError, sqlite3.OperationalError, RuntimeError):
         session = None
-    cfg = _cfg()
+    cfg = _state().config
     session_context = None
     if session is not None:
         resolved = _resolve_context(session, trust_tier=_trust_tier(event.user))
@@ -1727,7 +1710,7 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
     report = await collect_runtime_health_report(
         cfg,
-        _prov(),
+        _state().provider,
         caller_is_bot=True,
         session_context=session_context,
     )
@@ -1846,7 +1829,7 @@ def _format_discovery_results(agents: list[dict[str, Any]]) -> str:
 @_command_handler
 async def cmd_discover(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     del context
-    cfg = _cfg()
+    cfg = _state().config
     if cfg.agent_mode == "standalone":
         await update.effective_message.reply_text(
             "Agent discovery is unavailable in standalone mode.",
@@ -1887,7 +1870,7 @@ async def cmd_discover(event, update: Update, context: ContextTypes.DEFAULT_TYPE
 @_command_handler
 async def cmd_export(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = event.chat_id
-    cfg = _cfg()
+    cfg = _state().config
 
     history = export_chat_history(cfg.data_dir, _conversation_key(chat_id))
     if not history:
@@ -1936,7 +1919,7 @@ async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "Usage: /admin sessions [conversation_key]")
         return
 
-    cfg = _cfg()
+    cfg = _state().config
     sessions = list_sessions(cfg.data_dir)
 
     if not sessions:
@@ -2133,7 +2116,7 @@ async def cmd_compact(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
 @_command_handler
 async def cmd_raw(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = event.chat_id
-    cfg = _cfg()
+    cfg = _state().config
     args = event.args
 
     n = 1
@@ -2175,14 +2158,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if user is None or not is_allowed(user):
         return
 
-    if _rate_limiter and _rate_limiter.enabled and not (_cfg().admin_users_explicit and is_admin(user)):
-        allowed, retry_after = _rate_limiter.check(user.id)
+    rate_limiter = _state().rate_limiter
+    if rate_limiter and rate_limiter.enabled and not (_state().config.admin_users_explicit and is_admin(user)):
+        allowed, retry_after = rate_limiter.check(user.id)
         if not allowed:
             await update.effective_message.reply_text(
                 f"Rate limit reached. Please wait {retry_after} seconds.")
             return
 
-    msg = await normalize_message(update, context, _cfg().data_dir)
+    msg = await normalize_message(update, context, _state().config.data_dir)
     if msg is None:
         return
 
@@ -2192,7 +2176,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     prompt, image_paths = build_user_prompt(msg.text, list(msg.attachments))
     payload = serialize_inbound(msg)
 
-    cfg = _cfg()
+    cfg = _state().config
     needs_welcome = not session_exists(cfg.data_dir, _conversation_key(chat_id))
 
     data_dir = cfg.data_dir
@@ -2303,7 +2287,7 @@ async def handle_expand_callback(event, query) -> None:
     target_chat, slot = parsed
 
     from app.summarize import load_raw_by_slot
-    cfg = _cfg()
+    cfg = _state().config
     raw_text = load_raw_by_slot(cfg.data_dir, _conversation_key(target_chat), slot)
     if raw_text is None:
         await query.edit_message_reply_markup(reply_markup=None)
@@ -2354,7 +2338,7 @@ async def handle_collapse_callback(event, query) -> None:
     target_chat, slot = parsed
 
     from app.summarize import load_raw_by_slot
-    cfg = _cfg()
+    cfg = _state().config
     raw_text = load_raw_by_slot(cfg.data_dir, _conversation_key(target_chat), slot)
     if raw_text is None:
         await query.edit_message_reply_markup(reply_markup=None)
@@ -2430,7 +2414,7 @@ async def cmd_allowuser(event, update: Update, context: ContextTypes.DEFAULT_TYP
         return
     reason = " ".join(event.args[1:])
     granted_by = _actor_key(event.user.id if event.user else 0)
-    cfg = _cfg()
+    cfg = _state().config
     work_queue.set_user_access(cfg.data_dir, actor_key, "allowed", reason, granted_by)
     await update.effective_message.reply_text(f"Actor {actor_key} added to allowed list.")
 
@@ -2451,7 +2435,7 @@ async def cmd_blockuser(event, update: Update, context: ContextTypes.DEFAULT_TYP
         return
     reason = " ".join(event.args[1:])
     granted_by = _actor_key(event.user.id if event.user else 0)
-    cfg = _cfg()
+    cfg = _state().config
     work_queue.set_user_access(cfg.data_dir, actor_key, "blocked", reason, granted_by)
     await update.effective_message.reply_text(f"Actor {actor_key} blocked.")
 
@@ -2463,7 +2447,7 @@ async def cmd_listaccess(event, update: Update, context: ContextTypes.DEFAULT_TY
     if not is_admin(event.user):
         await update.effective_message.reply_text("This command requires admin access.")
         return
-    cfg = _cfg()
+    cfg = _state().config
     rows = work_queue.list_user_access(cfg.data_dir)
     if not rows:
         await update.effective_message.reply_text("No access overrides set.")
@@ -2478,13 +2462,10 @@ async def cmd_listaccess(event, update: Update, context: ContextTypes.DEFAULT_TY
         parse_mode=ParseMode.HTML,
     )
 
-_bot_instance = None  # Set by build_application
-
-
 async def _poll_cancel_requested(item_id: str, cancel_event: asyncio.Event) -> None:
-    interval = poll_interval_for_runtime(_cfg().runtime_mode)
+    interval = poll_interval_for_runtime(_state().config.runtime_mode)
     while not cancel_event.is_set():
-        if work_queue.is_cancel_requested(_cfg().data_dir, item_id):
+        if work_queue.is_cancel_requested(_state().config.data_dir, item_id):
             cancel_event.set()
             return
         await asyncio.sleep(interval)
@@ -2494,7 +2475,7 @@ async def _run_with_cancel_watch(
     item: dict[str, Any],
     runner,
 ):
-    if _cfg().runtime_mode != "shared":
+    if _state().config.runtime_mode != "shared":
         return await runner(None)
     cancel_event = asyncio.Event()
     watcher = asyncio.create_task(
@@ -2522,27 +2503,28 @@ def _build_action_surface(
     *,
     item: dict[str, Any],
 ):
+    bot_instance = _state().bot_instance
     source = getattr(event, "source", "telegram")
     conversation_key = str(item.get("conversation_key") or event.conversation_key)
     chat_id = telegram_numeric_id(conversation_key) if source == "telegram" else None
-    if source == "telegram" and (chat_id is None or _bot_instance is None):
+    if source == "telegram" and (chat_id is None or bot_instance is None):
         raise RuntimeError(
             f"Telegram action item {item.get('id')} missing bot or chat_id for {conversation_key!r}"
         )
     runtime_chat = chat_id if chat_id is not None else conversation_key
     conversation_ref = event.conversation_ref or (
-        telegram_conversation_ref(_cfg(), chat_id)
+        telegram_conversation_ref(_state().config, chat_id)
         if source == "telegram" and chat_id is not None
         else conversation_key
     )
     surface = composition.create_channel_egress(
         conversation_ref,
-        config=_cfg(),
-        bot=_bot_instance,
+        config=_state().config,
+        bot=bot_instance,
         conversation_key=conversation_key,
         source=source,
         target_message_id=_action_target_message_id(event),
-        output_log=getattr(_bot_instance, "_output_log", None) if _bot_instance is not None else None,
+        output_log=getattr(bot_instance, "_output_log", None) if bot_instance is not None else None,
     )
     setattr(surface, "_worker_item_id", str(item.get("id", "")))
     return surface, runtime_chat, chat_id, conversation_ref, source
@@ -2555,7 +2537,7 @@ async def _execute_worker_action(
     cancel_event: asyncio.Event | None,
 ) -> None:
     surface, runtime_chat, chat_id, conversation_ref, source = _build_action_surface(event, item=item)
-    trust = trust_tier_for_source(source, event.user, config=_cfg())
+    trust = trust_tier_for_source(source, event.user, config=_state().config)
     action = event.action
     params = dict(event.params)
 
@@ -2613,13 +2595,13 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
 
     Items with dispatch_mode 'recovery' get a recovery notice and move to
     pending_recovery. Fresh message items (dispatch_mode 'fresh') are executed
-    here: execute_request or request_approval; they register _LIVE_CANCEL so
+    here: execute_request or request_approval; they register the live-cancel registry so
     /cancel works.
     """
     from app.runtime.inbound_types import InboundAction, InboundCallback, InboundCommand, InboundMessage
 
-    bot = _bot_instance
-    cfg = _cfg()
+    bot = _state().bot_instance
+    cfg = _state().config
     data_dir = cfg.data_dir
 
     if isinstance(event, InboundMessage):
@@ -2635,7 +2617,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             )
             return
         conversation_ref = event.conversation_ref or (
-            telegram_conversation_ref(_cfg(), chat_id)
+            telegram_conversation_ref(_state().config, chat_id)
             if source == "telegram" and chat_id is not None
             else conversation_key
         )
@@ -2643,7 +2625,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
         title = summarize_text(event.text) or "Conversation"
         bot_msg = composition.create_channel_egress(
             conversation_ref,
-            config=_cfg(),
+            config=_state().config,
             bot=bot,
             conversation_key=conversation_key,
             source=source,
@@ -2659,7 +2641,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             update_id = telegram_numeric_id(str(item.get("event_id") or "")) or 0
             original_text = event.text or ""
             preview = html.escape(original_text[:200] + ("\u2026" if len(original_text) > 200 else ""))
-            await bot_msg.bind(title=title, config=_cfg())
+            await bot_msg.bind(title=title, config=_state().config)
             await bot_msg.send_recovery_notice(
                 preview=preview,
                 prompt=_msg.recovery_notice_prompt(),
@@ -2670,14 +2652,14 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             work_queue.mark_pending_recovery(data_dir, item["id"])
             raise work_queue.PendingRecovery(item["id"])
 
-        # Fresh message: run provider (execute_request/request_approval register _LIVE_CANCEL).
+        # Fresh message: run provider (execute_request/request_approval register the live-cancel registry).
         if source == "telegram" and not is_allowed(event.user):
             work_queue.fail_work_item(data_dir, item["id"], error="not_allowed")
             return
         prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
         user_id = event.user.id
-        trust = trust_tier_for_source(source, event.user, config=_cfg())
-        await bot_msg.bind(title=title, config=_cfg())
+        trust = trust_tier_for_source(source, event.user, config=_state().config)
+        await bot_msg.bind(title=title, config=_state().config)
         await bot_msg.on_message_received(event.text)
         try:
             async with _chat_lock(runtime_chat, worker_item=item):
@@ -2728,7 +2710,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
                     session_after.pending_delegation = None
                     _save(runtime_chat, session_after)
         if routed_task_id:
-            client = registry_client(_cfg())
+            client = registry_client(_state().config)
             if client is not None and outcome is not None:
                 full_text = outcome.reply_text or html.unescape(getattr(bot_msg, "last_status_text", ""))
                 result_status = "completed" if outcome.status in {"completed", "completed_with_denials"} else outcome.status
@@ -2856,7 +2838,7 @@ async def _enqueue_shared_action(update: Update, action: InboundAction) -> tuple
         event_id=_event_key(update.update_id),
         action=action,
     )
-    return enqueue_inbound_envelope(_cfg().data_dir, envelope)
+    return enqueue_inbound_envelope(_state().config.data_dir, envelope)
 
 
 def _shared_action_envelope(update: Update, action: InboundAction) -> InboundEnvelope:
@@ -2869,7 +2851,7 @@ def _shared_action_envelope(update: Update, action: InboundAction) -> InboundEnv
 
 def _record_shared_action(update: Update, action: InboundAction) -> tuple[bool, InboundEnvelope]:
     envelope = _shared_action_envelope(update, action)
-    return record_inbound_envelope(_cfg().data_dir, envelope), envelope
+    return record_inbound_envelope(_state().config.data_dir, envelope), envelope
 
 
 async def _shared_cancel_command(update: Update, event, action: InboundAction) -> None:
@@ -2938,23 +2920,15 @@ async def _shared_callback_dispatch(update: Update, context: ContextTypes.DEFAUL
 
 
 def build_application(config: BotConfig, provider: Provider) -> Application:
-    global _config, _provider, _boot_id, _rate_limiter, _bot_instance
     from app.content_store import init_content_store_for_config
     from app.credential_store import init_credential_store_for_config
 
     init_content_store_for_config(config)
     init_credential_store_for_config(config)
-    _config = config
-    _provider = provider
-    _boot_id = _make_boot_id()
-    # Apply conservative rate-limit defaults for public mode
-    per_minute = config.rate_limit_per_minute
-    per_hour = config.rate_limit_per_hour
-    if config.allow_open and per_minute == 0 and per_hour == 0:
-        per_minute = 5
-        per_hour = 30
+    state = build_channel_state(config, provider)
+    if config.allow_open and config.rate_limit_per_minute == 0 and config.rate_limit_per_hour == 0:
         log.info("Public mode: applying default rate limits (5/min, 30/hr)")
-    _rate_limiter = RateLimiter(per_minute=per_minute, per_hour=per_hour)
+    install_channel_state(state)
 
     # Sequential update processing; live runs are worker-owned so /cancel is delivered promptly.
     builder = Application.builder().token(config.telegram_token)
@@ -2963,7 +2937,8 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
     if config.telegram_file_api_base_url:
         builder = builder.base_file_url(config.telegram_file_api_base_url)
     app = builder.build()
-    _bot_instance = app.bot
+    state.bot_instance = app.bot
+    app.bot_data["telegram_boot_id"] = state.boot_id
     if config.runtime_mode == "shared":
         app.add_handler(CommandHandler("start", cmd_start))
         app.add_handler(CommandHandler("help", cmd_help))

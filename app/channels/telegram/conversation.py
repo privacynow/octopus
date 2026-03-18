@@ -9,6 +9,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 
 from app import user_messages as _msg
+from app.channels.telegram.cancellation import get_cancellation_registry
+from app.channels.telegram.state import get_channel_state
 from app.credential_flow import foreign_setup_message
 from app.provider_guidance_service import get_provider_guidance_service
 from app.runtime import composition
@@ -20,6 +22,14 @@ def _th():
     return th
 
 
+def _state():
+    return get_channel_state()
+
+
+def _cancellations():
+    return get_cancellation_registry()
+
+
 def _flows():
     return composition.workflows()
 
@@ -28,8 +38,8 @@ async def cmd_new(event, update: Update, context) -> None:
     del context
     th = _th()
     chat_id = event.chat_id
-    cfg = th._cfg()
-    prov = th._prov()
+    cfg = _state().config
+    prov = _state().provider
     async with th._chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         old_session = th._load(chat_id)
         outcome = _flows().conversation.control.reset_session(
@@ -79,7 +89,7 @@ async def cancel_chat_operation(
         session = th._load(chat_id)
         outcome = _flows().conversation.control.cancel_conversation(
             session,
-            data_dir=th._cfg().data_dir,
+            data_dir=_state().config.data_dir,
             conversation_key=th._conversation_key(chat_id),
             actor_key=th._actor_key(actor_user_id),
             cancel_request_event_id=th._event_key(update_id) if update_id is not None else "",
@@ -101,10 +111,10 @@ def request_cancel_fast_path(
     session = th._load(chat_id)
     outcome = _flows().conversation.control.cancel_conversation(
         session,
-        data_dir=th._cfg().data_dir,
+        data_dir=_state().config.data_dir,
         conversation_key=th._conversation_key(chat_id),
         actor_key=actor_key,
-        live_cancel_event=th._LIVE_CANCEL.get(chat_id),
+        live_cancel_event=_cancellations().get(chat_id),
         cancel_request_event_id=cancel_request_event_id,
         allow_override=allow_override,
     )
@@ -160,7 +170,7 @@ async def cmd_compact(event, update: Update, context) -> None:
 
     if not args:
         session = th._load(chat_id)
-        current = session.compact_mode if session.compact_mode is not None else th._cfg().compact_mode
+        current = session.compact_mode if session.compact_mode is not None else _state().config.compact_mode
         state = "on" if current else "off"
         await update.effective_message.reply_text(
             f"Compact mode is <b>{state}</b>.",
@@ -208,7 +218,7 @@ async def cmd_role(event, update: Update, context) -> None:
         outcome = _flows().conversation.settings.set_role(
             session,
             value,
-            default_role=th._cfg().role,
+            default_role=_state().config.role,
         )
         if outcome.mutated:
             th._save(chat_id, session)
@@ -218,7 +228,7 @@ async def cmd_role(event, update: Update, context) -> None:
 async def cmd_model(event, update: Update, context) -> None:
     del context
     th = _th()
-    cfg = th._cfg()
+    cfg = _state().config
     msg = update.effective_message
     chat_id = event.chat_id
     settings = _flows().conversation.settings
@@ -232,7 +242,7 @@ async def cmd_model(event, update: Update, context) -> None:
                 session,
                 "",
                 cfg=cfg,
-                provider_name=th._prov().name,
+                provider_name=_state().provider.name,
                 trust_tier=trust,
             )
             if outcome.mutated:
@@ -246,7 +256,7 @@ async def cmd_model(event, update: Update, context) -> None:
             session,
             arg if arg and arg != "status" else "fast",
             cfg=cfg,
-            provider_name=th._prov().name,
+            provider_name=_state().provider.name,
             trust_tier=trust,
         )
         await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
@@ -264,7 +274,7 @@ async def cmd_model(event, update: Update, context) -> None:
                 session,
                 arg,
                 cfg=cfg,
-                provider_name=th._prov().name,
+                provider_name=_state().provider.name,
                 trust_tier=trust,
             )
             if outcome.mutated:
@@ -293,7 +303,7 @@ async def cmd_project(event, update: Update, context) -> None:
     th = _th()
     if await th._public_guard(event, update):
         return
-    cfg = th._cfg()
+    cfg = _state().config
     msg = update.effective_message
     arg = event.args[0].lower() if event.args else ""
 
@@ -325,7 +335,7 @@ async def cmd_project(event, update: Update, context) -> None:
                 session,
                 value,
                 cfg=cfg,
-                provider_state_factory=th._prov().new_provider_state,
+                provider_state_factory=_state().provider.new_provider_state,
             )
             if outcome.mutated:
                 th._save(event.chat_id, session)
@@ -351,7 +361,7 @@ async def cmd_project(event, update: Update, context) -> None:
 async def cmd_settings(event, update: Update, context) -> None:
     del context
     th = _th()
-    cfg = th._cfg()
+    cfg = _state().config
     msg = update.effective_message
     session = th._load(event.chat_id)
     trust = th._trust_tier(event.user)
@@ -422,10 +432,10 @@ async def cmd_policy(event, update: Update, context) -> None:
             outcome = _flows().conversation.settings.set_file_policy(
                 session,
                 value,
-                cfg=th._cfg(),
-                provider_name=th._prov().name,
+                cfg=_state().config,
+                provider_name=_state().provider.name,
                 trust_tier=th._trust_tier(event.user),
-                provider_state_factory=th._prov().new_provider_state,
+                provider_state_factory=_state().provider.new_provider_state,
             )
             if outcome.mutated:
                 th._save(event.chat_id, session)
@@ -472,8 +482,8 @@ async def handle_settings_callback(event, query) -> None:
             outcome = settings.set_model_profile(
                 session,
                 "" if value == "inherit" else value,
-                cfg=th._cfg(),
-                provider_name=th._prov().name,
+                cfg=_state().config,
+                provider_name=_state().provider.name,
                 trust_tier=th._trust_tier(event.user),
             )
             if outcome.mutated:
@@ -507,10 +517,10 @@ async def handle_settings_callback(event, query) -> None:
             outcome = settings.set_file_policy(
                 session,
                 "" if value == "inherit" else value,
-                cfg=th._cfg(),
-                provider_name=th._prov().name,
+                cfg=_state().config,
+                provider_name=_state().provider.name,
                 trust_tier=th._trust_tier(event.user),
-                provider_state_factory=th._prov().new_provider_state,
+                provider_state_factory=_state().provider.new_provider_state,
             )
             if outcome.status == "invalid":
                 return
@@ -524,14 +534,14 @@ async def handle_settings_callback(event, query) -> None:
             if th.is_public_user(event.user):
                 await query.edit_message_text(_msg.trust_project_public())
                 return
-            if not th._cfg().projects:
+            if not _state().config.projects:
                 await query.edit_message_text(_msg.no_projects_configured())
                 return
             outcome = settings.set_project(
                 session,
                 value,
-                cfg=th._cfg(),
-                provider_state_factory=th._prov().new_provider_state,
+                cfg=_state().config,
+                provider_state_factory=_state().provider.new_provider_state,
             )
             if outcome.mutated:
                 th._save(chat_id, session)
@@ -554,8 +564,8 @@ async def handle_worker_conversation_action(
     settings = _flows().conversation.settings
 
     if action == "session_new":
-        cfg = th._cfg()
-        prov = th._prov()
+        cfg = _state().config
+        prov = _state().provider
         old_session = th._load(runtime_chat)
         outcome = _flows().conversation.control.reset_session(
             old_session,
@@ -592,7 +602,7 @@ async def handle_worker_conversation_action(
         session = th._load(runtime_chat)
         outcome = _flows().conversation.control.cancel_conversation(
             session,
-            data_dir=th._cfg().data_dir,
+            data_dir=_state().config.data_dir,
             conversation_key=th._conversation_key(runtime_chat),
             actor_key=th._actor_key(event.user.id),
             cancel_request_event_id=str(item.get("event_id", "")),
@@ -632,7 +642,7 @@ async def handle_worker_conversation_action(
         outcome = settings.set_role(
             session,
             str(params.get("value", "")),
-            default_role=th._cfg().role,
+            default_role=_state().config.role,
         )
         if outcome.mutated:
             th._save(runtime_chat, session)
@@ -644,8 +654,8 @@ async def handle_worker_conversation_action(
         outcome = settings.set_model_profile(
             session,
             str(params.get("profile", "")),
-            cfg=th._cfg(),
-            provider_name=th._prov().name,
+            cfg=_state().config,
+            provider_name=_state().provider.name,
             trust_tier=trust,
         )
         if outcome.mutated:
@@ -658,15 +668,15 @@ async def handle_worker_conversation_action(
         if th.is_public_user(event.user):
             await th._edit_or_reply_text(surface, _msg.trust_project_public())
             return True
-        if not th._cfg().projects:
+        if not _state().config.projects:
             await th._edit_or_reply_text(surface, _msg.no_projects_configured())
             return True
         session = th._load(runtime_chat)
         outcome = settings.set_project(
             session,
             str(params.get("value", "")),
-            cfg=th._cfg(),
-            provider_state_factory=th._prov().new_provider_state,
+            cfg=_state().config,
+            provider_state_factory=_state().provider.new_provider_state,
         )
         if outcome.mutated:
             th._save(runtime_chat, session)
@@ -682,10 +692,10 @@ async def handle_worker_conversation_action(
         outcome = settings.set_file_policy(
             session,
             str(params.get("value", "")),
-            cfg=th._cfg(),
-            provider_name=th._prov().name,
+            cfg=_state().config,
+            provider_name=_state().provider.name,
             trust_tier=trust,
-            provider_state_factory=th._prov().new_provider_state,
+            provider_state_factory=_state().provider.new_provider_state,
         )
         if outcome.status == "invalid":
             return True

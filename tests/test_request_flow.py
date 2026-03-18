@@ -52,6 +52,7 @@ from app.session_state import (
 from app.storage import default_session, save_session
 from tests.support.config_support import make_config as _make_config
 from tests.support.handler_support import (
+    current_bot_instance,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -838,10 +839,10 @@ async def test_compact_long_reply_public_user():
         await drain_one_worker_item(data_dir)
 
         # Worker sends via bot
-        all_text = " ".join(str(m.get("text", "")) for m in th._bot_instance.sent_messages)
+        all_text = " ".join(str(m.get("text", "")) for m in current_bot_instance().sent_messages)
         # Should have compact rendering (blockquote or expand button)
         has_blockquote = "blockquote" in all_text
-        has_expand_button = any(m.get("reply_markup") is not None for m in th._bot_instance.sent_messages)
+        has_expand_button = any(m.get("reply_markup") is not None for m in current_bot_instance().sent_messages)
         assert has_blockquote or has_expand_button, (
             f"Expected compact rendering for public user, got: {all_text[:200]}")
 

@@ -8,6 +8,7 @@ import html
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction, ParseMode
 
+from app.channels.telegram.state import get_channel_state
 from app import user_messages as _msg
 from app.credential_flow import foreign_setup_message, format_credential_prompt
 from app.runtime import composition
@@ -17,6 +18,10 @@ def _th():
     import app.channels.telegram.ingress as th
 
     return th
+
+
+def _state():
+    return get_channel_state()
 
 
 def _flows():
@@ -331,7 +336,7 @@ async def skills_search(event, update: Update, query: str) -> None:
     results = await asyncio.to_thread(
         _flows().runtime_skills.imports.search,
         query,
-        registry_url=_th()._cfg().registry_url,
+        registry_url=_state().config.registry_url,
     )
     lines: list[str] = []
     if results.catalog:
@@ -393,7 +398,7 @@ async def skills_install(event, update: Update, name: str) -> None:
     if not th.is_admin(event.user):
         await update.effective_message.reply_text("Only admins can install skills.")
         return
-    registry_url = th._cfg().registry_url
+    registry_url = _state().config.registry_url
     if not registry_url:
         await update.effective_message.reply_text("No skill registry configured.", parse_mode=ParseMode.HTML)
         return
@@ -404,7 +409,7 @@ async def skills_install(event, update: Update, name: str) -> None:
             registry_url,
         )
         msg = result.message
-        size_warnings = th._check_prompt_size_cross_chat(th._cfg().data_dir, name) if result.ok else []
+        size_warnings = th._check_prompt_size_cross_chat(_state().config.data_dir, name) if result.ok else []
         if size_warnings:
             msg += "\n\nPrompt size warnings:\n" + "\n".join(size_warnings)
         await update.effective_message.reply_text(html.escape(msg), parse_mode=ParseMode.HTML)
@@ -420,7 +425,7 @@ async def skills_uninstall(event, update: Update, name: str) -> None:
     if not th.is_admin(event.user):
         await update.effective_message.reply_text("Only admins can uninstall imported skills.")
         return
-    result = _flows().runtime_skills.imports.uninstall(name, default_skills=th._cfg().default_skills)
+    result = _flows().runtime_skills.imports.uninstall(name, default_skills=_state().config.default_skills)
     await update.effective_message.reply_text(html.escape(result.message), parse_mode=ParseMode.HTML)
 
 
@@ -466,7 +471,7 @@ async def skills_update(event, update: Update, target: str) -> None:
             status = "✔" if result.ok else "✘"
             lines.append(f"  {status} {html.escape(result.message)}")
             if result.ok:
-                all_size_warnings.extend(th._check_prompt_size_cross_chat(th._cfg().data_dir, result.name))
+                all_size_warnings.extend(th._check_prompt_size_cross_chat(_state().config.data_dir, result.name))
         if all_size_warnings:
             lines.append("")
             lines.append("<b>Prompt size warnings:</b>")
@@ -477,7 +482,7 @@ async def skills_update(event, update: Update, target: str) -> None:
     result = await asyncio.to_thread(imports.update, target)
     msg = result.message
     if result.ok:
-        size_warnings = th._check_prompt_size_cross_chat(th._cfg().data_dir, target)
+        size_warnings = th._check_prompt_size_cross_chat(_state().config.data_dir, target)
         if size_warnings:
             msg += "\n\nPrompt size warnings:\n" + "\n".join(size_warnings)
     await update.effective_message.reply_text(html.escape(msg), parse_mode=ParseMode.HTML)
@@ -632,7 +637,7 @@ async def handle_skill_update_callback(event, query) -> None:
             name,
         )
         msg = result.message
-        size_warnings = th._check_prompt_size_cross_chat(th._cfg().data_dir, name) if result.ok else []
+        size_warnings = th._check_prompt_size_cross_chat(_state().config.data_dir, name) if result.ok else []
         if size_warnings:
             msg += "\n\nPrompt size warnings:\n" + "\n".join(size_warnings)
         await query.edit_message_reply_markup(reply_markup=None)
@@ -653,7 +658,7 @@ async def handle_skill_update_callback(event, query) -> None:
             status = "✔" if result.ok else "✘"
             lines.append(f"  {status} {html.escape(result.message)}")
             if result.ok:
-                all_size_warnings.extend(th._check_prompt_size_cross_chat(th._cfg().data_dir, result.name))
+                all_size_warnings.extend(th._check_prompt_size_cross_chat(_state().config.data_dir, result.name))
         if all_size_warnings:
             lines.append("")
             lines.append("<b>Prompt size warnings:</b>")
@@ -668,7 +673,7 @@ async def maybe_handle_setup_message(update: Update, msg, payload: str) -> bool:
     message = update.effective_message
     chat_id = msg.chat_id
     user_id = msg.user.id
-    data_dir = th._cfg().data_dir
+    data_dir = _state().config.data_dir
     session = th._load(chat_id)
     setup = session.awaiting_skill_setup
     if not setup or setup.user_id != th._actor_key(user_id):

@@ -5,6 +5,7 @@ from app.storage import default_session, save_session
 from app.channels.telegram.ingress import _extract_summary
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
+    current_bot_instance,
     FakeChat,
     FakeProvider,
     FakeUser,
@@ -99,7 +100,7 @@ async def test_e2e_table_in_provider_response():
         await drain_one_worker_item(data_dir)
 
         # Worker sends via bot
-        all_replies = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
+        all_replies = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "<pre>" in all_replies
         assert "Alice" in all_replies
         assert "---|---" not in all_replies
@@ -128,11 +129,11 @@ async def test_e2e_compact_mode_uses_blockquote():
         await drain_one_worker_item(data_dir)
 
         # Worker sends via bot
-        all_replies = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
+        all_replies = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         # Should contain expandable blockquote or a "Show full" button
         has_blockquote = "blockquote" in all_replies
         has_expand_button = any(
-            m.get("reply_markup") is not None for m in th._bot_instance.sent_messages
+            m.get("reply_markup") is not None for m in current_bot_instance().sent_messages
         )
         assert has_blockquote or has_expand_button, (
             f"Expected blockquote or expand button, got: {all_replies[:200]}"
@@ -163,7 +164,7 @@ async def test_e2e_compact_off_no_summarize():
         msg = await send_text(chat, user, "do something")
         await drain_one_worker_item(data_dir)
 
-        all_replies = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
+        all_replies = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "Full verbose response" in all_replies
         assert "/raw for full" not in all_replies
 
@@ -192,7 +193,7 @@ async def test_e2e_compact_mode_short_response_no_blockquote():
         msg = await send_text(chat, user, "what is the answer")
         await drain_one_worker_item(data_dir)
 
-        all_replies = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
+        all_replies = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "42" in all_replies
         assert "blockquote" not in all_replies
 
@@ -299,7 +300,7 @@ async def test_compact_long_response_shows_expand_button():
 
         # Must have taken the button path, not blockquote (worker sends via bot)
         expand_markup = None
-        for m in th._bot_instance.sent_messages:
+        for m in current_bot_instance().sent_messages:
             rm = m.get("reply_markup")
             if rm is not None:
                 expand_markup = rm
@@ -314,7 +315,7 @@ async def test_compact_long_response_shows_expand_button():
         assert button.callback_data.startswith("expand:")
 
         # The reply text should show "truncated" indicator (worker sends via bot)
-        for m in th._bot_instance.sent_messages:
+        for m in current_bot_instance().sent_messages:
             if m.get("reply_markup") is not None:
                 assert "truncated" in m.get("text", "").lower()
 
@@ -341,7 +342,7 @@ async def test_expand_callback_shows_full_response():
 
         # Get expand callback data (worker sends via bot)
         cb_data = None
-        for m in th._bot_instance.sent_messages:
+        for m in current_bot_instance().sent_messages:
             rm = m.get("reply_markup")
             if rm is not None:
                 cb_data = rm.inline_keyboard[0][0].callback_data

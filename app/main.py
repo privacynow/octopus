@@ -208,7 +208,17 @@ def main() -> None:
     log.info("Process role: %s", config.process_role)
     app = build_application(config, provider)
 
-    from app.channels.telegram.ingress import _boot_id as boot_id
+    from app.channels.telegram.state import make_boot_id, peek_channel_state
+
+    boot_id = None
+    bot_data = getattr(app, "bot_data", None)
+    if isinstance(bot_data, dict):
+        boot_id = bot_data.get("telegram_boot_id")
+    if boot_id is None:
+        boot_id = vars(app).get("telegram_boot_id")
+    if not isinstance(boot_id, str) or not boot_id:
+        state = peek_channel_state()
+        boot_id = state.boot_id if state is not None else make_boot_id()
 
     if _runs_worker(config):
         # Recover stale work items from previous boot and purge old transport data

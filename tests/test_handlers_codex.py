@@ -11,6 +11,7 @@ from tests.support.skill_test_helpers import (
 from app.storage import default_session, save_session
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
+    current_bot_instance,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -239,7 +240,7 @@ async def test_codex_error_text_is_html_escaped():
         # final error is shown via progress.update (edit_text). Escaping must produce &lt;MODEL&gt;.
         assert len(prov.run_calls) == 1
         all_bot_text = " ".join(
-            (m.get("text") or m.get("edit_text") or "") for m in th._bot_instance.sent_messages
+            (m.get("text") or m.get("edit_text") or "") for m in current_bot_instance().sent_messages
         )
         assert "&lt;MODEL&gt;" in all_bot_text, (
             "Codex error text must be HTML-escaped so <MODEL> appears as &lt;MODEL&gt; in user-visible output"

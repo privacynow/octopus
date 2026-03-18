@@ -2,7 +2,7 @@
 
 Worker-owned test model (authoritative):
 - Handler-only: handle_message() / send_text() only; assert no provider run, dedup/busy/rejection.
-- Single execution: handle_message() then await drain_one_worker_item(data_dir); assert prov.run_calls, session, _bot_instance.sent_messages.
+- Single execution: handle_message() then await drain_one_worker_item(data_dir); assert prov.run_calls, session, current_bot_instance().sent_messages.
 - Real concurrency: async with running_worker(data_dir): admit via handle_message(), use provider gates, /cancel; assert on bot-side log.
 """
 
@@ -12,9 +12,20 @@ import tempfile
 from pathlib import Path
 
 import app.channels.telegram.ingress as _th
+from app.channels.telegram.cancellation import (
+    get_cancellation_registry,
+    reset_cancellation_registry,
+)
+from app.channels.telegram.state import (
+    build_channel_state,
+    get_channel_state,
+    install_channel_state,
+    peek_channel_state,
+    reset_channel_state,
+    set_bot_instance as set_channel_bot_instance,
+)
 from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.providers.base import RunResult
-from app.ratelimit import RateLimiter
 from app.storage import close_db, ensure_data_dirs, load_session
 from app import work_queue as _work_queue
 from tests.support.config_support import make_config as _make_config
@@ -34,14 +45,10 @@ def reset_handler_test_runtime() -> None:
     import app.credential_store as _creds
     _creds.reset_for_test()
 
-    _th._config = None
-    _th._provider = None
-    _th._boot_id = ""
-    _th._rate_limiter = None
-    _th._bot_instance = None
+    reset_channel_state()
     _th._pending_work_items.clear()
     _th.CHAT_LOCKS.clear()
-    _th._LIVE_CANCEL.clear()
+    reset_cancellation_registry()
     try:
         _th._current_update_id.set(None)
     except LookupError:
@@ -304,13 +311,32 @@ def make_config(data_dir, **overrides):
 
 
 def set_bot_instance(bot_instance) -> None:
-    """Set the handler's bot instance (for worker_dispatch etc.). Prefer over direct _th._bot_instance write."""
-    _th._bot_instance = bot_instance
+    """Set the handler's bot instance (for worker_dispatch etc.)."""
+    set_channel_bot_instance(bot_instance)
+
+
+def set_provider(provider) -> None:
+    """Set the current provider on the installed Telegram channel state."""
+    get_channel_state().provider = provider
+
+
+def current_bot_instance():
+    state = peek_channel_state()
+    return None if state is None else state.bot_instance
+
+
+def current_boot_id() -> str:
+    return get_channel_state().boot_id
+
+
+def live_cancel_registry():
+    return get_cancellation_registry()
 
 
 def _append_simulator_output_log(kind: str, text: str) -> None:
     """When the bot has _output_log (simulator), append one user-visible output for a single ordered stream."""
-    bot = getattr(_th, "_bot_instance", None)
+    state = peek_channel_state()
+    bot = None if state is None else state.bot_instance
     if bot is not None and getattr(bot, "_output_log", None) is not None:
         bot._output_log.append({"type": kind, "text": text})
 
@@ -381,7 +407,7 @@ class MinimalFakeBot:
 
 
 def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
-    """Set handler runtime globals for tests. Call reset_handler_test_runtime() first if reusing."""
+    """Install explicit Telegram channel state for tests."""
     reset_handler_test_runtime()
     import app.content_store as _cs
     import app.credential_store as _creds
@@ -407,14 +433,14 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
                         created_by="test",
                     )
                 )
-    _th._config = config
-    _th._provider = provider
-    _th._boot_id = boot_id
-    _th._rate_limiter = RateLimiter(
-        per_minute=config.rate_limit_per_minute,
-        per_hour=config.rate_limit_per_hour,
+    install_channel_state(
+        build_channel_state(
+            config,
+            provider,
+            boot_id=boot_id,
+            bot_instance=bot_instance if bot_instance is not None else MinimalFakeBot(),
+        )
     )
-    _th._bot_instance = bot_instance if bot_instance is not None else MinimalFakeBot()
 
 
 def load_session_disk(data_dir, chat_id, provider):
@@ -453,7 +479,7 @@ async def drain_one_worker_item(data_dir: Path) -> bool:
     from app.runtime.inbound_types import deserialize_inbound
     from app.workflows.results import TransportStateCorruption
 
-    boot_id = _th._boot_id
+    boot_id = get_channel_state().boot_id
     item = _work_queue.claim_next_any(data_dir, boot_id)
     if item is None:
         return False
@@ -489,7 +515,7 @@ async def running_worker(data_dir: Path, *, poll_interval: float = 0.01):
     from app.worker import start_worker_task
 
     task, stop_event = start_worker_task(
-        data_dir, _th._boot_id, _th.worker_dispatch, poll_interval=poll_interval
+        data_dir, get_channel_state().boot_id, _th.worker_dispatch, poll_interval=poll_interval
     )
     try:
         yield task, stop_event

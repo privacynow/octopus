@@ -12,6 +12,7 @@ import pytest
 import app.storage as storage_mod
 import app.channels.telegram.ingress as th
 import app.work_queue as work_queue_mod
+from app.channels.telegram.state import peek_channel_state
 from tests.support.handler_support import reset_handler_test_runtime, setup_globals
 from tests.support.config_support import make_config as make_bot_config
 
@@ -27,11 +28,7 @@ def test_reset_clears_all_handler_globals():
 
     reset_handler_test_runtime()
 
-    assert th._config is None
-    assert th._provider is None
-    assert th._boot_id == ""
-    assert th._rate_limiter is None
-    assert th._bot_instance is None
+    assert peek_channel_state() is None
     assert len(th._pending_work_items) == 0
     assert len(th.CHAT_LOCKS) == 0
 
@@ -40,11 +37,22 @@ def test_clean_runtime_has_no_leaked_state():
     """Start with clean runtime; assert no leaked globals."""
     reset_handler_test_runtime()
 
-    assert th._config is None
-    assert th._provider is None
-    assert th._bot_instance is None
+    assert peek_channel_state() is None
     assert len(th._pending_work_items) == 0
     assert len(th.CHAT_LOCKS) == 0
+
+
+def test_setup_globals_does_not_restore_legacy_ingress_globals():
+    cfg = make_bot_config(data_dir=Path("/tmp/iso-test-no-legacy-globals"))
+    from tests.support.handler_support import FakeProvider
+
+    prov = FakeProvider("claude")
+    setup_globals(cfg, prov, boot_id="boot-no-legacy", bot_instance=object())
+
+    assert not hasattr(th, "_config")
+    assert not hasattr(th, "_provider")
+    assert not hasattr(th, "_bot_instance")
+    assert not hasattr(th, "_LIVE_CANCEL")
 
 
 def test_reset_closes_session_and_transport_db_caches():

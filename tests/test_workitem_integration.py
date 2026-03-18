@@ -23,6 +23,7 @@ from app.identity import (
 )
 from app.providers.base import RunResult
 from tests.support.handler_support import (
+    current_boot_id,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -1389,7 +1390,7 @@ async def test_fresh_command_item_created_as_claimed():
         ).fetchall()
         assert len(items) == 1
         assert items[0]["state"] == "done"
-        assert items[0]["worker_id"] == th._boot_id
+        assert items[0]["worker_id"] == current_boot_id()
 
 
 @pytest.mark.asyncio
@@ -1532,7 +1533,7 @@ async def test_handler_crash_leaves_item_claimed_for_recovery():
         # (as _dedup_update does), then DON'T complete it.
         _, item_id = work_queue.record_and_enqueue(
             data_dir, _event(800), _conv(chat_id), _actor(42), "command",
-            worker_id=th._boot_id,
+            worker_id=current_boot_id(),
         )
 
         # Item is claimed — worker can't steal it

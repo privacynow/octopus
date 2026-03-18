@@ -8,6 +8,7 @@ from telegram import Update
 from telegram.constants import ParseMode
 
 from app import access, user_messages as _msg
+from app.channels.telegram.state import get_channel_state
 from app.channels.telegram.normalization import normalize_user
 from app.runtime import composition
 from app import work_queue
@@ -17,6 +18,10 @@ def _th():
     import app.channels.telegram.ingress as th
 
     return th
+
+
+def _state():
+    return get_channel_state()
 
 
 def _flows():
@@ -33,8 +38,8 @@ async def approve_pending(
     session = th._load(chat_id)
     outcome = _flows().pending.requests.approve(
         session,
-        cfg=th._cfg(),
-        provider_name=th._prov().name,
+        cfg=_state().config,
+        provider_name=_state().provider.name,
     )
     if outcome.mutated:
         th._save(chat_id, session)
@@ -82,8 +87,8 @@ async def retry_allow_pending(
     session = th._load(chat_id)
     outcome = _flows().pending.requests.retry_allow(
         session,
-        cfg=th._cfg(),
-        provider_name=th._prov().name,
+        cfg=_state().config,
+        provider_name=_state().provider.name,
     )
     if outcome.mutated:
         th._save(chat_id, session)
@@ -174,14 +179,14 @@ async def handle_recovery_action(
             del text, show_alert
             return None
 
-    cfg = th._cfg()
+    cfg = _state().config
     data_dir = cfg.data_dir
     outcome = _flows().recovery.replay.prepare_action(
         data_dir=data_dir,
         conversation_key=th._conversation_key(chat_id),
         event_id=th._event_key(update_id),
         action=action,
-        worker_id=th._boot_id,
+        worker_id=_state().boot_id,
         ignore_claimed_item_id=str(getattr(message, "_worker_item_id", "")),
         config=cfg,
     )
@@ -280,7 +285,7 @@ async def handle_worker_pending_action(
             await surface.reply_text(_msg.recovery_invalid_action())
             return True
         if event.action == "recovery_replay":
-            work_queue.complete_work_item(_th()._cfg().data_dir, str(item.get("id", "")))
+            work_queue.complete_work_item(_state().config.data_dir, str(item.get("id", "")))
         await surface.edit_reply_markup(reply_markup=None)
         await handle_recovery_action(
             runtime_chat,

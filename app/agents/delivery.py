@@ -22,6 +22,7 @@ from app.agents.types import RoutedTaskResult
 from app.config import BotConfig
 from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
 from app.runtime import composition
+from app.channels.telegram.state import peek_channel_state
 
 log = logging.getLogger(__name__)
 
@@ -72,8 +73,6 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
     payload = delivery.get("payload", {})
     if not isinstance(payload, dict):
         return "rejected"
-    from app.channels.telegram import ingress as th
-
     if kind == "surface_action":
         conversation_ref = str(payload.get("conversation_ref", "") or payload.get("conversation_id", ""))
         if not conversation_ref:
@@ -138,9 +137,11 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
             metadata={"routed_task_id": routed_task_id},
             event_id=f"delegated-result:{routed_task_id}",
         )
-        if getattr(th, "_config", None) is None or getattr(th, "_provider", None) is None:
+        state = peek_channel_state()
+        if state is None:
             return "retry_later"
         conversation_key = conversation_key_for_ref(parent_conversation_id)
+        from app.channels.telegram import ingress as th
         session = th._load(conversation_key)
         pending, matched = apply_routed_result(
             session.pending_delegation,
@@ -174,7 +175,7 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
             surface = composition.create_channel_egress(
                 parent_conversation_id,
                 config=config,
-                bot=th._bot_instance,
+                bot=state.bot_instance,
                 conversation_key=conversation_key,
                 source="registry",
             )

@@ -11,6 +11,8 @@ from app import user_messages as _msg
 from app.work_queue import debug_transport_connection, get_work_items_for_chat
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
+    current_bot_instance,
+    live_cancel_registry,
     FakeChat,
     FakeContext,
     FakeMessage,
@@ -26,6 +28,7 @@ from tests.support.handler_support import (
     running_worker,
     send_command,
     set_bot_instance,
+    set_provider,
     setup_globals,
 )
 
@@ -140,7 +143,7 @@ class TestCancelLiveExecution:
 
             # Simulate a live execution by registering a cancel event
             cancel_event = asyncio.Event()
-            th._LIVE_CANCEL[12345] = cancel_event
+            live_cancel_registry()[12345] = cancel_event
 
             try:
                 msg = await send_command(th.cmd_cancel, chat, user, "/cancel")
@@ -149,7 +152,7 @@ class TestCancelLiveExecution:
                 from app.user_messages import cancel_live_requested
                 assert last_reply(msg) == cancel_live_requested()
             finally:
-                th._LIVE_CANCEL.pop(12345, None)
+                live_cancel_registry().pop(12345, None)
 
     async def test_cancel_no_live_execution_falls_through(self):
         """When no live execution, /cancel falls through to pending/setup check."""
@@ -257,7 +260,7 @@ class TestCancelledOutcome:
             await drain_one_worker_item(data_dir)
 
             # Worker sends status via bot
-            bot = th._bot_instance
+            bot = current_bot_instance()
             all_texts = [m.get("text", m.get("edit_text", "")) for m in bot.sent_messages if m.get("text") or m.get("edit_text")]
             assert any(t == cancel_live_completed() for t in all_texts), (
                 f"Expected status '{cancel_live_completed()}' in bot output: {all_texts}"
@@ -318,7 +321,7 @@ class TestCancelRegressions:
             await th.handle_message(update, FakeContext())
 
             # After execution completes, the registry should be clean
-            assert 12345 not in th._LIVE_CANCEL
+            assert 12345 not in live_cancel_registry()
 
     async def test_live_cancel_registry_cleaned_on_error(self):
         """_LIVE_CANCEL entry is removed even when provider returns an error."""
@@ -339,7 +342,7 @@ class TestCancelRegressions:
             update = FakeUpdate(message=msg, user=user, chat=chat)
             await th.handle_message(update, FakeContext())
 
-            assert 12345 not in th._LIVE_CANCEL
+            assert 12345 not in live_cancel_registry()
 
     async def test_double_cancel_is_idempotent(self):
         """Setting cancel event twice does not raise or cause issues."""
@@ -356,7 +359,7 @@ class TestCancelRegressions:
             save_session(data_dir, telegram_conversation_key(12345), session)
 
             cancel_event = asyncio.Event()
-            th._LIVE_CANCEL[12345] = cancel_event
+            live_cancel_registry()[12345] = cancel_event
 
             try:
                 # First cancel
@@ -373,7 +376,7 @@ class TestCancelRegressions:
                 from app.user_messages import cancel_live_requested
                 assert last_reply(msg2) == cancel_live_requested()
             finally:
-                th._LIVE_CANCEL.pop(12345, None)
+                live_cancel_registry().pop(12345, None)
 
     async def test_cancel_after_completion_is_noop(self):
         """After execution completes, /cancel shows nothing_to_cancel."""
@@ -395,7 +398,7 @@ class TestCancelRegressions:
             await th.handle_message(update, FakeContext())
             await drain_one_worker_item(data_dir)
 
-            assert 12345 not in th._LIVE_CANCEL
+            assert 12345 not in live_cancel_registry()
 
             # Now cancel — no queued item and no live run, so nothing_to_cancel
             cancel_msg = await send_command(th.cmd_cancel, chat, user, "/cancel")
@@ -669,7 +672,7 @@ class TestCancelConcurrency:
                 # Wait until the provider is running and the lock is held
                 await asyncio.wait_for(prov.provider_started.wait(), timeout=2.0)
                 assert th.CHAT_LOCKS[12345].locked(), "Lock should be held"
-                assert 12345 in th._LIVE_CANCEL, "Cancel registry should exist"
+                assert 12345 in live_cancel_registry(), "Cancel registry should exist"
 
                 # Send /cancel — must complete without blocking on the lock
                 cancel_msg = await asyncio.wait_for(
@@ -681,7 +684,7 @@ class TestCancelConcurrency:
                     f"Expected cancel ack. Got: {last_reply(cancel_msg)}"
 
                 # Cancel event should now be set while lock is still held
-                assert th._LIVE_CANCEL.get(12345) is None or th._LIVE_CANCEL[12345].is_set(), \
+                assert live_cancel_registry().get(12345) is None or live_cancel_registry()[12345].is_set(), \
                     "Cancel event should be set"
 
                 prov.gate.set()
@@ -749,7 +752,7 @@ class TestCancelConcurrency:
             async with running_worker(data_dir, poll_interval=0.01):
                 await th.handle_message(update, FakeContext())
                 await asyncio.wait_for(prov.provider_started.wait(), timeout=2.0)
-                cancel_event = th._LIVE_CANCEL.get(12345)
+                cancel_event = live_cancel_registry().get(12345)
                 assert cancel_event is not None, "_LIVE_CANCEL must exist"
                 cancel_event.set()
                 prov.gate.set()
@@ -758,7 +761,7 @@ class TestCancelConcurrency:
             assert s["provider_state"]["started"] is True, \
                 f"provider_state_updates must persist on cancel. Got: {s['provider_state']}"
 
-            bot = th._bot_instance
+            bot = current_bot_instance()
             all_text = " ".join(m.get("text", m.get("edit_text", "")) for m in getattr(bot, "sent_messages", []))
             assert cancel_live_completed() in all_text, f"Status must show Cancelled. Got: {all_text}"
             assert "working" in all_text.lower() or "Working" in all_text, f"Progress before cancel: {all_text}"
@@ -785,16 +788,16 @@ class TestCancelConcurrency:
             async with running_worker(data_dir, poll_interval=0.01):
                 await th.handle_message(update1, FakeContext())
                 await asyncio.wait_for(prov.provider_started.wait(), timeout=2.0)
-                cancel_event = th._LIVE_CANCEL.get(12345)
+                cancel_event = live_cancel_registry().get(12345)
                 assert cancel_event is not None
                 cancel_event.set()
                 prov.gate.set()
 
-            assert 12345 not in th._LIVE_CANCEL, "_LIVE_CANCEL must be cleaned after execution"
+            assert 12345 not in live_cancel_registry(), "_LIVE_CANCEL must be cleaned after execution"
 
             prov2 = FakeProvider("claude")
             prov2.run_results = [RunResult(text="normal response")]
-            th._provider = prov2
+            set_provider(prov2)
 
             msg2 = FakeMessage(chat=chat, text="second")
             update2 = FakeUpdate(message=msg2, user=user, chat=chat)
@@ -807,7 +810,7 @@ class TestCancelConcurrency:
 
             assert len(prov2.run_calls) == 1
             assert prov2.run_calls[0]["provider_state"]["started"] is True
-            assert 12345 not in th._LIVE_CANCEL
+            assert 12345 not in live_cancel_registry()
 
     async def test_second_message_while_run_active_is_queued_and_runs_next(self):
         """Second plain message while a run is active is durably queued and runs after the first item clears."""
@@ -857,7 +860,7 @@ class TestCancelConcurrency:
 
             chat_id = 12345
             cancel_event = asyncio.Event()
-            th._LIVE_CANCEL[chat_id] = cancel_event
+            live_cancel_registry()[chat_id] = cancel_event
             try:
                 chat = FakeChat(chat_id)
                 user = FakeUser(42)
@@ -865,7 +868,7 @@ class TestCancelConcurrency:
                 await send_command(th.cmd_cancel, chat, user, "/cancel")
                 assert cancel_event.is_set(), "/cancel must set the live cancel event"
             finally:
-                th._LIVE_CANCEL.pop(chat_id, None)
+                live_cancel_registry().pop(chat_id, None)
 
 # ---------------------------------------------------------------------------
 # Helpers

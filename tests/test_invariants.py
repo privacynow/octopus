@@ -33,6 +33,7 @@ from app.providers.codex import CodexProvider
 from app.storage import close_db, default_session, ensure_data_dirs, save_session
 from app.work_queue import debug_transport_connection
 from tests.support.config_support import make_config as _make_config
+from tests.support.handler_support import current_bot_instance
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeCallbackQuery,
@@ -871,7 +872,7 @@ async def test_interrupted_message_run_stays_claimed_for_recovery():
         await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
-        bot = th._bot_instance
+        bot = current_bot_instance()
         joined = " ".join(
             entry.get("text", entry.get("edit_text", "")) for entry in bot.sent_messages
         )
@@ -932,7 +933,7 @@ async def test_any_signal_treated_as_interrupted(rc):
         await drain_one_worker_item(data_dir)
 
         # No error surfaced to user (worker sends via bot)
-        bot = th._bot_instance
+        bot = current_bot_instance()
         joined = " ".join(
             entry.get("text", entry.get("edit_text", "")) for entry in bot.sent_messages
         )
@@ -968,7 +969,7 @@ async def test_provider_error_empty_output_still_shows_message():
         await th.handle_message(upd, FakeContext())
         await drain_one_worker_item(data_dir)
 
-        bot = th._bot_instance
+        bot = current_bot_instance()
         joined = " ".join(
             entry.get("text", entry.get("edit_text", "")) for entry in bot.sent_messages
         )
@@ -992,7 +993,7 @@ async def test_provider_error_long_output_truncated():
         await drain_one_worker_item(data_dir)
 
         # Verify user got feedback (not silent); worker sends via bot
-        bot = th._bot_instance
+        bot = current_bot_instance()
         joined = " ".join(
             entry.get("text", entry.get("edit_text", "")) for entry in bot.sent_messages
         )
@@ -1231,7 +1232,7 @@ async def test_initial_status_no_provider_name_claude():
         await send_text(chat, user, "hello")
         await drain_one_worker_item(data_dir)
 
-        bot = th._bot_instance
+        bot = current_bot_instance()
         texts = [m.get("text", "") for m in bot.sent_messages if m.get("text")]
         working = next((t for t in texts if "Working" in t), "")
         assert working.replace("\u2026", "...") == "Working..."
@@ -1247,7 +1248,7 @@ async def test_initial_status_no_provider_name_codex():
         await send_text(chat, user, "hello")
         await drain_one_worker_item(data_dir)
 
-        bot = th._bot_instance
+        bot = current_bot_instance()
         texts = [m.get("text", "") for m in bot.sent_messages if m.get("text")]
         working = next((t for t in texts if "Working" in t), "")
         assert working.replace("\u2026", "...") == "Working..."
@@ -1271,7 +1272,7 @@ async def test_resume_status_no_provider_name():
         await send_text(chat, user, "second")
         await drain_one_worker_item(data_dir)
 
-        bot = th._bot_instance
+        bot = current_bot_instance()
         texts = [m.get("text", "") for m in bot.sent_messages if m.get("text")]
         resuming = next((t for t in texts if "Resuming" in t), "")
         assert resuming.replace("\u2026", "...") == "Resuming..."
@@ -1291,7 +1292,7 @@ async def test_timeout_message_no_provider_name():
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
 
-        timeout_text = " ".join(bot_texts(th._bot_instance))
+        timeout_text = " ".join(bot_texts(current_bot_instance()))
         assert "Request timed out" in timeout_text
         assert "claude" not in timeout_text.lower()
         assert "codex" not in timeout_text.lower()
@@ -1309,7 +1310,7 @@ async def test_terminal_status_says_completed():
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
 
-        all_text = " ".join(bot_texts(th._bot_instance))
+        all_text = " ".join(bot_texts(current_bot_instance()))
         assert "Completed." in all_text, f"Expected 'Completed.' in bot output: {all_text}"
         assert "Done." not in all_text, f"'Done.' should not appear: {all_text}"
 
@@ -1602,7 +1603,7 @@ async def test_approval_initial_status_neutral():
         await drain_one_worker_item(data_dir)
 
         # In approval mode, worker sends approval status via bot
-        bot = th._bot_instance
+        bot = current_bot_instance()
         texts = [m.get("text", m.get("edit_text", "")) for m in bot.sent_messages if m.get("text") or m.get("edit_text")]
         initial_text = " ".join(texts[:2])  # first send + maybe first edit
         assert "preflight" not in initial_text.lower(), (
@@ -1630,7 +1631,7 @@ async def test_approval_no_preflight_in_any_user_text():
         await th.handle_message(upd, FakeContext())
         await drain_one_worker_item(data_dir)
 
-        bot = th._bot_instance
+        bot = current_bot_instance()
         all_texts = []
         edit_texts = []
         for m in bot.sent_messages:
@@ -1671,7 +1672,7 @@ async def test_approval_error_no_preflight():
         await th.handle_message(upd, FakeContext())
         await drain_one_worker_item(data_dir)
 
-        bot = th._bot_instance
+        bot = current_bot_instance()
         all_texts = []
         edit_texts = []
         for m in bot.sent_messages:
@@ -1860,7 +1861,7 @@ async def test_claude_resume_error_resets_provider_state():
         assert "session_id" in session.provider_state
 
         # Verify user got the "start fresh" / "starts fresh" message (worker sends via bot)
-        bot = th._bot_instance
+        bot = current_bot_instance()
         all_text = " ".join(
             r.get("text", r.get("edit_text", "")) for r in bot.sent_messages
         )
@@ -1954,7 +1955,7 @@ async def test_claude_generic_error_during_resume_does_not_reset():
         )
 
         # "starts fresh" message should NOT appear (worker sends via bot)
-        bot = th._bot_instance
+        bot = current_bot_instance()
         all_text = " ".join(
             r.get("text", r.get("edit_text", "")) for r in bot.sent_messages
         )

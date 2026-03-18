@@ -517,7 +517,7 @@ class SQLiteContentStore(AbstractContentStore):
                    changelog, created_by, created_at, status
             FROM skill_revisions
             WHERE track_id = ?
-            ORDER BY datetime(created_at) DESC, revision_id DESC
+            ORDER BY created_at DESC, revision_id DESC
             """,
             (track["track_id"],),
         ).fetchall()
@@ -546,7 +546,7 @@ class SQLiteContentStore(AbstractContentStore):
             SELECT record_id, revision_id, action, actor, note, created_at
             FROM skill_approval_records
             WHERE track_id = ?
-            ORDER BY datetime(created_at) DESC, record_id DESC
+            ORDER BY created_at DESC, record_id DESC
             """,
             (track["track_id"],),
         ).fetchall()
@@ -830,7 +830,7 @@ class SQLiteContentStore(AbstractContentStore):
             SELECT revision_id, content, format, created_by, created_at, status
             FROM provider_guidance_revisions
             WHERE guidance_id = ?
-            ORDER BY datetime(created_at) DESC, revision_id DESC
+            ORDER BY created_at DESC, revision_id DESC
             """,
             (track["guidance_id"],),
         ).fetchall()
@@ -861,7 +861,7 @@ class SQLiteContentStore(AbstractContentStore):
             SELECT record_id, revision_id, action, actor, note, created_at
             FROM provider_guidance_approval_records
             WHERE guidance_id = ?
-            ORDER BY datetime(created_at) DESC, record_id DESC
+            ORDER BY created_at DESC, record_id DESC
             """,
             (track["guidance_id"],),
         ).fetchall()

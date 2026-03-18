@@ -112,12 +112,22 @@ Completed slices:
      structural guard proving `http.py` no longer defines the displaced auth
      and session helpers.
 
+14. `this commit` `Track D / D1: centralize lifecycle snapshot construction`
+   - Added `build_lifecycle_snapshot(...)` to
+     `app/workflows/lifecycle_machine.py` as the single owner of lifecycle
+     snapshot construction.
+   - Runtime-skill authoring, runtime-skill approval, and provider-guidance
+     management now consume the shared builder instead of maintaining local
+     `_snapshot()` helpers.
+   - Added focused positive helper coverage and a negative structural guard
+     proving the duplicate runtime-skill `_snapshot()` helpers are gone.
+
 ## Latest Verified Test Baseline
 
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1515 passed, 23 skipped`
+- result: `1517 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -182,13 +192,22 @@ Remaining:
 
 ### Track D. Lifecycle and Workflow Hygiene Cleanup
 
-Status: not started
+Status: in progress
 
 Required scope:
 
 - deduplicate lifecycle snapshot construction
 - add explicit latest-approval store methods
 - remove private cross-class lifecycle helper access
+
+Completed:
+
+- `D1` move shared lifecycle snapshot construction into `app/workflows/lifecycle_machine.py`
+
+Remaining:
+
+- `D2` explicit latest-approval store methods
+- `D3` remove private cross-class latest-action helper access
 
 ### Track E. Dead Code, Naming, and Test-Gate Cleanup
 
@@ -244,7 +263,7 @@ status.
 
 Next required slice:
 
-- `Track D / D1: deduplicate lifecycle snapshot construction`
+- `Track D / D2: add explicit latest-approval store methods`
 
 Completed:
 
@@ -253,19 +272,20 @@ Completed:
 
 Remaining:
 
-- `Track D / D1-D3`
+- `Track D / D2-D3`
 - `Track F / F1-F2`
 - all Phase 4-6 remediation slices after Phase 3 completes
 
 Before-state:
 
-- `app/workflows/runtime_skills/authoring.py` and
-  `app/workflows/runtime_skills/approval.py` still duplicate lifecycle snapshot
-  construction and still rely on indirect latest-approval lookup ownership.
+- latest approval lookup for runtime skills and provider guidance still depends
+  on Python scanning over approval-history lists rather than an explicit store
+  query contract.
 
 After-state required next:
 
-- lifecycle snapshot construction lives in one shared helper
+- latest-approval lookup lives in the content-store contract explicitly for
+  both runtime skills and provider guidance
 - latest-approval lookup is owned by the store contract explicitly
 - approval no longer reaches across workflow-private helper boundaries
 

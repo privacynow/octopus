@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from app.content_models import ProviderGuidanceRevisionRecord, ProviderGuidanceTrackRecord
 from app.content_store import get_content_store
-from app.workflows.lifecycle_machine import LifecycleDecision, LifecycleSnapshot, decide_lifecycle_action
+from app.workflows.lifecycle_machine import (
+    LifecycleDecision,
+    build_lifecycle_snapshot,
+    decide_lifecycle_action,
+)
 from app.workflows.provider_guidance.contracts import (
     ProviderGuidanceLifecycleApproval,
     ProviderGuidanceLifecycleDetail,
@@ -82,18 +86,15 @@ class ProviderGuidanceManagementUseCases(ProviderGuidanceManagementPort):
                 return item.action
         return ""
 
-    def _snapshot(self, track: ProviderGuidanceTrackRecord) -> LifecycleSnapshot:
-        published_revision_id = track.published_revision_id or ""
-        return LifecycleSnapshot(
-            revision_status=track.revision.status,
-            latest_action=self._latest_action(
+    def _lifecycle_snapshot(self, track: ProviderGuidanceTrackRecord):
+        return build_lifecycle_snapshot(
+            track,
+            self._latest_action(
                 track.provider,
                 revision_id=track.active_revision_id,
                 scope_kind=track.scope_kind,
                 scope_key=track.scope_key,
             ),
-            has_published_revision=bool(published_revision_id),
-            published_revision_matches_active=(published_revision_id == track.active_revision_id and bool(published_revision_id)),
         )
 
     def _transition_message(
@@ -137,7 +138,7 @@ class ProviderGuidanceManagementUseCases(ProviderGuidanceManagementPort):
         actor_key: str,
         note: str = "",
     ) -> ProviderGuidanceLifecycleMutation:
-        decision = decide_lifecycle_action(self._snapshot(track), action)
+        decision = decide_lifecycle_action(self._lifecycle_snapshot(track), action)
         if not decision.ok:
             return ProviderGuidanceLifecycleMutation(
                 status=decision.status,

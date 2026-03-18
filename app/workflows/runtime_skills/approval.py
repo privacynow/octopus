@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from app.content_store import get_content_store
 from app.skill_catalog_service import get_skill_catalog_service
-from app.workflows.lifecycle_machine import LifecycleDecision, LifecycleSnapshot, decide_lifecycle_action
+from app.workflows.lifecycle_machine import (
+    LifecycleDecision,
+    build_lifecycle_snapshot,
+    decide_lifecycle_action,
+)
 from app.workflows.runtime_skills.authoring import get_runtime_skill_authoring_use_cases
 from app.workflows.runtime_skills.contracts import (
     RuntimeSkillApprovalPort,
@@ -30,13 +34,10 @@ class RuntimeSkillApprovalUseCases(RuntimeSkillApprovalPort):
             return None
         return track
 
-    def _snapshot(self, track) -> LifecycleSnapshot:
-        published_revision_id = track.published_revision_id or ""
-        return LifecycleSnapshot(
-            revision_status=track.revision.status,
-            latest_action=self._authoring()._latest_action_for_revision(track.slug, track.active_revision_id),
-            has_published_revision=bool(published_revision_id),
-            published_revision_matches_active=(published_revision_id == track.active_revision_id and bool(published_revision_id)),
+    def _lifecycle_snapshot(self, track):
+        return build_lifecycle_snapshot(
+            track,
+            self._authoring()._latest_action_for_revision(track.slug, track.active_revision_id),
         )
 
     def _transition_message(self, skill_name: str, action: str, decision: LifecycleDecision) -> str:
@@ -58,7 +59,7 @@ class RuntimeSkillApprovalUseCases(RuntimeSkillApprovalPort):
                 ok=False,
                 message=f"Custom skill '{skill_name}' not found.",
             )
-        decision = decide_lifecycle_action(self._snapshot(track), "approve")
+        decision = decide_lifecycle_action(self._lifecycle_snapshot(track), "approve")
         if not decision.ok:
             return RuntimeSkillLifecycleMutation(
                 status=decision.status,
@@ -93,7 +94,7 @@ class RuntimeSkillApprovalUseCases(RuntimeSkillApprovalPort):
                 ok=False,
                 message=f"Custom skill '{skill_name}' not found.",
             )
-        decision = decide_lifecycle_action(self._snapshot(track), "reject")
+        decision = decide_lifecycle_action(self._lifecycle_snapshot(track), "reject")
         if not decision.ok:
             return RuntimeSkillLifecycleMutation(
                 status=decision.status,

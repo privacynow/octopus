@@ -1,6 +1,39 @@
 """Lifecycle state-machine tests."""
 
-from app.workflows.lifecycle_machine import LifecycleSnapshot, decide_lifecycle_action
+from dataclasses import dataclass
+from pathlib import Path
+
+from app.workflows.lifecycle_machine import LifecycleSnapshot, build_lifecycle_snapshot, decide_lifecycle_action
+
+
+@dataclass(frozen=True)
+class _FakeRevision:
+    status: str
+
+
+@dataclass(frozen=True)
+class _FakeTrack:
+    active_revision_id: str
+    published_revision_id: str
+    revision: _FakeRevision
+
+
+def test_build_lifecycle_snapshot_uses_track_and_latest_action():
+    snapshot = build_lifecycle_snapshot(
+        _FakeTrack(
+            active_revision_id="rev-2",
+            published_revision_id="rev-1",
+            revision=_FakeRevision(status="review"),
+        ),
+        "approved",
+    )
+
+    assert snapshot == LifecycleSnapshot(
+        revision_status="review",
+        latest_action="approved",
+        has_published_revision=True,
+        published_revision_matches_active=False,
+    )
 
 
 def test_submit_from_draft_enters_review_and_records_submission():
@@ -87,3 +120,12 @@ def test_archive_repairs_pointer_and_history_when_already_archived():
     assert decision.effects.set_status is None
     assert decision.effects.published_pointer == "clear"
     assert decision.effects.approval_action == "archived"
+
+
+def test_runtime_skill_workflows_no_longer_duplicate_snapshot_builders() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    authoring_text = (repo_root / "app" / "workflows" / "runtime_skills" / "authoring.py").read_text()
+    approval_text = (repo_root / "app" / "workflows" / "runtime_skills" / "approval.py").read_text()
+
+    assert "def _snapshot(" not in authoring_text
+    assert "def _snapshot(" not in approval_text

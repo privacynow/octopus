@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 from typing import Literal
 
 PublishedPointer = Literal["unchanged", "set_active", "clear"]
@@ -29,6 +30,28 @@ class LifecycleDecision:
     status: str
     ok: bool
     effects: LifecycleEffects = LifecycleEffects()
+
+
+class _LifecycleRevisionLike(Protocol):
+    status: str
+
+
+class _LifecycleTrackLike(Protocol):
+    active_revision_id: str
+    published_revision_id: str
+    revision: _LifecycleRevisionLike
+
+
+def build_lifecycle_snapshot(track: _LifecycleTrackLike, latest_action: str) -> LifecycleSnapshot:
+    published_revision_id = track.published_revision_id or ""
+    return LifecycleSnapshot(
+        revision_status=track.revision.status,
+        latest_action=latest_action,
+        has_published_revision=bool(published_revision_id),
+        published_revision_matches_active=(
+            published_revision_id == track.active_revision_id and bool(published_revision_id)
+        ),
+    )
 
 
 def _published_repair(snapshot: LifecycleSnapshot) -> LifecycleDecision:

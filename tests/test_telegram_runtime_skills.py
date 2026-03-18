@@ -1,7 +1,6 @@
 import contextlib
 
 from app.credential_validation import validate_credential
-from app.channels.telegram.state import get_channel_state
 from app.channels.telegram.runtime_skills import (
     TelegramRuntimeSkillsRuntime,
     skills_show,
@@ -13,6 +12,7 @@ from tests.support.handler_support import (
     FakeMessage,
     FakeProvider,
     FakeUpdate,
+    current_runtime,
     fresh_data_dir,
     make_config,
     reset_handler_test_runtime,
@@ -41,7 +41,7 @@ async def test_runtime_skills_show_runs_from_explicit_runtime_boundary():
                 command="skills",
             )
             runtime = TelegramRuntimeSkillsRuntime(
-                state=get_channel_state(),
+                state=current_runtime(),
                 chat_lock=_noop_chat_lock,
                 validate_credential=validate_credential,
                 check_prompt_size_cross_chat=lambda data_dir, skill_name: [],

@@ -389,9 +389,9 @@ async def test_handlers_receive_normalized_user():
         original_is_allowed = th.is_allowed
         received_users = []
 
-        def tracking_is_allowed(user):
+        def tracking_is_allowed(runtime, user):
             received_users.append(user)
-            return original_is_allowed(user)
+            return original_is_allowed(runtime, user)
 
         th.is_allowed = tracking_is_allowed
         try:

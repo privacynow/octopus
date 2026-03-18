@@ -1,4 +1,4 @@
-"""Explicit Telegram live-cancel registry."""
+"""Telegram live-cancel registry types."""
 
 from __future__ import annotations
 
@@ -35,14 +35,3 @@ class TelegramCancellationRegistry:
 
     def __len__(self) -> int:
         return len(self._events)
-
-
-_REGISTRY = TelegramCancellationRegistry()
-
-
-def get_cancellation_registry() -> TelegramCancellationRegistry:
-    return _REGISTRY
-
-
-def reset_cancellation_registry() -> None:
-    _REGISTRY.clear()

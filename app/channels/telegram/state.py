@@ -1,30 +1,20 @@
-"""Explicit Telegram channel startup state."""
+"""Explicit Telegram runtime ownership."""
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import os
 import platform
 import uuid
-from dataclasses import dataclass
+from collections import defaultdict
+from dataclasses import dataclass, field
 from typing import Any
 
+from app.channels.telegram.cancellation import TelegramCancellationRegistry
 from app.config import BotConfig
 from app.providers.base import Provider
 from app.ratelimit import RateLimiter
-
-
-@dataclass
-class TelegramChannelState:
-    """Startup-installed Telegram channel state."""
-
-    config: BotConfig
-    provider: Provider
-    boot_id: str
-    rate_limiter: RateLimiter | None
-    bot_instance: Any = None
-
-
-_CURRENT_STATE: TelegramChannelState | None = None
 
 
 def make_boot_id() -> str:
@@ -40,47 +30,46 @@ def _build_rate_limiter(config: BotConfig) -> RateLimiter:
     return RateLimiter(per_minute=per_minute, per_hour=per_hour)
 
 
-def build_channel_state(
+@dataclass
+class TelegramRuntime:
+    """Bootstrap-owned Telegram runtime instance.
+
+    This is the only authoritative owner of live Telegram runtime state.
+    """
+
+    config: BotConfig
+    provider: Provider
+    boot_id: str
+    rate_limiter: RateLimiter | None
+    bot_instance: Any = None
+    cancellation_registry: TelegramCancellationRegistry = field(
+        default_factory=TelegramCancellationRegistry
+    )
+    chat_locks: defaultdict[int | str, asyncio.Lock] = field(
+        default_factory=lambda: defaultdict(asyncio.Lock)
+    )
+    pending_work_items: dict[int, str] = field(default_factory=dict)
+    current_update_id: contextvars.ContextVar[int | None] = field(
+        default_factory=lambda: contextvars.ContextVar(
+            "telegram_current_update_id",
+            default=None,
+        )
+    )
+
+
+def build_telegram_runtime(
     config: BotConfig,
     provider: Provider,
     *,
     boot_id: str | None = None,
     bot_instance: Any = None,
-) -> TelegramChannelState:
-    """Construct a live Telegram channel state object."""
-    return TelegramChannelState(
+) -> TelegramRuntime:
+    """Construct an explicit Telegram runtime instance."""
+
+    return TelegramRuntime(
         config=config,
         provider=provider,
         boot_id=boot_id or make_boot_id(),
         rate_limiter=_build_rate_limiter(config),
         bot_instance=bot_instance,
     )
-
-
-def install_channel_state(state: TelegramChannelState) -> None:
-    """Install the live Telegram channel state."""
-    global _CURRENT_STATE
-    _CURRENT_STATE = state
-
-
-def peek_channel_state() -> TelegramChannelState | None:
-    """Return the live Telegram channel state when installed."""
-    return _CURRENT_STATE
-
-
-def get_channel_state() -> TelegramChannelState:
-    """Return the installed Telegram channel state."""
-    if _CURRENT_STATE is None:
-        raise RuntimeError("Telegram channel state is not installed")
-    return _CURRENT_STATE
-
-
-def reset_channel_state() -> None:
-    """Clear the installed Telegram channel state."""
-    global _CURRENT_STATE
-    _CURRENT_STATE = None
-
-
-def set_bot_instance(bot_instance: Any) -> None:
-    """Replace the current bot instance on the installed state."""
-    get_channel_state().bot_instance = bot_instance

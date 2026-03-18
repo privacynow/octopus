@@ -41,6 +41,15 @@ FORBIDDEN_APP_REFERENCES = (
     "import app.transport_contract",
 )
 
+FORBIDDEN_TELEGRAM_SINGLETON_HELPERS = (
+    "install_channel_state(",
+    "get_channel_state(",
+    "peek_channel_state(",
+    "reset_channel_state(",
+    "get_cancellation_registry(",
+    "reset_cancellation_registry(",
+)
+
 
 def test_deleted_legacy_module_references_are_gone_from_app_code() -> None:
     repo_root = Path(__file__).resolve().parents[1]
@@ -49,6 +58,16 @@ def test_deleted_legacy_module_references_are_gone_from_app_code() -> None:
     for path in python_files:
         text = path.read_text()
         for forbidden in FORBIDDEN_APP_REFERENCES:
+            assert forbidden not in text, f"{forbidden} still referenced in {path}"
+
+
+def test_deleted_telegram_singleton_helpers_are_gone_from_app_code() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    app_root = repo_root / "app"
+    python_files = sorted(path for path in app_root.rglob("*.py") if "__pycache__" not in path.parts)
+    for path in python_files:
+        text = path.read_text()
+        for forbidden in FORBIDDEN_TELEGRAM_SINGLETON_HELPERS:
             assert forbidden not in text, f"{forbidden} still referenced in {path}"
 
 
@@ -97,6 +116,22 @@ def test_telegram_pending_module_has_no_ingress_import() -> None:
     assert "app.channels.telegram.routing" not in text, (
         f"telegram ingress import still referenced in {pending_path}"
     )
+
+
+def test_telegram_runtime_owner_modules_do_not_define_singletons() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    state_path = repo_root / "app" / "channels" / "telegram" / "state.py"
+    cancellation_path = repo_root / "app" / "channels" / "telegram" / "cancellation.py"
+    routing_path = repo_root / "app" / "channels" / "telegram" / "routing.py"
+    state_text = state_path.read_text()
+    cancellation_text = cancellation_path.read_text()
+    routing_text = routing_path.read_text()
+
+    assert "_CURRENT_STATE" not in state_text, f"singleton runtime still referenced in {state_path}"
+    assert "_REGISTRY" not in cancellation_text, f"singleton cancel registry still referenced in {cancellation_path}"
+    assert "CHAT_LOCKS =" not in routing_text, f"routing global lock registry still referenced in {routing_path}"
+    assert "_pending_work_items" not in routing_text, f"routing pending-item global still referenced in {routing_path}"
+    assert "_current_update_id" not in routing_text, f"routing update-id contextvar global still referenced in {routing_path}"
 
 
 def test_deleted_telegram_ingress_path_is_gone() -> None:

@@ -12,6 +12,7 @@ from app.work_queue import debug_transport_connection, get_work_items_for_chat
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     current_bot_instance,
+    current_runtime,
     live_cancel_registry,
     FakeChat,
     FakeContext,
@@ -671,7 +672,7 @@ class TestCancelConcurrency:
                 await th.handle_message(update, FakeContext())
                 # Wait until the provider is running and the lock is held
                 await asyncio.wait_for(prov.provider_started.wait(), timeout=2.0)
-                assert th.CHAT_LOCKS[12345].locked(), "Lock should be held"
+                assert current_runtime().chat_locks[12345].locked(), "Lock should be held"
                 assert 12345 in live_cancel_registry(), "Cancel registry should exist"
 
                 # Send /cancel — must complete without blocking on the lock

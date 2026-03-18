@@ -1,5 +1,3 @@
-from app.channels.telegram.cancellation import get_cancellation_registry
-from app.channels.telegram.state import get_channel_state
 from app.identity import telegram_actor_key, telegram_conversation_key
 from app.runtime.dispatch import (
     RuntimeDispatchRuntime,
@@ -14,6 +12,7 @@ from app.workflows.execution.requests import execute_request, request_approval
 from tests.support.handler_support import (
     FakeChat,
     FakeMessage,
+    current_runtime,
     fresh_env,
     load_session_disk,
 )
@@ -25,14 +24,14 @@ async def _no_op(*args, **kwargs):
 
 
 def _dispatch_runtime(th) -> RuntimeDispatchRuntime:
-    state = get_channel_state()
+    state = current_runtime()
     return RuntimeDispatchRuntime(
         config=state.config,
         provider=state.provider,
         boot_id=state.boot_id,
-        cancellations=get_cancellation_registry(),
+        cancellations=state.cancellation_registry,
         progress_factory=th.TelegramProgress,
-        keep_typing=th.keep_typing,
+        keep_typing=lambda chat: th.keep_typing(chat, runtime=state),
         heartbeat=th._heartbeat,
         format_provider_error=th._format_provider_error,
         run_result_was_interrupted=th._run_result_was_interrupted,
@@ -40,6 +39,7 @@ def _dispatch_runtime(th) -> RuntimeDispatchRuntime:
 
 
 def _execution_runtime(th) -> ExecutionRuntime:
+    telegram_runtime = current_runtime()
     return ExecutionRuntime(
         dispatch=_dispatch_runtime(th),
         build_surface_context=lambda _message, _chat_id: ExecutionSurfaceContext(),
@@ -48,9 +48,22 @@ def _execution_runtime(th) -> ExecutionRuntime:
         send_retry_prompt=_no_op,
         send_approval_prompt=_no_op,
         send_formatted_reply=th.send_formatted_reply,
-        send_directed_artifacts=th.send_directed_artifacts,
+        send_directed_artifacts=lambda chat_id, message, directives, resolved_ctx=None: th.send_directed_artifacts(
+            chat_id,
+            message,
+            directives,
+            resolved_ctx,
+            runtime=telegram_runtime,
+        ),
         send_compact_reply=th._send_compact_reply,
-        propose_delegation_plan=th._propose_delegation_plan,
+        propose_delegation_plan=lambda chat_id, message, session, conversation_ref, result: th._propose_delegation_plan(
+            telegram_runtime,
+            chat_id,
+            message,
+            session,
+            conversation_ref=conversation_ref,
+            result=result,
+        ),
     )
 
 

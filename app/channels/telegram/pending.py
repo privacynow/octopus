@@ -12,7 +12,7 @@ from telegram import Update
 from app import access
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.normalization import normalize_user
-from app.channels.telegram.state import TelegramChannelState
+from app.channels.telegram.state import TelegramRuntime
 from app.identity import telegram_conversation_key, telegram_event_id
 from app.runtime import composition
 from app.runtime.session_runtime import load_runtime_session, save_runtime_session
@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 class TelegramPendingRuntime:
     """Injected Telegram pending/recovery dependencies."""
 
-    state: TelegramChannelState
+    state: TelegramRuntime
     chat_lock: Callable[..., Any]
     edit_or_reply_text: Callable[..., Awaitable[None]]
     execute_request: Callable[..., Awaitable[None]]

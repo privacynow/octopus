@@ -502,8 +502,8 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
 async def test_handle_registry_surface_action_and_control_dispatch(monkeypatch, tmp_path: Path):
     seen: list[tuple[str, str, str]] = []
 
-    async def fake_execute_worker_action(event, item, *, cancel_event=None) -> None:
-        del item, cancel_event
+    async def fake_execute_worker_action(_runtime, event, item, *, cancel_event=None) -> None:
+        del _runtime, item, cancel_event
         seen.append((event.action, event.conversation_key, event.conversation_ref))
 
     monkeypatch.setattr("app.channels.telegram.routing._execute_worker_action", fake_execute_worker_action)

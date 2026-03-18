@@ -24,6 +24,7 @@ from app.identity import (
 from app.providers.base import RunResult
 from tests.support.handler_support import (
     current_boot_id,
+    current_runtime,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -216,7 +217,7 @@ async def test_approval_callback_does_not_consume_stale_item():
         await th.handle_message(upd1, FakeContext())
         await drain_one_worker_item(data_dir)
 
-        session = th._load(chat_id)
+        session = th._load(current_runtime(), chat_id)
         assert session.pending_approval is not None, "Should have pending approval"
 
         # Step 2: inject a stale recovered item into the queue
@@ -276,7 +277,7 @@ async def test_project_switch_waits_for_inflight_request():
         await drain_one_worker_item(data_dir)
 
         # Verify started=True
-        session = th._load(chat_id)
+        session = th._load(current_runtime(), chat_id)
         assert session.provider_state["started"] is True
 
         # Now /project use — must acquire lock, reset state
@@ -286,7 +287,7 @@ async def test_project_switch_waits_for_inflight_request():
             "/project use proj1", args=["use", "proj1"],
         )
 
-        session = th._load(chat_id)
+        session = th._load(current_runtime(), chat_id)
         assert session.project_id == "proj1"
         assert session.provider_state["started"] is False, (
             "/project use must reset provider_state after acquiring lock"
@@ -311,9 +312,9 @@ async def test_preflight_and_execution_use_same_model():
         chat_id = 9006
 
         # Set model profile
-        session = th._load(chat_id)
+        session = th._load(current_runtime(), chat_id)
         session.model_profile = "fast"
-        th._save(chat_id, session)
+        th._save(current_runtime(), chat_id, session)
 
         # Approval flow: preflight then execution
         prov.preflight_results = [RunResult(text="plan: use fast model")]
@@ -538,7 +539,7 @@ async def test_live_callback_blocked_by_worker_and_query_answered():
         await th.handle_message(upd1, FakeContext())
         await drain_one_worker_item(data_dir)
 
-        session = th._load(chat_id)
+        session = th._load(current_runtime(), chat_id)
         assert session.pending_approval is not None
 
         # Step 2: simulate worker claiming an item for this chat
@@ -648,7 +649,7 @@ async def test_worker_dispatch_sends_recovery_notice():
             }
 
             with pytest.raises(work_queue.PendingRecovery):
-                await th.worker_dispatch("message", event, item)
+                await th.worker_dispatch("message", event, item, runtime=current_runtime())
 
             # Provider must NOT have been called
             assert len(prov.run_calls) == 0, "No auto-replay allowed"

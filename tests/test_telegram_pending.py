@@ -1,10 +1,10 @@
 from app.channels.telegram.pending import TelegramPendingRuntime, reject_pending
-from app.channels.telegram.state import get_channel_state
 from app.identity import telegram_conversation_key
 from app.storage import default_session, save_session
 from tests.support.handler_support import (
     FakeMessage,
     FakeProvider,
+    current_runtime,
     fresh_data_dir,
     make_config,
     reset_handler_test_runtime,
@@ -47,7 +47,7 @@ async def test_reject_pending_runs_from_explicit_runtime_boundary():
             save_session(data_dir, telegram_conversation_key(chat_id), session)
 
             runtime = TelegramPendingRuntime(
-                state=get_channel_state(),
+                state=current_runtime(),
                 chat_lock=None,
                 edit_or_reply_text=_noop_edit_or_reply_text,
                 execute_request=_unused_execute_request,

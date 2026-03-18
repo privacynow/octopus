@@ -2731,7 +2731,7 @@ final cleanup at the end of the remediation track.
 Feature expansion may resume only when all of the following are true:
 
 - no app module outside Telegram ingress imports Telegram ingress
-- Telegram channel runtime state is explicit and no longer global-module-owned
+- Telegram channel runtime state is explicit and instance-owned, not singleton or global-module-owned
 - `runtime/*` has no channel imports
 - `agents/*` has no channel imports
 - `access.py` has no channel imports
@@ -2747,6 +2747,179 @@ Feature expansion may resume only when all of the following are true:
   misleading transitional ownership
 - zero-import gates cover both `app/` and `tests/`
 - test support no longer mutates Telegram ingress globals
+- Telegram bootstrap owns PTB application construction and route registration;
+  Telegram ingress owns normalized event translation and dispatch only
+- Telegram-heavy tests exercise the Telegram boundary through explicit runtime
+  setup rather than routing-module internals or singleton mutable state
+- `status.md` and `docs/orchestration_inventory.md` reflect the actual current
+  code ownership and are updated only after code/tests prove the state
+
+## Phase 7. Closure Correction Stage
+
+The prior closure overstated completion. The following remaining work is
+required before the acceptance gates above can be considered satisfied.
+
+### G1. Replace singleton Telegram runtime ownership with bootstrap-owned runtime
+
+The current `app/channels/telegram/state.py` and
+`app/channels/telegram/cancellation.py` still own singleton mutable state via
+module globals. That is a renamed global-state seam, not the explicit context
+boundary Track A required.
+
+#### Required work
+
+- replace singleton-installed Telegram channel state with an explicit
+  bootstrap-owned runtime object
+- the runtime object must own:
+  - startup state (`config`, `provider`, `boot_id`, `rate_limiter`, `bot`)
+  - mutable in-memory registries that are genuinely Telegram-runtime scoped
+    such as live cancellation and chat-lock maps
+- this runtime object is the runtime boundary that the restored
+  `app/channels/telegram/ingress.py` owner in G2 must consume; do not create a
+  second ingress-local runtime authority later
+- pass that runtime explicitly to Telegram ingress and worker dispatch owners
+- delete singleton accessors and reset helpers from:
+  - `app/channels/telegram/state.py`
+  - `app/channels/telegram/cancellation.py`
+- update `app/main.py`, Telegram channel code, and tests to use the explicit
+  runtime object rather than installed globals
+
+#### Hard rules
+
+- no module-level singleton may remain as the authoritative Telegram runtime
+  owner
+- if a helper only exists to read a singleton runtime, the helper must be
+  deleted or moved behind an explicit runtime object
+- test fixtures must construct runtime objects the same way production bootstrap
+  does; tests do not get an alternate global seam
+
+#### Required tests
+
+- positive tests proving bootstrap/runtime construction produces the expected
+  Telegram runtime shape
+- negative tests proving singleton install/get/reset helpers are gone
+- update Telegram runtime isolation tests so they assert over explicit runtime
+  instances rather than module singletons
+
+#### Exit criteria
+
+- no authoritative Telegram runtime or cancellation singleton remains
+- Telegram runtime is passed explicitly from bootstrap to ingress/worker paths
+- tests no longer depend on singleton install/reset helpers
+
+### G2. Restore the Telegram bootstrap and ingress ownership split
+
+The current `app/channels/telegram/bootstrap.py` is a re-export shim and
+`app/channels/telegram/routing.py` remains a monolithic owner for PTB wiring,
+worker dispatch, ingress translation, and residual orchestration.
+
+#### Required work
+
+- make `app/channels/telegram/bootstrap.py` the real owner of:
+  - PTB application construction
+  - handler registration
+  - runtime installation/wiring
+- restore a true ingress owner at:
+  - `app/channels/telegram/ingress.py`
+- move normalized Telegram event translation and dispatch there
+- delete `app/channels/telegram/routing.py`
+- update all app and test imports to the final owners
+
+#### Hard rules
+
+- `bootstrap.py` must not be a re-export shim
+- `ingress.py` must not become a mega orchestrator
+- no compatibility alias or re-export module may remain for `routing.py`
+- worker dispatch must run through the real ingress owner, not a legacy alias
+
+#### Required tests
+
+- positive tests for bootstrap application construction through
+  `app/channels/telegram/bootstrap.py`
+- positive tests for ingress message/callback/worker dispatch behavior through
+  `app/channels/telegram/ingress.py`
+- negative tests proving `app/channels/telegram/routing.py` is gone
+- updated zero-import gates proving no app module outside Telegram ingress
+  imports Telegram ingress, and no tests import deleted Telegram routing paths
+
+#### Exit criteria
+
+- `bootstrap.py` owns PTB app construction and route registration
+- `ingress.py` owns normalized Telegram event translation and dispatch only
+- `routing.py` no longer exists
+
+### G3. Finish the Telegram test-boundary migration
+
+The current Telegram-heavy tests still import routing internals directly and
+mutate or inspect runtime internals such as pending-work registries and context
+variables. That keeps the old implementation seam alive in tests.
+
+#### Required work
+
+- rewrite `tests/support/handler_support.py` around explicit Telegram runtime
+  construction and boundary helpers
+- update Telegram-heavy suites to import and exercise the final bootstrap and
+  ingress owners, not deleted or transitional internal modules
+- remove direct test mutation/assertion of internal registries such as:
+  - `_pending_work_items`
+  - `CHAT_LOCKS`
+  - `_current_update_id`
+- where runtime state must be asserted, assert through explicit runtime objects
+  or public boundary behavior
+
+#### Hard rules
+
+- tests must not preserve architecture that production code no longer uses
+- tests must not reach into module-private mutable state to prove a contract
+- if a test only passes by importing a deleted/transitional owner, rewrite it
+  or delete it
+
+#### Required tests
+
+- update handler/runtime isolation tests to assert explicit runtime ownership
+- update presenter tests so they target final ingress/bootstrap owners
+- strengthen zero-import gates to block test imports of deleted or transitional
+  Telegram entrypoint paths
+
+#### Exit criteria
+
+- Telegram-heavy tests run through the same explicit runtime boundary as
+  production
+- no test imports deleted/transitional Telegram routing owners
+- test support no longer mutates or resets Telegram module internals
+
+### G4. Repair documentation and final structural gates
+
+`status.md` and `docs/orchestration_inventory.md` must reflect the actual
+current ownership model. Structural gates must verify the final architecture,
+not only deleted historical paths.
+
+#### Required work
+
+- update `status.md` to reflect the reopened state and final closure truthfully
+- update `docs/orchestration_inventory.md` to reflect the actual current owners
+  after G1-G3
+- specifically correct stale entries such as:
+  - any Telegram entrypoint ownership references that still point at deleted or
+    transitional owners instead of the final bootstrap/ingress split
+  - delegation ownership entries that still name deleted `app/agents/*`
+    owners instead of `app/workflows/delegation/*`
+  - request-execution ownership entries that still describe
+    `app/runtime/dispatch.py` as a mixed workflow owner after F6 cleanup
+- expand zero-import/structure tests so they check the final Telegram owners
+  and the absence of singleton authority
+
+#### Required tests
+
+- structural tests for:
+  - no singleton Telegram runtime authority
+  - no deleted/transitional Telegram entrypoint imports in app or tests
+  - final bootstrap/ingress ownership split
+
+#### Exit criteria
+
+- status and inventory docs match the actual code
+- structural gates fail on the regressions that escaped the previous closure
 
 ## Post-Remediation Policy
 
@@ -2790,25 +2963,18 @@ Do not:
 
 ## Milestone Acceptance Gates
 
-Feature work may resume only when all of the following are true:
+This section is sealed historical artifact language from the earlier
+replacement-plan phase.
 
-- channels are the only external boundary shape in the repo
-- egress lives under `ports/egress.py` and `channels/*/egress.py`
-- current workflows live under `app/workflows/*` with local contracts
-- `runtime/composition.py` owns channel wiring
-- `runtime/*` owns admission and dispatch
-- Telegram and registry are both thin channel packages over shared workflow modules
-- registry browser UI performs all mutations through registry HTTP ingress
-- Telegram channel runtime state is explicit and no longer owned by ingress module globals
-- no app module outside Telegram ingress imports Telegram ingress
-- `runtime/*` has no concrete channel imports
-- `agents/*` has no concrete channel imports
-- `access.py` has no channel imports and accepts normalized shared types only
-- Telegram presenters own Telegram rendering
-- registry `http.py` is a thin HTTP boundary and `ui.py` owns UI rendering
-- test support does not mutate Telegram ingress globals
-- zero-import gates cover both `app/` and `tests/`
-- no deleted legacy path remains imported
+It is not the authoritative completion gate for the reopened remediation work.
+The only authoritative gate list is:
+
+- `Architecture Remediation Acceptance Gates`
+
+above in this document.
+
+Keep this section only as historical context for the pre-Phase-7 shape. Do not
+use it to decide whether the repo is done.
 
 ## Success Criteria
 

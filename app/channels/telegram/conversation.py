@@ -9,7 +9,7 @@ from telegram import Update
 from app import access
 from app.channels.telegram.cancellation import TelegramCancellationRegistry
 from app.channels.telegram import presenters as telegram_presenters
-from app.channels.telegram.state import TelegramChannelState
+from app.channels.telegram.state import TelegramRuntime
 from app.execution_context import ResolvedExecutionContext
 from app.identity import (
     telegram_actor_key,
@@ -35,7 +35,7 @@ class TelegramConversationRuntime:
     the Telegram-specific runtime collaborators it genuinely needs.
     """
 
-    state: TelegramChannelState
+    state: TelegramRuntime
     cancellations: TelegramCancellationRegistry
     chat_lock: Callable[..., Any]
     edit_or_reply_text: Callable[..., Awaitable[None]]

@@ -15,6 +15,7 @@ from telegram.ext import (
 )
 
 from app.channels.telegram import ingress
+from app.channels.telegram import worker as telegram_worker
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
 from app.config import BotConfig
 from app.providers.base import Provider
@@ -143,5 +144,5 @@ def build_bootstrap(config: BotConfig, provider: Provider) -> TelegramBootstrap:
     return TelegramBootstrap(
         application=application,
         runtime=runtime,
-        worker_dispatch=functools.partial(ingress.worker_dispatch, runtime=runtime),
+        worker_dispatch=functools.partial(telegram_worker.worker_dispatch, runtime=runtime),
     )

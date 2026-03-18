@@ -1,3 +1,4 @@
+from app.agents.bridge import telegram_conversation_ref
 from app.agents.state import AgentRuntimeState, save_agent_runtime_state
 from app.identity import telegram_conversation_key
 from app.providers.base import RunResult
@@ -99,7 +100,7 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
         user = FakeUser()
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["pending_delegation"] = {
-            "conversation_ref": th.telegram_conversation_ref(cfg, chat.id),
+            "conversation_ref": telegram_conversation_ref(cfg, chat.id),
             "title": "Feature delegation",
             "tasks": [
                 {
@@ -153,7 +154,7 @@ async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_s
         user = FakeUser()
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["pending_delegation"] = {
-            "conversation_ref": th.telegram_conversation_ref(cfg, chat.id),
+            "conversation_ref": telegram_conversation_ref(cfg, chat.id),
             "title": "Feature delegation",
             "tasks": [
                 {
@@ -209,7 +210,7 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
         user = FakeUser()
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["pending_delegation"] = {
-            "conversation_ref": th.telegram_conversation_ref(cfg, chat.id),
+            "conversation_ref": telegram_conversation_ref(cfg, chat.id),
             "title": "Feature delegation",
             "tasks": [
                 {

@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+import app.channels.telegram.worker as telegram_worker
 from app.channels.telegram.session_io import (
     load as telegram_load_session,
     save as telegram_save_session,
@@ -848,7 +849,7 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
             }
 
             with pytest.raises(PendingRecovery):
-                await th.worker_dispatch("message", event, item, runtime=current_runtime())
+                await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
 
             # Provider must NOT have been called — no auto-replay.
             assert len(prov.run_calls) == 0, (
@@ -1797,7 +1798,7 @@ async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
             }
 
             # Should return normally (not raise PendingRecovery)
-            await th.worker_dispatch("message", event, item, runtime=current_runtime())
+            await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
 
             # No notice sent, no provider call
             assert len(bot.sent) == 0
@@ -1831,7 +1832,7 @@ async def test_worker_dispatch_command_still_notifies():
                 "id": "cmd-item",
             }
 
-            await th.worker_dispatch("command", event, item, runtime=current_runtime())
+            await telegram_worker.worker_dispatch("command", event, item, runtime=current_runtime())
 
             # Notification about interrupted command
             cmd_msgs = [s for s in bot.sent if "interrupted" in s.get("text", "")]

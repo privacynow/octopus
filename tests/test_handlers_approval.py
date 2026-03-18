@@ -583,7 +583,7 @@ async def test_stale_pending_ttl():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.execution as telegram_execution
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -600,7 +600,7 @@ async def test_stale_pending_ttl():
         save_session(data_dir, telegram_conversation_key(12345), session)
 
         msg = FakeMessage(chat=chat, text="")
-        await th.approve_pending(12345, msg, runtime=current_runtime())
+        await telegram_execution.approve_pending(12345, msg, runtime=current_runtime())
 
         reply = " ".join(r.get("text", "") for r in msg.replies)
         assert "expired" in reply.lower()

@@ -61,7 +61,7 @@ Phase 8 is now active.
       progress module owner
     - focused suite: `173 passed`
     - verified against the full suite: `1624 passed, 23 skipped`
-  - `Phase 8 / H1 delegation channel slice` is complete in the current branch state:
+  - `62b7569` `Phase 8 / H1: extract delegation channel from ingress`
     - Telegram delegation proposal publication and callback parsing/approval
       flow now live in `app/channels/telegram/delegation_channel.py`
     - no new `surface`-named Telegram owner was introduced in this slice;
@@ -69,12 +69,20 @@ Phase 8 is now active.
     - `app/channels/telegram/ingress.py` no longer defines delegation proposal,
       callback parsing, or callback-approve/cancel helpers
     - focused suite: `90 passed`
-    - verified against the full suite: `1627 passed, 23 skipped`
+    - verified against the full suite: `1628 passed, 23 skipped`
 - Remaining verified-but-uncommitted Phase 8 work in this branch state:
-  - delegation channel extraction is ready to commit after this status update
+  - `Phase 8 / H1 execution slice` is complete in the current branch state:
+    - Telegram execution, approval, context resolution, send helpers, and
+      runtime builders now live in `app/channels/telegram/execution.py`
+    - `app/channels/telegram/ingress.py` no longer defines execution/runtime
+      builder helpers, prompt-size helpers, context-resolution helpers, or the
+      extracted send/approval helpers
+    - execution-focused suites:
+      - `300 passed`
+    - verified against the full suite:
+      - `1632 passed, 23 skipped`
 - Remaining Phase 8 work is still pending:
-  - H1 execution / worker / shared dispatch extraction
-    and ingress cleanup
+  - H1 worker / shared dispatch extraction and final ingress cleanup
   - H2 presenter rendering blind-spot closure
   - H3 Telegram test-boundary hardening
   - H4 documentation and structural gate tightening
@@ -506,7 +514,7 @@ Completed slices:
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1608 passed, 23 skipped`
+- result: `1632 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.

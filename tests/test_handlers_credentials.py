@@ -12,6 +12,7 @@ from tests.support.skill_test_helpers import (
     save_user_credential,
 )
 from app.storage import default_session, ensure_data_dirs, save_session
+import app.channels.telegram.execution as _te
 import app.channels.telegram.ingress as _th
 from app import work_queue
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
@@ -53,12 +54,12 @@ async def test_credential_capture():
         prov.run_results = [RunResult(text="Used github token")]
         setup_globals(cfg, prov)
 
-        original_validate = _th.validate_credential
+        original_validate = _te.validate_credential
 
         async def fake_validate(req, value):
             return (True, "")
 
-        _th.validate_credential = fake_validate
+        _te.validate_credential = fake_validate
         try:
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -96,7 +97,7 @@ async def test_credential_capture():
             assert "GITHUB_TOKEN" in ctx.credential_env
             assert ctx.credential_env["GITHUB_TOKEN"] == "ghp_fake_token_12345"
         finally:
-            _th.validate_credential = original_validate
+            _te.validate_credential = original_validate
 
 
 async def test_credential_validation_failure():
@@ -124,12 +125,12 @@ async def test_credential_validation_failure():
         }
         save_session(data_dir, telegram_conversation_key(12345), session)
 
-        original_validate = _th.validate_credential
+        original_validate = _te.validate_credential
 
         async def fake_validate_fail(req, value):
             return (False, "Expected status 200, got 401")
 
-        _th.validate_credential = fake_validate_fail
+        _te.validate_credential = fake_validate_fail
         try:
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -150,7 +151,7 @@ async def test_credential_validation_failure():
             creds = load_user_credentials(data_dir, telegram_actor_key(42), key)
             assert not creds.get("github-integration", {}).get("GITHUB_TOKEN")
         finally:
-            _th.validate_credential = original_validate
+            _te.validate_credential = original_validate
 
 
 async def test_credential_reply_while_worker_alive_no_provider_run():
@@ -174,8 +175,8 @@ async def test_credential_reply_while_worker_alive_no_provider_run():
         async def fake_validate(req, value):
             return (True, "")
 
-        original_validate = _th.validate_credential
-        _th.validate_credential = fake_validate
+        original_validate = _te.validate_credential
+        _te.validate_credential = fake_validate
         try:
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -194,7 +195,7 @@ async def test_credential_reply_while_worker_alive_no_provider_run():
             ).fetchone()
             assert row is None, "Credential message must not create a work item (record_update only)"
         finally:
-            _th.validate_credential = original_validate
+            _te.validate_credential = original_validate
 
 
 async def test_doctor_credential_check():
@@ -449,12 +450,12 @@ async def test_cross_user_credential_isolation():
         prov.run_results = [RunResult(text="Done with github")]
         setup_globals(cfg, prov)
 
-        original_validate = _th.validate_credential
+        original_validate = _te.validate_credential
 
         async def fake_validate(req, value):
             return (True, "")
 
-        _th.validate_credential = fake_validate
+        _te.validate_credential = fake_validate
         try:
             key = derive_encryption_key(cfg.telegram_token)
             save_user_credential(data_dir, telegram_actor_key(100), "github-integration", "GITHUB_TOKEN", "ghp_alice_token", key)
@@ -484,7 +485,7 @@ async def test_cross_user_credential_isolation():
             assert ctx.credential_env.get("GITHUB_TOKEN") == "ghp_alice_token"
             assert ctx.credential_env.get("GITHUB_TOKEN") != "ghp_bob_token"
         finally:
-            _th.validate_credential = original_validate
+            _te.validate_credential = original_validate
 
 
 async def test_group_chat_setup_isolation():
@@ -493,12 +494,12 @@ async def test_group_chat_setup_isolation():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        original_validate = _th.validate_credential
+        original_validate = _te.validate_credential
 
         async def fake_validate(req, value):
             return (True, "")
 
-        _th.validate_credential = fake_validate
+        _te.validate_credential = fake_validate
         try:
             chat = FakeChat(12345)
             alice = FakeUser(uid=100, username="alice")
@@ -547,7 +548,7 @@ async def test_group_chat_setup_isolation():
             assert alice_creds.get("github-integration", {}).get("GITHUB_TOKEN") == "ghp_alice_real_token"
             assert not bob_creds.get("github-integration", {}).get("GITHUB_TOKEN")
         finally:
-            _th.validate_credential = original_validate
+            _te.validate_credential = original_validate
 
 
 async def test_group_check_cred_satisfaction_no_overwrite():
@@ -788,8 +789,8 @@ async def test_handler_credential_activation_and_capture():
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            original_validate = _th.validate_credential
-            _th.validate_credential = lambda req, val: asyncio.coroutine(lambda: (True, ""))()
+            original_validate = _te.validate_credential
+            _te.validate_credential = lambda req, val: asyncio.coroutine(lambda: (True, ""))()
             try:
                 chat = FakeChat(1001)
                 alice = FakeUser(uid=100, username="alice")
@@ -810,7 +811,7 @@ async def test_handler_credential_activation_and_capture():
                 creds = load_user_credentials(data_dir, telegram_actor_key(100), key)
                 assert creds.get("alpha", {}).get("ALPHA_TOKEN") == "my-secret-token"
             finally:
-                _th.validate_credential = original_validate
+                _te.validate_credential = original_validate
     finally:
         skills_mod.CUSTOM_DIR = orig
 
@@ -1060,8 +1061,8 @@ async def test_smoke_credentialed_skill_flow():
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            original_validate = _th.validate_credential
-            _th.validate_credential = lambda req, val: asyncio.coroutine(lambda: (True, ""))()
+            original_validate = _te.validate_credential
+            _te.validate_credential = lambda req, val: asyncio.coroutine(lambda: (True, ""))()
             try:
                 chat = FakeChat(1001)
                 alice = FakeUser(uid=100, username="alice")
@@ -1080,7 +1081,7 @@ async def test_smoke_credentialed_skill_flow():
                 assert MARKER_ALPHA in ctx.system_prompt
                 assert ctx.credential_env.get("ALPHA_TOKEN") == "my-secret"
             finally:
-                _th.validate_credential = original_validate
+                _te.validate_credential = original_validate
     finally:
         skills_mod.CUSTOM_DIR = orig
 

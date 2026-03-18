@@ -299,9 +299,9 @@ async def test_multiple_chats_save_independently():
 # ---------------------------------------------------------------------------
 
 async def test_prompt_size_cross_chat_reads_sqlite():
-    """Verify _check_prompt_size_cross_chat iterates sessions from SQLite,
+    """Verify telegram execution prompt-size warnings iterate sessions from SQLite,
     not from JSON files."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.execution as telegram_execution
 
     with fresh_env(config_overrides={
         "admin_user_ids": frozenset({100}),
@@ -326,8 +326,7 @@ async def test_prompt_size_cross_chat_reads_sqlite():
         with_skill = [s for s in sessions if "big-skill" in s.get("active_skills", [])]
         assert len(with_skill) == 2
 
-        # Call the function directly (it's a module-level helper)
-        warnings = th._check_prompt_size_cross_chat(current_runtime(), data_dir, "big-skill")
+        warnings = telegram_execution.check_prompt_size_cross_chat(current_runtime(), data_dir, "big-skill")
         # The skill doesn't actually exist so it gets filtered out — no warnings expected.
         # The point is that it doesn't crash and successfully iterates SQLite rows.
         assert isinstance(warnings, list)

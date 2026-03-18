@@ -436,7 +436,7 @@ async def test_is_allowed_closed_mode_rejects_stranger():
 @pytest.mark.asyncio
 async def test_execute_request_public_user_gets_inspect_policy():
     """execute_request with trust_tier='public' resolves inspect file_policy."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.execution as telegram_execution
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -461,7 +461,7 @@ async def test_execute_request_public_user_gets_inspect_policy():
 
         # Execute as public
         msg = FakeMessage(chat=chat, text="hello")
-        await th.execute_request(
+        await telegram_execution.execute_request(
             chat.id, "test prompt", [], msg,
             request_user_id=telegram_actor_key(999), trust_tier="public",
             runtime=current_runtime(),
@@ -477,7 +477,7 @@ async def test_execute_request_public_user_gets_inspect_policy():
 @pytest.mark.asyncio
 async def test_execute_request_trusted_user_gets_edit_policy():
     """execute_request with trust_tier='trusted' preserves session file_policy."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.execution as telegram_execution
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -498,7 +498,7 @@ async def test_execute_request_trusted_user_gets_edit_policy():
         save_session(data_dir, telegram_conversation_key(chat.id), session)
 
         msg = FakeMessage(chat=chat, text="hello")
-        await th.execute_request(
+        await telegram_execution.execute_request(
             chat.id, "test prompt", [], msg,
             request_user_id=telegram_actor_key(42), trust_tier="trusted",
             runtime=current_runtime(),
@@ -867,6 +867,7 @@ async def test_compact_long_reply_public_user():
 @pytest.mark.asyncio
 async def test_export_uses_resolved_skills_not_raw_session():
     """/export header shows resolved skills, not raw session.active_skills."""
+    import app.channels.telegram.execution as telegram_execution
     import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={
@@ -886,7 +887,7 @@ async def test_export_uses_resolved_skills_not_raw_session():
         # Verify the resolved context gives [] for public users
         session_after = telegram_load_session(current_runtime(), 8005)
         trust = th._trust_tier(current_runtime(), public_user)
-        resolved = th._resolve_context(current_runtime(), session_after, trust_tier=trust)
+        resolved = telegram_execution.resolve_context(current_runtime(), session_after, trust_tier=trust)
         assert resolved.active_skills == [], (
             f"Public user should resolve to zero skills, got: {resolved.active_skills}"
         )

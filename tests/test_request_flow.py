@@ -725,7 +725,7 @@ def test_classify_pending_validation_accepts_iso_created_at():
 def test_credential_check_uses_resolved_skills_not_session():
     """Credential check with empty resolved skills skips all checks."""
     from app.credential_store import init_credential_store_for_config
-    from app.runtime_skill_setup_use_cases import get_runtime_skill_setup_use_cases
+    from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
     from tests.support.config_support import make_config
 
     with fresh_data_dir() as data_dir:
@@ -746,7 +746,7 @@ def test_credential_check_uses_resolved_skills_not_session():
 def test_credential_check_with_resolved_skills():
     """Credential check with non-empty resolved skills actually checks them."""
     from app.credential_store import init_credential_store_for_config
-    from app.runtime_skill_setup_use_cases import get_runtime_skill_setup_use_cases
+    from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
     from tests.support.config_support import make_config
 
     with fresh_data_dir() as data_dir:

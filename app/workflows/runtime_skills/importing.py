@@ -1,9 +1,9 @@
-"""Concern-owned use cases for runtime skill search and import lifecycle."""
+"""Runtime-skill import and update workflow ownership."""
 
 from __future__ import annotations
 
 from app.provider_guidance_service import get_provider_guidance_service
-from app.runtime_skill_catalog_use_cases import (
+from app.workflows.runtime_skills.catalog import (
     get_runtime_skill_catalog_use_cases,
 )
 from app.workflows.runtime_skills.contracts import (

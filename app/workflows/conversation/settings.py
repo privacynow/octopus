@@ -1,4 +1,4 @@
-"""Concern-owned use cases for conversation settings and session mutations."""
+"""Conversation settings workflow ownership."""
 
 from __future__ import annotations
 

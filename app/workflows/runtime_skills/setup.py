@@ -1,4 +1,4 @@
-"""Concern-owned use cases for runtime skill credential-setup workflows."""
+"""Runtime-skill setup workflow ownership."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from app.workflows.runtime_skills.contracts import (
 from app.skill_activation_service import get_skill_activation_service
 from app.skill_lifecycle_service import get_skill_lifecycle_service
 from app.skill_types import SkillRequirement
-from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_cases
+from app.workflows.runtime_skills.catalog import get_runtime_skill_catalog_use_cases
 
 
 class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):

@@ -1,4 +1,4 @@
-"""Concern-owned use cases for provider guidance preview operations."""
+"""Provider-guidance preview workflow ownership."""
 
 from __future__ import annotations
 

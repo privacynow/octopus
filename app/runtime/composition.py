@@ -71,16 +71,16 @@ class WorkflowComposition:
 
 @lru_cache(maxsize=1)
 def workflows() -> WorkflowComposition:
-    from app.conversation_control_use_cases import get_conversation_control_use_cases
-    from app.conversation_settings_use_cases import get_conversation_settings_use_cases
-    from app.credential_management_use_cases import get_credential_management_use_cases
-    from app.pending_request_use_cases import get_pending_request_use_cases
-    from app.provider_guidance_use_cases import get_provider_guidance_use_cases
-    from app.recovery_use_cases import get_recovery_use_cases
-    from app.runtime_skill_activation_use_cases import get_runtime_skill_activation_use_cases
-    from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_cases
-    from app.runtime_skill_import_use_cases import get_runtime_skill_import_use_cases
-    from app.runtime_skill_setup_use_cases import get_runtime_skill_setup_use_cases
+    from app.workflows.conversation.control import get_conversation_control_use_cases
+    from app.workflows.conversation.settings import get_conversation_settings_use_cases
+    from app.workflows.credentials.management import get_credential_management_use_cases
+    from app.workflows.pending.requests import get_pending_request_use_cases
+    from app.workflows.provider_guidance.preview import get_provider_guidance_use_cases
+    from app.workflows.recovery.replay import get_recovery_use_cases
+    from app.workflows.runtime_skills.activation import get_runtime_skill_activation_use_cases
+    from app.workflows.runtime_skills.catalog import get_runtime_skill_catalog_use_cases
+    from app.workflows.runtime_skills.importing import get_runtime_skill_import_use_cases
+    from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
 
     return WorkflowComposition(
         runtime_skills=RuntimeSkillWorkflows(

@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from app.access import trust_tier
 from app.config import BotConfig
 from app.identity import telegram_conversation_key, telegram_numeric_id
 from app.ports.egress import ChannelEgress
@@ -171,9 +170,3 @@ def create_channel_egress(
         routed_task_id=routed_task_id,
         output_log=output_log,
     )
-
-
-def trust_tier_for_source(source: str, user: Any, *, config: BotConfig) -> str:
-    if source == "registry":
-        return "trusted"
-    return trust_tier(config, user)

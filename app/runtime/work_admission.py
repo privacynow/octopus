@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
+from app.access import trust_tier
 from app import work_queue
 from app.runtime.inbound_types import InboundEnvelope, serialize_inbound
+
+
+def trust_tier_for_source(source: str, user: Any, *, config) -> str:
+    """Resolve trust at the inbound admission boundary."""
+    if source == "registry":
+        return "trusted"
+    return trust_tier(config, user)
 
 
 def admit_fresh_message(data_dir: Path, envelope: InboundEnvelope) -> tuple[str, str | None]:

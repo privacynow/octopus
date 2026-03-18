@@ -1,8 +1,15 @@
-"""Workflow state machines for transport/recovery and pending request.
+"""Workflow package root.
 
-Phase 11: contract-only. Persistence stays in work_queue / session_state.
-Machines validate transitions and classify outcomes; they do not own
-persistence, transactions, or side effects.
+`app.workflows` is the target namespace for concern-owned workflow modules.
+Existing transport/recovery state-machine exports remain here temporarily while
+the repo is migrated into the new package layout in-place.
+
+Rules:
+
+- workflow packages own typed requests/outcomes in local `contracts.py`
+- workflow code must not depend on channel packages
+- workflow code may depend on ports, domain services, and stores
+- this package must not split into parallel legacy and v2 namespaces
 """
 
 from app.workflows.pending_request import (

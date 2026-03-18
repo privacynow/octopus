@@ -748,11 +748,11 @@ This plan assumes:
 The current refactor made real progress, but some of it sits on incomplete
 foundations. The most expensive remaining risks are:
 
-1. the inbound use-case layer has no explicit Protocol/ABC boundary
-2. [app/skills.py](/Users/tinker/output/bots/telegram-agent-bot/app/skills.py) still owns critical runtime-skill and credential concepts
-3. the credential subsystem is still split across multiple modules
-4. resolved active skills are not yet the only authority
-5. [app/skill_commands.py](/Users/tinker/output/bots/telegram-agent-bot/app/skill_commands.py) remains a hidden orchestration seam
+1. the current code shape still reflects the old `transports/` plus ingress-monolith split
+2. workflow contracts and composition are still organized by legacy top-level modules rather than the target `workflows/*` and `runtime/*` ownership
+3. Telegram ingress is still concentrated in [app/telegram_handlers.py](/Users/tinker/output/bots/telegram-agent-bot/app/telegram_handlers.py)
+4. registry ingress, HTTP, and UI are still concentrated in [app/registry_service/app.py](/Users/tinker/output/bots/telegram-agent-bot/app/registry_service/app.py)
+5. [app/skill_commands.py](/Users/tinker/output/bots/telegram-agent-bot/app/skill_commands.py) and a few related modules are still transitional ingress seams rather than deleted architecture
 
 The correct response is not to restart from scratch. It is to:
 
@@ -775,10 +775,13 @@ These apply to every stage and milestone.
 8. Registry UI performs all mutations through registry APIs.
 9. Telegram does not call registry HTTP for normal runtime mutations.
 10. The shared inbound boundary must be modular and concern-owned, not a god-service.
-11. New surfaces must require only a new adapter plus rendering/input translation.
+11. New channels must require only a new channel package plus rendering/input translation.
 12. Durable state owns correctness. In-memory state is optimization only.
 13. Equivalent ingress paths must be audited before and after each nontrivial change.
 14. Stale tests never justify escape hatches for bad architecture.
+15. `contracts.py` is workflow-local; `ports/` is only for cross-workflow or infrastructure boundaries.
+16. Shared inbound/admission types must not live under a channel package.
+17. Existing code and existing package names are raw material only; they do not get to constrain the target architecture.
 
 ### Stale Test Rule
 
@@ -852,15 +855,73 @@ Before implementation in any milestone, each concern must have a named owner.
 | Concern | Authoritative owner | Current risk to eliminate |
 |---|---|---|
 | Skill catalog / instructions | Content store + runtime skill services | Residual old helper coupling |
-| Provider guidance | Content store + ProviderGuidanceService | Prompt/config assembly still lives in or is coupled to `app/skills.py` until Milestone 5 closes it |
-| Runtime skill types | Canonical skill types module | `SkillRequirement` / `SkillMeta` still tied to `app/skills.py` |
+| Provider guidance | Content store + ProviderGuidanceService | Prompt/config assembly must stay with ProviderGuidanceService and not drift back into generic helpers during the channel refactor |
+| Runtime skill types | Canonical skill types module | Type ownership must not drift back into convenience modules during package moves |
 | User credentials | Credential store + credential services/use-cases | Still fragmented and filesystem-helper-owned |
 | Credential validation | Credential subsystem | Still scattered across old helpers and request flow |
-| Prompt/config assembly | ProviderGuidanceService | Must not remain in `app/skills.py` |
-| Codex script staging | Codex provider | Provider-specific concern is still in the wrong module until Milestone 5 moves it |
-| Filesystem skill fallback | None; seeder replaces it | `app/store.py` / old fallback residue must be deleted |
+| Prompt/config assembly | ProviderGuidanceService | Must not drift into channels or runtime composition |
+| Codex script staging | Codex provider | Must not drift into channels or workflow packages |
+| Filesystem skill fallback | None; seeder replaces it | Deleted; must not be reintroduced via convenience paths |
 
-## Correct Layer Model
+## Authoritative Structural Model
+
+The clean-room target architecture is:
+
+```text
+app/
+  channels/
+    telegram/
+      ingress.py
+      egress.py
+      presenters.py
+      bootstrap.py
+      normalization.py
+
+    registry/
+      ingress.py
+      egress.py
+      presenters.py
+      bootstrap.py
+      http.py
+      ui.py
+
+  workflows/
+    runtime_skills/
+      catalog.py
+      activation.py
+      importing.py
+      setup.py
+      contracts.py
+    credentials/
+      management.py
+      contracts.py
+    conversation/
+      control.py
+      settings.py
+      contracts.py
+    pending/
+      requests.py
+      contracts.py
+    recovery/
+      replay.py
+      contracts.py
+    provider_guidance/
+      preview.py
+      contracts.py
+
+  ports/
+    egress.py
+    content_store.py
+    credential_store.py
+    registry_store.py
+
+  runtime/
+    composition.py
+    inbound_types.py
+    session_runtime.py
+    work_admission.py
+    dispatch.py
+```
 
 ### Layer 1. Domain types and contracts
 
@@ -870,10 +931,45 @@ Required targets:
 
 - runtime skill type contracts
 - credential type contracts
-- runtime skill use-case ports
-- credential use-case ports
-- provider guidance use-case ports
-- capability ports where needed
+- workflow contracts beside each workflow package
+- egress port contracts
+- store ports
+
+### Contracts vs `ports/` Rule
+
+Use `contracts.py` when the types or protocols are owned by one workflow and
+exist to express that workflow boundary:
+
+- typed requests
+- typed outcomes
+- narrow workflow-local protocols
+
+Use `ports/` only when the boundary is shared across workflows or is
+infrastructure-level:
+
+- egress
+- content store
+- credential store
+- registry store
+- any future cross-channel registry/composition seam that is truly justified
+
+Do **not** put workflow-local contracts in `ports/` just because multiple
+channels call the workflow. Multiple callers do not make a workflow contract an
+infrastructure port.
+
+### Shared inbound/admission types
+
+Normalized inbound types such as message/command/callback/action plus admitted
+envelope shapes are not workflow contracts and are not channel-local.
+
+They must live under `runtime/*`, with the expected home being:
+
+- `runtime/inbound_types.py` for normalized shared inbound shapes
+- `runtime/work_admission.py` for admitted-envelope and queue-admission logic
+
+They must not live in `channels/telegram/normalization.py` or any other
+channel-scoped module because workflows and runtime dispatch consume them across
+channels.
 
 ### Layer 2. Durable stores
 
@@ -895,59 +991,103 @@ Concern-owned services only:
 - credentials
 - capabilities
 
-### Layer 4. Application/use-case modules
+### Layer 4. Workflows
 
-This is the canonical inbound abstraction.
+This is the canonical inbound business boundary.
 
 It must be:
 
 - modular
 - concern-owned
 - typed by contracts
-- independent of Telegram/FastAPI types
+- independent of Telegram/FastAPI/browser types
 
-Minimum expected modules:
+Current workflow packages:
 
-- currently existing / current-workflow modules:
-- runtime skill catalog use-cases
-- runtime skill activation use-cases
-- runtime skill import use-cases
-- runtime skill setup use-cases
-- credential management use-cases
-- conversation control use-cases
-- conversation settings use-cases
-- pending request use-cases
-- recovery use-cases
-- provider guidance use-cases
+- `workflows/runtime_skills/catalog.py`
+- `workflows/runtime_skills/activation.py`
+- `workflows/runtime_skills/importing.py`
+- `workflows/runtime_skills/setup.py`
+- `workflows/credentials/management.py`
+- `workflows/conversation/control.py`
+- `workflows/conversation/settings.py`
+- `workflows/pending/requests.py`
+- `workflows/recovery/replay.py`
+- `workflows/provider_guidance/preview.py`
 
-- future lifecycle modules, introduced only after the lifecycle schema gate:
-- runtime skill authoring use-cases
-- runtime skill approval use-cases
+Future lifecycle workflow packages, introduced only after the lifecycle schema gate:
 
-### Layer 5. Surface adapters
+- `workflows/runtime_skills/authoring.py`
+- `workflows/runtime_skills/approval.py`
 
-- Telegram inbound adapter
-- Registry API adapter
+The existing [app/workflows](/Users/tinker/output/bots/telegram-agent-bot/app/workflows)
+package already contains transport/pending state-machine code. It is not a
+reason to avoid the `workflows/` name. It is the package that will be absorbed
+and repurposed into the target concern-owned namespace.
 
-Registry UI is not a peer adapter. It is a client of the registry API.
+Hard rule:
 
-### Layer 6. Outbound transport adapters
+- do not create a parallel `workflows_v2` or similar package
+- absorb or relocate the current `app/workflows/*` contents into the target
+  ownership model in-place
+- if the existing `app/workflows/*` contents do not fit the target ownership
+  model cleanly, rewrite or relocate them; do not distort the target model to
+  preserve legacy file shapes
 
-- Telegram outbound surface
-- Registry outbound surface
-- future Slack outbound surface
+### Layer 5. Channels
 
-Inbound and outbound remain separate concerns.
+Channels are the external boundary.
+
+Each channel has separate ingress and egress.
+
+- Telegram is one channel
+- Registry is one channel
+- future Slack/Signal/etc are additional channels
+
+Registry is not split into separate top-level peers such as `registry_api` and `registry`.
+Registry browser UI is a client of registry HTTP ingress, but server-side registry remains
+one channel with both ingress and egress.
+
+### Layer 6. Runtime composition
+
+`runtime/*` owns:
+
+- channel enablement from config
+- shared inbound/admission types
+- channel bootstrapping
+- egress factory wiring
+- work admission
+- dispatch/runtime execution
+
+This is wiring only, not business workflow logic.
+
+`runtime/session_runtime.py` scope:
+
+- session load/save helpers
+- resolved session/context preparation
+- persistence-only mutation handoff helpers
+- no business workflow decisions
+
+`runtime/dispatch.py` scope:
+
+- queue-claim to provider-run orchestration
+- progress/timeline plumbing
+- cancellation/interrupt handoff
+- provider execution dispatch
+- no channel parsing
+- no workflow state-machine ownership
+- no workflow-local branching that belongs in `workflows/*`
 
 ## What We Keep
 
 These are valid and should be preserved:
 
 - content-store foundation
+- credential-store foundation
 - runtime skills vs capabilities separation
 - registry runtime skill namespace
 - content-store hard cutover for runtime skill reads
-- content-store contract coverage
+- content-store and credential-store contract coverage
 - confidence-suite rewrite where it proves the new architecture
 - the existing concern-owned modules that already align with this plan
 
@@ -955,18 +1095,21 @@ These are valid and should be preserved:
 
 These are no longer acceptable as-is:
 
-- concrete-only shared use-case boundary
-- credential ownership spread across modules
-- `SkillRequirement` living in [app/skills.py](/Users/tinker/output/bots/telegram-agent-bot/app/skills.py)
-- resolved active skills falling back to raw session values in business logic
-- hidden orchestration in [app/skill_commands.py](/Users/tinker/output/bots/telegram-agent-bot/app/skill_commands.py)
-- lingering authority in [app/skills.py](/Users/tinker/output/bots/telegram-agent-bot/app/skills.py)
+- the `transports/` top-level concept
+- the split between “transport” and large ingress monoliths
+- `telegram_handlers.py` as the effective Telegram channel implementation
+- `registry_service/app.py` as combined HTTP, UI, ingress, and workflow bridge
+- concrete-only shared workflow boundary rooted in legacy top-level modules
+- generic inbound action shapes drifting into workflow APIs
+- hidden orchestration in `skill_commands.py`
+- any reintroduction of deleted legacy authorities through convenience imports or aliases
 
 ## Execution Plan
 
 ### Milestone 0. Freeze Feature Expansion
 
-No new lifecycle feature work lands until Milestones 1-5 pass.
+No new lifecycle feature work lands until the channel/workflow architecture track
+reaches Milestone 8.
 
 Blocked features:
 
@@ -984,243 +1127,241 @@ Blocked features:
 - do not add new user-facing lifecycle behavior during this milestone
 - do not “sneak in” convenience helpers that deepen the wrong seams
 - do not use temporary bridges that keep old authorities alive
+- do not let legacy tests or current file layout dictate package boundaries
 
 #### Exit criteria
 
-- the repo and plan both clearly state that foundation work is blocking feature expansion
+- the repo and plan both clearly state that structural refactor work is blocking feature expansion
 - any known red baseline test that proves a real durable contract bug must be resolved or explicitly reclassified before the milestone that touches that contract
 
-### Milestone 1. Define Ports for the Inbound Boundary
+### Milestone 1. Land the Package Skeleton and Dependency Rules
 
-Create Protocol/ABC contracts for the use-case layer before more feature work.
-
-These contracts are required for:
-
-- signature enforcement
-- test injection seams
-- preventing PTB/FastAPI types from leaking into use-case boundaries
-- making Telegram and registry prove they call the same application contracts
-
-They are not justified by “multiple interchangeable implementations of every use-case.”
+Create the target package structure first, without preserving old names as architecture.
 
 #### Work
 
-- define use-case ports for currently existing shared inbound workflows only
-- ensure adapters depend on ports, not concrete implementations
-- provide builders/factories for concrete wiring
-
-This milestone does **not** define contracts for future lifecycle concerns that
-do not exist yet. Authoring and approval lifecycle ports are introduced only
-when the lifecycle schema is defined and those workflows are concrete.
+- create `app/channels/`
+- create `app/workflows/`
+- create `app/ports/`
+- create `app/runtime/`
+- add package-level docs or module comments that state dependency direction
+- add import-lint or equivalent guardrails if practical
 
 #### Hard rules
 
-- no single mega `UseCases` interface
-- no Telegram/FastAPI/PTB types in use-case signatures
-- no new concrete shared module without a port
-- no adapter importing concrete implementation modules directly
-- no “minimal protocol” that omits real workflow inputs/outputs just to satisfy the rule superficially
+- do not create placeholder packages that immediately import old monoliths wholesale
+- do not keep `transports/` as the conceptual owner once `channels/` exists
+- do not let `channels/*` import each other directly for workflow logic
+- do not let `workflows/*` import channel code
+- do not create a second workflows package; absorb the existing `app/workflows/`
+  package in-place
+- do not preserve an existing file or package layout if it conflicts with the
+  target channel/workflow/runtime boundary
 
-#### Watchouts
+#### Implementation guidance
 
-- a shared use-case layer must not become a monolith
-- naming must reveal the boundary clearly
+- create the new packages empty or with minimal `__init__.py` only
+- keep behavior unchanged in this milestone
+- record the allowed dependency direction explicitly:
+  - `channels/*` -> `workflows/*`, `ports/*`, `runtime/*` helpers where justified
+  - `workflows/*` -> `ports/*`, domain services, stores
+  - `runtime/*` -> composition/wiring only
+- define the explicit rule for what belongs in `contracts.py` vs `ports/`
+- name `runtime/inbound_types.py` as the shared home for normalized inbound types
+- treat existing code as migration input only, not as a source of architecture truth
 
 #### Exit criteria
 
-- Telegram and registry adapter code import use-case ports/contracts
-- concrete implementations are instantiated behind composition/factory code
-- the contracts are complete enough to express the current shared workflows without adapter-side business branching
-- future lifecycle workflows are not prematurely frozen into incomplete contracts
+- the target package map exists
+- dependency direction is documented and enforceable
+- no behavior changed
 
-### Milestone 2. Establish Authoritative Runtime-Skill and Credential Types
+### Milestone 2. Move Egress to `ports/egress.py` and `channels/*/egress.py`
 
-Move authoritative types out of [app/skills.py](/Users/tinker/output/bots/telegram-agent-bot/app/skills.py).
+Egress is the least ambiguous seam and should move first.
 
 #### Work
 
-- create authoritative homes for runtime skill types
-- create authoritative homes for credential-related types
-- move `SkillRequirement` and related ownership out of `app/skills.py`
+- move outbound contracts from `app/transports/ports.py` to `app/ports/egress.py`
+- move Telegram outbound implementation to `app/channels/telegram/egress.py`
+- move registry outbound implementation to `app/channels/registry/egress.py`
+- replace `app/transports/factory.py` with channel-aware egress construction in `app/runtime/composition.py`
 
 #### Hard rules
 
-- no duplicate transitional dataclasses with conversion glue as a permanent seam
-- no second authoritative home “for now”
-- no continued import of authoritative types from `app/skills.py`
+- do not keep `transports/ports.py` as an alias or second authority
+- do not leave channel egress construction split between old and new factories
+- do not move ingress logic into egress packages
 
-#### Watchouts
+#### Implementation guidance
 
-- types that seem “small” still create parallel authority if duplicated
+- port names may change if they are legacy-shaped, but keep the contract narrow
+- if `InteractionSurface` is too rendering-specific or misnamed, rename it during this move
+- update imports directly to the new path; do not add compatibility exports
+- preserve tests that prove egress contract behavior; rewrite any that prove old module ownership
 
 #### Exit criteria
 
-- `SkillRequirement` no longer lives in `app/skills.py`
-- services/use-cases import the new authoritative types only
-- Milestone 3 is blocked until this milestone is complete, because the credential subsystem must not re-import types from `app/skills.py`
+- all outbound code uses `app/ports/egress.py`
+- all concrete egress implementations live under `app/channels/*/egress.py`
+- `app/transports/` no longer owns architecture and is on a straight deletion path
 
-### Milestone 3. Extract the Credential Subsystem
+### Milestone 3. Move Current Use-Case Ports into Local Workflow Contracts
 
-Create one authoritative credential domain.
-
-Primary motivation:
-
-The central problem is not only that credentials are fragmented. It is that
-storage implementation details currently leak into use-case signatures.
-
-After this milestone:
-
-- use-case signatures must not accept `data_dir`
-- use-case signatures must not accept `encryption_key`
-- key derivation must happen once at store construction time
-- callers must use an injected credential subsystem, not thread filesystem/key details through the stack
-
-Credential boundary definition:
-
-- the credential store owns persistence only
-- the credential store owns encryption/decryption as part of persistence
-- the credential service owns plaintext credential operations, validation dispatch, and environment materialization
-- credential use-cases own setup/clear/satisfaction orchestration across the credential service, runtime skill requirements, and session/setup state
-- handlers/routes do not own credential workflow decisions
-
-Encryption tightening:
-
-- Fernet remains the battle-tested authenticated-encryption library
-- key derivation at credential store construction must use HKDF from `cryptography`, not raw `hashlib.sha256`
-- callers and use-cases must never derive keys themselves
-- the credential store factory/construction site is the only allowed place where derivation happens
-
-Specific ownership changes required in this milestone:
-
-- `check_credential_satisfaction` moves out of [app/request_flow.py](/Users/tinker/output/bots/telegram-agent-bot/app/request_flow.py) into credential use-cases
-- `AwaitingSkillSetup` transition ownership moves into credential use-cases operating over the credential service
-- `validate_credential` moves out of [app/skills.py](/Users/tinker/output/bots/telegram-agent-bot/app/skills.py) into a dedicated credential-validation module
-- key derivation for the credential store becomes a factory concern, not a caller concern
-- [app/registry_service/runtime_surface.py](/Users/tinker/output/bots/telegram-agent-bot/app/registry_service/runtime_surface.py) must consume the shared credential store/service and must not derive keys independently
+Replace the old shared “use-case factory” shape with local workflow contracts.
 
 #### Work
 
-- add credential store port and implementation
-- add credential service
-- add credential use-cases
-- move storage, validation, env building, and satisfaction checks into that subsystem
-- move setup/clear side effects behind credential-aware use-cases
-- define and use a `CredentialValidator` protocol at the credential boundary
-- move the default HTTP credential validator into a dedicated credential-validation module
-- construct the credential store once with HKDF-derived key material
-- state explicitly whether this milestone lands:
-  - full backend parity, or
-  - a filesystem-backed implementation with the shared-runtime/Postgres seam explicitly named and deferred
-- add contract tests for the credential seam in either case
-
-Named contract-test scope for the credential seam:
-
-- round-trip save then load
-- per-user isolation
-- per-skill deletion
-- full deletion
-- corrupted/tampered entry handling
-- missing credential file behavior
-- `list_skills` behavior without decryption
+- create `contracts.py` beside each current workflow package
+- move request/outcome dataclasses and narrow protocols there
+- replace old `*_port.py` sprawl with workflow-local contracts where practical
+- remove the conceptual center of gravity from `app/inbound_use_case_factory.py`
 
 #### Hard rules
 
-- no direct credential storage helpers imported from `app/skills.py`
-- no handler-owned credential mutations
-- no request-flow-specific credential logic that bypasses the subsystem
-- no shadow credential API kept for compatibility
-- no silent omission of parity language for the credential seam
-- no independent encryption-key derivation outside credential store construction/factory wiring
-- no `data_dir` or `encryption_key` parameters in credential use-case signatures after this milestone
-- no raw SHA-256 key derivation for credential encryption; HKDF is the required KDF
-- the credential service must not expand into unrelated runtime-skill orchestration
-- if full backend parity is deferred in this milestone, the plan and implementation must name:
-  - the exact deferred seam
-  - the reason for deferral
-  - the closure milestone
-  - the blocking condition that prevents the deferred seam from surviving into later shared-runtime/lifecycle work unchecked
+- no generic `use_cases` or `actions` sink
+- no single mega workflow registry contract
+- no stringly `action, params` workflow APIs
+- do not define future lifecycle workflow contracts until the lifecycle schema exists
 
-#### Watchouts
+#### Implementation guidance
 
-- `request_flow.py`, `runtime_skill_setup_use_cases.py`, `telegram_handlers.py`, and `skill_commands.py` all currently touch credentials
-- this is a cross-cutting seam; partial migration is unacceptable
-- `AwaitingSkillSetup` is currently written by multiple modules; that split ownership must end in this milestone
-- the existing injectable validator seam in tests must be preserved via the credential validator protocol, not lost by hardwiring validation into the service
-- `AwaitingSkillSetup` is session state: credential use-cases own the transition decision, adapters persist the returned session mutation
+- one workflow package owns one concern and its contracts
+- examples:
+  - `workflows/runtime_skills/contracts.py`
+  - `workflows/conversation/contracts.py`
+  - `workflows/pending/contracts.py`
+- generic queue envelopes remain generic only at admission/runtime layers, never as workflow public APIs
 
 #### Exit criteria
 
-- credentials have one authoritative storage/service/use-case path
-- all credential reads/writes/validation/env building flow through that subsystem
-- the credential seam has explicit contract coverage
-- parity status is explicit, scoped, and tested or deliberately deferred as named debt
-- any deferred credential-backend seam has an explicit closure milestone and blocking rule recorded in the same slice
-- the credential service vs credential use-case boundary is implemented as defined above, not left to adapter interpretation
-- `request_flow.py` no longer owns execution-path credential satisfaction logic
-- `AwaitingSkillSetup` transition decisions occur through one owner: credential use-cases operating over the credential service
-- registry runtime surface no longer derives credential keys independently
+- workflow contracts live beside their workflows
+- no workflow depends on old top-level port clutter as its conceptual home
+- the workflow boundary remains concern-owned and typed
 
-### Milestone 4. Make Resolved Skills Authoritative Everywhere
+### Milestone 4. Replace `inbound_use_case_factory.py` with `runtime/composition.py`
 
-Resolved active skills must become the only authority in business logic.
+Composition must own channel wiring, not an old use-case factory.
 
 #### Work
 
-- change [app/execution_context.py](/Users/tinker/output/bots/telegram-agent-bot/app/execution_context.py) so effective active skills are resolved centrally
-- remove `resolved if present else session.active_skills` business-logic fallbacks
-- normalize unresolved/invalid skills at the authoritative boundary
+- create `app/runtime/composition.py`
+- move concrete workflow instantiation there
+- make channels depend on composition, not on direct concrete imports
 
 #### Hard rules
 
-- no business logic path may read raw `session.active_skills` except persistence/mutation code
-- no user-visible or safety-sensitive path may use raw skill lists
-- no duplicate resolution logic in handlers/services/use-cases
+- no new service locator
+- no one mega composition object that becomes hidden business logic
+- composition wires dependencies only; it does not make workflow decisions
+- do not introduce `ports/channel_registry.py` for only two known channels unless
+  a concrete third-channel or dynamic-registration need appears first
 
-#### Watchouts
+#### Implementation guidance
 
-- raw vs resolved state drift is one of the core historical bug classes
+- composition may expose narrow getters/builders grouped by concern or channel
+- composition may wire:
+  - workflow implementations
+  - egress factories
+  - channel bootstraps
+- for the known Telegram and registry channels, direct composition wiring is
+  preferred over a premature registry abstraction
+- delete `app/inbound_use_case_factory.py` at milestone completion; do not leave it as an alias
 
 #### Exit criteria
 
-- resolved skill lists are the only active-skill authority in request/preflight/display/validation logic
-- any raw session usage is clearly persistence-only
+- channels get workflow implementations through composition
+- old shared use-case factory is deleted
+- composition owns wiring only
+- no premature channel-registry abstraction was introduced without a justified
+  third-channel need
 
-### Milestone 5. Dismantle `app/skills.py` as an Authority
+### Milestone 5. Refactor Registry Into One Channel
 
-After the previous milestones, remove central authority from [app/skills.py](/Users/tinker/output/bots/telegram-agent-bot/app/skills.py).
+Registry must be one channel with ingress and egress, not a split legacy shape.
 
 #### Work
 
-- move any remaining authoritative responsibilities to proper modules
-- delete dead or bypassed logic
-- keep only narrowly justified implementation helpers, if any remain
-- move prompt/config assembly ownership explicitly into [app/provider_guidance_service.py](/Users/tinker/output/bots/telegram-agent-bot/app/provider_guidance_service.py)
-- move Codex script staging/cleanup ownership explicitly into the Codex provider layer
-- retire [app/store.py](/Users/tinker/output/bots/telegram-agent-bot/app/store.py) as a named deletion target, not an implicit side effect
+- create `app/channels/registry/ingress.py`
+- create `app/channels/registry/egress.py`
+- create `app/channels/registry/presenters.py`
+- create `app/channels/registry/http.py`
+- create `app/channels/registry/ui.py`
+- move route registration and request validation into `http.py`
+- move HTML shell/static/UI-serving concerns into `ui.py`
+- move workflow translation into `ingress.py`
+- move timeline/result publication into `egress.py`
 
 #### Hard rules
 
-- `app/skills.py` may not remain a hidden dependency root
-- no “utility graveyard” that new code starts importing from again
-- no compatibility wrapper that preserves the old authority shape
-- no module under `app/` may import from `app/skills.py` after this milestone completes
+- no separate top-level `registry_api` architecture
+- browser UI must use registry HTTP ingress for all mutations
+- no workflow logic in `http.py`
+- no workflow logic in `ui.py`
+- no continued dependence on `registry_service/runtime_surface.py` after migration
 
-#### Watchouts
+#### Implementation guidance
 
-- small helper retention often becomes a new stealth parallel path
+- `http.py` should be thin: validate, call ingress, map response
+- `ingress.py` should translate registry-native requests into typed workflow calls
+- `presenters.py` should shape workflow outcomes into HTTP JSON, action lists, and UI hints
+- `egress.py` should own timeline/result publication and any registry-native output behavior
+- `ui.py` may serve HTML/JS/static assets only
+- delete or absorb `app/registry_service/runtime_surface.py` at the end of the milestone
 
 #### Exit criteria
 
-- `app/skills.py` is no longer central to runtime-skill or credential architecture
-- zero modules under `app/` import from `app/skills.py`
-- `app/store.py` is removed or reduced to zero live architectural responsibility, with no filesystem fallback path left
-- prompt/config assembly is owned by `ProviderGuidanceService`, not `app/skills.py`
+- registry server-side code is one channel with ingress and egress
+- browser UI uses registry HTTP ingress only
+- `app/registry_service/app.py` no longer owns workflow translation directly
+- `app/registry_service/runtime_surface.py` is deleted
 
-### Milestone 6. Refactor Current Inbound Workflows In Per-Workflow Lockstep
+### Milestone 6. Refactor Telegram Into One Channel
 
-Do not refactor Telegram fully and registry later. That creates a temporary parallel-path drift window that this plan explicitly forbids.
+Telegram must become one channel with ingress and egress, not egress plus a giant ingress monolith.
 
-The required sequencing is per workflow, across both surfaces in the same slice.
+#### Work
+
+- create `app/channels/telegram/ingress.py`
+- create `app/channels/telegram/egress.py`
+- create `app/channels/telegram/presenters.py`
+- create `app/channels/telegram/bootstrap.py`
+- create `app/channels/telegram/normalization.py`
+- move PTB wiring/registration into `bootstrap.py`
+- move update normalization into `normalization.py`
+- move workflow translation into `ingress.py`
+- move rendering into `presenters.py`
+
+#### Hard rules
+
+- no domain workflow logic remains in `telegram_handlers.py`
+- no workflow branching remains in `skill_commands.py`
+- no handler-local state machines
+- no “Telegram first, registry later” for shared workflows
+- no hidden reuse of old monolith helpers after the new owner lands
+
+#### Implementation guidance
+
+- treat the already extracted Telegram modules as migration raw material only
+- merge or rewrite them if that yields a cleaner channel package
+- `bootstrap.py` owns PTB app construction and route registration only
+- `ingress.py` owns translation from normalized Telegram input into typed workflow calls
+- `presenters.py` owns Telegram-specific rendering, keyboards, and message formatting
+- `normalization.py` owns Telegram-native update parsing and attachment download entrypoints
+- delete `app/telegram_handlers.py` and `app/skill_commands.py` at the end of the milestone; do not leave namespace shims
+
+#### Exit criteria
+
+- Telegram is one channel with ingress and egress
+- `telegram_handlers.py` is deleted
+- `skill_commands.py` is deleted
+- all Telegram workflow entry paths route through the new channel package
+
+### Milestone 7. Move Current Workflows Under `app/workflows/` In Per-Workflow Lockstep
+
+This is the sequencing-critical milestone.
+
+The required sequencing is per workflow, across both channels in the same slice.
 
 Current workflow slices covered by this milestone:
 
@@ -1229,62 +1370,111 @@ Current workflow slices covered by this milestone:
 - skill deactivation/clear
 - skill setup
 - skill import/update/uninstall/diff
+- credential management
 - conversation settings mutations
 - conversation control/cancel
 - pending approval/retry actions
 - recovery replay/discard
 - provider-guidance preview
 
-This list is the complete scope of Milestone 6.
+This list is the complete scope of Milestone 7.
 Any workflow addition requires explicit re-scoping in the plan before implementation.
 
 For each workflow:
 
-- Telegram adapter must route through the shared contracts
-- registry API adapter must route through the same shared contracts
+- move/rename the workflow module under `app/workflows/...`
+- move/rename its local contracts beside it
+- migrate Telegram ingress to the new workflow path
+- migrate registry ingress to the same workflow path
+- delete the old implementation path completely
 - only then move to the next workflow
-
-This milestone covers current workflows only. Lifecycle workflows introduced in
-Milestone 8 follow the same lockstep rule and are completed in Milestone 9.
-
-Treat both Telegram-facing modules as adapter code:
-
-- [app/telegram_handlers.py](/Users/tinker/output/bots/telegram-agent-bot/app/telegram_handlers.py)
-- [app/skill_commands.py](/Users/tinker/output/bots/telegram-agent-bot/app/skill_commands.py)
-
-#### Work
-
-- surface parsing only
-- call use-case ports
-- persist returned state changes
-- render returned outcomes
 
 #### Hard rules
 
-- no workflow branching in `skill_commands.py`
-- no domain branching in Telegram handlers outside provider execution paths that genuinely belong there
-- no handler-local lifecycle state machines
-- no adapter-specific fallbacks that bypass shared use-cases
 - no “Telegram first, registry later” sequencing for a shared workflow
-- no workflow may be added to this milestone’s scope implicitly during implementation; any addition must be named and re-scoped explicitly first
+- no workflow may be added implicitly during implementation
+- no old/new workflow path may coexist past the end of a workflow slice
+- no generic action router may be introduced as a shortcut
 
-#### Watchouts
+#### Implementation guidance
 
-- `skill_commands.py` is currently a hidden orchestration seam and must be treated as such
+- examples:
+  - `app/runtime_skill_catalog_use_cases.py` -> `app/workflows/runtime_skills/catalog.py`
+  - `app/conversation_control_use_cases.py` -> `app/workflows/conversation/control.py`
+  - `app/provider_guidance_use_cases.py` -> `app/workflows/provider_guidance/preview.py`
+- rewrite rather than mechanically move files if the old shape is wrong
+- preserve concern ownership; do not create a shared dumping ground in `workflows/`
 
 #### Exit criteria
 
-- zero workflow branching remains in `app/skill_commands.py` for workflows covered by this milestone
-- zero domain branching remains in `app/telegram_handlers.py` for workflows covered by this milestone when a use-case port exists
-- for each workflow slice covered by this milestone, Telegram and registry route through the same use-case contracts before the next workflow begins
+- current workflows live under `app/workflows/`
+- Telegram and registry both call the same workflow modules for each covered slice
+- no old workflow module path remains live for the covered slices
 
-#### Additional registry requirements for every workflow slice
+### Milestone 8. Move Runtime Admission and Request Execution Into `runtime/*`
 
-- [app/registry_service/app.py](/Users/tinker/output/bots/telegram-agent-bot/app/registry_service/app.py) must remain a thin HTTP adapter
-- registry UI mutations must continue to flow only through registry APIs
-- no route-local lifecycle branching may be introduced while matching Telegram parity
+`runtime/*` must own composition, admission, and dispatch, not channels.
 
-### Milestone 7. Lifecycle Schema Gate
+#### Work
+
+- move shared admitted-envelope and queue logic into `app/runtime/work_admission.py`
+- move request execution orchestration into `app/runtime/dispatch.py`
+- move session/runtime composition helpers into `app/runtime/session_runtime.py`
+- remove business/runtime orchestration from channel ingress packages
+
+#### Hard rules
+
+- channels do not own queue semantics
+- channels do not own generic runtime dispatch
+- workflows do not own channel admission concerns
+- generic inbound envelopes remain runtime/admission types only
+- `runtime/session_runtime.py` must not become a hidden business-logic sink
+- `runtime/dispatch.py` must not become a replacement monolith for channel or workflow logic
+
+#### Implementation guidance
+
+- `request_runtime.py` should either move here or be split by concern and deleted
+- `app/transport.py` should be split into channel normalization and runtime admission types; do not keep it as a grab bag
+- `app/transports/types.py` should either disappear or move under runtime with clearer naming
+- `runtime/session_runtime.py` owns only session/context preparation and persistence-only helpers
+- `runtime/dispatch.py` owns only queue/admission-to-provider execution plumbing
+
+#### Exit criteria
+
+- runtime composition/admission/dispatch live under `app/runtime/`
+- channels are thinner because generic runtime work moved out
+- no old transport/admission grab-bag remains as an architecture center
+
+### Milestone 9. Delete Legacy Entry Paths and Enforce Zero-Import Gates
+
+Once the new owners exist, the old ones must die.
+
+#### Work
+
+- delete `app/transports/`
+- delete `app/inbound_use_case_factory.py`
+- delete `app/telegram_handlers.py`
+- delete `app/skill_commands.py`
+- delete or absorb old top-level `*_use_cases.py` modules replaced by `app/workflows/*`
+- delete or absorb old registry service routing/runtime bridge modules replaced by `app/channels/registry/*`
+
+#### Hard rules
+
+- no compatibility exports
+- no alias modules
+- no “temporary” re-export packages
+- no tests preserved by keeping dead paths alive
+
+#### Exit criteria
+
+- zero imports from deleted legacy modules
+- the new architecture is the only architecture
+
+### Milestone 10. Lifecycle Schema Gate
+
+This milestone is the renamed continuation of the former lifecycle-schema work
+that used to sit earlier in the plan. It is intentionally deferred until the
+channel/workflow/runtime architecture track is complete.
 
 Before implementing missing lifecycle behavior, land the durable schema first.
 
@@ -1311,9 +1501,12 @@ Expected lifecycle schema concerns:
 
 - lifecycle schema is landed with backend parity expectations stated and tested
 
-### Milestone 8. Lifecycle Implementation
+### Milestone 11. Lifecycle Implementation
 
-After Milestones 1-7 are done, add the missing lifecycle:
+This milestone is the renamed continuation of the former lifecycle implementation
+work. It remains blocked until Milestones 0-10 complete.
+
+After Milestones 0-10 are done, add the missing lifecycle:
 
 - draft edit
 - revision/history
@@ -1324,8 +1517,8 @@ After Milestones 1-7 are done, add the missing lifecycle:
 
 #### Hard rules
 
-- no lifecycle feature may be added on top of an unresolved foundational gap
-- every new lifecycle use-case must land with contracts and both surface adapters
+- no lifecycle feature may be added on top of an unresolved structural gap
+- every new lifecycle workflow must land with local contracts and both channels
 - no lifecycle implementation before the schema gate is complete
 - no lifecycle state transition may land without explicit durable-state hardening:
   - state machine/transition inventory
@@ -1337,26 +1530,32 @@ After Milestones 1-7 are done, add the missing lifecycle:
 
 #### Exit criteria
 
-- lifecycle behavior is owned by use-cases, not adapters
+- lifecycle behavior is owned by workflow modules, not channels
 - lifecycle durable-state transitions are explicitly hardened against interruption, replay, rejection, and partial completion paths
 
-### Milestone 9. Surface Capability Parity For Lifecycle Workflows
+### Milestone 12. Channel Capability Parity For Lifecycle Workflows
 
-Bring Telegram and registry to the same capability set for lifecycle workflows added in Milestone 8.
+This milestone is the renamed continuation of the former parity milestone for
+lifecycle workflows. It remains blocked until Milestone 11 completes.
+
+Bring Telegram and registry to the same capability set for lifecycle workflows added in Milestone 11.
 
 #### Hard rules
 
 - parity means same operations and invariants
 - presentation may differ
 - Telegram cannot be “left for later”
-- Milestone 9 follows the same per-workflow lockstep discipline as Milestone 6; it is not a Telegram-first or registry-first catch-up phase
+- this milestone follows the same per-workflow lockstep discipline as Milestone 7
 
 #### Exit criteria
 
-- Telegram and registry support the same lifecycle operations added in Milestone 8
+- Telegram and registry support the same lifecycle operations added in Milestone 11
 - no lifecycle workflow remains registry-only or Telegram-only at milestone completion
 
-### Milestone 10. Rich Registry Editor
+### Milestone 13. Rich Registry Editor
+
+This milestone is the renamed continuation of the former rich-editor work. It
+remains blocked until lifecycle contracts and channel boundaries are correct.
 
 Only after lifecycle contracts are correct.
 
@@ -1366,24 +1565,53 @@ Only after lifecycle contracts are correct.
 
 #### Hard rules
 
-- do not let UI richness hide API/use-case shortcomings
-- do not add editor-driven server shortcuts that bypass lifecycle contracts
+- do not let UI richness hide channel/workflow shortcomings
+- do not add editor-driven server shortcuts that bypass workflow contracts
 
 #### Exit criteria
 
-- rich editing exists as a UI enhancement over the correct API/use-case boundary
+- rich editing exists as a UI enhancement over the correct registry channel ingress/workflow boundary
+
+## Next Execution Track
+
+The next concrete work is Milestones 1-5 of this channel architecture plan.
+
+Implementation sequence for the next track:
+
+1. create package skeletons and document dependency rules
+2. move egress to `ports/egress.py` and `channels/*/egress.py`
+3. move current workflow contracts beside their workflows and replace `inbound_use_case_factory.py` with `runtime/composition.py`
+4. refactor registry into one channel package (`ingress.py`, `egress.py`, `http.py`, `ui.py`, `presenters.py`)
+
+Implementation guidance for the next track:
+
+- prefer rewriting a module cleanly over preserving a bad legacy file shape
+- preserve valid contracts and tests, not legacy file paths
+- delete or rewrite stale tests in the same slice if they encode dead ownership
+- do not add aliases to “smooth” the refactor
+- when a new owner lands, move callers directly and delete the old owner
+- keep each milestone behavior-preserving until its exit criteria are met
+
+The refactor is allowed to be invasive as long as:
+
+- the new dependency direction is respected
+- no parallel path survives
+- no stale test dictates a compatibility seam
+- channel/workflow/runtime ownership gets cleaner, not merely relocated
 
 ## Required Audits At Every Milestone
 
 Each milestone must explicitly audit:
 
-1. equivalent ingress paths
+1. equivalent ingress paths across both channels
 2. raw vs resolved state usage
 3. completion ownership where background/recovery state is touched
 4. durable state vs in-memory state authority
 5. test boundary correctness
 6. adjacent regression risk
 7. whether a known pre-existing failing test needs to be fixed or formally reclassified before touching that contract
+8. whether any deleted module path still has live imports
+9. whether browser UI still uses registry HTTP ingress only
 
 ## Hard “Do Not” List
 
@@ -1392,22 +1620,25 @@ Do not:
 - keep old helpers alive because tests still call them
 - preserve bad architecture for stale tests
 - add a temporary second authority “until later”
-- put workflow logic in handlers, routes, or UI code
+- put workflow logic in channel ingress, HTTP routes, or UI code
 - centralize all inbound behavior into one mega orchestrator
 - use aliasing or naming tricks that obscure whether one or two paths exist
-- add new lifecycle features before the foundation gates pass
+- add new lifecycle features before the structural gates pass
+- split registry into separate top-level architectural peers again
+- let generic action envelopes become the workflow API
 
 ## Milestone Acceptance Gates
 
 Feature work may resume only when all of the following are true:
 
-- use-case ports exist
-- authoritative type ownership is fixed
-- credentials have one authoritative subsystem
-- resolved active skills are authoritative everywhere
-- `app/skills.py` is no longer a central authority
-- `skill_commands.py` is a real adapter seam, not hidden orchestration
-- Telegram and registry API both depend on the same contract-defined use-case boundary
+- channels are the only external boundary shape in the repo
+- egress lives under `ports/egress.py` and `channels/*/egress.py`
+- current workflows live under `app/workflows/*` with local contracts
+- `runtime/composition.py` owns channel wiring
+- `runtime/*` owns admission and dispatch
+- Telegram and registry are both thin channel packages over shared workflow modules
+- registry browser UI performs all mutations through registry HTTP ingress
+- no deleted legacy path remains imported
 
 ## Success Criteria
 
@@ -1415,9 +1646,9 @@ This replacement plan is complete only when:
 
 - runtime skills, provider guidance, credentials, and capabilities each have one owner
 - no parallel old/new runtime paths exist
-- Telegram and registry API are both thin adapters over contract-defined concern-owned use-cases
-- registry UI performs all mutations through registry APIs
+- Telegram and registry are both channels with ingress and egress over shared workflow modules
+- registry UI performs all mutations through registry HTTP ingress
 - stale tests no longer influence architectural decisions
-- `app/skills.py` is no longer a hidden authority
-- resolved context is the only authority in business logic where applicable
-- new surfaces can be added by writing adapters, not reworking the architecture
+- workflow modules are concern-owned and typed, not a universal action bus
+- runtime composition/admission/dispatch are owned by `app/runtime/*`
+- new channels can be added by writing channel packages and wiring them in composition, not reworking the architecture

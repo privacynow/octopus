@@ -7,8 +7,8 @@ import sqlite3
 
 from fastapi.testclient import TestClient
 
-from app.registry_service.app import app
-from app.registry_service import runtime_surface
+from app.channels.registry.http import app
+from app.channels.registry import ingress
 from app.registry_service.store import RegistrySQLiteStore
 from app.runtime_health import (
     QueueSnapshot,
@@ -36,7 +36,7 @@ def _configure_runtime_surface(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("BOT_WORKING_DIR", str(tmp_path))
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "telegram-test-token")
     ensure_data_dirs(data_dir)
-    runtime_surface.reset_for_test()
+    ingress.reset_for_test()
     return data_dir
 
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.registry_service.app import app
+from app.channels.registry.http import app
 from app.registry_service.store import RegistrySQLiteStore
 
 

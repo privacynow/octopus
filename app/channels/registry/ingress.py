@@ -1,4 +1,4 @@
-"""Shared runtime-surface access for registry skill and guidance APIs.
+"""Registry channel ingress for runtime-skill and guidance APIs.
 
 The registry remains the only public HTTP API, but it should call the same
 runtime services in-process rather than forcing the bot through HTTP for
@@ -17,6 +17,7 @@ from app.credential_store import (
     reset_for_test as reset_credential_store_for_test,
 )
 from app.agents.bridge import conversation_key_for_ref
+from app.channels.registry import presenters
 from app.execution_context import resolve_execution_context
 from app.registry_service.store_base import AbstractRegistryStore
 from app import runtime_backend
@@ -46,7 +47,7 @@ class RuntimeConversationContext:
     session: SessionState
 
 
-class RuntimeSurfaceError(RuntimeError):
+class RegistryIngressError(RuntimeError):
     def __init__(self, status_code: int, detail: str) -> None:
         super().__init__(detail)
         self.status_code = status_code
@@ -96,7 +97,7 @@ def load_runtime_conversation(store: AbstractRegistryStore, conversation_id: str
     try:
         store.get_conversation(conversation_id)
     except KeyError as exc:
-        raise RuntimeSurfaceError(404, f"Unknown conversation: {conversation_id}") from exc
+        raise RegistryIngressError(404, f"Unknown conversation: {conversation_id}") from exc
     context = get_runtime_surface_context()
     conversation_key = conversation_key_for_ref(conversation_id)
     raw = load_session(
@@ -116,22 +117,7 @@ def load_runtime_conversation(store: AbstractRegistryStore, conversation_id: str
 
 def list_catalog_skills(query: str = "") -> dict[str, Any]:
     return {
-        "skills": [
-            {
-                "name": item.name,
-                "display_name": item.display_name,
-                "description": item.description,
-                "source_kind": item.source_kind,
-                "has_custom_override": item.has_custom_override,
-                "requires_credentials": bool(item.requirement_keys),
-                "requirement_keys": list(item.requirement_keys),
-                "providers": list(item.providers),
-                "can_activate": item.can_activate,
-                "can_update": item.can_update,
-                "can_uninstall": item.can_uninstall,
-            }
-            for item in _flows().runtime_skills.catalog.list_skills(query)
-        ]
+        "skills": [presenters.catalog_item(item) for item in _flows().runtime_skills.catalog.list_skills(query)]
     }
 
 
@@ -140,72 +126,28 @@ def search_catalog_skills(query: str) -> dict[str, Any]:
     if len(query_text) < 2:
         return {"catalog": [], "registry": []}
     results = _flows().runtime_skills.imports.search(query_text, registry_url=runtime_registry_url())
-    return {
-        "catalog": [
-            {
-                "name": item.name,
-                "display_name": item.display_name,
-                "description": item.description,
-                "source_kind": item.source_kind,
-                "can_activate": item.can_activate,
-                "can_update": item.can_update,
-                "can_uninstall": item.can_uninstall,
-            }
-            for item in results.catalog
-        ],
-        "registry": [
-            {
-                "name": item.name,
-                "display_name": item.display_name,
-                "description": item.description,
-                "publisher": item.publisher,
-                "version": item.version,
-                "can_import": item.can_import,
-            }
-            for item in results.registry
-        ],
-        "registry_error": results.registry_error,
-    }
+    return presenters.search_results(results)
 
 
 def catalog_skill_detail(skill_name: str) -> dict[str, Any]:
     detail = _flows().runtime_skills.catalog.get_skill(skill_name)
     if detail is None:
-        raise RuntimeSurfaceError(404, f"Unknown skill: {skill_name}")
-    return {
-        "name": detail.name,
-        "display_name": detail.display_name,
-        "description": detail.description,
-        "body": detail.body,
-        "source_kind": detail.source_kind,
-        "has_custom_override": detail.has_custom_override,
-        "providers": list(detail.providers),
-        "requirement_keys": list(detail.requirement_keys),
-        "can_activate": detail.can_activate,
-        "can_update": detail.can_update,
-        "can_uninstall": detail.can_uninstall,
-    }
+        raise RegistryIngressError(404, f"Unknown skill: {skill_name}")
+    return presenters.catalog_detail(detail)
 
 
 def install_catalog_skill(skill_name: str) -> dict[str, Any]:
     registry_url = runtime_registry_url()
     if not registry_url:
-        raise RuntimeSurfaceError(404, "No skill registry configured.")
+        raise RegistryIngressError(404, "No skill registry configured.")
     result = _flows().runtime_skills.imports.install_from_registry(
         skill_name,
         registry_url,
         warning_context=prompt_warning_context(),
     )
     if not result.ok:
-        raise RuntimeSurfaceError(404, result.message)
-    response: dict[str, Any] = {
-        "name": result.name,
-        "ok": result.ok,
-        "message": result.message,
-    }
-    if result.prompt_size_warnings:
-        response["prompt_size_warnings"] = list(result.prompt_size_warnings)
-    return response
+        raise RegistryIngressError(404, result.message)
+    return presenters.mutation_result(result)
 
 
 def uninstall_catalog_skill(skill_name: str) -> dict[str, Any]:
@@ -216,8 +158,8 @@ def uninstall_catalog_skill(skill_name: str) -> dict[str, Any]:
         default_skills = ()
     result = _flows().runtime_skills.imports.uninstall(skill_name, default_skills=default_skills)
     if not result.ok:
-        raise RuntimeSurfaceError(400, result.message)
-    return {"name": result.name, "ok": result.ok, "message": result.message}
+        raise RegistryIngressError(400, result.message)
+    return presenters.mutation_result(result)
 
 
 def update_catalog_skill(skill_name: str) -> dict[str, Any]:
@@ -226,22 +168,15 @@ def update_catalog_skill(skill_name: str) -> dict[str, Any]:
         warning_context=prompt_warning_context(),
     )
     if not result.ok:
-        raise RuntimeSurfaceError(400, result.message)
-    response: dict[str, Any] = {
-        "name": result.name,
-        "ok": result.ok,
-        "message": result.message,
-    }
-    if result.prompt_size_warnings:
-        response["prompt_size_warnings"] = list(result.prompt_size_warnings)
-    return response
+        raise RegistryIngressError(400, result.message)
+    return presenters.mutation_result(result)
 
 
 def diff_catalog_skill(skill_name: str) -> dict[str, Any]:
     result = _flows().runtime_skills.imports.diff(skill_name)
     if not result.ok:
-        raise RuntimeSurfaceError(400, result.message)
-    return {"name": result.name, "ok": result.ok, "diff": result.message}
+        raise RegistryIngressError(400, result.message)
+    return presenters.diff_result(result)
 
 
 def conversation_skill_state(store: AbstractRegistryStore, conversation_id: str) -> dict[str, Any]:
@@ -255,21 +190,7 @@ def conversation_skill_state(store: AbstractRegistryStore, conversation_id: str)
     listing = _flows().runtime_skills.activation.list_conversation_skills(
         list(resolved.active_skills)
     )
-    return {
-        "conversation_id": conversation_id,
-        "conversation_key": loaded.conversation_key,
-        "active_skills": list(listing.active_skills),
-        "active_skill_details": [
-            {
-                "name": item.name,
-                "display_name": item.display_name,
-                "description": item.description,
-                "source_kind": item.source_kind,
-                "has_custom_override": item.has_custom_override,
-            }
-            for item in listing.active_skill_details
-        ],
-    }
+    return presenters.conversation_skill_state(conversation_id, loaded.conversation_key, listing)
 
 
 def activate_conversation_skill(
@@ -288,18 +209,10 @@ def activate_conversation_skill(
         confirm=confirm,
     )
     if decision.status == "unknown":
-        raise RuntimeSurfaceError(404, f"Unknown skill: {skill_name}")
+        raise RegistryIngressError(404, f"Unknown skill: {skill_name}")
     if decision.mutated:
         save_session(loaded.context.config.data_dir, loaded.conversation_key, session_to_dict(loaded.session))
-    response: dict[str, Any] = {"status": decision.status}
-    if decision.status == "needs_setup" and decision.first_requirement:
-        response["first_requirement"] = decision.first_requirement
-    if decision.status == "needs_confirmation":
-        response["projected_size"] = decision.projected_size
-        response["prompt_size_threshold"] = decision.prompt_size_threshold
-    if decision.status == "foreign_setup":
-        response["foreign_setup_user"] = decision.foreign_setup.user_id if decision.foreign_setup else ""
-    return response
+    return presenters.activation_result(decision)
 
 
 def deactivate_conversation_skill(
@@ -316,10 +229,10 @@ def deactivate_conversation_skill(
         skill_name=skill_name,
     )
     if decision.status == "foreign_setup":
-        raise RuntimeSurfaceError(409, "credential_setup_in_progress")
+        raise RegistryIngressError(409, "credential_setup_in_progress")
     if decision.mutated:
         save_session(loaded.context.config.data_dir, loaded.conversation_key, session_to_dict(loaded.session))
-    return {"status": decision.status}
+    return presenters.status_result(decision)
 
 
 def clear_conversation_skills(
@@ -331,10 +244,10 @@ def clear_conversation_skills(
     loaded = load_runtime_conversation(store, conversation_id)
     decision = _flows().runtime_skills.activation.clear(loaded.session, user_id=actor_key)
     if decision.status == "foreign_setup":
-        raise RuntimeSurfaceError(409, "credential_setup_in_progress")
+        raise RegistryIngressError(409, "credential_setup_in_progress")
     if decision.mutated:
         save_session(loaded.context.config.data_dir, loaded.conversation_key, session_to_dict(loaded.session))
-    return {"status": decision.status}
+    return presenters.status_result(decision)
 
 
 def preview_provider_guidance(
@@ -352,15 +265,8 @@ def preview_provider_guidance(
             compact_mode=compact_mode,
         )
     except ValueError as exc:
-        raise RuntimeSurfaceError(404, str(exc)) from exc
-    return {
-        "provider": preview.provider,
-        "effective_guidance": preview.effective_guidance,
-        "system_prompt": preview.system_prompt,
-        "capability_summary": preview.capability_summary,
-        "provider_config": preview.provider_config,
-        "prompt_weight": preview.prompt_weight,
-    }
+        raise RegistryIngressError(404, str(exc)) from exc
+    return presenters.provider_guidance_preview(preview)
 
 
 def reset_for_test() -> None:

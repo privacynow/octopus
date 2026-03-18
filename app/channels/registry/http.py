@@ -1,4 +1,4 @@
-"""FastAPI registry control-plane application."""
+"""FastAPI HTTP entrypoint for the registry channel."""
 
 from __future__ import annotations
 
@@ -18,9 +18,9 @@ from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.capability_service import CapabilityService
-from app.registry_service.backend import get_registry_store
-from app.registry_service.runtime_surface import (
-    RuntimeSurfaceError,
+from app.channels.registry import ui
+from app.channels.registry.ingress import (
+    RegistryIngressError,
     activate_conversation_skill,
     catalog_skill_detail,
     clear_conversation_skills,
@@ -34,6 +34,7 @@ from app.registry_service.runtime_surface import (
     uninstall_catalog_skill,
     update_catalog_skill,
 )
+from app.registry_service.backend import get_registry_store
 from app.registry_service.store_base import AbstractRegistryStore, CapabilityDisabledError
 from app.session_state import session_to_dict
 
@@ -130,98 +131,6 @@ def _require_session(request: Request) -> None:
     if _session_is_valid(request):
         return
     raise HTTPException(status_code=302, headers={"Location": "/ui/login"})
-
-
-def _login_html(settings: RegistrySettings, *, error: str = "") -> str:
-    heading = settings.display_name or "Agent Registry"
-    error_html = (
-        f'<div class="error">{html.escape(error)}</div>'
-        if error else
-        ""
-    )
-    return f"""<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{html.escape(heading)} — Login</title>
-    <style>
-      :root {{
-        color-scheme: dark;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-                     "Helvetica Neue", Arial, sans-serif;
-      }}
-      * {{ box-sizing: border-box; }}
-      body {{
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        background:
-          radial-gradient(circle at top right, rgba(15, 118, 110, 0.22), transparent 30%),
-          linear-gradient(180deg, #0f172a 0%, #111827 100%);
-        color: #e5e7eb;
-      }}
-      .card {{
-        width: min(320px, calc(100vw - 2rem));
-        padding: 1.5rem;
-        border-radius: 1rem;
-        background: #1e293b;
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
-      }}
-      h1 {{
-        margin: 0 0 0.4rem;
-        font-size: 1.2rem;
-      }}
-      p {{
-        margin: 0 0 1rem;
-        color: #cbd5e1;
-        font-size: 0.92rem;
-      }}
-      label {{
-        display: block;
-        margin-bottom: 0.45rem;
-        color: #cbd5e1;
-        font-size: 0.92rem;
-      }}
-      input {{
-        width: 100%;
-        padding: 0.8rem 0.9rem;
-        border-radius: 0.8rem;
-        border: 1px solid rgba(148, 163, 184, 0.25);
-        background: #0f172a;
-        color: #f8fafc;
-        margin-bottom: 0.9rem;
-      }}
-      button {{
-        width: 100%;
-        border: 0;
-        border-radius: 0.8rem;
-        padding: 0.85rem 1rem;
-        background: #0f766e;
-        color: #f8fafc;
-        font: inherit;
-        cursor: pointer;
-      }}
-      .error {{
-        margin-bottom: 0.9rem;
-        color: #fca5a5;
-        font-size: 0.9rem;
-      }}
-    </style>
-  </head>
-  <body>
-    <form class="card" method="post" action="/ui/login">
-      <h1>{html.escape(heading)}</h1>
-      <p>Enter the Registry UI password to continue.</p>
-      {error_html}
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required />
-      <button type="submit">Log in</button>
-    </form>
-  </body>
-</html>"""
 
 
 app = FastAPI(title="Telegram Agent Registry", version="0.1.0")
@@ -419,7 +328,7 @@ def api_catalog_skill_detail(
 ) -> dict[str, Any]:
     try:
         return catalog_skill_detail(skill_name)
-    except RuntimeSurfaceError as exc:
+    except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
@@ -430,7 +339,7 @@ def api_catalog_skill_install(
 ) -> dict[str, Any]:
     try:
         return install_catalog_skill(skill_name)
-    except RuntimeSurfaceError as exc:
+    except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
@@ -441,7 +350,7 @@ def api_catalog_skill_uninstall(
 ) -> dict[str, Any]:
     try:
         return uninstall_catalog_skill(skill_name)
-    except RuntimeSurfaceError as exc:
+    except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
@@ -452,7 +361,7 @@ def api_catalog_skill_update(
 ) -> dict[str, Any]:
     try:
         return update_catalog_skill(skill_name)
-    except RuntimeSurfaceError as exc:
+    except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
@@ -463,7 +372,7 @@ def api_catalog_skill_diff(
 ) -> dict[str, Any]:
     try:
         return diff_catalog_skill(skill_name)
-    except RuntimeSurfaceError as exc:
+    except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
@@ -475,7 +384,7 @@ def api_conversation_skills(
 ) -> dict[str, Any]:
     try:
         return conversation_skill_state(store, conversation_id)
-    except RuntimeSurfaceError as exc:
+    except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
@@ -495,7 +404,7 @@ def api_conversation_activate_skill(
             skill_name=skill_name,
             confirm=payload.confirm,
         )
-    except RuntimeSurfaceError as exc:
+    except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
@@ -514,7 +423,7 @@ def api_conversation_deactivate_skill(
             actor_key=payload.actor_key,
             skill_name=skill_name,
         )
-    except RuntimeSurfaceError as exc:
+    except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
@@ -531,7 +440,7 @@ def api_conversation_clear_skills(
             conversation_id,
             actor_key=payload.actor_key,
         )
-    except RuntimeSurfaceError as exc:
+    except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
@@ -548,7 +457,7 @@ def api_provider_guidance_preview(
             active_skills=list(payload.active_skills),
             compact_mode=payload.compact_mode,
         )
-    except RuntimeSurfaceError as exc:
+    except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
@@ -559,7 +468,7 @@ def ui_login_page(request: Request):
         return RedirectResponse("/ui", status_code=303)
     if not settings.ui_token:
         return RedirectResponse("/ui", status_code=303)
-    return HTMLResponse(_login_html(settings))
+    return HTMLResponse(ui.render_login_html(settings.display_name or "Agent Registry"))
 
 
 @app.post("/ui/login")
@@ -568,7 +477,9 @@ async def ui_login(request: Request, password: str = Form(default="")):
     if _session_is_valid(request):
         return RedirectResponse("/ui", status_code=303)
     if settings.ui_token and not hmac.compare_digest(password, settings.ui_token):
-        return HTMLResponse(_login_html(settings, error="Incorrect password."))
+        return HTMLResponse(
+            ui.render_login_html(settings.display_name or "Agent Registry", error="Incorrect password.")
+        )
     request.session["ui_authenticated"] = True
     return RedirectResponse("/ui", status_code=303)
 

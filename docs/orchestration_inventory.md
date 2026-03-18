@@ -22,6 +22,21 @@ workflow package under `app/workflows/*`.
 `runtime/*`, `agents/*`, and channel packages may bridge I/O and persistence
 handoff, but they do not own durable business transitions.
 
+## Channel Entry Boundaries
+
+Channel bootstrap and ingress ownership are intentionally not classified as
+workflow orchestration concerns in this inventory.
+
+Current Telegram boundary:
+
+- `app/channels/telegram/bootstrap.py` owns PTB application construction and
+  route registration
+- `app/channels/telegram/ingress.py` owns normalized event translation,
+  ingress dispatch, and worker dispatch handoff
+
+Those modules are channel entrypoint owners, not durable workflow owners. This
+inventory covers the concern-owned orchestration packages they call into.
+
 ## Inventory
 
 ### 1. Lifecycle
@@ -96,19 +111,21 @@ handoff, but they do not own durable business transitions.
   - the state is conversational and durable in session storage
   - the concern previously had split ownership over `session.awaiting_skill_setup`
   - cancellation, foreign-setup, completion, and credential-clear semantics need one authoritative transition owner
-- Follow-on owner: Track F / F3
+- Follow-on owner: Track F / F3 complete
 - Resolved split owners removed by F3:
-  - `app/skill_lifecycle_service.py`
   - `app/credential_flow.py` no longer owns setup-state transitions
 
 ### 5. Delegation Progression
 
 - Concern: parent delegation-plan state, child routed-task state, cancel/approve/result-application/resume-readiness
 - Current owners:
-  - `app/agents/orchestration.py`
-  - `app/agents/delegation.py`
+  - `app/workflows/delegation/machine.py`
+  - `app/workflows/delegation/coordination.py`
+  - `app/workflows/delegation/contracts.py`
+  - `app/agents/delegation.py` thin bridge
+  - `app/agents/delivery.py` thin bridge
   - `app/session_state.py` delegated-task and pending-delegation records
-- Current style: procedural orchestration with scattered direct status-string edits
+- Current style: functional decision machine plus thin bridge adapters
 - Classification: `explicit machine required`
 - Authoritative destination:
   - `app/workflows/delegation/machine.py`
@@ -116,30 +133,32 @@ handoff, but they do not own durable business transitions.
   - `app/workflows/delegation/contracts.py`
 - Why:
   - parent and child states are durable and multi-step
-  - there is an explicit active-state inventory already in `app/agents/orchestration.py`
+  - the durable state inventory is now explicit in the delegation machine
   - result application and resume readiness are workflow concerns, not agent-bridge concerns
-- Follow-on owner: Track F / F4
+- Follow-on owner: Track F / F4 complete
 
 ### 6. Request Execution / Preflight
 
 - Concern: execution admission, preflight, pending-approval creation, provider run orchestration, reply/result shaping
 - Current owners:
   - `app/runtime/dispatch.py`
+  - `app/workflows/execution/contracts.py`
+  - `app/workflows/execution/requests.py`
   - `app/request_flow.py`
-  - `app/approvals.py`
-  - `app/provider_guidance_service.py` preflight/run-context builders
+  - `app/approvals.py` as helper policy/approval logic
 - Current style:
-  - `app/request_flow.py` is a procedural workflow helper and is acceptable
-  - `app/runtime/dispatch.py` still mixes runtime plumbing with workflow decisions
-- Classification: `misplaced orchestration that must move`
+  - `app/runtime/dispatch.py` is channel-agnostic provider-call plumbing
+  - `app/workflows/execution/requests.py` is the concern-owned execution workflow
+  - `app/request_flow.py` remains a procedural helper module
+- Classification: `procedural workflow acceptable`
 - Authoritative destination:
-  - business and durable decision logic moves to a concern-owned workflow package such as `app/workflows/execution/*`
   - `app/runtime/dispatch.py` remains only queue-claim to provider-run plumbing
+  - `app/workflows/execution/*` remains the execution/preflight workflow owner
 - Why:
-  - runtime should not own business workflows
-  - the concern currently spans pure helpers and a too-fat runtime orchestrator
-  - Track A removed channel imports, but ownership is still not clean
-- Follow-on owner: Track F / F6
+  - runtime no longer owns business workflows
+  - execution/preflight orchestration now lives under a concern-owned workflow package
+  - the remaining request-flow helpers are acceptable procedural workflow code
+- Follow-on owner: Track F / F6 complete
 
 ## Acceptable Procedural Workflow Notes
 

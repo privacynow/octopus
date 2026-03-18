@@ -140,6 +140,53 @@ def test_deleted_telegram_routing_path_is_gone() -> None:
     assert not deleted_path.exists(), f"legacy telegram routing path still exists at {deleted_path}"
 
 
+def test_only_telegram_bootstrap_imports_the_live_ingress_owner_from_app_code() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    app_root = repo_root / "app"
+    bootstrap_path = app_root / "channels" / "telegram" / "bootstrap.py"
+    ingress_path = app_root / "channels" / "telegram" / "ingress.py"
+    python_files = sorted(path for path in app_root.rglob("*.py") if "__pycache__" not in path.parts)
+    forbidden_tokens = (
+        "app.channels.telegram.ingress",
+        "from app.channels.telegram import ingress",
+    )
+    for path in python_files:
+        if path in {bootstrap_path, ingress_path}:
+            continue
+        text = path.read_text()
+        for token in forbidden_tokens:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_telegram_bootstrap_owns_application_construction_and_handler_registration() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    bootstrap_path = repo_root / "app" / "channels" / "telegram" / "bootstrap.py"
+    text = bootstrap_path.read_text()
+    required = (
+        "def build_application(",
+        "Application.builder().token(",
+        "app.add_handler(",
+        "def build_bootstrap(",
+        "from app.channels.telegram import ingress",
+    )
+    for token in required:
+        assert token in text, f"{token} missing from {bootstrap_path}"
+
+
+def test_telegram_ingress_does_not_build_ptb_applications_or_register_handlers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    text = ingress_path.read_text()
+    forbidden = (
+        "def build_application(",
+        "Application.builder(",
+        "app.add_handler(",
+        "def build_bootstrap(",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in {ingress_path}"
+
+
 def test_runtime_dispatch_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     dispatch_path = repo_root / "app" / "runtime" / "dispatch.py"

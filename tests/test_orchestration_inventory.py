@@ -12,6 +12,9 @@ def test_orchestration_inventory_lists_required_concerns_and_files() -> None:
     text = _inventory_text()
 
     required_fragments = (
+        "Channel Entry Boundaries",
+        "app/channels/telegram/bootstrap.py",
+        "app/channels/telegram/ingress.py",
         "Lifecycle",
         "Pending Approval / Retry",
         "Transport Recovery",
@@ -19,11 +22,13 @@ def test_orchestration_inventory_lists_required_concerns_and_files() -> None:
         "Delegation Progression",
         "Request Execution / Preflight",
         "app/workflows/runtime_skills/setup.py",
-        "app/skill_lifecycle_service.py",
         "app/credential_flow.py",
-        "app/agents/orchestration.py",
+        "app/workflows/delegation/machine.py",
+        "app/workflows/delegation/coordination.py",
+        "app/workflows/delegation/contracts.py",
         "app/agents/delegation.py",
         "app/runtime/dispatch.py",
+        "app/workflows/execution/requests.py",
     )
 
     for fragment in required_fragments:
@@ -34,8 +39,21 @@ def test_orchestration_inventory_uses_only_declared_classifications() -> None:
     text = _inventory_text()
 
     assert "Classification: `explicit machine required`" in text
-    assert "Classification: `misplaced orchestration that must move`" in text
-    assert text.count("Classification: `procedural workflow acceptable`") == 0
+    assert "Classification: `procedural workflow acceptable`" in text
+    assert "Classification: `misplaced orchestration that must move`" not in text
     assert "TBD" not in text
     assert "TODO" not in text
     assert "unclassified" not in text.lower()
+
+
+def test_orchestration_inventory_names_only_live_owners() -> None:
+    text = _inventory_text()
+    forbidden_fragments = (
+        "app/channels/telegram/routing.py",
+        "app/agents/orchestration.py",
+        "app/skill_lifecycle_service.py",
+        "app/workflows/pending_request.py",
+        "app/workflows/transport_recovery.py",
+    )
+    for fragment in forbidden_fragments:
+        assert fragment not in text

@@ -13,7 +13,7 @@ from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_ca
 from app.runtime_skill_import_use_cases import get_runtime_skill_import_use_cases
 from app.runtime_skill_setup_use_cases import get_runtime_skill_setup_use_cases
 from app.session_state import session_from_dict
-from app.skills import derive_encryption_key, load_user_credentials
+from tests.support.skill_test_helpers import derive_encryption_key, load_user_credentials
 from app.storage import close_db, default_session, ensure_data_dirs
 from tests.support.config_support import make_config
 from tests.support.runtime_skill_registry import FakeRuntimeSkillRegistry
@@ -76,7 +76,7 @@ def test_activation_use_cases_list_and_activate_skill(tmp_path: Path):
         assert outcome.status == "activated"
         assert outcome.mutated is True
 
-        listing = activation.list_conversation_skills(session)
+        listing = activation.list_conversation_skills(["code-review"])
         assert listing.active_skills == ("code-review",)
         assert listing.active_skill_details[0].source_kind == "builtin"
     finally:

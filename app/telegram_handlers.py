@@ -82,7 +82,6 @@ from app.transports.admission import (
 )
 from app.transports.types import InboundEnvelope
 from app.credential_validation import validate_credential
-from app.skills import cleanup_codex_scripts
 from app.inbound_use_case_factory import (
     get_credential_management_use_cases,
     get_conversation_control_use_cases,
@@ -1285,7 +1284,7 @@ def _save(chat_id: int, session: SessionState) -> None:
 
 async def _check_credential_satisfaction(
     chat_id: int | str, user_id: int | str, session: SessionState, message,
-    resolved: ResolvedExecutionContext | None = None,
+    resolved: ResolvedExecutionContext,
 ) -> dict[str, str] | None:
     """Check credentials for active skills. Returns credential_env if satisfied, None if not.
 
@@ -1294,11 +1293,10 @@ async def _check_credential_satisfaction(
 
     Delegates to the runtime-skill setup use case and handles only persistence/rendering.
     """
-    active_skills = resolved.active_skills if resolved else session.active_skills
     outcome = get_runtime_skill_setup_use_cases().check_satisfaction(
         session,
         user_id=_actor_key(user_id),
-        active_skills=active_skills,
+        active_skills=resolved.active_skills,
     )
     if outcome.status == "satisfied":
         return outcome.credential_env or {}
@@ -1974,7 +1972,9 @@ async def cmd_new(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
         _save(chat_id, outcome.replacement_session)
         if outcome.cleanup_scripts:
-            cleanup_codex_scripts(cfg.data_dir, _conversation_key(chat_id))
+            get_provider_guidance_service().cleanup_codex_scripts(
+                cfg.data_dir, _conversation_key(chat_id)
+            )
     await update.effective_message.reply_text(outcome.message)
 
 
@@ -2133,9 +2133,11 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     cfg = _cfg()
     session_context = None
     if session is not None:
+        resolved = _resolve_context(session, trust_tier=_trust_tier(event.user))
         session_context = SessionHealthContext(
             session=session_to_dict(session),
             user_id=_actor_key(event.user.id),
+            resolved_active_skills=tuple(resolved.active_skills),
         )
     report = await collect_runtime_health_report(
         cfg,
@@ -3758,7 +3760,9 @@ async def _execute_worker_action(
             return
         _save(runtime_chat, outcome.replacement_session)
         if outcome.cleanup_scripts:
-            cleanup_codex_scripts(cfg.data_dir, _conversation_key(runtime_chat))
+            get_provider_guidance_service().cleanup_codex_scripts(
+                cfg.data_dir, _conversation_key(runtime_chat)
+            )
         await surface.reply_text(outcome.message)
         return
 

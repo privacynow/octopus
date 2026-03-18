@@ -40,7 +40,7 @@ from app.session_state import (
     session_from_dict,
     session_to_dict,
 )
-from app.skills import get_provider_config_digest, get_skill_digests
+from tests.support.skill_test_helpers import get_provider_config_digest, get_skill_digests
 from app.storage import default_session, save_session
 from tests.support.config_support import make_config as _make_config
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id

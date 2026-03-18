@@ -128,6 +128,19 @@ def test_public_trust_strips_skills():
     assert ctx.active_skills == []
 
 
+def test_trusted_context_filters_unresolvable_skills():
+    """Trusted resolved context must ignore raw session skills that do not resolve."""
+    with fresh_env() as (_data_dir, cfg, _prov):
+        session = SessionState(
+            provider="claude",
+            provider_state={},
+            approval_mode="off",
+            active_skills=["code-review", "missing-skill", "code-review"],
+        )
+        ctx = resolve_execution_context(session, cfg, "claude", trust_tier="trusted")
+        assert ctx.active_skills == ["code-review"]
+
+
 def test_public_trust_strips_project():
     """Public users must have no project binding."""
     project_dir = tempfile.mkdtemp()

@@ -22,8 +22,8 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
     def _catalog(self):
         return get_runtime_skill_catalog_use_cases()
 
-    def list_conversation_skills(self, session: SessionState) -> ConversationSkillListing:
-        active = tuple(self._lifecycle().list_active(session))
+    def list_conversation_skills(self, active_skills: list[str]) -> ConversationSkillListing:
+        active = tuple(active_skills)
         details: list[ConversationSkillItem] = []
         for skill_name in active:
             summary = self._catalog().get_skill(skill_name)

@@ -6,7 +6,11 @@ import time
 from pathlib import Path
 
 from app.providers.base import RunResult
-from app.skills import derive_encryption_key, load_user_credentials, save_user_credential
+from tests.support.skill_test_helpers import (
+    derive_encryption_key,
+    load_user_credentials,
+    save_user_credential,
+)
 from app.storage import default_session, ensure_data_dirs, save_session
 import app.telegram_handlers as _th
 from app import work_queue
@@ -210,6 +214,30 @@ async def test_doctor_credential_check():
         assert "GITHUB_TOKEN" in " ".join(r.get("text", "") for r in msg.replies)
 
 
+async def test_doctor_public_user_ignores_raw_session_skills():
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            allow_open=True,
+            allowed_user_ids=frozenset({42}),
+            public_working_dir="/tmp/public-sandbox",
+        )
+        prov = FakeProvider("claude")
+        prov._health_errors = []
+        setup_globals(cfg, prov)
+
+        session = default_session("claude", prov.new_provider_state(), "off")
+        session["active_skills"] = ["github-integration"]
+        save_session(data_dir, telegram_conversation_key(12345), session)
+
+        chat = FakeChat(12345)
+        msg = FakeMessage(chat=chat, text="/doctor")
+        stranger = FakeUser(999)
+        await _th.cmd_doctor(FakeUpdate(message=msg, user=stranger, chat=chat), FakeContext())
+        rendered = " ".join(r.get("text", "") for r in msg.replies)
+        assert "GITHUB_TOKEN" not in rendered
+
+
 async def test_multi_credential():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -339,7 +367,7 @@ async def test_credential_completion_activates():
 
 
 async def test_skills_add_no_creds():
-    from app.skills import load_catalog, get_skill_requirements
+    from tests.support.skill_test_helpers import load_catalog, get_skill_requirements
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -743,7 +771,7 @@ async def test_expired_setup_persisted_on_noop_remove():
 
 
 async def test_handler_credential_activation_and_capture():
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     orig = skills_mod.CUSTOM_DIR
     try:
@@ -787,7 +815,7 @@ async def test_handler_credential_activation_and_capture():
 
 
 async def test_handler_provider_context_has_skill_and_creds():
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     orig = skills_mod.CUSTOM_DIR
     try:
@@ -824,7 +852,7 @@ async def test_handler_provider_context_has_skill_and_creds():
 
 
 async def test_handler_second_skill_changes_prompt():
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     orig = skills_mod.CUSTOM_DIR
     try:
@@ -868,7 +896,7 @@ async def test_handler_second_skill_changes_prompt():
 
 
 async def test_handler_skills_remove_drops_cred_env():
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     orig = skills_mod.CUSTOM_DIR
     try:
@@ -912,7 +940,7 @@ async def test_handler_skills_remove_drops_cred_env():
 
 
 async def test_handler_skills_clear_preserves_credentials():
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     orig = skills_mod.CUSTOM_DIR
     try:
@@ -947,7 +975,7 @@ async def test_handler_skills_clear_preserves_credentials():
 
 
 async def test_handler_new_resets_state_not_credentials():
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     orig = skills_mod.CUSTOM_DIR
     try:
@@ -984,7 +1012,7 @@ async def test_handler_new_resets_state_not_credentials():
 
 
 async def test_regression_readd_after_new_skips_setup():
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     orig = skills_mod.CUSTOM_DIR
     try:
@@ -1015,7 +1043,7 @@ async def test_regression_readd_after_new_skips_setup():
 
 
 async def test_smoke_credentialed_skill_flow():
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     orig = skills_mod.CUSTOM_DIR
     try:
@@ -1164,7 +1192,7 @@ async def test_credential_prompt_html_link():
 
 
 async def test_delete_user_credentials():
-    from app.skills import delete_user_credentials
+    from tests.support.skill_test_helpers import delete_user_credentials
 
     with fresh_data_dir() as data_dir:
         key = derive_encryption_key("1234567890:AABBCCDDEEFFaabbccddeeff_01234567")
@@ -1193,7 +1221,7 @@ async def test_foreign_setup_message_info():
 
 async def test_clear_credentials_confirm_flow():
     """Clear credentials shows confirmation, then clears on confirm."""
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     orig_custom_dir = skills_mod.CUSTOM_DIR
     try:
@@ -1255,7 +1283,7 @@ async def test_clear_credentials_confirm_flow():
 
 async def test_clear_credentials_cancel():
     """Cancel button aborts credential clearing."""
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     orig_custom_dir = skills_mod.CUSTOM_DIR
     try:
@@ -1303,7 +1331,7 @@ async def test_clear_credentials_cancel():
 
 async def test_clear_credentials_all_confirm():
     """Clear all credentials with confirmation."""
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     orig_custom_dir = skills_mod.CUSTOM_DIR
     try:
@@ -1376,7 +1404,7 @@ async def test_clear_credentials_no_stored():
 
 async def test_clear_credentials_cross_user_rejected():
     """In a group chat, Bob cannot tap Alice's clear-credentials button."""
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     orig_custom_dir = skills_mod.CUSTOM_DIR
     try:
@@ -1429,7 +1457,7 @@ async def test_clear_credentials_cross_user_rejected():
 
 
 async def test_bad_validate_spec_no_crash():
-    from app.skills import SkillRequirement, validate_credential
+    from tests.support.skill_test_helpers import SkillRequirement, validate_credential
 
     req = SkillRequirement(
         key="API_KEY",

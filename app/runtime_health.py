@@ -113,6 +113,7 @@ class SessionHealthContext:
 
     session: dict[str, Any]
     user_id: str
+    resolved_active_skills: tuple[str, ...] = ()
 
 
 class RuntimeHealthProvider(Protocol):
@@ -341,14 +342,8 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
 
             credential_service = get_credential_service()
 
-            diagnostics.extend(
-                _diag("error", "skills.invalid_active_selection", message)
-                for message in get_skill_catalog_service().validate_active(
-                    session_context.session.get("active_skills", [])
-                )
-            )
             user_credentials = credential_service.load(session_context.user_id)
-            for skill_name in session_context.session.get("active_skills", []):
+            for skill_name in session_context.resolved_active_skills:
                 missing = credential_service.missing_requirements(
                     get_skill_catalog_service().requirements(skill_name),
                     user_credentials.get(skill_name, {}),

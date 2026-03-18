@@ -145,6 +145,26 @@ def _resolved_provider_config_digest(skill_names: list[str], provider_name: str 
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 
+def _resolved_active_skills(
+    session: "SessionState",
+    trust_tier: str = "trusted",
+) -> list[str]:
+    if trust_tier == "public":
+        return []
+    from app.skill_catalog_service import get_skill_catalog_service
+
+    catalog = get_skill_catalog_service()
+    seen: set[str] = set()
+    active: list[str] = []
+    for name in session.active_skills:
+        if name in seen:
+            continue
+        seen.add(name)
+        if catalog.has_skill(name):
+            active.append(name)
+    return active
+
+
 def resolve_execution_context(
     session: "SessionState",
     config: "BotConfig",
@@ -203,8 +223,8 @@ def resolve_execution_context(
             dirs.extend(sorted(project_binding.extra_dirs))
         base_extra_dirs = dirs
 
-    # Skills: public users get no active skills
-    active_skills = [] if trust_tier == "public" else session.active_skills
+    # Skills: trust shaping and resolvable filtering happen here.
+    active_skills = _resolved_active_skills(session, trust_tier=trust_tier)
 
     return ResolvedExecutionContext(
         role=session.role,

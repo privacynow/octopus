@@ -35,7 +35,7 @@ class ConversationSkillMutationOutcome:
 
 
 class RuntimeSkillActivationPort(Protocol):
-    def list_conversation_skills(self, session: SessionState) -> ConversationSkillListing: ...
+    def list_conversation_skills(self, active_skills: list[str]) -> ConversationSkillListing: ...
 
     def begin_activate(
         self,

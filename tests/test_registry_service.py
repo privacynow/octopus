@@ -303,6 +303,37 @@ def test_registry_conversation_skill_activation_surface(monkeypatch, tmp_path: P
     assert deactivate.json()["status"] == "removed"
 
 
+def test_registry_conversation_skill_state_filters_unresolvable_raw_skills(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    data_dir = _configure_runtime_surface(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _, token = _enroll_and_register(client, "Dev Bot", "dev-bot")
+
+    conversation_key = telegram_conversation_key(12346)
+    conversation_id = "telegram:dev-bot:12346"
+    session = default_session("claude", {"session_id": "test", "started": False}, "on")
+    session["active_skills"] = ["code-review", "missing-skill"]
+    save_session(data_dir, conversation_key, session)
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": conversation_id,
+            "title": "Telegram chat 12346",
+            "origin_surface": "telegram",
+            "external_id": "12346",
+        },
+    )
+    assert bind.status_code == 200
+
+    listed = client.get(
+        f"/v1/conversations/{conversation_id}/skills",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert listed.status_code == 200
+    assert listed.json()["active_skills"] == ["code-review"]
+
+
 def test_registry_conversation_skill_surface_lazy_loads_default_session(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     _configure_runtime_surface(monkeypatch, tmp_path)

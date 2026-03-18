@@ -386,7 +386,7 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
     import app.content_store as _cs
     import app.credential_store as _creds
     from app.content_seed import track_from_skill_dir
-    import app.skills as _skills_mod
+    from tests.support import skill_test_helpers as _skills_mod
 
     _cs.init_content_store_for_config(config)
     _creds.init_credential_store_for_config(config)

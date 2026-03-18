@@ -24,7 +24,16 @@ class SkillActivationService:
         return pruned
 
     def list_active(self, session: SessionState) -> list[str]:
-        return list(session.active_skills)
+        catalog = get_skill_catalog_service()
+        seen: set[str] = set()
+        active: list[str] = []
+        for name in session.active_skills:
+            if name in seen:
+                continue
+            seen.add(name)
+            if catalog.has_skill(name):
+                active.append(name)
+        return active
 
     def activate(self, session: SessionState, skill_name: str) -> bool:
         if skill_name in session.active_skills:

@@ -18,6 +18,7 @@ _COMPACT_RESPONSE_SUFFIX = (
     "then provide detailed explanation below. Lead with the answer."
 )
 _PROMPT_SIZE_WARNING_THRESHOLD = 8000
+PROMPT_SIZE_WARNING_THRESHOLD = _PROMPT_SIZE_WARNING_THRESHOLD
 
 
 def _resolve_placeholders(obj, env: dict[str, str]):
@@ -299,6 +300,11 @@ class ProviderGuidanceService:
                 if file_record.executable:
                     target.chmod(0o755)
         return scripts_dir
+
+    def cleanup_codex_scripts(self, data_dir: Path, conversation_key: str) -> None:
+        scripts_dir = data_dir / "scripts" / filesystem_component_for_key(conversation_key)
+        if scripts_dir.is_dir():
+            shutil.rmtree(scripts_dir, ignore_errors=True)
 
     def default_seed_tracks(self) -> list[ProviderGuidanceTrackRecord]:
         return default_provider_guidance_tracks()

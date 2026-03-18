@@ -15,7 +15,7 @@ from app.content_models import (
     SkillRevisionRecord,
 )
 from app.content_store_base import AbstractContentStore
-from app.skills import CATALOG_DIR
+from app.runtime_skill_paths import BUILTIN_SKILL_CATALOG_DIR
 
 _SKILL_RESERVED_FILES = {"skill.md", "requires.yaml", "claude.yaml", "codex.yaml"}
 _DEFAULT_PROVIDER_GUIDANCE = {
@@ -140,9 +140,9 @@ def _builtin_skill_track(path: Path) -> RuntimeSkillTrackRecord:
 
 def builtin_skill_tracks() -> list[RuntimeSkillTrackRecord]:
     out: list[RuntimeSkillTrackRecord] = []
-    if not CATALOG_DIR.is_dir():
+    if not BUILTIN_SKILL_CATALOG_DIR.is_dir():
         return out
-    for child in sorted(CATALOG_DIR.iterdir()):
+    for child in sorted(BUILTIN_SKILL_CATALOG_DIR.iterdir()):
         if not child.is_dir() or not (child / "skill.md").is_file():
             continue
         out.append(_builtin_skill_track(child))

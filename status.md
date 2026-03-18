@@ -43,16 +43,29 @@ acceptance gates in
 
 Phase 8 is now active.
 
-- `H1 / session_io` is complete in the current branch state:
-  - Telegram session/key helpers now live in
-    `app/channels/telegram/session_io.py`
-  - `app/channels/telegram/ingress.py` no longer defines `_load`, `_save`,
-    `_conversation_key`, `_actor_key`, `_event_key`, or `_telegram_chat_id`
-  - focused structural gates for the extracted module are in place
-  - verified against the full suite: `1620 passed, 23 skipped`
+- Completed Phase 8 slices:
+  - `9b8b611` `Phase 8 / H1: extract session_io from ingress`
+    - Telegram session/key helpers now live in
+      `app/channels/telegram/session_io.py`
+    - `app/channels/telegram/ingress.py` no longer defines `_load`, `_save`,
+      `_conversation_key`, `_actor_key`, `_event_key`, or `_telegram_chat_id`
+    - focused structural gates for the extracted module are in place
+    - verified against the full suite: `1620 passed, 23 skipped`
+  - `Phase 8 / H1 progress slice` is complete in the current branch state:
+    - Telegram progress lifecycle now lives in
+      `app/channels/telegram/progress.py`
+    - `app/channels/telegram/ingress.py` no longer defines `TelegramProgress`,
+      `_progress_timeline_callback`, `keep_typing`, or `_heartbeat`
+    - `tests/test_progress.py`, `tests/test_invariants.py`, and
+      `tests/test_runtime_dispatch_boundary.py` now use the extracted public
+      progress module owner
+    - focused suite: `173 passed`
+    - verified against the full suite: `1624 passed, 23 skipped`
+- Remaining verified-but-uncommitted Phase 8 work in this branch state:
+  - progress lifecycle extraction is ready to commit after this status update
 - Remaining Phase 8 work is still pending:
-  - H1 progress / delegation surface / execution / worker / shared dispatch
-    extraction and ingress cleanup
+  - H1 delegation surface / execution / worker / shared dispatch extraction
+    and ingress cleanup
   - H2 presenter rendering blind-spot closure
   - H3 Telegram test-boundary hardening
   - H4 documentation and structural gate tightening

@@ -741,25 +741,50 @@ This plan assumes:
 
 - we keep valid work already completed
 - we rebuild compromised seams cleanly
-- we do not add new lifecycle features until the foundation gates pass
+- feature expansion stays frozen until the architecture and lifecycle gates pass
 
 ## Executive Summary
 
-The current refactor made real progress, but some of it sits on incomplete
-foundations. The most expensive remaining risks are:
+The architecture-and-lifecycle recovery plan is complete through Milestone 13.
 
-1. the current code shape still reflects the old `transports/` plus ingress-monolith split
-2. workflow contracts and composition are still organized by legacy top-level modules rather than the target `workflows/*` and `runtime/*` ownership
-3. Telegram ingress is still concentrated in [app/telegram_handlers.py](/Users/tinker/output/bots/telegram-agent-bot/app/telegram_handlers.py)
-4. registry ingress, HTTP, and UI are still concentrated in [app/registry_service/app.py](/Users/tinker/output/bots/telegram-agent-bot/app/registry_service/app.py)
-5. [app/skill_commands.py](/Users/tinker/output/bots/telegram-agent-bot/app/skill_commands.py) and a few related modules are still transitional ingress seams rather than deleted architecture
+What is now true:
 
-The correct response is not to restart from scratch. It is to:
+1. the repo shape follows the `channels/`, `workflows/`, `ports/`, and `runtime/` model
+2. the old `transports/` ownership and ingress monoliths are no longer the live architecture
+3. lifecycle schema, lifecycle workflows, Telegram parity, registry parity, and registry rich editing are all landed
+4. the registry browser UI mutates through registry HTTP ingress rather than a server-side shortcut path
 
-- freeze feature expansion
-- lay the missing foundations properly
-- delete the compromised seams
-- then resume lifecycle work
+The feature freeze that existed earlier in this plan is now lifted.
+
+The plan below remains authoritative as an architectural contract and milestone
+record, but the gating condition has changed:
+
+- foundational recovery work is complete
+- lifecycle work is complete through the planned editor milestone
+- new feature work is unblocked
+- hardening is now a normal follow-up slice, not a global blocker
+
+## Current Plan State
+
+As of 2026-03-17:
+
+- Milestones 1-13 are complete
+- the earlier feature freeze is lifted
+- no additional architecture freeze milestone remains open in this plan
+- future work must preserve the channel/workflow/runtime ownership model rather than reopen it
+
+### Feature Freeze Status
+
+The earlier freeze existed to prevent new work from landing on bad
+foundations. That condition no longer applies.
+
+Feature work is now allowed under the normal rules:
+
+- no parallel paths
+- no channel-owned workflow logic
+- no registry UI side doors
+- no stale-test-driven compatibility seams
+- new work must land on the current `channels/*`, `workflows/*`, `ports/*`, and `runtime/*` shape
 
 ## Non-Negotiable Global Rules
 
@@ -1470,7 +1495,7 @@ Once the new owners exist, the old ones must die.
 - zero imports from deleted legacy modules
 - the new architecture is the only architecture
 
-### Milestone 10. Lifecycle Schema Gate
+### Milestone 10. Lifecycle Schema Gate (Complete)
 
 This milestone is the renamed continuation of the former lifecycle-schema work
 that used to sit earlier in the plan. It is intentionally deferred until the
@@ -1497,16 +1522,22 @@ Expected lifecycle schema concerns:
 - no migration shortcuts that violate migration-fidelity rules
 - no SQLite-only lifecycle schema changes without explicit scoped debt language
 
+#### Completion notes
+
+- lifecycle schema landed with backend parity and versioned migrations
+- runtime-vs-published resolution semantics were split explicitly
+- durable approval history is now part of the content model
+
 #### Exit criteria
 
 - lifecycle schema is landed with backend parity expectations stated and tested
 
-### Milestone 11. Lifecycle Implementation
+### Milestone 11. Lifecycle Implementation (Complete)
 
 This milestone is the renamed continuation of the former lifecycle implementation
-work. It remains blocked until Milestones 0-10 complete.
+work.
 
-After Milestones 0-10 are done, add the missing lifecycle:
+This milestone added the missing lifecycle behavior:
 
 - draft edit
 - revision/history
@@ -1528,15 +1559,21 @@ After Milestones 0-10 are done, add the missing lifecycle:
   - partial failure / incomplete publish path
   - completion-owner definition for every transition
 
+#### Completion notes
+
+- lifecycle behavior now lives in workflow modules, not channels
+- runtime-skill authoring/approval and provider-guidance management are real workflow owners
+- lifecycle transitions were implemented only after the schema gate landed
+
 #### Exit criteria
 
 - lifecycle behavior is owned by workflow modules, not channels
 - lifecycle durable-state transitions are explicitly hardened against interruption, replay, rejection, and partial completion paths
 
-### Milestone 12. Channel Capability Parity For Lifecycle Workflows
+### Milestone 12. Channel Capability Parity For Lifecycle Workflows (Complete)
 
 This milestone is the renamed continuation of the former parity milestone for
-lifecycle workflows. It remains blocked until Milestone 11 completes.
+lifecycle workflows.
 
 Bring Telegram and registry to the same capability set for lifecycle workflows added in Milestone 11.
 
@@ -1547,15 +1584,19 @@ Bring Telegram and registry to the same capability set for lifecycle workflows a
 - Telegram cannot be “left for later”
 - this milestone follows the same per-workflow lockstep discipline as Milestone 7
 
+#### Completion notes
+
+- Telegram and registry both support the lifecycle operations added in Milestone 11
+- lifecycle workflow parity now exists at the channel layer, with different presentation but shared workflow ownership
+
 #### Exit criteria
 
 - Telegram and registry support the same lifecycle operations added in Milestone 11
 - no lifecycle workflow remains registry-only or Telegram-only at milestone completion
 
-### Milestone 13. Rich Registry Editor
+### Milestone 13. Rich Registry Editor (Complete)
 
-This milestone is the renamed continuation of the former rich-editor work. It
-remains blocked until lifecycle contracts and channel boundaries are correct.
+This milestone is the renamed continuation of the former rich-editor work.
 
 Only after lifecycle contracts are correct.
 
@@ -1568,36 +1609,47 @@ Only after lifecycle contracts are correct.
 - do not let UI richness hide channel/workflow shortcomings
 - do not add editor-driven server shortcuts that bypass workflow contracts
 
+#### Completion notes
+
+- the registry channel UI now provides rich editing over the correct HTTP-ingress/workflow boundary
+- lifecycle mutation and draft editing remain routed through registry HTTP ingress
+- the editor is a UI enhancement rather than a server-side shortcut
+
 #### Exit criteria
 
 - rich editing exists as a UI enhancement over the correct registry channel ingress/workflow boundary
 
 ## Next Execution Track
 
-The next concrete work is Milestones 1-5 of this channel architecture plan.
+The architecture recovery track is complete. There is no Milestone 14 in this
+plan.
 
-Implementation sequence for the next track:
+The next concrete work is ordinary feature delivery on top of the now-stable
+architecture.
 
-1. create package skeletons and document dependency rules
-2. move egress to `ports/egress.py` and `channels/*/egress.py`
-3. move current workflow contracts beside their workflows and replace `inbound_use_case_factory.py` with `runtime/composition.py`
-4. refactor registry into one channel package (`ingress.py`, `egress.py`, `http.py`, `ui.py`, `presenters.py`)
+Execution policy for post-M13 work:
 
-Implementation guidance for the next track:
+1. new feature slices are allowed and no longer blocked by the earlier freeze
+2. hardening work is optional follow-up work, not a prerequisite to shipping new features
+3. any new feature must land directly on `channels/*`, `workflows/*`, `ports/*`, and `runtime/*`
+4. if a proposed feature requires reopening the architecture, that architectural work must be planned explicitly rather than smuggled into feature code
 
-- prefer rewriting a module cleanly over preserving a bad legacy file shape
+Implementation guidance for post-M13 work:
+
+- prefer adding new behavior to the correct current owner over preserving transitional shapes
 - preserve valid contracts and tests, not legacy file paths
 - delete or rewrite stale tests in the same slice if they encode dead ownership
-- do not add aliases to “smooth” the refactor
-- when a new owner lands, move callers directly and delete the old owner
-- keep each milestone behavior-preserving until its exit criteria are met
+- do not add aliases to “smooth” a new feature onto the wrong layer
+- if a feature needs a new channel, add a new channel package rather than branching inside an existing one
+- if a feature needs a new workflow concern, add a concern-owned workflow module rather than expanding a generic dispatcher
 
-The refactor is allowed to be invasive as long as:
+Allowed next-track work now includes:
 
-- the new dependency direction is respected
-- no parallel path survives
-- no stale test dictates a compatibility seam
-- channel/workflow/runtime ownership gets cleaner, not merely relocated
+- new product features
+- lifecycle UX improvements
+- approval-policy enhancements
+- additional channels
+- non-blocking hardening and audit slices
 
 ## Required Audits At Every Milestone
 

@@ -880,3 +880,425 @@ def raw_usage_message() -> TelegramRenderedMessage:
 
 def raw_missing_message() -> TelegramRenderedMessage:
     return TelegramRenderedMessage(text="No stored responses found.")
+
+
+HELP_SKILLS = (
+    "<b>Skills</b>\n\n"
+    "Skills add domain knowledge and tools to the AI.\n\n"
+    "/skills list — see all available skills with status\n"
+    "/skills add &lt;name&gt; — activate a skill (prompts for credentials if needed)\n"
+    "/skills remove &lt;name&gt; — deactivate a skill\n"
+    "/skills setup &lt;name&gt; — re-enter credentials for a skill\n"
+    "/skills info &lt;name&gt; — view skill details\n"
+    "/skills search &lt;query&gt; — search the skill store\n"
+    "/skills clear — deactivate all skills\n"
+    "/skills create &lt;name&gt; — create a custom draft skill\n"
+    "/skills edit &lt;name&gt; &lt;body&gt; — replace the current draft body\n"
+    "/skills history &lt;name&gt; — show revision and approval history\n"
+    "/skills submit &lt;name&gt; — submit the draft for review\n"
+    "/skills approve|reject|publish|archive &lt;name&gt; — lifecycle admin actions\n\n"
+    "/guidance preview &lt;provider&gt; — show effective provider guidance\n"
+    "/guidance edit|history|submit|approve|reject|publish|archive &lt;provider&gt; — provider guidance lifecycle"
+)
+
+HELP_APPROVAL = (
+    "<b>Approval Mode</b>\n\n"
+    "When approval mode is on, the AI shows a plan before executing. "
+    "You review and approve or reject it.\n\n"
+    "If a request needs approval, retry, or recovery (e.g. interrupted or blocked), "
+    "use the in-chat buttons on the status message — Run again or Skip — no separate command needed.\n\n"
+    "/approval on — require approval before execution\n"
+    "/approval off — execute immediately\n"
+    "/approval status — check current setting\n"
+    "/approve — approve the pending plan\n"
+    "/reject — reject the pending plan\n"
+    "/cancel — cancel a pending request"
+)
+
+HELP_CREDENTIALS = (
+    "<b>Credentials</b>\n\n"
+    "Some skills need API tokens or keys. When you activate such a skill, "
+    "the bot asks for each credential in a private message and encrypts it.\n\n"
+    "/skills setup &lt;name&gt; — re-enter credentials for a skill\n"
+    "/clear_credentials — remove all your stored credentials\n"
+    "/clear_credentials &lt;skill&gt; — remove credentials for one skill\n\n"
+    "Your credential messages are deleted after capture for safety."
+)
+
+_HELP_TOPICS = {
+    "skills": HELP_SKILLS,
+    "approval": HELP_APPROVAL,
+    "credentials": HELP_CREDENTIALS,
+}
+
+
+def _help_command_lines(
+    *,
+    has_model_profiles: bool,
+    agent_mode: str,
+    is_public: bool,
+    has_projects: bool,
+    is_admin: bool,
+) -> list[str]:
+    lines = [
+        "/new — start a fresh conversation",
+        "/skills — browse and activate skills (e.g. <code>/skills list</code>)",
+        "/guidance — inspect and manage provider guidance",
+        "/role &lt;text&gt; — set the AI's persona (e.g. <code>/role Python expert</code>)",
+        "/approval on|off — show a plan before executing, or run immediately",
+        "/approve / /reject — act on a pending plan",
+        "/cancel — cancel a running task, credential setup, or a pending request",
+        "/clear_credentials — remove your stored credentials",
+        "/send &lt;path&gt; — retrieve a file from the server",
+        "/compact on|off — toggle short/full answers",
+    ]
+    if has_model_profiles:
+        lines.append("/model — switch model profile (fast/balanced/best)")
+    if agent_mode == "registry":
+        lines.append("/discover — find available specialist bots by role, skill, or tag")
+    if not is_public:
+        lines.append("/policy inspect|edit — set file access policy")
+    lines.append("/settings — view and change chat settings")
+    if not is_public and has_projects:
+        lines.append("/project — show or change project binding")
+    lines.extend([
+        "/session — show current session info",
+        "/id — show your Telegram user ID",
+        "/doctor — run full app health check (DB, config, Telegram)",
+        "/export — download recent conversation history",
+    ])
+    if is_admin:
+        lines.append("/admin sessions — session overview (admin only)")
+    return lines
+
+
+def main_help_message(
+    *,
+    instance: str,
+    provider_name: str,
+    has_model_profiles: bool,
+    agent_mode: str,
+    is_public: bool,
+    has_projects: bool,
+    is_admin: bool,
+) -> TelegramRenderedMessage:
+    header = (
+        f"<b>Agent Bot</b> (instance: <code>{html.escape(instance)}</code>, "
+        f"provider: {html.escape(provider_name)})\n\n"
+        "Send a message, photo, or document and the AI will respond.\n\n"
+        "<b>Commands:</b>\n"
+    )
+    command_block = "\n".join(
+        _help_command_lines(
+            has_model_profiles=has_model_profiles,
+            agent_mode=agent_mode,
+            is_public=is_public,
+            has_projects=has_projects,
+            is_admin=is_admin,
+        )
+    )
+    control_parts = ["/settings", "/session"]
+    if has_model_profiles:
+        control_parts.append("/model")
+    if not is_public and has_projects:
+        control_parts.append("/project")
+    controls_line = "Chat options: " + " · ".join(control_parts) + "."
+    recovery_line = "Interrupted? Use Run again or Skip on the status message."
+    footer = (
+        controls_line
+        + "\n"
+        + recovery_line
+        + "\n\nType /help skills, /help approval, or /help credentials for details."
+    )
+    return _html_message(header + command_block + "\n\n" + footer)
+
+
+def help_topic_message(topic: str) -> TelegramRenderedMessage | None:
+    text = _HELP_TOPICS.get(topic)
+    if text is None:
+        return None
+    return _html_message(text)
+
+
+def unknown_help_topic_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(
+        text="Unknown help topic. Try: /help skills, /help approval, or /help credentials."
+    )
+
+
+def session_overview_message(
+    *,
+    provider_name: str,
+    instance: str,
+    working_dir_display: str,
+    file_policy: str,
+    model_profile: str,
+    model_id: str,
+    compact_display: str,
+    prompt_weight: str,
+    session_label: str,
+    session_value: str,
+    session_active: str | None,
+    approval_mode: str,
+    approval_source: str,
+    role_display: str,
+    skills_display: str,
+    pending: str,
+    trust_public: bool,
+    session_commands: list[str],
+) -> TelegramRenderedMessage:
+    lines = [
+        f"Provider: <code>{html.escape(provider_name)}</code>",
+        f"Instance: <code>{html.escape(instance)}</code>",
+        f"Working dir: <code>{html.escape(working_dir_display)}</code>",
+        f"File policy: <code>{html.escape(file_policy)}</code>",
+        f"Model: <code>{html.escape(model_profile)}</code> ({html.escape(model_id)})",
+        f"Compact: <code>{compact_display}</code>",
+        f"Prompt weight: <code>{html.escape(prompt_weight)}</code>",
+        f"{html.escape(session_label)}: <code>{html.escape(session_value)}</code>",
+    ]
+    if session_active is not None:
+        lines.append(f"Active: <code>{html.escape(session_active)}</code>")
+    lines.extend(
+        [
+            f"Approval mode: <code>{html.escape(approval_mode)}</code> ({html.escape(approval_source)})",
+            f"Role: <code>{html.escape(role_display)}</code>",
+            f"Skills: <code>{html.escape(skills_display)}</code>",
+            f"Pending: <code>{html.escape(pending)}</code>",
+        ]
+    )
+    if trust_public:
+        lines.extend(["", _msg.trust_settings_managed_public()])
+    if session_commands:
+        if len(session_commands) == 1:
+            command_hint = session_commands[0]
+        elif len(session_commands) == 2:
+            command_hint = session_commands[0] + " or " + session_commands[1]
+        else:
+            command_hint = ", ".join(session_commands[:-1]) + ", or " + session_commands[-1]
+        lines.extend(["", "Use " + command_hint + " to change chat settings."])
+    return _html_message("\n".join(lines))
+
+
+def send_usage_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text="Usage: /send <path>")
+
+
+def send_path_not_allowed_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text="Path is missing or outside allowed roots.")
+
+
+def user_identity_message(user_id: str, username: str) -> TelegramRenderedMessage:
+    return _html_message(
+        f"Your user ID: <code>{html.escape(str(user_id))}</code>\n"
+        f"Your username: <code>{html.escape(username)}</code>"
+    )
+
+
+def doctor_report_message(lines: Iterable[str], prompt_weight_count: int | None) -> TelegramRenderedMessage:
+    parts: list[str] = []
+    for line in lines:
+        if line.startswith("INFO: "):
+            parts.append(f"\u2139\ufe0f {html.escape(line[6:])}")
+        elif line.startswith("FAIL: "):
+            parts.append(f"\u274c {html.escape(line[6:])}")
+        elif line.startswith("WARN: "):
+            parts.append(f"\u26a0\ufe0f {html.escape(line[6:])}")
+        else:
+            parts.append(html.escape(line))
+    if prompt_weight_count:
+        parts.append(f"Prompt weight: ~{prompt_weight_count} chars")
+    if parts:
+        return _html_message("\n".join(parts))
+    return TelegramRenderedMessage(text="\u2705 All checks passed.")
+
+
+def discover_usage_message() -> TelegramRenderedMessage:
+    return _html_message(
+        "Usage: /discover <query> [role:<role>] [capability:<capability>] [tag:<tag>] [state:<connected|degraded|standalone|offline>]\n"
+        "Example: <code>/discover role:developer capability:python tag:backend schema review</code>"
+    )
+
+
+def discover_unavailable_standalone_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text="Agent discovery is unavailable in standalone mode.")
+
+
+def discover_degraded_message(last_error: str) -> TelegramRenderedMessage:
+    detail = f" Last registry error: {last_error}" if last_error else ""
+    return TelegramRenderedMessage(
+        text="Agent discovery is unavailable because registry connectivity is degraded." + detail
+    )
+
+
+def discover_not_enrolled_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(
+        text="Agent discovery is unavailable because this bot has not finished registry enrollment."
+    )
+
+
+def discover_failed_message(error_text: str) -> TelegramRenderedMessage:
+    return _html_message(f"Agent discovery failed: {html.escape(error_text)}")
+
+
+def discover_results_message(agents: list[dict[str, Any]]) -> TelegramRenderedMessage:
+    if not agents:
+        return TelegramRenderedMessage(text="No matching agents found.")
+    lines = ["<b>Matching agents</b>"]
+    for agent in agents[:8]:
+        display_name = html.escape(
+            agent.get("display_name") or agent.get("slug") or agent.get("agent_id") or "Unnamed agent"
+        )
+        role = html.escape(agent.get("role") or "(unspecified)")
+        state = html.escape(agent.get("connectivity_state") or "unknown")
+        current_capacity = int(agent.get("current_capacity", 0) or 0)
+        max_capacity = int(agent.get("max_capacity", 1) or 1)
+        lines.append(f"\n<b>{display_name}</b> — <code>{role}</code>")
+        lines.append(
+            f"State: <code>{state}</code> · Capacity: <code>{current_capacity}/{max_capacity}</code>"
+        )
+        capabilities = [str(value) for value in agent.get("capabilities", agent.get("skills", [])) if value]
+        if capabilities:
+            lines.append(f"Capabilities: <code>{html.escape(', '.join(capabilities))}</code>")
+        tags = [str(value) for value in agent.get("tags", []) if value]
+        if tags:
+            lines.append(f"Tags: <code>{html.escape(', '.join(tags))}</code>")
+        description = str(agent.get("description", "") or "").strip()
+        if description:
+            lines.append(html.escape(description))
+    if len(agents) > 8:
+        lines.append(f"\nShowing first 8 of {len(agents)} matches.")
+    return _html_message("\n".join(lines))
+
+
+def admin_required_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=_msg.admin_required())
+
+
+def no_sessions_found_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=_msg.no_sessions_found())
+
+
+def admin_sessions_usage_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text="Usage: /admin sessions [conversation_key]")
+
+
+def admin_invalid_conversation_key_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text="Invalid conversation key.")
+
+
+def admin_session_not_found_message(target_key: str) -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=f"No session found for conversation {target_key}.")
+
+
+def admin_session_detail_message(target_key: str, match: dict[str, Any]) -> TelegramRenderedMessage:
+    skills = match["active_skills"]
+    skill_list = ", ".join(skills) if skills else "none"
+    lines = [
+        f"<b>Session {html.escape(target_key)}</b>",
+        f"Provider: {html.escape(match['provider'])}",
+        f"Approval: {html.escape(match['approval_mode'])}",
+        f"Skills ({len(skills)}): {html.escape(skill_list)}",
+        f"Pending request: {'yes' if match['has_pending'] else 'no'}",
+        f"Credential setup: {'in progress' if match['has_setup'] else 'no'}",
+        f"Created: {html.escape(match['created_at'][:19])}",
+        f"Updated: {html.escape(match['updated_at'][:19])}",
+    ]
+    return _html_message("\n".join(lines))
+
+
+def admin_sessions_summary_message(
+    *,
+    total: int,
+    pending: int,
+    setup: int,
+    top_skills: list[tuple[str, int]],
+    most_recent_key: str,
+    most_recent_updated_at: str,
+) -> TelegramRenderedMessage:
+    lines = [f"<b>Sessions: {total}</b>"]
+    if pending:
+        lines.append(f"Pending approval: {pending}")
+    if setup:
+        lines.append(f"Credential setup: {setup}")
+    if top_skills:
+        lines.extend(["", "<b>Top skills:</b>"])
+        for skill_name, count in top_skills:
+            lines.append(f"  {html.escape(skill_name)}: {count}")
+    lines.extend(["", f"Most recent: {html.escape(most_recent_key)}"])
+    if most_recent_updated_at:
+        lines.append(f"  updated {html.escape(most_recent_updated_at[:19])}")
+    return _html_message("\n".join(lines))
+
+
+def skills_usage_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(
+        text="Usage: /skills [list|add|remove|setup|create|edit|history|submit|approve|reject|publish|archive|clear|search|info|install|uninstall|updates|update|diff]"
+    )
+
+
+def guidance_usage_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(
+        text="Usage: /guidance [preview|edit|history|submit|approve|reject|publish|archive] <provider> [body]"
+    )
+
+
+def guidance_admin_only_message(action: str) -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=f"Only admins can {action} provider guidance.")
+
+
+def no_conversation_to_export_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=_msg.no_conversation_to_export())
+
+
+def admin_access_required_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text="This command requires admin access.")
+
+
+def allowuser_usage_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text="Usage: /allowuser <actor_key|user_id> [reason]")
+
+
+def allowuser_success_message(actor_key: str) -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=f"Actor {actor_key} added to allowed list.")
+
+
+def blockuser_usage_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text="Usage: /blockuser <actor_key|user_id> [reason]")
+
+
+def blockuser_success_message(actor_key: str) -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=f"Actor {actor_key} blocked.")
+
+
+def listaccess_empty_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text="No access overrides set.")
+
+
+def access_overrides_message(rows: list[dict[str, Any]]) -> TelegramRenderedMessage:
+    lines = ["<b>Access overrides</b>"]
+    for row in rows:
+        status = "\u2705 allowed" if row["access"] == "allowed" else "\ud83d\udeab blocked"
+        reason = f" — {html.escape(row['reason'])}" if row["reason"] else ""
+        lines.append(f"\u2022 <code>{row['actor_key']}</code> {status}{reason}")
+    return _html_message("\n".join(lines))
+
+
+def queue_busy_message() -> TelegramRenderedMessage:
+    return _html_message(f"<i>{_msg.queue_busy()}</i>")
+
+
+def queue_accepted_message() -> TelegramRenderedMessage:
+    return _html_message(f"<i>{_msg.queue_accepted()}</i>")
+
+
+def generic_error_try_again_message() -> TelegramRenderedMessage:
+    return _html_message(f"<i>{_msg.generic_error_try_again()}</i>")
+
+
+def rate_limit_message(retry_after: int) -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=f"Rate limit reached. Please wait {retry_after} seconds.")
+
+
+def recovery_orphaned_command_message(detail: str) -> TelegramRenderedMessage:
+    return _html_message(_msg.recovery_orphaned_command(detail))

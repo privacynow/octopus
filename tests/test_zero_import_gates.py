@@ -231,6 +231,32 @@ def test_telegram_ingress_request_and_compact_rendering_is_presenter_owned() -> 
         assert token not in text, f"{token} still referenced in {ingress_path}"
 
 
+def test_telegram_ingress_help_and_admin_rendering_is_presenter_owned() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    text = ingress_path.read_text()
+    forbidden = (
+        "_help_command_lines(",
+        "_build_main_help(",
+        "HELP_SKILLS =",
+        "HELP_APPROVAL =",
+        "HELP_CREDENTIALS =",
+        "_HELP_TOPICS =",
+        "_discover_usage(",
+        "_format_discovery_results(",
+        "Usage: /skills [list|add|remove|setup|create|edit|history|submit|approve|reject|publish|archive|clear|search|info|install|uninstall|updates|update|diff]",
+        "Usage: /guidance [preview|edit|history|submit|approve|reject|publish|archive] <provider> [body]",
+        "Usage: /admin sessions [conversation_key]",
+        "This command requires admin access.",
+        "<b>Access overrides</b>",
+        "<b>Agent Bot</b>",
+        "Unknown help topic. Try:",
+        "Agent discovery is unavailable in standalone mode.",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in {ingress_path}"
+
+
 def test_agents_delivery_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     delivery_path = repo_root / "app" / "agents" / "delivery.py"

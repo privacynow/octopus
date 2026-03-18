@@ -9,11 +9,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Update
 from telegram.constants import ChatAction, ParseMode
 
 from app import access
 from app import user_messages as _msg
+from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.state import TelegramChannelState
 from app.credential_flow import foreign_setup_message, format_credential_prompt
 from app.execution_context import ResolvedExecutionContext
@@ -221,18 +222,12 @@ async def skills_add(event, update: Update, name: str, *, runtime: TelegramRunti
             )
             return
         if decision.status == "needs_confirmation":
-            kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("Yes", callback_data=f"skill_add_confirm:{name}"),
-                InlineKeyboardButton("No", callback_data="skill_add_cancel"),
-            ]])
-            await update.effective_message.reply_text(
-                f"Adding <code>{html.escape(name)}</code> would bring total "
-                f"prompt context to ~{decision.projected_size:,} chars "
-                f"(threshold: {decision.prompt_size_threshold:,}). "
-                f"This may reduce response quality. Continue?",
-                parse_mode=ParseMode.HTML,
-                reply_markup=kb,
+            rendered = telegram_presenters.skill_add_confirmation(
+                name,
+                decision.projected_size,
+                decision.prompt_size_threshold,
             )
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
         if decision.status == "not_published":
             await update.effective_message.reply_text(
@@ -621,15 +616,12 @@ async def cmd_clear_credentials(event, update: Update, context, *, runtime: Tele
         )
         cb_data = f"clear_cred_confirm_all:{user_id}"
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("Yes, clear", callback_data=cb_data),
-        InlineKeyboardButton("Cancel", callback_data=f"clear_cred_cancel:{user_id}"),
-    ]])
-    await update.effective_message.reply_text(
+    rendered = telegram_presenters.clear_credentials_confirmation(
         msg,
-        parse_mode=ParseMode.HTML,
-        reply_markup=keyboard,
+        confirm_callback=cb_data,
+        cancel_callback=f"clear_cred_cancel:{user_id}",
     )
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def _execute_clear_credentials(

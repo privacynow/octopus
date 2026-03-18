@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -27,7 +27,7 @@ from telegram.ext import (
 
 from app import access
 from app import user_messages as _msg
-from app.approvals import format_denials_html
+from app.channels.telegram import presenters as telegram_presenters
 from app.config import BotConfig
 from app.formatting import extract_send_directives, md_to_telegram_html, split_html, trim_text
 from app.identity import (
@@ -482,25 +482,13 @@ async def _show_setup_prompt(message, missing_skill: str, first_requirement: dic
 
 
 async def _send_retry_prompt(message, denials: tuple[dict[str, Any], ...]) -> None:
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("\u2705 " + _msg.retry_button_grant(), callback_data="retry_allow"),
-        InlineKeyboardButton("\u274c " + _msg.retry_button_skip(), callback_data="retry_skip"),
-    ]])
-    await message.chat.send_message(
-        f"\u26a0\ufe0f <b>{_msg.retry_permission_prompt()}</b>\n"
-        f"{format_denials_html(list(denials))}\n\n"
-        f"{_msg.retry_grant_and_retry_question()}",
-        parse_mode=ParseMode.HTML,
-        reply_markup=keyboard,
-    )
+    rendered = telegram_presenters.retry_prompt(denials)
+    await message.chat.send_message(rendered.text, **rendered.kwargs())
 
 
 async def _send_approval_prompt(message) -> None:
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("\u2705 " + _msg.approval_button_approve(), callback_data="approval_approve"),
-        InlineKeyboardButton("\u274c " + _msg.approval_button_reject(), callback_data="approval_reject"),
-    ]])
-    await message.chat.send_message(_msg.approval_plan_question(), reply_markup=keyboard)
+    rendered = telegram_presenters.approval_prompt()
+    await message.chat.send_message(rendered.text, **rendered.kwargs())
 
 
 def _execution_runtime() -> ExecutionRuntime:
@@ -1044,83 +1032,6 @@ def _settings_model_profile_state(
     return (list(state.available_profiles), state.current_profile)
 
 
-def _settings_model_buttons(available: list[str], current: str, has_explicit_override: bool = False) -> list[InlineKeyboardButton]:
-    """One row of model profile buttons, with optional Inherit button."""
-    buttons = [
-        InlineKeyboardButton(
-            f"\u2705 {p}" if p == current else p,
-            callback_data=f"setting_model:{p}",
-        )
-        for p in available
-    ]
-    if has_explicit_override:
-        buttons.append(InlineKeyboardButton("Inherit", callback_data="setting_model:inherit"))
-    return buttons
-
-
-def _settings_project_buttons(
-    cfg: BotConfig, session: SessionState
-) -> list[list[InlineKeyboardButton]]:
-    """Project rows: one row of project names, optional clear row. For trusted users only."""
-    rows: list[list[InlineKeyboardButton]] = []
-    if not cfg.projects:
-        return rows
-    row = []
-    for proj in cfg.projects:
-        label = f"\u2705 {proj.name}" if proj.name == session.project_id else proj.name
-        row.append(InlineKeyboardButton(label, callback_data=f"setting_project:{proj.name}"))
-    if row:
-        rows.append(row)
-    if session.project_id:
-        rows.append([InlineKeyboardButton("Clear project", callback_data="setting_project:clear")])
-    return rows
-
-
-def _settings_policy_buttons(policy: str, has_explicit_override: bool = False) -> list[InlineKeyboardButton]:
-    """One row of file policy buttons, with optional Inherit button."""
-    buttons = [
-        InlineKeyboardButton(
-            "\u2705 Read only" if policy == "inspect" else "Read only",
-            callback_data="setting_policy:inspect",
-        ),
-        InlineKeyboardButton(
-            "\u2705 Read & write" if policy == "edit" else "Read & write",
-            callback_data="setting_policy:edit",
-        ),
-    ]
-    if has_explicit_override:
-        buttons.append(InlineKeyboardButton("Inherit", callback_data="setting_policy:inherit"))
-    return buttons
-
-
-def _settings_compact_buttons(compact: bool) -> list[InlineKeyboardButton]:
-    """One row of compact mode buttons."""
-    return [
-        InlineKeyboardButton(
-            "\u2705 Short answers" if compact else "Short answers",
-            callback_data="setting_compact:on",
-        ),
-        InlineKeyboardButton(
-            "\u2705 Full answers" if not compact else "Full answers",
-            callback_data="setting_compact:off",
-        ),
-    ]
-
-
-def _settings_approval_buttons(approval: str) -> list[InlineKeyboardButton]:
-    """One row of approval mode buttons."""
-    return [
-        InlineKeyboardButton(
-            "\u2705 Review first" if approval == "on" else "Review first",
-            callback_data="setting_approval:on",
-        ),
-        InlineKeyboardButton(
-            "\u2705 Run immediately" if approval == "off" else "Run immediately",
-            callback_data="setting_approval:off",
-        ),
-    ]
-
-
 # -- Helpers ---------------------------------------------------------------
 
 def _allowed_roots(chat_id: int | str, resolved: ResolvedExecutionContext | None = None) -> list[Path]:
@@ -1209,15 +1120,14 @@ async def _send_compact_reply(message, text: str, chat_id: int, slot: int) -> No
         # Too long for blockquote — send summary with "Show full" button
         button_text = f"{formatted_summary}\n\n<i>Response truncated</i>"
         try:
+            rendered = telegram_presenters.collapsed_response_message(
+                formatted_summary,
+                chat_id,
+                slot,
+            )
             await message.reply_text(
-                button_text[:4000], parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton(
-                        "Show full answer",
-                        callback_data=f"expand:{chat_id}:{slot}",
-                    ),
-                ]]),
+                rendered.text,
+                **rendered.kwargs(),
             )
             return
         except BadRequest:
@@ -1248,11 +1158,8 @@ async def send_directed_artifacts(
         await send_path_to_chat(message, allowed_path, force_image=(dtype == "IMAGE"))
 
 
-def _delegation_keyboard(chat_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("\u25b6\ufe0f Approve delegation", callback_data=f"delegation_approve:{chat_id}"),
-        InlineKeyboardButton("\u2716 Cancel", callback_data=f"delegation_cancel:{chat_id}"),
-    ]])
+def _delegation_keyboard(chat_id: int):
+    return telegram_presenters.delegation_reply_markup(chat_id)
 
 
 def _format_delegation_plan_message(delegation: PendingDelegation) -> str:
@@ -2435,9 +2342,10 @@ async def handle_expand_callback(event, query) -> None:
     raw_text = load_raw_by_slot(cfg.data_dir, _conversation_key(target_chat), slot)
     if raw_text is None:
         await query.edit_message_reply_markup(reply_markup=None)
+        rendered = telegram_presenters.missing_collapsed_response_message()
         await query.message.edit_text(
-            "<i>Response no longer available (ring buffer rotated). Use /raw to check.</i>",
-            parse_mode=ParseMode.HTML,
+            rendered.text,
+            **rendered.kwargs(),
         )
         return
 
@@ -2447,14 +2355,10 @@ async def handle_expand_callback(event, query) -> None:
     if len(formatted) <= 4000:
         try:
             await query.message.edit_text(
-                formatted, parse_mode=ParseMode.HTML,
+                formatted,
+                parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True,
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton(
-                        "Collapse",
-                        callback_data=f"collapse:{target_chat}:{slot}",
-                    ),
-                ]]),
+                reply_markup=telegram_presenters.expanded_response_reply_markup(target_chat, slot),
             )
             return
         except BadRequest:
@@ -2491,17 +2395,15 @@ async def handle_collapse_callback(event, query) -> None:
     # Re-render compact version with "Show full answer" button
     summary, detail = _extract_summary(raw_text)
     formatted_summary = md_to_telegram_html(summary) if summary else ""
-    button_text = f"{formatted_summary}\n\n<i>Response truncated</i>" if formatted_summary else "<i>Response truncated</i>"
+    rendered = telegram_presenters.collapsed_response_message(
+        formatted_summary if formatted_summary else "",
+        target_chat,
+        slot,
+    )
     try:
         await query.message.edit_text(
-            button_text[:4000], parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton(
-                    "Show full answer",
-                    callback_data=f"expand:{target_chat}:{slot}",
-                ),
-            ]]),
+            rendered.text,
+            **rendered.kwargs(),
         )
     except BadRequest:
         await query.edit_message_reply_markup(reply_markup=None)

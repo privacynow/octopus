@@ -225,6 +225,30 @@ def test_publishing_custom_revision_switches_runtime_resolution(store):
     assert revisions[0].status == "published"
 
 
+def test_latest_skill_approval_action_returns_newest_match_and_empty_for_missing_revision(store):
+    store.upsert_skill_draft(
+        _skill(
+            "helpers",
+            source_kind="custom",
+            body="Draft helper",
+            source_uri="custom/helpers",
+            owner_actor="tg:42",
+            version_label="draft",
+        )
+    )
+    current = store.resolve_skill("helpers")
+    assert current is not None
+
+    store.append_skill_approval("helpers", current.active_revision_id, action="submitted", actor="admin:1")
+    store.append_skill_approval("helpers", current.active_revision_id, action="approved", actor="admin:2")
+
+    latest = store.get_latest_skill_approval_action("helpers", current.active_revision_id)
+    missing = store.get_latest_skill_approval_action("helpers", "missing-revision")
+
+    assert latest == "approved"
+    assert missing == ""
+
+
 def test_provider_guidance_draft_uses_published_pointer_for_runtime(store):
     store.replace_provider_guidance(
         ProviderGuidanceTrackRecord(
@@ -270,3 +294,36 @@ def test_provider_guidance_draft_uses_published_pointer_for_runtime(store):
     runtime_after = store.resolve_provider_guidance("claude")
     assert runtime_after is not None
     assert runtime_after.revision.content == "draft"
+
+
+def test_latest_provider_guidance_approval_action_returns_newest_match_and_empty_for_missing_revision(store):
+    store.upsert_provider_guidance_draft(
+        ProviderGuidanceTrackRecord(
+            provider="claude",
+            scope_kind="system",
+            scope_key="",
+            is_mutable=True,
+            revision=ProviderGuidanceRevisionRecord(content="draft", created_by="admin"),
+        )
+    )
+    current = store.get_provider_guidance("claude", scope_kind="system", scope_key="")
+    assert current is not None
+
+    store.append_provider_guidance_approval(
+        "claude",
+        current.active_revision_id,
+        action="submitted",
+        actor="admin:1",
+    )
+    store.append_provider_guidance_approval(
+        "claude",
+        current.active_revision_id,
+        action="approved",
+        actor="admin:2",
+    )
+
+    latest = store.get_latest_provider_guidance_approval_action("claude", current.active_revision_id)
+    missing = store.get_latest_provider_guidance_approval_action("claude", "missing-revision")
+
+    assert latest == "approved"
+    assert missing == ""

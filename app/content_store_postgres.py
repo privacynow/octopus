@@ -608,6 +608,25 @@ class PostgresContentStore(AbstractContentStore):
             for row in rows
         ]
 
+    def get_latest_skill_approval_action(self, slug: str, revision_id: str) -> str:
+        track = self._custom_track_row(slug)
+        if track is None:
+            return ""
+        with self._connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    f"""
+                    SELECT action
+                    FROM {_SCHEMA}.skill_approval_records
+                    WHERE track_id = %s AND revision_id = %s
+                    ORDER BY created_at DESC, record_id DESC
+                    LIMIT 1
+                    """,
+                    (track["track_id"], revision_id),
+                )
+                row = cur.fetchone()
+        return str(row["action"]) if row is not None else ""
+
     def append_skill_approval(
         self,
         slug: str,
@@ -1030,6 +1049,32 @@ class PostgresContentStore(AbstractContentStore):
             )
             for row in rows
         ]
+
+    def get_latest_provider_guidance_approval_action(
+        self,
+        provider: str,
+        revision_id: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> str:
+        track = self._guidance_track_row(provider, scope_kind=scope_kind, scope_key=scope_key)
+        if track is None:
+            return ""
+        with self._connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    f"""
+                    SELECT action
+                    FROM {_SCHEMA}.provider_guidance_approval_records
+                    WHERE guidance_id = %s AND revision_id = %s
+                    ORDER BY created_at DESC, record_id DESC
+                    LIMIT 1
+                    """,
+                    (track["guidance_id"], revision_id),
+                )
+                row = cur.fetchone()
+        return str(row["action"]) if row is not None else ""
 
     def append_provider_guidance_approval(
         self,

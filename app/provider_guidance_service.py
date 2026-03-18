@@ -43,7 +43,7 @@ class ProviderGuidanceService:
     def _tracks(self, active_skills: list[str]) -> list[RuntimeSkillTrackRecord]:
         tracks: list[RuntimeSkillTrackRecord] = []
         for name in active_skills:
-            if (record := self._catalog.resolve_track(name)) is not None:
+            if (record := self._catalog.resolve_runtime_track(name)) is not None:
                 tracks.append(record)
         return tracks
 

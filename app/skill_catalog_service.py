@@ -68,11 +68,23 @@ class SkillCatalogService:
     def resolve_track(self, skill_name: str) -> RuntimeSkillTrackRecord | None:
         return self._store().resolve_skill(skill_name)
 
+    def resolve_runtime_track(self, skill_name: str) -> RuntimeSkillTrackRecord | None:
+        return self._store().resolve_runtime_skill(skill_name)
+
     def has_skill(self, skill_name: str) -> bool:
         return self.resolve_track(skill_name) is not None
 
+    def has_runtime_skill(self, skill_name: str) -> bool:
+        return self.resolve_runtime_track(skill_name) is not None
+
     def requirements(self, skill_name: str) -> list[SkillRequirement]:
         record = self.resolve_track(skill_name)
+        if record is None:
+            return []
+        return _requirements_from_track(record)
+
+    def runtime_requirements(self, skill_name: str) -> list[SkillRequirement]:
+        record = self.resolve_runtime_track(skill_name)
         if record is None:
             return []
         return _requirements_from_track(record)
@@ -118,16 +130,17 @@ class SkillCatalogService:
                 instruction_body="Add your instructions here.",
                 version_label="draft",
                 created_by=owner_actor or "draft",
+                status="draft",
             ),
         )
-        self._store().replace_skill_track(record)
+        self._store().upsert_skill_draft(record)
         resolved = self.resolve_track(skill_name)
         if resolved is None:
             raise RuntimeError(f"Failed to create draft skill '{skill_name}'")
         return resolved
 
     def filter_resolvable(self, names: list[str]) -> list[str]:
-        return [name for name in names if self.has_skill(name)]
+        return [name for name in names if self.has_runtime_skill(name)]
 
     def validate_active(self, skill_names: list[str]) -> list[str]:
         errors: list[str] = []

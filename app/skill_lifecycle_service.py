@@ -76,7 +76,7 @@ class SkillLifecycleService:
         skill_name: str,
         user_credentials: dict[str, dict[str, str]],
     ):
-        requirements = self._catalog.requirements(skill_name)
+        requirements = self._catalog.runtime_requirements(skill_name)
         skill_creds = user_credentials.get(skill_name, {})
         return self._credentials.missing_requirements(requirements, skill_creds)
 
@@ -89,9 +89,11 @@ class SkillLifecycleService:
     ) -> SkillAddDecision:
         if not self._catalog.has_skill(skill_name):
             return SkillAddDecision(status="unknown")
+        if not self._catalog.has_runtime_skill(skill_name):
+            return SkillAddDecision(status="not_published")
 
         active = self._activation.list_active(session)
-        requirements = self._catalog.requirements(skill_name)
+        requirements = self._catalog.runtime_requirements(skill_name)
         if requirements:
             user_creds = self._credentials.load(user_id)
             missing = self._missing_requirements(skill_name, user_creds)
@@ -144,7 +146,9 @@ class SkillLifecycleService:
     ) -> SkillSetupDecision:
         if not self._catalog.has_skill(skill_name):
             return SkillSetupDecision(status="unknown")
-        requirements = self._catalog.requirements(skill_name)
+        if not self._catalog.has_runtime_skill(skill_name):
+            return SkillSetupDecision(status="not_published")
+        requirements = self._catalog.runtime_requirements(skill_name)
         if not requirements:
             return SkillSetupDecision(status="no_requirements")
         foreign = foreign_skill_setup(session, user_id)

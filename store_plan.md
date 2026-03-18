@@ -745,22 +745,29 @@ This plan assumes:
 
 ## Executive Summary
 
-The architecture recovery work and the reopened lifecycle remediation track are
-complete.
+The lifecycle remediation track is complete, but the architecture recovery is
+not actually accepted complete.
 
 What is now true:
 
 1. the repo shape follows the `channels/`, `workflows/`, `ports/`, and `runtime/` model
-2. the old `transports/` ownership and ingress monoliths are no longer the live architecture
-3. lifecycle schema, lifecycle workflows, Telegram parity, registry parity, and registry rich editing are landed and revalidated
-4. lifecycle transitions now use an explicit machine plus atomic durable transition application
-5. the registry browser UI mutates through registry HTTP ingress rather than a server-side shortcut path
+2. lifecycle schema, lifecycle workflows, Telegram parity, registry parity, and registry rich editing are landed and revalidated
+3. lifecycle transitions now use an explicit machine plus atomic durable transition application
+4. the registry browser UI mutates through registry HTTP ingress rather than a server-side shortcut path
 
-The temporary lifecycle re-freeze introduced by the remediation track is now
-lifted.
+What is not yet true:
 
-The plan below remains authoritative as an architectural contract and milestone
-record, but no lifecycle gate remains open in this plan.
+1. Telegram ingress is still the real mutable runtime state hub for the Telegram channel
+2. `runtime/dispatch.py` and parts of `app/agents/*` still depend on Telegram channel internals
+3. registry HTTP/UI decomposition is still incomplete
+4. the Telegram presenter layer is still largely absent
+5. some ownership and naming cleanup promised by the target architecture is still incomplete
+6. test support still couples a large part of the suite to Telegram ingress module globals
+
+The earlier feature unfreeze was premature.
+
+Feature expansion is now re-frozen until the architecture remediation track
+defined below is complete.
 
 ## Current Plan State
 
@@ -768,21 +775,37 @@ As of 2026-03-17:
 
 - Milestones 1-13 are accepted complete
 - Milestones 11R-13R are accepted complete
-- the earlier temporary lifecycle re-freeze is lifted
-- future work must preserve the channel/workflow/runtime ownership model rather than reopen it
+- lifecycle hardening is accepted complete
+- channel/workflow/runtime package migration is only partially accepted complete
+- a new architecture remediation track is now open
 
 ### Feature Freeze Status
 
-The earlier freeze existed to prevent new work from landing on bad
-foundations. That condition no longer applies.
+The earlier unfreeze was a mistake.
 
-Feature work is now allowed under the normal rules:
+Feature expansion is frozen again because the current package layout still
+contains unresolved ownership violations:
 
-- no parallel paths
-- no channel-owned workflow logic
-- no registry UI side doors
-- no stale-test-driven compatibility seams
-- new work must land on the current `channels/*`, `workflows/*`, `ports/*`, and `runtime/*` shape
+- Telegram ingress still owns mutable channel runtime state through module globals
+- runtime and agents still reach back into Telegram ingress
+- registry HTTP still embeds large UI/template programs
+- Telegram presentation is still scattered across ingress and satellite modules
+- tests still depend on Telegram ingress globals through `setup_globals`
+
+Allowed work during this freeze:
+
+- architecture remediation defined in this plan
+- test rewrites needed to remove architecture coupling
+- naming, ownership, and boundary cleanup that moves the repo toward the
+  declared channel/workflow/runtime model
+
+Blocked work during this freeze:
+
+- new feature work
+- new channel features
+- lifecycle expansion
+- UI expansion not required by the remediation track
+- convenience shims that preserve the broken seams
 
 ## Non-Negotiable Global Rules
 
@@ -805,6 +828,17 @@ These apply to every stage and milestone.
 15. `contracts.py` is workflow-local; `ports/` is only for cross-workflow or infrastructure boundaries.
 16. Shared inbound/admission types must not live under a channel package.
 17. Existing code and existing package names are raw material only; they do not get to constrain the target architecture.
+18. No module may import a sibling or parent channel entrypoint to obtain runtime state or helper access.
+19. No module-level mutable globals may be used as a shared service locator for channel state.
+20. Tests must construct or inject explicit context objects; they must not mutate channel module globals as setup.
+21. `runtime/*` must not import channel packages for business orchestration.
+22. `agents/*` must not import channel packages for business orchestration.
+23. `access.py` and other shared/domain helpers may accept only normalized shared types, never raw channel-native objects.
+24. `presenters.py` owns channel-specific rendering; `ingress.py` and `http.py` do not build UI strings or markup inline except for trivial literals.
+25. `http.py` is a thin HTTP boundary; `ui.py` owns HTML/CSS/JS page construction.
+26. No workflow may reach into another workflow implementation’s private helpers.
+27. Do not rely on implicit ordering contracts when the store can provide an explicit query.
+28. Temporary re-exports, aliases, or naming bridges must have an explicit removal step in the same track or they are not allowed.
 
 ### Stale Test Rule
 
@@ -914,6 +948,7 @@ app/
       activation.py
       importing.py
       setup.py
+      setup_machine.py
       contracts.py
     credentials/
       management.py
@@ -923,10 +958,18 @@ app/
       settings.py
       contracts.py
     pending/
+      machine.py
       requests.py
       contracts.py
     recovery/
+      machine.py
       replay.py
+      results.py
+      transport_contract.py
+      contracts.py
+    delegation/
+      machine.py
+      coordination.py
       contracts.py
     provider_guidance/
       preview.py
@@ -1036,6 +1079,7 @@ Current workflow packages:
 - `workflows/conversation/settings.py`
 - `workflows/pending/requests.py`
 - `workflows/recovery/replay.py`
+- `workflows/delegation/coordination.py`
 - `workflows/provider_guidance/preview.py`
 
 Future lifecycle workflow packages, introduced only after the lifecycle schema gate:
@@ -1101,6 +1145,65 @@ This is wiring only, not business workflow logic.
 - no workflow state-machine ownership
 - no workflow-local branching that belongs in `workflows/*`
 
+## Orchestration Classification Rule
+
+The repo currently has multiple orchestration forms. That is tolerated only as
+an intermediate state, not as an accepted end-state.
+
+Authoritative rule:
+
+- durable transition systems use one explicit machine style
+- one-shot orchestration may remain procedural
+- `runtime/*`, `agents/*`, services, and channels must not become shadow
+  business-orchestration layers
+
+### Durable transition systems
+
+These require an explicit machine with:
+
+- transition inventory
+- one owner
+- replay/idempotency semantics
+- explicit effects
+- tests for interruption and duplicate handling where applicable
+
+Current and expected durable transition systems:
+
+- lifecycle transitions
+- pending approval/retry
+- transport recovery
+- credential/setup progression (`awaiting_skill_setup`)
+- delegation progression
+
+### Procedural workflows
+
+These may remain procedural because they are request/response orchestration,
+not durable transition systems:
+
+- catalog reads
+- provider-guidance preview
+- import/update/diff
+- credential listing/clear
+- most conversation setting changes
+
+### Standard machine style
+
+The target standard for explicit machines in this repo is:
+
+- pure functional machine
+- snapshot + action in
+- decision + effects out
+- atomic application at the session/store boundary
+
+Reason:
+
+- it expresses replay and repair directly
+- it avoids callback-driven mutable machine models
+- it matches the lifecycle hardening shape already accepted in this plan
+
+Existing `python-statemachine` machines are accepted only as migration-state
+implementations until they are consolidated into the standard style.
+
 ## What We Keep
 
 These are valid and should be preserved:
@@ -1126,6 +1229,12 @@ These are no longer acceptable as-is:
 - generic inbound action shapes drifting into workflow APIs
 - hidden orchestration in `skill_commands.py`
 - any reintroduction of deleted legacy authorities through convenience imports or aliases
+- Telegram ingress as a mutable global state hub
+- `runtime/dispatch.py` as Telegram-shaped orchestration hiding under `runtime/`
+- `app/agents/*` depending on Telegram channel internals
+- registry HTTP routes mixed with large inline UI/template programs
+- a Telegram channel with no real presenter layer
+- tests that require mutating Telegram ingress globals to construct runtime state
 
 ## Execution Plan
 
@@ -1714,26 +1823,942 @@ This milestone reopens Milestone 13 after Milestone 12R.
 - the rich editor is accepted on top of the hardened lifecycle behavior
 - registry editor tests cover the repaired lifecycle path, not just the original happy path
 
-## Next Execution Track
+## Reopened Architecture Remediation Track
 
-The remediation track is complete. There is no open follow-on milestone in this
-plan.
+Deep review after the lifecycle remediation confirmed that the package migration
+landed the target directory shape but did not fully land the target ownership
+model.
 
-Execution policy after remediation:
+This track is now authoritative and blocks feature expansion.
 
-1. new feature work is allowed again
-2. keep work on the current `channels/*`, `workflows/*`, `ports/*`, and `runtime/*` shape
-3. if future work reopens a lifecycle or durable-state gate, it must be planned explicitly rather than assumed safe
+### Root Problem Summary
 
-Implementation guidance after remediation:
+The deepest unresolved issue is the inbound context problem:
 
-- prefer adding new behavior to the correct current owner over preserving transitional shapes
-- preserve valid contracts and tests, not legacy file paths
-- delete or rewrite stale tests in the same slice if they encode dead ownership
-- do not add aliases to “smooth” a new feature onto the wrong layer
-- if a feature needs a new channel, add a new channel package rather than branching inside an existing one
-- if a feature needs a new workflow concern, add a concern-owned workflow module rather than expanding a generic dispatcher
-- explicit lifecycle machines and atomic durable transitions are preferred over ad hoc conditional checks
+- [app/channels/telegram/ingress.py](/Users/tinker/output/bots/telegram-agent-bot/app/channels/telegram/ingress.py)
+  still owns module-level mutable state
+- multiple channel, runtime, and agent modules import it at runtime to reach
+  back into that state
+- test support still mutates those globals directly
+
+That one seam causes most of the remaining violations:
+
+- reverse dependencies from `runtime/*` into a channel package
+- reverse dependencies from `agents/*` into a channel package
+- Telegram satellite modules that are not truly independent
+- tests coupled to implementation internals rather than the channel boundary
+
+The other open faults are grouped below by root cause.
+
+### Open Issue Inventory
+
+#### 1. Inbound context and dependency-direction faults
+
+- Telegram ingress owns `_config`, `_provider`, `_boot_id`, `_rate_limiter`,
+  and `_bot_instance`
+- Telegram ingress also owns `_LIVE_CANCEL`, which is mutable per-conversation
+  async cancellation state and must be treated as runtime concurrency state,
+  not startup configuration
+- six app modules still import Telegram ingress as a back-door dependency
+- `runtime/dispatch.py` is not channel-agnostic
+- `app/agents/delivery.py` and `app/agents/delegation.py` are not channel-agnostic
+- `access.py` imports Telegram normalization
+- `trust_tier_for_source` lives in `runtime/composition.py` instead of the
+  inbound/admission boundary
+- `setup_globals` in test support still mutates Telegram ingress globals
+- large Telegram-heavy suites, including 139 ingress references in
+  `test_handlers.py` alone, are coupled to the module-global pattern
+
+#### 2. Registry channel decomposition faults
+
+- `channels/registry/http.py` still mixes:
+  - route handlers
+  - auth/session behavior
+  - large inline HTML/CSS/JS template programs
+- `channels/registry/ui.py` exists but does not own the UI layer yet
+
+#### 3. Telegram presentation faults
+
+- `channels/telegram/presenters.py` is effectively empty
+- Telegram rendering remains spread across:
+  - `ingress.py`
+  - `conversation.py`
+  - `runtime_skills.py`
+  - `pending.py`
+  - `guidance.py`
+
+#### 4. Workflow/lifecycle hygiene faults
+
+- `_snapshot()` is duplicated in runtime-skill lifecycle workflows
+- approval workflow reaches into a private helper on authoring
+- latest-approval lookup relies on implicit ordering and Python scanning rather
+  than an explicit store query
+
+#### 5. Dead code, naming, and gate faults
+
+- `workflows/__init__.py` re-exports have no callers
+- `transport_contract.py` is still stranded at `app/` root under a legacy name
+- zero-import gate scans `app/` only, not `tests/`
+- stale test names still refer to deleted `transports` ownership
+
+#### 6. Orchestration and state-machine consolidation faults
+
+- the repo still contains multiple orchestration styles:
+  - library-backed class machines
+  - functional decision machines
+  - procedural workflow orchestration
+  - out-of-band orchestration in `runtime/*` and `agents/*`
+- `awaiting_skill_setup` progression is still split across workflow and service
+  ownership instead of one explicit machine
+- `app/credential_flow.py` is still a third setup-logic locus alongside the
+  workflow and service layers
+- delegation progression is still outside `app/workflows/*`
+- pending/recovery machine files still live in transitional top-level modules
+- `runtime/dispatch.py` still risks acting as a shadow workflow owner
+
+## Architecture Remediation Rules
+
+These rules are specific to this reopened track and are stricter than the
+global rules above.
+
+1. Do not decompose a large module by creating satellites that import back into
+   it for state, helpers, or service access.
+2. Any extracted module must be executable from explicit inputs plus injected
+   collaborators. If it still needs `import ... as th`, the extraction is not
+   accepted.
+3. Replace module-global mutable channel state with a typed context object
+   before further decomposition of that channel.
+4. `runtime/*` may depend on shared types, stores, ports, and workflows only.
+   It may not depend on a concrete channel package.
+5. `agents/*` may depend on shared types, stores, runtime admission, and
+   workflows only. It may not depend on a concrete channel package.
+6. Channel normalization happens at the channel edge. Shared helpers such as
+   `access.py` must consume normalized shared types only.
+7. Route modules and ingress modules translate, validate, persist, and delegate.
+   They do not render large UI programs and they do not own business workflow
+   branches.
+8. Presenter extraction is not optional cleanup. A channel does not satisfy the
+   architecture until its rendering lives in its presenter layer.
+9. Tests must follow the same architectural boundary as production code. If
+   production moves from globals to explicit context, tests must do the same in
+   the same slice.
+10. No private cross-workflow method access is allowed. Shared logic either
+    moves to a shared helper/module or becomes an explicit store/domain API.
+11. Do not accept “temporary” re-exports or naming bridges without a same-track
+    removal step and a zero-import test.
+12. Preserve behavior by tests, not by keeping the wrong owner alive.
+13. Durable transition systems must not be implemented as ad hoc conditionals
+    spread across workflows, services, runtime, and agents.
+14. New and remediated durable transition systems must use the repo-standard
+    functional machine style unless a narrower exception is explicitly planned.
+15. Existing library-backed machines are migration targets, not an accepted
+    second long-term machine standard.
+
+## Track A. Fix the Inbound Context Problem
+
+Root cause: Telegram ingress owns module-level mutable runtime state, and six
+other modules plus the test harness reach back into it.
+
+### A1. Extract `TelegramChannelState` and explicit Telegram runtime registries
+
+Create a dedicated context object under:
+
+- `app/channels/telegram/state.py`
+  or
+- `app/channels/telegram/context.py`
+
+`TelegramChannelState` owns startup-initialized Telegram channel state currently
+held in module globals, including:
+
+- `config`
+- `provider`
+- `boot_id`
+- `rate_limiter`
+- `bot_instance`
+- any Telegram-specific helper dependencies that are currently read through
+  `_cfg()` / `_prov()` and related globals
+
+A separate explicit mutable runtime registry object must own concurrency maps
+such as:
+
+- `_LIVE_CANCEL`
+- any similar per-conversation async runtime registries discovered during A1
+
+Expected home:
+
+- `app/channels/telegram/cancellation.py`
+
+This module owns Telegram-specific mutable per-conversation async runtime
+registries and exposes explicit access/manipulation helpers for them.
+
+Helpers that already have a correct owner do not move onto the context object:
+
+- session load/save helpers stay in `runtime/session_runtime.py`
+- chat/conversation key helpers stay in `identity.py`
+- upload-dir helpers stay with their current correct owner or move to
+  `runtime/*` if they are truly shared
+- boot wiring stays in bootstrap/startup code
+
+#### Hard rules
+
+- no module-level mutable globals remain as the authoritative Telegram state
+- no module may read channel runtime state through `import ...ingress as th`
+- the context object must be explicit and typed
+- mutable per-conversation async registries must be explicit and typed; they
+  do not hide as anonymous module globals
+- startup/bootstrap is the only place allowed to construct or mutate the live
+  startup channel state object
+
+#### Implementation guidance
+
+- keep the context object small and explicit; do not turn it into a giant bag
+  of random helpers
+- prefer injected collaborators over context methods when a dependency is not
+  truly Telegram-owned
+- if a helper already has a correct home, keep it there; the context object may
+  reference it but does not become its new owner
+- if a helper belongs in `runtime/*` or `workflows/*`, move it there instead of
+  hiding it on the context object
+- `ingress.py` becomes a thin PTB wiring layer that holds a context reference
+  and passes it down
+
+#### Required tests
+
+- add focused tests for context construction and access
+- add focused tests for the explicit mutable runtime registry that replaces
+  `_LIVE_CANCEL`
+- replace any test that currently relies on `_th._config` / `_th._provider`
+  mutation with explicit context setup
+
+#### Exit criteria
+
+- Telegram startup state is owned by one explicit context object
+- mutable async channel runtime registries have explicit owners under
+  `channels/telegram/cancellation.py`
+- `_cfg()` / `_prov()` style global accessors are deleted
+- `ingress.py` no longer acts as a service locator
+
+### A2. Remove back-imports into Telegram ingress
+
+Update these modules to accept explicit context or injected collaborators:
+
+- `app/channels/telegram/conversation.py`
+- `app/channels/telegram/runtime_skills.py`
+- `app/channels/telegram/pending.py`
+- `app/runtime/dispatch.py`
+- `app/agents/delivery.py`
+- `app/agents/delegation.py`
+
+#### Hard rules
+
+- no `import app.channels.telegram.ingress as th` outside `ingress.py`
+- `runtime/*` and `agents/*` must not gain new channel imports while this is
+  being fixed
+- do not replace one hidden global with another hidden singleton
+
+#### Implementation guidance
+
+- update one concern slice at a time:
+  - conversation
+  - runtime skills
+  - pending
+  - runtime dispatch
+  - agents
+- delete compatibility helper wrappers in the same slice once callers are moved
+- if a function needs too many context fields, that is a signal to split the
+  function or move shared logic to the correct layer
+
+#### Required tests
+
+- add a zero-import gate proving no app module outside `channels/telegram/ingress.py`
+  imports Telegram ingress
+- add focused regression tests for `runtime/dispatch.py` and `app/agents/*`
+  showing they can run with injected collaborators/context rather than hidden
+  ingress state
+
+#### Exit criteria
+
+- no file outside `ingress.py` imports Telegram ingress
+- `runtime/*` has no channel import
+- `agents/*` has no channel import
+- `ingress.py` contains PTB registration, normalization, event dispatch
+  handoff, and context passing only; it does not own business logic,
+  rendering, or shared helper/state accessors
+
+### A3. Fix `access.py` import direction
+
+`access.py` must accept only `InboundUser` and other shared types.
+
+#### Required work
+
+- remove the import of Telegram normalization from `access.py`
+- normalize Telegram-native objects at the Telegram channel edge before calling
+  access/trust helpers
+- update the existing call sites accordingly
+
+#### Hard rules
+
+- shared helpers do not coerce channel-native objects
+- normalization belongs to the channel edge only
+
+#### Required tests
+
+- add focused access tests over `InboundUser`
+- update channel tests to normalize before calling access helpers
+
+#### Exit criteria
+
+- `access.py` has no import from `app/channels`
+- `access.py` accepts normalized shared types only
+
+### A4. Move `trust_tier_for_source`
+
+The source-sensitive trust decision is an inbound/admission concern.
+
+#### Required work
+
+- move `trust_tier_for_source` out of `runtime/composition.py`
+- expected home:
+  - `runtime/work_admission.py`
+  or
+  - a nearby inbound identity/admission helper module
+- update all call sites
+
+#### Exit criteria
+
+- `runtime/composition.py` no longer owns inbound trust routing
+
+### A5. Update `setup_globals` and the Telegram-heavy tests
+
+The test harness must stop mutating ingress globals.
+
+#### Required work
+
+- change `tests/support/handler_support.py` so `setup_globals` constructs or
+  injects the new Telegram channel context instead of mutating module globals
+- update the large Telegram suites to use that explicit setup path
+- audit the very large `test_handlers.py` and related Telegram tests to ensure
+  they exercise the channel boundary rather than module-global internals
+
+#### Hard rules
+
+- tests do not get a “special exception” to keep global state alive
+- if a test is only proving the global pattern, rewrite or delete it
+
+#### Required tests
+
+- add one focused test proving the setup helper no longer mutates ingress globals
+- keep behavioral coverage while removing implementation coupling
+
+#### Exit criteria
+
+- `setup_globals` does not mutate Telegram ingress globals
+- Telegram tests construct explicit context/state instead of depending on module globals
+
+## Track B. Build the Telegram Presenter Layer
+
+Root cause: Telegram rendering still lives in ingress and satellite modules
+instead of `presenters.py`.
+
+### B1. Extract message and keyboard builders
+
+Move all Telegram-specific rendering into:
+
+- `app/channels/telegram/presenters.py`
+
+Including:
+
+- `InlineKeyboardMarkup` construction
+- `InlineKeyboardButton` construction
+- HTML message bodies
+- edit-vs-send rendering choices where the decision is presentation-specific
+- credential/setup prompt formatting
+- approval/recovery/pending formatting
+- provider-guidance rendering now living in `guidance.py`
+
+### B2. Extract workflow-outcome presenters
+
+Each workflow outcome rendered by Telegram must have a named presenter
+function:
+
+- runtime skill outcomes
+- conversation-control outcomes
+- pending approval/retry outcomes
+- recovery outcomes
+- provider-guidance lifecycle outcomes
+
+#### Hard rules
+
+- no new inline Telegram markup outside `presenters.py`
+- `ingress.py`, `conversation.py`, `runtime_skills.py`, and `pending.py` may
+  orchestrate calls, but they do not build channel markup directly
+- `guidance.py` follows the same rule
+- presentation decisions must not drift into workflow modules
+
+#### Required tests
+
+- add focused presenter tests for Telegram analogous to registry presenter tests
+- add at least one regression test per major workflow family proving the
+  channel module calls a presenter instead of formatting inline
+
+#### Exit criteria
+
+- `presenters.py` is the authoritative home for Telegram rendering
+- no `InlineKeyboardMarkup` or `InlineKeyboardButton` creation remains outside
+  `presenters.py`
+
+## Track C. Decompose Registry HTTP and UI
+
+Root cause: `channels/registry/http.py` still combines route handling,
+auth/session logic, and a large inline UI program.
+
+### C1. Move UI/template programs into `ui.py`
+
+Move all large HTML/CSS/JS page-building content into:
+
+- `app/channels/registry/ui.py`
+
+Where useful, split further into:
+
+- template helpers
+- page builders
+- editor asset helpers
+
+### C2. Reduce `http.py` to a thin HTTP boundary
+
+`http.py` should contain:
+
+- route registration
+- request parsing and validation
+- auth/session checks that truly belong to the HTTP boundary
+- calls into registry ingress/workflows
+- response mapping
+
+It should not contain:
+
+- large template strings
+- embedded editor programs
+- page markup construction
+
+Auth/session logic that does not belong in the HTTP boundary moves to:
+
+- `app/channels/registry/auth.py`
+
+That module becomes the registry channel owner for:
+
+- session lookup helpers
+- auth policy helpers
+- non-route request authentication/authorization helpers shared by registry
+  ingress and HTTP routes
+
+`http.py` may call into `auth.py`, but it does not remain the owner of that
+logic.
+
+#### Hard rules
+
+- `http.py` contains no long inline HTML/CSS/JS blocks
+- browser UI remains a client of registry HTTP ingress only
+- do not move workflow logic into `ui.py`; `ui.py` owns rendering only
+- auth/session logic that is not intrinsically HTTP-bound moves to
+  `channels/registry/auth.py`
+
+#### Required tests
+
+- add focused tests for UI render helpers in `ui.py`
+- keep registry HTTP tests proving route behavior unchanged
+- add one guard test that fails if:
+  - `http.py` contains a multiline literal with markers such as `<!DOCTYPE`,
+    `<html`, `<style`, `<script`, or `<textarea>`
+  - or `http.py` remains above the agreed line-count threshold after extraction
+    (target: fewer than 1800 lines)
+
+#### Exit criteria
+
+- `ui.py` owns the registry UI rendering layer
+- `http.py` is a thin HTTP boundary with no embedded UI program
+- registry auth/session ownership is explicit and no longer muddled inside
+  `http.py`
+
+## Track D. Lifecycle and Workflow Hygiene Cleanup
+
+Root cause: the lifecycle hardening fixed correctness, but some ownership and
+maintainability problems remain.
+
+### D1. Extract lifecycle snapshot construction
+
+Move duplicated `_snapshot()` logic to one explicit shared helper, expected
+home:
+
+- `app/workflows/lifecycle_machine.py`
+
+Expose something like:
+
+- `build_lifecycle_snapshot(track, latest_action) -> LifecycleSnapshot`
+
+### D2. Add explicit latest-approval store methods
+
+Add explicit store methods for latest approval lookup for both:
+
+- runtime skills
+- provider guidance
+
+The method must express ordering explicitly in the store boundary rather than
+relying on Python scans over ordered lists.
+
+### D3. Remove private cross-workflow access
+
+After D2:
+
+- remove `_latest_action_for_revision` from authoring
+- stop approval from calling a private helper on authoring
+
+#### Hard rules
+
+- shared lifecycle helper logic exists in one place only
+- approval workflow does not reach into authoring internals
+- hidden ordering contracts are not allowed at the call site
+
+#### Required tests
+
+- add store tests for explicit latest-approval queries
+- update lifecycle workflow tests to prove both authoring and approval consume
+  the shared helper/store method rather than duplicated logic
+
+#### Exit criteria
+
+- snapshot logic exists in one place
+- no private cross-class workflow access remains
+- latest-approval lookup is explicit at the store boundary
+
+## Track E. Dead Code, Naming, and Test-Gate Cleanup
+
+Root cause: dead re-exports, legacy naming, incomplete gates, and stale test
+names still muddy the architecture.
+
+### E1. Resolve `workflows/__init__.py`
+
+Do not leave dead re-exports in place.
+
+Guidance:
+
+- F5 resolves the machine file relocation for pending/recovery
+- E1 should not perform a separate intermediate relocation of those same files
+- after F5 lands, remove the dead root re-exports and the misleading
+  “temporary” language
+- if F5 has not landed yet, E1 may only remove dead re-exports that already
+  have no callers; it must not introduce a second move of the same files
+
+### E2. Relocate `transport_contract.py`
+
+Move it under the recovery concern package:
+
+- `app/workflows/recovery/transport_contract.py`
+
+Update imports and tests in the same slice.
+
+Do not create a new `app/work_queue/` package in this remediation track.
+
+### E3. Expand zero-import gates to `tests/`
+
+Add a second forbidden-import scan over the test tree.
+
+### E4. Audit and clean stale transport test names
+
+`test_transports_factory.py` and `test_transports_telegram.py` are not dead,
+but their names still encode the deleted architecture.
+
+Required action:
+
+- either rename them to match the current `channels/*` ownership
+- or merge/delete them if they are duplicate coverage
+
+#### Hard rules
+
+- no “temporary” language without an active same-track removal step
+- zero-import gates must cover both production code and tests
+- test names must reflect the live architecture
+
+#### Required tests
+
+- update zero-import-gate coverage
+- add/adjust tests to prove the relocated transport/work-queue contract module
+  still behaves the same
+
+#### Exit criteria
+
+- no dead re-exports remain
+- `transport_contract.py` no longer sits at app root under a legacy name
+- zero-import gates scan both `app/` and `tests/`
+- no test file name encodes a deleted top-level architecture without justification
+
+## Track F. Orchestration and State-Machine Consolidation
+
+Root cause: the repo still has multiple durable orchestration styles and still
+leaks transition ownership outside `app/workflows/*`.
+
+This track makes the earlier orchestration analysis explicit and turns it into
+required work rather than background guidance.
+
+### F1. Inventory and classify every orchestration owner
+
+Before moving code, produce an explicit inventory for the current durable and
+semi-durable flows:
+
+- lifecycle
+- pending approval/retry
+- transport recovery
+- credential/setup progression, explicitly including:
+  - `app/workflows/runtime_skills/setup.py`
+  - `app/skill_lifecycle_service.py`
+  - `app/credential_flow.py`
+- delegation progression
+- request execution / preflight
+
+Each concern must be classified as exactly one of:
+
+- explicit machine required
+- procedural workflow acceptable
+- misplaced orchestration that must move
+
+#### Hard rules
+
+- do not assume a module belongs in `runtime/*` or `agents/*` just because it
+  currently lives there
+- do not tolerate “mixed ownership” where one concern is partly in workflows
+  and partly in services or runtime
+
+#### Required output
+
+The inventory must be committed in:
+
+- `docs/orchestration_inventory.md`
+
+That document becomes the gating reference for F2-F6.
+
+#### Exit criteria
+
+- each major orchestration concern has a written owner and type classification
+- there is no unclassified durable transition system left in the repo
+
+### F2. Standardize on one explicit machine style
+
+The standard machine style for this repo is the functional decision-machine
+shape already used by lifecycle:
+
+- snapshot
+- action
+- decision
+- effects
+- atomic application at the store/session boundary
+
+#### Required work
+
+- define shared conventions for machine modules:
+  - snapshot type
+  - action type
+  - decision/effects type
+  - stable statuses for idempotent replay
+- treat existing `python-statemachine` machines as migration-state only
+
+#### Hard rules
+
+- do not introduce a third explicit machine style
+- do not add new callback-driven mutable machines
+- do not keep two machine standards as a permanent compromise
+
+#### Required tests
+
+- add machine-focused tests for any newly migrated machine module
+- prove replay/idempotent behavior where the concern is durable
+
+#### Exit criteria
+
+- the repo has one declared explicit-machine standard
+- any remaining non-standard machine is explicitly tracked as not-yet-migrated
+
+### F3. Extract a real runtime-skill setup machine
+
+`awaiting_skill_setup` is a durable conversational progression and must have
+one explicit machine owner.
+
+#### Required work
+
+- move setup progression into:
+  - `app/workflows/runtime_skills/setup_machine.py`
+- define:
+  - states
+  - actions
+  - effects on `session.awaiting_skill_setup`
+  - activation-ready transition
+  - foreign-setup and cancellation semantics
+- absorb or replace the setup helper logic currently living in:
+  - `app/credential_flow.py`
+- make `runtime_skills/setup.py` a consumer of that machine, not a second
+  state owner
+- remove setup-transition ownership from `skill_lifecycle_service.py`
+
+#### Hard rules
+
+- `awaiting_skill_setup` writes have one owner only
+- no split ownership between workflow and service
+- `credential_flow.py` must not survive as a parallel setup-state helper path
+- no ad hoc mutation of `session.awaiting_skill_setup` outside the machine
+  application boundary
+
+#### Required tests
+
+- setup machine tests for:
+  - start
+  - next requirement
+  - ready/completion
+  - cancel
+  - foreign setup
+  - clear-after-credential-removal
+
+#### Exit criteria
+
+- setup progression has one explicit machine owner
+- service/workflow split no longer duplicates setup transition ownership
+- `credential_flow.py` no longer owns parallel setup-state logic
+
+### F4. Move delegation into `app/workflows/*`
+
+Delegation progression is durable workflow state and must stop living as a
+half-workflow under `app/agents/*`.
+
+#### Required work
+
+- create a real delegation workflow package:
+  - `app/workflows/delegation/contracts.py`
+  - `app/workflows/delegation/machine.py`
+  - `app/workflows/delegation/coordination.py`
+- implement `delegation/machine.py` using the repo-standard functional
+  decision-machine style defined in F2
+- move plan approval/cancel/result-application/resume-readiness logic there
+- make `agents/delivery.py` and `agents/delegation.py` thin transport/bridge
+  adapters over that workflow package
+- define the explicit state inventory for both:
+  - parent delegation plan state
+  - child task progression state
+
+Expected parent delegation plan states include:
+
+- `proposed`
+- `submitted`
+- `completed`
+- `partial_failed`
+- `cancelled`
+
+Expected child-task progression states include the currently live active values:
+
+- `proposed`
+- `queued`
+- `leased`
+- `running`
+- `submitted`
+- `completed`
+- `failed`
+
+#### Hard rules
+
+- `app/agents/*` may bridge agent I/O, but they do not own delegation state
+  transitions
+- delegation statuses are explicit machine outcomes, not scattered string edits
+- delegation does not introduce a second long-term machine style; it uses the
+  F2 functional decision-machine standard
+
+#### Required tests
+
+- machine tests for:
+  - proposed -> submitted
+  - proposed -> queued -> leased -> running -> completed
+  - cancel before send
+  - routed result application
+  - all tasks complete
+  - partial failure
+  - ready-to-resume
+
+#### Exit criteria
+
+- delegation transition ownership lives in `app/workflows/delegation/*`
+- `app/agents/*` no longer edits delegation status strings directly
+- delegation machine uses the repo-standard functional decision-machine style
+
+### F5. Migrate pending and transport recovery to the repo-standard machine style
+
+The current root files:
+
+- `app/workflows/pending_request.py`
+- `app/workflows/transport_recovery.py`
+- `app/workflows/results.py`
+
+are transitional residue.
+
+#### Required work
+
+- replace the current `python-statemachine` implementations with functional
+  decision machines that use the repo-standard shape
+- move pending machine code under:
+  - `app/workflows/pending/machine.py`
+- move transport recovery machine code under:
+  - `app/workflows/recovery/machine.py`
+- move supporting recovery result types under the same concern-owned package
+- move `transport_contract.py` under:
+  - `app/workflows/recovery/transport_contract.py`
+- update imports and zero-import gates accordingly
+
+This milestone also resolves the machine-file location part of E1.
+
+#### Hard rules
+
+- no root-level “temporary” machine modules remain after this slice
+- machine code lives with the workflow concern that owns it
+- pending and recovery do not remain on `python-statemachine` as a permanent
+  second standard
+
+#### Required tests
+
+- keep the current pending/recovery machine contract tests
+- add migration-equivalence tests proving the new functional machines preserve
+  the accepted transition semantics
+- add zero-import coverage for the old root module paths once callers are moved
+
+#### Exit criteria
+
+- pending and recovery machine modules live under their concern packages
+- no callers import the old root machine modules
+- pending and recovery use the repo-standard functional machine style
+- no production pending/recovery logic depends on `python-statemachine`
+
+### F6. Enforce `runtime/dispatch.py` as pure runtime plumbing
+
+`runtime/dispatch.py` must be explicitly classified rather than left as a
+catch-all orchestrator.
+
+#### Required work
+
+- make `runtime/dispatch.py` pure channel-agnostic execution plumbing
+- if any business decision or durable transition logic remains after Track A,
+  move that logic to a dedicated concern-owned workflow package such as
+  `app/workflows/execution/*` in the same slice
+- if any logic is inherently Telegram-specific rendering or callback behavior,
+  move it back under the Telegram channel in the same slice
+
+The required invariant after the decision:
+
+- `runtime/dispatch.py` does not own durable business transitions
+- `runtime/dispatch.py` does not depend on channel packages
+- if some logic is inherently Telegram-specific, it moves out of runtime
+
+#### Hard rules
+
+- do not keep channel-shaped orchestration under `runtime/*`
+- do not let the “runtime” name justify a hidden business workflow
+
+#### Required tests
+
+- focused execution/preflight tests at the chosen boundary
+- import-boundary tests proving `runtime/*` no longer imports channel packages
+
+#### Exit criteria
+
+- execution/preflight ownership is explicit
+- `runtime/dispatch.py` is no longer a shadow workflow owner
+- `runtime/dispatch.py` remains only if it is channel-agnostic plumbing
+- any workflow-local decision logic formerly hidden there has a concern-owned
+  workflow home
+
+## Required Sequencing
+
+The tracks above are not all equal-risk.
+
+### Phase 1. Freeze and boundary rules
+
+- reopen the feature freeze
+- land the stricter architecture rules and this remediation track in the plan
+
+### Phase 2. Track A first
+
+Do Track A before major Telegram decomposition work.
+
+Reason:
+
+- presenter extraction and runtime cleanup are unstable until Telegram state is
+  explicit rather than global
+- test coupling must be fixed at the same seam
+
+Recommended slice order inside Track A:
+
+1. A3 fix `access.py` direction and A4 move `trust_tier_for_source`
+2. A1 extract context/state object plus explicit runtime registries
+3. A2 remove back-imports one concern at a time
+4. A5 rewrite setup/test support
+
+### Phase 3. Tracks C, D, and F1-F2 may run after A1
+
+After the context object exists:
+
+- Track C is mostly independent and can proceed
+- Track D is independent and low-risk
+- Track F inventory and machine-standard work can proceed without waiting for
+  full Telegram cleanup
+
+### Phase 4. Track F3-F6 before final unfreeze
+
+The orchestration consolidation track must be resolved before the freeze lifts.
+
+Recommended order:
+
+1. F1 inventory/classification
+2. F2 machine-standard decision
+3. F3 setup machine
+4. F4 delegation workflow
+5. F5 pending/recovery package consolidation
+6. F6 dispatch ownership decision and cleanup
+
+### Phase 5. Track B after A2 is substantially done
+
+Presenter extraction is easier and cleaner once the Telegram modules no longer
+reach back into ingress for state and helpers.
+
+### Phase 6. Track E throughout, but finish it last
+
+Dead-code cleanup and gate expansion should accompany the relevant slices, with
+final cleanup at the end of the remediation track.
+
+## Architecture Remediation Acceptance Gates
+
+Feature expansion may resume only when all of the following are true:
+
+- no app module outside Telegram ingress imports Telegram ingress
+- Telegram channel runtime state is explicit and no longer global-module-owned
+- `runtime/*` has no channel imports
+- `agents/*` has no channel imports
+- `access.py` has no channel imports
+- Telegram presenters own Telegram rendering
+- registry `http.py` is a thin HTTP boundary and `ui.py` owns UI rendering
+- setup progression has one explicit machine owner
+- delegation progression has one explicit workflow/machine owner
+- pending and recovery machines live under concern-owned workflow packages
+- `runtime/dispatch.py` has explicit non-channel ownership and is not a shadow workflow owner
+- the repo-standard explicit machine style is declared and used for remediated durable workflows
+- lifecycle snapshot and latest-approval ownership are cleaned up
+- `workflows/__init__.py` and `transport_contract.py` no longer carry dead or
+  misleading transitional ownership
+- zero-import gates cover both `app/` and `tests/`
+- test support no longer mutates Telegram ingress globals
+
+## Post-Remediation Policy
+
+When this architecture remediation track is complete:
+
+1. feature work may resume
+2. any new decomposition must obey the no-satellite-back-import rule
+3. any new test seam must follow the same injection/context pattern as production
+4. durable transition systems must either use the repo-standard explicit machine
+   style or be explicitly classified as procedural and non-durable
+5. if a future feature needs to reopen a major architecture gate, it must do so
+   explicitly in the plan before implementation
 
 ## Required Audits At Every Milestone
 
@@ -1774,6 +2799,15 @@ Feature work may resume only when all of the following are true:
 - `runtime/*` owns admission and dispatch
 - Telegram and registry are both thin channel packages over shared workflow modules
 - registry browser UI performs all mutations through registry HTTP ingress
+- Telegram channel runtime state is explicit and no longer owned by ingress module globals
+- no app module outside Telegram ingress imports Telegram ingress
+- `runtime/*` has no concrete channel imports
+- `agents/*` has no concrete channel imports
+- `access.py` has no channel imports and accepts normalized shared types only
+- Telegram presenters own Telegram rendering
+- registry `http.py` is a thin HTTP boundary and `ui.py` owns UI rendering
+- test support does not mutate Telegram ingress globals
+- zero-import gates cover both `app/` and `tests/`
 - no deleted legacy path remains imported
 
 ## Success Criteria
@@ -1784,7 +2818,13 @@ This replacement plan is complete only when:
 - no parallel old/new runtime paths exist
 - Telegram and registry are both channels with ingress and egress over shared workflow modules
 - registry UI performs all mutations through registry HTTP ingress
+- Telegram ingress is not a mutable runtime state hub
+- runtime and agents do not depend on channel internals
+- channel decomposition does not rely on satellite modules importing back into a parent entrypoint
+- Telegram presentation lives in its presenter layer
+- registry HTTP and UI are structurally separated
 - stale tests no longer influence architectural decisions
+- tests follow the same explicit context and dependency boundaries as production code
 - workflow modules are concern-owned and typed, not a universal action bus
 - runtime composition/admission/dispatch are owned by `app/runtime/*`
 - new channels can be added by writing channel packages and wiring them in composition, not reworking the architecture

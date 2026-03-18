@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from telegram import Update
-from telegram.constants import ParseMode
 
-from app import access, user_messages as _msg
+from app import access
+from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.normalization import normalize_user
 from app.channels.telegram.state import TelegramChannelState
 from app.identity import telegram_conversation_key, telegram_event_id
@@ -88,7 +88,8 @@ async def approve_pending(
     if outcome.mutated:
         _save(runtime, chat_id, session)
     if outcome.execution_plan is None:
-        await message.reply_text(outcome.message)
+        rendered = telegram_presenters.pending_plain_outcome_message(outcome.message)
+        await message.reply_text(rendered.text, **rendered.kwargs())
         return
     await runtime.execute_request(
         chat_id,
@@ -108,7 +109,8 @@ async def reject_pending(chat_id: int | str, message, *, runtime: TelegramPendin
     outcome = _flows().pending.requests.reject(session)
     if outcome.mutated:
         _save(runtime, chat_id, session)
-    await message.reply_text(outcome.message)
+    rendered = telegram_presenters.pending_plain_outcome_message(outcome.message)
+    await message.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def retry_skip_pending(chat_id: int | str, message, *, runtime: TelegramPendingRuntime) -> None:
@@ -116,7 +118,8 @@ async def retry_skip_pending(chat_id: int | str, message, *, runtime: TelegramPe
     outcome = _flows().pending.requests.retry_skip(session)
     if outcome.mutated:
         _save(runtime, chat_id, session)
-    await runtime.edit_or_reply_text(message, outcome.message)
+    rendered = telegram_presenters.pending_plain_outcome_message(outcome.message)
+    await runtime.edit_or_reply_text(message, rendered.text, **rendered.kwargs())
 
 
 async def retry_allow_pending(
@@ -135,7 +138,8 @@ async def retry_allow_pending(
     if outcome.mutated:
         _save(runtime, chat_id, session)
     if outcome.execution_plan is None:
-        await runtime.edit_or_reply_text(message, outcome.message)
+        rendered = telegram_presenters.pending_plain_outcome_message(outcome.message)
+        await runtime.edit_or_reply_text(message, rendered.text, **rendered.kwargs())
         return
     await runtime.execute_request(
         chat_id,
@@ -181,19 +185,22 @@ async def handle_recovery_callback(update: Update, context, *, runtime: Telegram
     query = update.callback_query
     user = normalize_user(update.effective_user)
     if user is None or not _is_allowed(runtime, user):
-        await query.answer(_msg.trust_not_authorized(), show_alert=True)
+        rendered = telegram_presenters.trust_not_authorized_message()
+        await query.answer(rendered.text, show_alert=True)
         return
 
     data = query.data or ""
     parts = data.split(":", 1)
     if len(parts) != 2:
-        await query.answer(_msg.recovery_invalid_action())
+        rendered = telegram_presenters.recovery_invalid_action_message()
+        await query.answer(rendered.text)
         return
     action, update_id_str = parts
     try:
         update_id = int(update_id_str)
     except (ValueError, TypeError):
-        await query.answer(_msg.recovery_invalid_action())
+        rendered = telegram_presenters.recovery_invalid_action_message()
+        await query.answer(rendered.text)
         return
 
     await handle_recovery_action(
@@ -236,11 +243,8 @@ async def handle_recovery_action(
         await answer_action(outcome.toast_message, show_alert=outcome.show_alert)
     if outcome.edit_message:
         try:
-            await runtime.edit_or_reply_text(
-                message,
-                outcome.edit_message,
-                parse_mode=ParseMode.HTML,
-            )
+            rendered = telegram_presenters.pending_html_outcome_message(outcome.edit_message)
+            await runtime.edit_or_reply_text(message, rendered.text, **rendered.kwargs())
         except Exception:
             pass
     if outcome.replay_plan is None:
@@ -287,11 +291,8 @@ async def handle_recovery_action(
             item_id=outcome.replay_plan.item_id,
         )
         try:
-            await runtime.edit_or_reply_text(
-                message,
-                _msg.recovery_replay_failed_edit(),
-                parse_mode=ParseMode.HTML,
-            )
+            rendered = telegram_presenters.recovery_failed_edit_message()
+            await runtime.edit_or_reply_text(message, rendered.text, **rendered.kwargs())
         except Exception:
             pass
 
@@ -325,7 +326,8 @@ async def handle_worker_pending_action(
     if event.action in {"recovery_replay", "recovery_discard"}:
         update_id = int(params.get("update_id") or 0)
         if update_id <= 0:
-            await surface.reply_text(_msg.recovery_invalid_action())
+            rendered = telegram_presenters.recovery_invalid_action_message()
+            await surface.reply_text(rendered.text, **rendered.kwargs())
             return True
         if event.action == "recovery_replay":
             work_queue.complete_work_item(runtime.state.config.data_dir, str(item.get("id", "")))

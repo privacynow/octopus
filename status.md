@@ -611,7 +611,7 @@ status.
 
 Next required slice:
 
-- `Track B / B2c: move remaining conversation, pending, and ingress Telegram rendering into presenters.py`
+- `Track B / B2c2: move remaining ingress Telegram rendering into presenters.py`
 
 Completed:
 
@@ -806,6 +806,81 @@ Before-state for `Track B / B2c`:
   - `tests/test_handlers_output.py`
   - `tests/test_request_flow.py`
   - `tests/test_zero_import_gates.py`
+
+Before-state for `Track B / B2c1`:
+
+- files that will change:
+  - `app/channels/telegram/conversation.py`
+  - `app/channels/telegram/pending.py`
+  - `app/channels/telegram/presenters.py`
+  - `tests/test_telegram_presenters.py`
+  - `tests/test_handlers.py`
+  - `tests/test_zero_import_gates.py`
+- current caller and owner inventory:
+  - `conversation.py` still owns role/project/status and callback response
+    formatting inline
+  - `pending.py` still owns pending/retry/recovery response formatting inline
+- after-state required by this slice:
+  - conversation-control/settings and pending/recovery rendering live in
+    `app/channels/telegram/presenters.py`
+  - `conversation.py` and `pending.py` orchestrate workflow calls and apply
+    presenter output only
+  - focused regression coverage proves both modules call presenters
+  - negative structural guards prove the removed inline rendering is gone
+- contract tests for this slice:
+  - `tests/test_telegram_presenters.py`
+  - `tests/test_handlers.py`
+  - `tests/test_zero_import_gates.py`
+
+27. `pending` `Track B / B2c1: move conversation and pending Telegram rendering into presenters.py`
+   - Added named conversation/pending presenter functions in
+     `app/channels/telegram/presenters.py` for:
+     - plain vs HTML conversation outcome rendering
+     - role/project/status messages
+     - public/trust/no-project/policy usage messages
+     - pending/retry plain and HTML outcome rendering
+     - recovery invalid-action and replay-failed messages
+   - `app/channels/telegram/conversation.py` and
+     `app/channels/telegram/pending.py` now apply presenter output instead of
+     owning inline HTML, `ParseMode`, or `html.escape(...)` formatting.
+   - Added:
+     - presenter unit tests for conversation and pending helpers
+     - regression tests proving `conversation.py` and `pending.py` call
+       presenters
+     - negative structural guards proving inline rendering is gone from both
+       channel modules
+   - focused verification passed:
+     - `204 passed`
+   - full suite passed:
+     - `1579 passed, 23 skipped`
+
+Before-state for `Track B / B2c2`:
+
+- files expected after `B2c1`:
+  - `app/channels/telegram/ingress.py`
+  - `app/channels/telegram/presenters.py`
+  - `tests/test_telegram_presenters.py`
+  - `tests/test_handlers_output.py`
+  - `tests/test_request_flow.py`
+  - `tests/test_zero_import_gates.py`
+- current caller and owner inventory:
+  - `ingress.py` will still own compact/full-answer rendering, setup prompts,
+    delegation-plan formatting, and help/session/discover/admin text
+- after-state required by this slice:
+  - remaining Telegram ingress rendering lives in
+    `app/channels/telegram/presenters.py`
+  - `ingress.py` becomes orchestration plus PTB wiring only
+  - focused regression coverage proves ingress uses presenters for the remaining
+    rendered outputs
+  - negative structural guards prove the removed inline formatting is gone
+
+Completed in `Track B / B2c1`:
+
+- `app/channels/telegram/conversation.py` no longer imports
+  `app.credential_flow` or owns inline HTML formatting
+- `app/channels/telegram/pending.py` no longer owns `ParseMode` or recovery
+  reply formatting
+- remaining Telegram rendering debt is now isolated to `app/channels/telegram/ingress.py`
 
 Completed in `F6`:
 

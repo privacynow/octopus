@@ -1,20 +1,15 @@
 """Telegram conversation channel handlers."""
 
 from __future__ import annotations
-
-import html
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from telegram import Update
-from telegram.constants import ParseMode
 
 from app import access
-from app import user_messages as _msg
 from app.channels.telegram.cancellation import TelegramCancellationRegistry
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.state import TelegramChannelState
-from app.credential_flow import foreign_setup_message
 from app.execution_context import ResolvedExecutionContext
 from app.identity import (
     telegram_actor_key,
@@ -101,7 +96,8 @@ def _trust_tier(runtime: TelegramConversationRuntime, user) -> str:
 
 async def _public_guard(runtime: TelegramConversationRuntime, event, update: Update) -> bool:
     if _is_public_user(runtime, event.user):
-        await update.effective_message.reply_text(_msg.trust_command_not_available_public())
+        rendered = telegram_presenters.public_command_not_available_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return True
     return False
 
@@ -161,9 +157,8 @@ async def cmd_new(event, update: Update, context, *, runtime: TelegramConversati
             default_skills=cfg.default_skills,
         )
         if outcome.status == "foreign_setup":
-            await update.effective_message.reply_text(
-                foreign_setup_message(old_session.awaiting_skill_setup),
-            )
+            rendered = telegram_presenters.conversation_foreign_setup_message(old_session.awaiting_skill_setup)
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
         if outcome.replacement_session is None:
             return
@@ -173,7 +168,8 @@ async def cmd_new(event, update: Update, context, *, runtime: TelegramConversati
                 cfg.data_dir,
                 _conversation_key(chat_id),
             )
-    await update.effective_message.reply_text(outcome.message)
+    rendered = telegram_presenters.conversation_plain_outcome_message(outcome.message)
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def cancel_chat_operation(
@@ -193,7 +189,8 @@ async def cancel_chat_operation(
         allow_override=allow_admin_override,
     )
     if fast_outcome is not None:
-        await message.reply_text(fast_outcome.message)
+        rendered = telegram_presenters.conversation_plain_outcome_message(fast_outcome.message)
+        await message.reply_text(rendered.text, **rendered.kwargs())
         return
 
     async with runtime.chat_lock(chat_id, message=message, update_id=update_id):
@@ -208,7 +205,8 @@ async def cancel_chat_operation(
         )
         if outcome.mutated:
             _save(runtime, chat_id, session)
-    await message.reply_text(outcome.message)
+    rendered = telegram_presenters.conversation_plain_outcome_message(outcome.message)
+    await message.reply_text(rendered.text, **rendered.kwargs())
 
 
 def request_cancel_fast_path(
@@ -253,7 +251,8 @@ async def cmd_approval(event, update: Update, context, *, runtime: TelegramConve
     chat_id = event.chat_id
     arg = (event.args[0].lower() if event.args else "status")
     if arg not in {"on", "off", "status"}:
-        await update.effective_message.reply_text(_msg.approval_usage())
+        rendered = telegram_presenters.conversation_approval_usage_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     async with runtime.chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = _load(runtime, chat_id)
@@ -266,7 +265,8 @@ async def cmd_approval(event, update: Update, context, *, runtime: TelegramConve
         outcome = _flows().conversation.settings.set_approval_mode(session, arg)
         if outcome.mutated:
             _save(runtime, chat_id, session)
-    await update.effective_message.reply_text(outcome.message)
+    rendered = telegram_presenters.conversation_plain_outcome_message(outcome.message)
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def cmd_compact(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
@@ -287,7 +287,8 @@ async def cmd_compact(event, update: Update, context, *, runtime: TelegramConver
 
     mode = args[0].lower()
     if mode not in {"on", "off"}:
-        await update.effective_message.reply_text("Usage: /compact on|off")
+        rendered = telegram_presenters.conversation_compact_usage_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
 
     async with runtime.chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
@@ -295,7 +296,8 @@ async def cmd_compact(event, update: Update, context, *, runtime: TelegramConver
         outcome = _flows().conversation.settings.set_compact_mode(session, mode == "on")
         if outcome.mutated:
             _save(runtime, chat_id, session)
-    await update.effective_message.reply_text(outcome.message, parse_mode=ParseMode.HTML)
+    rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def cmd_role(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
@@ -309,12 +311,10 @@ async def cmd_role(event, update: Update, context, *, runtime: TelegramConversat
         session = _load(runtime, chat_id)
         role = session.role
         if role:
-            await update.effective_message.reply_text(
-                f"Current role: <code>{html.escape(role)}</code>",
-                parse_mode=ParseMode.HTML,
-            )
+            rendered = telegram_presenters.conversation_role_current_message(role)
         else:
-            await update.effective_message.reply_text("No role set (using instance default).")
+            rendered = telegram_presenters.conversation_role_default_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
 
     value = "" if args[0].lower() == "clear" else " ".join(args)
@@ -327,10 +327,12 @@ async def cmd_role(event, update: Update, context, *, runtime: TelegramConversat
         )
         if outcome.mutated:
             _save(runtime, chat_id, session)
-    await update.effective_message.reply_text(
-        outcome.message,
-        parse_mode=ParseMode.HTML if value else None,
+    rendered = (
+        telegram_presenters.conversation_html_outcome_message(outcome.message)
+        if value
+        else telegram_presenters.conversation_plain_outcome_message(outcome.message)
     )
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def cmd_model(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
@@ -354,7 +356,8 @@ async def cmd_model(event, update: Update, context, *, runtime: TelegramConversa
             )
             if outcome.mutated:
                 _save(runtime, chat_id, session)
-        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
+        rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
+        await msg.reply_text(rendered.text, **rendered.kwargs())
         return
 
     if not cfg.model_profiles:
@@ -366,7 +369,8 @@ async def cmd_model(event, update: Update, context, *, runtime: TelegramConversa
             provider_name=runtime.state.provider.name,
             trust_tier=trust,
         )
-        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
+        rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
+        await msg.reply_text(rendered.text, **rendered.kwargs())
         return
 
     session = _load(runtime, chat_id)
@@ -386,7 +390,8 @@ async def cmd_model(event, update: Update, context, *, runtime: TelegramConversa
             )
             if outcome.mutated:
                 _save(runtime, chat_id, session)
-        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
+        rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
+        await msg.reply_text(rendered.text, **rendered.kwargs())
         return
 
     rendered = telegram_presenters.model_profile_status(
@@ -407,20 +412,15 @@ async def cmd_project(event, update: Update, context, *, runtime: TelegramConver
     arg = event.args[0].lower() if event.args else ""
 
     if not cfg.projects:
-        await msg.reply_text(_msg.no_projects_configured())
+        rendered = telegram_presenters.no_projects_configured_message()
+        await msg.reply_text(rendered.text, **rendered.kwargs())
         return
 
     if arg == "list":
         session = _load(runtime, event.chat_id)
         current = session.project_id
-        lines = ["<b>Available projects:</b>"]
-        for proj in cfg.projects:
-            marker = " (active)" if proj.name == current else ""
-            lines.append(
-                f"  <code>{html.escape(proj.name)}</code> → "
-                f"{html.escape(str(proj.root_dir))}{marker}"
-            )
-        await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        rendered = telegram_presenters.conversation_projects_list_message(cfg.projects, current)
+        await msg.reply_text(rendered.text, **rendered.kwargs())
         return
 
     if arg == "use" and len(event.args) >= 2:
@@ -441,7 +441,8 @@ async def cmd_project(event, update: Update, context, *, runtime: TelegramConver
             )
             if outcome.mutated:
                 _save(runtime, event.chat_id, session)
-        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
+        rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
+        await msg.reply_text(rendered.text, **rendered.kwargs())
         return
 
     session = _load(runtime, event.chat_id)
@@ -522,7 +523,8 @@ async def cmd_policy(event, update: Update, context, *, runtime: TelegramConvers
             )
             if outcome.mutated:
                 _save(runtime, event.chat_id, session)
-        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
+        rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
+        await msg.reply_text(rendered.text, **rendered.kwargs())
         return
 
     if arg in {"", "status"}:
@@ -536,7 +538,8 @@ async def cmd_policy(event, update: Update, context, *, runtime: TelegramConvers
         await msg.reply_text(rendered.text, **rendered.kwargs())
         return
 
-    await msg.reply_text(_msg.policy_usage())
+    rendered = telegram_presenters.conversation_policy_usage_message()
+    await msg.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def handle_settings_callback(
@@ -574,7 +577,8 @@ async def handle_settings_callback(
             if outcome.mutated:
                 _save(runtime, chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(outcome.message, parse_mode=ParseMode.HTML)
+            rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
+            await query.edit_message_text(rendered.text, **rendered.kwargs())
             return
 
         if setting == "approval":
@@ -584,7 +588,8 @@ async def handle_settings_callback(
             if outcome.mutated:
                 _save(runtime, chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(outcome.message)
+            rendered = telegram_presenters.conversation_plain_outcome_message(outcome.message)
+            await query.edit_message_text(rendered.text, **rendered.kwargs())
             return
 
         if setting == "compact":
@@ -592,12 +597,14 @@ async def handle_settings_callback(
             if outcome.mutated:
                 _save(runtime, chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(outcome.message, parse_mode=ParseMode.HTML)
+            rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
+            await query.edit_message_text(rendered.text, **rendered.kwargs())
             return
 
         if setting == "policy":
             if _is_public_user(runtime, event.user):
-                await query.edit_message_text(_msg.trust_file_policy_public())
+                rendered = telegram_presenters.trust_file_policy_public_message()
+                await query.edit_message_text(rendered.text, **rendered.kwargs())
                 return
             outcome = settings.set_file_policy(
                 session,
@@ -612,15 +619,18 @@ async def handle_settings_callback(
             if outcome.mutated:
                 _save(runtime, chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(outcome.message, parse_mode=ParseMode.HTML)
+            rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
+            await query.edit_message_text(rendered.text, **rendered.kwargs())
             return
 
         if setting == "project":
             if _is_public_user(runtime, event.user):
-                await query.edit_message_text(_msg.trust_project_public())
+                rendered = telegram_presenters.trust_project_public_message()
+                await query.edit_message_text(rendered.text, **rendered.kwargs())
                 return
             if not runtime.state.config.projects:
-                await query.edit_message_text(_msg.no_projects_configured())
+                rendered = telegram_presenters.no_projects_configured_message()
+                await query.edit_message_text(rendered.text, **rendered.kwargs())
                 return
             outcome = settings.set_project(
                 session,
@@ -631,7 +641,8 @@ async def handle_settings_callback(
             if outcome.mutated:
                 _save(runtime, chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(outcome.message, parse_mode=ParseMode.HTML)
+            rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
+            await query.edit_message_text(rendered.text, **rendered.kwargs())
 
 
 async def handle_worker_conversation_action(
@@ -662,7 +673,8 @@ async def handle_worker_conversation_action(
             default_skills=cfg.default_skills,
         )
         if outcome.status == "foreign_setup":
-            await surface.reply_text(foreign_setup_message(old_session.awaiting_skill_setup))
+            rendered = telegram_presenters.conversation_foreign_setup_message(old_session.awaiting_skill_setup)
+            await surface.reply_text(rendered.text, **rendered.kwargs())
             return True
         if outcome.replacement_session is None:
             return True
@@ -672,7 +684,8 @@ async def handle_worker_conversation_action(
                 cfg.data_dir,
                 _conversation_key(runtime_chat),
             )
-        await surface.reply_text(outcome.message)
+        rendered = telegram_presenters.conversation_plain_outcome_message(outcome.message)
+        await surface.reply_text(rendered.text, **rendered.kwargs())
         return True
 
     if action == "cancel_conversation":
@@ -684,7 +697,8 @@ async def handle_worker_conversation_action(
             allow_override=(source != "telegram" or _is_admin(runtime, event.user)),
         )
         if live_outcome is not None:
-            await surface.reply_text(live_outcome.message)
+            rendered = telegram_presenters.conversation_plain_outcome_message(live_outcome.message)
+            await surface.reply_text(rendered.text, **rendered.kwargs())
             return True
         session = _load(runtime, runtime_chat)
         outcome = _flows().conversation.control.cancel_conversation(
@@ -697,7 +711,8 @@ async def handle_worker_conversation_action(
         )
         if outcome.mutated:
             _save(runtime, runtime_chat, session)
-        await surface.reply_text(outcome.message)
+        rendered = telegram_presenters.conversation_plain_outcome_message(outcome.message)
+        await surface.reply_text(rendered.text, **rendered.kwargs())
         return True
 
     if action == "set_approval_mode":
@@ -709,7 +724,8 @@ async def handle_worker_conversation_action(
         if outcome.mutated:
             _save(runtime, runtime_chat, session)
         await surface.edit_reply_markup(reply_markup=None)
-        await runtime.edit_or_reply_text(surface, outcome.message)
+        rendered = telegram_presenters.conversation_plain_outcome_message(outcome.message)
+        await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
         return True
 
     if action == "set_compact_mode":
@@ -718,12 +734,14 @@ async def handle_worker_conversation_action(
         if outcome.mutated:
             _save(runtime, runtime_chat, session)
         await surface.edit_reply_markup(reply_markup=None)
-        await runtime.edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
+        rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
+        await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
         return True
 
     if action == "set_role":
         if _is_public_user(runtime, event.user):
-            await surface.reply_text(_msg.trust_command_not_available_public())
+            rendered = telegram_presenters.public_command_not_available_message()
+            await surface.reply_text(rendered.text, **rendered.kwargs())
             return True
         session = _load(runtime, runtime_chat)
         outcome = settings.set_role(
@@ -733,7 +751,8 @@ async def handle_worker_conversation_action(
         )
         if outcome.mutated:
             _save(runtime, runtime_chat, session)
-        await surface.reply_text(outcome.message, parse_mode=ParseMode.HTML)
+        rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
+        await surface.reply_text(rendered.text, **rendered.kwargs())
         return True
 
     if action == "set_model_profile":
@@ -748,15 +767,18 @@ async def handle_worker_conversation_action(
         if outcome.mutated:
             _save(runtime, runtime_chat, session)
         await surface.edit_reply_markup(reply_markup=None)
-        await runtime.edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
+        rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
+        await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
         return True
 
     if action == "set_project":
         if _is_public_user(runtime, event.user):
-            await runtime.edit_or_reply_text(surface, _msg.trust_project_public())
+            rendered = telegram_presenters.trust_project_public_message()
+            await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
             return True
         if not runtime.state.config.projects:
-            await runtime.edit_or_reply_text(surface, _msg.no_projects_configured())
+            rendered = telegram_presenters.no_projects_configured_message()
+            await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
             return True
         session = _load(runtime, runtime_chat)
         outcome = settings.set_project(
@@ -768,12 +790,14 @@ async def handle_worker_conversation_action(
         if outcome.mutated:
             _save(runtime, runtime_chat, session)
         await surface.edit_reply_markup(reply_markup=None)
-        await runtime.edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
+        rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
+        await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
         return True
 
     if action == "set_file_policy":
         if _is_public_user(runtime, event.user):
-            await runtime.edit_or_reply_text(surface, _msg.trust_file_policy_public())
+            rendered = telegram_presenters.trust_file_policy_public_message()
+            await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
             return True
         session = _load(runtime, runtime_chat)
         outcome = settings.set_file_policy(
@@ -789,7 +813,8 @@ async def handle_worker_conversation_action(
         if outcome.mutated:
             _save(runtime, runtime_chat, session)
         await surface.edit_reply_markup(reply_markup=None)
-        await runtime.edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
+        rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
+        await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
         return True
 
     return False

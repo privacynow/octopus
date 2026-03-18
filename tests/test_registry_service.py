@@ -603,6 +603,30 @@ def test_ui_shell_includes_runtime_skills_panel(monkeypatch, tmp_path: Path):
     assert "Catalog, prompt preview, and conversation activation" in response.text
 
 
+def test_ui_shell_includes_rich_registry_editors(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    login = client.post(
+        "/ui/login",
+        data={"password": "ui-secret"},
+        follow_redirects=False,
+    )
+    assert login.status_code == 303
+
+    response = client.get("/ui")
+    assert response.status_code == 200
+    assert "registry-editor-ready" in response.text
+    assert "@codemirror/state" in response.text
+    assert "@codemirror/view" in response.text
+    assert "runtime-skill-create-button" in response.text
+    assert "runtime-skill-editor-textarea" in response.text
+    assert "provider-guidance-select" in response.text
+    assert "provider-guidance-editor-textarea" in response.text
+    assert "/v1/catalog/skills/${encodeURIComponent(skillName)}/draft" in response.text
+    assert "/v1/provider-guidance/${encodeURIComponent(providerName)}/draft" in response.text
+
+
 def test_ui_bootstrap_still_accepts_bearer_token(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)

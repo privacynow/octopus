@@ -937,6 +937,28 @@ def ui_shell(request: Request) -> str:
         min-height: 7.5rem;
         resize: vertical;
       }}
+      .editor-shell {{
+        display: grid;
+        gap: 0.75rem;
+        margin-top: 0.9rem;
+      }}
+      .editor-actions {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+      }}
+      .code-editor {{
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 0.85rem;
+        overflow: hidden;
+        background: rgba(8, 12, 22, 0.9);
+      }}
+      .code-editor .cm-editor {{
+        min-height: 18rem;
+      }}
+      .code-editor .cm-scroller {{
+        font-family: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
+      }}
       .timeline {{
         display: flex;
         flex-direction: column;
@@ -1153,6 +1175,8 @@ def ui_shell(request: Request) -> str:
           <span class="subtle">Catalog, prompt preview, and conversation activation</span>
         </div>
         <div class="toolbar" style="margin-bottom: 0.9rem;">
+          <input id="runtime-skill-create-name" type="text" placeholder="new-runtime-skill" />
+          <button id="runtime-skill-create-button" type="button">Create draft</button>
           <input id="runtime-skill-search" type="text" placeholder="Search runtime skills…" />
           <button id="runtime-skill-search-button" type="button">Search</button>
           <button id="runtime-skill-reset-button" class="secondary" type="button">Reset</button>
@@ -1162,12 +1186,42 @@ def ui_shell(request: Request) -> str:
       </section>
       <section class="skills-panel">
         <div class="panel-header">
+          <h2>Provider Guidance</h2>
+          <span class="subtle">Draft, review, publish, and runtime preview</span>
+        </div>
+        <div class="toolbar" style="margin-bottom: 0.9rem;">
+          <select id="provider-guidance-select">
+            <option value="claude">claude</option>
+            <option value="codex">codex</option>
+          </select>
+          <button id="provider-guidance-load-button" type="button">Load guidance</button>
+        </div>
+        <div id="provider-guidance-detail" class="detail-card hidden"></div>
+      </section>
+      <section class="skills-panel">
+        <div class="panel-header">
           <h2>Capabilities</h2>
           <span class="subtle">Global routing kill switches</span>
         </div>
         <div id="capabilities"><div class="loading-state">Loading…</div></div>
       </section>
     </main>
+    <script type="module">
+      import {{EditorState}} from "https://esm.sh/@codemirror/state@6.5.2";
+      import {{EditorView, keymap, lineNumbers}} from "https://esm.sh/@codemirror/view@6.38.7";
+      import {{defaultKeymap, history, historyKeymap}} from "https://esm.sh/@codemirror/commands@6.9.1";
+
+      window.__REGISTRY_CODEMIRROR__ = {{
+        EditorState,
+        EditorView,
+        keymap,
+        lineNumbers,
+        history,
+        defaultKeymap,
+        historyKeymap,
+      }};
+      window.dispatchEvent(new Event("registry-editor-ready"));
+    </script>
     <script>
       const token = {settings.ui_token!r};
       const EMPTY_STATES = {{
@@ -1183,6 +1237,7 @@ def ui_shell(request: Request) -> str:
       let bootstrapLoaded = false;
       let runtimeSkillsLoaded = false;
       let capabilitiesLoaded = false;
+      let providerGuidanceLoaded = false;
       let lastSuccessfulLoad = 0;
       let currentDetailKind = "";
       let currentDetailId = "";
@@ -1191,8 +1246,12 @@ def ui_shell(request: Request) -> str:
       let runtimeCatalog = [];
       let currentRuntimeSkillDetail = null;
       let currentRuntimeSkillPreview = null;
+      let currentRuntimeSkillLifecycle = null;
+      let currentProviderGuidanceDetail = null;
+      let currentProviderGuidancePreview = null;
       const delegationActionState = Object.create(null);
       const delegationActionError = Object.create(null);
+      const registryEditors = Object.create(null);
       var _convSearchTimer = null;
 
       function authHeaders(extra = {{}}) {{
@@ -1265,6 +1324,146 @@ def ui_shell(request: Request) -> str:
           unhealthy: "badge-failed",
         }};
         return map[s] || "";
+      }}
+
+      function ensureEditorHost(textarea) {{
+        const hostId = `${{textarea.id}}-host`;
+        let host = document.getElementById(hostId);
+        if (!host) {{
+          host = document.createElement("div");
+          host.id = hostId;
+          host.className = "code-editor hidden";
+          textarea.insertAdjacentElement("afterend", host);
+        }}
+        return host;
+      }}
+
+      function editorValue(textareaId) {{
+        const record = registryEditors[textareaId];
+        if (record && record.view) {{
+          return record.view.state.doc.toString();
+        }}
+        const textarea = document.getElementById(textareaId);
+        return textarea ? textarea.value : "";
+      }}
+
+      function setEditorValue(textareaId, value) {{
+        const text = String(value || "");
+        const textarea = document.getElementById(textareaId);
+        if (textarea) {{
+          textarea.value = text;
+        }}
+        const record = registryEditors[textareaId];
+        if (record && record.view) {{
+          const current = record.view.state.doc.toString();
+          if (current !== text) {{
+            record.view.dispatch({{
+              changes: {{ from: 0, to: current.length, insert: text }},
+            }});
+          }}
+        }}
+      }}
+
+      function mountRichEditor(textareaId) {{
+        const textarea = document.getElementById(textareaId);
+        if (!textarea) return;
+        const host = ensureEditorHost(textarea);
+        const cm = window.__REGISTRY_CODEMIRROR__;
+        if (!cm) {{
+          textarea.classList.remove("hidden");
+          host.classList.add("hidden");
+          return;
+        }}
+        textarea.classList.add("hidden");
+        host.classList.remove("hidden");
+        const currentText = textarea.value || "";
+        const existing = registryEditors[textareaId];
+        if (existing && existing.host === host) {{
+          const existingText = existing.view.state.doc.toString();
+          if (existingText !== currentText) {{
+            existing.view.dispatch({{
+              changes: {{ from: 0, to: existingText.length, insert: currentText }},
+            }});
+          }}
+          return;
+        }}
+        if (existing && existing.view) {{
+          existing.view.destroy();
+        }}
+        host.replaceChildren();
+        const updateListener = cm.EditorView.updateListener.of(update => {{
+          if (!update.docChanged) return;
+          const text = update.state.doc.toString();
+          textarea.value = text;
+        }});
+        const state = cm.EditorState.create({{
+          doc: currentText,
+          extensions: [
+            cm.lineNumbers(),
+            cm.history(),
+            cm.keymap.of([...cm.defaultKeymap, ...cm.historyKeymap]),
+            cm.EditorView.lineWrapping,
+            updateListener,
+          ],
+        }});
+        const view = new cm.EditorView({{
+          state,
+          parent: host,
+        }});
+        registryEditors[textareaId] = {{ view, host }};
+      }}
+
+      function renderLifecycleHistory(revisions = [], approvals = []) {{
+        const revisionRows = revisions.length
+          ? revisions.map(item => `
+              <tr>
+                <td><strong>${{escapeHtml(item.version_label || item.revision_id || "")}}</strong></td>
+                <td>${{escapeHtml(item.status || "")}}</td>
+                <td>${{escapeHtml(item.created_by || "")}}</td>
+                <td>${{escapeHtml(formatTime(item.created_at) || "")}}</td>
+              </tr>
+            `).join("")
+          : `<tr><td colspan="4" class="skill-empty">No revisions yet.</td></tr>`;
+        const approvalRows = approvals.length
+          ? approvals.map(item => `
+              <tr>
+                <td><strong>${{escapeHtml(item.action || "")}}</strong></td>
+                <td>${{escapeHtml(item.actor || "")}}</td>
+                <td>${{escapeHtml(item.note || "")}}</td>
+                <td>${{escapeHtml(formatTime(item.created_at) || "")}}</td>
+              </tr>
+            `).join("")
+          : `<tr><td colspan="4" class="skill-empty">No approvals yet.</td></tr>`;
+        return `
+          <div class="detail-card">
+            <strong>Revision History</strong>
+            <table class="skills-table" style="margin-top: 0.75rem;">
+              <thead>
+                <tr>
+                  <th>Revision</th>
+                  <th>Status</th>
+                  <th>Actor</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>${{revisionRows}}</tbody>
+            </table>
+          </div>
+          <div class="detail-card">
+            <strong>Approval History</strong>
+            <table class="skills-table" style="margin-top: 0.75rem;">
+              <thead>
+                <tr>
+                  <th>Action</th>
+                  <th>Actor</th>
+                  <th>Note</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>${{approvalRows}}</tbody>
+            </table>
+          </div>
+        `;
       }}
 
       function stateBadge(item) {{
@@ -1540,7 +1739,7 @@ def ui_shell(request: Request) -> str:
         }});
       }}
 
-      function renderRuntimeSkillDetail(detail, preview = null) {{
+      function renderRuntimeSkillDetail(detail, preview = null, lifecycle = null) {{
         const panel = document.getElementById("runtime-skill-detail");
         if (!panel) return;
         if (!detail) {{
@@ -1558,6 +1757,7 @@ def ui_shell(request: Request) -> str:
               </button>
             `).join("")
           : '<span class="subtle">No provider-specific preview available.</span>';
+        const lifecycleStatus = lifecycle?.lifecycle_status || detail.lifecycle_status || "";
         const actionButtons = detail.can_update || detail.can_uninstall
           ? `
               <button type="button" class="secondary" data-runtime-skill-update="${{escapeHtml(detail.name)}}">Update</button>
@@ -1575,15 +1775,50 @@ def ui_shell(request: Request) -> str:
               </div>
             `
           : "";
+        const lifecycleBlock = lifecycle
+          ? `
+              <div class="editor-shell">
+                <div class="detail-card">
+                  <div class="meta"><strong>Lifecycle:</strong> ${{escapeHtml(lifecycle.lifecycle_status || "draft")}}</div>
+                  <div class="meta"><strong>Runtime available:</strong> ${{escapeHtml(lifecycle.runtime_available ? "yes" : "no")}}</div>
+                  <div class="meta"><strong>Active revision:</strong> ${{escapeHtml(lifecycle.active_revision_id || "none")}}</div>
+                  <div class="meta"><strong>Published revision:</strong> ${{escapeHtml(lifecycle.published_revision_id || "none")}}</div>
+                </div>
+                <label>
+                  Description
+                  <input id="runtime-skill-description" type="text" value="${{escapeHtml(detail.description || "")}}" />
+                </label>
+                <label>
+                  Draft body
+                  <textarea id="runtime-skill-editor-textarea">${{escapeHtml(lifecycle.body || detail.body || "")}}</textarea>
+                </label>
+                <div class="editor-actions">
+                  <button type="button" data-runtime-skill-save="${{escapeHtml(detail.name)}}">Save draft</button>
+                  <button type="button" class="secondary" data-runtime-skill-lifecycle-action="submit" data-runtime-skill-name="${{escapeHtml(detail.name)}}">Submit</button>
+                  <button type="button" class="secondary" data-runtime-skill-lifecycle-action="approve" data-runtime-skill-name="${{escapeHtml(detail.name)}}">Approve</button>
+                  <button type="button" class="secondary" data-runtime-skill-lifecycle-action="reject" data-runtime-skill-name="${{escapeHtml(detail.name)}}">Reject</button>
+                  <button type="button" class="secondary" data-runtime-skill-lifecycle-action="publish" data-runtime-skill-name="${{escapeHtml(detail.name)}}">Publish</button>
+                  <button type="button" class="danger" data-runtime-skill-lifecycle-action="archive" data-runtime-skill-name="${{escapeHtml(detail.name)}}">Archive</button>
+                </div>
+                ${{renderLifecycleHistory(lifecycle.revisions || [], lifecycle.approvals || [])}}
+              </div>
+            `
+          : "";
         panel.classList.remove("hidden");
         panel.innerHTML = `
           <strong>${{escapeHtml(detail.display_name || detail.name)}}</strong>
           <div class="meta"><strong>Slug:</strong> ${{escapeHtml(detail.name)}}</div>
           <div class="meta"><strong>Source:</strong> ${{escapeHtml(detail.source_kind || "unknown")}}</div>
+          <div class="meta"><strong>Status:</strong> ${{escapeHtml(lifecycleStatus || "runtime")}}</div>
           <div class="meta"><strong>Requirements:</strong> ${{requirements}}</div>
           <div class="meta"><strong>Description:</strong> ${{escapeHtml(detail.description || "No description provided.")}}</div>
-          <pre class="timeline-body">${{escapeHtml(detail.body || "")}}</pre>
+          ${{
+            lifecycle
+              ? ""
+              : `<pre class="timeline-body">${{escapeHtml(detail.body || "")}}</pre>`
+          }}
           <div class="toolbar" style="margin-top: 0.75rem;">${{actionButtons}}${{providers}}</div>
+          ${{lifecycleBlock}}
           ${{previewBlock}}
         `;
         panel.querySelectorAll("[data-runtime-skill-preview]").forEach(node => {{
@@ -1598,6 +1833,15 @@ def ui_shell(request: Request) -> str:
         panel.querySelectorAll("[data-runtime-skill-uninstall]").forEach(node => {{
           node.addEventListener("click", () => uninstallRuntimeSkill(node.dataset.runtimeSkillUninstall));
         }});
+        panel.querySelectorAll("[data-runtime-skill-save]").forEach(node => {{
+          node.addEventListener("click", () => saveRuntimeSkillDraft(node.dataset.runtimeSkillSave));
+        }});
+        panel.querySelectorAll("[data-runtime-skill-lifecycle-action]").forEach(node => {{
+          node.addEventListener("click", () => runRuntimeSkillLifecycle(node.dataset.runtimeSkillName, node.dataset.runtimeSkillLifecycleAction));
+        }});
+        if (lifecycle) {{
+          mountRichEditor("runtime-skill-editor-textarea");
+        }}
       }}
 
       function renderRuntimeSkills(items) {{
@@ -1627,7 +1871,9 @@ def ui_shell(request: Request) -> str:
                   const sourceKind = item.source_kind || "unknown";
                   const status = sourceKind === "imported"
                     ? "Imported"
-                    : (sourceKind === "custom" ? "Custom" : "Built-in");
+                    : (sourceKind === "custom"
+                      ? (item.lifecycle_status || "draft")
+                      : "Built-in");
                   const rowAction = item.can_update || item.can_uninstall
                     ? `<button type="button" class="secondary" data-runtime-skill-update="${{escapeHtml(item.name)}}">Update</button>
                        <button type="button" class="danger" data-runtime-skill-uninstall="${{escapeHtml(item.name)}}">Uninstall</button>`
@@ -1689,16 +1935,22 @@ def ui_shell(request: Request) -> str:
       }}
 
       async function loadRuntimeSkillDetail(skillName) {{
-        const response = await fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}`, {{
-          headers: authHeaders(),
-        }});
-        if (!response.ok) {{
-          setStatus(await response.text() || "Failed to load runtime skill detail.");
+        const [detailResponse, lifecycleResponse] = await Promise.all([
+          fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}`, {{
+            headers: authHeaders(),
+          }}),
+          fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/lifecycle`, {{
+            headers: authHeaders(),
+          }}),
+        ]);
+        if (!detailResponse.ok) {{
+          setStatus(await detailResponse.text() || "Failed to load runtime skill detail.");
           return;
         }}
-        currentRuntimeSkillDetail = await response.json();
+        currentRuntimeSkillDetail = await detailResponse.json();
         currentRuntimeSkillPreview = null;
-        renderRuntimeSkillDetail(currentRuntimeSkillDetail, null);
+        currentRuntimeSkillLifecycle = lifecycleResponse.ok ? await lifecycleResponse.json() : null;
+        renderRuntimeSkillDetail(currentRuntimeSkillDetail, null, currentRuntimeSkillLifecycle);
       }}
 
       async function previewRuntimeSkill(providerName, skillName) {{
@@ -1773,6 +2025,215 @@ def ui_shell(request: Request) -> str:
           await loadRuntimeSkillDetail(skillName);
         }}
         await refreshCurrentDetail();
+      }}
+
+      function normalizeRuntimeSkillName(value) {{
+        return String(value || "")
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9._-]+/g, "-")
+          .replace(/^-+|-+$/g, "");
+      }}
+
+      async function createRuntimeSkillDraft() {{
+        const input = document.getElementById("runtime-skill-create-name");
+        const skillName = normalizeRuntimeSkillName(input?.value || "");
+        if (!skillName) {{
+          setStatus("Enter a runtime skill slug first.");
+          return;
+        }}
+        if (input) {{
+          input.value = skillName;
+        }}
+        const response = await fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/draft`, {{
+          method: "PUT",
+          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          body: JSON.stringify({{
+            actor_key: REGISTRY_UI_ACTOR_KEY,
+            body: "Add your instructions here.",
+            description: "",
+            changelog: "Created in registry editor",
+          }}),
+        }});
+        const payload = await response.json().catch(() => ({{}}));
+        if (!response.ok) {{
+          setStatus(payload.detail || payload.message || "Could not create draft.");
+          return;
+        }}
+        setStatus(payload.message || `Created draft ${{skillName}}.`);
+        await loadRuntimeSkills(document.getElementById("runtime-skill-search")?.value.trim() || "");
+        await loadRuntimeSkillDetail(skillName);
+      }}
+
+      async function saveRuntimeSkillDraft(skillName) {{
+        const body = editorValue("runtime-skill-editor-textarea").trim();
+        const description = document.getElementById("runtime-skill-description")?.value.trim() || "";
+        const response = await fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/draft`, {{
+          method: "PUT",
+          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          body: JSON.stringify({{
+            actor_key: REGISTRY_UI_ACTOR_KEY,
+            body,
+            description,
+            changelog: "Updated in registry editor",
+          }}),
+        }});
+        const payload = await response.json().catch(() => ({{}}));
+        if (!response.ok) {{
+          setStatus(payload.detail || payload.message || "Could not save draft.");
+          return;
+        }}
+        setStatus(payload.message || `Saved draft ${{skillName}}.`);
+        await loadRuntimeSkills(document.getElementById("runtime-skill-search")?.value.trim() || "");
+        await loadRuntimeSkillDetail(skillName);
+      }}
+
+      async function runRuntimeSkillLifecycle(skillName, action) {{
+        const response = await fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/${{action}}`, {{
+          method: "POST",
+          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          body: JSON.stringify({{
+            actor_key: REGISTRY_UI_ACTOR_KEY,
+            note: `registry-ui:${{action}}`,
+          }}),
+        }});
+        const payload = await response.json().catch(() => ({{}}));
+        if (!response.ok) {{
+          setStatus(payload.detail || payload.message || `Could not ${{action}} ${{skillName}}.`);
+          return;
+        }}
+        setStatus(payload.message || `${{action}} ${{skillName}}.`);
+        await loadRuntimeSkills(document.getElementById("runtime-skill-search")?.value.trim() || "");
+        await loadRuntimeSkillDetail(skillName);
+        await refreshCurrentDetail();
+      }}
+
+      function renderProviderGuidanceDetail(detail, preview = null) {{
+        const panel = document.getElementById("provider-guidance-detail");
+        if (!panel) return;
+        if (!detail) {{
+          panel.classList.add("hidden");
+          panel.innerHTML = "";
+          return;
+        }}
+        const previewBlock = preview
+          ? `
+              <div class="detail-card">
+                <strong>Runtime Preview</strong>
+                <div class="meta"><strong>Prompt weight:</strong> ${{escapeHtml(String(preview.prompt_weight || 0))}}</div>
+                <div class="meta"><strong>Capabilities:</strong> ${{escapeHtml(String(preview.capability_summary || ""))}}</div>
+                <pre class="timeline-body">${{escapeHtml(preview.effective_guidance || "")}}</pre>
+              </div>
+            `
+          : "";
+        panel.classList.remove("hidden");
+        panel.innerHTML = `
+          <strong>${{escapeHtml(detail.provider || "")}} guidance</strong>
+          <div class="meta"><strong>Scope:</strong> ${{escapeHtml(detail.scope_kind || "system")}}${{detail.scope_key ? ` / ${{escapeHtml(detail.scope_key)}}` : ""}}</div>
+          <div class="meta"><strong>Lifecycle:</strong> ${{escapeHtml(detail.lifecycle_status || "draft")}}</div>
+          <div class="meta"><strong>Runtime available:</strong> ${{escapeHtml(detail.runtime_available ? "yes" : "no")}}</div>
+          <div class="meta"><strong>Active revision:</strong> ${{escapeHtml(detail.active_revision_id || "none")}}</div>
+          <div class="meta"><strong>Published revision:</strong> ${{escapeHtml(detail.published_revision_id || "none")}}</div>
+          <div class="editor-shell">
+            <label>
+              Draft body
+              <textarea id="provider-guidance-editor-textarea">${{escapeHtml(detail.body || "")}}</textarea>
+            </label>
+            <div class="editor-actions">
+              <button type="button" data-provider-guidance-save="${{escapeHtml(detail.provider)}}">Save draft</button>
+              <button type="button" class="secondary" data-provider-guidance-action="submit" data-provider-name="${{escapeHtml(detail.provider)}}">Submit</button>
+              <button type="button" class="secondary" data-provider-guidance-action="approve" data-provider-name="${{escapeHtml(detail.provider)}}">Approve</button>
+              <button type="button" class="secondary" data-provider-guidance-action="reject" data-provider-name="${{escapeHtml(detail.provider)}}">Reject</button>
+              <button type="button" class="secondary" data-provider-guidance-action="publish" data-provider-name="${{escapeHtml(detail.provider)}}">Publish</button>
+              <button type="button" class="danger" data-provider-guidance-action="archive" data-provider-name="${{escapeHtml(detail.provider)}}">Archive</button>
+              <button type="button" class="secondary" data-provider-guidance-preview="${{escapeHtml(detail.provider)}}">Refresh preview</button>
+            </div>
+            ${{renderLifecycleHistory(detail.revisions || [], detail.approvals || [])}}
+            ${{previewBlock}}
+          </div>
+        `;
+        panel.querySelectorAll("[data-provider-guidance-save]").forEach(node => {{
+          node.addEventListener("click", () => saveProviderGuidanceDraft(node.dataset.providerGuidanceSave));
+        }});
+        panel.querySelectorAll("[data-provider-guidance-action]").forEach(node => {{
+          node.addEventListener("click", () => runProviderGuidanceLifecycle(node.dataset.providerName, node.dataset.providerGuidanceAction));
+        }});
+        panel.querySelectorAll("[data-provider-guidance-preview]").forEach(node => {{
+          node.addEventListener("click", () => loadProviderGuidanceDetail(node.dataset.providerGuidancePreview));
+        }});
+        mountRichEditor("provider-guidance-editor-textarea");
+      }}
+
+      async function loadProviderGuidanceDetail(providerName) {{
+        const [detailResponse, previewResponse] = await Promise.all([
+          fetch(`/v1/provider-guidance/${{encodeURIComponent(providerName)}}`, {{
+            headers: authHeaders(),
+          }}),
+          fetch(`/v1/provider-guidance/${{encodeURIComponent(providerName)}}/preview`, {{
+            method: "POST",
+            headers: authHeaders({{ "Content-Type": "application/json" }}),
+            body: JSON.stringify({{
+              role: "",
+              active_skills: [],
+              compact_mode: false,
+            }}),
+          }}),
+        ]);
+        if (!detailResponse.ok) {{
+          setStatus(await detailResponse.text() || "Failed to load provider guidance.");
+          return;
+        }}
+        currentProviderGuidanceDetail = await detailResponse.json();
+        currentProviderGuidancePreview = previewResponse.ok ? await previewResponse.json() : null;
+        providerGuidanceLoaded = true;
+        renderProviderGuidanceDetail(currentProviderGuidanceDetail, currentProviderGuidancePreview);
+      }}
+
+      async function saveProviderGuidanceDraft(providerName) {{
+        const body = editorValue("provider-guidance-editor-textarea").trim();
+        const detail = currentProviderGuidanceDetail;
+        if (!detail) {{
+          setStatus("Load provider guidance first.");
+          return;
+        }}
+        const response = await fetch(`/v1/provider-guidance/${{encodeURIComponent(providerName)}}/draft`, {{
+          method: "PUT",
+          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          body: JSON.stringify({{
+            actor_key: REGISTRY_UI_ACTOR_KEY,
+            body,
+            scope_kind: detail.scope_kind || "system",
+            scope_key: detail.scope_key || "",
+          }}),
+        }});
+        const payload = await response.json().catch(() => ({{}}));
+        if (!response.ok) {{
+          setStatus(payload.detail || payload.message || "Could not save provider guidance.");
+          return;
+        }}
+        setStatus(payload.message || `Saved ${{providerName}} guidance draft.`);
+        await loadProviderGuidanceDetail(providerName);
+      }}
+
+      async function runProviderGuidanceLifecycle(providerName, action) {{
+        const detail = currentProviderGuidanceDetail;
+        const response = await fetch(`/v1/provider-guidance/${{encodeURIComponent(providerName)}}/${{action}}`, {{
+          method: "POST",
+          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          body: JSON.stringify({{
+            actor_key: REGISTRY_UI_ACTOR_KEY,
+            note: `registry-ui:${{action}}`,
+            scope_kind: detail?.scope_kind || "system",
+            scope_key: detail?.scope_key || "",
+          }}),
+        }});
+        const payload = await response.json().catch(() => ({{}}));
+        if (!response.ok) {{
+          setStatus(payload.detail || payload.message || `Could not ${{action}} ${{providerName}} guidance.`);
+          return;
+        }}
+        setStatus(payload.message || `${{action}} ${{providerName}} guidance.`);
+        await loadProviderGuidanceDetail(providerName);
       }}
 
       function renderCapabilities(items) {{
@@ -2153,6 +2614,10 @@ def ui_shell(request: Request) -> str:
           if (!capabilitiesLoaded) {{
             await loadCapabilities();
           }}
+          if (!providerGuidanceLoaded) {{
+            const provider = document.getElementById("provider-guidance-select")?.value || "claude";
+            await loadProviderGuidanceDetail(provider);
+          }}
           await refreshCurrentDetail();
         }} catch (error) {{
           const message = error.message || "Failed to refresh registry UI.";
@@ -2400,6 +2865,11 @@ def ui_shell(request: Request) -> str:
           setStatus(error.message || "Failed to search runtime skills.");
         }});
       }});
+      document.getElementById("runtime-skill-create-button").addEventListener("click", () => {{
+        createRuntimeSkillDraft().catch(error => {{
+          setStatus(error.message || "Failed to create runtime skill draft.");
+        }});
+      }});
       document.getElementById("runtime-skill-reset-button").addEventListener("click", () => {{
         document.getElementById("runtime-skill-search").value = "";
         loadRuntimeSkills().catch(error => {{
@@ -2412,6 +2882,27 @@ def ui_shell(request: Request) -> str:
         loadRuntimeSkills(document.getElementById("runtime-skill-search").value.trim()).catch(error => {{
           setStatus(error.message || "Failed to search runtime skills.");
         }});
+      }});
+      document.getElementById("runtime-skill-create-name").addEventListener("keydown", event => {{
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        createRuntimeSkillDraft().catch(error => {{
+          setStatus(error.message || "Failed to create runtime skill draft.");
+        }});
+      }});
+      document.getElementById("provider-guidance-load-button").addEventListener("click", () => {{
+        const provider = document.getElementById("provider-guidance-select").value;
+        loadProviderGuidanceDetail(provider).catch(error => {{
+          setStatus(error.message || "Failed to load provider guidance.");
+        }});
+      }});
+      window.addEventListener("registry-editor-ready", () => {{
+        if (currentRuntimeSkillLifecycle) {{
+          mountRichEditor("runtime-skill-editor-textarea");
+        }}
+        if (currentProviderGuidanceDetail) {{
+          mountRichEditor("provider-guidance-editor-textarea");
+        }}
       }});
       var convSearchEl = document.getElementById('conv-search');
       if (convSearchEl) {{

@@ -109,6 +109,7 @@ from app.channels.telegram.conversation import (
     cmd_settings as conversation_cmd_settings,
     handle_settings_callback as conversation_handle_settings_callback,
     handle_worker_conversation_action as conversation_handle_worker_action,
+    TelegramConversationRuntime,
 )
 from app.channels.telegram.pending import (
     approve_pending as pending_approve_pending,
@@ -387,6 +388,15 @@ _pending_work_items: dict[int, str] = {}  # update_id -> work_item_id
 
 def _state():
     return get_channel_state()
+
+
+def _conversation_runtime() -> TelegramConversationRuntime:
+    return TelegramConversationRuntime(
+        state=_state(),
+        cancellations=get_cancellation_registry(),
+        chat_lock=_chat_lock,
+        edit_or_reply_text=_edit_or_reply_text,
+    )
 
 
 def _dedup_update(update: Update, kind: str = "unknown", payload: str = "{}") -> bool:
@@ -1566,7 +1576,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 @_command_handler
 async def cmd_new(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await conversation_cmd_new(event, update, context)
+    await conversation_cmd_new(event, update, context, runtime=_conversation_runtime())
 
 
 @_command_handler
@@ -1645,7 +1655,7 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @_command_handler
 async def cmd_approval(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await conversation_cmd_approval(event, update, context)
+    await conversation_cmd_approval(event, update, context, runtime=_conversation_runtime())
 
 
 @_command_handler
@@ -2095,7 +2105,7 @@ async def cmd_guidance(event, update: Update, context: ContextTypes.DEFAULT_TYPE
 
 @_command_handler
 async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await conversation_cmd_cancel(event, update, context)
+    await conversation_cmd_cancel(event, update, context, runtime=_conversation_runtime())
 
 
 @_command_handler
@@ -2110,7 +2120,7 @@ async def handle_clear_cred_callback(event, query) -> None:
 
 @_command_handler
 async def cmd_compact(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await conversation_cmd_compact(event, update, context)
+    await conversation_cmd_compact(event, update, context, runtime=_conversation_runtime())
 
 
 @_command_handler
@@ -2137,12 +2147,12 @@ async def cmd_raw(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 @_command_handler
 async def cmd_role(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await conversation_cmd_role(event, update, context)
+    await conversation_cmd_role(event, update, context, runtime=_conversation_runtime())
 
 
 @_command_handler
 async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await conversation_cmd_model(event, update, context)
+    await conversation_cmd_model(event, update, context, runtime=_conversation_runtime())
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2368,7 +2378,7 @@ async def handle_collapse_callback(event, query) -> None:
 
 @_callback_handler
 async def handle_settings_callback(event, query) -> None:
-    await conversation_handle_settings_callback(event, query)
+    await conversation_handle_settings_callback(event, query, runtime=_conversation_runtime())
 
 
 # -- Application builder ---------------------------------------------------
@@ -2385,17 +2395,17 @@ async def handle_skill_update_callback(event, query) -> None:
 
 @_command_handler
 async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await conversation_cmd_project(event, update, context)
+    await conversation_cmd_project(event, update, context, runtime=_conversation_runtime())
 
 
 @_command_handler
 async def cmd_settings(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await conversation_cmd_settings(event, update, context)
+    await conversation_cmd_settings(event, update, context, runtime=_conversation_runtime())
 
 
 @_command_handler
 async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await conversation_cmd_policy(event, update, context)
+    await conversation_cmd_policy(event, update, context, runtime=_conversation_runtime())
 
 
 @_command_handler
@@ -2545,6 +2555,7 @@ async def _execute_worker_action(
         event,
         item,
         surface,
+        runtime=_conversation_runtime(),
         runtime_chat=runtime_chat,
         source=source,
         trust=trust,
@@ -2862,6 +2873,7 @@ async def _shared_cancel_command(update: Update, event, action: InboundAction) -
     await conversation_cancel_chat_operation(
         event.chat_id,
         update.effective_message,
+        runtime=_conversation_runtime(),
         actor_user_id=event.user.id,
         allow_admin_override=is_admin(event.user),
         update_id=update.update_id,

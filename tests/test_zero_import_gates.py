@@ -43,3 +43,12 @@ def test_access_module_has_no_channel_imports() -> None:
     access_path = repo_root / "app" / "access.py"
     text = access_path.read_text()
     assert "app.channels" not in text, f"channel import still referenced in {access_path}"
+
+
+def test_telegram_conversation_module_has_no_ingress_import() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    conversation_path = repo_root / "app" / "channels" / "telegram" / "conversation.py"
+    text = conversation_path.read_text()
+    assert "app.channels.telegram.ingress" not in text, (
+        f"telegram ingress import still referenced in {conversation_path}"
+    )

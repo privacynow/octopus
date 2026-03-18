@@ -3,50 +3,238 @@
 from __future__ import annotations
 
 import html
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 
+from app import access
 from app import user_messages as _msg
-from app.channels.telegram.cancellation import get_cancellation_registry
-from app.channels.telegram.state import get_channel_state
+from app.channels.telegram.cancellation import TelegramCancellationRegistry
+from app.channels.telegram.state import TelegramChannelState
 from app.credential_flow import foreign_setup_message
+from app.execution_context import ResolvedExecutionContext
+from app.identity import (
+    telegram_actor_key,
+    telegram_conversation_key,
+    telegram_event_id,
+)
 from app.provider_guidance_service import get_provider_guidance_service
 from app.runtime import composition
+from app.runtime.session_runtime import (
+    load_runtime_session,
+    resolve_session_context,
+    save_runtime_session,
+)
+from app.session_state import SessionState
+from app.skill_activation_service import get_skill_activation_service
 
 
-def _th():
-    import app.channels.telegram.ingress as th
+@dataclass(frozen=True)
+class TelegramConversationRuntime:
+    """Injected Telegram conversation dependencies.
 
-    return th
+    The conversation surface owns its workflow logic directly and receives only
+    the Telegram-specific runtime collaborators it genuinely needs.
+    """
 
-
-def _state():
-    return get_channel_state()
-
-
-def _cancellations():
-    return get_cancellation_registry()
+    state: TelegramChannelState
+    cancellations: TelegramCancellationRegistry
+    chat_lock: Callable[..., Any]
+    edit_or_reply_text: Callable[..., Awaitable[None]]
 
 
 def _flows():
     return composition.workflows()
 
 
-async def cmd_new(event, update: Update, context) -> None:
+def _conversation_key(chat_id: int | str) -> str:
+    return telegram_conversation_key(chat_id)
+
+
+def _actor_key(user_id: int | str) -> str:
+    return telegram_actor_key(user_id)
+
+
+def _event_key(update_id: int | str) -> str:
+    return telegram_event_id(update_id)
+
+
+def _approval_mode_source(session: SessionState) -> str:
+    return "chat override" if session.approval_mode_explicit else "instance default"
+
+
+def _load(runtime: TelegramConversationRuntime, chat_id: int | str) -> SessionState:
+    cfg = runtime.state.config
+    provider = runtime.state.provider
+    session = load_runtime_session(
+        cfg.data_dir,
+        _conversation_key(chat_id),
+        provider_name=provider.name,
+        provider_state_factory=provider.new_provider_state,
+        approval_mode=cfg.approval_mode,
+        default_role=cfg.role,
+        default_skills=cfg.default_skills,
+    )
+    if get_skill_activation_service().normalize(session):
+        _save(runtime, chat_id, session)
+    return session
+
+
+def _save(runtime: TelegramConversationRuntime, chat_id: int | str, session: SessionState) -> None:
+    save_runtime_session(runtime.state.config.data_dir, _conversation_key(chat_id), session)
+
+
+def _is_admin(runtime: TelegramConversationRuntime, user) -> bool:
+    return access.is_admin_user(runtime.state.config, user)
+
+
+def _is_public_user(runtime: TelegramConversationRuntime, user) -> bool:
+    return access.is_public_user(runtime.state.config, user)
+
+
+def _trust_tier(runtime: TelegramConversationRuntime, user) -> str:
+    return access.trust_tier(runtime.state.config, user)
+
+
+async def _public_guard(runtime: TelegramConversationRuntime, event, update: Update) -> bool:
+    if _is_public_user(runtime, event.user):
+        await update.effective_message.reply_text(_msg.trust_command_not_available_public())
+        return True
+    return False
+
+
+def _resolve_project(runtime: TelegramConversationRuntime, session: SessionState):
+    project_id = session.project_id
+    if not project_id:
+        return None
+    for proj in runtime.state.config.projects:
+        if proj.name == project_id:
+            return proj
+    return None
+
+
+def _resolve_context(
+    runtime: TelegramConversationRuntime,
+    session: SessionState,
+    trust_tier: str = "trusted",
+) -> ResolvedExecutionContext:
+    return resolve_session_context(
+        session,
+        config=runtime.state.config,
+        provider_name=runtime.state.provider.name,
+        trust_tier=trust_tier,
+    )
+
+
+def _settings_model_profile_state(
+    runtime: TelegramConversationRuntime,
+    session: SessionState,
+    trust_tier: str,
+    effective_model: str,
+) -> tuple[list[str], str]:
+    state = _flows().conversation.settings.model_profile_state(
+        session,
+        runtime.state.config,
+        trust_tier,
+        effective_model,
+    )
+    return (list(state.available_profiles), state.current_profile)
+
+
+def _settings_model_buttons(
+    available: list[str],
+    current: str,
+    has_explicit_override: bool = False,
+) -> list[InlineKeyboardButton]:
+    buttons = [
+        InlineKeyboardButton(
+            f"\u2705 {profile}" if profile == current else profile,
+            callback_data=f"setting_model:{profile}",
+        )
+        for profile in available
+    ]
+    if has_explicit_override:
+        buttons.append(InlineKeyboardButton("Inherit", callback_data="setting_model:inherit"))
+    return buttons
+
+
+def _settings_project_buttons(
+    runtime: TelegramConversationRuntime,
+    session: SessionState,
+) -> list[list[InlineKeyboardButton]]:
+    rows: list[list[InlineKeyboardButton]] = []
+    if not runtime.state.config.projects:
+        return rows
+    row: list[InlineKeyboardButton] = []
+    for proj in runtime.state.config.projects:
+        label = f"\u2705 {proj.name}" if proj.name == session.project_id else proj.name
+        row.append(InlineKeyboardButton(label, callback_data=f"setting_project:{proj.name}"))
+    if row:
+        rows.append(row)
+    if session.project_id:
+        rows.append([InlineKeyboardButton("Clear project", callback_data="setting_project:clear")])
+    return rows
+
+
+def _settings_policy_buttons(
+    policy: str,
+    has_explicit_override: bool = False,
+) -> list[InlineKeyboardButton]:
+    buttons = [
+        InlineKeyboardButton(
+            "\u2705 Read only" if policy == "inspect" else "Read only",
+            callback_data="setting_policy:inspect",
+        ),
+        InlineKeyboardButton(
+            "\u2705 Read & write" if policy == "edit" else "Read & write",
+            callback_data="setting_policy:edit",
+        ),
+    ]
+    if has_explicit_override:
+        buttons.append(InlineKeyboardButton("Inherit", callback_data="setting_policy:inherit"))
+    return buttons
+
+
+def _settings_compact_buttons(compact: bool) -> list[InlineKeyboardButton]:
+    return [
+        InlineKeyboardButton(
+            "\u2705 Short answers" if compact else "Short answers",
+            callback_data="setting_compact:on",
+        ),
+        InlineKeyboardButton(
+            "\u2705 Full answers" if not compact else "Full answers",
+            callback_data="setting_compact:off",
+        ),
+    ]
+
+
+def _settings_approval_buttons(approval: str) -> list[InlineKeyboardButton]:
+    return [
+        InlineKeyboardButton(
+            "\u2705 Review first" if approval == "on" else "Review first",
+            callback_data="setting_approval:on",
+        ),
+        InlineKeyboardButton(
+            "\u2705 Run immediately" if approval == "off" else "Run immediately",
+            callback_data="setting_approval:off",
+        ),
+    ]
+
+
+async def cmd_new(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
     del context
-    th = _th()
     chat_id = event.chat_id
-    cfg = _state().config
-    prov = _state().provider
-    async with th._chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
-        old_session = th._load(chat_id)
+    cfg = runtime.state.config
+    provider = runtime.state.provider
+    async with runtime.chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
+        old_session = _load(runtime, chat_id)
         outcome = _flows().conversation.control.reset_session(
             old_session,
-            user_id=th._actor_key(event.user.id),
-            provider_name=prov.name,
-            provider_state_factory=prov.new_provider_state,
+            user_id=_actor_key(event.user.id),
+            provider_name=provider.name,
+            provider_state_factory=provider.new_provider_state,
             approval_mode_default=cfg.approval_mode,
             default_role=cfg.role,
             default_skills=cfg.default_skills,
@@ -58,10 +246,11 @@ async def cmd_new(event, update: Update, context) -> None:
             return
         if outcome.replacement_session is None:
             return
-        th._save(chat_id, outcome.replacement_session)
+        _save(runtime, chat_id, outcome.replacement_session)
         if outcome.cleanup_scripts:
             get_provider_guidance_service().cleanup_codex_scripts(
-                cfg.data_dir, th._conversation_key(chat_id)
+                cfg.data_dir,
+                _conversation_key(chat_id),
             )
     await update.effective_message.reply_text(outcome.message)
 
@@ -70,51 +259,52 @@ async def cancel_chat_operation(
     chat_id: int | str,
     message,
     *,
+    runtime: TelegramConversationRuntime,
     actor_user_id: int | str = "",
     allow_admin_override: bool = False,
     update_id: int | None = None,
 ) -> None:
-    th = _th()
     fast_outcome = request_cancel_fast_path(
         chat_id,
-        actor_key=th._actor_key(actor_user_id),
-        cancel_request_event_id=th._event_key(update_id) if update_id is not None else "",
+        runtime=runtime,
+        actor_key=_actor_key(actor_user_id),
+        cancel_request_event_id=_event_key(update_id) if update_id is not None else "",
         allow_override=allow_admin_override,
     )
     if fast_outcome is not None:
         await message.reply_text(fast_outcome.message)
         return
 
-    async with th._chat_lock(chat_id, message=message, update_id=update_id):
-        session = th._load(chat_id)
+    async with runtime.chat_lock(chat_id, message=message, update_id=update_id):
+        session = _load(runtime, chat_id)
         outcome = _flows().conversation.control.cancel_conversation(
             session,
-            data_dir=_state().config.data_dir,
-            conversation_key=th._conversation_key(chat_id),
-            actor_key=th._actor_key(actor_user_id),
-            cancel_request_event_id=th._event_key(update_id) if update_id is not None else "",
+            data_dir=runtime.state.config.data_dir,
+            conversation_key=_conversation_key(chat_id),
+            actor_key=_actor_key(actor_user_id),
+            cancel_request_event_id=_event_key(update_id) if update_id is not None else "",
             allow_override=allow_admin_override,
         )
         if outcome.mutated:
-            th._save(chat_id, session)
+            _save(runtime, chat_id, session)
     await message.reply_text(outcome.message)
 
 
 def request_cancel_fast_path(
     chat_id: int | str,
     *,
+    runtime: TelegramConversationRuntime,
     actor_key: str,
     cancel_request_event_id: str = "",
     allow_override: bool = False,
 ):
-    th = _th()
-    session = th._load(chat_id)
+    session = _load(runtime, chat_id)
     outcome = _flows().conversation.control.cancel_conversation(
         session,
-        data_dir=_state().config.data_dir,
-        conversation_key=th._conversation_key(chat_id),
+        data_dir=runtime.state.config.data_dir,
+        conversation_key=_conversation_key(chat_id),
         actor_key=actor_key,
-        live_cancel_event=_cancellations().get(chat_id),
+        live_cancel_event=runtime.cancellations.get(chat_id),
         cancel_request_event_id=cancel_request_event_id,
         allow_override=allow_override,
     )
@@ -123,59 +313,61 @@ def request_cancel_fast_path(
     return None
 
 
-async def cmd_cancel(event, update: Update, context) -> None:
+async def cmd_cancel(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
     del context
-    th = _th()
-    if await th._public_guard(event, update):
+    if await _public_guard(runtime, event, update):
         return
     await cancel_chat_operation(
         event.chat_id,
         update.effective_message,
+        runtime=runtime,
         actor_user_id=event.user.id,
-        allow_admin_override=th.is_admin(event.user),
+        allow_admin_override=_is_admin(runtime, event.user),
         update_id=update.update_id,
     )
 
 
-async def cmd_approval(event, update: Update, context) -> None:
+async def cmd_approval(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
     del context
-    th = _th()
     chat_id = event.chat_id
     arg = (event.args[0].lower() if event.args else "status")
     if arg not in {"on", "off", "status"}:
         await update.effective_message.reply_text(_msg.approval_usage())
         return
-    async with th._chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
-        session = th._load(chat_id)
+    async with runtime.chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
+        session = _load(runtime, chat_id)
         if arg == "status":
             mode = session.approval_mode
-            source = th._approval_mode_source(session)
+            source = _approval_mode_source(session)
             await update.effective_message.reply_text(
                 f"Approval mode is <b>{mode}</b> ({source}).",
                 parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([th._settings_approval_buttons(mode)]),
+                reply_markup=InlineKeyboardMarkup([_settings_approval_buttons(mode)]),
             )
             return
         outcome = _flows().conversation.settings.set_approval_mode(session, arg)
         if outcome.mutated:
-            th._save(chat_id, session)
+            _save(runtime, chat_id, session)
     await update.effective_message.reply_text(outcome.message)
 
 
-async def cmd_compact(event, update: Update, context) -> None:
+async def cmd_compact(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
     del context
-    th = _th()
     chat_id = event.chat_id
     args = event.args
 
     if not args:
-        session = th._load(chat_id)
-        current = session.compact_mode if session.compact_mode is not None else _state().config.compact_mode
+        session = _load(runtime, chat_id)
+        current = (
+            session.compact_mode
+            if session.compact_mode is not None
+            else runtime.state.config.compact_mode
+        )
         state = "on" if current else "off"
         await update.effective_message.reply_text(
             f"Compact mode is <b>{state}</b>.",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([th._settings_compact_buttons(current)]),
+            reply_markup=InlineKeyboardMarkup([_settings_compact_buttons(current)]),
         )
         return
 
@@ -184,24 +376,23 @@ async def cmd_compact(event, update: Update, context) -> None:
         await update.effective_message.reply_text("Usage: /compact on|off")
         return
 
-    async with th._chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
-        session = th._load(chat_id)
+    async with runtime.chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
+        session = _load(runtime, chat_id)
         outcome = _flows().conversation.settings.set_compact_mode(session, mode == "on")
         if outcome.mutated:
-            th._save(chat_id, session)
+            _save(runtime, chat_id, session)
     await update.effective_message.reply_text(outcome.message, parse_mode=ParseMode.HTML)
 
 
-async def cmd_role(event, update: Update, context) -> None:
+async def cmd_role(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
     del context
-    th = _th()
-    if await th._public_guard(event, update):
+    if await _public_guard(runtime, event, update):
         return
     chat_id = event.chat_id
     args = event.args
 
     if not args:
-        session = th._load(chat_id)
+        session = _load(runtime, chat_id)
         role = session.role
         if role:
             await update.effective_message.reply_text(
@@ -213,76 +404,82 @@ async def cmd_role(event, update: Update, context) -> None:
         return
 
     value = "" if args[0].lower() == "clear" else " ".join(args)
-    async with th._chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
-        session = th._load(chat_id)
+    async with runtime.chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
+        session = _load(runtime, chat_id)
         outcome = _flows().conversation.settings.set_role(
             session,
             value,
-            default_role=_state().config.role,
+            default_role=runtime.state.config.role,
         )
         if outcome.mutated:
-            th._save(chat_id, session)
-    await update.effective_message.reply_text(outcome.message, parse_mode=ParseMode.HTML if value else None)
+            _save(runtime, chat_id, session)
+    await update.effective_message.reply_text(
+        outcome.message,
+        parse_mode=ParseMode.HTML if value else None,
+    )
 
 
-async def cmd_model(event, update: Update, context) -> None:
+async def cmd_model(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
     del context
-    th = _th()
-    cfg = _state().config
+    cfg = runtime.state.config
     msg = update.effective_message
     chat_id = event.chat_id
     settings = _flows().conversation.settings
-    trust = th._trust_tier(event.user)
+    trust = _trust_tier(runtime, event.user)
     arg = event.args[0].lower() if event.args else ""
 
     if arg == "inherit":
-        async with th._chat_lock(chat_id, message=msg, update_id=update.update_id):
-            session = th._load(chat_id)
+        async with runtime.chat_lock(chat_id, message=msg, update_id=update.update_id):
+            session = _load(runtime, chat_id)
             outcome = settings.set_model_profile(
                 session,
                 "",
                 cfg=cfg,
-                provider_name=_state().provider.name,
+                provider_name=runtime.state.provider.name,
                 trust_tier=trust,
             )
             if outcome.mutated:
-                th._save(chat_id, session)
+                _save(runtime, chat_id, session)
         await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
         return
 
     if not cfg.model_profiles:
-        session = th._load(chat_id)
+        session = _load(runtime, chat_id)
         outcome = settings.set_model_profile(
             session,
             arg if arg and arg != "status" else "fast",
             cfg=cfg,
-            provider_name=_state().provider.name,
+            provider_name=runtime.state.provider.name,
             trust_tier=trust,
         )
         await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
         return
 
-    session = th._load(chat_id)
-    resolved = th._resolve_context(session, trust)
+    session = _load(runtime, chat_id)
+    resolved = _resolve_context(runtime, session, trust)
     effective = resolved.effective_model
-    available, current = th._settings_model_profile_state(session, cfg, trust, effective or "")
+    available, current = _settings_model_profile_state(runtime, session, trust, effective or "")
 
     if arg and arg != "status":
-        async with th._chat_lock(chat_id, message=msg, update_id=update.update_id):
-            session = th._load(chat_id)
+        async with runtime.chat_lock(chat_id, message=msg, update_id=update.update_id):
+            session = _load(runtime, chat_id)
             outcome = settings.set_model_profile(
                 session,
                 arg,
                 cfg=cfg,
-                provider_name=_state().provider.name,
+                provider_name=runtime.state.provider.name,
                 trust_tier=trust,
             )
             if outcome.mutated:
-                th._save(chat_id, session)
+                _save(runtime, chat_id, session)
         await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
         return
 
-    buttons = th._settings_model_buttons(available, current, has_explicit_override=bool(session.model_profile))
+    buttons = _settings_model_buttons(
+        available,
+        current,
+        has_explicit_override=bool(session.model_profile),
+    )
     text = (
         f"Model profile: <b>{html.escape(current)}</b>\n"
         f"Effective model: <code>{html.escape(effective or cfg.model or '(default)')}</code>"
@@ -298,12 +495,11 @@ async def cmd_model(event, update: Update, context) -> None:
     await msg.reply_text(text, parse_mode=ParseMode.HTML)
 
 
-async def cmd_project(event, update: Update, context) -> None:
+async def cmd_project(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
     del context
-    th = _th()
-    if await th._public_guard(event, update):
+    if await _public_guard(runtime, event, update):
         return
-    cfg = _state().config
+    cfg = runtime.state.config
     msg = update.effective_message
     arg = event.args[0].lower() if event.args else ""
 
@@ -312,12 +508,15 @@ async def cmd_project(event, update: Update, context) -> None:
         return
 
     if arg == "list":
-        session = th._load(event.chat_id)
+        session = _load(runtime, event.chat_id)
         current = session.project_id
         lines = ["<b>Available projects:</b>"]
         for proj in cfg.projects:
             marker = " (active)" if proj.name == current else ""
-            lines.append(f"  <code>{html.escape(proj.name)}</code> → {html.escape(proj.root_dir)}{marker}")
+            lines.append(
+                f"  <code>{html.escape(proj.name)}</code> → "
+                f"{html.escape(str(proj.root_dir))}{marker}"
+            )
         await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
         return
 
@@ -329,22 +528,22 @@ async def cmd_project(event, update: Update, context) -> None:
         value = None
 
     if value is not None:
-        async with th._chat_lock(event.chat_id, message=msg, update_id=update.update_id):
-            session = th._load(event.chat_id)
+        async with runtime.chat_lock(event.chat_id, message=msg, update_id=update.update_id):
+            session = _load(runtime, event.chat_id)
             outcome = _flows().conversation.settings.set_project(
                 session,
                 value,
                 cfg=cfg,
-                provider_state_factory=_state().provider.new_provider_state,
+                provider_state_factory=runtime.state.provider.new_provider_state,
             )
             if outcome.mutated:
-                th._save(event.chat_id, session)
+                _save(runtime, event.chat_id, session)
         await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
         return
 
-    session = th._load(event.chat_id)
-    proj = th._resolve_project(session)
-    working_dir = proj.root_dir if proj else str(cfg.working_dir)
+    session = _load(runtime, event.chat_id)
+    proj = _resolve_project(runtime, session)
+    working_dir = str(proj.root_dir) if proj else str(cfg.working_dir)
     project_label = proj.name if proj else "No project"
     lines = [
         f"Project: <b>{html.escape(project_label)}</b>",
@@ -354,18 +553,17 @@ async def cmd_project(event, update: Update, context) -> None:
     await msg.reply_text(
         "\n".join(lines),
         parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(th._settings_project_buttons(cfg, session)),
+        reply_markup=InlineKeyboardMarkup(_settings_project_buttons(runtime, session)),
     )
 
 
-async def cmd_settings(event, update: Update, context) -> None:
+async def cmd_settings(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
     del context
-    th = _th()
-    cfg = _state().config
+    cfg = runtime.state.config
     msg = update.effective_message
-    session = th._load(event.chat_id)
-    trust = th._trust_tier(event.user)
-    resolved = th._resolve_context(session, trust_tier=trust)
+    session = _load(runtime, event.chat_id)
+    trust = _trust_tier(runtime, event.user)
+    resolved = _resolve_context(runtime, session, trust_tier=trust)
 
     project_display = resolved.project_id or "No project"
     if trust == "public":
@@ -375,14 +573,18 @@ async def cmd_settings(event, update: Update, context) -> None:
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
     compact_label = "on" if compact else "off"
     effective_model = resolved.effective_model
-    model_available, model_display = th._settings_model_profile_state(
-        session, cfg, trust, effective_model or ""
+    model_available, model_display = _settings_model_profile_state(
+        runtime,
+        session,
+        trust,
+        effective_model or "",
     )
     approval = session.approval_mode
 
     lines = [
         "<b>Chat settings</b>",
-        f"Project: <code>{html.escape(project_display)}</code> → <code>{html.escape(working_dir)}</code>",
+        f"Project: <code>{html.escape(project_display)}</code> → "
+        f"<code>{html.escape(working_dir)}</code>",
         f"Model profile: <code>{html.escape(model_display)}</code>",
         f"File policy: <code>{html.escape(policy)}</code>",
         f"Compact mode: <b>{compact_label}</b>",
@@ -396,14 +598,24 @@ async def cmd_settings(event, update: Update, context) -> None:
 
     keyboard: list[list[Any]] = []
     if trust != "public":
-        keyboard.extend(th._settings_project_buttons(cfg, session))
-        keyboard.append(th._settings_policy_buttons(policy, has_explicit_override=bool(session.file_policy)))
+        keyboard.extend(_settings_project_buttons(runtime, session))
+        keyboard.append(
+            _settings_policy_buttons(policy, has_explicit_override=bool(session.file_policy))
+        )
     if model_available:
-        keyboard.append(th._settings_model_buttons(model_available, model_display, has_explicit_override=bool(session.model_profile)))
+        keyboard.append(
+            _settings_model_buttons(
+                model_available,
+                model_display,
+                has_explicit_override=bool(session.model_profile),
+            )
+        )
     elif session.model_profile:
-        keyboard.append([InlineKeyboardButton("Clear model override", callback_data="setting_model:inherit")])
-    keyboard.append(th._settings_compact_buttons(compact))
-    keyboard.append(th._settings_approval_buttons(approval))
+        keyboard.append(
+            [InlineKeyboardButton("Clear model override", callback_data="setting_model:inherit")]
+        )
+    keyboard.append(_settings_compact_buttons(compact))
+    keyboard.append(_settings_approval_buttons(approval))
 
     await msg.reply_text(
         "\n".join(lines),
@@ -412,10 +624,9 @@ async def cmd_settings(event, update: Update, context) -> None:
     )
 
 
-async def cmd_policy(event, update: Update, context) -> None:
+async def cmd_policy(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
     del context
-    th = _th()
-    if await th._public_guard(event, update):
+    if await _public_guard(runtime, event, update):
         return
     msg = update.effective_message
     arg = event.args[0].lower() if event.args else ""
@@ -427,30 +638,30 @@ async def cmd_policy(event, update: Update, context) -> None:
         value = arg
 
     if value is not None:
-        async with th._chat_lock(event.chat_id, message=msg, update_id=update.update_id):
-            session = th._load(event.chat_id)
+        async with runtime.chat_lock(event.chat_id, message=msg, update_id=update.update_id):
+            session = _load(runtime, event.chat_id)
             outcome = _flows().conversation.settings.set_file_policy(
                 session,
                 value,
-                cfg=_state().config,
-                provider_name=_state().provider.name,
-                trust_tier=th._trust_tier(event.user),
-                provider_state_factory=_state().provider.new_provider_state,
+                cfg=runtime.state.config,
+                provider_name=runtime.state.provider.name,
+                trust_tier=_trust_tier(runtime, event.user),
+                provider_state_factory=runtime.state.provider.new_provider_state,
             )
             if outcome.mutated:
-                th._save(event.chat_id, session)
+                _save(runtime, event.chat_id, session)
         await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
         return
 
     if arg in {"", "status"}:
-        session = th._load(event.chat_id)
-        resolved = th._resolve_context(session, th._trust_tier(event.user))
+        session = _load(runtime, event.chat_id)
+        resolved = _resolve_context(runtime, session, _trust_tier(runtime, event.user))
         policy = resolved.file_policy or "edit"
         await msg.reply_text(
             f"File policy: <b>{html.escape(policy)}</b>",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(
-                [th._settings_policy_buttons(policy, has_explicit_override=bool(session.file_policy))]
+                [_settings_policy_buttons(policy, has_explicit_override=bool(session.file_policy))]
             ),
         )
         return
@@ -458,8 +669,12 @@ async def cmd_policy(event, update: Update, context) -> None:
     await msg.reply_text(_msg.policy_usage())
 
 
-async def handle_settings_callback(event, query) -> None:
-    th = _th()
+async def handle_settings_callback(
+    event,
+    query,
+    *,
+    runtime: TelegramConversationRuntime,
+) -> None:
     chat_id = event.chat_id
     data = event.data
 
@@ -472,22 +687,22 @@ async def handle_settings_callback(event, query) -> None:
         return
     setting, value = rest.split(":", 1)
 
-    async with th._chat_lock(chat_id, query=query) as already_answered:
+    async with runtime.chat_lock(chat_id, query=query) as already_answered:
         if not already_answered:
             await query.answer()
-        session = th._load(chat_id)
+        session = _load(runtime, chat_id)
         settings = _flows().conversation.settings
 
         if setting == "model":
             outcome = settings.set_model_profile(
                 session,
                 "" if value == "inherit" else value,
-                cfg=_state().config,
-                provider_name=_state().provider.name,
-                trust_tier=th._trust_tier(event.user),
+                cfg=runtime.state.config,
+                provider_name=runtime.state.provider.name,
+                trust_tier=_trust_tier(runtime, event.user),
             )
             if outcome.mutated:
-                th._save(chat_id, session)
+                _save(runtime, chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(outcome.message, parse_mode=ParseMode.HTML)
             return
@@ -497,7 +712,7 @@ async def handle_settings_callback(event, query) -> None:
                 return
             outcome = settings.set_approval_mode(session, value)
             if outcome.mutated:
-                th._save(chat_id, session)
+                _save(runtime, chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(outcome.message)
             return
@@ -505,46 +720,46 @@ async def handle_settings_callback(event, query) -> None:
         if setting == "compact":
             outcome = settings.set_compact_mode(session, value == "on")
             if outcome.mutated:
-                th._save(chat_id, session)
+                _save(runtime, chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(outcome.message, parse_mode=ParseMode.HTML)
             return
 
         if setting == "policy":
-            if th.is_public_user(event.user):
+            if _is_public_user(runtime, event.user):
                 await query.edit_message_text(_msg.trust_file_policy_public())
                 return
             outcome = settings.set_file_policy(
                 session,
                 "" if value == "inherit" else value,
-                cfg=_state().config,
-                provider_name=_state().provider.name,
-                trust_tier=th._trust_tier(event.user),
-                provider_state_factory=_state().provider.new_provider_state,
+                cfg=runtime.state.config,
+                provider_name=runtime.state.provider.name,
+                trust_tier=_trust_tier(runtime, event.user),
+                provider_state_factory=runtime.state.provider.new_provider_state,
             )
             if outcome.status == "invalid":
                 return
             if outcome.mutated:
-                th._save(chat_id, session)
+                _save(runtime, chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(outcome.message, parse_mode=ParseMode.HTML)
             return
 
         if setting == "project":
-            if th.is_public_user(event.user):
+            if _is_public_user(runtime, event.user):
                 await query.edit_message_text(_msg.trust_project_public())
                 return
-            if not _state().config.projects:
+            if not runtime.state.config.projects:
                 await query.edit_message_text(_msg.no_projects_configured())
                 return
             outcome = settings.set_project(
                 session,
                 value,
-                cfg=_state().config,
-                provider_state_factory=_state().provider.new_provider_state,
+                cfg=runtime.state.config,
+                provider_state_factory=runtime.state.provider.new_provider_state,
             )
             if outcome.mutated:
-                th._save(chat_id, session)
+                _save(runtime, chat_id, session)
             await query.edit_message_reply_markup(reply_markup=None)
             await query.edit_message_text(outcome.message, parse_mode=ParseMode.HTML)
 
@@ -554,24 +769,24 @@ async def handle_worker_conversation_action(
     item: dict[str, Any],
     surface,
     *,
+    runtime: TelegramConversationRuntime,
     runtime_chat: int | str,
     source: str,
     trust: str,
 ) -> bool:
-    th = _th()
     action = event.action
     params = dict(event.params)
     settings = _flows().conversation.settings
 
     if action == "session_new":
-        cfg = _state().config
-        prov = _state().provider
-        old_session = th._load(runtime_chat)
+        cfg = runtime.state.config
+        provider = runtime.state.provider
+        old_session = _load(runtime, runtime_chat)
         outcome = _flows().conversation.control.reset_session(
             old_session,
-            user_id=th._actor_key(event.user.id),
-            provider_name=prov.name,
-            provider_state_factory=prov.new_provider_state,
+            user_id=_actor_key(event.user.id),
+            provider_name=provider.name,
+            provider_state_factory=provider.new_provider_state,
             approval_mode_default=cfg.approval_mode,
             default_role=cfg.role,
             default_skills=cfg.default_skills,
@@ -581,10 +796,11 @@ async def handle_worker_conversation_action(
             return True
         if outcome.replacement_session is None:
             return True
-        th._save(runtime_chat, outcome.replacement_session)
+        _save(runtime, runtime_chat, outcome.replacement_session)
         if outcome.cleanup_scripts:
             get_provider_guidance_service().cleanup_codex_scripts(
-                cfg.data_dir, th._conversation_key(runtime_chat)
+                cfg.data_dir,
+                _conversation_key(runtime_chat),
             )
         await surface.reply_text(outcome.message)
         return True
@@ -592,117 +808,118 @@ async def handle_worker_conversation_action(
     if action == "cancel_conversation":
         live_outcome = request_cancel_fast_path(
             runtime_chat,
-            actor_key=th._actor_key(event.user.id),
+            runtime=runtime,
+            actor_key=_actor_key(event.user.id),
             cancel_request_event_id=str(item.get("event_id", "")),
-            allow_override=(source != "telegram" or th.is_admin(event.user)),
+            allow_override=(source != "telegram" or _is_admin(runtime, event.user)),
         )
         if live_outcome is not None:
             await surface.reply_text(live_outcome.message)
             return True
-        session = th._load(runtime_chat)
+        session = _load(runtime, runtime_chat)
         outcome = _flows().conversation.control.cancel_conversation(
             session,
-            data_dir=_state().config.data_dir,
-            conversation_key=th._conversation_key(runtime_chat),
-            actor_key=th._actor_key(event.user.id),
+            data_dir=runtime.state.config.data_dir,
+            conversation_key=_conversation_key(runtime_chat),
+            actor_key=_actor_key(event.user.id),
             cancel_request_event_id=str(item.get("event_id", "")),
-            allow_override=(source != "telegram" or th.is_admin(event.user)),
+            allow_override=(source != "telegram" or _is_admin(runtime, event.user)),
         )
         if outcome.mutated:
-            th._save(runtime_chat, session)
+            _save(runtime, runtime_chat, session)
         await surface.reply_text(outcome.message)
         return True
 
     if action == "set_approval_mode":
         value = str(params.get("value", "")).lower()
-        session = th._load(runtime_chat)
+        session = _load(runtime, runtime_chat)
         outcome = settings.set_approval_mode(session, value)
         if outcome.status == "invalid":
             return True
         if outcome.mutated:
-            th._save(runtime_chat, session)
+            _save(runtime, runtime_chat, session)
         await surface.edit_reply_markup(reply_markup=None)
-        await th._edit_or_reply_text(surface, outcome.message)
+        await runtime.edit_or_reply_text(surface, outcome.message)
         return True
 
     if action == "set_compact_mode":
-        session = th._load(runtime_chat)
+        session = _load(runtime, runtime_chat)
         outcome = settings.set_compact_mode(session, bool(params.get("value", False)))
         if outcome.mutated:
-            th._save(runtime_chat, session)
+            _save(runtime, runtime_chat, session)
         await surface.edit_reply_markup(reply_markup=None)
-        await th._edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
+        await runtime.edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
         return True
 
     if action == "set_role":
-        if th.is_public_user(event.user):
+        if _is_public_user(runtime, event.user):
             await surface.reply_text(_msg.trust_command_not_available_public())
             return True
-        session = th._load(runtime_chat)
+        session = _load(runtime, runtime_chat)
         outcome = settings.set_role(
             session,
             str(params.get("value", "")),
-            default_role=_state().config.role,
+            default_role=runtime.state.config.role,
         )
         if outcome.mutated:
-            th._save(runtime_chat, session)
+            _save(runtime, runtime_chat, session)
         await surface.reply_text(outcome.message, parse_mode=ParseMode.HTML)
         return True
 
     if action == "set_model_profile":
-        session = th._load(runtime_chat)
+        session = _load(runtime, runtime_chat)
         outcome = settings.set_model_profile(
             session,
             str(params.get("profile", "")),
-            cfg=_state().config,
-            provider_name=_state().provider.name,
+            cfg=runtime.state.config,
+            provider_name=runtime.state.provider.name,
             trust_tier=trust,
         )
         if outcome.mutated:
-            th._save(runtime_chat, session)
+            _save(runtime, runtime_chat, session)
         await surface.edit_reply_markup(reply_markup=None)
-        await th._edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
+        await runtime.edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
         return True
 
     if action == "set_project":
-        if th.is_public_user(event.user):
-            await th._edit_or_reply_text(surface, _msg.trust_project_public())
+        if _is_public_user(runtime, event.user):
+            await runtime.edit_or_reply_text(surface, _msg.trust_project_public())
             return True
-        if not _state().config.projects:
-            await th._edit_or_reply_text(surface, _msg.no_projects_configured())
+        if not runtime.state.config.projects:
+            await runtime.edit_or_reply_text(surface, _msg.no_projects_configured())
             return True
-        session = th._load(runtime_chat)
+        session = _load(runtime, runtime_chat)
         outcome = settings.set_project(
             session,
             str(params.get("value", "")),
-            cfg=_state().config,
-            provider_state_factory=_state().provider.new_provider_state,
+            cfg=runtime.state.config,
+            provider_state_factory=runtime.state.provider.new_provider_state,
         )
         if outcome.mutated:
-            th._save(runtime_chat, session)
+            _save(runtime, runtime_chat, session)
         await surface.edit_reply_markup(reply_markup=None)
-        await th._edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
+        await runtime.edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
         return True
 
     if action == "set_file_policy":
-        if th.is_public_user(event.user):
-            await th._edit_or_reply_text(surface, _msg.trust_file_policy_public())
+        if _is_public_user(runtime, event.user):
+            await runtime.edit_or_reply_text(surface, _msg.trust_file_policy_public())
             return True
-        session = th._load(runtime_chat)
+        session = _load(runtime, runtime_chat)
         outcome = settings.set_file_policy(
             session,
             str(params.get("value", "")),
-            cfg=_state().config,
-            provider_name=_state().provider.name,
+            cfg=runtime.state.config,
+            provider_name=runtime.state.provider.name,
             trust_tier=trust,
-            provider_state_factory=_state().provider.new_provider_state,
+            provider_state_factory=runtime.state.provider.new_provider_state,
         )
         if outcome.status == "invalid":
             return True
         if outcome.mutated:
-            th._save(runtime_chat, session)
+            _save(runtime, runtime_chat, session)
         await surface.edit_reply_markup(reply_markup=None)
-        await th._edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
+        await runtime.edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
         return True
 
     return False

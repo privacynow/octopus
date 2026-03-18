@@ -121,6 +121,7 @@ from app.channels.telegram.pending import (
     reject_pending as pending_reject_pending,
     retry_allow_pending as pending_retry_allow_pending,
     retry_skip_pending as pending_retry_skip_pending,
+    TelegramPendingRuntime,
 )
 from app.runtime import composition
 from app.runtime.inbound_types import InboundUser
@@ -405,6 +406,17 @@ def _runtime_skill_runtime() -> TelegramRuntimeSkillsRuntime:
         state=_state(),
         chat_lock=_chat_lock,
         validate_credential=validate_credential,
+    )
+
+
+def _pending_runtime() -> TelegramPendingRuntime:
+    return TelegramPendingRuntime(
+        state=_state(),
+        chat_lock=_chat_lock,
+        edit_or_reply_text=_edit_or_reply_text,
+        execute_request=execute_request,
+        request_approval=request_approval,
+        build_user_prompt=build_user_prompt,
     )
 
 
@@ -1373,15 +1385,20 @@ async def approve_pending(
     *,
     cancel_event: asyncio.Event | None = None,
 ) -> None:
-    await pending_approve_pending(chat_id, message, cancel_event=cancel_event)
+    await pending_approve_pending(
+        chat_id,
+        message,
+        cancel_event=cancel_event,
+        runtime=_pending_runtime(),
+    )
 
 
 async def reject_pending(chat_id: int, message) -> None:
-    await pending_reject_pending(chat_id, message)
+    await pending_reject_pending(chat_id, message, runtime=_pending_runtime())
 
 
 async def retry_skip_pending(chat_id: int, message) -> None:
-    await pending_retry_skip_pending(chat_id, message)
+    await pending_retry_skip_pending(chat_id, message, runtime=_pending_runtime())
 
 
 async def retry_allow_pending(
@@ -1390,7 +1407,12 @@ async def retry_allow_pending(
     *,
     cancel_event: asyncio.Event | None = None,
 ) -> None:
-    await pending_retry_allow_pending(chat_id, message, cancel_event=cancel_event)
+    await pending_retry_allow_pending(
+        chat_id,
+        message,
+        cancel_event=cancel_event,
+        runtime=_pending_runtime(),
+    )
 
 
 def _parse_delegation_callback(data: str) -> tuple[str, int] | None:
@@ -2251,7 +2273,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 @_callback_handler
 async def handle_callback(event, query) -> None:
-    await pending_handle_callback(event, query)
+    await pending_handle_callback(event, query, runtime=_pending_runtime())
 
 
 @_callback_handler
@@ -2275,7 +2297,7 @@ async def handle_delegation_callback(event, query) -> None:
 
 
 async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await pending_handle_recovery_callback(update, context)
+    await pending_handle_recovery_callback(update, context, runtime=_pending_runtime())
 
 
 async def handle_recovery_action(
@@ -2294,6 +2316,7 @@ async def handle_recovery_action(
         message,
         answer_action=answer_action,
         cancel_event=cancel_event,
+        runtime=_pending_runtime(),
     )
 
 
@@ -2601,6 +2624,7 @@ async def _execute_worker_action(
         surface,
         runtime_chat=runtime_chat,
         cancel_event=cancel_event,
+        runtime=_pending_runtime(),
     ):
         return
 

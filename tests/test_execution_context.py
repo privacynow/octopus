@@ -23,6 +23,10 @@ from pathlib import Path
 
 import pytest
 
+from app.channels.telegram.session_io import (
+    load as telegram_load_session,
+    save as telegram_save_session,
+)
 from app.execution_context import (
     ResolvedExecutionContext,
     _compute_execution_config_digest,
@@ -794,9 +798,9 @@ def test_project_extra_dirs_folded_into_resolved_context():
         "projects": (("myproj", "/tmp/myproj", ("/tmp/proj-extra",)),),
     }) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
-        session = th._load(current_runtime(), 8006)
+        session = telegram_load_session(current_runtime(), 8006)
         session.project_id = "myproj"
-        th._save(current_runtime(), 8006, session)
+        telegram_save_session(current_runtime(), 8006, session)
 
         resolved = resolve_execution_context(session, cfg, "claude")
         assert "/tmp/proj-extra" in resolved.base_extra_dirs, (

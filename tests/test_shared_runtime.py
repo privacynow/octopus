@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from app import work_queue
 from app.channels.telegram.bootstrap import build_bootstrap
+from app.channels.telegram.session_io import event_key
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
 from app.runtime.inbound_types import deserialize_inbound
@@ -95,7 +96,7 @@ async def test_shared_command_dispatch_persists_action_without_inline_execution(
         await th._shared_command_dispatch(update, FakeContext(args=[]))
 
         assert prov.run_calls == []
-        payload = work_queue.get_update_payload(data_dir, th._event_key(update.update_id))
+        payload = work_queue.get_update_payload(data_dir, event_key(update.update_id))
         assert payload is not None
         event = deserialize_inbound("action", payload)
         assert event.action == "approve_pending"
@@ -117,7 +118,7 @@ async def test_shared_callback_dispatch_persists_action_without_inline_execution
 
         assert prov.run_calls == []
         assert query.answered is True
-        payload = work_queue.get_update_payload(data_dir, th._event_key(update.update_id))
+        payload = work_queue.get_update_payload(data_dir, event_key(update.update_id))
         assert payload is not None
         event = deserialize_inbound("action", payload)
         assert event.action == "approve_pending"
@@ -185,7 +186,7 @@ async def test_shared_cancel_records_action_and_sets_durable_flag():
         await th._shared_command_dispatch(update, FakeContext(args=[]))
 
         assert work_queue.is_cancel_requested(data_dir, claimed["id"]) is True
-        payload = work_queue.get_update_payload(data_dir, th._event_key(update.update_id))
+        payload = work_queue.get_update_payload(data_dir, event_key(update.update_id))
         assert payload is not None
         event = deserialize_inbound("action", payload)
         assert event.action == "cancel_conversation"

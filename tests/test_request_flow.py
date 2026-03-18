@@ -35,6 +35,10 @@ from pathlib import Path
 
 import pytest
 
+from app.channels.telegram.session_io import (
+    load as telegram_load_session,
+    save as telegram_save_session,
+)
 from app.execution_context import (
     ResolvedExecutionContext,
     resolve_execution_context,
@@ -870,9 +874,9 @@ async def test_export_uses_resolved_skills_not_raw_session():
         "allowed_user_ids": frozenset(),  # no trusted users
     }) as (data_dir, cfg, prov):
         # Create a session as a trusted user first, add skills
-        session = th._load(current_runtime(), 8005)
+        session = telegram_load_session(current_runtime(), 8005)
         session.active_skills = ["github-integration", "secret-tool"]
-        th._save(current_runtime(), 8005, session)
+        telegram_save_session(current_runtime(), 8005, session)
 
         # Export as a public user (not in allowed_user_ids)
         chat = FakeChat(chat_id=8005)
@@ -880,7 +884,7 @@ async def test_export_uses_resolved_skills_not_raw_session():
         await send_command(th.cmd_export, chat, public_user, "/export")
 
         # Verify the resolved context gives [] for public users
-        session_after = th._load(current_runtime(), 8005)
+        session_after = telegram_load_session(current_runtime(), 8005)
         trust = th._trust_tier(current_runtime(), public_user)
         resolved = th._resolve_context(current_runtime(), session_after, trust_tier=trust)
         assert resolved.active_skills == [], (

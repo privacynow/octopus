@@ -25,6 +25,10 @@ from pathlib import Path
 
 import pytest
 
+from app.channels.telegram.session_io import (
+    load as telegram_load_session,
+    save as telegram_save_session,
+)
 from app.providers.base import (
     RunResult,
 )
@@ -632,7 +636,7 @@ async def test_contended_approval_callback_single_answer():
         chat_id = 1
         chat = FakeChat(chat_id)
         user = FakeUser(next(iter(cfg.allowed_user_ids)))
-        session = th._load(current_runtime(), chat_id)
+        session = telegram_load_session(current_runtime(), chat_id)
         from app.session_state import PendingApproval
         ctx_hash = th._resolve_context(current_runtime(), session).context_hash
         session.pending_approval = PendingApproval(
@@ -640,7 +644,7 @@ async def test_contended_approval_callback_single_answer():
             attachment_dicts=[], context_hash=ctx_hash,
             created_at=0, trust_tier="trusted",
         )
-        th._save(current_runtime(), chat_id, session)
+        telegram_save_session(current_runtime(), chat_id, session)
 
         from app.providers.base import RunResult
         prov.run_results.append(RunResult(text="done"))
@@ -675,8 +679,8 @@ async def test_contended_settings_callback_single_answer():
         chat_id = 1
         chat = FakeChat(chat_id)
         user = FakeUser(next(iter(cfg.allowed_user_ids)))
-        session = th._load(current_runtime(), chat_id)
-        th._save(current_runtime(), chat_id, session)
+        session = telegram_load_session(current_runtime(), chat_id)
+        telegram_save_session(current_runtime(), chat_id, session)
 
         lock = current_runtime().chat_locks[chat_id]
         await lock.acquire()
@@ -708,8 +712,8 @@ async def test_contended_clear_cred_callback_single_answer():
         chat_id = 1
         chat = FakeChat(chat_id)
         user = FakeUser(next(iter(cfg.allowed_user_ids)))
-        session = th._load(current_runtime(), chat_id)
-        th._save(current_runtime(), chat_id, session)
+        session = telegram_load_session(current_runtime(), chat_id)
+        telegram_save_session(current_runtime(), chat_id, session)
 
         lock = current_runtime().chat_locks[chat_id]
         await lock.acquire()
@@ -1110,16 +1114,16 @@ async def test_command_exception_marks_work_item_failed():
         upd = FakeUpdate(message=msg, user=user, chat=chat)
 
         # Patch _load to raise inside cmd_session
-        original_load = th._load
+        original_load = th.load_session
         def exploding_load(_runtime, chat_id):
             raise RuntimeError("session DB corrupt")
 
-        th._load = exploding_load
+        th.load_session = exploding_load
         try:
             with pytest.raises(RuntimeError, match="session DB corrupt"):
                 await th.cmd_session(upd, FakeContext())
         finally:
-            th._load = original_load
+            th.load_session = original_load
 
         conn = debug_transport_connection(data_dir)
         row = conn.execute(
@@ -1866,7 +1870,7 @@ async def test_claude_resume_error_resets_provider_state():
         assert len(prov.run_calls) == 1
 
         # Verify session now has started=True
-        session = th._load(current_runtime(), 5001)
+        session = telegram_load_session(current_runtime(), 5001)
         assert session.provider_state["started"] is True
 
         # Second request: provider signals resume target is dead
@@ -1877,7 +1881,7 @@ async def test_claude_resume_error_resets_provider_state():
         await drain_one_worker_item(data_dir)
 
         # Session must be reset to fresh state
-        session = th._load(current_runtime(), 5001)
+        session = telegram_load_session(current_runtime(), 5001)
         assert session.provider_state["started"] is False, (
             "started should be reset after resume error"
         )
@@ -1916,11 +1920,11 @@ async def test_codex_resume_error_still_clears_thread():
 
     with fresh_env(provider_name="codex") as (data_dir, cfg, prov):
         # Simulate a session with an existing thread_id
-        session = th._load(current_runtime(), 6001)
+        session = telegram_load_session(current_runtime(), 6001)
         session.provider_state["thread_id"] = "t-existing"
         session.provider_state["context_hash"] = "hash1"
         session.provider_state["boot_id"] = "test-boot"
-        th._save(current_runtime(), 6001, session)
+        telegram_save_session(current_runtime(), 6001, session)
 
         # Provider fails with non-zero rc
         prov.run_results = [RunResult(text="codex error", returncode=1)]
@@ -1931,7 +1935,7 @@ async def test_codex_resume_error_still_clears_thread():
         await th.handle_message(upd, FakeContext())
         await drain_one_worker_item(data_dir)
 
-        session = th._load(current_runtime(), 6001)
+        session = telegram_load_session(current_runtime(), 6001)
         assert session.provider_state["thread_id"] is None, (
             "Codex thread_id should be cleared on resume error"
         )
@@ -1959,7 +1963,7 @@ async def test_claude_generic_error_during_resume_does_not_reset():
         await th.handle_message(upd1, FakeContext())
         await drain_one_worker_item(data_dir)
 
-        session = th._load(current_runtime(), 7001)
+        session = telegram_load_session(current_runtime(), 7001)
         assert session.provider_state["started"] is True
         old_session_id = session.provider_state["session_id"]
 
@@ -1971,7 +1975,7 @@ async def test_claude_generic_error_during_resume_does_not_reset():
         await drain_one_worker_item(data_dir)
 
         # Session must NOT be reset — still started=True with same session_id
-        session = th._load(current_runtime(), 7001)
+        session = telegram_load_session(current_runtime(), 7001)
         assert session.provider_state["started"] is True, (
             "Generic error should not reset started flag"
         )

@@ -525,7 +525,7 @@ async def test_propose_delegation_plan_uses_presenter(monkeypatch):
 
     rendered = TelegramRenderedMessage(text="patched delegation plan", parse_mode=ParseMode.HTML)
     monkeypatch.setattr(th, "_publish_delegation_proposed_event", _noop_publish)
-    monkeypatch.setattr(th, "_save", lambda *args, **kwargs: None)
+    monkeypatch.setattr(th, "save_session", lambda *args, **kwargs: None)
     monkeypatch.setattr(th.telegram_presenters, "delegation_plan_message", lambda delegation: rendered)
 
     message = FakeMessage(chat=FakeChat(12345), text="delegate")

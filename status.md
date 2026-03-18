@@ -41,6 +41,22 @@ acceptance gates in
    post-remediation truth pass so they match the actual code ownership and
    test seam state.
 
+Phase 8 is now active.
+
+- `H1 / session_io` is complete in the current branch state:
+  - Telegram session/key helpers now live in
+    `app/channels/telegram/session_io.py`
+  - `app/channels/telegram/ingress.py` no longer defines `_load`, `_save`,
+    `_conversation_key`, `_actor_key`, `_event_key`, or `_telegram_chat_id`
+  - focused structural gates for the extracted module are in place
+  - verified against the full suite: `1620 passed, 23 skipped`
+- Remaining Phase 8 work is still pending:
+  - H1 progress / delegation surface / execution / worker / shared dispatch
+    extraction and ingress cleanup
+  - H2 presenter rendering blind-spot closure
+  - H3 Telegram test-boundary hardening
+  - H4 documentation and structural gate tightening
+
 Feature work remains frozen.
 
 Historical execution log follows below. Some older entries reference the

@@ -11,6 +11,10 @@ from telegram.constants import ParseMode
 
 from app import user_messages as _msg
 from app.approvals import format_denials_html
+from app.workflows.provider_guidance.contracts import (
+    ProviderGuidanceLifecycleDetail,
+    ProviderGuidancePreview,
+)
 
 
 @dataclass(frozen=True)
@@ -336,3 +340,53 @@ def clear_credentials_confirmation(
             InlineKeyboardButton("Cancel", callback_data=cancel_callback),
         ]]),
     )
+
+
+def provider_guidance_preview_message(
+    provider_name: str,
+    preview: ProviderGuidancePreview,
+) -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(
+        text=(
+            f"<b>{html.escape(provider_name)}</b>\n"
+            f"<pre>{html.escape(preview.effective_guidance)}</pre>"
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+def provider_guidance_not_found_message(provider_name: str) -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(
+        text=f"Provider guidance <code>{html.escape(provider_name)}</code> not found.",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+def provider_guidance_history_message(
+    provider_name: str,
+    detail: ProviderGuidanceLifecycleDetail,
+) -> TelegramRenderedMessage:
+    lines = [
+        f"<b>{html.escape(provider_name)}</b>",
+        f"Status: <code>{html.escape(detail.lifecycle_status)}</code>",
+        f"Published revision: <code>{html.escape(detail.published_revision_id or '(none)')}</code>",
+        "",
+        "<b>Revisions</b>",
+    ]
+    for item in detail.revisions[:8]:
+        pub = " [published]" if item.is_published else ""
+        lines.append(
+            f"  <code>{html.escape(item.revision_id[:12])}</code> — "
+            f"{html.escape(item.status)}{pub}"
+        )
+    if detail.approvals:
+        lines.append("")
+        lines.append("<b>Approvals</b>")
+        for item in detail.approvals[:8]:
+            note = f" — {html.escape(item.note)}" if item.note else ""
+            lines.append(f"  {html.escape(item.action)} by {html.escape(item.actor)}{note}")
+    return TelegramRenderedMessage(text="\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+def provider_guidance_mutation_message(message: str) -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=html.escape(message), parse_mode=ParseMode.HTML)

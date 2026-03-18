@@ -148,6 +148,21 @@ def test_telegram_reply_markup_builders_live_only_in_presenters() -> None:
             assert token not in text, f"{token} still referenced in {path}"
 
 
+def test_telegram_guidance_channel_has_no_inline_html_formatting() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    guidance_path = repo_root / "app" / "channels" / "telegram" / "guidance.py"
+    text = guidance_path.read_text()
+    forbidden = (
+        "html.escape(",
+        "ParseMode.HTML",
+        "<b>",
+        "<pre>",
+        "<code>",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in {guidance_path}"
+
+
 def test_agents_delivery_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     delivery_path = repo_root / "app" / "agents" / "delivery.py"

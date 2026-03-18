@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -7,8 +8,17 @@ from app.channels.telegram.presenters import (
     TelegramRenderedMessage,
     approval_prompt,
     collapsed_response_message,
+    provider_guidance_history_message,
+    provider_guidance_mutation_message,
+    provider_guidance_preview_message,
     settings_overview,
     skill_add_confirmation,
+)
+from app.workflows.provider_guidance.contracts import (
+    ProviderGuidanceLifecycleApproval,
+    ProviderGuidanceLifecycleDetail,
+    ProviderGuidanceLifecycleRevision,
+    ProviderGuidancePreview,
 )
 from tests.support.handler_support import (
     FakeChat,
@@ -74,6 +84,68 @@ def test_skill_add_confirmation_renders_expected_buttons():
     assert "helper" in rendered.text
     assert rendered.reply_markup.inline_keyboard[0][0].callback_data == "skill_add_confirm:helper"
     assert rendered.reply_markup.inline_keyboard[0][1].callback_data == "skill_add_cancel"
+
+
+def test_provider_guidance_preview_message_renders_expected_html():
+    preview = ProviderGuidancePreview(
+        provider="claude",
+        effective_guidance="Use careful guidance",
+        system_prompt="",
+        capability_summary="",
+        provider_config={},
+        prompt_weight=1,
+    )
+
+    rendered = provider_guidance_preview_message("claude", preview)
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "<b>claude</b>" in rendered.text
+    assert "<pre>Use careful guidance</pre>" in rendered.text
+
+
+def test_provider_guidance_history_message_renders_revisions_and_approvals():
+    detail = ProviderGuidanceLifecycleDetail(
+        provider="claude",
+        scope_kind="system",
+        scope_key="",
+        body="body",
+        lifecycle_status="published",
+        active_revision_id="rev-current",
+        published_revision_id="rev-current",
+        runtime_available=True,
+        revisions=(
+            ProviderGuidanceLifecycleRevision(
+                revision_id="rev-current",
+                status="published",
+                created_by="admin",
+                created_at="2026-03-18T00:00:00+00:00",
+                is_published=True,
+            ),
+        ),
+        approvals=(
+            ProviderGuidanceLifecycleApproval(
+                revision_id="rev-current",
+                action="approved",
+                actor="admin",
+                note="ship it",
+                created_at="2026-03-18T00:00:00+00:00",
+            ),
+        ),
+    )
+
+    rendered = provider_guidance_history_message("claude", detail)
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "Status: <code>published</code>" in rendered.text
+    assert "approved by admin" in rendered.text
+    assert "[published]" in rendered.text
+
+
+def test_provider_guidance_mutation_message_escapes_html():
+    rendered = provider_guidance_mutation_message("<saved>")
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert rendered.text == "&lt;saved&gt;"
 
 
 async def test_cmd_compact_status_uses_presenter(monkeypatch):
@@ -154,3 +226,40 @@ async def test_send_approval_prompt_uses_presenter(monkeypatch):
 
     assert chat.sent_messages[-1]["text"] == "patched approval presenter"
     assert chat.sent_messages[-1]["reply_markup"].inline_keyboard[0][0].callback_data == "patched:approval"
+
+
+async def test_guidance_preview_uses_presenter(monkeypatch):
+    import app.channels.telegram.guidance as guidance
+
+    rendered = TelegramRenderedMessage(text="patched guidance preview", parse_mode=ParseMode.HTML)
+    monkeypatch.setattr(guidance.telegram_presenters, "provider_guidance_preview_message", lambda *args, **kwargs: rendered)
+
+    preview = ProviderGuidancePreview(
+        provider="claude",
+        effective_guidance="Use careful guidance",
+        system_prompt="",
+        capability_summary="",
+        provider_config={},
+        prompt_weight=1,
+    )
+    monkeypatch.setattr(
+        guidance,
+        "_flows",
+        lambda: type(
+            "Flows",
+            (),
+            {
+                "provider_guidance": type(
+                    "ProviderGuidanceFlows",
+                    (),
+                    {"preview": type("PreviewFlows", (), {"preview": lambda *args, **kwargs: preview})()},
+                )(),
+            },
+        )(),
+    )
+
+    update = FakeUpdate(message=FakeMessage(chat=FakeChat(), user=FakeUser(42)), user=FakeUser(42))
+
+    await guidance.guidance_preview(SimpleNamespace(user=FakeUser(42)), update, "claude")
+
+    assert update.effective_message.replies[-1]["text"] == "patched guidance preview"

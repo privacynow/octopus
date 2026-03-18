@@ -396,7 +396,7 @@ Completed slices:
      - full suite:
        - `1554 passed, 23 skipped`
 
-24. `pending commit` `Track B / B1: centralize Telegram reply-markup builders`
+24. `602f5c1` `Track B / B1: centralize Telegram reply-markup builders`
    - Before-state inventory captured before editing:
      - `app/channels/telegram/ingress.py`
        - still built retry/approval/delegation/expand-collapse keyboards inline
@@ -611,7 +611,7 @@ status.
 
 Next required slice:
 
-- `Track B / B2: move remaining Telegram text and HTML rendering into presenters.py`
+- `Track B / B2b: move runtime-skill Telegram text and HTML rendering into presenters.py`
 
 Completed:
 
@@ -655,6 +655,89 @@ Completed in `Track B / B1`:
   - `314 passed`
 - full suite passed:
   - `1562 passed, 23 skipped`
+
+25. `pending` `Track B / B2a: move provider-guidance Telegram rendering into presenters.py`
+   - Added named provider-guidance presenter functions in
+     `app/channels/telegram/presenters.py` for:
+     - preview
+     - missing-detail
+     - lifecycle history
+     - lifecycle mutation messages
+   - `app/channels/telegram/guidance.py` now only orchestrates workflow calls
+     and applies presenter output.
+   - Added:
+     - focused presenter unit tests for provider-guidance preview/history/
+       mutation rendering
+     - a regression test proving the guidance channel module calls the
+       presenter
+     - a negative structural guard proving `guidance.py` no longer performs
+       inline HTML formatting
+   - focused verification passed:
+     - `46 passed`
+   - full suite passed:
+     - `1567 passed, 23 skipped`
+
+Before-state for `Track B / B2`:
+
+- `app/channels/telegram/guidance.py`
+  - still formats all provider-guidance preview/history/lifecycle replies inline
+- `app/channels/telegram/runtime_skills.py`
+  - still formats catalog, activation/setup, lifecycle, import, and setup-step
+    replies inline
+- `app/channels/telegram/conversation.py`
+  - still formats role/project/status and callback outcome replies inline
+- `app/channels/telegram/pending.py`
+  - still formats recovery replay/discard status text inline
+- `app/channels/telegram/ingress.py`
+  - still formats compact/full-answer text, delegation-plan text, help/session/
+    discover/admin output, and setup prompts inline
+- current contract tests covering these seams:
+  - `tests/test_handlers.py`
+  - `tests/test_handlers_output.py`
+  - `tests/test_handlers_credentials.py`
+  - `tests/test_handlers_store.py`
+  - `tests/test_invariants.py`
+  - `tests/test_request_flow.py`
+  - `tests/test_runtime_dispatch_boundary.py`
+
+Completed in `Track B / B2a`:
+
+- provider-guidance preview, history, and lifecycle mutation rendering now live
+  in `app/channels/telegram/presenters.py`
+- `app/channels/telegram/guidance.py` no longer owns inline HTML formatting
+- structural guard now proves `guidance.py` does not use `html.escape(...)`,
+  `ParseMode.HTML`, or inline HTML tags for provider-guidance replies
+
+Before-state for `Track B / B2b`:
+
+- files that will change:
+  - `app/channels/telegram/runtime_skills.py`
+  - `app/channels/telegram/presenters.py`
+  - `tests/test_telegram_presenters.py`
+  - `tests/test_handlers_store.py`
+  - `tests/test_telegram_runtime_skills.py`
+  - `tests/test_zero_import_gates.py`
+- current caller and owner inventory:
+  - `app/channels/telegram/runtime_skills.py` still formats runtime-skill
+    catalog replies inline
+  - it still formats activation/deactivation/setup outcomes inline
+  - it still formats runtime-skill lifecycle detail/history and mutation
+    replies inline
+  - it still formats setup prompts and foreign-setup notices inline
+- after-state required by this slice:
+  - runtime-skill catalog, activation/setup, lifecycle, and mutation rendering
+    live in `app/channels/telegram/presenters.py`
+  - `runtime_skills.py` only orchestrates workflow calls and applies presenter
+    output
+  - focused regression coverage proves the runtime-skills channel module calls
+    presenters for these outcomes
+  - negative structural guards prove the moved runtime-skill rendering is no
+    longer formatted inline in `runtime_skills.py`
+- contract tests for this slice:
+  - `tests/test_telegram_presenters.py`
+  - `tests/test_handlers_store.py`
+  - `tests/test_telegram_runtime_skills.py`
+  - `tests/test_zero_import_gates.py`
 
 Completed in `F6`:
 

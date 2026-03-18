@@ -3,29 +3,73 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable
 
 from telegram import Update
 from telegram.constants import ParseMode
 
 from app import access, user_messages as _msg
-from app.channels.telegram.state import get_channel_state
 from app.channels.telegram.normalization import normalize_user
+from app.channels.telegram.state import TelegramChannelState
+from app.identity import telegram_conversation_key, telegram_event_id
 from app.runtime import composition
+from app.runtime.session_runtime import load_runtime_session, save_runtime_session
+from app.session_state import SessionState
+from app.skill_activation_service import get_skill_activation_service
 from app import work_queue
 
+log = logging.getLogger(__name__)
 
-def _th():
-    import app.channels.telegram.ingress as th
+@dataclass(frozen=True)
+class TelegramPendingRuntime:
+    """Injected Telegram pending/recovery dependencies."""
 
-    return th
-
-
-def _state():
-    return get_channel_state()
+    state: TelegramChannelState
+    chat_lock: Callable[..., Any]
+    edit_or_reply_text: Callable[..., Awaitable[None]]
+    execute_request: Callable[..., Awaitable[None]]
+    request_approval: Callable[..., Awaitable[None]]
+    build_user_prompt: Callable[..., tuple[str, list[str]]]
 
 
 def _flows():
     return composition.workflows()
+
+
+def _conversation_key(chat_id: int | str) -> str:
+    return telegram_conversation_key(chat_id)
+
+
+def _event_key(update_id: int | str) -> str:
+    return telegram_event_id(update_id)
+
+
+def _load(runtime: TelegramPendingRuntime, chat_id: int | str) -> SessionState:
+    cfg = runtime.state.config
+    provider = runtime.state.provider
+    session = load_runtime_session(
+        cfg.data_dir,
+        _conversation_key(chat_id),
+        provider_name=provider.name,
+        provider_state_factory=provider.new_provider_state,
+        approval_mode=cfg.approval_mode,
+        default_role=cfg.role,
+        default_skills=cfg.default_skills,
+    )
+    if get_skill_activation_service().normalize(session):
+        _save(runtime, chat_id, session)
+    return session
+
+
+def _save(runtime: TelegramPendingRuntime, chat_id: int | str, session: SessionState) -> None:
+    save_runtime_session(runtime.state.config.data_dir, _conversation_key(chat_id), session)
+
+
+def _is_allowed(runtime: TelegramPendingRuntime, user) -> bool:
+    override = work_queue.get_user_access(runtime.state.config.data_dir, user.id)
+    return access.is_allowed_user_with_override(runtime.state.config, user, override)
 
 
 async def approve_pending(
@@ -33,20 +77,20 @@ async def approve_pending(
     message,
     *,
     cancel_event: asyncio.Event | None = None,
+    runtime: TelegramPendingRuntime,
 ) -> None:
-    th = _th()
-    session = th._load(chat_id)
+    session = _load(runtime, chat_id)
     outcome = _flows().pending.requests.approve(
         session,
-        cfg=_state().config,
-        provider_name=_state().provider.name,
+        cfg=runtime.state.config,
+        provider_name=runtime.state.provider.name,
     )
     if outcome.mutated:
-        th._save(chat_id, session)
+        _save(runtime, chat_id, session)
     if outcome.execution_plan is None:
         await message.reply_text(outcome.message)
         return
-    await th.execute_request(
+    await runtime.execute_request(
         chat_id,
         outcome.execution_plan.prompt,
         list(outcome.execution_plan.image_paths),
@@ -59,22 +103,20 @@ async def approve_pending(
     )
 
 
-async def reject_pending(chat_id: int | str, message) -> None:
-    th = _th()
-    session = th._load(chat_id)
+async def reject_pending(chat_id: int | str, message, *, runtime: TelegramPendingRuntime) -> None:
+    session = _load(runtime, chat_id)
     outcome = _flows().pending.requests.reject(session)
     if outcome.mutated:
-        th._save(chat_id, session)
+        _save(runtime, chat_id, session)
     await message.reply_text(outcome.message)
 
 
-async def retry_skip_pending(chat_id: int | str, message) -> None:
-    th = _th()
-    session = th._load(chat_id)
+async def retry_skip_pending(chat_id: int | str, message, *, runtime: TelegramPendingRuntime) -> None:
+    session = _load(runtime, chat_id)
     outcome = _flows().pending.requests.retry_skip(session)
     if outcome.mutated:
-        th._save(chat_id, session)
-    await th._edit_or_reply_text(message, outcome.message)
+        _save(runtime, chat_id, session)
+    await runtime.edit_or_reply_text(message, outcome.message)
 
 
 async def retry_allow_pending(
@@ -82,20 +124,20 @@ async def retry_allow_pending(
     message,
     *,
     cancel_event: asyncio.Event | None = None,
+    runtime: TelegramPendingRuntime,
 ) -> None:
-    th = _th()
-    session = th._load(chat_id)
+    session = _load(runtime, chat_id)
     outcome = _flows().pending.requests.retry_allow(
         session,
-        cfg=_state().config,
-        provider_name=_state().provider.name,
+        cfg=runtime.state.config,
+        provider_name=runtime.state.provider.name,
     )
     if outcome.mutated:
-        th._save(chat_id, session)
+        _save(runtime, chat_id, session)
     if outcome.execution_plan is None:
-        await th._edit_or_reply_text(message, outcome.message)
+        await runtime.edit_or_reply_text(message, outcome.message)
         return
-    await th.execute_request(
+    await runtime.execute_request(
         chat_id,
         outcome.execution_plan.prompt,
         list(outcome.execution_plan.image_paths),
@@ -108,38 +150,37 @@ async def retry_allow_pending(
     )
 
 
-async def handle_pending_callback(event, query) -> None:
-    th = _th()
+async def handle_pending_callback(event, query, *, runtime: TelegramPendingRuntime) -> None:
     chat_id = event.chat_id
 
-    async with th._chat_lock(chat_id, query=query) as already_answered:
+    async with runtime.chat_lock(chat_id, query=query) as already_answered:
         if not already_answered:
             await query.answer()
         if event.data == "approval_approve":
             await query.edit_message_reply_markup(reply_markup=None)
-            await approve_pending(chat_id, query.message)
+            await approve_pending(chat_id, query.message, runtime=runtime)
             return
 
         if event.data == "approval_reject":
             await query.edit_message_reply_markup(reply_markup=None)
-            await reject_pending(chat_id, query.message)
+            await reject_pending(chat_id, query.message, runtime=runtime)
             return
 
         if event.data == "retry_skip":
             await query.edit_message_reply_markup(reply_markup=None)
-            await retry_skip_pending(chat_id, query.message)
+            await retry_skip_pending(chat_id, query.message, runtime=runtime)
             return
 
         if event.data == "retry_allow":
             await query.edit_message_reply_markup(reply_markup=None)
-            await retry_allow_pending(chat_id, query.message)
+            await retry_allow_pending(chat_id, query.message, runtime=runtime)
 
 
-async def handle_recovery_callback(update: Update, context) -> None:
+async def handle_recovery_callback(update: Update, context, *, runtime: TelegramPendingRuntime) -> None:
     del context
     query = update.callback_query
     user = normalize_user(update.effective_user)
-    if user is None or not _th().is_allowed(user):
+    if user is None or not _is_allowed(runtime, user):
         await query.answer(_msg.trust_not_authorized(), show_alert=True)
         return
 
@@ -161,6 +202,7 @@ async def handle_recovery_callback(update: Update, context) -> None:
         update_id,
         query.message,
         answer_action=query.answer,
+        runtime=runtime,
     )
 
 
@@ -172,21 +214,21 @@ async def handle_recovery_action(
     *,
     answer_action=None,
     cancel_event: asyncio.Event | None = None,
+    runtime: TelegramPendingRuntime,
 ) -> None:
-    th = _th()
     if answer_action is None:
         async def answer_action(text=None, show_alert=False):
             del text, show_alert
             return None
 
-    cfg = _state().config
+    cfg = runtime.state.config
     data_dir = cfg.data_dir
     outcome = _flows().recovery.replay.prepare_action(
         data_dir=data_dir,
-        conversation_key=th._conversation_key(chat_id),
-        event_id=th._event_key(update_id),
+        conversation_key=_conversation_key(chat_id),
+        event_id=_event_key(update_id),
         action=action,
-        worker_id=_state().boot_id,
+        worker_id=runtime.state.boot_id,
         ignore_claimed_item_id=str(getattr(message, "_worker_item_id", "")),
         config=cfg,
     )
@@ -194,7 +236,7 @@ async def handle_recovery_action(
         await answer_action(outcome.toast_message, show_alert=outcome.show_alert)
     if outcome.edit_message:
         try:
-            await th._edit_or_reply_text(
+            await runtime.edit_or_reply_text(
                 message,
                 outcome.edit_message,
                 parse_mode=ParseMode.HTML,
@@ -204,15 +246,15 @@ async def handle_recovery_action(
     if outcome.replay_plan is None:
         return
 
-    prompt, image_paths = th.build_user_prompt(
+    prompt, image_paths = runtime.build_user_prompt(
         outcome.replay_plan.event.text,
         list(outcome.replay_plan.event.attachments),
     )
     try:
-        async with th._chat_lock(chat_id, message=message, worker_item={"id": outcome.replay_plan.item_id}):
-            session = th._load(chat_id)
+        async with runtime.chat_lock(chat_id, message=message, worker_item={"id": outcome.replay_plan.item_id}):
+            session = _load(runtime, chat_id)
             if not getattr(outcome.replay_plan.event, "routed_task_id", "") and session.approval_mode == "on":
-                await th.request_approval(
+                await runtime.request_approval(
                     chat_id,
                     prompt,
                     image_paths,
@@ -223,7 +265,7 @@ async def handle_recovery_action(
                     cancel_event=cancel_event,
                 )
             else:
-                await th.execute_request(
+                await runtime.execute_request(
                     chat_id,
                     prompt,
                     image_paths,
@@ -237,15 +279,15 @@ async def handle_recovery_action(
             item_id=outcome.replay_plan.item_id,
         )
     except work_queue.LeaveClaimed:
-        th.log.warning("Replay interrupted for chat %d; item stays claimed for re-recovery", chat_id)
+        log.warning("Replay interrupted for chat %d; item stays claimed for re-recovery", chat_id)
     except Exception:
-        th.log.exception("Replay failed for chat %d", chat_id)
+        log.exception("Replay failed for chat %d", chat_id)
         _flows().recovery.replay.fail_replay(
             data_dir=data_dir,
             item_id=outcome.replay_plan.item_id,
         )
         try:
-            await th._edit_or_reply_text(
+            await runtime.edit_or_reply_text(
                 message,
                 _msg.recovery_replay_failed_edit(),
                 parse_mode=ParseMode.HTML,
@@ -262,22 +304,23 @@ async def handle_worker_pending_action(
     *,
     runtime_chat: int | str,
     cancel_event: asyncio.Event | None = None,
+    runtime: TelegramPendingRuntime,
 ) -> bool:
     if event.action == "approve_pending":
         await surface.edit_reply_markup(reply_markup=None)
-        await approve_pending(runtime_chat, surface, cancel_event=cancel_event)
+        await approve_pending(runtime_chat, surface, cancel_event=cancel_event, runtime=runtime)
         return True
     if event.action == "reject_pending":
         await surface.edit_reply_markup(reply_markup=None)
-        await reject_pending(runtime_chat, surface)
+        await reject_pending(runtime_chat, surface, runtime=runtime)
         return True
     if event.action == "retry_skip":
         await surface.edit_reply_markup(reply_markup=None)
-        await retry_skip_pending(runtime_chat, surface)
+        await retry_skip_pending(runtime_chat, surface, runtime=runtime)
         return True
     if event.action == "retry_allow":
         await surface.edit_reply_markup(reply_markup=None)
-        await retry_allow_pending(runtime_chat, surface, cancel_event=cancel_event)
+        await retry_allow_pending(runtime_chat, surface, cancel_event=cancel_event, runtime=runtime)
         return True
     if event.action in {"recovery_replay", "recovery_discard"}:
         update_id = int(params.get("update_id") or 0)
@@ -285,7 +328,7 @@ async def handle_worker_pending_action(
             await surface.reply_text(_msg.recovery_invalid_action())
             return True
         if event.action == "recovery_replay":
-            work_queue.complete_work_item(_state().config.data_dir, str(item.get("id", "")))
+            work_queue.complete_work_item(runtime.state.config.data_dir, str(item.get("id", "")))
         await surface.edit_reply_markup(reply_markup=None)
         await handle_recovery_action(
             runtime_chat,
@@ -293,6 +336,7 @@ async def handle_worker_pending_action(
             update_id,
             surface,
             cancel_event=cancel_event,
+            runtime=runtime,
         )
         return True
     return False

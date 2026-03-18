@@ -1,4 +1,4 @@
-"""Guards for the final architecture-remediation status document."""
+"""Guards for the architecture-remediation status document."""
 
 from pathlib import Path
 
@@ -8,8 +8,25 @@ def _status_text() -> str:
     return (repo_root / "status.md").read_text()
 
 
-def test_status_doc_records_final_phase7_state_and_live_owners() -> None:
+def test_status_doc_preserves_historical_log_entries() -> None:
     text = _status_text()
+
+    required_fragments = (
+        "This file tracks execution of the **Reopened Architecture Remediation Track**",
+        "00379be",
+        "Track A / A3: normalize access boundary",
+        "Track F / F6: enforce runtime dispatch ownership",
+        "Track B / B2c2a: move ingress request rendering into presenters",
+        "## Working Rules",
+    )
+
+    for fragment in required_fragments:
+        assert fragment in text
+
+
+def test_status_doc_records_final_phase7_state_and_live_owners_in_authoritative_section() -> None:
+    text = _status_text()
+    authoritative = text.split("## Current Authoritative Status", 1)[1]
 
     required_fragments = (
         "Phase 7 closure correction is complete.",
@@ -21,15 +38,16 @@ def test_status_doc_records_final_phase7_state_and_live_owners() -> None:
         "4166599",
         "0c01b70",
         "78051ae",
-        "1615 passed, 23 skipped",
+        "1616 passed, 23 skipped",
     )
 
     for fragment in required_fragments:
-        assert fragment in text
+        assert fragment in authoritative
 
 
 def test_status_doc_includes_all_phase7_acceptance_gate_fragments() -> None:
     text = _status_text()
+    authoritative = text.split("## Current Authoritative Status", 1)[1]
 
     required_fragments = (
         "Telegram channel runtime state is explicit and instance-owned",
@@ -39,18 +57,18 @@ def test_status_doc_includes_all_phase7_acceptance_gate_fragments() -> None:
     )
 
     for fragment in required_fragments:
-        assert fragment in text
+        assert fragment in authoritative
 
 
-def test_status_doc_has_no_stale_placeholders_or_reopened_state() -> None:
+def test_status_doc_historical_and_authoritative_sections_are_both_present() -> None:
     text = _status_text()
 
-    forbidden_fragments = (
-        "The remediation track is reopened and not complete.",
-        "complete in current worktree",
-        "Worktree now in progress",
-        "Acceptance remains blocked",
+    required_fragments = (
+        "Historical pre-closure execution notes are preserved below as an audit log",
+        "## Current Authoritative Status",
+        "The historical log above is preserved intentionally",
+        "42 passed",
     )
 
-    for fragment in forbidden_fragments:
-        assert fragment not in text
+    for fragment in required_fragments:
+        assert fragment in text

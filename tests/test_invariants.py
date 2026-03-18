@@ -1118,16 +1118,17 @@ async def test_callback_exception_marks_work_item_failed():
                                   user=user)
         upd = FakeUpdate(callback_query=query, user=user, chat=chat)
 
-        original_load = th._load
-        def exploding_load(chat_id):
+        original_handler = th.conversation_handle_settings_callback
+
+        async def exploding_handler(event, query, *, runtime):
             raise RuntimeError("session DB corrupt")
 
-        th._load = exploding_load
+        th.conversation_handle_settings_callback = exploding_handler
         try:
             with pytest.raises(RuntimeError, match="session DB corrupt"):
                 await th.handle_settings_callback(upd, FakeContext())
         finally:
-            th._load = original_load
+            th.conversation_handle_settings_callback = original_handler
 
         conn = debug_transport_connection(data_dir)
         row = conn.execute(

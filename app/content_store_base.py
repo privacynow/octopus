@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Literal
 
 from app.content_models import (
     LifecycleApprovalRecord,
@@ -85,6 +86,20 @@ class AbstractContentStore(ABC):
     @abstractmethod
     def clear_published_skill_revision(self, slug: str) -> None:
         """Remove the runtime published pointer for the mutable custom skill track."""
+
+    @abstractmethod
+    def apply_skill_lifecycle_transition(
+        self,
+        slug: str,
+        revision_id: str,
+        *,
+        set_status: str | None = None,
+        published_pointer: Literal["unchanged", "set_active", "clear"] = "unchanged",
+        approval_action: str | None = None,
+        actor: str = "",
+        note: str = "",
+    ) -> LifecycleApprovalRecord | None:
+        """Atomically apply one validated lifecycle transition for a mutable custom skill."""
 
     @abstractmethod
     def replace_provider_guidance(self, record: ProviderGuidanceTrackRecord) -> None:
@@ -179,3 +194,19 @@ class AbstractContentStore(ABC):
         scope_key: str = "",
     ) -> None:
         """Remove the runtime published pointer for one provider-guidance track."""
+
+    @abstractmethod
+    def apply_provider_guidance_lifecycle_transition(
+        self,
+        provider: str,
+        revision_id: str,
+        *,
+        set_status: str | None = None,
+        published_pointer: Literal["unchanged", "set_active", "clear"] = "unchanged",
+        approval_action: str | None = None,
+        actor: str = "",
+        note: str = "",
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> LifecycleApprovalRecord | None:
+        """Atomically apply one validated lifecycle transition for one provider-guidance track."""

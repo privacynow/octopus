@@ -7,6 +7,7 @@ import json
 import sqlite3
 from pathlib import Path
 import threading
+from typing import Literal
 
 from app.content_models import (
     LifecycleApprovalRecord,
@@ -624,6 +625,63 @@ class SQLiteContentStore(AbstractContentStore):
         )
         self._db().commit()
 
+    def apply_skill_lifecycle_transition(
+        self,
+        slug: str,
+        revision_id: str,
+        *,
+        set_status: str | None = None,
+        published_pointer: Literal["unchanged", "set_active", "clear"] = "unchanged",
+        approval_action: str | None = None,
+        actor: str = "",
+        note: str = "",
+    ) -> LifecycleApprovalRecord | None:
+        track = self._custom_track_row(slug)
+        if track is None:
+            raise KeyError(f"Unknown custom skill: {slug}")
+        record: LifecycleApprovalRecord | None = None
+        now = _utcnow()
+        record_id = (
+            f"{track['track_id']}|{revision_id}|{approval_action}|{now}"
+            if approval_action is not None else
+            ""
+        )
+        conn = self._db()
+        with conn:
+            if set_status is not None:
+                conn.execute(
+                    "UPDATE skill_revisions SET status = ? WHERE track_id = ? AND revision_id = ?",
+                    (set_status, track["track_id"], revision_id),
+                )
+            if published_pointer == "set_active":
+                conn.execute(
+                    "UPDATE skill_tracks SET published_revision_id = ?, updated_at = ? WHERE track_id = ?",
+                    (revision_id, now, track["track_id"]),
+                )
+            elif published_pointer == "clear":
+                conn.execute(
+                    "UPDATE skill_tracks SET published_revision_id = '', updated_at = ? WHERE track_id = ?",
+                    (now, track["track_id"]),
+                )
+            if approval_action is not None:
+                conn.execute(
+                    """
+                    INSERT INTO skill_approval_records (
+                        record_id, track_id, revision_id, action, actor, note, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (record_id, track["track_id"], revision_id, approval_action, actor, note, now),
+                )
+                record = LifecycleApprovalRecord(
+                    record_id=record_id,
+                    revision_id=revision_id,
+                    action=approval_action,
+                    actor=actor,
+                    note=note,
+                    created_at=now,
+                )
+        return record
+
     def _upsert_provider_guidance(
         self,
         record: ProviderGuidanceTrackRecord,
@@ -969,6 +1027,73 @@ class SQLiteContentStore(AbstractContentStore):
             (_utcnow(), track["guidance_id"]),
         )
         self._db().commit()
+
+    def apply_provider_guidance_lifecycle_transition(
+        self,
+        provider: str,
+        revision_id: str,
+        *,
+        set_status: str | None = None,
+        published_pointer: Literal["unchanged", "set_active", "clear"] = "unchanged",
+        approval_action: str | None = None,
+        actor: str = "",
+        note: str = "",
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> LifecycleApprovalRecord | None:
+        track = self._guidance_track_row(provider, scope_kind=scope_kind, scope_key=scope_key)
+        if track is None:
+            raise KeyError(f"Unknown provider guidance: {provider}/{scope_kind}/{scope_key}")
+        record: LifecycleApprovalRecord | None = None
+        now = _utcnow()
+        record_id = (
+            f"{track['guidance_id']}|{revision_id}|{approval_action}|{now}"
+            if approval_action is not None else
+            ""
+        )
+        conn = self._db()
+        with conn:
+            if set_status is not None:
+                conn.execute(
+                    "UPDATE provider_guidance_revisions SET status = ? WHERE guidance_id = ? AND revision_id = ?",
+                    (set_status, track["guidance_id"], revision_id),
+                )
+            if published_pointer == "set_active":
+                conn.execute(
+                    """
+                    UPDATE provider_guidance_tracks
+                    SET published_revision_id = ?, updated_at = ?
+                    WHERE guidance_id = ?
+                    """,
+                    (revision_id, now, track["guidance_id"]),
+                )
+            elif published_pointer == "clear":
+                conn.execute(
+                    """
+                    UPDATE provider_guidance_tracks
+                    SET published_revision_id = '', updated_at = ?
+                    WHERE guidance_id = ?
+                    """,
+                    (now, track["guidance_id"]),
+                )
+            if approval_action is not None:
+                conn.execute(
+                    """
+                    INSERT INTO provider_guidance_approval_records (
+                        record_id, guidance_id, revision_id, action, actor, note, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (record_id, track["guidance_id"], revision_id, approval_action, actor, note, now),
+                )
+                record = LifecycleApprovalRecord(
+                    record_id=record_id,
+                    revision_id=revision_id,
+                    action=approval_action,
+                    actor=actor,
+                    note=note,
+                    created_at=now,
+                )
+        return record
 
     def close(self) -> None:
         conn = getattr(self._local, "conn", None)

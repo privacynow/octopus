@@ -118,6 +118,7 @@ from app.channels.telegram.pending import (
     retry_skip_pending as pending_retry_skip_pending,
 )
 from app.runtime import composition
+from app.runtime.inbound_types import InboundUser
 from app.runtime.dispatch import (
     check_prompt_size_cross_chat as runtime_check_prompt_size_cross_chat,
     execute_request as runtime_execute_request,
@@ -775,7 +776,7 @@ def _maybe_fire_webhook(cfg: BotConfig, chat_id: int, conversation_ref: str, out
 
 def is_allowed(user) -> bool:
     cfg = _cfg()
-    inbound = access.to_inbound_user(user)
+    inbound = user if isinstance(user, InboundUser) else normalize_user(user)
     if inbound is None:
         return False
     override = work_queue.get_user_access(cfg.data_dir, inbound.id)
@@ -784,7 +785,8 @@ def is_allowed(user) -> bool:
 
 def is_admin(user) -> bool:
     """Check if user is an admin (can import/uninstall/update runtime skills)."""
-    return access.is_admin_user(_cfg(), user)
+    inbound = user if isinstance(user, InboundUser) else normalize_user(user)
+    return access.is_admin_user(_cfg(), inbound)
 
 
 def is_public_user(user) -> bool:
@@ -794,12 +796,14 @@ def is_public_user(user) -> bool:
     any allowed-user set.  Returns False if allow_open is off (the user
     wouldn't have passed is_allowed at all).
     """
-    return access.is_public_user(_cfg(), user)
+    inbound = user if isinstance(user, InboundUser) else normalize_user(user)
+    return access.is_public_user(_cfg(), inbound)
 
 
 def _trust_tier(user) -> str:
     """Resolve the trust tier for a user: 'trusted' or 'public'."""
-    return access.trust_tier(_cfg(), user)
+    inbound = user if isinstance(user, InboundUser) else normalize_user(user)
+    return access.trust_tier(_cfg(), inbound)
 
 
 async def _public_guard(event, update: Update) -> bool:
@@ -1891,7 +1895,7 @@ async def cmd_export(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     # Add session metadata header — use resolved context for user-visible data
     session = _load(chat_id)
-    trust = _trust_tier(normalize_user(update.effective_user))
+    trust = _trust_tier(update.effective_user)
     resolved = _resolve_context(session, trust_tier=trust)
     skills = resolved.active_skills
     header_lines = [

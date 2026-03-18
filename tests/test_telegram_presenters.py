@@ -516,48 +516,6 @@ async def test_send_compact_reply_uses_presenter(monkeypatch):
     assert message.replies[-1]["text"] == "patched compact reply"
 
 
-async def test_propose_delegation_plan_uses_presenter(monkeypatch):
-    import app.channels.telegram.ingress as th
-    from app.channels.telegram.state import build_telegram_runtime
-
-    async def _noop_publish(*args, **kwargs):
-        return None
-
-    rendered = TelegramRenderedMessage(text="patched delegation plan", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(th, "_publish_delegation_proposed_event", _noop_publish)
-    monkeypatch.setattr(th, "save_session", lambda *args, **kwargs: None)
-    monkeypatch.setattr(th.telegram_presenters, "delegation_plan_message", lambda delegation: rendered)
-
-    message = FakeMessage(chat=FakeChat(12345), text="delegate")
-    session = SessionState(provider="codex", provider_state={}, approval_mode="off")
-    result = SimpleNamespace(
-        delegation_title="Delegate this",
-        text="delegate this work",
-        delegation_resume_instruction="resume",
-        delegation_tasks=[
-            {
-                "routed_task_id": "task-1",
-                "title": "Review docs",
-                "target_agent_id": "agent-reviewer",
-                "instructions": "Review the current docs",
-            },
-        ],
-    )
-    runtime = build_telegram_runtime(make_config(Path("/tmp/telegram-presenters")), FakeProvider("codex"))
-
-    outcome = await th._propose_delegation_plan(
-        runtime,
-        12345,
-        message,
-        session,
-        conversation_ref="conv-1",
-        result=result,
-    )
-
-    assert outcome.status == "delegation_proposed"
-    assert message.replies[-1]["text"] == "patched delegation plan"
-
-
 async def test_cmd_raw_usage_uses_presenter(monkeypatch):
     import app.channels.telegram.ingress as th
 

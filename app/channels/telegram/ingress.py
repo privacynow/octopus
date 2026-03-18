@@ -25,7 +25,6 @@ from app.identity import (
 )
 from app.execution_context import ResolvedExecutionContext
 from app.session_state import (
-    PendingDelegation,
     SessionState,
     session_to_dict,
 )
@@ -43,7 +42,14 @@ from app.agents.delegation import (
     handle_delegation_cancel as handle_surface_delegation_cancel,
 )
 from app.agents.state import load_agent_runtime_state
-from app.agents.types import AgentDiscoveryQuery, RoutedTaskResult, TimelineEvent
+from app.agents.types import AgentDiscoveryQuery, RoutedTaskResult
+from app.channels.telegram.delegation_channel import (
+    delegation_reply_markup,
+    handle_delegation_approve,
+    handle_delegation_cancel,
+    parse_delegation_callback,
+    propose_delegation_plan,
+)
 from app.channels.telegram.normalization import normalize_callback, normalize_command, normalize_message, normalize_user
 from app.channels.telegram.session_io import (
     actor_key,
@@ -147,7 +153,7 @@ from app.summarize import export_chat_history, load_raw, save_raw
 from app import work_queue
 from app.workflows.recovery.results import TransportStateCorruption
 from app.worker import poll_interval_for_runtime
-from app.workflows.delegation.coordination import build_delegation_plan, finalize_resumed_delegation
+from app.workflows.delegation.coordination import finalize_resumed_delegation
 
 log = logging.getLogger(__name__)
 
@@ -504,7 +510,7 @@ def _execution_runtime(runtime: TelegramRuntime) -> ExecutionRuntime:
             runtime=runtime,
         ),
         send_compact_reply=_send_compact_reply,
-        propose_delegation_plan=lambda chat_id, message, session, conversation_ref, result: _propose_delegation_plan(
+        propose_delegation_plan=lambda chat_id, message, session, conversation_ref, result: propose_delegation_plan(
             runtime,
             chat_id,
             message,
@@ -748,7 +754,7 @@ def _worker_owned_callback_action(update: Update, event) -> InboundAction | None
             return None
         return InboundAction(event.user, event.conversation_key, parts[0], params=params)
     if data.startswith("delegation_"):
-        parsed = _parse_delegation_callback(data)
+        parsed = parse_delegation_callback(data)
         if parsed is None:
             return None
         action, chat_id = parsed
@@ -1101,96 +1107,6 @@ async def send_directed_artifacts(
         await send_path_to_chat(message, allowed_path, force_image=(dtype == "IMAGE"))
 
 
-def _delegation_keyboard(chat_id: int):
-    return telegram_presenters.delegation_reply_markup(chat_id)
-
-
-class _DelegationCallbackEditableHandle:
-    async def edit_text(self, text: str, **kwargs: Any) -> None:
-        del text, kwargs
-        return None
-
-    async def edit_reply_markup(self, reply_markup: Any = None, **kwargs: Any) -> None:
-        del reply_markup, kwargs
-        return None
-
-
-class _DelegationCallbackSurface:
-    def __init__(self, query) -> None:
-        self._query = query
-
-    async def send_text(self, text: str, **kwargs: Any) -> _DelegationCallbackEditableHandle:
-        await self._query.edit_message_text(text, **kwargs)
-        return _DelegationCallbackEditableHandle()
-
-
-async def _publish_delegation_proposed_event(
-    runtime: TelegramRuntime,
-    message,
-    delegation: PendingDelegation,
-) -> None:
-    body = "\n".join(
-        [
-            "Delegation plan:",
-            *[
-                f"{index}. {task.title or task.routed_task_id} -> {task.target_agent_id or 'unassigned'}"
-                for index, task in enumerate(delegation.tasks, start=1)
-            ],
-        ]
-    )
-    event = TimelineEvent(
-        event_id=f"delegation-proposed:{delegation.conversation_ref}:{int(delegation.created_at * 1000)}",
-        conversation_id=delegation.conversation_ref,
-        kind="delegation_proposed",
-        title="Delegation plan proposed",
-        body=body,
-        status=delegation.status,
-    )
-    publisher = getattr(message, "publish_timeline", None)
-    if callable(publisher):
-        await publisher(event)
-        return
-    await publish_timeline_event(
-        runtime.config,
-        conversation_ref=delegation.conversation_ref,
-        kind=event.kind,
-        title=event.title,
-        body=event.body,
-        status=event.status,
-        event_id=event.event_id,
-    )
-
-
-async def _propose_delegation_plan(
-    runtime: TelegramRuntime,
-    chat_id: int,
-    message,
-    session: SessionState,
-    *,
-    conversation_ref: str,
-    result,
-) -> RequestExecutionOutcome:
-    title = result.delegation_title.strip() or summarize_text(result.text) or "Delegation plan"
-    delegation = build_delegation_plan(
-        conversation_ref,
-        title,
-        result.delegation_resume_instruction,
-        list(result.delegation_tasks),
-    )
-    session.pending_delegation = delegation
-    save_session(runtime, chat_id, session)
-    await _publish_delegation_proposed_event(runtime, message, delegation)
-
-    send_plan = getattr(message, "send_text", None) or getattr(message, "reply_text")
-    rendered = telegram_presenters.delegation_plan_message(delegation)
-    await send_plan(
-        rendered.text,
-        parse_mode=rendered.parse_mode,
-        reply_markup=_delegation_keyboard(chat_id),
-    )
-    return RequestExecutionOutcome(status="delegation_proposed")
-
-
 # -- Core execution --------------------------------------------------------
 
 async def execute_request(
@@ -1280,37 +1196,6 @@ async def retry_allow_pending(
         message,
         cancel_event=cancel_event,
         runtime=_pending_runtime(runtime),
-    )
-
-
-def _parse_delegation_callback(data: str) -> tuple[str, int] | None:
-    parts = (data or "").split(":", 1)
-    if len(parts) != 2:
-        return None
-    try:
-        return parts[0], int(parts[1])
-    except ValueError:
-        return None
-
-
-async def _handle_delegation_approve(runtime: TelegramRuntime, chat_id: int, query) -> None:
-    conversation_ref = telegram_conversation_ref(runtime.config, chat_id)
-    await handle_surface_delegation_approve(
-        chat_id,
-        conversation_ref,
-        _DelegationCallbackSurface(query),
-        runtime=_delegation_runtime(runtime),
-        retry_markup=_delegation_keyboard(chat_id),
-    )
-
-
-async def _handle_delegation_cancel(runtime: TelegramRuntime, chat_id: int, query) -> None:
-    conversation_ref = telegram_conversation_ref(runtime.config, chat_id)
-    await handle_surface_delegation_cancel(
-        chat_id,
-        conversation_ref,
-        _DelegationCallbackSurface(query),
-        runtime=_delegation_runtime(runtime),
     )
 
 
@@ -2065,7 +1950,7 @@ async def handle_callback(runtime: TelegramRuntime, event, query) -> None:
 
 @_callback_handler
 async def handle_delegation_callback(runtime: TelegramRuntime, event, query) -> None:
-    parsed = _parse_delegation_callback(event.data)
+    parsed = parse_delegation_callback(event.data)
     if parsed is None:
         return
     action, chat_id = parsed
@@ -2074,10 +1959,20 @@ async def handle_delegation_callback(runtime: TelegramRuntime, event, query) -> 
         if not already_answered:
             await query.answer()
         if action == "delegation_approve":
-            await _handle_delegation_approve(runtime, chat_id, query)
+            await handle_delegation_approve(
+                runtime,
+                chat_id,
+                query,
+                delegation_runtime=_delegation_runtime(runtime),
+            )
             return
         if action == "delegation_cancel":
-            await _handle_delegation_cancel(runtime, chat_id, query)
+            await handle_delegation_cancel(
+                runtime,
+                chat_id,
+                query,
+                delegation_runtime=_delegation_runtime(runtime),
+            )
 
 
 # -- Recovery replay/discard callback handler --------------------------------

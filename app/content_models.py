@@ -42,6 +42,8 @@ class SkillRevisionRecord:
     changelog: str = ""
     created_by: str = ""
     created_at: str = ""
+    revision_id: str = ""
+    status: str = "published"
 
     @property
     def digest(self) -> str:
@@ -80,6 +82,8 @@ class RuntimeSkillTrackRecord:
     visibility: str = "shared"
     is_mutable: bool = False
     archived: bool = False
+    active_revision_id: str = ""
+    published_revision_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -92,6 +96,9 @@ class RuntimeSkillSummary:
     visibility: str
     is_mutable: bool
     digest: str
+    status: str = "published"
+    runtime_available: bool = True
+    has_unpublished_changes: bool = False
 
 
 @dataclass(frozen=True)
@@ -100,6 +107,8 @@ class ProviderGuidanceRevisionRecord:
     format: str = "markdown"
     created_by: str = ""
     created_at: str = ""
+    revision_id: str = ""
+    status: str = "published"
 
     @property
     def digest(self) -> str:
@@ -114,6 +123,18 @@ class ProviderGuidanceTrackRecord:
     scope_kind: str = "system"
     scope_key: str = ""
     is_mutable: bool = False
+    active_revision_id: str = ""
+    published_revision_id: str = ""
+
+
+@dataclass(frozen=True)
+class LifecycleApprovalRecord:
+    record_id: str
+    revision_id: str
+    action: str
+    actor: str = ""
+    note: str = ""
+    created_at: str = ""
 
 
 def skill_precedence(source_kind: str) -> int:

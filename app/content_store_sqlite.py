@@ -9,6 +9,7 @@ from pathlib import Path
 import threading
 
 from app.content_models import (
+    LifecycleApprovalRecord,
     ProviderGuidanceRevisionRecord,
     ProviderGuidanceTrackRecord,
     RuntimeSkillSummary,
@@ -19,7 +20,9 @@ from app.content_models import (
 )
 from app.content_store_base import AbstractContentStore
 
-_CREATE_SQL = """\
+_SCHEMA_VERSION = 2
+
+_CREATE_V1_SQL = """\
 CREATE TABLE IF NOT EXISTS skill_namespaces (
     skill_id TEXT PRIMARY KEY,
     slug TEXT NOT NULL UNIQUE,
@@ -125,33 +128,121 @@ class SQLiteContentStore(AbstractContentStore):
         )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
-        conn.executescript(_CREATE_SQL)
-        conn.commit()
+        self._ensure_schema(conn)
         self._local.conn = conn
         return conn
+
+    def _ensure_schema(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(_CREATE_V1_SQL)
+        conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        row = conn.execute("SELECT value FROM meta WHERE key = 'content_schema_version'").fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('content_schema_version', '1')"
+            )
+            version = 1
+        else:
+            try:
+                version = int(row["value"])
+            except (TypeError, ValueError):
+                version = 1
+        if version < 2:
+            self._migrate_v2(conn)
+            version = 2
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('content_schema_version', ?)",
+            (str(version),),
+        )
+        conn.commit()
+
+    def _has_column(self, conn: sqlite3.Connection, table: str, column: str) -> bool:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return any(row["name"] == column for row in rows)
+
+    def _migrate_v2(self, conn: sqlite3.Connection) -> None:
+        if not self._has_column(conn, "skill_tracks", "published_revision_id"):
+            conn.execute("ALTER TABLE skill_tracks ADD COLUMN published_revision_id TEXT NOT NULL DEFAULT ''")
+        if not self._has_column(conn, "skill_revisions", "status"):
+            conn.execute("ALTER TABLE skill_revisions ADD COLUMN status TEXT NOT NULL DEFAULT 'published'")
+        if not self._has_column(conn, "provider_guidance_tracks", "published_revision_id"):
+            conn.execute(
+                "ALTER TABLE provider_guidance_tracks ADD COLUMN published_revision_id TEXT NOT NULL DEFAULT ''"
+            )
+        if not self._has_column(conn, "provider_guidance_revisions", "status"):
+            conn.execute(
+                "ALTER TABLE provider_guidance_revisions ADD COLUMN status TEXT NOT NULL DEFAULT 'published'"
+            )
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS skill_approval_records (
+                record_id TEXT PRIMARY KEY,
+                track_id TEXT NOT NULL,
+                revision_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                actor TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(track_id) REFERENCES skill_tracks(track_id) ON DELETE CASCADE,
+                FOREIGN KEY(revision_id) REFERENCES skill_revisions(revision_id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS provider_guidance_approval_records (
+                record_id TEXT PRIMARY KEY,
+                guidance_id TEXT NOT NULL,
+                revision_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                actor TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(guidance_id) REFERENCES provider_guidance_tracks(guidance_id) ON DELETE CASCADE,
+                FOREIGN KEY(revision_id) REFERENCES provider_guidance_revisions(revision_id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_skill_approval_records_track_id ON skill_approval_records(track_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_guidance_approval_records_guidance_id ON provider_guidance_approval_records(guidance_id, created_at DESC);
+            """
+        )
+        conn.execute(
+            "UPDATE skill_tracks SET published_revision_id = active_revision_id WHERE published_revision_id = ''"
+        )
+        conn.execute("UPDATE skill_revisions SET status = 'published' WHERE status = ''")
+        conn.execute(
+            "UPDATE provider_guidance_tracks SET published_revision_id = active_revision_id WHERE published_revision_id = ''"
+        )
+        conn.execute(
+            "UPDATE provider_guidance_revisions SET status = 'published' WHERE status = ''"
+        )
 
     def _skill_id(self, slug: str) -> str:
         return f"skill:{slug}"
 
     def _track_id(self, record: RuntimeSkillTrackRecord) -> str:
-        return "|".join(
-            (
-                record.slug,
-                record.source_kind,
-                record.source_uri,
-                record.owner_actor,
-            )
-        )
+        return "|".join((record.slug, record.source_kind, record.source_uri, record.owner_actor))
 
     def _guidance_id(self, record: ProviderGuidanceTrackRecord) -> str:
         return "|".join((record.provider, record.scope_kind, record.scope_key))
 
-    def replace_skill_track(self, record: RuntimeSkillTrackRecord) -> None:
+    def _skill_revision_id(self, record: RuntimeSkillTrackRecord) -> str:
+        return record.revision.revision_id or f"{self._track_id(record)}|{record.revision.digest}"
+
+    def _guidance_revision_id(self, record: ProviderGuidanceTrackRecord) -> str:
+        return record.revision.revision_id or f"{self._guidance_id(record)}|{record.revision.digest}"
+
+    def _upsert_skill_track(
+        self,
+        record: RuntimeSkillTrackRecord,
+        *,
+        status: str,
+        publish: bool,
+    ) -> None:
         conn = self._db()
         now = _utcnow()
         skill_id = self._skill_id(record.slug)
         track_id = self._track_id(record)
-        revision_id = f"{track_id}|{record.revision.digest}"
+        revision_id = self._skill_revision_id(record)
+        existing = conn.execute(
+            "SELECT published_revision_id FROM skill_tracks WHERE track_id = ?",
+            (track_id,),
+        ).fetchone()
+        published_revision_id = revision_id if publish else (existing["published_revision_id"] if existing else "")
         conn.execute(
             """
             INSERT INTO skill_namespaces (skill_id, slug, display_name, description, archived, created_at, updated_at)
@@ -176,11 +267,13 @@ class SQLiteContentStore(AbstractContentStore):
             """
             INSERT INTO skill_tracks (
                 track_id, skill_id, source_kind, source_uri, owner_actor, visibility,
-                is_mutable, active_revision_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                is_mutable, active_revision_id, published_revision_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(track_id) DO UPDATE SET
                 visibility = excluded.visibility,
                 is_mutable = excluded.is_mutable,
+                active_revision_id = excluded.active_revision_id,
+                published_revision_id = excluded.published_revision_id,
                 updated_at = excluded.updated_at
             """,
             (
@@ -192,6 +285,7 @@ class SQLiteContentStore(AbstractContentStore):
                 record.visibility,
                 1 if record.is_mutable else 0,
                 revision_id,
+                published_revision_id,
                 now,
                 now,
             ),
@@ -200,8 +294,8 @@ class SQLiteContentStore(AbstractContentStore):
             """
             INSERT OR REPLACE INTO skill_revisions (
                 revision_id, track_id, version_label, digest, instruction_body,
-                requirements_json, provider_config_json, changelog, created_by, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                requirements_json, provider_config_json, changelog, created_by, created_at, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 revision_id,
@@ -214,6 +308,7 @@ class SQLiteContentStore(AbstractContentStore):
                 record.revision.changelog,
                 record.revision.created_by,
                 record.revision.created_at or now,
+                status,
             ),
         )
         conn.execute("DELETE FROM skill_files WHERE revision_id = ?", (revision_id,))
@@ -233,11 +328,13 @@ class SQLiteContentStore(AbstractContentStore):
                     file_record.digest,
                 ),
             )
-        conn.execute(
-            "UPDATE skill_tracks SET active_revision_id = ?, updated_at = ? WHERE track_id = ?",
-            (revision_id, now, track_id),
-        )
         conn.commit()
+
+    def replace_skill_track(self, record: RuntimeSkillTrackRecord) -> None:
+        self._upsert_skill_track(record, status="published", publish=True)
+
+    def upsert_skill_draft(self, record: RuntimeSkillTrackRecord) -> None:
+        self._upsert_skill_track(record, status="draft", publish=False)
 
     def delete_skill_track(
         self,
@@ -266,10 +363,11 @@ class SQLiteContentStore(AbstractContentStore):
         conn.commit()
         return conn.total_changes > before
 
-    def _rows_for_slug(self, slug: str) -> list[sqlite3.Row]:
-        conn = self._db()
-        return conn.execute(
-            """
+    def _rows_for_slug(self, slug: str, *, runtime_only: bool) -> list[sqlite3.Row]:
+        revision_ref = "CASE WHEN tr.published_revision_id != '' THEN tr.published_revision_id ELSE tr.active_revision_id END" if runtime_only else "tr.active_revision_id"
+        extra_where = "AND tr.published_revision_id != ''" if runtime_only else ""
+        return self._db().execute(
+            f"""
             SELECT
                 ns.slug,
                 ns.display_name,
@@ -281,6 +379,8 @@ class SQLiteContentStore(AbstractContentStore):
                 tr.owner_actor,
                 tr.visibility,
                 tr.is_mutable,
+                tr.active_revision_id,
+                tr.published_revision_id,
                 rev.revision_id,
                 rev.version_label,
                 rev.digest,
@@ -289,11 +389,13 @@ class SQLiteContentStore(AbstractContentStore):
                 rev.provider_config_json,
                 rev.changelog,
                 rev.created_by,
-                rev.created_at
+                rev.created_at,
+                rev.status
             FROM skill_namespaces ns
             JOIN skill_tracks tr ON tr.skill_id = ns.skill_id
-            JOIN skill_revisions rev ON rev.revision_id = tr.active_revision_id
+            JOIN skill_revisions rev ON rev.revision_id = {revision_ref}
             WHERE ns.slug = ?
+            {extra_where}
             ORDER BY tr.source_kind ASC, tr.updated_at DESC
             """,
             (slug,),
@@ -329,6 +431,8 @@ class SQLiteContentStore(AbstractContentStore):
             changelog=row["changelog"],
             created_by=row["created_by"],
             created_at=row["created_at"],
+            revision_id=row["revision_id"],
+            status=row["status"],
         )
         return RuntimeSkillTrackRecord(
             slug=row["slug"],
@@ -341,22 +445,29 @@ class SQLiteContentStore(AbstractContentStore):
             visibility=row["visibility"],
             is_mutable=bool(row["is_mutable"]),
             archived=bool(row["archived"]),
+            active_revision_id=row["active_revision_id"],
+            published_revision_id=row["published_revision_id"],
         )
 
     def list_skill_tracks(self, slug: str) -> list[RuntimeSkillTrackRecord]:
-        rows = self._rows_for_slug(slug)
-        records = [self._record_from_row(row) for row in rows]
+        records = [self._record_from_row(row) for row in self._rows_for_slug(slug, runtime_only=False)]
         return sorted(records, key=lambda item: skill_precedence(item.source_kind), reverse=True)
 
     def resolve_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
         tracks = self.list_skill_tracks(slug)
         return tracks[0] if tracks else None
 
-    def list_skill_summaries(self) -> list[RuntimeSkillSummary]:
+    def resolve_runtime_skill(self, slug: str) -> RuntimeSkillTrackRecord | None:
+        records = [self._record_from_row(row) for row in self._rows_for_slug(slug, runtime_only=True)]
+        records = sorted(records, key=lambda item: skill_precedence(item.source_kind), reverse=True)
+        return records[0] if records else None
+
+    def _summaries(self, *, runtime_only: bool) -> list[RuntimeSkillSummary]:
         rows = self._db().execute("SELECT slug FROM skill_namespaces ORDER BY lower(slug)").fetchall()
         summaries: list[RuntimeSkillSummary] = []
+        resolver = self.resolve_runtime_skill if runtime_only else self.resolve_skill
         for row in rows:
-            record = self.resolve_skill(row["slug"])
+            record = resolver(row["slug"])
             if record is None:
                 continue
             summaries.append(
@@ -369,22 +480,176 @@ class SQLiteContentStore(AbstractContentStore):
                     visibility=record.visibility,
                     is_mutable=record.is_mutable,
                     digest=record.revision.digest,
+                    status=record.revision.status,
+                    runtime_available=bool(record.published_revision_id) or not record.is_mutable,
+                    has_unpublished_changes=bool(record.published_revision_id)
+                    and record.published_revision_id != record.active_revision_id,
                 )
             )
         return summaries
 
-    def replace_provider_guidance(self, record: ProviderGuidanceTrackRecord) -> None:
+    def list_skill_summaries(self) -> list[RuntimeSkillSummary]:
+        return self._summaries(runtime_only=False)
+
+    def list_runtime_skill_summaries(self) -> list[RuntimeSkillSummary]:
+        return self._summaries(runtime_only=True)
+
+    def _custom_track_row(self, slug: str) -> sqlite3.Row | None:
+        return self._db().execute(
+            """
+            SELECT tr.track_id, tr.active_revision_id, tr.published_revision_id
+            FROM skill_tracks tr
+            JOIN skill_namespaces ns ON ns.skill_id = tr.skill_id
+            WHERE ns.slug = ? AND tr.source_kind = 'custom'
+            ORDER BY tr.updated_at DESC
+            LIMIT 1
+            """,
+            (slug,),
+        ).fetchone()
+
+    def list_skill_revisions(self, slug: str) -> list[SkillRevisionRecord]:
+        track = self._custom_track_row(slug)
+        if track is None:
+            return []
+        rows = self._db().execute(
+            """
+            SELECT revision_id, version_label, instruction_body, requirements_json, provider_config_json,
+                   changelog, created_by, created_at, status
+            FROM skill_revisions
+            WHERE track_id = ?
+            ORDER BY datetime(created_at) DESC, revision_id DESC
+            """,
+            (track["track_id"],),
+        ).fetchall()
+        return [
+            SkillRevisionRecord(
+                instruction_body=row["instruction_body"],
+                requirements=_parse_json(row["requirements_json"], []),
+                provider_config=_parse_json(row["provider_config_json"], {}),
+                files=self._files_for_revision(row["revision_id"]),
+                version_label=row["version_label"],
+                changelog=row["changelog"],
+                created_by=row["created_by"],
+                created_at=row["created_at"],
+                revision_id=row["revision_id"],
+                status=row["status"],
+            )
+            for row in rows
+        ]
+
+    def list_skill_approvals(self, slug: str) -> list[LifecycleApprovalRecord]:
+        track = self._custom_track_row(slug)
+        if track is None:
+            return []
+        rows = self._db().execute(
+            """
+            SELECT record_id, revision_id, action, actor, note, created_at
+            FROM skill_approval_records
+            WHERE track_id = ?
+            ORDER BY datetime(created_at) DESC, record_id DESC
+            """,
+            (track["track_id"],),
+        ).fetchall()
+        return [
+            LifecycleApprovalRecord(
+                record_id=row["record_id"],
+                revision_id=row["revision_id"],
+                action=row["action"],
+                actor=row["actor"],
+                note=row["note"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def append_skill_approval(
+        self,
+        slug: str,
+        revision_id: str,
+        *,
+        action: str,
+        actor: str,
+        note: str = "",
+    ) -> LifecycleApprovalRecord:
+        track = self._custom_track_row(slug)
+        if track is None:
+            raise KeyError(f"Unknown custom skill: {slug}")
+        now = _utcnow()
+        record_id = f"{track['track_id']}|{revision_id}|{action}|{now}"
+        self._db().execute(
+            """
+            INSERT INTO skill_approval_records (
+                record_id, track_id, revision_id, action, actor, note, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (record_id, track["track_id"], revision_id, action, actor, note, now),
+        )
+        self._db().commit()
+        return LifecycleApprovalRecord(
+            record_id=record_id,
+            revision_id=revision_id,
+            action=action,
+            actor=actor,
+            note=note,
+            created_at=now,
+        )
+
+    def set_skill_revision_status(self, slug: str, revision_id: str, status: str) -> None:
+        track = self._custom_track_row(slug)
+        if track is None:
+            raise KeyError(f"Unknown custom skill: {slug}")
+        self._db().execute(
+            "UPDATE skill_revisions SET status = ? WHERE track_id = ? AND revision_id = ?",
+            (status, track["track_id"], revision_id),
+        )
+        self._db().commit()
+
+    def set_published_skill_revision(self, slug: str, revision_id: str) -> None:
+        track = self._custom_track_row(slug)
+        if track is None:
+            raise KeyError(f"Unknown custom skill: {slug}")
+        self._db().execute(
+            "UPDATE skill_tracks SET published_revision_id = ?, updated_at = ? WHERE track_id = ?",
+            (revision_id, _utcnow(), track["track_id"]),
+        )
+        self._db().commit()
+
+    def clear_published_skill_revision(self, slug: str) -> None:
+        track = self._custom_track_row(slug)
+        if track is None:
+            raise KeyError(f"Unknown custom skill: {slug}")
+        self._db().execute(
+            "UPDATE skill_tracks SET published_revision_id = '', updated_at = ? WHERE track_id = ?",
+            (_utcnow(), track["track_id"]),
+        )
+        self._db().commit()
+
+    def _upsert_provider_guidance(
+        self,
+        record: ProviderGuidanceTrackRecord,
+        *,
+        status: str,
+        publish: bool,
+    ) -> None:
         conn = self._db()
         now = _utcnow()
         guidance_id = self._guidance_id(record)
-        revision_id = f"{guidance_id}|{record.revision.digest}"
+        revision_id = self._guidance_revision_id(record)
+        existing = conn.execute(
+            "SELECT published_revision_id FROM provider_guidance_tracks WHERE guidance_id = ?",
+            (guidance_id,),
+        ).fetchone()
+        published_revision_id = revision_id if publish else (existing["published_revision_id"] if existing else "")
         conn.execute(
             """
             INSERT INTO provider_guidance_tracks (
-                guidance_id, provider, scope_kind, scope_key, is_mutable, active_revision_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                guidance_id, provider, scope_kind, scope_key, is_mutable,
+                active_revision_id, published_revision_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(guidance_id) DO UPDATE SET
                 is_mutable = excluded.is_mutable,
+                active_revision_id = excluded.active_revision_id,
+                published_revision_id = excluded.published_revision_id,
                 updated_at = excluded.updated_at
             """,
             (
@@ -394,6 +659,7 @@ class SQLiteContentStore(AbstractContentStore):
                 record.scope_key,
                 1 if record.is_mutable else 0,
                 revision_id,
+                published_revision_id,
                 now,
                 now,
             ),
@@ -401,8 +667,8 @@ class SQLiteContentStore(AbstractContentStore):
         conn.execute(
             """
             INSERT OR REPLACE INTO provider_guidance_revisions (
-                revision_id, guidance_id, digest, content, format, created_by, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                revision_id, guidance_id, digest, content, format, created_by, created_at, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 revision_id,
@@ -412,13 +678,16 @@ class SQLiteContentStore(AbstractContentStore):
                 record.revision.format,
                 record.revision.created_by,
                 record.revision.created_at or now,
+                status,
             ),
         )
-        conn.execute(
-            "UPDATE provider_guidance_tracks SET active_revision_id = ?, updated_at = ? WHERE guidance_id = ?",
-            (revision_id, now, guidance_id),
-        )
         conn.commit()
+
+    def replace_provider_guidance(self, record: ProviderGuidanceTrackRecord) -> None:
+        self._upsert_provider_guidance(record, status="published", publish=True)
+
+    def upsert_provider_guidance_draft(self, record: ProviderGuidanceTrackRecord) -> None:
+        self._upsert_provider_guidance(record, status="draft", publish=False)
 
     def get_provider_guidance(
         self,
@@ -434,10 +703,14 @@ class SQLiteContentStore(AbstractContentStore):
                 tr.scope_kind,
                 tr.scope_key,
                 tr.is_mutable,
+                tr.active_revision_id,
+                tr.published_revision_id,
                 rev.content,
                 rev.format,
                 rev.created_by,
-                rev.created_at
+                rev.created_at,
+                rev.status,
+                rev.revision_id
             FROM provider_guidance_tracks tr
             JOIN provider_guidance_revisions rev ON rev.revision_id = tr.active_revision_id
             WHERE tr.provider = ? AND tr.scope_kind = ? AND tr.scope_key = ?
@@ -451,11 +724,62 @@ class SQLiteContentStore(AbstractContentStore):
             scope_kind=row["scope_kind"],
             scope_key=row["scope_key"],
             is_mutable=bool(row["is_mutable"]),
+            active_revision_id=row["active_revision_id"],
+            published_revision_id=row["published_revision_id"],
             revision=ProviderGuidanceRevisionRecord(
                 content=row["content"],
                 format=row["format"],
                 created_by=row["created_by"],
                 created_at=row["created_at"],
+                revision_id=row["revision_id"],
+                status=row["status"],
+            ),
+        )
+
+    def _runtime_provider_guidance(
+        self,
+        provider: str,
+        *,
+        scope_kind: str,
+        scope_key: str,
+    ) -> ProviderGuidanceTrackRecord | None:
+        row = self._db().execute(
+            """
+            SELECT
+                tr.provider,
+                tr.scope_kind,
+                tr.scope_key,
+                tr.is_mutable,
+                tr.active_revision_id,
+                tr.published_revision_id,
+                rev.content,
+                rev.format,
+                rev.created_by,
+                rev.created_at,
+                rev.status,
+                rev.revision_id
+            FROM provider_guidance_tracks tr
+            JOIN provider_guidance_revisions rev ON rev.revision_id = tr.published_revision_id
+            WHERE tr.provider = ? AND tr.scope_kind = ? AND tr.scope_key = ? AND tr.published_revision_id != ''
+            """,
+            (provider, scope_kind, scope_key),
+        ).fetchone()
+        if row is None:
+            return None
+        return ProviderGuidanceTrackRecord(
+            provider=row["provider"],
+            scope_kind=row["scope_kind"],
+            scope_key=row["scope_key"],
+            is_mutable=bool(row["is_mutable"]),
+            active_revision_id=row["active_revision_id"],
+            published_revision_id=row["published_revision_id"],
+            revision=ProviderGuidanceRevisionRecord(
+                content=row["content"],
+                format=row["format"],
+                created_by=row["created_by"],
+                created_at=row["created_at"],
+                revision_id=row["revision_id"],
+                status=row["status"],
             ),
         )
 
@@ -466,16 +790,188 @@ class SQLiteContentStore(AbstractContentStore):
         instance_key: str = "",
     ) -> ProviderGuidanceTrackRecord | None:
         if instance_key:
-            match = self.get_provider_guidance(
+            match = self._runtime_provider_guidance(
                 provider,
                 scope_kind="instance",
                 scope_key=instance_key,
             )
             if match is not None:
                 return match
-        return self.get_provider_guidance(provider, scope_kind="system", scope_key="")
+        return self._runtime_provider_guidance(provider, scope_kind="system", scope_key="")
+
+    def _guidance_track_row(
+        self,
+        provider: str,
+        *,
+        scope_kind: str,
+        scope_key: str,
+    ) -> sqlite3.Row | None:
+        return self._db().execute(
+            """
+            SELECT guidance_id, active_revision_id, published_revision_id
+            FROM provider_guidance_tracks
+            WHERE provider = ? AND scope_kind = ? AND scope_key = ?
+            """,
+            (provider, scope_kind, scope_key),
+        ).fetchone()
+
+    def list_provider_guidance_revisions(
+        self,
+        provider: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> list[ProviderGuidanceRevisionRecord]:
+        track = self._guidance_track_row(provider, scope_kind=scope_kind, scope_key=scope_key)
+        if track is None:
+            return []
+        rows = self._db().execute(
+            """
+            SELECT revision_id, content, format, created_by, created_at, status
+            FROM provider_guidance_revisions
+            WHERE guidance_id = ?
+            ORDER BY datetime(created_at) DESC, revision_id DESC
+            """,
+            (track["guidance_id"],),
+        ).fetchall()
+        return [
+            ProviderGuidanceRevisionRecord(
+                content=row["content"],
+                format=row["format"],
+                created_by=row["created_by"],
+                created_at=row["created_at"],
+                revision_id=row["revision_id"],
+                status=row["status"],
+            )
+            for row in rows
+        ]
+
+    def list_provider_guidance_approvals(
+        self,
+        provider: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> list[LifecycleApprovalRecord]:
+        track = self._guidance_track_row(provider, scope_kind=scope_kind, scope_key=scope_key)
+        if track is None:
+            return []
+        rows = self._db().execute(
+            """
+            SELECT record_id, revision_id, action, actor, note, created_at
+            FROM provider_guidance_approval_records
+            WHERE guidance_id = ?
+            ORDER BY datetime(created_at) DESC, record_id DESC
+            """,
+            (track["guidance_id"],),
+        ).fetchall()
+        return [
+            LifecycleApprovalRecord(
+                record_id=row["record_id"],
+                revision_id=row["revision_id"],
+                action=row["action"],
+                actor=row["actor"],
+                note=row["note"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def append_provider_guidance_approval(
+        self,
+        provider: str,
+        revision_id: str,
+        *,
+        action: str,
+        actor: str,
+        note: str = "",
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> LifecycleApprovalRecord:
+        track = self._guidance_track_row(provider, scope_kind=scope_kind, scope_key=scope_key)
+        if track is None:
+            raise KeyError(f"Unknown provider guidance: {provider}/{scope_kind}/{scope_key}")
+        now = _utcnow()
+        record_id = f"{track['guidance_id']}|{revision_id}|{action}|{now}"
+        self._db().execute(
+            """
+            INSERT INTO provider_guidance_approval_records (
+                record_id, guidance_id, revision_id, action, actor, note, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (record_id, track["guidance_id"], revision_id, action, actor, note, now),
+        )
+        self._db().commit()
+        return LifecycleApprovalRecord(
+            record_id=record_id,
+            revision_id=revision_id,
+            action=action,
+            actor=actor,
+            note=note,
+            created_at=now,
+        )
+
+    def set_provider_guidance_revision_status(
+        self,
+        provider: str,
+        revision_id: str,
+        status: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> None:
+        track = self._guidance_track_row(provider, scope_kind=scope_kind, scope_key=scope_key)
+        if track is None:
+            raise KeyError(f"Unknown provider guidance: {provider}/{scope_kind}/{scope_key}")
+        self._db().execute(
+            "UPDATE provider_guidance_revisions SET status = ? WHERE guidance_id = ? AND revision_id = ?",
+            (status, track["guidance_id"], revision_id),
+        )
+        self._db().commit()
+
+    def set_published_provider_guidance_revision(
+        self,
+        provider: str,
+        revision_id: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> None:
+        track = self._guidance_track_row(provider, scope_kind=scope_kind, scope_key=scope_key)
+        if track is None:
+            raise KeyError(f"Unknown provider guidance: {provider}/{scope_kind}/{scope_key}")
+        self._db().execute(
+            """
+            UPDATE provider_guidance_tracks
+            SET published_revision_id = ?, updated_at = ?
+            WHERE guidance_id = ?
+            """,
+            (revision_id, _utcnow(), track["guidance_id"]),
+        )
+        self._db().commit()
+
+    def clear_published_provider_guidance_revision(
+        self,
+        provider: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> None:
+        track = self._guidance_track_row(provider, scope_kind=scope_kind, scope_key=scope_key)
+        if track is None:
+            raise KeyError(f"Unknown provider guidance: {provider}/{scope_kind}/{scope_key}")
+        self._db().execute(
+            """
+            UPDATE provider_guidance_tracks
+            SET published_revision_id = '', updated_at = ?
+            WHERE guidance_id = ?
+            """,
+            (_utcnow(), track["guidance_id"]),
+        )
+        self._db().commit()
 
     def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            conn.close()
+            self._local.conn = None

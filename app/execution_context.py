@@ -121,7 +121,7 @@ def _resolved_skill_digests(skill_names: list[str]) -> dict[str, str]:
     catalog = get_skill_catalog_service()
     digests: dict[str, str] = {}
     for name in skill_names:
-        if (record := catalog.resolve_track(name)) is not None:
+        if (record := catalog.resolve_runtime_track(name)) is not None:
             digests[name] = record.revision.digest
     return digests
 
@@ -133,7 +133,7 @@ def _resolved_provider_config_digest(skill_names: list[str], provider_name: str 
     providers = (provider_name,) if provider_name else ("claude", "codex")
     parts: list[str] = []
     for name in sorted(skill_names):
-        record = catalog.resolve_track(name)
+        record = catalog.resolve_runtime_track(name)
         if record is None:
             continue
         for provider in providers:
@@ -160,7 +160,7 @@ def _resolved_active_skills(
         if name in seen:
             continue
         seen.add(name)
-        if catalog.has_skill(name):
+        if catalog.has_runtime_skill(name):
             active.append(name)
     return active
 

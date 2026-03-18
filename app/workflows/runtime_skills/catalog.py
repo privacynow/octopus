@@ -29,6 +29,7 @@ class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
         track = self._catalog().resolve_track(skill_name)
         if track is None:
             return None
+        runtime_track = self._catalog().resolve_runtime_track(skill_name)
         info = self._catalog().resolve_info(skill_name)
         providers = info.providers if info is not None else ()
         requirement_keys = info.requirement_keys if info is not None else ()
@@ -41,7 +42,7 @@ class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
             providers=providers,
             requirement_keys=requirement_keys,
             has_custom_override=self._imports().has_custom_override(skill_name),
-            can_activate=True,
+            can_activate=(runtime_track is not None),
             can_update=(source_kind == "imported"),
             can_uninstall=(source_kind == "imported"),
         )

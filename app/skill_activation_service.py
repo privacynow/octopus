@@ -31,7 +31,7 @@ class SkillActivationService:
             if name in seen:
                 continue
             seen.add(name)
-            if catalog.has_skill(name):
+            if catalog.has_runtime_skill(name):
                 active.append(name)
         return active
 

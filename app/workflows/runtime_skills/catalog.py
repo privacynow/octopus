@@ -45,6 +45,7 @@ class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
             can_activate=(runtime_track is not None),
             can_update=(source_kind == "imported"),
             can_uninstall=(source_kind == "imported"),
+            lifecycle_status=track.revision.status,
         )
 
     def list_skills(self, query: str = "") -> list[RuntimeSkillCatalogItem]:
@@ -84,6 +85,7 @@ class RuntimeSkillCatalogUseCases(RuntimeSkillCatalogPort):
             can_activate=summary.can_activate,
             can_update=summary.can_update,
             can_uninstall=summary.can_uninstall,
+            lifecycle_status=summary.lifecycle_status,
         )
 
     def has_skill(self, skill_name: str) -> bool:

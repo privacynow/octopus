@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+from app.content_models import LifecycleApprovalRecord, SkillRevisionRecord
 from app.credential_types import CredentialValidator
 from app.session_state import AwaitingSkillSetup, SessionState
 from app.skill_types import SkillRequirement
@@ -23,6 +24,7 @@ class RuntimeSkillCatalogItem:
     can_activate: bool
     can_update: bool
     can_uninstall: bool
+    lifecycle_status: str = ""
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,7 @@ class RuntimeSkillDetail:
     can_activate: bool
     can_update: bool
     can_uninstall: bool
+    lifecycle_status: str = ""
 
 
 @dataclass(frozen=True)
@@ -289,6 +292,77 @@ class RuntimeSkillSetupPort(Protocol):
         raw_value: str,
         validator: CredentialValidator,
     ) -> RuntimeSkillSetupAdvanceOutcome: ...
+
+
+@dataclass(frozen=True)
+class RuntimeSkillLifecycleRevision:
+    revision_id: str
+    version_label: str
+    status: str
+    changelog: str
+    created_by: str
+    created_at: str
+    is_published: bool
+
+
+@dataclass(frozen=True)
+class RuntimeSkillLifecycleApproval:
+    revision_id: str
+    action: str
+    actor: str
+    note: str
+    created_at: str
+
+
+@dataclass(frozen=True)
+class RuntimeSkillLifecycleDetail:
+    name: str
+    display_name: str
+    description: str
+    visibility: str
+    body: str
+    lifecycle_status: str
+    active_revision_id: str
+    published_revision_id: str
+    runtime_available: bool
+    revisions: tuple[RuntimeSkillLifecycleRevision, ...]
+    approvals: tuple[RuntimeSkillLifecycleApproval, ...]
+
+
+@dataclass(frozen=True)
+class RuntimeSkillLifecycleMutation:
+    status: str
+    ok: bool
+    message: str
+    detail: RuntimeSkillLifecycleDetail | None = None
+
+
+class RuntimeSkillAuthoringPort(Protocol):
+    def detail(self, skill_name: str) -> RuntimeSkillLifecycleDetail | None: ...
+
+    def create_draft(self, skill_name: str, *, owner_actor: str = "") -> RuntimeSkillLifecycleMutation: ...
+
+    def edit_draft(
+        self,
+        skill_name: str,
+        *,
+        actor_key: str,
+        body: str,
+        description: str | None = None,
+        changelog: str = "",
+    ) -> RuntimeSkillLifecycleMutation: ...
+
+    def submit(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation: ...
+
+    def publish(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation: ...
+
+    def archive(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation: ...
+
+
+class RuntimeSkillApprovalPort(Protocol):
+    def approve(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation: ...
+
+    def reject(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation: ...
 
     def apply_cleared_credentials(
         self,

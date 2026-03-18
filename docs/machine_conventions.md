@@ -18,8 +18,9 @@ The standard shape is:
 - `effects`
 - atomic application at the store or session boundary
 
-`python-statemachine` remains migration-state only for not-yet-migrated
-machines. It is not the long-term standard.
+`python-statemachine` remains migration-state only if a future staged
+remediation temporarily needs it. It is not the long-term standard, and no
+production pending/recovery machine remains on it after Track F / F5.
 
 ## Module Shape
 
@@ -87,12 +88,8 @@ Disallowed:
 
 ## Migration Rule
 
-Existing `python-statemachine` usages are migration-state only:
-
-- `app/workflows/pending_request.py`
-- `app/workflows/transport_recovery.py`
-
-They remain valid only until the owning concern is migrated under Track F / F5.
+Any discovered `python-statemachine` usage in production workflow code is a
+regression after Track F / F5.
 
 No new `python-statemachine` machine may be added.
 

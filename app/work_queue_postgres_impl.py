@@ -12,13 +12,13 @@ from typing import Any, Callable
 from psycopg.rows import dict_row
 
 from app.runtime_health import QueueSnapshot, WorkerHeartbeat
-from app.workflows.results import TransportDisposition, TransportStateCorruption
-from app.workflows.transport_recovery import (
+from app.workflows.recovery.results import TransportDisposition, TransportStateCorruption
+from app.workflows.recovery.machine import (
     TRANSPORT_STATES,
     TransportWorkflowModel,
     run_transport_event,
 )
-from app.transport_contract import (
+from app.workflows.recovery.transport_contract import (
     ApplyResult,
     CancelRequestResult,
     DiscardResult,

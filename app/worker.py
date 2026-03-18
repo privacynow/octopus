@@ -27,7 +27,7 @@ from app.runtime.inbound_types import (
     InboundMessage,
     deserialize_inbound,
 )
-from app.workflows.results import TransportStateCorruption
+from app.workflows.recovery.results import TransportStateCorruption
 
 log = logging.getLogger(__name__)
 

@@ -487,7 +487,7 @@ async def drain_one_worker_item(data_dir: Path) -> bool:
     an item was drained, False if queue was empty.
     """
     from app.runtime.inbound_types import deserialize_inbound
-    from app.workflows.results import TransportStateCorruption
+    from app.workflows.recovery.results import TransportStateCorruption
 
     boot_id = get_channel_state().boot_id
     item = _work_queue.claim_next_any(data_dir, boot_id)

@@ -1,12 +1,12 @@
-"""Shared transport types and row validation. Used by work_queue facade and SQLite/Postgres backends."""
+"""Shared recovery transport types and row validation."""
 
 from __future__ import annotations
 
 from enum import Enum
 from typing import Any
 
-from app.workflows.results import TransportStateCorruption
-from app.workflows.transport_recovery import TRANSPORT_STATES
+from app.workflows.recovery.machine import TRANSPORT_STATES
+from app.workflows.recovery.results import TransportStateCorruption
 
 
 class LeaveClaimed(Exception):
@@ -42,6 +42,7 @@ class CancelRequestResult(str, Enum):
 
 def validate_work_item_row(row: dict[str, Any], item_id: str = "") -> None:
     """Raise TransportStateCorruption if row violates transport invariants."""
+
     state = row.get("state")
     if state not in TRANSPORT_STATES:
         raise TransportStateCorruption(
@@ -64,5 +65,4 @@ def validate_work_item_row(row: dict[str, Any], item_id: str = "") -> None:
             )
 
 
-# Backend modules expect this name
 _validate_work_item_row = validate_work_item_row

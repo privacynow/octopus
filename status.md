@@ -186,7 +186,7 @@ Completed slices:
      - `app/workflows/runtime_skills/setup.py` is the only app owner writing
        `session.awaiting_skill_setup`
 
-20. `pending commit` `Track F / F4: move delegation into concern-owned workflows`
+20. `128bf67` `Track F / F4: move delegation into concern-owned workflows`
    - Added the real delegation workflow package:
      - `app/workflows/delegation/contracts.py`
      - `app/workflows/delegation/machine.py`
@@ -204,6 +204,107 @@ Completed slices:
      - updated workflow tests
      - negative gates proving the deleted owner path is gone and `app/agents/*`
        no longer edits delegation status strings directly
+
+21. `pending commit` `Track F / F5: migrate pending and recovery to concern-owned functional machines`
+   - Before-state inventory captured before editing:
+     - `app/workflows/pending_request.py`
+       - still owns the pending approval/retry machine
+       - still uses `python-statemachine`
+       - still exports:
+         - `PendingRequestMachine`
+         - `PendingRequestWorkflowModel`
+         - `PendingRequestDisposition`
+         - `PendingRequestTransitionResult`
+         - `run_pending_request_event(...)`
+     - `app/workflows/transport_recovery.py`
+       - still owns the transport/recovery machine
+       - still uses `python-statemachine`
+       - still exports:
+         - `TransportRecoveryMachine`
+         - `TransportWorkflowModel`
+         - `TRANSPORT_STATES`
+         - `run_transport_event(...)`
+     - `app/workflows/results.py`
+       - still holds transport/recovery transition result types and domain
+         exceptions under a root transitional owner
+     - `app/transport_contract.py`
+       - still sits at app root
+       - still imports `TRANSPORT_STATES` from the root transport workflow
+   - Current caller inventory captured by `rg` before editing:
+     - pending owner:
+       - `app/workflows/pending/requests.py`
+       - `tests/test_pending_request_workflow_machine.py`
+       - `app/workflows/__init__.py`
+     - recovery/result owner:
+       - `app/work_queue_sqlite_impl.py`
+       - `app/work_queue_postgres_impl.py`
+       - `app/worker.py`
+       - `app/workflows/recovery/replay.py`
+       - `app/channels/telegram/ingress.py`
+       - `tests/test_transport_workflow_machine.py`
+       - `tests/test_work_queue.py`
+       - `tests/test_contracts/test_transport_store_contract.py`
+       - `tests/support/handler_support.py`
+       - `app/workflows/__init__.py`
+     - transport contract owner:
+       - `app/work_queue.py`
+       - `app/work_queue_sqlite.py`
+       - `app/work_queue_postgres.py`
+       - `app/work_queue_sqlite_impl.py`
+       - `app/work_queue_postgres_impl.py`
+       - `tests/contracts/test_transport_store_contract.py`
+   - Contract tests that currently define the accepted behavior:
+     - `tests/test_pending_request_workflow_machine.py`
+     - `tests/test_transport_workflow_machine.py`
+     - `tests/test_work_queue.py`
+     - `tests/contracts/test_transport_store_contract.py`
+     - `tests/test_workitem_integration.py`
+     - `tests/test_invariants.py`
+   - Required after-state for F5:
+     - `app/workflows/pending/machine.py` becomes the only pending machine owner
+     - `app/workflows/recovery/machine.py` becomes the only recovery machine owner
+     - `app/workflows/recovery/results.py` owns recovery result and exception types
+     - `app/workflows/recovery/transport_contract.py` owns recovery contract types
+     - old root paths are deleted, not aliased
+     - no production pending/recovery path remains on `python-statemachine`
+   - Completed implementation in the current worktree:
+     - added:
+       - `app/workflows/pending/machine.py`
+       - `app/workflows/recovery/machine.py`
+       - `app/workflows/recovery/results.py`
+       - `app/workflows/recovery/transport_contract.py`
+     - deleted:
+       - `app/workflows/pending_request.py`
+       - `app/workflows/transport_recovery.py`
+       - `app/workflows/results.py`
+       - `app/transport_contract.py`
+     - updated app callers:
+       - `app/workflows/pending/requests.py`
+       - `app/workflows/recovery/replay.py`
+       - `app/workflows/__init__.py`
+       - `app/work_queue.py`
+       - `app/work_queue_sqlite.py`
+       - `app/work_queue_postgres.py`
+       - `app/work_queue_sqlite_impl.py`
+       - `app/work_queue_postgres_impl.py`
+       - `app/channels/telegram/ingress.py`
+       - `app/worker.py`
+     - updated machine and boundary tests:
+       - `tests/test_pending_request_workflow_machine.py`
+       - `tests/test_transport_workflow_machine.py`
+       - `tests/test_work_queue.py`
+       - `tests/contracts/test_transport_store_contract.py`
+       - `tests/support/handler_support.py`
+       - `tests/test_architecture_skeleton.py`
+       - `tests/test_zero_import_gates.py`
+     - updated machine/inventory docs:
+       - `docs/machine_conventions.md`
+       - `docs/orchestration_inventory.md`
+   - Verification completed before commit:
+     - focused F5 suite:
+       - `254 passed`
+     - full suite:
+       - `1547 passed, 23 skipped`
 
 ## Latest Verified Test Baseline
 
@@ -326,7 +427,6 @@ Completed:
 
 Remaining:
 
-- `F5` pending/recovery migration off `python-statemachine`
 - `F6` dispatch ownership cleanup
 
 ## Acceptance Gate Checklist
@@ -344,16 +444,16 @@ status.
 - [ ] Registry `http.py` is a thin HTTP boundary and `ui.py` owns UI rendering.
 - [x] Setup progression has one explicit machine owner.
 - [x] Delegation progression has one explicit workflow/machine owner.
-- [ ] Pending and recovery machines live under concern-owned workflow packages.
+- [x] Pending and recovery machines live under concern-owned workflow packages.
 - [ ] `runtime/dispatch.py` is channel-agnostic plumbing and not a shadow
   workflow owner.
 - [x] The repo-standard explicit machine style is declared and used for
   remediated durable workflows.
-- [ ] Lifecycle snapshot and latest-approval ownership are cleaned up.
+- [x] Lifecycle snapshot and latest-approval ownership are cleaned up.
 - [ ] `workflows/__init__.py` and `transport_contract.py` no longer carry
   dead or misleading transitional ownership.
 - [ ] Zero-import gates cover both `app/` and `tests/`.
-- [ ] Test support no longer mutates Telegram ingress globals.
+- [x] Test support no longer mutates Telegram ingress globals.
 
 ## Current Slice
 

@@ -7,7 +7,7 @@ from typing import Any
 
 from app import runtime_backend
 from app.runtime_health import QueueSnapshot, WorkerHeartbeat
-from app.transport_contract import (
+from app.workflows.recovery.transport_contract import (
     ApplyResult,
     CancelRequestResult,
     DiscardResult,

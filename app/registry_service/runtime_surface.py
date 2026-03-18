@@ -18,17 +18,12 @@ from app.credential_store import (
 )
 from app.agents.bridge import conversation_key_for_ref
 from app.execution_context import resolve_execution_context
-from app.inbound_use_case_factory import (
-    get_provider_guidance_use_cases,
-    get_runtime_skill_activation_use_cases,
-    get_runtime_skill_catalog_use_cases,
-    get_runtime_skill_import_use_cases,
-)
 from app.registry_service.store_base import AbstractRegistryStore
 from app import runtime_backend
 from app.config import BotConfig, load_config_provider_health
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
+from app.runtime import composition
 from app.workflows.runtime_skills.contracts import PromptWarningContext
 from app.session_state import SessionState, session_from_dict, session_to_dict
 from app.storage import load_session, save_session
@@ -78,6 +73,10 @@ def get_runtime_surface_context() -> RuntimeSurfaceContext:
 
 def runtime_registry_url() -> str:
     return os.environ.get("BOT_REGISTRY_URL", "").strip()
+
+
+def _flows():
+    return composition.workflows()
 
 
 def prompt_warning_context() -> PromptWarningContext | None:
@@ -131,7 +130,7 @@ def list_catalog_skills(query: str = "") -> dict[str, Any]:
                 "can_update": item.can_update,
                 "can_uninstall": item.can_uninstall,
             }
-            for item in get_runtime_skill_catalog_use_cases().list_skills(query)
+            for item in _flows().runtime_skills.catalog.list_skills(query)
         ]
     }
 
@@ -140,7 +139,7 @@ def search_catalog_skills(query: str) -> dict[str, Any]:
     query_text = query.strip()
     if len(query_text) < 2:
         return {"catalog": [], "registry": []}
-    results = get_runtime_skill_import_use_cases().search(query_text, registry_url=runtime_registry_url())
+    results = _flows().runtime_skills.imports.search(query_text, registry_url=runtime_registry_url())
     return {
         "catalog": [
             {
@@ -170,7 +169,7 @@ def search_catalog_skills(query: str) -> dict[str, Any]:
 
 
 def catalog_skill_detail(skill_name: str) -> dict[str, Any]:
-    detail = get_runtime_skill_catalog_use_cases().get_skill(skill_name)
+    detail = _flows().runtime_skills.catalog.get_skill(skill_name)
     if detail is None:
         raise RuntimeSurfaceError(404, f"Unknown skill: {skill_name}")
     return {
@@ -192,7 +191,7 @@ def install_catalog_skill(skill_name: str) -> dict[str, Any]:
     registry_url = runtime_registry_url()
     if not registry_url:
         raise RuntimeSurfaceError(404, "No skill registry configured.")
-    result = get_runtime_skill_import_use_cases().install_from_registry(
+    result = _flows().runtime_skills.imports.install_from_registry(
         skill_name,
         registry_url,
         warning_context=prompt_warning_context(),
@@ -215,14 +214,14 @@ def uninstall_catalog_skill(skill_name: str) -> dict[str, Any]:
         default_skills = context.config.default_skills
     except Exception:
         default_skills = ()
-    result = get_runtime_skill_import_use_cases().uninstall(skill_name, default_skills=default_skills)
+    result = _flows().runtime_skills.imports.uninstall(skill_name, default_skills=default_skills)
     if not result.ok:
         raise RuntimeSurfaceError(400, result.message)
     return {"name": result.name, "ok": result.ok, "message": result.message}
 
 
 def update_catalog_skill(skill_name: str) -> dict[str, Any]:
-    result = get_runtime_skill_import_use_cases().update(
+    result = _flows().runtime_skills.imports.update(
         skill_name,
         warning_context=prompt_warning_context(),
     )
@@ -239,7 +238,7 @@ def update_catalog_skill(skill_name: str) -> dict[str, Any]:
 
 
 def diff_catalog_skill(skill_name: str) -> dict[str, Any]:
-    result = get_runtime_skill_import_use_cases().diff(skill_name)
+    result = _flows().runtime_skills.imports.diff(skill_name)
     if not result.ok:
         raise RuntimeSurfaceError(400, result.message)
     return {"name": result.name, "ok": result.ok, "diff": result.message}
@@ -253,7 +252,7 @@ def conversation_skill_state(store: AbstractRegistryStore, conversation_id: str)
         loaded.context.config.provider_name,
         trust_tier="trusted",
     )
-    listing = get_runtime_skill_activation_use_cases().list_conversation_skills(
+    listing = _flows().runtime_skills.activation.list_conversation_skills(
         list(resolved.active_skills)
     )
     return {
@@ -282,7 +281,7 @@ def activate_conversation_skill(
     confirm: bool,
 ) -> dict[str, Any]:
     loaded = load_runtime_conversation(store, conversation_id)
-    decision = get_runtime_skill_activation_use_cases().begin_activate(
+    decision = _flows().runtime_skills.activation.begin_activate(
         loaded.session,
         user_id=actor_key,
         skill_name=skill_name,
@@ -311,7 +310,7 @@ def deactivate_conversation_skill(
     skill_name: str,
 ) -> dict[str, Any]:
     loaded = load_runtime_conversation(store, conversation_id)
-    decision = get_runtime_skill_activation_use_cases().deactivate(
+    decision = _flows().runtime_skills.activation.deactivate(
         loaded.session,
         user_id=actor_key,
         skill_name=skill_name,
@@ -330,7 +329,7 @@ def clear_conversation_skills(
     actor_key: str,
 ) -> dict[str, Any]:
     loaded = load_runtime_conversation(store, conversation_id)
-    decision = get_runtime_skill_activation_use_cases().clear(loaded.session, user_id=actor_key)
+    decision = _flows().runtime_skills.activation.clear(loaded.session, user_id=actor_key)
     if decision.status == "foreign_setup":
         raise RuntimeSurfaceError(409, "credential_setup_in_progress")
     if decision.mutated:
@@ -346,7 +345,7 @@ def preview_provider_guidance(
     compact_mode: bool,
 ) -> dict[str, Any]:
     try:
-        preview = get_provider_guidance_use_cases().preview(
+        preview = _flows().provider_guidance.preview.preview(
             provider_name,
             role=role,
             active_skills=list(active_skills),

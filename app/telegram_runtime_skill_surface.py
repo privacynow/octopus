@@ -10,13 +10,7 @@ from telegram.constants import ChatAction, ParseMode
 
 from app import user_messages as _msg
 from app.credential_flow import foreign_setup_message, format_credential_prompt
-from app.inbound_use_case_factory import (
-    get_credential_management_use_cases,
-    get_runtime_skill_activation_use_cases,
-    get_runtime_skill_catalog_use_cases,
-    get_runtime_skill_import_use_cases,
-    get_runtime_skill_setup_use_cases,
-)
+from app.runtime import composition
 
 
 def _th():
@@ -25,12 +19,16 @@ def _th():
     return th
 
 
+def _flows():
+    return composition.workflows()
+
+
 async def skills_show(event, update: Update) -> None:
-    catalog = {item.name: item for item in get_runtime_skill_catalog_use_cases().list_skills()}
+    catalog = {item.name: item for item in _flows().runtime_skills.catalog.list_skills()}
     th = _th()
     session = th._load(event.chat_id)
     resolved = th._resolve_context(session, trust_tier=th._trust_tier(event.user))
-    active = get_runtime_skill_activation_use_cases().list_conversation_skills(
+    active = _flows().runtime_skills.activation.list_conversation_skills(
         list(resolved.active_skills)
     ).active_skills
     if active:
@@ -46,7 +44,7 @@ async def skills_show(event, update: Update) -> None:
 
 
 async def skills_list(event, update: Update) -> None:
-    catalog = get_runtime_skill_catalog_use_cases().list_skills()
+    catalog = _flows().runtime_skills.catalog.list_skills()
     if not catalog:
         await update.effective_message.reply_text("No skills available.")
         return
@@ -54,11 +52,11 @@ async def skills_list(event, update: Update) -> None:
     session = th._load(event.chat_id)
     resolved = th._resolve_context(session, trust_tier=th._trust_tier(event.user))
     active = set(
-        get_runtime_skill_activation_use_cases().list_conversation_skills(
+        _flows().runtime_skills.activation.list_conversation_skills(
             list(resolved.active_skills)
         ).active_skills
     )
-    user_creds = get_credential_management_use_cases().load_credentials(
+    user_creds = _flows().credentials.management.load_credentials(
         th._actor_key(event.user.id)
     )
     lines = ["<b>Available skills:</b>"]
@@ -69,7 +67,7 @@ async def skills_list(event, update: Update) -> None:
         else:
             if item.requirement_keys:
                 skill_creds = user_creds.get(name, {})
-                missing = get_runtime_skill_catalog_use_cases().missing_requirements(name, skill_creds)
+                missing = _flows().runtime_skills.catalog.missing_requirements(name, skill_creds)
                 status = " [needs setup]" if missing else " [ready]"
             else:
                 status = ""
@@ -87,8 +85,8 @@ async def skills_list(event, update: Update) -> None:
 
 
 async def skills_add(event, update: Update, name: str) -> None:
-    lifecycle = get_runtime_skill_activation_use_cases()
-    if not get_runtime_skill_catalog_use_cases().has_skill(name):
+    lifecycle = _flows().runtime_skills.activation
+    if not _flows().runtime_skills.catalog.has_skill(name):
         await update.effective_message.reply_text(
             f"Unknown skill: {html.escape(name)}. Use /skills list to see available.",
             parse_mode=ParseMode.HTML,
@@ -139,7 +137,7 @@ async def skills_add(event, update: Update, name: str) -> None:
 
 async def skills_remove(event, update: Update, name: str) -> None:
     th = _th()
-    lifecycle = get_runtime_skill_activation_use_cases()
+    lifecycle = _flows().runtime_skills.activation
     chat_id = event.chat_id
     async with th._chat_lock(chat_id, message=update.effective_message) as _:
         session = th._load(chat_id)
@@ -164,8 +162,8 @@ async def skills_remove(event, update: Update, name: str) -> None:
 
 
 async def skills_setup(event, update: Update, name: str) -> None:
-    lifecycle = get_runtime_skill_activation_use_cases()
-    if not get_runtime_skill_catalog_use_cases().has_skill(name):
+    lifecycle = _flows().runtime_skills.activation
+    if not _flows().runtime_skills.catalog.has_skill(name):
         await update.effective_message.reply_text(
             f"Unknown skill: {html.escape(name)}. Use /skills list to see available.",
             parse_mode=ParseMode.HTML,
@@ -202,7 +200,7 @@ async def skills_setup(event, update: Update, name: str) -> None:
 
 async def skills_clear(event, update: Update) -> None:
     th = _th()
-    lifecycle = get_runtime_skill_activation_use_cases()
+    lifecycle = _flows().runtime_skills.activation
     chat_id = event.chat_id
     async with th._chat_lock(chat_id, message=update.effective_message) as _:
         session = th._load(chat_id)
@@ -219,7 +217,7 @@ async def skills_clear(event, update: Update) -> None:
 
 async def skills_create(event, update: Update, name: str) -> None:
     try:
-        record = get_runtime_skill_catalog_use_cases().create_custom_draft(
+        record = _flows().runtime_skills.catalog.create_custom_draft(
             name,
             owner_actor=str(event.user.id),
         )
@@ -235,7 +233,7 @@ async def skills_create(event, update: Update, name: str) -> None:
 
 async def skills_search(event, update: Update, query: str) -> None:
     results = await asyncio.to_thread(
-        get_runtime_skill_import_use_cases().search,
+        _flows().runtime_skills.imports.search,
         query,
         registry_url=_th()._cfg().registry_url,
     )
@@ -268,7 +266,7 @@ async def skills_search(event, update: Update, query: str) -> None:
 
 
 async def skills_info(event, update: Update, name: str) -> None:
-    result = get_runtime_skill_catalog_use_cases().get_skill(name)
+    result = _flows().runtime_skills.catalog.get_skill(name)
     if not result:
         await update.effective_message.reply_text(
             f"Skill '{html.escape(name)}' not found.",
@@ -305,7 +303,7 @@ async def skills_install(event, update: Update, name: str) -> None:
         return
     try:
         result = await asyncio.to_thread(
-            get_runtime_skill_import_use_cases().install_from_registry,
+            _flows().runtime_skills.imports.install_from_registry,
             name,
             registry_url,
         )
@@ -326,12 +324,12 @@ async def skills_uninstall(event, update: Update, name: str) -> None:
     if not th.is_admin(event.user):
         await update.effective_message.reply_text("Only admins can uninstall imported skills.")
         return
-    result = get_runtime_skill_import_use_cases().uninstall(name, default_skills=th._cfg().default_skills)
+    result = _flows().runtime_skills.imports.uninstall(name, default_skills=th._cfg().default_skills)
     await update.effective_message.reply_text(html.escape(result.message), parse_mode=ParseMode.HTML)
 
 
 async def skills_updates(event, update: Update) -> None:
-    updates = await asyncio.to_thread(get_runtime_skill_import_use_cases().list_updates)
+    updates = await asyncio.to_thread(_flows().runtime_skills.imports.list_updates)
     if not updates:
         await update.effective_message.reply_text("No imported skills found.")
         return
@@ -344,7 +342,7 @@ async def skills_updates(event, update: Update) -> None:
 
 
 async def skills_diff(event, update: Update, name: str) -> None:
-    diff_text = (await asyncio.to_thread(get_runtime_skill_import_use_cases().diff, name)).message
+    diff_text = (await asyncio.to_thread(_flows().runtime_skills.imports.diff, name)).message
     if not diff_text.strip():
         diff_text = "No differences."
     if len(diff_text) > 4000:
@@ -357,7 +355,7 @@ async def skills_diff(event, update: Update, name: str) -> None:
 
 async def skills_update(event, update: Update, target: str) -> None:
     th = _th()
-    imports = get_runtime_skill_import_use_cases()
+    imports = _flows().runtime_skills.imports
     if not th.is_admin(event.user):
         await update.effective_message.reply_text("Only admins can update imported skills.")
         return
@@ -398,7 +396,7 @@ async def cmd_clear_credentials(event, update: Update, context) -> None:
     args = event.args
     skill_name = args[0] if args else None
 
-    stored = list(get_credential_management_use_cases().list_stored_skills(th._actor_key(user_id)))
+    stored = list(_flows().credentials.management.list_stored_skills(th._actor_key(user_id)))
 
     if skill_name:
         if skill_name not in stored:
@@ -443,7 +441,7 @@ async def _execute_clear_credentials(query, chat_id: int, user_id: int, skill_na
         if not already_answered:
             await query.answer()
         session = th._load(chat_id)
-        outcome = get_credential_management_use_cases().clear_credentials(
+        outcome = _flows().credentials.management.clear_credentials(
             session,
             actor_key=th._actor_key(user_id),
             skill_name=skill_name,
@@ -509,7 +507,7 @@ async def handle_skill_add_callback(event, query) -> None:
             if not already_answered:
                 await query.answer()
             session = th._load(chat_id)
-            if get_runtime_skill_activation_use_cases().confirm_activate(session, name).mutated:
+            if _flows().runtime_skills.activation.confirm_activate(session, name).mutated:
                 th._save(chat_id, session)
         await query.edit_message_reply_markup(reply_markup=None)
         await query.edit_message_text(
@@ -534,7 +532,7 @@ async def handle_skill_update_callback(event, query) -> None:
     if event.data.startswith("skill_update_confirm:"):
         name = event.data.split(":", 1)[1]
         result = await asyncio.to_thread(
-            get_runtime_skill_import_use_cases().update,
+            _flows().runtime_skills.imports.update,
             name,
         )
         msg = result.message
@@ -547,7 +545,7 @@ async def handle_skill_update_callback(event, query) -> None:
 
     if event.data == "skill_update_all_confirm":
         results = await asyncio.to_thread(
-            get_runtime_skill_import_use_cases().update_all,
+            _flows().runtime_skills.imports.update_all,
         )
         if not results:
             await query.edit_message_reply_markup(reply_markup=None)
@@ -598,7 +596,7 @@ async def maybe_handle_setup_message(update: Update, msg, payload: str) -> bool:
         if not raw_value:
             await message.reply_text("Please send the credential value as a text message.")
             return True
-        outcome = await get_runtime_skill_setup_use_cases().submit_credential_value(
+        outcome = await _flows().runtime_skills.setup.submit_credential_value(
             session,
             user_id=th._actor_key(user_id),
             raw_value=raw_value,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.credential_service import get_credential_service
+from app.runtime import composition
 from app.session_state import SessionState
 from app.workflows.credentials.contracts import CredentialClearOutcome, CredentialManagementPort
 
@@ -24,10 +25,8 @@ class CredentialManagementUseCases(CredentialManagementPort):
         actor_key: str,
         skill_name: str | None,
     ) -> CredentialClearOutcome:
-        from app.inbound_use_case_factory import get_runtime_skill_setup_use_cases
-
         removed = tuple(self._credentials().delete(actor_key, skill_name))
-        outcome = get_runtime_skill_setup_use_cases().apply_cleared_credentials(
+        outcome = composition.workflows().runtime_skills.setup.apply_cleared_credentials(
             session,
             user_id=actor_key,
             removed_skills=list(removed),

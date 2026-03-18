@@ -10,17 +10,18 @@ from telegram.constants import ParseMode
 
 from app import user_messages as _msg
 from app.credential_flow import foreign_setup_message
-from app.inbound_use_case_factory import (
-    get_conversation_control_use_cases,
-    get_conversation_settings_use_cases,
-)
 from app.provider_guidance_service import get_provider_guidance_service
+from app.runtime import composition
 
 
 def _th():
     import app.telegram_handlers as th
 
     return th
+
+
+def _flows():
+    return composition.workflows()
 
 
 async def cmd_new(event, update: Update, context) -> None:
@@ -31,7 +32,7 @@ async def cmd_new(event, update: Update, context) -> None:
     prov = th._prov()
     async with th._chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         old_session = th._load(chat_id)
-        outcome = get_conversation_control_use_cases().reset_session(
+        outcome = _flows().conversation.control.reset_session(
             old_session,
             user_id=th._actor_key(event.user.id),
             provider_name=prov.name,
@@ -76,7 +77,7 @@ async def cancel_chat_operation(
 
     async with th._chat_lock(chat_id, message=message, update_id=update_id):
         session = th._load(chat_id)
-        outcome = get_conversation_control_use_cases().cancel_conversation(
+        outcome = _flows().conversation.control.cancel_conversation(
             session,
             data_dir=th._cfg().data_dir,
             conversation_key=th._conversation_key(chat_id),
@@ -98,7 +99,7 @@ def request_cancel_fast_path(
 ):
     th = _th()
     session = th._load(chat_id)
-    outcome = get_conversation_control_use_cases().cancel_conversation(
+    outcome = _flows().conversation.control.cancel_conversation(
         session,
         data_dir=th._cfg().data_dir,
         conversation_key=th._conversation_key(chat_id),
@@ -145,7 +146,7 @@ async def cmd_approval(event, update: Update, context) -> None:
                 reply_markup=InlineKeyboardMarkup([th._settings_approval_buttons(mode)]),
             )
             return
-        outcome = get_conversation_settings_use_cases().set_approval_mode(session, arg)
+        outcome = _flows().conversation.settings.set_approval_mode(session, arg)
         if outcome.mutated:
             th._save(chat_id, session)
     await update.effective_message.reply_text(outcome.message)
@@ -175,7 +176,7 @@ async def cmd_compact(event, update: Update, context) -> None:
 
     async with th._chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = th._load(chat_id)
-        outcome = get_conversation_settings_use_cases().set_compact_mode(session, mode == "on")
+        outcome = _flows().conversation.settings.set_compact_mode(session, mode == "on")
         if outcome.mutated:
             th._save(chat_id, session)
     await update.effective_message.reply_text(outcome.message, parse_mode=ParseMode.HTML)
@@ -204,7 +205,7 @@ async def cmd_role(event, update: Update, context) -> None:
     value = "" if args[0].lower() == "clear" else " ".join(args)
     async with th._chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
         session = th._load(chat_id)
-        outcome = get_conversation_settings_use_cases().set_role(
+        outcome = _flows().conversation.settings.set_role(
             session,
             value,
             default_role=th._cfg().role,
@@ -220,7 +221,7 @@ async def cmd_model(event, update: Update, context) -> None:
     cfg = th._cfg()
     msg = update.effective_message
     chat_id = event.chat_id
-    settings = get_conversation_settings_use_cases()
+    settings = _flows().conversation.settings
     trust = th._trust_tier(event.user)
     arg = event.args[0].lower() if event.args else ""
 
@@ -320,7 +321,7 @@ async def cmd_project(event, update: Update, context) -> None:
     if value is not None:
         async with th._chat_lock(event.chat_id, message=msg, update_id=update.update_id):
             session = th._load(event.chat_id)
-            outcome = get_conversation_settings_use_cases().set_project(
+            outcome = _flows().conversation.settings.set_project(
                 session,
                 value,
                 cfg=cfg,
@@ -418,7 +419,7 @@ async def cmd_policy(event, update: Update, context) -> None:
     if value is not None:
         async with th._chat_lock(event.chat_id, message=msg, update_id=update.update_id):
             session = th._load(event.chat_id)
-            outcome = get_conversation_settings_use_cases().set_file_policy(
+            outcome = _flows().conversation.settings.set_file_policy(
                 session,
                 value,
                 cfg=th._cfg(),
@@ -465,7 +466,7 @@ async def handle_settings_callback(event, query) -> None:
         if not already_answered:
             await query.answer()
         session = th._load(chat_id)
-        settings = get_conversation_settings_use_cases()
+        settings = _flows().conversation.settings
 
         if setting == "model":
             outcome = settings.set_model_profile(
@@ -550,13 +551,13 @@ async def handle_worker_conversation_action(
     th = _th()
     action = event.action
     params = dict(event.params)
-    settings = get_conversation_settings_use_cases()
+    settings = _flows().conversation.settings
 
     if action == "session_new":
         cfg = th._cfg()
         prov = th._prov()
         old_session = th._load(runtime_chat)
-        outcome = get_conversation_control_use_cases().reset_session(
+        outcome = _flows().conversation.control.reset_session(
             old_session,
             user_id=th._actor_key(event.user.id),
             provider_name=prov.name,
@@ -589,7 +590,7 @@ async def handle_worker_conversation_action(
             await surface.reply_text(live_outcome.message)
             return True
         session = th._load(runtime_chat)
-        outcome = get_conversation_control_use_cases().cancel_conversation(
+        outcome = _flows().conversation.control.cancel_conversation(
             session,
             data_dir=th._cfg().data_dir,
             conversation_key=th._conversation_key(runtime_chat),

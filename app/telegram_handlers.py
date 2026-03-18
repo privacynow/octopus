@@ -82,12 +82,6 @@ from app.transports.admission import (
 from app.transports.types import InboundEnvelope
 from app.runtime import composition
 from app.credential_validation import validate_credential
-from app.inbound_use_case_factory import (
-    get_conversation_settings_use_cases,
-    get_runtime_skill_activation_use_cases,
-    get_runtime_skill_catalog_use_cases,
-    get_runtime_skill_import_use_cases,
-)
 from app.skill_activation_service import get_skill_activation_service
 from app.request_runtime import (
     check_prompt_size_cross_chat as runtime_check_prompt_size_cross_chat,
@@ -908,7 +902,7 @@ def _settings_model_profile_state(
     trust_tier: str,
     effective_model: str,
 ) -> tuple[list[str], str]:
-    state = get_conversation_settings_use_cases().model_profile_state(
+    state = composition.workflows().conversation.settings.model_profile_state(
         session,
         cfg,
         trust_tier,
@@ -1942,7 +1936,9 @@ async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Filter stale active_skills that no longer resolve
     for s in sessions:
-        s["active_skills"] = get_runtime_skill_catalog_use_cases().filter_resolvable(s["active_skills"])
+        s["active_skills"] = composition.workflows().runtime_skills.catalog.filter_resolvable(
+            s["active_skills"]
+        )
 
     # Detail view for a specific conversation
     if len(args) >= 2:

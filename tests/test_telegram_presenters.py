@@ -11,6 +11,8 @@ from app.channels.telegram.presenters import (
     provider_guidance_history_message,
     provider_guidance_mutation_message,
     provider_guidance_preview_message,
+    conversation_role_current_message,
+    pending_html_outcome_message,
     runtime_skill_active_summary_message,
     runtime_skill_history_message,
     settings_overview,
@@ -154,6 +156,20 @@ def test_provider_guidance_mutation_message_escapes_html():
 
     assert rendered.parse_mode == ParseMode.HTML
     assert rendered.text == "&lt;saved&gt;"
+
+
+def test_conversation_role_current_message_renders_expected_html():
+    rendered = conversation_role_current_message("Python expert")
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "<code>Python expert</code>" in rendered.text
+
+
+def test_pending_html_outcome_message_renders_expected_html():
+    rendered = pending_html_outcome_message("<b>Replay queued</b>")
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert rendered.text == "<b>Replay queued</b>"
 
 
 def test_runtime_skill_active_summary_message_renders_expected_html():
@@ -462,3 +478,100 @@ async def test_runtime_skills_setup_uses_presenter(monkeypatch):
         await runtime_skills.skills_setup(event, update, "helper", runtime=runtime)
 
         assert message.replies[-1]["text"] == "patched setup presenter"
+
+
+async def test_conversation_cmd_role_uses_presenter(monkeypatch):
+    import contextlib
+
+    from app.channels.telegram.cancellation import get_cancellation_registry
+    from app.channels.telegram.state import get_channel_state
+    import app.channels.telegram.conversation as conversation
+
+    @contextlib.asynccontextmanager
+    async def _noop_chat_lock(*args, **kwargs):
+        del args, kwargs
+        yield False
+
+    rendered = TelegramRenderedMessage(text="patched role presenter", parse_mode=ParseMode.HTML)
+    monkeypatch.setattr(conversation.telegram_presenters, "conversation_role_current_message", lambda role: rendered)
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, allow_open=False)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        message = FakeMessage(chat=chat, text="/role")
+        update = FakeUpdate(message=message, chat=chat, user=FakeUser(42))
+        event = SimpleNamespace(chat_id=chat.id, user=InboundUser(id="telegram:42", username="testuser"), args=[])
+        runtime = conversation.TelegramConversationRuntime(
+            state=get_channel_state(),
+            cancellations=get_cancellation_registry(),
+            chat_lock=_noop_chat_lock,
+            edit_or_reply_text=lambda *args, **kwargs: None,
+        )
+
+        session = conversation._load(runtime, chat.id)
+        session.role = "Python expert"
+        conversation._save(runtime, chat.id, session)
+
+        await conversation.cmd_role(event, update, None, runtime=runtime)
+
+        assert message.replies[-1]["text"] == "patched role presenter"
+
+
+async def test_pending_reject_uses_presenter(monkeypatch):
+    import contextlib
+
+    from app.channels.telegram.state import get_channel_state
+    import app.channels.telegram.pending as pending
+
+    @contextlib.asynccontextmanager
+    async def _noop_chat_lock(*args, **kwargs):
+        del args, kwargs
+        yield False
+
+    async def _noop_edit_or_reply_text(message, text: str, **kwargs):
+        await message.reply_text(text, **kwargs)
+
+    rendered = TelegramRenderedMessage(text="patched pending presenter")
+    monkeypatch.setattr(pending.telegram_presenters, "pending_plain_outcome_message", lambda message: rendered)
+    monkeypatch.setattr(
+        pending,
+        "_flows",
+        lambda: type(
+            "Flows",
+            (),
+            {
+                "pending": type(
+                    "PendingFlows",
+                    (),
+                    {
+                        "requests": type(
+                            "RequestFlows",
+                            (),
+                            {"reject": lambda *args, **kwargs: SimpleNamespace(mutated=False, message="rejected")},
+                        )(),
+                    },
+                )(),
+            },
+        )(),
+    )
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        message = FakeMessage(chat=chat, text="pending")
+        runtime = pending.TelegramPendingRuntime(
+            state=get_channel_state(),
+            chat_lock=_noop_chat_lock,
+            edit_or_reply_text=_noop_edit_or_reply_text,
+            execute_request=lambda *args, **kwargs: None,
+            request_approval=lambda *args, **kwargs: None,
+            build_user_prompt=lambda *args, **kwargs: ("", []),
+        )
+
+        await pending.reject_pending(chat.id, message, runtime=runtime)
+
+        assert message.replies[-1]["text"] == "patched pending presenter"

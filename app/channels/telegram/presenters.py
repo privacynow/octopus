@@ -538,6 +538,65 @@ def public_command_not_available_message() -> TelegramRenderedMessage:
     return TelegramRenderedMessage(text=_msg.trust_command_not_available_public())
 
 
+def trust_not_authorized_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=_msg.trust_not_authorized())
+
+
+def conversation_plain_outcome_message(message: str) -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=message)
+
+
+def conversation_html_outcome_message(message: str) -> TelegramRenderedMessage:
+    return _html_message(message)
+
+
+def conversation_foreign_setup_message(setup) -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=foreign_setup_message(setup))
+
+
+def conversation_approval_usage_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=_msg.approval_usage())
+
+
+def conversation_compact_usage_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text="Usage: /compact on|off")
+
+
+def conversation_role_current_message(role: str) -> TelegramRenderedMessage:
+    return _html_message(f"Current role: <code>{html.escape(role)}</code>")
+
+
+def conversation_role_default_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text="No role set (using instance default).")
+
+
+def conversation_projects_list_message(projects, current_project: str | None) -> TelegramRenderedMessage:
+    lines = ["<b>Available projects:</b>"]
+    for proj in projects:
+        marker = " (active)" if proj.name == current_project else ""
+        lines.append(
+            f"  <code>{html.escape(proj.name)}</code> → "
+            f"{html.escape(str(proj.root_dir))}{marker}"
+        )
+    return _html_message("\n".join(lines))
+
+
+def no_projects_configured_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=_msg.no_projects_configured())
+
+
+def trust_project_public_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=_msg.trust_project_public())
+
+
+def trust_file_policy_public_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=_msg.trust_file_policy_public())
+
+
+def conversation_policy_usage_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=_msg.policy_usage())
+
+
 def runtime_skill_mutation_message(message: str) -> TelegramRenderedMessage:
     return _escaped_html_message(message)
 
@@ -704,3 +763,19 @@ def runtime_skill_next_requirement_message(requirement: dict[str, Any]) -> Teleg
 
 def runtime_skill_ready_message(skill_name: str) -> TelegramRenderedMessage:
     return _html_message(f"Skill <code>{html.escape(skill_name)}</code> is ready.")
+
+
+def pending_plain_outcome_message(message: str) -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=message)
+
+
+def pending_html_outcome_message(message: str) -> TelegramRenderedMessage:
+    return _html_message(message)
+
+
+def recovery_invalid_action_message() -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=_msg.recovery_invalid_action())
+
+
+def recovery_failed_edit_message() -> TelegramRenderedMessage:
+    return _html_message(_msg.recovery_replay_failed_edit())

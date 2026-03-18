@@ -15,14 +15,14 @@ from app.agents.types import RoutedTaskResult, TimelineEvent
 from app.config import BotConfig
 from app.identity import telegram_conversation_key
 from app.transport import InboundAction, InboundMessage, InboundUser, serialize_inbound
-from app.transports.factory import conversation_surface_name
+from app.runtime.composition import conversation_channel_name
 from app.transports.types import InboundEnvelope
 
 log = logging.getLogger(__name__)
 
 
 def conversation_key_for_ref(conversation_ref: str) -> str:
-    if conversation_surface_name(conversation_ref) == "telegram":
+    if conversation_channel_name(conversation_ref) == "telegram":
         try:
             return telegram_conversation_key(conversation_ref.rsplit(":", 1)[1])
         except (IndexError, ValueError):

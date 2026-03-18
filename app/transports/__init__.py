@@ -1,15 +1,6 @@
-"""Project-owned transport abstraction. Inbound envelopes and outbound conversation port."""
+"""Legacy transport package pending deletion.
 
-from app.transports.ports import (
-    ConversationIO,
-    EditableMessageHandle,
-    TransportCapabilities,
-)
-from app.transports.types import InboundEnvelope
-
-__all__ = [
-    "ConversationIO",
-    "EditableMessageHandle",
-    "InboundEnvelope",
-    "TransportCapabilities",
-]
+This package remains only for admission and transport-row helper modules during
+the runtime migration milestones. Outbound egress ownership lives under
+`app.ports.egress` and `app.channels.*.egress`.
+"""

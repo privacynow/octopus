@@ -1,4 +1,4 @@
-"""Contract tests for the registry-backed interaction surface."""
+"""Contract tests for the registry channel egress."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import types
 import pytest
 
 from app.providers.base import RunResult
-from app.transports.registry_adapter import RegistryConversationIO
+from app.channels.registry.egress import RegistryChannelEgress
 from tests.support.config_support import make_config
 
 
@@ -36,8 +36,8 @@ async def test_registry_surface_publishes_started_event_on_bind(monkeypatch, tmp
         agent_registry_url="http://registry.test",
     )
     client = _FakeRegistryClient()
-    surface = RegistryConversationIO(cfg, conversation_ref="conv-1")
-    monkeypatch.setattr("app.transports.registry_adapter.bind_conversation", _noop_bind)
+    surface = RegistryChannelEgress(cfg, conversation_ref="conv-1")
+    monkeypatch.setattr("app.channels.registry.egress.bind_conversation", _noop_bind)
     monkeypatch.setattr(surface, "_registry_client", lambda: client)
 
     await surface.bind(title="Spec review", config=cfg)
@@ -53,7 +53,7 @@ async def test_registry_surface_publishes_completed_event_on_outcome(monkeypatch
         agent_registry_url="http://registry.test",
     )
     client = _FakeRegistryClient()
-    surface = RegistryConversationIO(cfg, conversation_ref="conv-2")
+    surface = RegistryChannelEgress(cfg, conversation_ref="conv-2")
     monkeypatch.setattr(surface, "_registry_client", lambda: client)
 
     await surface.on_outcome(RunResult(text="done", returncode=0))
@@ -69,7 +69,7 @@ async def test_registry_surface_publishes_failed_event_on_outcome(monkeypatch, t
         agent_registry_url="http://registry.test",
     )
     client = _FakeRegistryClient()
-    surface = RegistryConversationIO(cfg, conversation_ref="conv-3")
+    surface = RegistryChannelEgress(cfg, conversation_ref="conv-3")
     monkeypatch.setattr(surface, "_registry_client", lambda: client)
 
     await surface.on_outcome(RunResult(text="boom", returncode=1))
@@ -85,7 +85,7 @@ async def test_registry_surface_rate_limits_progress_events(monkeypatch, tmp_pat
         agent_registry_url="http://registry.test",
     )
     client = _FakeRegistryClient()
-    surface = RegistryConversationIO(cfg, conversation_ref="conv-4")
+    surface = RegistryChannelEgress(cfg, conversation_ref="conv-4")
     monkeypatch.setattr(surface, "_registry_client", lambda: client)
 
     monotonic_values = iter([10.0, 11.0])
@@ -96,7 +96,7 @@ async def test_registry_surface_rate_limits_progress_events(monkeypatch, tmp_pat
         except StopIteration:
             return 11.0
 
-    monkeypatch.setattr("app.transports.registry_adapter.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("app.channels.registry.egress.time.monotonic", fake_monotonic)
 
     handle = await surface.send_text("Working…")
     client.published.clear()
@@ -115,7 +115,7 @@ async def test_registry_surface_swallows_publish_error(monkeypatch, tmp_path):
         agent_registry_url="http://registry.test",
     )
     output_log: list[dict[str, str]] = []
-    surface = RegistryConversationIO(cfg, conversation_ref="conv-5", output_log=output_log)
+    surface = RegistryChannelEgress(cfg, conversation_ref="conv-5", output_log=output_log)
     monkeypatch.setattr(surface, "_registry_client", lambda: _FakeRegistryClient(fail=True))
 
     await surface.send_text("hello")
@@ -138,9 +138,9 @@ async def test_registry_surface_caches_missing_client_state(monkeypatch, tmp_pat
         calls["count"] += 1
         return types.SimpleNamespace(agent_token="")
 
-    surface = RegistryConversationIO(cfg, conversation_ref="conv-6")
-    monkeypatch.setattr("app.transports.registry_adapter.load_agent_runtime_state", fake_load_agent_runtime_state)
-    monkeypatch.setattr("app.transports.registry_adapter.bind_conversation", _noop_bind)
+    surface = RegistryChannelEgress(cfg, conversation_ref="conv-6")
+    monkeypatch.setattr("app.channels.registry.egress.load_agent_runtime_state", fake_load_agent_runtime_state)
+    monkeypatch.setattr("app.channels.registry.egress.bind_conversation", _noop_bind)
 
     await surface.bind(title="No enrollment yet", config=cfg)
     await surface.send_text("hello")

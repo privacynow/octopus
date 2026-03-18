@@ -718,7 +718,7 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
     """Registry UI can create a conversation and receive a bot-published started event.
 
     Uses the real Compose-hosted registry service plus the production registry
-    client and RegistryConversationIO on the host. This keeps the E2E focused on
+    client and RegistryChannelEgress on the host. This keeps the E2E focused on
     M7's contract: UI-created work, polled delivery, and surface-owned timeline
     publication, without depending on Telegram startup or provider auth.
     """
@@ -727,7 +727,7 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
     from app.agents.client import AgentRegistryClient
     from app.agents.state import AgentRuntimeState, save_agent_runtime_state
     from app.agents.types import AgentCard
-    from app.transports.registry_adapter import RegistryConversationIO
+    from app.channels.registry.egress import RegistryChannelEgress
     from tests.support.config_support import make_config
 
     ctx = _registry_ui_ctx(postgres_up)
@@ -804,7 +804,7 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
         assert deliveries["deliveries"], deliveries
         delivery = deliveries["deliveries"][0]
         assert delivery["kind"] == "surface_input"
-        surface = RegistryConversationIO(cfg, conversation_ref=conversation_id)
+        surface = RegistryChannelEgress(cfg, conversation_ref=conversation_id)
         await surface.bind(title="Registry UI E2E", config=cfg)
         await client.ack([delivery["delivery_id"]], classification="accepted")
         return conversation_id

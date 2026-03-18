@@ -486,7 +486,7 @@ async def test_delegation_proposed_event_published(monkeypatch):
         }
     ) as (_, _, prov):
         import app.telegram_handlers as th
-        from app.transports.registry_adapter import RegistryConversationIO
+        from app.channels.registry.egress import RegistryChannelEgress
 
         published: list[tuple[str, str, str]] = []
 
@@ -494,8 +494,8 @@ async def test_delegation_proposed_event_published(monkeypatch):
             del self, status, progress, metadata, event_id
             published.append((kind, title, body))
 
-        monkeypatch.setattr("app.transports.registry_adapter.bind_conversation", async_noop)
-        monkeypatch.setattr(RegistryConversationIO, "_publish_event", fake_publish_event)
+        monkeypatch.setattr("app.channels.registry.egress.bind_conversation", async_noop)
+        monkeypatch.setattr(RegistryChannelEgress, "_publish_event", fake_publish_event)
         prov.run_results = [
             RunResult(
                 text="",
@@ -537,7 +537,7 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
     ) as (_, cfg, prov):
         import app.telegram_handlers as th
         import app.agents.bridge as bridge
-        from app.transports.registry_adapter import RegistryConversationIO
+        from app.channels.registry.egress import RegistryChannelEgress
 
         reported: list[tuple[str, object]] = []
 
@@ -557,13 +557,13 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
 
         monkeypatch.setattr(th, "registry_client", lambda config: FakeRegistryClient())
         monkeypatch.setattr(bridge, "registry_client", lambda config: FakeRegistryClient())
-        monkeypatch.setattr("app.transports.registry_adapter.bind_conversation", async_noop)
+        monkeypatch.setattr("app.channels.registry.egress.bind_conversation", async_noop)
 
         async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
             del self, status, progress, metadata, event_id
             reported.append(("surface_event", kind, title, body))
 
-        monkeypatch.setattr(RegistryConversationIO, "_publish_event", fake_publish_event)
+        monkeypatch.setattr(RegistryChannelEgress, "_publish_event", fake_publish_event)
         prov.run_results = [RunResult(text="Delegated review complete.")]
 
         event = InboundMessage(
@@ -1033,7 +1033,7 @@ async def test_registry_surface_parent_resumes_through_registry_surface(monkeypa
     ) as (data_dir, cfg, prov):
         import app.telegram_handlers as th
         import app.agents.bridge as bridge
-        from app.transports.registry_adapter import RegistryConversationIO
+        from app.channels.registry.egress import RegistryChannelEgress
 
         published: list[tuple[str, str, str]] = []
 
@@ -1048,13 +1048,13 @@ async def test_registry_surface_parent_resumes_through_registry_surface(monkeypa
                 return {"accepted": len(events)}
 
         monkeypatch.setattr(bridge, "registry_client", lambda config: FakeRegistryClient())
-        monkeypatch.setattr("app.transports.registry_adapter.bind_conversation", async_noop)
+        monkeypatch.setattr("app.channels.registry.egress.bind_conversation", async_noop)
 
         async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
             del self, status, progress, metadata, event_id
             published.append((kind, title, body))
 
-        monkeypatch.setattr(RegistryConversationIO, "_publish_event", fake_publish_event)
+        monkeypatch.setattr(RegistryChannelEgress, "_publish_event", fake_publish_event)
 
         conversation_ref = "registry:parent-conv-1"
         chat_id = _reg_conv(conversation_ref)
@@ -1289,17 +1289,17 @@ async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch)
         }
         ) as (_, cfg, prov):
             import app.telegram_handlers as th
-            from app.transports.registry_adapter import RegistryConversationIO
+            from app.channels.registry.egress import RegistryChannelEgress
 
             published: list[dict[str, object]] = []
 
-            monkeypatch.setattr("app.transports.registry_adapter.bind_conversation", async_noop)
+            monkeypatch.setattr("app.channels.registry.egress.bind_conversation", async_noop)
 
             async def fake_publish_event(self, **kwargs):
                 del self
                 published.append(kwargs)
 
-            monkeypatch.setattr(RegistryConversationIO, "_publish_event", fake_publish_event)
+            monkeypatch.setattr(RegistryChannelEgress, "_publish_event", fake_publish_event)
 
             event = InboundMessage(
                 user=InboundUser(id=_actor(42), username="registry-ui"),

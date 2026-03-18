@@ -74,13 +74,13 @@ from app.agents.delegation import (
 from app.agents.orchestration import build_delegation_plan
 from app.agents.state import load_agent_runtime_state
 from app.agents.types import AgentDiscoveryQuery, RoutedTaskResult, TimelineEvent
-from app.transports import factory
 from app.transports.admission import (
     admit_fresh_message,
     enqueue_inbound_envelope,
     record_inbound_envelope,
 )
 from app.transports.types import InboundEnvelope
+from app.runtime import composition
 from app.credential_validation import validate_credential
 from app.inbound_use_case_factory import (
     get_conversation_settings_use_cases,
@@ -1047,7 +1047,7 @@ async def _edit_or_reply_text(message, text: str, **kwargs) -> None:
         await message.edit_text(text, **kwargs)
         return
     caps = getattr(message, "capabilities", None)
-    if getattr(caps, "surface_name", "") == "telegram":
+    if getattr(caps, "channel_name", "") == "telegram":
         await message.reply_text(text, **kwargs)
         return
     if hasattr(message, "edit_text"):
@@ -2470,7 +2470,7 @@ def _build_action_surface(
         if source == "telegram" and chat_id is not None
         else conversation_key
     )
-    surface = factory.create_outbound_surface(
+    surface = composition.create_channel_egress(
         conversation_ref,
         config=_cfg(),
         bot=_bot_instance,
@@ -2490,7 +2490,7 @@ async def _execute_worker_action(
     cancel_event: asyncio.Event | None,
 ) -> None:
     surface, runtime_chat, chat_id, conversation_ref, source = _build_action_surface(event, item=item)
-    trust = factory.trust_tier_for_source(source, event.user, config=_cfg())
+    trust = composition.trust_tier_for_source(source, event.user, config=_cfg())
     action = event.action
     params = dict(event.params)
 
@@ -2576,7 +2576,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
         )
         routed_task_id = getattr(event, "routed_task_id", "")
         title = summarize_text(event.text) or "Conversation"
-        bot_msg = factory.create_outbound_surface(
+        bot_msg = composition.create_channel_egress(
             conversation_ref,
             config=_cfg(),
             bot=bot,
@@ -2611,7 +2611,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             return
         prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
         user_id = event.user.id
-        trust = factory.trust_tier_for_source(source, event.user, config=_cfg())
+        trust = composition.trust_tier_for_source(source, event.user, config=_cfg())
         await bot_msg.bind(title=title, config=_cfg())
         await bot_msg.on_message_received(event.text)
         try:

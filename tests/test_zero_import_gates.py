@@ -145,6 +145,15 @@ def test_telegram_delegation_channel_module_has_no_ingress_import() -> None:
     )
 
 
+def test_telegram_execution_module_has_no_ingress_import() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    execution_path = repo_root / "app" / "channels" / "telegram" / "execution.py"
+    text = execution_path.read_text()
+    assert "app.channels.telegram.ingress" not in text, (
+        f"telegram ingress import still referenced in {execution_path}"
+    )
+
+
 def test_ingress_no_longer_defines_session_io_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
@@ -188,6 +197,35 @@ def test_ingress_no_longer_defines_delegation_channel_helpers() -> None:
         "async def _propose_delegation_plan(",
         "async def _handle_delegation_approve(",
         "async def _handle_delegation_cancel(",
+    )
+    for token in forbidden_defs:
+        assert token not in text, f"{token} still defined in {ingress_path}"
+
+
+def test_ingress_no_longer_defines_execution_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    text = ingress_path.read_text()
+    forbidden_defs = (
+        "def _conversation_runtime(",
+        "def _runtime_skill_runtime(",
+        "def _pending_runtime(",
+        "def _dispatch_runtime(",
+        "def _execution_surface_context(",
+        "def _execution_runtime(",
+        "def _delegation_runtime(",
+        "def _check_prompt_size_cross_chat(",
+        "def _resolve_project(",
+        "def _resolve_context(",
+        "def _allowed_roots(",
+        "def _edit_or_reply_text(",
+        "def _send_compact_reply(",
+        "async def _show_foreign_setup(",
+        "async def _show_setup_prompt(",
+        "async def _send_retry_prompt(",
+        "async def _send_approval_prompt(",
+        "async def _format_provider_error(",
+        "def _run_result_was_interrupted(",
     )
     for token in forbidden_defs:
         assert token not in text, f"{token} still defined in {ingress_path}"

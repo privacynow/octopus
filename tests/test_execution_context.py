@@ -358,7 +358,7 @@ async def test_inspect_mode_always_readonly(provider_config):
 # =====================================================================
 # ResolvedContext is the single source of truth
 #
-# _resolve_context(session).context_hash must always equal what
+# telegram.execution.resolve_context(session).context_hash must always equal what
 # execute_request and request_approval would compute.
 # =====================================================================
 
@@ -373,6 +373,7 @@ async def test_resolve_context_matches_all_paths():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
+        import app.channels.telegram.execution as telegram_execution
         import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
@@ -395,8 +396,8 @@ async def test_resolve_context_matches_all_paths():
         session_dict = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         session = session_from_dict(session_dict)
 
-        # Path 1: handler adapter (_resolve_context)
-        handler_hash = th._resolve_context(current_runtime(), session).context_hash
+        # Path 1: telegram execution adapter
+        handler_hash = telegram_execution.resolve_context(current_runtime(), session).context_hash
 
         # Path 2: authoritative builder directly
         direct_hash = resolve_execution_context(session, cfg, prov.name).context_hash
@@ -544,11 +545,11 @@ def test_session_round_trip_no_pending():
 
 
 # =====================================================================
-# resolve_execution_context produces same hash as _resolve_context
+# resolve_execution_context produces the same hash as telegram.execution.resolve_context
 # =====================================================================
 
 async def test_resolve_execution_context_matches_handler_adapter():
-    """resolve_execution_context must produce same hash as handler _resolve_context."""
+    """resolve_execution_context must produce same hash as telegram execution resolve_context."""
     with fresh_data_dir() as data_dir:
         project_dir = tempfile.mkdtemp()
         cfg = make_config(
@@ -580,7 +581,9 @@ async def test_resolve_execution_context_matches_handler_adapter():
         # Get hash via handler adapter
         session_dict = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         typed = session_from_dict(session_dict)
-        handler_hash = th._resolve_context(current_runtime(), typed).context_hash
+        import app.channels.telegram.execution as telegram_execution
+
+        handler_hash = telegram_execution.resolve_context(current_runtime(), typed).context_hash
 
         # Get hash via authoritative builder
         direct_hash = resolve_execution_context(typed, cfg, prov.name).context_hash

@@ -460,58 +460,70 @@ async def test_skills_add_confirmation_uses_presenter(monkeypatch):
 
 
 async def test_send_approval_prompt_uses_presenter(monkeypatch):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.execution as telegram_execution
 
     rendered = TelegramRenderedMessage(
         text="patched approval presenter",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("patched", callback_data="patched:approval")]]),
     )
-    monkeypatch.setattr(th.telegram_presenters, "approval_prompt", lambda: rendered)
+    monkeypatch.setattr(telegram_execution.telegram_presenters, "approval_prompt", lambda: rendered)
 
     chat = FakeChat(12345)
     message = FakeMessage(chat=chat, text="hello")
 
-    await th._send_approval_prompt(message)
+    await telegram_execution.send_approval_prompt(message)
 
     assert chat.sent_messages[-1]["text"] == "patched approval presenter"
     assert chat.sent_messages[-1]["reply_markup"].inline_keyboard[0][0].callback_data == "patched:approval"
 
 
 async def test_show_setup_prompt_uses_presenter(monkeypatch):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.execution as telegram_execution
 
     rendered = TelegramRenderedMessage(text="patched setup prompt", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(th.telegram_presenters, "ingress_setup_prompt_message", lambda *args, **kwargs: rendered)
+    monkeypatch.setattr(
+        telegram_execution.telegram_presenters,
+        "ingress_setup_prompt_message",
+        lambda *args, **kwargs: rendered,
+    )
 
     message = FakeMessage(chat=FakeChat(12345), text="setup")
 
-    await th._show_setup_prompt(message, "planner", {"kind": "token", "key": "API_TOKEN"})
+    await telegram_execution.show_setup_prompt(
+        message,
+        "planner",
+        {"kind": "token", "key": "API_TOKEN"},
+    )
 
     assert message.replies[-1]["text"] == "patched setup prompt"
 
 
 async def test_send_formatted_reply_uses_presenter(monkeypatch):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.execution as telegram_execution
 
     rendered = TelegramRenderedMessage(text="patched formatted chunk", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(th.telegram_presenters, "formatted_reply_messages", lambda text: [rendered])
+    monkeypatch.setattr(telegram_execution.telegram_presenters, "formatted_reply_messages", lambda text: [rendered])
 
     message = FakeMessage(chat=FakeChat(12345), text="reply")
 
-    await th.send_formatted_reply(message, "ignored")
+    await telegram_execution.send_formatted_reply(message, "ignored")
 
     assert message.replies[-1]["text"] == "patched formatted chunk"
 
 
 async def test_send_compact_reply_uses_presenter(monkeypatch):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.execution as telegram_execution
 
     rendered = TelegramRenderedMessage(text="patched compact reply", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(th.telegram_presenters, "compact_reply_blockquote_message", lambda text: rendered)
+    monkeypatch.setattr(
+        telegram_execution.telegram_presenters,
+        "compact_reply_blockquote_message",
+        lambda text: rendered,
+    )
 
     message = FakeMessage(chat=FakeChat(12345), text="reply")
 
-    await th._send_compact_reply(message, "ignored", 12345, 7)
+    await telegram_execution.send_compact_reply(message, "ignored", 12345, 7)
 
     assert message.replies[-1]["text"] == "patched compact reply"
 

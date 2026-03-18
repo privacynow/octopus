@@ -1,8 +1,12 @@
 from app.identity import telegram_actor_key, telegram_conversation_key
 from app.channels.telegram.delegation_channel import propose_delegation_plan
-from app.channels.telegram.progress import TelegramProgress, heartbeat, keep_typing
+from app.channels.telegram.execution import (
+    build_dispatch_runtime,
+    build_execution_runtime,
+    send_compact_reply,
+    send_directed_artifacts,
+)
 from app.runtime.dispatch import (
-    RuntimeDispatchRuntime,
     run_provider_preflight,
     run_provider_request,
 )
@@ -25,57 +29,11 @@ async def _no_op(*args, **kwargs):
     return None
 
 
-def _dispatch_runtime(th) -> RuntimeDispatchRuntime:
-    state = current_runtime()
-    return RuntimeDispatchRuntime(
-        config=state.config,
-        provider=state.provider,
-        boot_id=state.boot_id,
-        cancellations=state.cancellation_registry,
-        progress_factory=TelegramProgress,
-        keep_typing=lambda chat: keep_typing(chat, runtime=state),
-        heartbeat=heartbeat,
-        format_provider_error=th._format_provider_error,
-        run_result_was_interrupted=th._run_result_was_interrupted,
-    )
-
-
-def _execution_runtime(th) -> ExecutionRuntime:
-    telegram_runtime = current_runtime()
-    return ExecutionRuntime(
-        dispatch=_dispatch_runtime(th),
-        build_surface_context=lambda _message, _chat_id: ExecutionSurfaceContext(),
-        show_foreign_setup=_no_op,
-        show_setup_prompt=_no_op,
-        send_retry_prompt=_no_op,
-        send_approval_prompt=_no_op,
-        send_formatted_reply=th.send_formatted_reply,
-        send_directed_artifacts=lambda chat_id, message, directives, resolved_ctx=None: th.send_directed_artifacts(
-            chat_id,
-            message,
-            directives,
-            resolved_ctx,
-            runtime=telegram_runtime,
-        ),
-        send_compact_reply=th._send_compact_reply,
-        propose_delegation_plan=lambda chat_id, message, session, conversation_ref, result: propose_delegation_plan(
-            telegram_runtime,
-            chat_id,
-            message,
-            session,
-            conversation_ref=conversation_ref,
-            result=result,
-        ),
-    )
-
-
 async def test_run_provider_request_uses_explicit_runtime_plumbing():
-    import app.channels.telegram.ingress as th
-
     with fresh_env() as (_data_dir, _cfg, prov):
         chat = FakeChat(12345)
         message = FakeMessage(chat=chat, text="hello")
-        runtime = _dispatch_runtime(th)
+        runtime = build_dispatch_runtime(current_runtime())
 
         outcome = await run_provider_request(
             chat.id,
@@ -93,12 +51,10 @@ async def test_run_provider_request_uses_explicit_runtime_plumbing():
 
 
 async def test_execute_request_runs_from_explicit_execution_runtime():
-    import app.channels.telegram.ingress as th
-
     with fresh_env() as (_data_dir, _cfg, prov):
         chat = FakeChat(12345)
         message = FakeMessage(chat=chat, text="hello")
-        runtime = _execution_runtime(th)
+        runtime = build_execution_runtime(current_runtime())
 
         outcome = await execute_request(
             chat.id,
@@ -115,8 +71,6 @@ async def test_execute_request_runs_from_explicit_execution_runtime():
 
 
 async def test_request_approval_runs_from_explicit_execution_runtime():
-    import app.channels.telegram.ingress as th
-
     approval_prompts: list[str] = []
 
     async def send_approval_prompt(_message) -> None:
@@ -126,15 +80,21 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
         chat = FakeChat(12345)
         message = FakeMessage(chat=chat, text="hello")
         runtime = ExecutionRuntime(
-            dispatch=_dispatch_runtime(th),
+            dispatch=build_dispatch_runtime(current_runtime()),
             build_surface_context=lambda _message, _chat_id: ExecutionSurfaceContext(),
             show_foreign_setup=_no_op,
             show_setup_prompt=_no_op,
             send_retry_prompt=_no_op,
             send_approval_prompt=send_approval_prompt,
-            send_formatted_reply=th.send_formatted_reply,
-            send_directed_artifacts=th.send_directed_artifacts,
-            send_compact_reply=th._send_compact_reply,
+            send_formatted_reply=build_execution_runtime(current_runtime()).send_formatted_reply,
+            send_directed_artifacts=lambda chat_id, message, directives, resolved_ctx=None: send_directed_artifacts(
+                chat_id,
+                message,
+                directives,
+                resolved_ctx,
+                runtime=current_runtime(),
+            ),
+            send_compact_reply=send_compact_reply,
             propose_delegation_plan=lambda chat_id, message, session, conversation_ref, result: propose_delegation_plan(
                 current_runtime(),
                 chat_id,

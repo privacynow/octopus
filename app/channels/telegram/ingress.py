@@ -6,7 +6,6 @@ import dataclasses
 import html
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from telegram import Update
@@ -17,19 +16,16 @@ from app import access
 from app import user_messages as _msg
 from app.channels.telegram import presenters as telegram_presenters
 from app.config import BotConfig
-from app.formatting import extract_send_directives
 from app.identity import (
     parse_actor_key,
     parse_conversation_key,
     telegram_numeric_id,
 )
-from app.execution_context import ResolvedExecutionContext
 from app.session_state import (
     SessionState,
     session_to_dict,
 )
 from app.agents.bridge import (
-    bind_conversation,
     publish_timeline_event,
     registry_client,
     summarize_text,
@@ -37,18 +33,30 @@ from app.agents.bridge import (
 )
 from app.agents.client import RegistryClientError
 from app.agents.delegation import (
-    build_delegation_runtime,
     handle_delegation_approve as handle_surface_delegation_approve,
     handle_delegation_cancel as handle_surface_delegation_cancel,
 )
 from app.agents.state import load_agent_runtime_state
 from app.agents.types import AgentDiscoveryQuery, RoutedTaskResult
 from app.channels.telegram.delegation_channel import (
-    delegation_reply_markup,
     handle_delegation_approve,
     handle_delegation_cancel,
     parse_delegation_callback,
-    propose_delegation_plan,
+)
+from app.channels.telegram.execution import (
+    allowed_roots,
+    approve_pending,
+    build_conversation_runtime,
+    build_delegation_channel_runtime,
+    build_runtime_skill_runtime,
+    build_pending_runtime,
+    build_user_prompt,
+    execute_request,
+    reject_pending,
+    request_approval,
+    resolve_context,
+    send_formatted_reply,
+    send_path_to_chat,
 )
 from app.channels.telegram.normalization import normalize_callback, normalize_command, normalize_message, normalize_user
 from app.channels.telegram.session_io import (
@@ -57,13 +65,6 @@ from app.channels.telegram.session_io import (
     event_key,
     load as load_session,
     save as save_session,
-    telegram_chat_id,
-)
-from app.channels.telegram.progress import (
-    TelegramProgress,
-    heartbeat,
-    keep_typing,
-    progress_timeline_callback,
 )
 from app.channels.telegram.state import TelegramRuntime
 from app.channels.telegram.runtime_skills import (
@@ -73,7 +74,6 @@ from app.channels.telegram.runtime_skills import (
     handle_skill_update_callback as runtime_skill_handle_skill_update_callback,
     handle_worker_skill_action as runtime_skill_handle_worker_skill_action,
     maybe_handle_setup_message as runtime_skill_maybe_handle_setup_message,
-    TelegramRuntimeSkillsRuntime,
 )
 from app.channels.telegram.guidance import (
     guidance_approve as channel_guidance_approve,
@@ -98,42 +98,24 @@ from app.channels.telegram.conversation import (
     cmd_settings as conversation_cmd_settings,
     handle_settings_callback as conversation_handle_settings_callback,
     handle_worker_conversation_action as conversation_handle_worker_action,
-    TelegramConversationRuntime,
 )
 from app.channels.telegram.pending import (
-    approve_pending as pending_approve_pending,
     handle_pending_callback as pending_handle_callback,
     handle_recovery_action as pending_handle_recovery_action,
     handle_recovery_callback as pending_handle_recovery_callback,
     handle_worker_pending_action as pending_handle_worker_action,
-    reject_pending as pending_reject_pending,
-    retry_allow_pending as pending_retry_allow_pending,
-    retry_skip_pending as pending_retry_skip_pending,
-    TelegramPendingRuntime,
 )
 from app.channel_egress_factory import create_channel_egress
 from app.runtime import composition
 from app.runtime.inbound_types import InboundUser
-from app.runtime.dispatch import RuntimeDispatchRuntime
-from app.workflows.execution.contracts import (
-    ExecutionRuntime,
-    ExecutionSurfaceContext,
-    RequestExecutionOutcome,
-)
+from app.workflows.execution.contracts import RequestExecutionOutcome
 from app.workflows.execution.requests import (
-    check_prompt_size_cross_chat as execution_check_prompt_size_cross_chat,
-    execute_request as execution_execute_request,
     prompt_weight as execution_prompt_weight,
-    request_approval as execution_request_approval,
 )
 from app.runtime.inbound_types import (
     InboundAction,
-    InboundAttachment,
     InboundEnvelope,
     serialize_inbound,
-)
-from app.runtime.session_runtime import (
-    resolve_session_context,
 )
 from app.runtime.work_admission import (
     admit_fresh_message,
@@ -141,98 +123,18 @@ from app.runtime.work_admission import (
     record_inbound_envelope,
     trust_tier_for_source,
 )
-from app.credential_validation import validate_credential
 from app.storage import (
-    chat_upload_dir,
-    is_image_path,
     resolve_allowed_path,
     session_exists,
     list_sessions,
 )
-from app.summarize import export_chat_history, load_raw, save_raw
+from app.summarize import export_chat_history, load_raw
 from app import work_queue
 from app.workflows.recovery.results import TransportStateCorruption
 from app.worker import poll_interval_for_runtime
 from app.workflows.delegation.coordination import finalize_resumed_delegation
 
 log = logging.getLogger(__name__)
-
-
-def _run_result_was_interrupted(returncode: int) -> bool:
-    """Return True for subprocess exits caused by a signal.
-
-    Any negative return code means the child was killed by a signal:
-    SIGTERM (-15) from systemd stop, SIGKILL (-9) from forced kill,
-    SIGINT (-2) from Ctrl+C, etc.  These should be replayed after
-    restart instead of being surfaced as provider errors.
-    """
-    return returncode < 0
-
-
-# Maximum chars of raw error text to show if summarization fails.
-_ERROR_DISPLAY_LIMIT = 1500
-
-_ERROR_SUMMARY_PROMPT = """\
-Summarize the following provider error for a Telegram chat user.
-
-Rules:
-- Keep it under 400 characters.
-- Preserve: error type, root cause, actionable next step if obvious.
-- Drop: full stack traces, repeated lines, internal paths.
-- If the error is empty or uninformative, say so.
-- Output plain text, no markdown headers.
-
-Error (rc={rc}):
-{text}
-"""
-
-
-async def _format_provider_error(raw_text: str, returncode: int) -> str:
-    """Format a provider error for Telegram display.
-
-    Tries to summarize long errors via the provider CLI.  If the provider
-    is down or fails, falls back to a truncated version.
-    """
-    raw_text = raw_text.strip()
-    if not raw_text:
-        return f"Provider exited with code {returncode} (no output)."
-
-    # Short errors don't need summarization
-    if len(raw_text) <= _ERROR_DISPLAY_LIMIT:
-        return html.escape(raw_text)
-
-    # Try to summarize via a lightweight provider call
-    proc = None
-    try:
-        from app.summarize import _clean_env
-        prompt = _ERROR_SUMMARY_PROMPT.format(rc=returncode, text=raw_text[:4000])
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "-p",
-            "--model", "claude-haiku-4-5-20251001",
-            "--output-format", "text",
-            "--", prompt,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=_clean_env(),
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
-        if proc.returncode == 0:
-            summary = stdout.decode("utf-8", errors="replace").strip()
-            if summary:
-                return html.escape(summary)
-    except Exception:
-        if proc and proc.returncode is None:
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
-
-    # Fallback: truncate intelligently — show beginning and end
-    head = raw_text[:800]
-    tail = raw_text[-400:]
-    truncated = f"{head}\n\n[…truncated…]\n\n{tail}"
-    return html.escape(truncated)
 
 
 class ClaimBlocked(Exception):
@@ -387,147 +289,8 @@ async def _chat_lock(
                     runtime.pending_work_items.pop(claimed_update_id, None)
 
 
-def _conversation_runtime(runtime: TelegramRuntime) -> TelegramConversationRuntime:
-    return TelegramConversationRuntime(
-        state=runtime,
-        cancellations=runtime.cancellation_registry,
-        chat_lock=lambda chat_id, **kwargs: _chat_lock(runtime, chat_id, **kwargs),
-        edit_or_reply_text=_edit_or_reply_text,
-    )
-
-
-def _runtime_skill_runtime(runtime: TelegramRuntime) -> TelegramRuntimeSkillsRuntime:
-    return TelegramRuntimeSkillsRuntime(
-        state=runtime,
-        chat_lock=lambda chat_id, **kwargs: _chat_lock(runtime, chat_id, **kwargs),
-        validate_credential=validate_credential,
-        check_prompt_size_cross_chat=lambda data_dir, skill_name: _check_prompt_size_cross_chat(
-            runtime,
-            data_dir,
-            skill_name,
-        ),
-    )
-
-
-def _pending_runtime(runtime: TelegramRuntime) -> TelegramPendingRuntime:
-    return TelegramPendingRuntime(
-        state=runtime,
-        chat_lock=lambda chat_id, **kwargs: _chat_lock(runtime, chat_id, **kwargs),
-        edit_or_reply_text=_edit_or_reply_text,
-        execute_request=lambda *args, **kwargs: execute_request(*args, runtime=runtime, **kwargs),
-        request_approval=lambda *args, **kwargs: request_approval(*args, runtime=runtime, **kwargs),
-        build_user_prompt=build_user_prompt,
-    )
-
-
-def _dispatch_runtime(runtime: TelegramRuntime) -> RuntimeDispatchRuntime:
-    return RuntimeDispatchRuntime(
-        config=runtime.config,
-        provider=runtime.provider,
-        boot_id=runtime.boot_id,
-        cancellations=runtime.cancellation_registry,
-        progress_factory=TelegramProgress,
-        keep_typing=lambda chat: keep_typing(chat, runtime=runtime),
-        heartbeat=heartbeat,
-        format_provider_error=_format_provider_error,
-        run_result_was_interrupted=_run_result_was_interrupted,
-    )
-
-
-def _execution_surface_context(
-    runtime: TelegramRuntime,
-    message,
-    chat_id: int | str,
-) -> ExecutionSurfaceContext:
-    conversation_ref = ""
-    routed_task_id = ""
-    if getattr(message, "capabilities", None) and getattr(message.capabilities, "channel_name", "") == "registry":
-        conversation_ref = getattr(message, "conversation_ref", "")
-        routed_task_id = getattr(message, "routed_task_id", "")
-    elif runtime.config.agent_mode == "registry" and isinstance(chat_id, int):
-        conversation_ref = telegram_conversation_ref(runtime.config, telegram_chat_id(chat_id))
-    channel_name = getattr(getattr(message, "capabilities", None), "channel_name", "telegram")
-    if conversation_ref and channel_name != "registry":
-        async def timeline_callback(html_text: str, force: bool = False) -> None:
-            await progress_timeline_callback(
-                runtime,
-                conversation_ref,
-                routed_task_id,
-                html_text,
-                force=force,
-            )
-
-        return ExecutionSurfaceContext(
-            conversation_ref=conversation_ref,
-            routed_task_id=routed_task_id,
-            timeline_callback=timeline_callback,
-        )
-    return ExecutionSurfaceContext(
-        conversation_ref=conversation_ref,
-        routed_task_id=routed_task_id,
-        timeline_callback=None,
-    )
-
-
-async def _show_foreign_setup(message, foreign_setup) -> None:
-    rendered = telegram_presenters.conversation_foreign_setup_message(foreign_setup)
-    await message.reply_text(rendered.text, **rendered.kwargs())
-
-
-async def _show_setup_prompt(message, missing_skill: str, first_requirement: dict[str, object]) -> None:
-    rendered = telegram_presenters.ingress_setup_prompt_message(missing_skill, first_requirement)
-    await message.reply_text(rendered.text, **rendered.kwargs())
-
-
-async def _send_retry_prompt(message, denials: tuple[dict[str, Any], ...]) -> None:
-    rendered = telegram_presenters.retry_prompt(denials)
-    await message.chat.send_message(rendered.text, **rendered.kwargs())
-
-
-async def _send_approval_prompt(message) -> None:
-    rendered = telegram_presenters.approval_prompt()
-    await message.chat.send_message(rendered.text, **rendered.kwargs())
-
-
-def _execution_runtime(runtime: TelegramRuntime) -> ExecutionRuntime:
-    return ExecutionRuntime(
-        dispatch=_dispatch_runtime(runtime),
-        build_surface_context=lambda message, chat_id: _execution_surface_context(
-            runtime,
-            message,
-            chat_id,
-        ),
-        show_foreign_setup=_show_foreign_setup,
-        show_setup_prompt=_show_setup_prompt,
-        send_retry_prompt=_send_retry_prompt,
-        send_approval_prompt=_send_approval_prompt,
-        send_formatted_reply=send_formatted_reply,
-        send_directed_artifacts=lambda chat_id, message, directives, resolved_ctx=None: send_directed_artifacts(
-            chat_id,
-            message,
-            directives,
-            resolved_ctx,
-            runtime=runtime,
-        ),
-        send_compact_reply=_send_compact_reply,
-        propose_delegation_plan=lambda chat_id, message, session, conversation_ref, result: propose_delegation_plan(
-            runtime,
-            chat_id,
-            message,
-            session,
-            conversation_ref=conversation_ref,
-            result=result,
-        ),
-    )
-
-
-def _delegation_runtime(runtime: TelegramRuntime):
-    return build_delegation_runtime(
-        config=runtime.config,
-        provider_name=runtime.provider.name,
-        provider_state_factory=runtime.provider.new_provider_state,
-    )
-
+def _chat_lock_adapter(runtime: TelegramRuntime):
+    return lambda chat_id, **kwargs: _chat_lock(runtime, chat_id, **kwargs)
 
 def _dedup_update(
     runtime: TelegramRuntime,
@@ -786,14 +549,6 @@ def _worker_owned_callback_action(update: Update, event) -> InboundAction | None
         return InboundAction(event.user, event.conversation_key, "skills_add", params=params)
     return None
 
-
-# -- Data classes ----------------------------------------------------------
-
-# Attachment is now InboundAttachment from app.channels.telegram.normalization.
-# Alias kept for internal signature compatibility.
-Attachment = InboundAttachment
-
-
 def _maybe_fire_webhook(cfg: BotConfig, chat_id: int, conversation_ref: str, outcome: RequestExecutionOutcome | None) -> None:
     """Schedule a non-blocking completion webhook for terminal outcomes."""
     if not cfg.completion_webhook_url:
@@ -946,47 +701,6 @@ def _callback_handler(fn):
 
     return wrapper
 
-
-def _check_prompt_size_cross_chat(
-    runtime: TelegramRuntime,
-    data_dir: Path,
-    skill_name: str,
-) -> list[str]:
-    """Telegram-side helper for prompt-size impact warnings."""
-    return execution_check_prompt_size_cross_chat(
-        data_dir,
-        skill_name,
-        runtime=_execution_runtime(runtime),
-    )
-
-
-# -- Project helpers -------------------------------------------------------
-
-def _resolve_project(runtime: TelegramRuntime, session: SessionState):
-    """Return ProjectBinding for the session's bound project, or None."""
-    project_id = session.project_id
-    if not project_id:
-        return None
-    for proj in runtime.config.projects:
-        if proj.name == project_id:
-            return proj
-    return None
-
-
-def _resolve_context(
-    runtime: TelegramRuntime,
-    session: SessionState,
-    trust_tier: str = "trusted",
-) -> ResolvedExecutionContext:
-    """Build the single authoritative execution identity from session + config."""
-    return resolve_session_context(
-        session,
-        config=runtime.config,
-        provider_name=runtime.provider.name,
-        trust_tier=trust_tier,
-    )
-
-
 def _settings_model_profile_state(
     session: SessionState,
     cfg: BotConfig,
@@ -1000,204 +714,6 @@ def _settings_model_profile_state(
         effective_model,
     )
     return (list(state.available_profiles), state.current_profile)
-
-
-# -- Helpers ---------------------------------------------------------------
-
-def _allowed_roots(
-    runtime: TelegramRuntime,
-    chat_id: int | str,
-    resolved: ResolvedExecutionContext | None = None,
-) -> list[Path]:
-    """Return path roots this chat is allowed to access.
-
-    Uses the resolved execution context for working_dir and extra_dirs,
-    so public users get public roots and project-bound chats get project roots.
-    Falls back to config defaults only when no resolved context is available.
-    """
-    cfg = runtime.config
-    if resolved:
-        roots: list[Path] = [Path(resolved.working_dir)]
-        roots.extend(Path(d) for d in resolved.base_extra_dirs)
-    else:
-        roots = [cfg.working_dir]
-        roots.extend(cfg.extra_dirs)
-    roots.append(chat_upload_dir(cfg.data_dir, conversation_key(chat_id)))
-    return [r.resolve() for r in roots]
-
-
-def build_user_prompt(text: str, attachments: list[InboundAttachment]) -> tuple[str, list[str]]:
-    prompt = text.strip() or "Inspect the attached files or images and help with them."
-    image_paths: list[str] = []
-    if attachments:
-        lines = []
-        for a in attachments:
-            kind = "image" if a.is_image else "file"
-            lines.append(f"- {a.path} ({kind}, original name: {a.original_name})")
-            if a.is_image:
-                image_paths.append(str(a.path))
-        prompt = f"{prompt}\n\nAttached local files:\n" + "\n".join(lines)
-    return prompt, image_paths
-
-
-
-async def send_formatted_reply(message, text: str) -> None:
-    for rendered in telegram_presenters.formatted_reply_messages(text):
-        try:
-            await message.reply_text(rendered.text, **rendered.kwargs())
-        except BadRequest:
-            await message.reply_text(telegram_presenters.formatted_reply_fallback_text(rendered.text))
-
-
-async def _edit_or_reply_text(message, text: str, **kwargs) -> None:
-    if getattr(message, "_target_message_id", None) is not None and hasattr(message, "edit_text"):
-        await message.edit_text(text, **kwargs)
-        return
-    caps = getattr(message, "capabilities", None)
-    if getattr(caps, "channel_name", "") == "telegram":
-        await message.reply_text(text, **kwargs)
-        return
-    if hasattr(message, "edit_text"):
-        await message.edit_text(text, **kwargs)
-        return
-    await message.reply_text(text, **kwargs)
-
-async def _send_compact_reply(message, text: str, chat_id: int, slot: int) -> None:
-    blockquote_rendered = telegram_presenters.compact_reply_blockquote_message(text)
-    if blockquote_rendered is not None:
-        try:
-            await message.reply_text(blockquote_rendered.text, **blockquote_rendered.kwargs())
-            return
-        except BadRequest:
-            pass
-    if "\n" in text:
-        try:
-            rendered = telegram_presenters.compact_reply_button_message(text, chat_id, slot)
-            await message.reply_text(rendered.text, **rendered.kwargs())
-            return
-        except BadRequest:
-            pass
-    await send_formatted_reply(message, text)
-
-
-async def send_path_to_chat(message, path: Path, *, force_image: bool | None = None) -> None:
-    should_image = force_image if force_image is not None else is_image_path(path)
-    with path.open("rb") as f:
-        if should_image:
-            await message.reply_photo(photo=f)
-        else:
-            await message.reply_document(document=f)
-
-
-async def send_directed_artifacts(
-    chat_id: int, message, directives: list[tuple[str, str]],
-    resolved_ctx: ResolvedExecutionContext | None = None,
-    *,
-    runtime: TelegramRuntime,
-) -> None:
-    for dtype, raw_path in directives:
-        allowed_path = resolve_allowed_path(
-            raw_path,
-            _allowed_roots(runtime, chat_id, resolved_ctx),
-        )
-        if not allowed_path:
-            rendered = telegram_presenters.cannot_send_path_message(raw_path)
-            await message.reply_text(rendered.text, **rendered.kwargs())
-            continue
-        await send_path_to_chat(message, allowed_path, force_image=(dtype == "IMAGE"))
-
-
-# -- Core execution --------------------------------------------------------
-
-async def execute_request(
-    chat_id: int | str,
-    prompt: str,
-    image_paths: list[str],
-    message,
-    extra_dirs: list[str] | None = None,
-    request_user_id: int | str = "",
-    skip_permissions: bool = False,
-    trust_tier: str = "trusted",
-    cancel_event: asyncio.Event | None = None,
-    *,
-    runtime: TelegramRuntime,
-) -> RequestExecutionOutcome:
-    return await execution_execute_request(
-        chat_id,
-        prompt,
-        image_paths,
-        message,
-        extra_dirs=extra_dirs,
-        request_user_id=request_user_id,
-        skip_permissions=skip_permissions,
-        trust_tier=trust_tier,
-        cancel_event=cancel_event,
-        runtime=_execution_runtime(runtime),
-    )
-
-
-async def request_approval(
-    chat_id: int | str,
-    prompt: str,
-    image_paths: list[str],
-    attachments: list[Attachment],
-    message,
-    request_user_id: int | str = "",
-    trust_tier: str = "trusted",
-    cancel_event: asyncio.Event | None = None,
-    *,
-    runtime: TelegramRuntime,
-) -> None:
-    await execution_request_approval(
-        chat_id,
-        prompt,
-        image_paths,
-        attachments,
-        message,
-        request_user_id=request_user_id,
-        trust_tier=trust_tier,
-        cancel_event=cancel_event,
-        runtime=_execution_runtime(runtime),
-    )
-
-
-async def approve_pending(
-    chat_id: int | str,
-    message,
-    *,
-    cancel_event: asyncio.Event | None = None,
-    runtime: TelegramRuntime,
-) -> None:
-    await pending_approve_pending(
-        chat_id,
-        message,
-        cancel_event=cancel_event,
-        runtime=_pending_runtime(runtime),
-    )
-
-
-async def reject_pending(chat_id: int, message, *, runtime: TelegramRuntime) -> None:
-    await pending_reject_pending(chat_id, message, runtime=_pending_runtime(runtime))
-
-
-async def retry_skip_pending(chat_id: int, message, *, runtime: TelegramRuntime) -> None:
-    await pending_retry_skip_pending(chat_id, message, runtime=_pending_runtime(runtime))
-
-
-async def retry_allow_pending(
-    chat_id: int | str,
-    message,
-    *,
-    cancel_event: asyncio.Event | None = None,
-    runtime: TelegramRuntime,
-) -> None:
-    await pending_retry_allow_pending(
-        chat_id,
-        message,
-        cancel_event=cancel_event,
-        runtime=_pending_runtime(runtime),
-    )
-
 
 # -- Command handlers ------------------------------------------------------
 
@@ -1271,7 +787,12 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 @_command_handler
 async def cmd_new(runtime: TelegramRuntime, event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await conversation_cmd_new(event, update, context, runtime=_conversation_runtime(runtime))
+    await conversation_cmd_new(
+        event,
+        update,
+        context,
+        runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+    )
 
 
 @_command_handler
@@ -1284,7 +805,7 @@ async def cmd_session(
     session = load_session(runtime, event.chat_id)
     cfg = runtime.config
     trust = _trust_tier(runtime, event.user)
-    resolved = _resolve_context(runtime, session, trust_tier=trust)
+    resolved = resolve_context(runtime, session, trust_tier=trust)
     pstate = session.provider_state
 
     if runtime.provider.name == "claude":
@@ -1354,7 +875,12 @@ async def cmd_approval(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    await conversation_cmd_approval(event, update, context, runtime=_conversation_runtime(runtime))
+    await conversation_cmd_approval(
+        event,
+        update,
+        context,
+        runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+    )
 
 
 @_command_handler
@@ -1389,8 +915,8 @@ async def cmd_send(runtime: TelegramRuntime, event, update: Update, context: Con
         return
     raw_path = " ".join(event.args)
     session = load_session(runtime, event.chat_id)
-    resolved_ctx = _resolve_context(runtime, session, trust_tier=_trust_tier(runtime, event.user))
-    resolved = resolve_allowed_path(raw_path, _allowed_roots(runtime, event.chat_id, resolved_ctx))
+    resolved_ctx = resolve_context(runtime, session, trust_tier=_trust_tier(runtime, event.user))
+    resolved = resolve_allowed_path(raw_path, allowed_roots(runtime, event.chat_id, resolved_ctx))
     if not resolved:
         rendered = telegram_presenters.send_path_not_allowed_message()
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
@@ -1425,7 +951,7 @@ async def cmd_doctor(
     cfg = runtime.config
     session_context = None
     if session is not None:
-        resolved = _resolve_context(runtime, session, trust_tier=_trust_tier(runtime, event.user))
+        resolved = resolve_context(runtime, session, trust_tier=_trust_tier(runtime, event.user))
         session_context = SessionHealthContext(
             session=session_to_dict(session),
             user_id=actor_key(event.user.id),
@@ -1439,7 +965,7 @@ async def cmd_doctor(
     )
     prompt_weight_count = None
     if session is not None:
-        resolved = _resolve_context(runtime, session, trust_tier=_trust_tier(runtime, event.user))
+        resolved = resolve_context(runtime, session, trust_tier=_trust_tier(runtime, event.user))
         prompt_weight_count = execution_prompt_weight(resolved.role, resolved.active_skills) or None
     rendered = telegram_presenters.doctor_report_message(
         format_runtime_health_for_doctor(report),
@@ -1558,7 +1084,7 @@ async def cmd_export(
     # Add session metadata header — use resolved context for user-visible data
     session = load_session(runtime, chat_id)
     trust = _trust_tier(runtime, update.effective_user)
-    resolved = _resolve_context(runtime, session, trust_tier=trust)
+    resolved = resolve_context(runtime, session, trust_tier=trust)
     skills = resolved.active_skills
     header_lines = [
         f"Chat ID: {chat_id}",
@@ -1672,7 +1198,7 @@ async def cmd_skills(
         skills_archive,
     )
     args = event.args
-    skills_runtime = _runtime_skill_runtime(runtime)
+    skills_runtime = build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime))
     if not args:
         await skills_show(event, update, runtime=skills_runtime)
         return
@@ -1778,7 +1304,12 @@ async def cmd_cancel(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    await conversation_cmd_cancel(event, update, context, runtime=_conversation_runtime(runtime))
+    await conversation_cmd_cancel(
+        event,
+        update,
+        context,
+        runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+    )
 
 
 @_command_handler
@@ -1792,7 +1323,7 @@ async def cmd_clear_credentials(
         event,
         update,
         context,
-        runtime=_runtime_skill_runtime(runtime),
+        runtime=build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
     )
 
 
@@ -1801,7 +1332,7 @@ async def handle_clear_cred_callback(runtime: TelegramRuntime, event, query) -> 
     await runtime_skill_handle_clear_cred_callback(
         event,
         query,
-        runtime=_runtime_skill_runtime(runtime),
+        runtime=build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
     )
 
 
@@ -1812,7 +1343,12 @@ async def cmd_compact(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    await conversation_cmd_compact(event, update, context, runtime=_conversation_runtime(runtime))
+    await conversation_cmd_compact(
+        event,
+        update,
+        context,
+        runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+    )
 
 
 @_command_handler
@@ -1851,7 +1387,12 @@ async def cmd_role(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    await conversation_cmd_role(event, update, context, runtime=_conversation_runtime(runtime))
+    await conversation_cmd_role(
+        event,
+        update,
+        context,
+        runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+    )
 
 
 @_command_handler
@@ -1861,7 +1402,12 @@ async def cmd_model(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    await conversation_cmd_model(event, update, context, runtime=_conversation_runtime(runtime))
+    await conversation_cmd_model(
+        event,
+        update,
+        context,
+        runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+    )
 
 
 async def handle_message(
@@ -1911,7 +1457,7 @@ async def handle_message(
         update,
         msg,
         payload,
-        runtime=_runtime_skill_runtime(runtime),
+        runtime=build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
     ):
         return
 
@@ -1945,7 +1491,11 @@ async def handle_message(
 
 @_callback_handler
 async def handle_callback(runtime: TelegramRuntime, event, query) -> None:
-    await pending_handle_callback(event, query, runtime=_pending_runtime(runtime))
+    await pending_handle_callback(
+        event,
+        query,
+        runtime=build_pending_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+    )
 
 
 @_callback_handler
@@ -1963,7 +1513,7 @@ async def handle_delegation_callback(runtime: TelegramRuntime, event, query) -> 
                 runtime,
                 chat_id,
                 query,
-                delegation_runtime=_delegation_runtime(runtime),
+                delegation_runtime=build_delegation_channel_runtime(runtime),
             )
             return
         if action == "delegation_cancel":
@@ -1971,7 +1521,7 @@ async def handle_delegation_callback(runtime: TelegramRuntime, event, query) -> 
                 runtime,
                 chat_id,
                 query,
-                delegation_runtime=_delegation_runtime(runtime),
+                delegation_runtime=build_delegation_channel_runtime(runtime),
             )
 
 
@@ -1985,7 +1535,11 @@ async def handle_recovery_callback(
     runtime: TelegramRuntime | None = None,
 ) -> None:
     runtime = runtime or _context_runtime(context)
-    await pending_handle_recovery_callback(update, context, runtime=_pending_runtime(runtime))
+    await pending_handle_recovery_callback(
+        update,
+        context,
+        runtime=build_pending_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+    )
 
 
 async def handle_recovery_action(
@@ -2005,7 +1559,7 @@ async def handle_recovery_action(
         message,
         answer_action=answer_action,
         cancel_event=cancel_event,
-        runtime=_pending_runtime(runtime),
+        runtime=build_pending_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
     )
 
 
@@ -2093,7 +1647,11 @@ async def handle_collapse_callback(runtime: TelegramRuntime, event, query) -> No
 
 @_callback_handler
 async def handle_settings_callback(runtime: TelegramRuntime, event, query) -> None:
-    await conversation_handle_settings_callback(event, query, runtime=_conversation_runtime(runtime))
+    await conversation_handle_settings_callback(
+        event,
+        query,
+        runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+    )
 
 
 # -- Application builder ---------------------------------------------------
@@ -2104,7 +1662,7 @@ async def handle_skill_add_callback(runtime: TelegramRuntime, event, query) -> N
     await runtime_skill_handle_skill_add_callback(
         event,
         query,
-        runtime=_runtime_skill_runtime(runtime),
+        runtime=build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
     )
 
 
@@ -2113,7 +1671,7 @@ async def handle_skill_update_callback(runtime: TelegramRuntime, event, query) -
     await runtime_skill_handle_skill_update_callback(
         event,
         query,
-        runtime=_runtime_skill_runtime(runtime),
+        runtime=build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
     )
 
 @_command_handler
@@ -2123,7 +1681,12 @@ async def cmd_project(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    await conversation_cmd_project(event, update, context, runtime=_conversation_runtime(runtime))
+    await conversation_cmd_project(
+        event,
+        update,
+        context,
+        runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+    )
 
 
 @_command_handler
@@ -2133,7 +1696,12 @@ async def cmd_settings(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    await conversation_cmd_settings(event, update, context, runtime=_conversation_runtime(runtime))
+    await conversation_cmd_settings(
+        event,
+        update,
+        context,
+        runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+    )
 
 
 @_command_handler
@@ -2143,7 +1711,12 @@ async def cmd_policy(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    await conversation_cmd_policy(event, update, context, runtime=_conversation_runtime(runtime))
+    await conversation_cmd_policy(
+        event,
+        update,
+        context,
+        runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+    )
 
 
 @_command_handler
@@ -2322,7 +1895,7 @@ async def _execute_worker_action(
         event,
         item,
         surface,
-        runtime=_conversation_runtime(runtime),
+        runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
         runtime_chat=runtime_chat,
         source=source,
         trust=trust,
@@ -2336,7 +1909,7 @@ async def _execute_worker_action(
         surface,
         runtime_chat=runtime_chat,
         cancel_event=cancel_event,
-        runtime=_pending_runtime(runtime),
+        runtime=build_pending_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
     ):
         return
 
@@ -2351,7 +1924,7 @@ async def _execute_worker_action(
             target_runtime,
             conversation_ref,
             surface,
-            runtime=_delegation_runtime(runtime),
+            runtime=build_delegation_channel_runtime(runtime),
         )
         return
 
@@ -2366,7 +1939,7 @@ async def _execute_worker_action(
             target_runtime,
             conversation_ref,
             surface,
-            runtime=_delegation_runtime(runtime),
+            runtime=build_delegation_channel_runtime(runtime),
         )
         return
 
@@ -2375,7 +1948,7 @@ async def _execute_worker_action(
         if await runtime_skill_handle_worker_skill_action(
             worker_event,
             surface,
-            runtime=_runtime_skill_runtime(runtime),
+            runtime=build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
         ):
             return
         return
@@ -2678,7 +2251,7 @@ async def _shared_cancel_command(
     await conversation_cancel_chat_operation(
         event.chat_id,
         update.effective_message,
-        runtime=_conversation_runtime(runtime),
+        runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
         actor_user_id=event.user.id,
         allow_admin_override=is_admin(runtime, event.user),
         update_id=update.update_id,

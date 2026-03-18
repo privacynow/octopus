@@ -630,6 +630,7 @@ async def test_chat_lock_no_feedback_when_free():
 @pytest.mark.asyncio
 async def test_contended_approval_callback_single_answer():
     """Approval callback under contention produces exactly one callback answer."""
+    import app.channels.telegram.execution as telegram_execution
     import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
@@ -638,7 +639,7 @@ async def test_contended_approval_callback_single_answer():
         user = FakeUser(next(iter(cfg.allowed_user_ids)))
         session = telegram_load_session(current_runtime(), chat_id)
         from app.session_state import PendingApproval
-        ctx_hash = th._resolve_context(current_runtime(), session).context_hash
+        ctx_hash = telegram_execution.resolve_context(current_runtime(), session).context_hash
         session.pending_approval = PendingApproval(
             request_user_id=_actor(user.id), prompt="test", image_paths=[],
             attachment_dicts=[], context_hash=ctx_hash,
@@ -1169,13 +1170,13 @@ async def test_callback_exception_marks_work_item_failed():
 # =====================================================================
 # INVARIANT 36: Error summarizer subprocess is cleaned up on timeout
 #
-# _format_provider_error spawns a subprocess for summarization.
+# telegram.execution.format_provider_error spawns a subprocess for summarization.
 # If it times out, the child must be killed and reaped, not leaked.
 # =====================================================================
 
 @pytest.mark.asyncio
 async def test_format_provider_error_kills_subprocess_on_timeout():
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.execution as telegram_execution
 
     killed = []
 
@@ -1197,7 +1198,7 @@ async def test_format_provider_error_kills_subprocess_on_timeout():
     asyncio.create_subprocess_exec = mock_exec
     try:
         # Long text triggers summarization attempt
-        result = await th._format_provider_error("E" * 5000, 1)
+        result = await telegram_execution.format_provider_error("E" * 5000, 1)
     finally:
         asyncio.create_subprocess_exec = mock_exec
         asyncio.create_subprocess_exec = original

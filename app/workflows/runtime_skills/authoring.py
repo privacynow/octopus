@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.content_store import get_content_store
 from app.skill_catalog_service import get_skill_catalog_service
+from app.workflows.lifecycle_machine import LifecycleDecision, LifecycleSnapshot, decide_lifecycle_action
 from app.workflows.runtime_skills.contracts import (
     RuntimeSkillAuthoringPort,
     RuntimeSkillLifecycleApproval,
@@ -64,6 +65,77 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
             runtime_available=bool(track.published_revision_id),
             revisions=revisions,
             approvals=approvals,
+        )
+
+    def _latest_action_for_revision(self, skill_name: str, revision_id: str) -> str:
+        for item in self._store().list_skill_approvals(skill_name):
+            if item.revision_id == revision_id:
+                return item.action
+        return ""
+
+    def _snapshot(self, track: RuntimeSkillTrackRecord) -> LifecycleSnapshot:
+        published_revision_id = track.published_revision_id or ""
+        return LifecycleSnapshot(
+            revision_status=track.revision.status,
+            latest_action=self._latest_action_for_revision(track.slug, track.active_revision_id),
+            has_published_revision=bool(published_revision_id),
+            published_revision_matches_active=(published_revision_id == track.active_revision_id and bool(published_revision_id)),
+        )
+
+    def _transition_message(self, skill_name: str, action: str, decision: LifecycleDecision, track: RuntimeSkillTrackRecord) -> str:
+        if decision.status == "submitted":
+            return f"Submitted '{skill_name}' for review."
+        if decision.status == "already_submitted":
+            return f"Skill '{skill_name}' is already submitted for review."
+        if decision.status == "published":
+            return f"Published '{skill_name}'."
+        if decision.status == "already_published":
+            return f"Skill '{skill_name}' is already published."
+        if decision.status == "archived":
+            return f"Archived '{skill_name}'."
+        if decision.status == "already_archived":
+            return f"Skill '{skill_name}' is already archived."
+        if decision.status == "approval_required":
+            return f"Skill '{skill_name}' must be approved before publishing."
+        if action == "submit":
+            return f"Cannot submit skill '{skill_name}' from state '{track.revision.status}'."
+        if action == "publish":
+            return f"Cannot publish skill '{skill_name}' from state '{track.revision.status}'."
+        return f"Cannot {action} skill '{skill_name}' from state '{track.revision.status}'."
+
+    def _apply_transition(
+        self,
+        track: RuntimeSkillTrackRecord,
+        *,
+        action: str,
+        actor_key: str,
+        note: str = "",
+    ) -> RuntimeSkillLifecycleMutation:
+        decision = decide_lifecycle_action(self._snapshot(track), action)
+        if not decision.ok:
+            return RuntimeSkillLifecycleMutation(
+                status=decision.status,
+                ok=False,
+                message=self._transition_message(track.slug, action, decision, track),
+                detail=self._detail_from_track(track),
+            )
+        effects = decision.effects
+        if effects.set_status is not None or effects.published_pointer != "unchanged" or effects.approval_action is not None:
+            self._store().apply_skill_lifecycle_transition(
+                track.slug,
+                track.active_revision_id,
+                set_status=effects.set_status,
+                published_pointer=effects.published_pointer,
+                approval_action=effects.approval_action,
+                actor=actor_key,
+                note=note,
+            )
+        detail = self.detail(track.slug)
+        return RuntimeSkillLifecycleMutation(
+            status=decision.status,
+            ok=detail is not None,
+            message=self._transition_message(track.slug, action, decision, track),
+            detail=detail,
         )
 
     def detail(self, skill_name: str) -> RuntimeSkillLifecycleDetail | None:
@@ -143,84 +215,19 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
         track = self._mutable_track(skill_name)
         if track is None:
             return RuntimeSkillLifecycleMutation(status="missing", ok=False, message=f"Custom skill '{skill_name}' not found.")
-        if track.revision.status != "draft":
-            return RuntimeSkillLifecycleMutation(
-                status="invalid_state",
-                ok=False,
-                message=f"Cannot submit skill '{skill_name}' from state '{track.revision.status}'.",
-                detail=self._detail_from_track(track),
-            )
-        self._store().set_skill_revision_status(skill_name, track.active_revision_id, "review")
-        self._store().append_skill_approval(
-            skill_name,
-            track.active_revision_id,
-            action="submitted",
-            actor=actor_key,
-            note=note,
-        )
-        detail = self.detail(skill_name)
-        return RuntimeSkillLifecycleMutation(
-            status="submitted",
-            ok=detail is not None,
-            message=f"Submitted '{skill_name}' for review.",
-            detail=detail,
-        )
-
-    def _latest_action_for_revision(self, skill_name: str, revision_id: str) -> str:
-        for item in self._store().list_skill_approvals(skill_name):
-            if item.revision_id == revision_id:
-                return item.action
-        return ""
+        return self._apply_transition(track, action="submit", actor_key=actor_key, note=note)
 
     def publish(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation:
         track = self._mutable_track(skill_name)
         if track is None:
             return RuntimeSkillLifecycleMutation(status="missing", ok=False, message=f"Custom skill '{skill_name}' not found.")
-        latest_action = self._latest_action_for_revision(skill_name, track.active_revision_id)
-        if latest_action != "approved":
-            return RuntimeSkillLifecycleMutation(
-                status="approval_required",
-                ok=False,
-                message=f"Skill '{skill_name}' must be approved before publishing.",
-                detail=self._detail_from_track(track),
-            )
-        self._store().set_skill_revision_status(skill_name, track.active_revision_id, "published")
-        self._store().set_published_skill_revision(skill_name, track.active_revision_id)
-        self._store().append_skill_approval(
-            skill_name,
-            track.active_revision_id,
-            action="published",
-            actor=actor_key,
-            note=note,
-        )
-        detail = self.detail(skill_name)
-        return RuntimeSkillLifecycleMutation(
-            status="published",
-            ok=detail is not None,
-            message=f"Published '{skill_name}'.",
-            detail=detail,
-        )
+        return self._apply_transition(track, action="publish", actor_key=actor_key, note=note)
 
     def archive(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation:
         track = self._mutable_track(skill_name)
         if track is None:
             return RuntimeSkillLifecycleMutation(status="missing", ok=False, message=f"Custom skill '{skill_name}' not found.")
-        self._store().set_skill_revision_status(skill_name, track.active_revision_id, "archived")
-        self._store().clear_published_skill_revision(skill_name)
-        self._store().append_skill_approval(
-            skill_name,
-            track.active_revision_id,
-            action="archived",
-            actor=actor_key,
-            note=note,
-        )
-        detail = self.detail(skill_name)
-        return RuntimeSkillLifecycleMutation(
-            status="archived",
-            ok=detail is not None,
-            message=f"Archived '{skill_name}'.",
-            detail=detail,
-        )
+        return self._apply_transition(track, action="archive", actor_key=actor_key, note=note)
 
 
 _USE_CASES = RuntimeSkillAuthoringUseCases()

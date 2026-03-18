@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+from typing import Literal
 
 from app.content_models import (
     LifecycleApprovalRecord,
@@ -685,6 +686,76 @@ class PostgresContentStore(AbstractContentStore):
                 )
             conn.commit()
 
+    def apply_skill_lifecycle_transition(
+        self,
+        slug: str,
+        revision_id: str,
+        *,
+        set_status: str | None = None,
+        published_pointer: Literal["unchanged", "set_active", "clear"] = "unchanged",
+        approval_action: str | None = None,
+        actor: str = "",
+        note: str = "",
+    ) -> LifecycleApprovalRecord | None:
+        track = self._custom_track_row(slug)
+        if track is None:
+            raise KeyError(f"Unknown custom skill: {slug}")
+        now = _utcnow()
+        record_id = (
+            f"{track['track_id']}|{revision_id}|{approval_action}|{now}"
+            if approval_action is not None else
+            ""
+        )
+        record: LifecycleApprovalRecord | None = None
+        with self._connect() as conn:
+            try:
+                with conn.cursor() as cur:
+                    if set_status is not None:
+                        cur.execute(
+                            f"UPDATE {_SCHEMA}.skill_revisions SET status = %s WHERE track_id = %s AND revision_id = %s",
+                            (set_status, track["track_id"], revision_id),
+                        )
+                    if published_pointer == "set_active":
+                        cur.execute(
+                            f"""
+                            UPDATE {_SCHEMA}.skill_tracks
+                            SET published_revision_id = %s, updated_at = %s::timestamptz
+                            WHERE track_id = %s
+                            """,
+                            (revision_id, now, track["track_id"]),
+                        )
+                    elif published_pointer == "clear":
+                        cur.execute(
+                            f"""
+                            UPDATE {_SCHEMA}.skill_tracks
+                            SET published_revision_id = '', updated_at = %s::timestamptz
+                            WHERE track_id = %s
+                            """,
+                            (now, track["track_id"]),
+                        )
+                    if approval_action is not None:
+                        cur.execute(
+                            f"""
+                            INSERT INTO {_SCHEMA}.skill_approval_records (
+                                record_id, track_id, revision_id, action, actor, note, created_at
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s::timestamptz)
+                            """,
+                            (record_id, track["track_id"], revision_id, approval_action, actor, note, now),
+                        )
+                        record = LifecycleApprovalRecord(
+                            record_id=record_id,
+                            revision_id=revision_id,
+                            action=approval_action,
+                            actor=actor,
+                            note=note,
+                            created_at=now,
+                        )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return record
+
     def _upsert_provider_guidance(
         self,
         record: ProviderGuidanceTrackRecord,
@@ -1064,3 +1135,79 @@ class PostgresContentStore(AbstractContentStore):
                     (_utcnow(), track["guidance_id"]),
                 )
             conn.commit()
+
+    def apply_provider_guidance_lifecycle_transition(
+        self,
+        provider: str,
+        revision_id: str,
+        *,
+        set_status: str | None = None,
+        published_pointer: Literal["unchanged", "set_active", "clear"] = "unchanged",
+        approval_action: str | None = None,
+        actor: str = "",
+        note: str = "",
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> LifecycleApprovalRecord | None:
+        track = self._guidance_track_row(provider, scope_kind=scope_kind, scope_key=scope_key)
+        if track is None:
+            raise KeyError(f"Unknown provider guidance: {provider}/{scope_kind}/{scope_key}")
+        now = _utcnow()
+        record_id = (
+            f"{track['guidance_id']}|{revision_id}|{approval_action}|{now}"
+            if approval_action is not None else
+            ""
+        )
+        record: LifecycleApprovalRecord | None = None
+        with self._connect() as conn:
+            try:
+                with conn.cursor() as cur:
+                    if set_status is not None:
+                        cur.execute(
+                            f"""
+                            UPDATE {_SCHEMA}.provider_guidance_revisions
+                            SET status = %s
+                            WHERE guidance_id = %s AND revision_id = %s
+                            """,
+                            (set_status, track["guidance_id"], revision_id),
+                        )
+                    if published_pointer == "set_active":
+                        cur.execute(
+                            f"""
+                            UPDATE {_SCHEMA}.provider_guidance_tracks
+                            SET published_revision_id = %s, updated_at = %s::timestamptz
+                            WHERE guidance_id = %s
+                            """,
+                            (revision_id, now, track["guidance_id"]),
+                        )
+                    elif published_pointer == "clear":
+                        cur.execute(
+                            f"""
+                            UPDATE {_SCHEMA}.provider_guidance_tracks
+                            SET published_revision_id = '', updated_at = %s::timestamptz
+                            WHERE guidance_id = %s
+                            """,
+                            (now, track["guidance_id"]),
+                        )
+                    if approval_action is not None:
+                        cur.execute(
+                            f"""
+                            INSERT INTO {_SCHEMA}.provider_guidance_approval_records (
+                                record_id, guidance_id, revision_id, action, actor, note, created_at
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s::timestamptz)
+                            """,
+                            (record_id, track["guidance_id"], revision_id, approval_action, actor, note, now),
+                        )
+                        record = LifecycleApprovalRecord(
+                            record_id=record_id,
+                            revision_id=revision_id,
+                            action=approval_action,
+                            actor=actor,
+                            note=note,
+                            created_at=now,
+                        )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return record

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.content_store import get_content_store
 from app.skill_catalog_service import get_skill_catalog_service
+from app.workflows.lifecycle_machine import LifecycleDecision, LifecycleSnapshot, decide_lifecycle_action
 from app.workflows.runtime_skills.authoring import get_runtime_skill_authoring_use_cases
 from app.workflows.runtime_skills.contracts import (
     RuntimeSkillApprovalPort,
@@ -23,63 +24,99 @@ class RuntimeSkillApprovalUseCases(RuntimeSkillApprovalPort):
     def _authoring(self):
         return get_runtime_skill_authoring_use_cases()
 
-    def _validate_review_track(self, skill_name: str) -> RuntimeSkillLifecycleMutation | None:
+    def _review_track(self, skill_name: str):
         track = self._catalog().resolve_track(skill_name)
         if track is None or track.source_kind != "custom" or not track.is_mutable:
+            return None
+        return track
+
+    def _snapshot(self, track) -> LifecycleSnapshot:
+        published_revision_id = track.published_revision_id or ""
+        return LifecycleSnapshot(
+            revision_status=track.revision.status,
+            latest_action=self._authoring()._latest_action_for_revision(track.slug, track.active_revision_id),
+            has_published_revision=bool(published_revision_id),
+            published_revision_matches_active=(published_revision_id == track.active_revision_id and bool(published_revision_id)),
+        )
+
+    def _transition_message(self, skill_name: str, action: str, decision: LifecycleDecision) -> str:
+        if decision.status == "approved":
+            return f"Approved '{skill_name}'."
+        if decision.status == "already_approved":
+            return f"Skill '{skill_name}' is already approved."
+        if decision.status == "rejected":
+            return f"Rejected '{skill_name}'. Back to draft."
+        if decision.status == "already_rejected":
+            return f"Skill '{skill_name}' is already back in draft after rejection."
+        return f"Skill '{skill_name}' is not awaiting review."
+
+    def approve(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation:
+        track = self._review_track(skill_name)
+        if track is None:
             return RuntimeSkillLifecycleMutation(
                 status="missing",
                 ok=False,
                 message=f"Custom skill '{skill_name}' not found.",
             )
-        if track.revision.status != "review":
+        decision = decide_lifecycle_action(self._snapshot(track), "approve")
+        if not decision.ok:
             return RuntimeSkillLifecycleMutation(
-                status="invalid_state",
+                status=decision.status,
                 ok=False,
-                message=f"Skill '{skill_name}' is not awaiting review.",
+                message=self._transition_message(skill_name, "approve", decision),
                 detail=self._authoring().detail(skill_name),
             )
-        return None
-
-    def approve(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation:
-        error = self._validate_review_track(skill_name)
-        if error is not None:
-            return error
-        track = self._catalog().resolve_track(skill_name)
-        assert track is not None
-        self._store().append_skill_approval(
-            skill_name,
-            track.active_revision_id,
-            action="approved",
-            actor=actor_key,
-            note=note,
-        )
+        effects = decision.effects
+        if effects.set_status is not None or effects.published_pointer != "unchanged" or effects.approval_action is not None:
+            self._store().apply_skill_lifecycle_transition(
+                skill_name,
+                track.active_revision_id,
+                set_status=effects.set_status,
+                published_pointer=effects.published_pointer,
+                approval_action=effects.approval_action,
+                actor=actor_key,
+                note=note,
+            )
         detail = self._authoring().detail(skill_name)
         return RuntimeSkillLifecycleMutation(
-            status="approved",
+            status=decision.status,
             ok=detail is not None,
-            message=f"Approved '{skill_name}'.",
+            message=self._transition_message(skill_name, "approve", decision),
             detail=detail,
         )
 
     def reject(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation:
-        error = self._validate_review_track(skill_name)
-        if error is not None:
-            return error
-        track = self._catalog().resolve_track(skill_name)
-        assert track is not None
-        self._store().set_skill_revision_status(skill_name, track.active_revision_id, "draft")
-        self._store().append_skill_approval(
-            skill_name,
-            track.active_revision_id,
-            action="rejected",
-            actor=actor_key,
-            note=note,
-        )
+        track = self._review_track(skill_name)
+        if track is None:
+            return RuntimeSkillLifecycleMutation(
+                status="missing",
+                ok=False,
+                message=f"Custom skill '{skill_name}' not found.",
+            )
+        decision = decide_lifecycle_action(self._snapshot(track), "reject")
+        if not decision.ok:
+            return RuntimeSkillLifecycleMutation(
+                status=decision.status,
+                ok=False,
+                message=self._transition_message(skill_name, "reject", decision),
+                detail=self._authoring().detail(skill_name),
+            )
+        effects = decision.effects
+        if effects.set_status is not None or effects.published_pointer != "unchanged" or effects.approval_action is not None:
+            self._store().apply_skill_lifecycle_transition(
+                skill_name,
+                track.active_revision_id,
+                set_status=effects.set_status,
+                published_pointer=effects.published_pointer,
+                approval_action=effects.approval_action,
+                actor=actor_key,
+                note=note,
+            )
         detail = self._authoring().detail(skill_name)
         return RuntimeSkillLifecycleMutation(
-            status="rejected",
+            status=decision.status,
             ok=detail is not None,
-            message=f"Rejected '{skill_name}'. Back to draft.",
+            message=self._transition_message(skill_name, "reject", decision),
             detail=detail,
         )
 

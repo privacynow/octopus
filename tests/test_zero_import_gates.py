@@ -97,3 +97,19 @@ def test_agents_delegation_has_no_channel_imports() -> None:
     assert "app.channels" not in text, (
         f"channel import still referenced in {delegation_path}"
     )
+
+
+def test_handler_support_does_not_mutate_legacy_ingress_globals() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    handler_support_path = repo_root / "tests" / "support" / "handler_support.py"
+    text = handler_support_path.read_text()
+    forbidden = (
+        "_th._config",
+        "_th._provider",
+        "_th._bot_instance",
+        "_th._LIVE_CANCEL",
+        "_th._cfg(",
+        "_th._prov(",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in {handler_support_path}"

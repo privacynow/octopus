@@ -78,7 +78,7 @@ Completed slices:
      and a negative gate now proves the agents delivery module has no channel
      imports.
 
-10. `this commit` `Track A / A2: detach agents delegation slice from ingress`
+10. `2f8a303` `Track A / A2: detach agents delegation slice from ingress`
    - `app/agents/delegation.py` no longer imports Telegram ingress or Telegram
      channel state.
    - Delegation approve/cancel flows now run through explicit
@@ -86,12 +86,19 @@ Completed slices:
    - Added direct delegation-boundary tests and a negative gate proving the
      delegation module has no channel imports.
 
+11. `this commit` `Track A / A5: finish test support migration and global-state cleanup`
+   - Test support now has explicit positive and negative coverage proving
+     `setup_globals()` installs Telegram channel state through the new state
+     owner rather than restoring deleted ingress globals.
+   - Added a guard that `tests/support/handler_support.py` does not mutate
+     legacy ingress globals or call deleted ingress global accessors.
+
 ## Latest Verified Test Baseline
 
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1509 passed, 23 skipped`
+- result: `1511 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -100,7 +107,7 @@ committing.
 
 ### Track A. Fix the Inbound Context Problem
 
-Status: in progress
+Status: complete
 
 Completed:
 
@@ -113,10 +120,10 @@ Completed:
 - `A2` runtime dispatch concern slice
 - `A2` agents delivery concern slice
 - `A2` agents delegation concern slice
+- `A5` finish test support migration and remove any remaining global-state test coupling
 
 Remaining:
-
-- `A5` finish test support migration and remove any remaining global-state test coupling
+- none
 
 ### Track B. Build the Telegram Presenter Layer
 
@@ -208,21 +215,20 @@ status.
 
 Next required slice:
 
-- `Track A / A5: finish test support migration and global-state cleanup`
+- `Track C / C1: move registry UI templates out of http.py`
 
 Before-state:
 
-- test support and handler-facing suites still need a final explicit check that
-  they no longer preserve or depend on Telegram ingress globals through
-  `setup_globals`.
+- `app/channels/registry/http.py` still mixes HTTP route handlers with large
+  inline HTML/CSS/JS template blocks.
 
 After-state required:
 
-- `tests/support/handler_support.py` remains the only test runtime setup owner.
-- no test helper mutates Telegram ingress globals or reaches for removed global
-  state slots.
-- the supporting tests and gates make that contract explicit before Track A is
-  considered complete.
+- large UI/template content moves into `app/channels/registry/ui.py`
+- `http.py` becomes a thinner HTTP boundary over registry ingress and UI
+  rendering helpers
+- focused tests and guard tests prove that large template blocks are no longer
+  embedded in `http.py`
 
 ## Working Rules
 

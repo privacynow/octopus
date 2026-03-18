@@ -12,8 +12,8 @@ from telegram.constants import ParseMode
 
 from app import user_messages as _msg
 from app.credential_flow import foreign_setup_message, format_credential_prompt
-from app.inbound_use_case_factory import get_runtime_skill_setup_use_cases
 from app.provider_guidance_service import get_provider_guidance_service
+from app.runtime import composition
 from app import work_queue
 
 
@@ -48,7 +48,7 @@ async def check_credential_satisfaction(
     resolved,
 ) -> dict[str, str] | None:
     th = _th()
-    outcome = get_runtime_skill_setup_use_cases().check_satisfaction(
+    outcome = composition.workflows().runtime_skills.setup.check_satisfaction(
         session,
         user_id=th._actor_key(user_id),
         active_skills=resolved.active_skills,

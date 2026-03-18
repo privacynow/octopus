@@ -8,10 +8,7 @@ from telegram import Update
 from telegram.constants import ParseMode
 
 from app import access, user_messages as _msg
-from app.inbound_use_case_factory import (
-    get_pending_request_use_cases,
-    get_recovery_use_cases,
-)
+from app.runtime import composition
 from app import work_queue
 
 
@@ -19,6 +16,10 @@ def _th():
     import app.telegram_handlers as th
 
     return th
+
+
+def _flows():
+    return composition.workflows()
 
 
 async def approve_pending(
@@ -29,7 +30,7 @@ async def approve_pending(
 ) -> None:
     th = _th()
     session = th._load(chat_id)
-    outcome = get_pending_request_use_cases().approve(
+    outcome = _flows().pending.requests.approve(
         session,
         cfg=th._cfg(),
         provider_name=th._prov().name,
@@ -55,7 +56,7 @@ async def approve_pending(
 async def reject_pending(chat_id: int | str, message) -> None:
     th = _th()
     session = th._load(chat_id)
-    outcome = get_pending_request_use_cases().reject(session)
+    outcome = _flows().pending.requests.reject(session)
     if outcome.mutated:
         th._save(chat_id, session)
     await message.reply_text(outcome.message)
@@ -64,7 +65,7 @@ async def reject_pending(chat_id: int | str, message) -> None:
 async def retry_skip_pending(chat_id: int | str, message) -> None:
     th = _th()
     session = th._load(chat_id)
-    outcome = get_pending_request_use_cases().retry_skip(session)
+    outcome = _flows().pending.requests.retry_skip(session)
     if outcome.mutated:
         th._save(chat_id, session)
     await th._edit_or_reply_text(message, outcome.message)
@@ -78,7 +79,7 @@ async def retry_allow_pending(
 ) -> None:
     th = _th()
     session = th._load(chat_id)
-    outcome = get_pending_request_use_cases().retry_allow(
+    outcome = _flows().pending.requests.retry_allow(
         session,
         cfg=th._cfg(),
         provider_name=th._prov().name,
@@ -174,7 +175,7 @@ async def handle_recovery_action(
 
     cfg = th._cfg()
     data_dir = cfg.data_dir
-    outcome = get_recovery_use_cases().prepare_action(
+    outcome = _flows().recovery.replay.prepare_action(
         data_dir=data_dir,
         conversation_key=th._conversation_key(chat_id),
         event_id=th._event_key(update_id),
@@ -225,7 +226,7 @@ async def handle_recovery_action(
                     trust_tier=outcome.replay_plan.trust_tier,
                     cancel_event=cancel_event,
                 )
-        get_recovery_use_cases().complete_replay(
+        _flows().recovery.replay.complete_replay(
             data_dir=data_dir,
             item_id=outcome.replay_plan.item_id,
         )
@@ -233,7 +234,7 @@ async def handle_recovery_action(
         th.log.warning("Replay interrupted for chat %d; item stays claimed for re-recovery", chat_id)
     except Exception:
         th.log.exception("Replay failed for chat %d", chat_id)
-        get_recovery_use_cases().fail_replay(
+        _flows().recovery.replay.fail_replay(
             data_dir=data_dir,
             item_id=outcome.replay_plan.item_id,
         )

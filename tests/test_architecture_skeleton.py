@@ -25,6 +25,7 @@ EXPECTED_MODULES = (
 )
 
 REMOVED_TOP_LEVEL_PORT_MODULES = (
+    "app/inbound_use_case_factory.py",
     "app/credential_management_port.py",
     "app/conversation_control_port.py",
     "app/conversation_settings_port.py",

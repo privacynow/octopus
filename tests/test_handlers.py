@@ -1446,7 +1446,7 @@ async def test_role_in_provider_context():
 
 
 async def test_new_preserves_default_skills():
-    from app.skills import save_user_credential, derive_encryption_key
+    from tests.support.skill_test_helpers import save_user_credential, derive_encryption_key
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, default_skills=("github-integration",))
@@ -1811,7 +1811,7 @@ async def test_doctor_no_warning_explicit_admin():
 
 
 async def test_prompt_size_warning_before_activation():
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     with fresh_data_dir() as data_dir:
         orig_custom_dir = skills_mod.CUSTOM_DIR
@@ -1853,7 +1853,7 @@ async def test_prompt_size_warning_before_activation():
 
 
 async def test_prompt_size_no_warning_small_skill():
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     with fresh_data_dir() as data_dir:
         orig_custom_dir = skills_mod.CUSTOM_DIR
@@ -3130,6 +3130,22 @@ async def test_session_command_shows_public_context():
         reply = last_reply(msg)
         assert "/tmp/public-sandbox" in reply
         assert "inspect" in reply.lower()
+
+
+async def test_skills_command_hides_unresolvable_session_skills():
+    """/skills display must use resolved active skills, not stale raw session.active_skills."""
+    import app.telegram_handlers as th
+    with fresh_env() as (data_dir, cfg, prov):
+        chat = FakeChat(12345)
+        user = FakeUser(uid=42, username="owner")
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session["active_skills"] = ["code-review", "missing-skill"]
+        save_session(data_dir, telegram_conversation_key(chat.id), session)
+
+        msg = await send_command(th.cmd_skills, chat, user, "/skills")
+        reply = last_reply(msg)
+        assert "Code Review" in reply
+        assert "missing-skill" not in reply
 
 
 async def test_settings_command_public_user_no_trusted_leak():

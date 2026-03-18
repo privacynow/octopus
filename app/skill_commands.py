@@ -26,8 +26,12 @@ def _th():
 
 async def skills_show(event, update: Update) -> None:
     catalog = {item.name: item for item in get_runtime_skill_catalog_use_cases().list_skills()}
-    session = _th()._load(event.chat_id)
-    active = get_runtime_skill_activation_use_cases().list_conversation_skills(session).active_skills
+    th = _th()
+    session = th._load(event.chat_id)
+    resolved = th._resolve_context(session, trust_tier=th._trust_tier(event.user))
+    active = get_runtime_skill_activation_use_cases().list_conversation_skills(
+        list(resolved.active_skills)
+    ).active_skills
     if active:
         lines = [f"<b>Active skills ({len(active)}):</b>"]
         for name in active:
@@ -47,7 +51,12 @@ async def skills_list(event, update: Update) -> None:
         return
     th = _th()
     session = th._load(event.chat_id)
-    active = set(get_runtime_skill_activation_use_cases().list_conversation_skills(session).active_skills)
+    resolved = th._resolve_context(session, trust_tier=th._trust_tier(event.user))
+    active = set(
+        get_runtime_skill_activation_use_cases().list_conversation_skills(
+            list(resolved.active_skills)
+        ).active_skills
+    )
     req_user_id = event.user.id
     user_creds = get_credential_management_use_cases().load_credentials(
         th._actor_key(req_user_id)

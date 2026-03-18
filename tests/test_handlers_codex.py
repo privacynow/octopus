@@ -3,7 +3,11 @@
 from app.execution_context import ResolvedExecutionContext, resolve_execution_context
 from app.providers.base import RunContext, RunResult
 from app.session_state import session_from_dict
-from app.skills import derive_encryption_key, get_provider_config_digest, save_user_credential
+from tests.support.skill_test_helpers import (
+    derive_encryption_key,
+    get_provider_config_digest,
+    save_user_credential,
+)
 from app.storage import default_session, save_session
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
@@ -329,7 +333,7 @@ async def test_scripts_dir_in_run_context():
 
 
 async def test_script_staging_removes_stale():
-    from app.skills import stage_codex_scripts
+    from tests.support.skill_test_helpers import stage_codex_scripts
 
     with fresh_data_dir() as data_dir:
 

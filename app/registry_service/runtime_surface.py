@@ -17,6 +17,7 @@ from app.credential_store import (
     reset_for_test as reset_credential_store_for_test,
 )
 from app.agents.bridge import conversation_key_for_ref
+from app.execution_context import resolve_execution_context
 from app.inbound_use_case_factory import (
     get_provider_guidance_use_cases,
     get_runtime_skill_activation_use_cases,
@@ -246,7 +247,15 @@ def diff_catalog_skill(skill_name: str) -> dict[str, Any]:
 
 def conversation_skill_state(store: AbstractRegistryStore, conversation_id: str) -> dict[str, Any]:
     loaded = load_runtime_conversation(store, conversation_id)
-    listing = get_runtime_skill_activation_use_cases().list_conversation_skills(loaded.session)
+    resolved = resolve_execution_context(
+        loaded.session,
+        loaded.context.config,
+        loaded.context.config.provider_name,
+        trust_tier="trusted",
+    )
+    listing = get_runtime_skill_activation_use_cases().list_conversation_skills(
+        list(resolved.active_skills)
+    )
     return {
         "conversation_id": conversation_id,
         "conversation_key": loaded.conversation_key,

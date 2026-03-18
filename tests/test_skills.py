@@ -23,7 +23,7 @@ from app.config import load_dotenv_file, validate_config
 from app.execution_context import ResolvedExecutionContext
 from app.providers.base import PreflightContext, RunContext
 from app.session_state import PendingApproval, PendingRetry
-from app.skills import (
+from tests.support.skill_test_helpers import (
     SkillRequirement,
     _encrypt, _decrypt, _parse_requires_yaml, _skill_dir,
     build_credential_env, build_preflight_context, build_provider_config,
@@ -612,16 +612,11 @@ other:
 # =====================================================================
 
 def test_check_credentials():
-    # Create temp skills and seed them into the content store.
+    # Create temp compatibility skills on disk.
     with tempfile.TemporaryDirectory() as tmpdir:
-        import app.content_store as content_store_mod
-        from app.content_seed import track_from_skill_dir
-        from app.content_store import get_content_store, init_content_store_for_config
-        from app.storage import ensure_data_dirs, close_db
+        from tests.support import skill_test_helpers as skills_mod
 
         catalog_dir = Path(tmpdir) / "catalog"
-        data_dir = Path(tmpdir) / "data"
-        ensure_data_dirs(data_dir)
         (catalog_dir / "test-cred-skill").mkdir(parents=True)
         (catalog_dir / "test-cred-skill" / "skill.md").write_text(
             "---\nname: test-cred-skill\ndisplay_name: Test Cred\ndescription: test\n---\nInstructions here.\n"
@@ -634,28 +629,9 @@ def test_check_credentials():
             "---\nname: test-no-cred\ndisplay_name: No Cred\ndescription: no creds\n---\nSimple.\n"
         )
 
-        content_store_mod.reset_for_test()
+        orig_catalog_dir = skills_mod.CATALOG_DIR
         try:
-            init_content_store_for_config(make_config(data_dir=data_dir))
-            store = get_content_store()
-            store.replace_skill_track(
-                track_from_skill_dir(
-                    catalog_dir / "test-cred-skill",
-                    source_kind="builtin",
-                    source_uri="catalog/test-cred-skill",
-                    created_by="test",
-                    version_label="builtin",
-                )
-            )
-            store.replace_skill_track(
-                track_from_skill_dir(
-                    catalog_dir / "test-no-cred",
-                    source_kind="builtin",
-                    source_uri="catalog/test-no-cred",
-                    created_by="test",
-                    version_label="builtin",
-                )
-            )
+            skills_mod.CATALOG_DIR = catalog_dir
 
             # No credentials → both missing
             missing = check_credentials("test-cred-skill", {})
@@ -678,8 +654,7 @@ def test_check_credentials():
             missing_unknown = check_credentials("nonexistent", {})
             assert len(missing_unknown) == 0
         finally:
-            close_db(data_dir)
-            content_store_mod.reset_for_test()
+            skills_mod.CATALOG_DIR = orig_catalog_dir
 
 
 # =====================================================================
@@ -760,7 +735,7 @@ def test_run_context_with_credential_env():
 
 def test_provider_yaml_parsing():
     import yaml
-    from app.skills import _resolve_placeholders
+    from tests.support.skill_test_helpers import _resolve_placeholders
 
     # Basic claude.yaml
     claude_yaml = """
@@ -801,7 +776,7 @@ config_overrides:
 # =====================================================================
 
 def test_placeholder_resolution():
-    from app.skills import _resolve_placeholders
+    from tests.support.skill_test_helpers import _resolve_placeholders
 
     env = {"GITHUB_TOKEN": "ghp_test123", "API_KEY": "secret"}
     assert _resolve_placeholders("${GITHUB_TOKEN}", env) == "ghp_test123"
@@ -844,7 +819,7 @@ def test_build_provider_config():
 # =====================================================================
 
 def test_capability_summary():
-    from app.skills import build_capability_summary
+    from tests.support.skill_test_helpers import build_capability_summary
 
     cap = build_capability_summary("claude", ["github-integration"])
     assert "MCP server" in cap
@@ -974,8 +949,8 @@ def test_load_provider_yaml():
 # =====================================================================
 
 def test_custom_skill_discovery():
-    import app.skills as skills_mod
-    from app.skills import scaffold_skill, validate_active_skills, CUSTOM_DIR
+    from tests.support import skill_test_helpers as skills_mod
+    from tests.support.skill_test_helpers import scaffold_skill, validate_active_skills, CUSTOM_DIR
 
     # Test with a temp custom skills directory
     orig_custom_dir = skills_mod.CUSTOM_DIR
@@ -1028,8 +1003,8 @@ def test_custom_skill_discovery():
 # =====================================================================
 
 def test_scaffold_skill():
-    import app.skills as skills_mod
-    from app.skills import scaffold_skill
+    from tests.support import skill_test_helpers as skills_mod
+    from tests.support.skill_test_helpers import scaffold_skill
 
     orig_custom_dir2 = skills_mod.CUSTOM_DIR
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1066,7 +1041,7 @@ def test_scaffold_skill():
 # =====================================================================
 
 def test_validate_active_skills():
-    from app.skills import validate_active_skills
+    from tests.support.skill_test_helpers import validate_active_skills
 
     errors = validate_active_skills(["code-review", "testing"])
     assert errors == []
@@ -1084,7 +1059,7 @@ def test_validate_active_skills():
 # =====================================================================
 
 def test_skill_meta_is_custom():
-    from app.skills import SkillMeta
+    from app.skill_types import SkillMeta
 
     meta_builtin = SkillMeta(name="test", display_name="Test", description="desc")
     assert meta_builtin.is_custom is False
@@ -1158,7 +1133,7 @@ def test_mcp_args_is_list():
 # =====================================================================
 
 def test_malformed_skill_resilience():
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     orig_custom_dir = skills_mod.CUSTOM_DIR
     try:
@@ -1186,7 +1161,7 @@ def test_malformed_skill_resilience():
 # =====================================================================
 
 def test_malformed_provider_yaml_resilience():
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     orig_custom_dir = skills_mod.CUSTOM_DIR
     try:
@@ -1246,7 +1221,7 @@ credentials:
 # =====================================================================
 
 def test_catalog_uses_directory_name():
-    import app.skills as skills_mod
+    from tests.support import skill_test_helpers as skills_mod
 
     orig_custom_dir = skills_mod.CUSTOM_DIR
     try:

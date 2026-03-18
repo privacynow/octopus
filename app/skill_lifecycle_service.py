@@ -18,8 +18,10 @@ from app.credential_service import get_credential_service
 from app.session_state import AwaitingSkillSetup, SessionState
 from app.skill_activation_service import get_skill_activation_service
 from app.skill_catalog_service import get_skill_catalog_service
-from app.provider_guidance_service import get_provider_guidance_service
-from app.skills import PROMPT_SIZE_WARNING_THRESHOLD
+from app.provider_guidance_service import (
+    PROMPT_SIZE_WARNING_THRESHOLD,
+    get_provider_guidance_service,
+)
 
 
 @dataclass(frozen=True)

@@ -64,6 +64,10 @@ class AbstractContentStore(ABC):
         """Return approval records for the mutable custom skill track, newest first."""
 
     @abstractmethod
+    def get_latest_skill_approval_action(self, slug: str, revision_id: str) -> str:
+        """Return the newest approval action for one skill revision, or an empty string."""
+
+    @abstractmethod
     def append_skill_approval(
         self,
         slug: str,
@@ -147,6 +151,17 @@ class AbstractContentStore(ABC):
         scope_key: str = "",
     ) -> list[LifecycleApprovalRecord]:
         """Return approval records for one provider-guidance track, newest first."""
+
+    @abstractmethod
+    def get_latest_provider_guidance_approval_action(
+        self,
+        provider: str,
+        revision_id: str,
+        *,
+        scope_kind: str = "system",
+        scope_key: str = "",
+    ) -> str:
+        """Return the newest approval action for one provider-guidance revision, or an empty string."""
 
     @abstractmethod
     def append_provider_guidance_approval(

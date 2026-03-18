@@ -100,7 +100,7 @@ Completed slices:
      `http.py` stays below the line-count threshold and no longer embeds the
      large UI shell markup.
 
-13. `this commit` `Track C / C2: move registry auth and session helpers out of http`
+13. `31db8ed` `Track C / C2: move registry auth and session helpers out of http`
    - Added `app/channels/registry/auth.py` as the registry channel owner for:
      - `RegistrySettings`
      - session middleware configuration
@@ -112,7 +112,7 @@ Completed slices:
      structural guard proving `http.py` no longer defines the displaced auth
      and session helpers.
 
-14. `this commit` `Track D / D1: centralize lifecycle snapshot construction`
+14. `eb071e7` `Track D / D1: centralize lifecycle snapshot construction`
    - Added `build_lifecycle_snapshot(...)` to
      `app/workflows/lifecycle_machine.py` as the single owner of lifecycle
      snapshot construction.
@@ -122,12 +122,23 @@ Completed slices:
    - Added focused positive helper coverage and a negative structural guard
      proving the duplicate runtime-skill `_snapshot()` helpers are gone.
 
+15. `this commit` `Track D / D2: add explicit latest-approval store queries`
+   - Added explicit content-store contract methods for latest approval lookup:
+     - `get_latest_skill_approval_action(...)`
+     - `get_latest_provider_guidance_approval_action(...)`
+   - Implemented both methods in SQLite and Postgres with explicit
+     `ORDER BY ... DESC LIMIT 1` queries instead of relying on workflow-level
+     Python scans.
+   - Added parameterized contract coverage for:
+     - newest matching action is returned
+     - missing revisions return an empty string
+
 ## Latest Verified Test Baseline
 
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1517 passed, 23 skipped`
+- result: `1521 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -203,10 +214,10 @@ Required scope:
 Completed:
 
 - `D1` move shared lifecycle snapshot construction into `app/workflows/lifecycle_machine.py`
+- `D2` add explicit latest-approval store methods with SQLite/Postgres parity
 
 Remaining:
 
-- `D2` explicit latest-approval store methods
 - `D3` remove private cross-class latest-action helper access
 
 ### Track E. Dead Code, Naming, and Test-Gate Cleanup
@@ -263,7 +274,7 @@ status.
 
 Next required slice:
 
-- `Track D / D2: add explicit latest-approval store methods`
+- `Track D / D3: remove private cross-class latest-action helper access`
 
 Completed:
 
@@ -278,15 +289,14 @@ Remaining:
 
 Before-state:
 
-- latest approval lookup for runtime skills and provider guidance still depends
-  on Python scanning over approval-history lists rather than an explicit store
-  query contract.
+- runtime-skill approval still reaches authoring’s private latest-action helper
+  instead of using the explicit store contract directly.
 
 After-state required next:
 
-- latest-approval lookup lives in the content-store contract explicitly for
-  both runtime skills and provider guidance
-- latest-approval lookup is owned by the store contract explicitly
+- approval no longer reaches across workflow-private helper boundaries
+- runtime-skill and provider-guidance workflows consume the explicit store
+  contract for latest-approval lookup
 - approval no longer reaches across workflow-private helper boundaries
 
 After-state required:

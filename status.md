@@ -306,7 +306,7 @@ Completed slices:
      - full suite:
        - `1547 passed, 23 skipped`
 
-22. `pending commit` `Track F / F6: enforce runtime dispatch ownership`
+22. `c5bbcdc` `Track F / F6: enforce runtime dispatch ownership`
    - Before-state inventory captured before editing:
      - `app/runtime/dispatch.py`
        - still owned:
@@ -361,12 +361,47 @@ Completed slices:
      - full suite:
        - `1550 passed, 23 skipped`
 
+23. `pending commit` `Track E / E1-E4: finalize dead ownership cleanup and test gates`
+   - Before-state inventory captured before editing:
+     - `app/workflows/__init__.py`
+       - already reduced to a package docstring
+       - needed an explicit structural guard so it cannot regress into root
+         transitional re-exports
+     - `app/workflows/recovery/transport_contract.py`
+       - already owned the recovery transport contract
+       - needed explicit positive coverage so the cleaned owner and deleted
+         root path are both locked in
+     - `tests/test_zero_import_gates.py`
+       - still scanned only `app/`
+       - did not yet scan `tests/` for forbidden deleted-module references
+     - stale transport-era test filenames still present:
+       - `tests/test_transports_factory.py`
+       - `tests/test_transports_telegram.py`
+   - Completed implementation in the current worktree:
+     - expanded `tests/test_zero_import_gates.py` to:
+       - scan both `app/` and `tests/` for deleted legacy module references
+       - assert `app/workflows/__init__.py` stays free of transitional
+         re-exports and temporary language
+       - assert the concern-owned recovery transport-contract file exists
+       - assert the stale transport-era test filenames are gone
+     - deleted stale transport-era test files:
+       - `tests/test_transports_factory.py`
+       - `tests/test_transports_telegram.py`
+     - added channel-owned replacements:
+       - `tests/test_channel_egress_factory.py`
+       - `tests/test_telegram_channel_egress.py`
+   - Verification completed before commit:
+     - focused Track E suite:
+       - `24 passed`
+     - full suite:
+       - `1554 passed, 23 skipped`
+
 ## Latest Verified Test Baseline
 
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1550 passed, 23 skipped`
+- result: `1554 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -451,7 +486,7 @@ Remaining:
 
 ### Track E. Dead Code, Naming, and Test-Gate Cleanup
 
-Status: not started
+Status: pending commit
 
 Required scope:
 
@@ -460,9 +495,19 @@ Required scope:
 - expand zero-import gates to `tests/`
 - rename stale transport-era tests
 
+Completed in the current worktree:
+
+- `E1` locked down `app/workflows/__init__.py` as a clean package root with
+  focused structural guards
+- `E2` locked down `app/workflows/recovery/transport_contract.py` as the
+  concern-owned recovery transport contract
+- `E3` expanded zero-import gates to scan both `app/` and `tests/`
+- `E4` deleted stale transport-era test file names and replaced them with
+  channel-owned test file names
+
 ### Track F. Orchestration and State-Machine Consolidation
 
-Status: in progress
+Status: complete
 
 Required scope:
 
@@ -479,6 +524,8 @@ Completed:
 - `F2` committed the repo-standard functional decision-machine conventions
 - `F3` runtime-skill setup machine with deleted legacy setup service
 - `F4` delegation workflow/machine with thin bridge adapters in `app/agents/*`
+- `F5` pending/recovery migration off `python-statemachine`
+- `F6` dispatch ownership cleanup
 
 Remaining:
 
@@ -505,16 +552,16 @@ status.
 - [x] The repo-standard explicit machine style is declared and used for
   remediated durable workflows.
 - [x] Lifecycle snapshot and latest-approval ownership are cleaned up.
-- [ ] `workflows/__init__.py` and `transport_contract.py` no longer carry
+- [x] `workflows/__init__.py` and `transport_contract.py` no longer carry
   dead or misleading transitional ownership.
-- [ ] Zero-import gates cover both `app/` and `tests/`.
+- [x] Zero-import gates cover both `app/` and `tests/`.
 - [x] Test support no longer mutates Telegram ingress globals.
 
 ## Current Slice
 
 Next required slice:
 
-- `Track E / E1-E4: remove stale transitional ownership and extend zero-import gates`
+- `Track B / B1-B2: move Telegram rendering into presenters.py`
 
 Completed:
 
@@ -532,9 +579,20 @@ Completed:
 
 Remaining:
 
-- Track E cleanup slices
 - Track B Telegram presenter extraction
 - final acceptance-gate audit
+
+Completed in `Track E / E1-E4`:
+
+- zero-import gates now scan both `app/` and `tests/`
+- `workflows/__init__.py` and the recovery transport-contract owner are locked
+  down by focused structural tests
+- stale transport-era test filenames are deleted and replaced with
+  channel-owned names
+- focused verification passed:
+  - `24 passed`
+- full suite passed:
+  - `1554 passed, 23 skipped`
 
 Completed in `F6`:
 

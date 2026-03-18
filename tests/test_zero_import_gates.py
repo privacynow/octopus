@@ -52,6 +52,19 @@ def test_deleted_legacy_module_references_are_gone_from_app_code() -> None:
             assert forbidden not in text, f"{forbidden} still referenced in {path}"
 
 
+def test_deleted_legacy_module_references_are_gone_from_test_code() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    tests_root = repo_root / "tests"
+    gate_path = Path(__file__).resolve()
+    python_files = sorted(
+        path for path in tests_root.rglob("*.py") if "__pycache__" not in path.parts and path != gate_path
+    )
+    for path in python_files:
+        text = path.read_text()
+        for forbidden in FORBIDDEN_APP_REFERENCES:
+            assert forbidden not in text, f"{forbidden} still referenced in {path}"
+
+
 def test_access_module_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     access_path = repo_root / "app" / "access.py"
@@ -189,6 +202,30 @@ def test_deleted_pending_and_recovery_root_paths_are_gone() -> None:
     )
     for deleted_path in deleted_paths:
         assert not deleted_path.exists(), f"legacy machine path still exists at {deleted_path}"
+
+
+def test_workflows_package_root_has_no_transitional_reexports() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workflows_init = repo_root / "app" / "workflows" / "__init__.py"
+    text = workflows_init.read_text()
+    assert "temporary" not in text.lower(), f"temporary language still present in {workflows_init}"
+    assert "import " not in text, f"transitional re-export still present in {workflows_init}"
+
+
+def test_recovery_transport_contract_owner_exists_under_concern_package() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    owner_path = repo_root / "app" / "workflows" / "recovery" / "transport_contract.py"
+    assert owner_path.exists(), f"recovery transport contract owner missing at {owner_path}"
+
+
+def test_stale_transport_era_test_files_are_gone() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    stale_paths = (
+        repo_root / "tests" / "test_transports_factory.py",
+        repo_root / "tests" / "test_transports_telegram.py",
+    )
+    for stale_path in stale_paths:
+        assert not stale_path.exists(), f"stale transport-era test file still exists at {stale_path}"
 
 
 def test_agents_do_not_edit_delegation_status_strings_directly() -> None:

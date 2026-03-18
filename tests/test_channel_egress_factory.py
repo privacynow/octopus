@@ -6,8 +6,8 @@ from pathlib import Path
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.telegram.egress import TelegramChannelEgress
 from app.identity import telegram_actor_key
-from app.runtime.inbound_types import InboundUser
 from app.runtime import composition
+from app.runtime.inbound_types import InboundUser
 from app.runtime.work_admission import trust_tier_for_source
 from tests.support.handler_support import (
     FakeProvider,

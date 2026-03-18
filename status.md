@@ -143,7 +143,7 @@ Completed slices:
    - Added a structural guard proving the removed private/helper paths no longer
      exist in the workflow modules.
 
-17. `this commit` `Track F / F1: commit orchestration inventory`
+17. `2ee0b77` `Track F / F1: commit orchestration inventory`
    - Added `docs/orchestration_inventory.md` as the committed inventory of the
      durable and semi-durable orchestration concerns named by the plan.
    - Classified lifecycle, pending approval/retry, transport recovery,
@@ -152,12 +152,26 @@ Completed slices:
    - Added guard tests proving the inventory names the required live modules and
      does not leave placeholder or unclassified entries behind.
 
+18. `this commit` `Track F / F2: commit machine conventions standard`
+   - Added `docs/machine_conventions.md` as the repo-standard functional
+     decision-machine contract for future machine migrations.
+   - Declared the standard shape:
+     - snapshot
+     - action
+     - decision
+     - effects
+     - atomic application at the store/session boundary
+   - Explicitly marked existing `python-statemachine` machines as
+     migration-state only and disallowed any third machine style.
+   - Added guard tests proving the standard document includes the required
+     shape, migration-state rule, and anti-drift constraints.
+
 ## Latest Verified Test Baseline
 
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1523 passed, 23 skipped`
+- result: `1525 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -267,10 +281,10 @@ Required scope:
 Completed:
 
 - `F1` committed orchestration inventory in `docs/orchestration_inventory.md`
+- `F2` committed the repo-standard functional decision-machine conventions
 
 Remaining:
 
-- `F2` repo-standard functional decision-machine conventions
 - `F3` runtime skill setup machine
 - `F4` delegation machine/workflow
 - `F5` pending/recovery migration off `python-statemachine`
@@ -306,7 +320,7 @@ status.
 
 Next required slice:
 
-- `Track F / F2: commit the repo-standard functional decision-machine conventions`
+- `Track F / F3: extract the runtime-skill setup machine`
 
 Completed:
 
@@ -319,19 +333,20 @@ Completed:
 
 Remaining:
 
-- `Track F / F2`
 - all Phase 4-6 remediation slices after Phase 3 completes
 
 Before-state:
 
-- the orchestration inventory now exists, but the repo-standard machine
-  conventions are not yet committed as a shared standard for the Phase 4
-  machine migrations.
+- `awaiting_skill_setup` progression is still split across
+  `app/workflows/runtime_skills/setup.py`, `app/skill_lifecycle_service.py`,
+  and `app/credential_flow.py`.
 
 After-state required next:
 
-- the repo-standard functional decision-machine conventions are documented and
-  committed before Phase 4 begins
+- `app/workflows/runtime_skills/setup_machine.py` becomes the one owner of
+  setup-state transitions
+- `credential_flow.py` no longer survives as a parallel setup-state helper path
+- `skill_lifecycle_service.py` no longer owns setup transitions
 
 ## Working Rules
 

@@ -79,3 +79,12 @@ def test_runtime_dispatch_has_no_channel_imports() -> None:
     assert "app.channels" not in text, (
         f"channel import still referenced in {dispatch_path}"
     )
+
+
+def test_agents_delivery_has_no_channel_imports() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    delivery_path = repo_root / "app" / "agents" / "delivery.py"
+    text = delivery_path.read_text()
+    assert "app.channels" not in text, (
+        f"channel import still referenced in {delivery_path}"
+    )

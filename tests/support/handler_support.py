@@ -11,6 +11,7 @@ import contextlib
 import tempfile
 from pathlib import Path
 
+from app.agents.delivery import build_registry_delivery_runtime
 import app.channels.telegram.ingress as _th
 from app.channels.telegram.cancellation import (
     get_cancellation_registry,
@@ -327,6 +328,15 @@ def current_bot_instance():
 
 def current_boot_id() -> str:
     return get_channel_state().boot_id
+
+
+def make_registry_delivery_runtime(config, provider, *, bot_instance=None):
+    bot = current_bot_instance() if bot_instance is None else bot_instance
+    return build_registry_delivery_runtime(
+        provider_name=provider.name,
+        provider_state_factory=provider.new_provider_state,
+        bot=bot,
+    )
 
 
 def live_cancel_registry():

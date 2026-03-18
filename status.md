@@ -436,7 +436,7 @@ Completed slices:
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1562 passed, 23 skipped`
+- result: `1603 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -465,7 +465,7 @@ Remaining:
 
 ### Track B. Build the Telegram Presenter Layer
 
-Status: in progress
+Status: complete
 
 Required scope:
 
@@ -478,15 +478,21 @@ Required scope:
 - into:
   - `app/channels/telegram/presenters.py`
 
-Completed in the current worktree:
+Completed and committed:
 
 - `B1` centralized the scoped Telegram reply-markup builders in
   `app/channels/telegram/presenters.py`
+- `B2a` moved provider-guidance Telegram rendering into presenters
+- `B2b` moved runtime-skill Telegram rendering into presenters
+- `B2c1` moved conversation and pending Telegram rendering into presenters
+- `B2c2a` moved ingress request/setup/compact/delegation/raw/welcome rendering
+  into presenters
+- `B2c2b` moved the remaining ingress help/session/discover/admin/reporting
+  rendering into presenters
 
 Remaining:
 
-- `B2` move the remaining Telegram text/HTML rendering into presenters and
-  add workflow-family regression coverage
+- none
 
 ### Track C. Decompose Registry HTTP and UI
 
@@ -611,241 +617,72 @@ status.
 
 Next required slice:
 
-- `Track B / B2c2a: move ingress request/setup/compact/delegation rendering into presenters.py`
-  - complete and ready to commit
+- `Final acceptance audit and remediation closure`
 
-Live worktree for `B2c2a`:
+Committed Track B slices after `B1`:
 
-- modified files:
-  - `app/channels/telegram/ingress.py`
-  - `app/channels/telegram/presenters.py`
-  - `status.md`
-- caller inventory captured before finishing the slice:
-  - `ingress.py`
-    - `_show_setup_prompt(...)`
-    - `send_formatted_reply(...)`
-    - `_send_compact_reply(...)`
-    - `send_directed_artifacts(...)`
-    - `_propose_delegation_plan(...)`
-    - `cmd_raw(...)`
-    - `handle_message(...)`
-    - `handle_expand_callback(...)`
-    - `handle_collapse_callback(...)`
-  - `presenters.py`
-    - now owns the new rendering helpers for setup prompts, formatted reply
-      chunking/fallback, compact/expanded response rendering, path errors,
-      delegation-plan formatting, welcome text, and `/raw` output text
-- before-state:
-  - these ingress flows still counted as Telegram-rendering ownership even
-    though the presenter functions had been partially introduced
-  - no focused tests yet proved ingress consumed the new presenter helpers for
-    request/setup/compact/delegation rendering
-  - no negative structural guard yet proved the moved strings/helpers were gone
-- after-state required by this slice:
-  - ingress uses named presenter functions for:
-    - setup prompt rendering
-    - formatted reply chunk generation and fallback
-    - compact/expanded response rendering
-    - delegation-plan formatting
-    - welcome/raw/path-error output
-  - focused regression tests prove ingress calls presenter functions for these
-    paths
-  - negative structural guards prove the removed inline strings/helpers are
-    gone from ingress
-- contract tests for this slice:
-  - `tests/test_telegram_presenters.py`
-  - `tests/test_handlers_output.py`
-  - `tests/test_request_flow.py`
-  - `tests/test_zero_import_gates.py`
+25. `f13dbd1` `Track B / B2a: move provider-guidance Telegram rendering into presenters`
+   - `app/channels/telegram/guidance.py` now applies named presenter functions
+     for preview, history, and lifecycle mutation output.
+   - Focused verification passed: `46 passed`
+   - Full suite passed: `1567 passed, 23 skipped`
 
-28. `pending` `Track B / B2c2a: move ingress request/setup/compact/delegation rendering into presenters.py`
-   - Added named ingress/request presenter functions in
-     `app/channels/telegram/presenters.py` for:
-     - setup-prompt rendering
-     - formatted-reply chunk rendering and plain-text fallback
-     - compact/expanded response rendering
-     - directed-path failure text
-     - delegation-plan formatting
-     - welcome output
-     - `/raw` usage/missing-response output
-   - `app/channels/telegram/ingress.py` now applies presenter output instead of
-     owning inline setup/delegation/compact/raw/welcome rendering logic.
-   - Added:
-     - presenter unit tests for setup prompts, formatted replies, summary
-       extraction, delegation plans, welcome text, and `/raw` text
-     - ingress regression tests proving presenter ownership for:
-       - setup prompts
-       - formatted replies
-       - compact replies
-       - delegation-plan output
-       - `/raw` usage output
-       - welcome output
-     - a negative structural guard proving the moved setup/compact/delegation/
-       raw/welcome formatting tokens are gone from ingress
-   - focused verification passed:
-     - `118 passed`
-   - full suite passed:
-     - `1592 passed, 23 skipped`
-
-Completed:
-
-- `C1` move registry UI shell rendering into `ui.py`
-- `C2` move registry auth/session helpers out of `http.py`
-- `D1` centralize lifecycle snapshot construction
-- `D2` add explicit latest-approval store queries
-- `D3` remove private cross-workflow latest-action access
-- `F1` commit the orchestration inventory
-- `F2` commit the repo-standard machine conventions
-- `F3` extract the runtime-skill setup machine and delete the legacy setup service
-- `F4` move delegation progression under `app/workflows/delegation/*`
-- `F5` migrate pending and recovery to concern-owned functional machines
-- `F6` separate execution workflow ownership from runtime dispatch
-
-Remaining:
-
-- Track B Telegram presenter extraction
-- final acceptance-gate audit
-
-Completed in `Track E / E1-E4`:
-
-- zero-import gates now scan both `app/` and `tests/`
-- `workflows/__init__.py` and the recovery transport-contract owner are locked
-  down by focused structural tests
-- stale transport-era test filenames are deleted and replaced with
-  channel-owned names
-- focused verification passed:
-  - `24 passed`
-- full suite passed:
-  - `1554 passed, 23 skipped`
-
-Completed in `Track B / B1`:
-
-- Telegram reply-markup construction now lives in
-  `app/channels/telegram/presenters.py`
-- the scoped Telegram channel modules no longer construct inline keyboards
-  directly
-- dead ingress-only settings button helpers are gone
-- focused verification passed:
-  - `314 passed`
-- full suite passed:
-  - `1562 passed, 23 skipped`
-
-25. `pending` `Track B / B2a: move provider-guidance Telegram rendering into presenters.py`
-   - Added named provider-guidance presenter functions in
-     `app/channels/telegram/presenters.py` for:
-     - preview
-     - missing-detail
-     - lifecycle history
-     - lifecycle mutation messages
-   - `app/channels/telegram/guidance.py` now only orchestrates workflow calls
-     and applies presenter output.
-   - Added:
-     - focused presenter unit tests for provider-guidance preview/history/
-       mutation rendering
-     - a regression test proving the guidance channel module calls the
-       presenter
-     - a negative structural guard proving `guidance.py` no longer performs
-       inline HTML formatting
-   - focused verification passed:
-     - `46 passed`
- - full suite passed:
-   - `1567 passed, 23 skipped`
-
-26. `pending` `Track B / B2b: move runtime-skill Telegram rendering into presenters.py`
-   - Added named runtime-skill presenter functions in
-     `app/channels/telegram/presenters.py` for:
-     - active-skill summary
-     - catalog listing
-     - setup/activation/deactivation outcomes
-     - lifecycle history and lifecycle mutation messages
-     - search/info/import/update/diff/update-all outputs
-     - clear-credential prompts and results
-     - setup-step validation and completion messages
+26. `cb6b191` `Track B / B2b: move runtime-skill Telegram rendering into presenters`
    - `app/channels/telegram/runtime_skills.py` now applies presenter output
-     instead of owning inline HTML, credential-prompt formatting, or direct
-     lifecycle text construction.
+     for catalog, setup, lifecycle, import/update/diff, and clear-credential
+     flows.
+   - Focused verification passed: `96 passed`
+   - Full suite passed: `1573 passed, 23 skipped`
+
+27. `6e6de74` `Track B / B2c1: move telegram conversation and pending presenters`
+   - `app/channels/telegram/conversation.py` and
+     `app/channels/telegram/pending.py` now apply presenter output instead of
+     owning inline status and callback text.
+   - Focused verification passed: `103 passed`
+   - Full suite passed: `1583 passed, 23 skipped`
+
+28. `0057e1c` `Track B / B2c2a: move ingress request rendering into presenters`
+   - `app/channels/telegram/ingress.py` now applies presenter output for setup,
+     formatted replies, compact/full replies, delegation plans, `/raw`, and
+     welcome output.
+   - Focused verification passed: `118 passed`
+   - Full suite passed: `1592 passed, 23 skipped`
+
+Worktree now in progress for `Track B / B2c2b`:
+
+29. `pending` `Track B / B2c2b: move ingress help/session/discover/admin/reporting rendering into presenters`
+   - `app/channels/telegram/presenters.py` now owns named rendering helpers for:
+     - main help and help-topic output
+     - session overview output
+     - `/send`, `/id`, and `/doctor` responses
+     - `/discover` usage, degraded-state, failure, and results output
+     - `/admin sessions` usage/detail/summary output
+     - access-command usage and override summaries
+     - `/skills` and `/guidance` usage/admin-only output
+     - queue/rate-limit/orphan-recovery user-facing status text
+   - `app/channels/telegram/ingress.py` now applies presenter output for those
+     flows instead of formatting text or HTML inline.
    - Added:
-     - runtime-skill presenter unit tests
-     - regression tests proving `runtime_skills.py` calls presenters for
-       summary, setup, and lifecycle rendering
-     - a negative structural guard proving `runtime_skills.py` no longer owns
-       inline HTML or credential-formatting helpers
+     - presenter unit tests for help/session/discover/admin/access rendering
+     - ingress regression tests proving presenter ownership for:
+       - `/help`
+       - `/session`
+       - `/discover`
+       - `/admin`
+       - `/guidance` admin-only output
+     - negative structural guards proving the removed help/discover/admin usage
+       text and helper builders are gone from ingress
    - focused verification passed:
-     - `96 passed`
+     - `277 passed`
    - full suite passed:
-     - `1573 passed, 23 skipped`
+     - `1603 passed, 23 skipped`
 
-Before-state for `Track B / B2`:
+## Remaining Work
 
-- `app/channels/telegram/guidance.py`
-  - still formats all provider-guidance preview/history/lifecycle replies inline
-- `app/channels/telegram/runtime_skills.py`
-  - still formats catalog, activation/setup, lifecycle, import, and setup-step
-    replies inline
-- `app/channels/telegram/conversation.py`
-  - still formats role/project/status and callback outcome replies inline
-- `app/channels/telegram/pending.py`
-  - still formats recovery replay/discard status text inline
-- `app/channels/telegram/ingress.py`
-  - still formats compact/full-answer text, delegation-plan text, help/session/
-    discover/admin output, and setup prompts inline
-- current contract tests covering these seams:
-  - `tests/test_handlers.py`
-  - `tests/test_handlers_output.py`
-  - `tests/test_handlers_credentials.py`
-  - `tests/test_handlers_store.py`
-  - `tests/test_invariants.py`
-  - `tests/test_request_flow.py`
-  - `tests/test_runtime_dispatch_boundary.py`
-
-Completed in `Track B / B2a`:
-
-- provider-guidance preview, history, and lifecycle mutation rendering now live
-  in `app/channels/telegram/presenters.py`
-- `app/channels/telegram/guidance.py` no longer owns inline HTML formatting
-- structural guard now proves `guidance.py` does not use `html.escape(...)`,
-  `ParseMode.HTML`, or inline HTML tags for provider-guidance replies
-
-Before-state for `Track B / B2b`:
-
-- files that will change:
-  - `app/channels/telegram/runtime_skills.py`
-  - `app/channels/telegram/presenters.py`
-  - `tests/test_telegram_presenters.py`
-  - `tests/test_handlers_store.py`
-  - `tests/test_telegram_runtime_skills.py`
-  - `tests/test_zero_import_gates.py`
-- current caller and owner inventory:
-  - `app/channels/telegram/runtime_skills.py` still formats runtime-skill
-    catalog replies inline
-  - it still formats activation/deactivation/setup outcomes inline
-  - it still formats runtime-skill lifecycle detail/history and mutation
-    replies inline
-  - it still formats setup prompts and foreign-setup notices inline
-- after-state required by this slice:
-  - runtime-skill catalog, activation/setup, lifecycle, and mutation rendering
-    live in `app/channels/telegram/presenters.py`
-  - `runtime_skills.py` only orchestrates workflow calls and applies presenter
-    output
-  - focused regression coverage proves the runtime-skills channel module calls
-    presenters for these outcomes
-  - negative structural guards prove the moved runtime-skill rendering is no
-    longer formatted inline in `runtime_skills.py`
-- contract tests for this slice:
-  - `tests/test_telegram_presenters.py`
-  - `tests/test_handlers_store.py`
-  - `tests/test_telegram_runtime_skills.py`
-  - `tests/test_zero_import_gates.py`
-
-Completed in `Track B / B2b`:
-
-- `app/channels/telegram/runtime_skills.py` no longer owns inline HTML or
-  credential-prompt formatting for runtime-skill channel replies
-- `app/channels/telegram/presenters.py` is now the owner for runtime-skill
-  catalog, setup, lifecycle, import, update, diff, and clear-credential
-  rendering
-- structural guards now prove `runtime_skills.py` does not import
-  `app.credential_flow` or contain inline HTML formatting tokens
+- run the final architecture acceptance audit against `store_plan.md`
+- add any last guard/fix required by the acceptance gates
+- rerun the full suite
+- commit remediation closure
 
 Before-state for `Track B / B2c`:
 

@@ -297,9 +297,8 @@ async def _chat_lock(chat_id: int | str, *, message=None, query=None, update_id:
     if is_busy:
         sent_feedback = True
         if message is not None:
-            await message.reply_text(
-                f"<i>{_msg.queue_busy()}</i>",
-                parse_mode=ParseMode.HTML)
+            rendered = telegram_presenters.queue_busy_message()
+            await message.reply_text(rendered.text, **rendered.kwargs())
         elif query is not None:
             await query.answer(_msg.queue_busy())
     async with lock:
@@ -331,10 +330,8 @@ async def _chat_lock(chat_id: int | str, *, message=None, query=None, update_id:
                 e,
             )
             if message is not None:
-                await message.reply_text(
-                    f"<i>{_msg.generic_error_try_again()}</i>",
-                    parse_mode=ParseMode.HTML,
-                )
+                rendered = telegram_presenters.generic_error_try_again_message()
+                await message.reply_text(rendered.text, **rendered.kwargs())
             elif query is not None:
                 await query.answer(_msg.generic_error_try_again(), show_alert=True)
             return
@@ -900,7 +897,8 @@ def _trust_tier(user) -> str:
 async def _public_guard(event, update: Update) -> bool:
     """Return True (and send denial) if the user is public. Use at top of restricted commands."""
     if is_public_user(event.user):
-        await update.effective_message.reply_text(_msg.trust_command_not_available_public())
+        rendered = telegram_presenters.public_command_not_available_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return True
     return False
 
@@ -954,7 +952,7 @@ def _callback_handler(fn):
             return
         query = update.callback_query
         if not is_allowed(event.user):
-            await query.answer(_msg.trust_not_authorized(), show_alert=True)
+            await query.answer(telegram_presenters.trust_not_authorized_message().text, show_alert=True)
             _complete_pending_work_item(uid)
             return
         token = _current_update_id.set(uid)
@@ -1386,118 +1384,6 @@ async def _handle_delegation_cancel(chat_id: int, query) -> None:
 
 # -- Command handlers ------------------------------------------------------
 
-def _help_command_lines(user) -> list[str]:
-    """Build the main help command list for the given user (trust- and admin-aware).
-
-    Public users do not see /project or /policy (blocked by _public_guard in handlers).
-    Non-admin users do not see /admin sessions.
-    """
-    lines = [
-        "/new — start a fresh conversation",
-        "/skills — browse and activate skills (e.g. <code>/skills list</code>)",
-        "/guidance — inspect and manage provider guidance",
-        "/role &lt;text&gt; — set the AI's persona (e.g. <code>/role Python expert</code>)",
-        "/approval on|off — show a plan before executing, or run immediately",
-        "/approve / /reject — act on a pending plan",
-        "/cancel — cancel a running task, credential setup, or a pending request",
-        "/clear_credentials — remove your stored credentials",
-        "/send &lt;path&gt; — retrieve a file from the server",
-        "/compact on|off — toggle short/full answers",
-    ]
-    if _state().config.model_profiles:
-        lines.append("/model — switch model profile (fast/balanced/best)")
-    if _state().config.agent_mode == "registry":
-        lines.append("/discover — find available specialist bots by role, skill, or tag")
-    if not is_public_user(user):
-        lines.append("/policy inspect|edit — set file access policy")
-    lines.extend([
-        "/settings — view and change chat settings",
-    ])
-    if not is_public_user(user) and _state().config.projects:
-        lines.append("/project — show or change project binding")
-    lines.extend([
-        "/session — show current session info",
-        "/id — show your Telegram user ID",
-        "/doctor — run full app health check (DB, config, Telegram)",
-        "/export — download recent conversation history",
-    ])
-    if is_admin(user):
-        lines.append("/admin sessions — session overview (admin only)")
-    return lines
-
-
-def _build_main_help(user) -> str:
-    """Build the full main help text for the given user (trust- and admin-aware)."""
-    cfg = _state().config
-    provider = _state().provider.name.capitalize()
-    instance = cfg.instance
-    header = (
-        "<b>Agent Bot</b> (instance: <code>{instance}</code>, provider: {provider})\n\n"
-        "Send a message, photo, or document and the AI will respond.\n\n"
-        "<b>Commands:</b>\n"
-    ).format(instance=instance, provider=provider)
-    command_block = "\n".join(_help_command_lines(user)) + "\n\n"
-    # Intentional set of controls (trust-aware: no /project for public).
-    control_parts = ["/settings", "/session"]
-    if cfg.model_profiles:
-        control_parts.append("/model")
-    if not is_public_user(user) and cfg.projects:
-        control_parts.append("/project")
-    controls_line = "Chat options: " + " · ".join(control_parts) + "."
-    recovery_line = "Interrupted? Use Run again or Skip on the status message."
-    footer = controls_line + "\n" + recovery_line + "\n\nType /help skills, /help approval, or /help credentials for details."
-    return header + command_block + footer
-
-HELP_SKILLS = (
-    "<b>Skills</b>\n\n"
-    "Skills add domain knowledge and tools to the AI.\n\n"
-    "/skills list — see all available skills with status\n"
-    "/skills add &lt;name&gt; — activate a skill (prompts for credentials if needed)\n"
-    "/skills remove &lt;name&gt; — deactivate a skill\n"
-    "/skills setup &lt;name&gt; — re-enter credentials for a skill\n"
-    "/skills info &lt;name&gt; — view skill details\n"
-    "/skills search &lt;query&gt; — search the skill store\n"
-    "/skills clear — deactivate all skills\n"
-    "/skills create &lt;name&gt; — create a custom draft skill\n"
-    "/skills edit &lt;name&gt; &lt;body&gt; — replace the current draft body\n"
-    "/skills history &lt;name&gt; — show revision and approval history\n"
-    "/skills submit &lt;name&gt; — submit the draft for review\n"
-    "/skills approve|reject|publish|archive &lt;name&gt; — lifecycle admin actions\n\n"
-    "/guidance preview &lt;provider&gt; — show effective provider guidance\n"
-    "/guidance edit|history|submit|approve|reject|publish|archive &lt;provider&gt; — provider guidance lifecycle"
-)
-
-HELP_APPROVAL = (
-    "<b>Approval Mode</b>\n\n"
-    "When approval mode is on, the AI shows a plan before executing. "
-    "You review and approve or reject it.\n\n"
-    "If a request needs approval, retry, or recovery (e.g. interrupted or blocked), "
-    "use the in-chat buttons on the status message — Run again or Skip — no separate command needed.\n\n"
-    "/approval on — require approval before execution\n"
-    "/approval off — execute immediately\n"
-    "/approval status — check current setting\n"
-    "/approve — approve the pending plan\n"
-    "/reject — reject the pending plan\n"
-    "/cancel — cancel a pending request"
-)
-
-HELP_CREDENTIALS = (
-    "<b>Credentials</b>\n\n"
-    "Some skills need API tokens or keys. When you activate such a skill, "
-    "the bot asks for each credential in a private message and encrypts it.\n\n"
-    "/skills setup &lt;name&gt; — re-enter credentials for a skill\n"
-    "/clear_credentials — remove all your stored credentials\n"
-    "/clear_credentials &lt;skill&gt; — remove credentials for one skill\n\n"
-    "Your credential messages are deleted after capture for safety."
-)
-
-_HELP_TOPICS = {
-    "skills": HELP_SKILLS,
-    "approval": HELP_APPROVAL,
-    "credentials": HELP_CREDENTIALS,
-}
-
-
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start — always show main help (ignores deep-link payloads)."""
     event = normalize_command(update, context)
@@ -1506,11 +1392,21 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     uid = update.update_id
     if event is None or not is_allowed(event.user):
-        await update.effective_message.reply_text(_msg.trust_not_authorized())
+        rendered = telegram_presenters.trust_not_authorized_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         _complete_pending_work_item(uid)
         return
-    text = _build_main_help(event.user)
-    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+    cfg = _state().config
+    rendered = telegram_presenters.main_help_message(
+        instance=cfg.instance,
+        provider_name=_state().provider.name.capitalize(),
+        has_model_profiles=bool(cfg.model_profiles),
+        agent_mode=cfg.agent_mode,
+        is_public=is_public_user(event.user),
+        has_projects=bool(cfg.projects),
+        is_admin=is_admin(event.user),
+    )
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
     _complete_pending_work_item(uid)
 
 
@@ -1522,26 +1418,35 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     uid = update.update_id
     if event is None or not is_allowed(event.user):
-        await update.effective_message.reply_text(_msg.trust_not_authorized())
+        rendered = telegram_presenters.trust_not_authorized_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         _complete_pending_work_item(uid)
         return
     args = event.args
 
     if args:
         topic = args[0].lower()
-        topic_text = _HELP_TOPICS.get(topic)
-        if topic_text:
-            await update.effective_message.reply_text(topic_text, parse_mode=ParseMode.HTML)
+        rendered = telegram_presenters.help_topic_message(topic)
+        if rendered is not None:
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             _complete_pending_work_item(uid)
             return
-        await update.effective_message.reply_text(
-            "Unknown help topic. Try: /help skills, /help approval, or /help credentials."
-        )
+        rendered = telegram_presenters.unknown_help_topic_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         _complete_pending_work_item(uid)
         return
 
-    text = _build_main_help(event.user)
-    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+    cfg = _state().config
+    rendered = telegram_presenters.main_help_message(
+        instance=cfg.instance,
+        provider_name=_state().provider.name.capitalize(),
+        has_model_profiles=bool(cfg.model_profiles),
+        agent_mode=cfg.agent_mode,
+        is_public=is_public_user(event.user),
+        has_projects=bool(cfg.projects),
+        is_admin=is_admin(event.user),
+    )
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
     _complete_pending_work_item(uid)
 
 
@@ -1558,14 +1463,17 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     resolved = _resolve_context(session, trust_tier=trust)
     pstate = session.provider_state
 
-    # Show provider-relevant session ID
     if _state().provider.name == "claude":
         sid = pstate.get("session_id", "[none]")
         active = pstate.get("started", False)
-        session_line = f"Session: <code>{html.escape(sid[:12])}\u2026</code>\nActive: <code>{active}</code>"
+        session_label = "Session"
+        session_value = sid[:12] + "\u2026"
+        session_active = str(active)
     else:
         tid = pstate.get("thread_id") or "[none yet]"
-        session_line = f"Thread: <code>{html.escape(str(tid))}</code>"
+        session_label = "Thread"
+        session_value = str(tid)
+        session_active = None
 
     pending = "yes" if session.has_pending else "no"
     role_display = resolved.role or "(default)"
@@ -1573,7 +1481,6 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     approval_mode = session.approval_mode
     approval_source = _approval_mode_source(session)
 
-    # Resolve effective working directory for display
     if resolved.project_id:
         wd_display = f"{resolved.working_dir} (project: {resolved.project_id})"
     else:
@@ -1586,42 +1493,34 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     model_id = resolved.effective_model or cfg.model or "(default)"
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
     compact_display = "on" if compact else "off"
-
-    # Prompt weight estimate (chars of system prompt)
     prompt_weight_count = execution_prompt_weight(resolved.role, resolved.active_skills)
     prompt_weight = f"~{prompt_weight_count} chars" if prompt_weight_count else "minimal"
-
-    body = (
-        f"Provider: <code>{html.escape(_state().provider.name)}</code>\n"
-        f"Instance: <code>{html.escape(cfg.instance)}</code>\n"
-        f"Working dir: <code>{html.escape(wd_display)}</code>\n"
-        f"File policy: <code>{html.escape(file_policy)}</code>\n"
-        f"Model: <code>{html.escape(model_profile)}</code> ({html.escape(model_id)})\n"
-        f"Compact: <code>{compact_display}</code>\n"
-        f"Prompt weight: <code>{html.escape(prompt_weight)}</code>\n"
-        f"{session_line}\n"
-        f"Approval mode: <code>{approval_mode}</code> ({approval_source})\n"
-        f"Role: <code>{html.escape(role_display)}</code>\n"
-        f"Skills: <code>{html.escape(skills_display)}</code>\n"
-        f"Pending: <code>{pending}</code>"
-    )
-    if trust == "public":
-        body += "\n\n" + _msg.trust_settings_managed_public()
-    cfg = _state().config
     session_cmds = ["/settings"]
     if trust != "public" and cfg.projects:
         session_cmds.append("/project")
     if cfg.model_profiles:
         session_cmds.append("/model")
-    if session_cmds:
-        if len(session_cmds) == 1:
-            cmd_str = session_cmds[0]
-        elif len(session_cmds) == 2:
-            cmd_str = session_cmds[0] + " or " + session_cmds[1]
-        else:
-            cmd_str = ", ".join(session_cmds[:-1]) + ", or " + session_cmds[-1]
-        body += "\n\n" + "Use " + cmd_str + " to change chat settings."
-    await update.effective_message.reply_text(body, parse_mode=ParseMode.HTML)
+    rendered = telegram_presenters.session_overview_message(
+        provider_name=_state().provider.name,
+        instance=cfg.instance,
+        working_dir_display=wd_display,
+        file_policy=file_policy,
+        model_profile=model_profile,
+        model_id=model_id,
+        compact_display=compact_display,
+        prompt_weight=prompt_weight,
+        session_label=session_label,
+        session_value=session_value,
+        session_active=session_active,
+        approval_mode=approval_mode,
+        approval_source=approval_source,
+        role_display=role_display,
+        skills_display=skills_display,
+        pending=pending,
+        trust_public=(trust == "public"),
+        session_commands=session_cmds,
+    )
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 @_command_handler
@@ -1646,14 +1545,16 @@ async def cmd_send(event, update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if await _public_guard(event, update):
         return
     if not event.args:
-        await update.effective_message.reply_text("Usage: /send <path>")
+        rendered = telegram_presenters.send_usage_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     raw_path = " ".join(event.args)
     session = _load(event.chat_id)
     resolved_ctx = _resolve_context(session, trust_tier=_trust_tier(event.user))
     resolved = resolve_allowed_path(raw_path, _allowed_roots(event.chat_id, resolved_ctx))
     if not resolved:
-        await update.effective_message.reply_text("Path is missing or outside allowed roots.")
+        rendered = telegram_presenters.send_path_not_allowed_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     await send_path_to_chat(update.effective_message, resolved)
 
@@ -1661,11 +1562,8 @@ async def cmd_send(event, update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 @_command_handler
 async def cmd_id(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     username = event.user.username or "[none]"
-    await update.effective_message.reply_text(
-        f"Your user ID: <code>{event.user.id}</code>\n"
-        f"Your username: <code>{html.escape(username)}</code>",
-        parse_mode=ParseMode.HTML,
-    )
+    rendered = telegram_presenters.user_identity_message(event.user.id, username)
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 @_command_handler
@@ -1695,34 +1593,15 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         caller_is_bot=True,
         session_context=session_context,
     )
-    parts: list[str] = []
-    for line in format_runtime_health_for_doctor(report):
-        if line.startswith("INFO: "):
-            parts.append(f"\u2139\ufe0f {html.escape(line[6:])}")
-        elif line.startswith("FAIL: "):
-            parts.append(f"\u274c {html.escape(line[6:])}")
-        elif line.startswith("WARN: "):
-            parts.append(f"\u26a0\ufe0f {html.escape(line[6:])}")
-        else:
-            parts.append(html.escape(line))
-    # Prompt weight from resolved execution context (respects trust tier)
+    prompt_weight_count = None
     if session is not None:
         resolved = _resolve_context(session, trust_tier=_trust_tier(event.user))
-        prompt_weight_count = execution_prompt_weight(resolved.role, resolved.active_skills)
-        if prompt_weight_count:
-            parts.append(f"Prompt weight: ~{prompt_weight_count} chars")
-    if parts:
-        await update.effective_message.reply_text(
-            "\n".join(parts), parse_mode=ParseMode.HTML)
-    else:
-        await update.effective_message.reply_text("\u2705 All checks passed.")
-
-
-def _discover_usage() -> str:
-    return (
-        "Usage: /discover <query> [role:<role>] [capability:<capability>] [tag:<tag>] [state:<connected|degraded|standalone|offline>]\n"
-        "Example: <code>/discover role:developer capability:python tag:backend schema review</code>"
+        prompt_weight_count = execution_prompt_weight(resolved.role, resolved.active_skills) or None
+    rendered = telegram_presenters.doctor_report_message(
+        format_runtime_health_for_doctor(report),
+        prompt_weight_count,
     )
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 def _parse_discovery_query(
@@ -1761,9 +1640,9 @@ def _parse_discovery_query(
         else:
             free_text_parts.append(token)
     if required_state not in {"connected", "degraded", "standalone", "offline"}:
-        return None, _discover_usage()
+        return None, telegram_presenters.discover_usage_message().text
     if not role and not capabilities and not tags and not free_text_parts:
-        return None, _discover_usage()
+        return None, telegram_presenters.discover_usage_message().text
     return (
         AgentDiscoveryQuery(
             role=role,
@@ -1777,74 +1656,37 @@ def _parse_discovery_query(
     )
 
 
-def _format_discovery_results(agents: list[dict[str, Any]]) -> str:
-    if not agents:
-        return "No matching agents found."
-    lines = ["<b>Matching agents</b>"]
-    for agent in agents[:8]:
-        display_name = html.escape(
-            agent.get("display_name") or agent.get("slug") or agent.get("agent_id") or "Unnamed agent"
-        )
-        role = html.escape(agent.get("role") or "(unspecified)")
-        state = html.escape(agent.get("connectivity_state") or "unknown")
-        current_capacity = int(agent.get("current_capacity", 0) or 0)
-        max_capacity = int(agent.get("max_capacity", 1) or 1)
-        lines.append(f"\n<b>{display_name}</b> — <code>{role}</code>")
-        lines.append(
-            f"State: <code>{state}</code> · Capacity: <code>{current_capacity}/{max_capacity}</code>"
-        )
-        capabilities = [str(capability) for capability in agent.get("capabilities", agent.get("skills", [])) if capability]
-        if capabilities:
-            lines.append(f"Capabilities: <code>{html.escape(', '.join(capabilities))}</code>")
-        tags = [str(tag) for tag in agent.get("tags", []) if tag]
-        if tags:
-            lines.append(f"Tags: <code>{html.escape(', '.join(tags))}</code>")
-        description = str(agent.get("description", "") or "").strip()
-        if description:
-            lines.append(html.escape(description))
-    if len(agents) > 8:
-        lines.append(f"\nShowing first {8} of {len(agents)} matches.")
-    return "\n".join(lines)
-
-
 @_command_handler
 async def cmd_discover(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     del context
     cfg = _state().config
     if cfg.agent_mode == "standalone":
-        await update.effective_message.reply_text(
-            "Agent discovery is unavailable in standalone mode.",
-        )
+        rendered = telegram_presenters.discover_unavailable_standalone_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     state = load_agent_runtime_state(cfg.data_dir)
     if state.connectivity_state != "connected":
-        detail = f" Last registry error: {state.last_error}" if state.last_error else ""
-        await update.effective_message.reply_text(
-            "Agent discovery is unavailable because registry connectivity is degraded." + detail
-        )
+        rendered = telegram_presenters.discover_degraded_message(state.last_error)
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     query, error = _parse_discovery_query(event.args, exclude_agent_id=state.agent_id)
     if error is not None or query is None:
-        await update.effective_message.reply_text(error or _discover_usage(), parse_mode=ParseMode.HTML)
+        rendered = telegram_presenters.discover_usage_message()
+        await update.effective_message.reply_text(error or rendered.text, parse_mode=rendered.parse_mode)
         return
     client = registry_client(cfg)
     if client is None:
-        await update.effective_message.reply_text(
-            "Agent discovery is unavailable because this bot has not finished registry enrollment."
-        )
+        rendered = telegram_presenters.discover_not_enrolled_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     try:
         agents = await client.search(query)
     except RegistryClientError as exc:
-        await update.effective_message.reply_text(
-            f"Agent discovery failed: {html.escape(str(exc))}",
-            parse_mode=ParseMode.HTML,
-        )
+        rendered = telegram_presenters.discover_failed_message(str(exc))
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    await update.effective_message.reply_text(
-        _format_discovery_results(agents),
-        parse_mode=ParseMode.HTML,
-    )
+    rendered = telegram_presenters.discover_results_message(agents)
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 
@@ -1855,7 +1697,8 @@ async def cmd_export(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     history = export_chat_history(cfg.data_dir, _conversation_key(chat_id))
     if not history:
-        await update.effective_message.reply_text(_msg.no_conversation_to_export())
+        rendered = telegram_presenters.no_conversation_to_export_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
 
     # Add session metadata header — use resolved context for user-visible data
@@ -1889,22 +1732,24 @@ async def cmd_export(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 @_command_handler
 async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(event.user):
-        await update.effective_message.reply_text(_msg.admin_required())
+        rendered = telegram_presenters.admin_required_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
 
     args = event.args
     sub = args[0].lower() if args else ""
 
     if sub != "sessions":
-        await update.effective_message.reply_text(
-            "Usage: /admin sessions [conversation_key]")
+        rendered = telegram_presenters.admin_sessions_usage_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
 
     cfg = _state().config
     sessions = list_sessions(cfg.data_dir)
 
     if not sessions:
-        await update.effective_message.reply_text(_msg.no_sessions_found())
+        rendered = telegram_presenters.no_sessions_found_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
 
     # Filter stale active_skills that no longer resolve
@@ -1917,27 +1762,16 @@ async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if len(args) >= 2:
         target_key = parse_conversation_key(args[1])
         if not target_key:
-            await update.effective_message.reply_text("Invalid conversation key.")
+            rendered = telegram_presenters.admin_invalid_conversation_key_message()
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
         match = next((s for s in sessions if s["conversation_key"] == target_key), None)
         if not match:
-            await update.effective_message.reply_text(
-                f"No session found for conversation {target_key}.")
+            rendered = telegram_presenters.admin_session_not_found_message(target_key)
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
-        skills = match["active_skills"]
-        skill_list = ", ".join(skills) if skills else "none"
-        lines = [
-            f"<b>Session {html.escape(target_key)}</b>",
-            f"Provider: {html.escape(match['provider'])}",
-            f"Approval: {html.escape(match['approval_mode'])}",
-            f"Skills ({len(skills)}): {html.escape(skill_list)}",
-            f"Pending request: {'yes' if match['has_pending'] else 'no'}",
-            f"Credential setup: {'in progress' if match['has_setup'] else 'no'}",
-            f"Created: {html.escape(match['created_at'][:19])}",
-            f"Updated: {html.escape(match['updated_at'][:19])}",
-        ]
-        await update.effective_message.reply_text(
-            "\n".join(lines), parse_mode=ParseMode.HTML)
+        rendered = telegram_presenters.admin_session_detail_message(target_key, match)
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
 
     # Summary view
@@ -1949,24 +1783,16 @@ async def cmd_admin(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -
         for sk in s["active_skills"]:
             skill_counts[sk] = skill_counts.get(sk, 0) + 1
 
-    lines = [f"<b>Sessions: {total}</b>"]
-    if pending:
-        lines.append(f"Pending approval: {pending}")
-    if setup:
-        lines.append(f"Credential setup: {setup}")
-    if skill_counts:
-        top = sorted(skill_counts.items(), key=lambda x: -x[1])[:5]
-        lines.append("")
-        lines.append("<b>Top skills:</b>")
-        for sk, count in top:
-            lines.append(f"  {html.escape(sk)}: {count}")
-    lines.append("")
-    lines.append(f"Most recent: {html.escape(sessions[0]['conversation_key'])}")
-    if sessions[0]["updated_at"]:
-        lines.append(f"  updated {sessions[0]['updated_at'][:19]}")
-
-    await update.effective_message.reply_text(
-        "\n".join(lines), parse_mode=ParseMode.HTML)
+    top = sorted(skill_counts.items(), key=lambda value: -value[1])[:5] if skill_counts else []
+    rendered = telegram_presenters.admin_sessions_summary_message(
+        total=total,
+        pending=pending,
+        setup=setup,
+        top_skills=top,
+        most_recent_key=sessions[0]["conversation_key"],
+        most_recent_updated_at=sessions[0]["updated_at"],
+    )
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 @_command_handler
@@ -2017,9 +1843,8 @@ async def cmd_skills(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await skills_edit(event, update, args[1], " ".join(args[2:]), runtime=runtime)
         return
 
-    await update.effective_message.reply_text(
-        "Usage: /skills [list|add|remove|setup|create|edit|history|submit|approve|reject|publish|archive|clear|search|info|install|uninstall|updates|update|diff]"
-    )
+    rendered = telegram_presenters.skills_usage_message()
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 @_command_handler
@@ -2028,9 +1853,8 @@ async def cmd_guidance(event, update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     args = event.args
     if len(args) < 2:
-        await update.effective_message.reply_text(
-            "Usage: /guidance [preview|edit|history|submit|approve|reject|publish|archive] <provider> [body]"
-        )
+        rendered = telegram_presenters.guidance_usage_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     sub = args[0].lower()
     provider_name = args[1]
@@ -2048,31 +1872,34 @@ async def cmd_guidance(event, update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     if sub == "approve":
         if not is_admin(event.user):
-            await update.effective_message.reply_text("Only admins can approve provider guidance.")
+            rendered = telegram_presenters.guidance_admin_only_message("approve")
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
         await channel_guidance_approve(event, update, provider_name)
         return
     if sub == "reject":
         if not is_admin(event.user):
-            await update.effective_message.reply_text("Only admins can reject provider guidance.")
+            rendered = telegram_presenters.guidance_admin_only_message("reject")
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
         await channel_guidance_reject(event, update, provider_name)
         return
     if sub == "publish":
         if not is_admin(event.user):
-            await update.effective_message.reply_text("Only admins can publish provider guidance.")
+            rendered = telegram_presenters.guidance_admin_only_message("publish")
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
         await channel_guidance_publish(event, update, provider_name)
         return
     if sub == "archive":
         if not is_admin(event.user):
-            await update.effective_message.reply_text("Only admins can archive provider guidance.")
+            rendered = telegram_presenters.guidance_admin_only_message("archive")
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
         await channel_guidance_archive(event, update, provider_name)
         return
-    await update.effective_message.reply_text(
-        "Usage: /guidance [preview|edit|history|submit|approve|reject|publish|archive] <provider> [body]"
-    )
+    rendered = telegram_presenters.guidance_usage_message()
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 @_command_handler
@@ -2155,8 +1982,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if rate_limiter and rate_limiter.enabled and not (_state().config.admin_users_explicit and is_admin(user)):
         allowed, retry_after = rate_limiter.check(user.id)
         if not allowed:
-            await update.effective_message.reply_text(
-                f"Rate limit reached. Please wait {retry_after} seconds.")
+            rendered = telegram_presenters.rate_limit_message(retry_after)
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
 
     msg = await normalize_message(update, context, _state().config.data_dir)
@@ -2199,10 +2026,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         await message.chat.send_message(rendered.text, **rendered.kwargs())
     if status == "queued":
-        await message.reply_text(
-            f"<i>{_msg.queue_accepted()}</i>",
-            parse_mode=ParseMode.HTML,
-        )
+        rendered = telegram_presenters.queue_accepted_message()
+        await message.reply_text(rendered.text, **rendered.kwargs())
         return
     if status not in {"admitted", "queued"} or item_id is None:
         return
@@ -2387,20 +2212,24 @@ async def cmd_allowuser(event, update: Update, context: ContextTypes.DEFAULT_TYP
     """Admin: add a user to the allowed list. Usage: /allowuser <actor_key|user_id> [reason]."""
     del context
     if not is_admin(event.user):
-        await update.effective_message.reply_text("This command requires admin access.")
+        rendered = telegram_presenters.admin_access_required_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     if not event.args:
-        await update.effective_message.reply_text("Usage: /allowuser <actor_key|user_id> [reason]")
+        rendered = telegram_presenters.allowuser_usage_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     actor_key = parse_actor_key(event.args[0])
     if not actor_key:
-        await update.effective_message.reply_text("Usage: /allowuser <actor_key|user_id> [reason]")
+        rendered = telegram_presenters.allowuser_usage_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     reason = " ".join(event.args[1:])
     granted_by = _actor_key(event.user.id if event.user else 0)
     cfg = _state().config
     work_queue.set_user_access(cfg.data_dir, actor_key, "allowed", reason, granted_by)
-    await update.effective_message.reply_text(f"Actor {actor_key} added to allowed list.")
+    rendered = telegram_presenters.allowuser_success_message(actor_key)
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 @_command_handler
@@ -2408,20 +2237,24 @@ async def cmd_blockuser(event, update: Update, context: ContextTypes.DEFAULT_TYP
     """Admin: block a user. Usage: /blockuser <actor_key|user_id> [reason]."""
     del context
     if not is_admin(event.user):
-        await update.effective_message.reply_text("This command requires admin access.")
+        rendered = telegram_presenters.admin_access_required_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     if not event.args:
-        await update.effective_message.reply_text("Usage: /blockuser <actor_key|user_id> [reason]")
+        rendered = telegram_presenters.blockuser_usage_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     actor_key = parse_actor_key(event.args[0])
     if not actor_key:
-        await update.effective_message.reply_text("Usage: /blockuser <actor_key|user_id> [reason]")
+        rendered = telegram_presenters.blockuser_usage_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     reason = " ".join(event.args[1:])
     granted_by = _actor_key(event.user.id if event.user else 0)
     cfg = _state().config
     work_queue.set_user_access(cfg.data_dir, actor_key, "blocked", reason, granted_by)
-    await update.effective_message.reply_text(f"Actor {actor_key} blocked.")
+    rendered = telegram_presenters.blockuser_success_message(actor_key)
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 @_command_handler
@@ -2429,22 +2262,17 @@ async def cmd_listaccess(event, update: Update, context: ContextTypes.DEFAULT_TY
     """Admin: list all configured DB-backed access overrides."""
     del context
     if not is_admin(event.user):
-        await update.effective_message.reply_text("This command requires admin access.")
+        rendered = telegram_presenters.admin_access_required_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     cfg = _state().config
     rows = work_queue.list_user_access(cfg.data_dir)
     if not rows:
-        await update.effective_message.reply_text("No access overrides set.")
+        rendered = telegram_presenters.listaccess_empty_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    lines = ["<b>Access overrides</b>"]
-    for row in rows:
-        status = "✅ allowed" if row["access"] == "allowed" else "🚫 blocked"
-        reason = f" — {html.escape(row['reason'])}" if row["reason"] else ""
-        lines.append(f"• <code>{row['actor_key']}</code> {status}{reason}")
-    await update.effective_message.reply_text(
-        "\n".join(lines),
-        parse_mode=ParseMode.HTML,
-    )
+    rendered = telegram_presenters.access_overrides_message(rows)
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 async def _poll_cancel_requested(item_id: str, cancel_event: asyncio.Event) -> None:
     interval = poll_interval_for_runtime(_state().config.runtime_mode)
@@ -2793,11 +2621,8 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             return
         try:
             detail = f"/{event.command}" if isinstance(event, InboundCommand) else "a button action"
-            await bot.send_message(
-                chat_id,
-                _msg.recovery_orphaned_command(detail),
-                parse_mode=ParseMode.HTML,
-            )
+            rendered = telegram_presenters.recovery_orphaned_command_message(detail)
+            await bot.send_message(chat_id, rendered.text, **rendered.kwargs())
         except Exception:
             pass
         return
@@ -2873,7 +2698,8 @@ async def _shared_command_dispatch(update: Update, context: ContextTypes.DEFAULT
     if event is None:
         return
     if not is_allowed(event.user):
-        await update.effective_message.reply_text(_msg.trust_not_authorized())
+        rendered = telegram_presenters.trust_not_authorized_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
 
     action = _worker_owned_command_action(event)
@@ -2900,7 +2726,7 @@ async def _shared_callback_dispatch(update: Update, context: ContextTypes.DEFAUL
     if event is None or query is None:
         return
     if not is_allowed(event.user):
-        await query.answer(_msg.trust_not_authorized(), show_alert=True)
+        await query.answer(telegram_presenters.trust_not_authorized_message().text, show_alert=True)
         return
 
     action = _worker_owned_callback_action(update, event)
@@ -2912,7 +2738,7 @@ async def _shared_callback_dispatch(update: Update, context: ContextTypes.DEFAUL
         return
 
     if _action_requires_public_guard(action.action) and is_public_user(event.user):
-        await query.answer(_msg.trust_command_not_available_public(), show_alert=True)
+        await query.answer(telegram_presenters.public_command_not_available_message().text, show_alert=True)
         return
 
     await query.answer()

@@ -6,12 +6,16 @@ from telegram.constants import ParseMode
 
 from app.channels.telegram.presenters import (
     TelegramRenderedMessage,
+    access_overrides_message,
+    admin_sessions_summary_message,
     approval_prompt,
     collapsed_response_message,
     delegation_plan_message,
+    discover_results_message,
     extract_summary,
     formatted_reply_messages,
     ingress_setup_prompt_message,
+    main_help_message,
     provider_guidance_history_message,
     provider_guidance_mutation_message,
     provider_guidance_preview_message,
@@ -21,6 +25,7 @@ from app.channels.telegram.presenters import (
     raw_usage_message,
     runtime_skill_active_summary_message,
     runtime_skill_history_message,
+    session_overview_message,
     settings_overview,
     skill_add_confirmation,
     welcome_message,
@@ -33,6 +38,7 @@ from app.workflows.provider_guidance.contracts import (
 )
 from app.runtime.inbound_types import InboundUser
 from app.session_state import DelegatedTask, PendingDelegation, SessionState
+from app.storage import default_session, save_session
 from app.workflows.runtime_skills.contracts import (
     RuntimeSkillLifecycleApproval,
     RuntimeSkillLifecycleDetail,
@@ -240,6 +246,103 @@ def test_welcome_message_mentions_current_modes():
 def test_raw_messages_render_expected_text():
     assert "Usage: /raw [N]" in raw_usage_message().text
     assert raw_missing_message().text == "No stored responses found."
+
+
+def test_main_help_message_renders_expected_sections():
+    rendered = main_help_message(
+        instance="prod",
+        provider_name="Claude",
+        has_model_profiles=True,
+        agent_mode="registry",
+        is_public=False,
+        has_projects=True,
+        is_admin=True,
+    )
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "Agent Bot" in rendered.text
+    assert "/discover" in rendered.text
+    assert "/admin sessions" in rendered.text
+
+
+def test_session_overview_message_renders_expected_html():
+    rendered = session_overview_message(
+        provider_name="claude",
+        instance="prod",
+        working_dir_display="/tmp/project",
+        file_policy="edit",
+        model_profile="fast",
+        model_id="gpt-5.4",
+        compact_display="on",
+        prompt_weight="~123 chars",
+        session_label="Session",
+        session_value="abc123…",
+        session_active="True",
+        approval_mode="on",
+        approval_source="chat override",
+        role_display="Python expert",
+        skills_display="planner, reviewer",
+        pending="no",
+        trust_public=False,
+        session_commands=["/settings", "/project"],
+    )
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "Working dir" in rendered.text
+    assert "Python expert" in rendered.text
+    assert "/settings or /project" in rendered.text
+
+
+def test_discover_results_message_renders_matching_agents():
+    rendered = discover_results_message(
+        [
+            {
+                "display_name": "Reviewer",
+                "role": "developer",
+                "connectivity_state": "connected",
+                "current_capacity": 1,
+                "max_capacity": 4,
+                "capabilities": ["python", "review"],
+                "tags": ["backend"],
+                "description": "Reviews code changes.",
+            }
+        ]
+    )
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "Matching agents" in rendered.text
+    assert "Reviewer" in rendered.text
+    assert "backend" in rendered.text
+
+
+def test_access_overrides_message_renders_expected_html():
+    rendered = access_overrides_message(
+        [
+            {"actor_key": "telegram:42", "access": "allowed", "reason": "trusted"},
+            {"actor_key": "telegram:99", "access": "blocked", "reason": ""},
+        ]
+    )
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "Access overrides" in rendered.text
+    assert "telegram:42" in rendered.text
+    assert "allowed" in rendered.text
+
+
+def test_admin_sessions_summary_message_renders_expected_html():
+    rendered = admin_sessions_summary_message(
+        total=3,
+        pending=1,
+        setup=1,
+        top_skills=[("planner", 2)],
+        most_recent_key="telegram:123",
+        most_recent_updated_at="2026-03-18T00:00:00+00:00",
+    )
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "Sessions: 3" in rendered.text
+    assert "planner: 2" in rendered.text
+    assert "telegram:123" in rendered.text
 
 
 def test_runtime_skill_active_summary_message_renders_expected_html():
@@ -484,6 +587,118 @@ async def test_handle_message_welcome_uses_presenter(monkeypatch):
         await th.handle_message(update, SimpleNamespace())
 
         assert chat.sent_messages[-1]["text"] == "patched welcome"
+
+
+async def test_cmd_help_uses_presenter(monkeypatch):
+    import app.channels.telegram.ingress as th
+
+    rendered = TelegramRenderedMessage(text="patched help presenter", parse_mode=ParseMode.HTML)
+    monkeypatch.setattr(th.telegram_presenters, "main_help_message", lambda **kwargs: rendered)
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+
+        msg = await send_command(th.cmd_help, chat, user, "/help")
+
+        assert msg.replies[-1]["text"] == "patched help presenter"
+
+
+async def test_cmd_session_uses_presenter(monkeypatch):
+    import app.channels.telegram.ingress as th
+
+    rendered = TelegramRenderedMessage(text="patched session presenter", parse_mode=ParseMode.HTML)
+    monkeypatch.setattr(th.telegram_presenters, "session_overview_message", lambda **kwargs: rendered)
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+
+        msg = await send_command(th.cmd_session, chat, user, "/session")
+
+        assert msg.replies[-1]["text"] == "patched session presenter"
+
+
+async def test_cmd_discover_uses_presenter(monkeypatch):
+    import app.channels.telegram.ingress as th
+
+    class _FakeClient:
+        async def search(self, query):
+            del query
+            return [{"display_name": "Reviewer"}]
+
+    rendered = TelegramRenderedMessage(text="patched discover presenter", parse_mode=ParseMode.HTML)
+    monkeypatch.setattr(th.telegram_presenters, "discover_results_message", lambda agents: rendered)
+    monkeypatch.setattr(
+        th,
+        "load_agent_runtime_state",
+        lambda data_dir: SimpleNamespace(
+            connectivity_state="connected",
+            last_error="",
+            agent_id="agent-1",
+        ),
+    )
+    monkeypatch.setattr(th, "registry_client", lambda cfg: _FakeClient())
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, agent_mode="registry")
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+
+        msg = await send_command(th.cmd_discover, chat, user, "/discover role:developer", ["role:developer"])
+
+        assert msg.replies[-1]["text"] == "patched discover presenter"
+
+
+async def test_cmd_admin_uses_presenter(monkeypatch):
+    import app.channels.telegram.ingress as th
+
+    rendered = TelegramRenderedMessage(text="patched admin presenter", parse_mode=ParseMode.HTML)
+    monkeypatch.setattr(th.telegram_presenters, "admin_sessions_summary_message", lambda **kwargs: rendered)
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(
+            data_dir,
+            admin_user_ids=frozenset({42}),
+            admin_usernames=frozenset(),
+            admin_users_explicit=True,
+        )
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        session = default_session("claude", prov.new_provider_state(), "off")
+        save_session(data_dir, "telegram:12345", session)
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+
+        msg = await send_command(th.cmd_admin, chat, user, "/admin sessions", ["sessions"])
+
+        assert msg.replies[-1]["text"] == "patched admin presenter"
+
+
+async def test_cmd_guidance_admin_only_uses_presenter(monkeypatch):
+    import app.channels.telegram.ingress as th
+
+    rendered = TelegramRenderedMessage(text="patched guidance admin presenter")
+    monkeypatch.setattr(th.telegram_presenters, "guidance_admin_only_message", lambda action: rendered)
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, admin_user_ids=frozenset(), admin_usernames=frozenset())
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+
+        msg = await send_command(th.cmd_guidance, chat, user, "/guidance approve claude", ["approve", "claude"])
+
+        assert msg.replies[-1]["text"] == "patched guidance admin presenter"
 
 
 async def test_guidance_preview_uses_presenter(monkeypatch):

@@ -14,6 +14,7 @@ from app.inbound_use_case_factory import (
     get_conversation_control_use_cases,
     get_conversation_settings_use_cases,
 )
+from app.provider_guidance_service import get_provider_guidance_service
 
 
 def _th():
@@ -48,7 +49,7 @@ async def cmd_new(event, update: Update, context) -> None:
             return
         th._save(chat_id, outcome.replacement_session)
         if outcome.cleanup_scripts:
-            th.get_provider_guidance_service().cleanup_codex_scripts(
+            get_provider_guidance_service().cleanup_codex_scripts(
                 cfg.data_dir, th._conversation_key(chat_id)
             )
     await update.effective_message.reply_text(outcome.message)
@@ -571,7 +572,7 @@ async def handle_worker_conversation_action(
             return True
         th._save(runtime_chat, outcome.replacement_session)
         if outcome.cleanup_scripts:
-            th.get_provider_guidance_service().cleanup_codex_scripts(
+            get_provider_guidance_service().cleanup_codex_scripts(
                 cfg.data_dir, th._conversation_key(runtime_chat)
             )
         await surface.reply_text(outcome.message)

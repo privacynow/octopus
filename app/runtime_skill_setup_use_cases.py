@@ -4,20 +4,20 @@ from __future__ import annotations
 
 from app.credential_flow import build_setup_state, foreign_skill_setup
 from app.credential_service import get_credential_service
+from app.credential_types import CredentialValidator
+from app.credential_validation import validate_credential
 from app.session_state import SessionState
-from app.runtime_skill_setup_port import (
+from app.workflows.runtime_skills.contracts import (
     RuntimeSkillSetupState,
     RuntimeSkillSetupCancellationOutcome,
     RuntimeSkillSetupAdvanceOutcome,
     RuntimeSkillCredentialSatisfactionOutcome,
     RuntimeSkillCredentialClearOutcome,
-    CredentialValidator,
     RuntimeSkillSetupPort,
 )
 from app.skill_activation_service import get_skill_activation_service
 from app.skill_lifecycle_service import get_skill_lifecycle_service
 from app.skill_types import SkillRequirement
-from app.credential_validation import validate_credential
 from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_cases
 
 

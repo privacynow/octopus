@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.session_state import SessionState
 from app.skill_lifecycle_service import get_skill_lifecycle_service
-from app.runtime_skill_activation_port import (
+from app.workflows.runtime_skills.contracts import (
     ConversationSkillItem,
     ConversationSkillListing,
     ConversationSkillMutationOutcome,

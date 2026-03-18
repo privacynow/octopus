@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.runtime_skill_catalog_port import (
+from app.workflows.runtime_skills.contracts import (
     RuntimeSkillCatalogItem,
     RuntimeSkillDetail,
     RuntimeSkillDraftRecord,

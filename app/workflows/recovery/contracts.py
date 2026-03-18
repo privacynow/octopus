@@ -1,4 +1,4 @@
-"""Contracts for recovery replay and discard workflows."""
+"""Workflow-local contracts for recovery replay and discard flows."""
 
 from __future__ import annotations
 

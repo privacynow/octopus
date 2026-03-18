@@ -126,6 +126,10 @@ def test_runtime_skill_workflows_no_longer_duplicate_snapshot_builders() -> None
     repo_root = Path(__file__).resolve().parents[1]
     authoring_text = (repo_root / "app" / "workflows" / "runtime_skills" / "authoring.py").read_text()
     approval_text = (repo_root / "app" / "workflows" / "runtime_skills" / "approval.py").read_text()
+    guidance_text = (repo_root / "app" / "workflows" / "provider_guidance" / "management.py").read_text()
 
     assert "def _snapshot(" not in authoring_text
     assert "def _snapshot(" not in approval_text
+    assert "def _latest_action_for_revision" not in authoring_text
+    assert "._latest_action_for_revision(" not in approval_text
+    assert "def _latest_action(" not in guidance_text

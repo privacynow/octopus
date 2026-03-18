@@ -133,6 +133,16 @@ Completed slices:
      - newest matching action is returned
      - missing revisions return an empty string
 
+16. `this commit` `Track D / D3: remove private cross-workflow latest-action access`
+   - Runtime-skill authoring now uses the explicit store query directly for
+     lifecycle snapshot construction.
+   - Runtime-skill approval no longer reaches into authoring’s private helper;
+     it consumes the explicit store contract instead.
+   - Provider-guidance management now also consumes the explicit latest-approval
+     store query instead of scanning approval history in-process.
+   - Added a structural guard proving the removed private/helper paths no longer
+     exist in the workflow modules.
+
 ## Latest Verified Test Baseline
 
 At the end of the latest completed slice:
@@ -215,10 +225,11 @@ Completed:
 
 - `D1` move shared lifecycle snapshot construction into `app/workflows/lifecycle_machine.py`
 - `D2` add explicit latest-approval store methods with SQLite/Postgres parity
+- `D3` remove private cross-class latest-action helper access
 
 Remaining:
 
-- `D3` remove private cross-class latest-action helper access
+- none
 
 ### Track E. Dead Code, Naming, and Test-Gate Cleanup
 
@@ -274,7 +285,7 @@ status.
 
 Next required slice:
 
-- `Track D / D3: remove private cross-class latest-action helper access`
+- `Track F / F1: write committed orchestration inventory`
 
 Completed:
 
@@ -283,21 +294,21 @@ Completed:
 
 Remaining:
 
-- `Track D / D2-D3`
 - `Track F / F1-F2`
 - all Phase 4-6 remediation slices after Phase 3 completes
 
 Before-state:
 
-- runtime-skill approval still reaches authoring’s private latest-action helper
-  instead of using the explicit store contract directly.
+- the orchestration inventory and repo-standard machine conventions are not yet
+  committed, so the Phase 4 machine migration work still lacks its explicit
+  recorded owner model and standard.
 
 After-state required next:
 
-- approval no longer reaches across workflow-private helper boundaries
-- runtime-skill and provider-guidance workflows consume the explicit store
-  contract for latest-approval lookup
-- approval no longer reaches across workflow-private helper boundaries
+- `docs/orchestration_inventory.md` exists and classifies every durable
+  orchestration concern named in the plan
+- the repo-standard functional decision-machine conventions are documented and
+  committed before Phase 4 begins
 
 After-state required:
 

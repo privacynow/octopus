@@ -11,6 +11,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 
 from app import user_messages as _msg
+from app.channels.telegram.cancellation import get_cancellation_registry
+from app.channels.telegram.state import get_channel_state
 from app.credential_flow import foreign_setup_message, format_credential_prompt
 from app.provider_guidance_service import get_provider_guidance_service
 from app.runtime import composition
@@ -23,14 +25,22 @@ def _th():
     return th
 
 
+def _state():
+    return get_channel_state()
+
+
+def _cancellations():
+    return get_cancellation_registry()
+
+
 def check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
     th = _th()
-    cfg = th._cfg()
+    cfg = _state().config
     return get_provider_guidance_service().check_prompt_size_cross_chat(
         data_dir,
         skill_name,
         cfg.provider_name,
-        th._prov().new_provider_state,
+        _state().provider.new_provider_state,
         cfg.approval_mode,
     )
 
@@ -81,8 +91,8 @@ async def execute_request(
     cancel_event: asyncio.Event | None = None,
 ):
     th = _th()
-    cfg = th._cfg()
-    prov = th._prov()
+    cfg = _state().config
+    prov = _state().provider
     guidance = get_provider_guidance_service()
     session = th._load(chat_id)
     resolved = th._resolve_context(session, trust_tier=trust_tier)
@@ -130,18 +140,18 @@ async def execute_request(
         stored_boot = session.provider_state.get("boot_id")
         stale_thread = (
             (stored_hash and stored_hash != context_hash)
-            or (stored_boot and stored_boot != th._boot_id)
+            or (stored_boot and stored_boot != _state().boot_id)
         )
         if stale_thread and session.provider_state.get("thread_id"):
             th.log.info(
                 "Clearing stale codex thread for chat %d (hash_match=%s, boot_match=%s)",
                 chat_id,
                 stored_hash == context_hash,
-                stored_boot == th._boot_id,
+                stored_boot == _state().boot_id,
             )
             session.provider_state["thread_id"] = None
         session.provider_state["context_hash"] = context_hash
-        session.provider_state["boot_id"] = th._boot_id
+        session.provider_state["boot_id"] = _state().boot_id
         th._save(chat_id, session)
 
     is_resume = bool(session.provider_state.get("thread_id") or session.provider_state.get("started"))
@@ -172,7 +182,7 @@ async def execute_request(
     heartbeat_task = asyncio.create_task(th._heartbeat(progress, content_started))
 
     local_cancel_event = cancel_event or asyncio.Event()
-    th._LIVE_CANCEL[chat_id] = local_cancel_event
+    _cancellations()[chat_id] = local_cancel_event
     try:
         result = await prov.run(
             session.provider_state,
@@ -183,7 +193,7 @@ async def execute_request(
             cancel=local_cancel_event,
         )
     finally:
-        th._LIVE_CANCEL.pop(chat_id, None)
+        _cancellations().pop(chat_id, None)
         heartbeat_task.cancel()
         typing_task.cancel()
         await asyncio.gather(heartbeat_task, typing_task, return_exceptions=True)
@@ -308,8 +318,8 @@ async def request_approval(
     cancel_event: asyncio.Event | None = None,
 ) -> None:
     th = _th()
-    cfg = th._cfg()
-    prov = th._prov()
+    cfg = _state().config
+    prov = _state().provider
     guidance = get_provider_guidance_service()
     session = th._load(chat_id)
 
@@ -365,7 +375,7 @@ async def request_approval(
 
     preflight_prompt = th.build_preflight_prompt(prompt, prov.name)
     local_cancel_event = cancel_event or asyncio.Event()
-    th._LIVE_CANCEL[chat_id] = local_cancel_event
+    _cancellations()[chat_id] = local_cancel_event
     try:
         plan_result = await prov.run_preflight(
             preflight_prompt,
@@ -375,7 +385,7 @@ async def request_approval(
             cancel=local_cancel_event,
         )
     finally:
-        th._LIVE_CANCEL.pop(chat_id, None)
+        _cancellations().pop(chat_id, None)
         heartbeat_task.cancel()
         typing_task.cancel()
         await asyncio.gather(heartbeat_task, typing_task, return_exceptions=True)

@@ -12,6 +12,7 @@ from app.providers.base import RunResult
 from app.storage import default_session, save_session
 from app import user_messages as _msg
 from tests.support.handler_support import (
+    live_cancel_registry,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -112,7 +113,7 @@ async def test_canonical_message_long_run_cancel():
         assert idx_ack < idx_done, "cancel ack must appear before cancelled status in ordered log"
 
         assert len(prov.run_calls) == 1
-        assert 12345 not in th._LIVE_CANCEL
+        assert 12345 not in live_cancel_registry()
 
         # Exact durable-work shape: one terminal item for the message, one for the /cancel command
         items = work_queue.get_work_items_for_chat(data_dir, _conv(12345))

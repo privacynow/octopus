@@ -16,6 +16,7 @@ import app.channels.telegram.ingress as _th
 from app import work_queue
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
+    current_bot_instance,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -320,7 +321,7 @@ async def test_missing_creds_block_execution():
         assert len(prov.run_calls) == 0
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("awaiting_skill_setup") is not None
-        out = " ".join(bot_texts(_th._bot_instance)).lower()
+        out = " ".join(bot_texts(current_bot_instance())).lower()
         assert "needs setup" in out
 
 
@@ -578,7 +579,7 @@ async def test_group_check_cred_satisfaction_no_overwrite():
         setup = session.get("awaiting_skill_setup")
         assert setup is not None
         assert setup["user_id"] == telegram_actor_key(100)
-        out = " ".join(bot_texts(_th._bot_instance)).lower()
+        out = " ".join(bot_texts(current_bot_instance())).lower()
         assert "wait" in out
 
 

@@ -3,6 +3,7 @@ from app.identity import telegram_conversation_key
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
 from tests.support.handler_support import (
+    current_bot_instance,
     drain_one_worker_item,
     fresh_env,
     last_reply,
@@ -20,7 +21,7 @@ async def test_execute_request_proposes_delegation_and_persists_pending_delegati
             "agent_registry_url": "http://registry.test",
             "agent_registry_enroll_token": "enroll-secret",
         }
-    ) as (data_dir, _, prov):
+    ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
 
@@ -62,7 +63,7 @@ async def test_execute_request_proposes_delegation_and_persists_pending_delegati
         assert any(
             "<b>Delegation plan</b>" in message.get("text", "")
             and message.get("reply_markup") is not None
-            for message in th._bot_instance.sent_messages
+            for message in current_bot_instance().sent_messages
         )
 
 
@@ -73,7 +74,7 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
             "agent_registry_url": "http://registry.test",
             "agent_registry_enroll_token": "enroll-secret",
         }
-    ) as (data_dir, _, prov):
+    ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
 
@@ -98,7 +99,7 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
         user = FakeUser()
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["pending_delegation"] = {
-            "conversation_ref": th.telegram_conversation_ref(th._cfg(), chat.id),
+            "conversation_ref": th.telegram_conversation_ref(cfg, chat.id),
             "title": "Feature delegation",
             "tasks": [
                 {
@@ -135,7 +136,7 @@ async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_s
             "agent_registry_url": "http://registry.test",
             "agent_registry_enroll_token": "enroll-secret",
         }
-    ) as (data_dir, _, prov):
+    ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
 
@@ -152,7 +153,7 @@ async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_s
         user = FakeUser()
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["pending_delegation"] = {
-            "conversation_ref": th.telegram_conversation_ref(th._cfg(), chat.id),
+            "conversation_ref": th.telegram_conversation_ref(cfg, chat.id),
             "title": "Feature delegation",
             "tasks": [
                 {
@@ -182,7 +183,7 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
             "agent_registry_url": "http://registry.test",
             "agent_registry_enroll_token": "enroll-secret",
         }
-    ) as (data_dir, _, prov):
+    ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
 
@@ -208,7 +209,7 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
         user = FakeUser()
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["pending_delegation"] = {
-            "conversation_ref": th.telegram_conversation_ref(th._cfg(), chat.id),
+            "conversation_ref": th.telegram_conversation_ref(cfg, chat.id),
             "title": "Feature delegation",
             "tasks": [
                 {

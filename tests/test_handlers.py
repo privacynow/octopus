@@ -16,6 +16,7 @@ from app.runtime.inbound_types import InboundMessage, InboundUser
 from app.storage import debug_session_connection, default_session, save_session
 from app import work_queue
 from tests.support.handler_support import (
+    current_bot_instance,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -86,7 +87,7 @@ async def test_happy_path():
         session = load_session_disk(data_dir, _conv(12345), prov)
         assert session["provider_state"]["started"] == True
         # Worker sends via bot, not msg.replies
-        bot = th._bot_instance
+        bot = current_bot_instance()
         assert len(bot.sent_messages) >= 2
         assert "Hello world" in " ".join(m.get("text", "") for m in bot.sent_messages)
 
@@ -693,7 +694,7 @@ async def test_registry_routed_result_resumes_parent_conversation_without_new_ap
         assert session_after.get("pending_delegation") is None
         assert any(
             "Final synthesized answer." in message.get("text", "")
-            for message in th._bot_instance.sent_messages
+            for message in current_bot_instance().sent_messages
         )
 
 
@@ -744,7 +745,7 @@ async def test_delegation_completion_sends_final_message_all_completed():
         assert outcome == "accepted"
         assert any(
             "All delegated tasks completed." in message.get("text", "")
-            for message in th._bot_instance.sent_messages
+            for message in current_bot_instance().sent_messages
         )
         assert await drain_one_worker_item(data_dir) is True
 
@@ -815,7 +816,7 @@ async def test_delegation_completion_sends_final_message_partial_failed():
 
         assert first == "accepted"
         assert second == "accepted"
-        summary_texts = " ".join(message.get("text", "") for message in th._bot_instance.sent_messages)
+        summary_texts = " ".join(message.get("text", "") for message in current_bot_instance().sent_messages)
         assert "Some delegated tasks failed." in summary_texts
         assert "Review feature [failed]" in summary_texts
         assert "retry the failed tasks" in summary_texts
@@ -929,7 +930,7 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
         assert outcome == "accepted"
         assert not any(
             "All delegated tasks completed." in message.get("text", "")
-            for message in th._bot_instance.sent_messages
+            for message in current_bot_instance().sent_messages
         )
         session_after = load_session_disk(data_dir, _conv(chat_id), prov)
         pending = session_after.get("pending_delegation")
@@ -1092,7 +1093,7 @@ async def test_registry_surface_parent_resumes_through_registry_surface(monkeypa
         assert outcome == "accepted"
         assert await drain_one_worker_item(data_dir) is True
         assert len(prov.run_calls) == 1
-        assert th._bot_instance.sent_messages == []
+        assert current_bot_instance().sent_messages == []
         assert any(
             kind == "bot_message" and "Registry parent final answer." in body
             for kind, _title, body in published
@@ -1365,9 +1366,9 @@ async def test_provider_timeout():
 
         assert len(prov.run_calls) == 1
         import app.channels.telegram.ingress as _th
-        reply_texts = " ".join(m.get("text", "") for m in _th._bot_instance.sent_messages)
+        reply_texts = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "partial output" not in reply_texts
-        assert sum(1 for m in _th._bot_instance.sent_messages if m.get("text")) >= 1
+        assert sum(1 for m in current_bot_instance().sent_messages if m.get("text")) >= 1
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
@@ -1390,9 +1391,9 @@ async def test_provider_error_returncode():
 
         assert len(prov.run_calls) == 1
         import app.channels.telegram.ingress as _th
-        reply_texts = " ".join(m.get("text", "") for m in _th._bot_instance.sent_messages)
+        reply_texts = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "segfault" not in reply_texts
-        assert sum(1 for m in _th._bot_instance.sent_messages if m.get("text")) >= 1
+        assert sum(1 for m in current_bot_instance().sent_messages if m.get("text")) >= 1
         session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         assert session.get("pending_approval") is None and session.get("pending_retry") is None
 
@@ -1705,7 +1706,7 @@ async def test_first_run_welcome():
         assert "Approval mode is on" in sent_chat
         await drain_one_worker_item(data_dir)
         # Worker sends approval plan via bot
-        bot = th._bot_instance
+        bot = current_bot_instance()
         sent_bot = " ".join(m.get("text", m.get("edit_text", "")) for m in bot.sent_messages)
         assert "preparing" in sent_bot.lower() or "plan" in sent_bot.lower()
 
@@ -1744,7 +1745,7 @@ async def test_first_run_welcome_no_compact():
         msg = FakeMessage(chat=chat, text="hello")
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
-        bot = th._bot_instance
+        bot = current_bot_instance()
         sent = " ".join(m.get("text", m.get("edit_text", "")) for m in bot.sent_messages)
         assert "Compact mode" not in sent
 
@@ -2159,7 +2160,7 @@ async def test_send_file_directive():
         await drain_one_worker_item(data_dir)
 
         import app.channels.telegram.ingress as th
-        bot = th._bot_instance
+        bot = current_bot_instance()
         doc_sent = [m for m in bot.sent_messages if m.get("document") is not None]
         assert len(doc_sent) >= 1
 
@@ -2183,7 +2184,7 @@ async def test_send_image_directive():
         await drain_one_worker_item(data_dir)
 
         import app.channels.telegram.ingress as th
-        bot = th._bot_instance
+        bot = current_bot_instance()
         photo_sent = [m for m in bot.sent_messages if m.get("photo") is not None]
         assert len(photo_sent) >= 1
 

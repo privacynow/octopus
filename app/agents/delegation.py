@@ -8,6 +8,7 @@ from typing import Any
 from app.agents.bridge import registry_client
 from app.agents.state import load_agent_runtime_state
 from app.agents.types import RoutedTaskRequest
+from app.channels.telegram.state import get_channel_state
 
 
 async def handle_delegation_approve(
@@ -20,7 +21,7 @@ async def handle_delegation_approve(
     """Approve a pending delegation plan on any conversation surface."""
     import app.channels.telegram.ingress as th
 
-    cfg = th._cfg()
+    cfg = get_channel_state().config
     state = load_agent_runtime_state(cfg.data_dir)
     if state.connectivity_state != "connected":
         detail = f" Last error: {state.last_error}" if state.last_error else ""

@@ -138,6 +138,73 @@ def catalog_skill_detail(skill_name: str) -> dict[str, Any]:
     return presenters.catalog_detail(detail)
 
 
+def catalog_skill_lifecycle_detail(skill_name: str) -> dict[str, Any]:
+    detail = _flows().runtime_skills.authoring.detail(skill_name)
+    if detail is None:
+        raise RegistryIngressError(404, f"Unknown custom skill: {skill_name}")
+    return presenters.runtime_skill_lifecycle_detail(detail)
+
+
+def _raise_for_lifecycle(result) -> None:
+    if result.ok:
+        return
+    if result.status == "missing":
+        raise RegistryIngressError(404, result.message)
+    raise RegistryIngressError(400, result.message)
+
+
+def edit_catalog_skill_draft(
+    skill_name: str,
+    *,
+    actor_key: str,
+    body: str,
+    description: str | None = None,
+    changelog: str = "",
+) -> dict[str, Any]:
+    if _flows().runtime_skills.authoring.detail(skill_name) is None:
+        created = _flows().runtime_skills.authoring.create_draft(skill_name, owner_actor=actor_key)
+        _raise_for_lifecycle(created)
+    result = _flows().runtime_skills.authoring.edit_draft(
+        skill_name,
+        actor_key=actor_key,
+        body=body,
+        description=description,
+        changelog=changelog,
+    )
+    _raise_for_lifecycle(result)
+    return presenters.runtime_skill_lifecycle_mutation(result)
+
+
+def submit_catalog_skill(skill_name: str, *, actor_key: str, note: str = "") -> dict[str, Any]:
+    result = _flows().runtime_skills.authoring.submit(skill_name, actor_key=actor_key, note=note)
+    _raise_for_lifecycle(result)
+    return presenters.runtime_skill_lifecycle_mutation(result)
+
+
+def approve_catalog_skill(skill_name: str, *, actor_key: str, note: str = "") -> dict[str, Any]:
+    result = _flows().runtime_skills.approval.approve(skill_name, actor_key=actor_key, note=note)
+    _raise_for_lifecycle(result)
+    return presenters.runtime_skill_lifecycle_mutation(result)
+
+
+def reject_catalog_skill(skill_name: str, *, actor_key: str, note: str = "") -> dict[str, Any]:
+    result = _flows().runtime_skills.approval.reject(skill_name, actor_key=actor_key, note=note)
+    _raise_for_lifecycle(result)
+    return presenters.runtime_skill_lifecycle_mutation(result)
+
+
+def publish_catalog_skill(skill_name: str, *, actor_key: str, note: str = "") -> dict[str, Any]:
+    result = _flows().runtime_skills.authoring.publish(skill_name, actor_key=actor_key, note=note)
+    _raise_for_lifecycle(result)
+    return presenters.runtime_skill_lifecycle_mutation(result)
+
+
+def archive_catalog_skill(skill_name: str, *, actor_key: str, note: str = "") -> dict[str, Any]:
+    result = _flows().runtime_skills.authoring.archive(skill_name, actor_key=actor_key, note=note)
+    _raise_for_lifecycle(result)
+    return presenters.runtime_skill_lifecycle_mutation(result)
+
+
 def install_catalog_skill(skill_name: str) -> dict[str, Any]:
     registry_url = runtime_registry_url()
     if not registry_url:
@@ -269,6 +336,136 @@ def preview_provider_guidance(
     except ValueError as exc:
         raise RegistryIngressError(404, str(exc)) from exc
     return presenters.provider_guidance_preview(preview)
+
+
+def provider_guidance_detail(
+    provider_name: str,
+    *,
+    scope_kind: str = "system",
+    scope_key: str = "",
+) -> dict[str, Any]:
+    detail = _flows().provider_guidance.management.detail(
+        provider_name,
+        scope_kind=scope_kind,
+        scope_key=scope_key,
+    )
+    if detail is None:
+        raise RegistryIngressError(404, f"Unknown provider guidance: {provider_name}")
+    return presenters.provider_guidance_lifecycle_detail(detail)
+
+
+def edit_provider_guidance_draft(
+    provider_name: str,
+    *,
+    actor_key: str,
+    body: str,
+    scope_kind: str = "system",
+    scope_key: str = "",
+) -> dict[str, Any]:
+    result = _flows().provider_guidance.management.edit_draft(
+        provider_name,
+        actor_key=actor_key,
+        body=body,
+        scope_kind=scope_kind,
+        scope_key=scope_key,
+    )
+    _raise_for_lifecycle(result)
+    return presenters.provider_guidance_lifecycle_mutation(result)
+
+
+def submit_provider_guidance(
+    provider_name: str,
+    *,
+    actor_key: str,
+    note: str = "",
+    scope_kind: str = "system",
+    scope_key: str = "",
+) -> dict[str, Any]:
+    result = _flows().provider_guidance.management.submit(
+        provider_name,
+        actor_key=actor_key,
+        note=note,
+        scope_kind=scope_kind,
+        scope_key=scope_key,
+    )
+    _raise_for_lifecycle(result)
+    return presenters.provider_guidance_lifecycle_mutation(result)
+
+
+def approve_provider_guidance(
+    provider_name: str,
+    *,
+    actor_key: str,
+    note: str = "",
+    scope_kind: str = "system",
+    scope_key: str = "",
+) -> dict[str, Any]:
+    result = _flows().provider_guidance.management.approve(
+        provider_name,
+        actor_key=actor_key,
+        note=note,
+        scope_kind=scope_kind,
+        scope_key=scope_key,
+    )
+    _raise_for_lifecycle(result)
+    return presenters.provider_guidance_lifecycle_mutation(result)
+
+
+def reject_provider_guidance(
+    provider_name: str,
+    *,
+    actor_key: str,
+    note: str = "",
+    scope_kind: str = "system",
+    scope_key: str = "",
+) -> dict[str, Any]:
+    result = _flows().provider_guidance.management.reject(
+        provider_name,
+        actor_key=actor_key,
+        note=note,
+        scope_kind=scope_kind,
+        scope_key=scope_key,
+    )
+    _raise_for_lifecycle(result)
+    return presenters.provider_guidance_lifecycle_mutation(result)
+
+
+def publish_provider_guidance(
+    provider_name: str,
+    *,
+    actor_key: str,
+    note: str = "",
+    scope_kind: str = "system",
+    scope_key: str = "",
+) -> dict[str, Any]:
+    result = _flows().provider_guidance.management.publish(
+        provider_name,
+        actor_key=actor_key,
+        note=note,
+        scope_kind=scope_kind,
+        scope_key=scope_key,
+    )
+    _raise_for_lifecycle(result)
+    return presenters.provider_guidance_lifecycle_mutation(result)
+
+
+def archive_provider_guidance(
+    provider_name: str,
+    *,
+    actor_key: str,
+    note: str = "",
+    scope_kind: str = "system",
+    scope_key: str = "",
+) -> dict[str, Any]:
+    result = _flows().provider_guidance.management.archive(
+        provider_name,
+        actor_key=actor_key,
+        note=note,
+        scope_kind=scope_kind,
+        scope_key=scope_key,
+    )
+    _raise_for_lifecycle(result)
+    return presenters.provider_guidance_lifecycle_mutation(result)
 
 
 def reset_for_test() -> None:

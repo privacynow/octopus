@@ -358,3 +358,74 @@ async def test_callback_unauthorized_alert(monkeypatch, tmp_path: Path):
         assert len(cb_msg.replies) == 0
     finally:
         _cleanup_runtime(data_dir)
+
+
+async def test_handler_skill_lifecycle_commands(monkeypatch, tmp_path: Path):
+    import app.channels.telegram.ingress as th
+
+    data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
+    try:
+        admin = FakeUser(uid=100, username="admin")
+        regular = FakeUser(uid=200, username="regular")
+        chat = FakeChat(1001)
+
+        created = await send_command(th.cmd_skills, chat, regular, "/skills create release-notes", ["create", "release-notes"])
+        assert "Created custom skill" in last_reply(created)
+        assert get_skill_catalog_service().resolve_runtime_track("release-notes") is None
+
+        edited = await send_command(
+            th.cmd_skills,
+            chat,
+            regular,
+            "/skills edit release-notes Summarize releases carefully.",
+            ["edit", "release-notes", "Summarize", "releases", "carefully."],
+        )
+        assert "Saved draft" in last_reply(edited)
+
+        submitted = await send_command(th.cmd_skills, chat, regular, "/skills submit release-notes", ["submit", "release-notes"])
+        assert "Submitted" in last_reply(submitted)
+
+        approved = await send_command(th.cmd_skills, chat, admin, "/skills approve release-notes", ["approve", "release-notes"])
+        assert "Approved" in last_reply(approved)
+
+        published = await send_command(th.cmd_skills, chat, admin, "/skills publish release-notes", ["publish", "release-notes"])
+        assert "Published" in last_reply(published)
+        assert get_skill_catalog_service().resolve_runtime_track("release-notes") is not None
+
+        archived = await send_command(th.cmd_skills, chat, admin, "/skills archive release-notes", ["archive", "release-notes"])
+        assert "Archived" in last_reply(archived)
+        assert get_skill_catalog_service().resolve_runtime_track("release-notes") is None
+    finally:
+        _cleanup_runtime(data_dir)
+
+
+async def test_handler_provider_guidance_lifecycle_commands(monkeypatch, tmp_path: Path):
+    import app.channels.telegram.ingress as th
+
+    data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
+    try:
+        admin = FakeUser(uid=100, username="admin")
+        chat = FakeChat(1001)
+
+        edited = await send_command(
+            th.cmd_guidance,
+            chat,
+            admin,
+            "/guidance edit claude Use edited guidance",
+            ["edit", "claude", "Use", "edited", "guidance"],
+        )
+        assert "Saved draft provider guidance" in last_reply(edited)
+
+        submitted = await send_command(th.cmd_guidance, chat, admin, "/guidance submit claude", ["submit", "claude"])
+        assert "Submitted provider guidance" in last_reply(submitted)
+
+        approved = await send_command(th.cmd_guidance, chat, admin, "/guidance approve claude", ["approve", "claude"])
+        assert "Approved provider guidance" in last_reply(approved)
+
+        published = await send_command(th.cmd_guidance, chat, admin, "/guidance publish claude", ["publish", "claude"])
+        assert "Published provider guidance" in last_reply(published)
+
+        preview = await send_command(th.cmd_guidance, chat, admin, "/guidance preview claude", ["preview", "claude"])
+        assert "Use edited guidance" in last_reply(preview)
+    finally:
+        _cleanup_runtime(data_dir)

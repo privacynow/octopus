@@ -256,6 +256,87 @@ def test_registry_catalog_and_provider_preview(monkeypatch, tmp_path: Path):
     assert "summary first" in preview_payload["system_prompt"].lower()
 
 
+def test_registry_lifecycle_endpoints_cover_skill_and_guidance(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    _configure_runtime_surface(monkeypatch, tmp_path)
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer ui-secret"}
+
+    created = client.put(
+        "/v1/catalog/skills/release-notes/draft",
+        headers=headers,
+        json={
+            "actor_key": "reg:ui",
+            "body": "Summarize release notes carefully.",
+            "description": "Release notes helper",
+            "changelog": "initial draft",
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["status"] == "draft_saved"
+
+    before_publish = client.get("/v1/catalog/skills/release-notes", headers=headers)
+    assert before_publish.status_code == 200
+    assert before_publish.json()["can_activate"] is False
+
+    detail = client.get("/v1/catalog/skills/release-notes/lifecycle", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["lifecycle_status"] == "draft"
+
+    for path in ("submit", "approve", "publish"):
+        response = client.post(
+            f"/v1/catalog/skills/release-notes/{path}",
+            headers=headers,
+            json={"actor_key": "reg:ui", "note": path},
+        )
+        assert response.status_code == 200
+
+    after_publish = client.get("/v1/catalog/skills/release-notes", headers=headers)
+    assert after_publish.status_code == 200
+    assert after_publish.json()["can_activate"] is True
+
+    guidance_edit = client.put(
+        "/v1/provider-guidance/claude/draft",
+        headers=headers,
+        json={
+            "actor_key": "reg:ui",
+            "body": "# Registry Guidance\n\nUse the registry lifecycle path.",
+            "scope_kind": "system",
+            "scope_key": "",
+        },
+    )
+    assert guidance_edit.status_code == 200
+    assert guidance_edit.json()["status"] == "draft_saved"
+
+    preview_before = client.post(
+        "/v1/provider-guidance/claude/preview",
+        headers=headers,
+        json={"role": "", "active_skills": [], "compact_mode": False},
+    )
+    assert preview_before.status_code == 200
+    assert "Registry Guidance" not in preview_before.json()["effective_guidance"]
+
+    for path in ("submit", "approve", "publish"):
+        response = client.post(
+            f"/v1/provider-guidance/claude/{path}",
+            headers=headers,
+            json={"actor_key": "reg:ui", "note": path},
+        )
+        assert response.status_code == 200
+
+    guidance_detail = client.get("/v1/provider-guidance/claude", headers=headers)
+    assert guidance_detail.status_code == 200
+    assert guidance_detail.json()["lifecycle_status"] == "published"
+
+    preview_after = client.post(
+        "/v1/provider-guidance/claude/preview",
+        headers=headers,
+        json={"role": "", "active_skills": [], "compact_mode": False},
+    )
+    assert preview_after.status_code == 200
+    assert "Registry Guidance" in preview_after.json()["effective_guidance"]
+
+
 def test_registry_conversation_skill_activation_surface(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     data_dir = _configure_runtime_surface(monkeypatch, tmp_path)

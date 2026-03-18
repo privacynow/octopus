@@ -5,6 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from app.workflows.provider_guidance.contracts import ProviderGuidancePreview
+from app.workflows.provider_guidance.contracts import (
+    ProviderGuidanceLifecycleDetail,
+    ProviderGuidanceLifecycleMutation,
+)
 from app.workflows.runtime_skills.contracts import (
     ConversationSkillItem,
     ConversationSkillListing,
@@ -12,6 +16,8 @@ from app.workflows.runtime_skills.contracts import (
     RegistryRuntimeSkillSearchHit,
     RuntimeSkillCatalogItem,
     RuntimeSkillDetail,
+    RuntimeSkillLifecycleDetail,
+    RuntimeSkillLifecycleMutation,
     RuntimeSkillMutationOutcome,
     RuntimeSkillSearchResults,
 )
@@ -147,3 +153,94 @@ def provider_guidance_preview(preview: ProviderGuidancePreview) -> dict[str, Any
         "provider_config": preview.provider_config,
         "prompt_weight": preview.prompt_weight,
     }
+
+
+def runtime_skill_lifecycle_detail(detail: RuntimeSkillLifecycleDetail) -> dict[str, Any]:
+    return {
+        "name": detail.name,
+        "display_name": detail.display_name,
+        "description": detail.description,
+        "visibility": detail.visibility,
+        "body": detail.body,
+        "lifecycle_status": detail.lifecycle_status,
+        "active_revision_id": detail.active_revision_id,
+        "published_revision_id": detail.published_revision_id,
+        "runtime_available": detail.runtime_available,
+        "revisions": [
+            {
+                "revision_id": item.revision_id,
+                "version_label": item.version_label,
+                "status": item.status,
+                "changelog": item.changelog,
+                "created_by": item.created_by,
+                "created_at": item.created_at,
+                "is_published": item.is_published,
+            }
+            for item in detail.revisions
+        ],
+        "approvals": [
+            {
+                "revision_id": item.revision_id,
+                "action": item.action,
+                "actor": item.actor,
+                "note": item.note,
+                "created_at": item.created_at,
+            }
+            for item in detail.approvals
+        ],
+    }
+
+
+def runtime_skill_lifecycle_mutation(result: RuntimeSkillLifecycleMutation) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "status": result.status,
+        "ok": result.ok,
+        "message": result.message,
+    }
+    if result.detail is not None:
+        payload["detail"] = runtime_skill_lifecycle_detail(result.detail)
+    return payload
+
+
+def provider_guidance_lifecycle_detail(detail: ProviderGuidanceLifecycleDetail) -> dict[str, Any]:
+    return {
+        "provider": detail.provider,
+        "scope_kind": detail.scope_kind,
+        "scope_key": detail.scope_key,
+        "body": detail.body,
+        "lifecycle_status": detail.lifecycle_status,
+        "active_revision_id": detail.active_revision_id,
+        "published_revision_id": detail.published_revision_id,
+        "runtime_available": detail.runtime_available,
+        "revisions": [
+            {
+                "revision_id": item.revision_id,
+                "status": item.status,
+                "created_by": item.created_by,
+                "created_at": item.created_at,
+                "is_published": item.is_published,
+            }
+            for item in detail.revisions
+        ],
+        "approvals": [
+            {
+                "revision_id": item.revision_id,
+                "action": item.action,
+                "actor": item.actor,
+                "note": item.note,
+                "created_at": item.created_at,
+            }
+            for item in detail.approvals
+        ],
+    }
+
+
+def provider_guidance_lifecycle_mutation(result: ProviderGuidanceLifecycleMutation) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "status": result.status,
+        "ok": result.ok,
+        "message": result.message,
+    }
+    if result.detail is not None:
+        payload["detail"] = provider_guidance_lifecycle_detail(result.detail)
+    return payload

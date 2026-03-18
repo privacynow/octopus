@@ -83,6 +83,16 @@ from app.channels.telegram.runtime_skills import (
     handle_worker_skill_action as runtime_skill_handle_worker_skill_action,
     maybe_handle_setup_message as runtime_skill_maybe_handle_setup_message,
 )
+from app.channels.telegram.guidance import (
+    guidance_approve as channel_guidance_approve,
+    guidance_archive as channel_guidance_archive,
+    guidance_edit as channel_guidance_edit,
+    guidance_history as channel_guidance_history,
+    guidance_preview as channel_guidance_preview,
+    guidance_publish as channel_guidance_publish,
+    guidance_reject as channel_guidance_reject,
+    guidance_submit as channel_guidance_submit,
+)
 from app.channels.telegram.conversation import (
     cancel_chat_operation as conversation_cancel_chat_operation,
     cmd_approval as conversation_cmd_approval,
@@ -1416,6 +1426,7 @@ def _help_command_lines(user) -> list[str]:
     lines = [
         "/new — start a fresh conversation",
         "/skills — browse and activate skills (e.g. <code>/skills list</code>)",
+        "/guidance — inspect and manage provider guidance",
         "/role &lt;text&gt; — set the AI's persona (e.g. <code>/role Python expert</code>)",
         "/approval on|off — show a plan before executing, or run immediately",
         "/approve / /reject — act on a pending plan",
@@ -1477,7 +1488,14 @@ HELP_SKILLS = (
     "/skills setup &lt;name&gt; — re-enter credentials for a skill\n"
     "/skills info &lt;name&gt; — view skill details\n"
     "/skills search &lt;query&gt; — search the skill store\n"
-    "/skills clear — deactivate all skills"
+    "/skills clear — deactivate all skills\n"
+    "/skills create &lt;name&gt; — create a custom draft skill\n"
+    "/skills edit &lt;name&gt; &lt;body&gt; — replace the current draft body\n"
+    "/skills history &lt;name&gt; — show revision and approval history\n"
+    "/skills submit &lt;name&gt; — submit the draft for review\n"
+    "/skills approve|reject|publish|archive &lt;name&gt; — lifecycle admin actions\n\n"
+    "/guidance preview &lt;provider&gt; — show effective provider guidance\n"
+    "/guidance edit|history|submit|approve|reject|publish|archive &lt;provider&gt; — provider guidance lifecycle"
 )
 
 HELP_APPROVAL = (
@@ -1990,7 +2008,9 @@ async def cmd_skills(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         skills_show, skills_list, skills_add, skills_remove,
         skills_setup, skills_clear, skills_create, skills_search,
         skills_info, skills_install, skills_uninstall, skills_updates,
-        skills_diff, skills_update,
+        skills_diff, skills_update, skills_edit, skills_history,
+        skills_submit, skills_approve, skills_reject, skills_publish,
+        skills_archive,
     )
     args = event.args
     if not args:
@@ -2002,6 +2022,8 @@ async def cmd_skills(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
         "add": skills_add, "remove": skills_remove, "setup": skills_setup,
         "create": skills_create, "info": skills_info, "install": skills_install,
         "uninstall": skills_uninstall, "diff": skills_diff,
+        "history": skills_history, "submit": skills_submit, "approve": skills_approve,
+        "reject": skills_reject, "publish": skills_publish, "archive": skills_archive,
     }
     if sub in _SUBS_WITH_ARG and len(args) >= 2:
         await _SUBS_WITH_ARG[sub](event, update, args[1])
@@ -2021,9 +2043,65 @@ async def cmd_skills(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if sub == "update" and len(args) >= 2:
         await skills_update(event, update, args[1])
         return
+    if sub == "edit" and len(args) >= 3:
+        await skills_edit(event, update, args[1], " ".join(args[2:]))
+        return
 
     await update.effective_message.reply_text(
-        "Usage: /skills [list|add|remove|setup|create|clear|search|info|install|uninstall|updates|update|diff]"
+        "Usage: /skills [list|add|remove|setup|create|edit|history|submit|approve|reject|publish|archive|clear|search|info|install|uninstall|updates|update|diff]"
+    )
+
+
+@_command_handler
+async def cmd_guidance(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if await _public_guard(event, update):
+        return
+    args = event.args
+    if len(args) < 2:
+        await update.effective_message.reply_text(
+            "Usage: /guidance [preview|edit|history|submit|approve|reject|publish|archive] <provider> [body]"
+        )
+        return
+    sub = args[0].lower()
+    provider_name = args[1]
+    if sub == "preview":
+        await channel_guidance_preview(event, update, provider_name)
+        return
+    if sub == "history":
+        await channel_guidance_history(event, update, provider_name)
+        return
+    if sub == "edit" and len(args) >= 3:
+        await channel_guidance_edit(event, update, provider_name, " ".join(args[2:]))
+        return
+    if sub == "submit":
+        await channel_guidance_submit(event, update, provider_name)
+        return
+    if sub == "approve":
+        if not is_admin(event.user):
+            await update.effective_message.reply_text("Only admins can approve provider guidance.")
+            return
+        await channel_guidance_approve(event, update, provider_name)
+        return
+    if sub == "reject":
+        if not is_admin(event.user):
+            await update.effective_message.reply_text("Only admins can reject provider guidance.")
+            return
+        await channel_guidance_reject(event, update, provider_name)
+        return
+    if sub == "publish":
+        if not is_admin(event.user):
+            await update.effective_message.reply_text("Only admins can publish provider guidance.")
+            return
+        await channel_guidance_publish(event, update, provider_name)
+        return
+    if sub == "archive":
+        if not is_admin(event.user):
+            await update.effective_message.reply_text("Only admins can archive provider guidance.")
+            return
+        await channel_guidance_archive(event, update, provider_name)
+        return
+    await update.effective_message.reply_text(
+        "Usage: /guidance [preview|edit|history|submit|approve|reject|publish|archive] <provider> [body]"
     )
 
 
@@ -2745,6 +2823,7 @@ def _shared_inline_command_handler(command: str):
     return {
         "approval": cmd_approval,
         "skills": cmd_skills,
+        "guidance": cmd_guidance,
         "compact": cmd_compact,
         "role": cmd_role,
         "model": cmd_model,
@@ -2928,6 +3007,7 @@ def build_application(config: BotConfig, provider: Provider) -> Application:
         app.add_handler(CommandHandler("approve", cmd_approve))
         app.add_handler(CommandHandler("reject", cmd_reject))
         app.add_handler(CommandHandler("skills", cmd_skills))
+        app.add_handler(CommandHandler("guidance", cmd_guidance))
         app.add_handler(CommandHandler("cancel", cmd_cancel))
         app.add_handler(CommandHandler("clear_credentials", cmd_clear_credentials))
         app.add_handler(CommandHandler("role", cmd_role))

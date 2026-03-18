@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app import access
 from app.identity import telegram_actor_key
-from app.channels.telegram.normalization import InboundUser
+from app.runtime.inbound_types import InboundUser
 from app.work_queue_sqlite_impl import (
     _create_new_transport_db,
     get_user_access_override,

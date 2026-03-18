@@ -19,7 +19,10 @@ EXPECTED_MODULES = (
     "app.channels.registry.ui",
     "app.ports",
     "app.runtime",
+    "app.runtime.dispatch",
     "app.runtime.inbound_types",
+    "app.runtime.session_runtime",
+    "app.runtime.work_admission",
     "app.workflows",
     "app.workflows.runtime_skills",
     "app.workflows.runtime_skills.activation",
@@ -69,12 +72,14 @@ REMOVED_TOP_LEVEL_PORT_MODULES = (
     "app/runtime_skill_setup_use_cases.py",
     "app/registry_service/app.py",
     "app/registry_service/runtime_surface.py",
+    "app/request_runtime.py",
     "app/telegram_handlers.py",
     "app/skill_commands.py",
     "app/telegram_runtime_skill_surface.py",
     "app/telegram_conversation_surface.py",
     "app/telegram_pending_request_surface.py",
     "app/transport.py",
+    "app/transports/admission.py",
 )
 
 

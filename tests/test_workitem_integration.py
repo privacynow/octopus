@@ -613,7 +613,7 @@ async def test_worker_dispatch_sends_recovery_notice():
     """Recovered InboundMessage gets a recovery notice with buttons,
     not an automatic replay through the provider."""
     import app.channels.telegram.ingress as th
-    from app.channels.telegram.normalization import InboundMessage, InboundUser
+    from app.runtime.inbound_types import InboundMessage, InboundUser
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 11001
@@ -735,7 +735,7 @@ async def test_recovery_replay_callback_executes_original():
     """Clicking Replay on a recovery notice replays the original message
     through execute_request."""
     import app.channels.telegram.ingress as th
-    from app.channels.telegram.normalization import serialize_inbound, InboundMessage, InboundUser
+    from app.runtime.inbound_types import serialize_inbound, InboundMessage, InboundUser
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 13001
@@ -935,7 +935,7 @@ async def test_failed_notice_delivery_marks_item_failed_via_worker_loop():
     the item failed — not done, not pending_recovery."""
     import app.channels.telegram.ingress as th
     from app.worker import worker_loop
-    from app.channels.telegram.normalization import serialize_inbound, InboundMessage, InboundUser
+    from app.runtime.inbound_types import serialize_inbound, InboundMessage, InboundUser
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 16001
@@ -1194,7 +1194,7 @@ async def test_replay_callback_blocked_by_claimed_item_answers_user():
     for the chat, the callback must inform the user rather than silently
     failing or creating two claimed rows."""
     import app.channels.telegram.ingress as th
-    from app.channels.telegram.normalization import serialize_inbound, InboundMessage, InboundUser
+    from app.runtime.inbound_types import serialize_inbound, InboundMessage, InboundUser
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 19002

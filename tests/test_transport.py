@@ -5,16 +5,18 @@ from pathlib import Path
 
 from app.identity import telegram_actor_key, telegram_conversation_key
 from app.channels.telegram.normalization import (
+    normalize_callback,
+    normalize_command,
+    normalize_message,
+    normalize_user,
+)
+from app.runtime.inbound_types import (
     InboundAttachment,
     InboundCallback,
     InboundCommand,
     InboundMessage,
     InboundUser,
     deserialize_inbound,
-    normalize_callback,
-    normalize_command,
-    normalize_message,
-    normalize_user,
     serialize_inbound,
 )
 from tests.support.handler_support import (

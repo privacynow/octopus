@@ -1,12 +1,11 @@
-"""Admission seam over the transport contract. Production ingress uses InboundEnvelope here."""
+"""Shared runtime admission helpers for normalized inbound envelopes."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from app import work_queue
-from app.channels.telegram.normalization import serialize_inbound
-from app.transports.types import InboundEnvelope
+from app.runtime.inbound_types import InboundEnvelope, serialize_inbound
 
 
 def admit_fresh_message(data_dir: Path, envelope: InboundEnvelope) -> tuple[str, str | None]:

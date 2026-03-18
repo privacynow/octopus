@@ -1,4 +1,4 @@
-"""Runtime request orchestration outside Telegram adapter ownership."""
+"""Shared runtime dispatch and request execution orchestration."""
 
 from __future__ import annotations
 

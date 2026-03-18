@@ -9,7 +9,7 @@ from unittest.mock import patch
 from app import work_queue
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
-from app.channels.telegram.normalization import deserialize_inbound
+from app.runtime.inbound_types import deserialize_inbound
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,

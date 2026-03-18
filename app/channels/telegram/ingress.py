@@ -130,6 +130,8 @@ from app.runtime.dispatch import (
     execute_request as runtime_execute_request,
     prompt_weight as runtime_prompt_weight,
     request_approval as runtime_request_approval,
+    RequestExecutionOutcome,
+    RuntimeDispatchRuntime,
 )
 from app.runtime.inbound_types import (
     InboundAction,
@@ -406,6 +408,7 @@ def _runtime_skill_runtime() -> TelegramRuntimeSkillsRuntime:
         state=_state(),
         chat_lock=_chat_lock,
         validate_credential=validate_credential,
+        check_prompt_size_cross_chat=_check_prompt_size_cross_chat,
     )
 
 
@@ -417,6 +420,25 @@ def _pending_runtime() -> TelegramPendingRuntime:
         execute_request=execute_request,
         request_approval=request_approval,
         build_user_prompt=build_user_prompt,
+    )
+
+
+def _dispatch_runtime() -> RuntimeDispatchRuntime:
+    return RuntimeDispatchRuntime(
+        config=_state().config,
+        provider=_state().provider,
+        boot_id=_state().boot_id,
+        cancellations=get_cancellation_registry(),
+        progress_factory=TelegramProgress,
+        keep_typing=keep_typing,
+        heartbeat=_heartbeat,
+        format_provider_error=_format_provider_error,
+        run_result_was_interrupted=_run_result_was_interrupted,
+        progress_timeline_callback=_progress_timeline_callback,
+        send_formatted_reply=send_formatted_reply,
+        send_directed_artifacts=send_directed_artifacts,
+        send_compact_reply=_send_compact_reply,
+        propose_delegation_plan=_propose_delegation_plan,
     )
 
 
@@ -742,17 +764,6 @@ class TelegramProgress:
                 log.debug("registry timeline callback failed: %s", exc)
 
 
-@dataclasses.dataclass(frozen=True)
-class RequestExecutionOutcome:
-    status: str
-    reply_text: str = ""
-    error_text: str = ""
-    denials: tuple[dict[str, Any], ...] = ()
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    cost_usd: float = 0.0
-
-
 async def _progress_timeline_callback(conversation_ref: str, routed_task_id: str, html_text: str, *, force: bool = False) -> None:
     del force
     await publish_timeline_event(
@@ -903,7 +914,11 @@ def _callback_handler(fn):
 
 def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
     """Telegram-side helper for prompt-size impact warnings."""
-    return runtime_check_prompt_size_cross_chat(data_dir, skill_name)
+    return runtime_check_prompt_size_cross_chat(
+        data_dir,
+        skill_name,
+        runtime=_dispatch_runtime(),
+    )
 
 
 # -- Project helpers -------------------------------------------------------
@@ -1328,6 +1343,7 @@ async def _check_credential_satisfaction(
         session,
         message,
         resolved=resolved,
+        runtime=_dispatch_runtime(),
     )
 
 
@@ -1354,6 +1370,7 @@ async def execute_request(
         skip_permissions=skip_permissions,
         trust_tier=trust_tier,
         cancel_event=cancel_event,
+        runtime=_dispatch_runtime(),
     )
 
 
@@ -1376,6 +1393,7 @@ async def request_approval(
         request_user_id=request_user_id,
         trust_tier=trust_tier,
         cancel_event=cancel_event,
+        runtime=_dispatch_runtime(),
     )
 
 

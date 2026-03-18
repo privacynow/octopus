@@ -11,7 +11,7 @@ import contextlib
 import tempfile
 from pathlib import Path
 
-import app.telegram_handlers as _th
+import app.channels.telegram.ingress as _th
 from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.providers.base import RunResult
 from app.ratelimit import RateLimiter
@@ -450,7 +450,7 @@ async def drain_one_worker_item(data_dir: Path) -> bool:
     Use after send_text when the test needs the provider to run. Returns True if
     an item was drained, False if queue was empty.
     """
-    from app.transport import deserialize_inbound
+    from app.channels.telegram.normalization import deserialize_inbound
     from app.workflows.results import TransportStateCorruption
 
     boot_id = _th._boot_id

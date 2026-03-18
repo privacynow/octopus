@@ -151,7 +151,7 @@ async def test_doctor_reads_sqlite_not_json():
     """Verify cmd_doctor's stale session scan actually reads from SQLite.
     Create sessions directly in SQLite (no JSON files), run /doctor,
     and verify the scan finds them."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         # Create stale pending session directly via storage API
@@ -300,7 +300,7 @@ async def test_multiple_chats_save_independently():
 async def test_prompt_size_cross_chat_reads_sqlite():
     """Verify _check_prompt_size_cross_chat iterates sessions from SQLite,
     not from JSON files."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={
         "admin_user_ids": frozenset({100}),

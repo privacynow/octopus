@@ -20,7 +20,7 @@ from pathlib import Path
 from app import work_queue
 from app.runtime_health import WorkerHeartbeat
 from app.time_utils import utc_now
-from app.transport import (
+from app.channels.telegram.normalization import (
     InboundAction,
     InboundCallback,
     InboundCommand,

@@ -72,7 +72,7 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
     payload = delivery.get("payload", {})
     if not isinstance(payload, dict):
         return "rejected"
-    from app import telegram_handlers as th
+    from app.channels.telegram import ingress as th
 
     if kind == "surface_action":
         conversation_ref = str(payload.get("conversation_ref", "") or payload.get("conversation_id", ""))

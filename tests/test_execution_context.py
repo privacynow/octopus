@@ -100,7 +100,7 @@ async def test_approval_hash_round_trip(combo):
         prov.run_results = [RunResult(text="Done")]
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -164,7 +164,7 @@ async def test_retry_hash_round_trip(combo):
         ]
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -238,7 +238,7 @@ async def test_approval_detects_stale_context(change):
         prov.run_results = [RunResult(text="Done")]
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -368,7 +368,7 @@ async def test_resolve_context_matches_all_paths():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -553,7 +553,7 @@ async def test_resolve_execution_context_matches_handler_adapter():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -627,7 +627,7 @@ async def test_configured_extra_dirs_forwarded_to_provider():
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_message(
             FakeUpdate(message=FakeMessage(chat=chat, text="hello"), user=user, chat=chat),
@@ -792,7 +792,7 @@ def test_project_extra_dirs_folded_into_resolved_context():
     with fresh_env(config_overrides={
         "projects": (("myproj", "/tmp/myproj", ("/tmp/proj-extra",)),),
     }) as (data_dir, cfg, prov):
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         session = th._load(8006)
         session.project_id = "myproj"
         th._save(8006, session)
@@ -987,7 +987,7 @@ def test_phantom_profile_not_displayed_when_no_profiles_configured():
     )
 
     # Import the display helper
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
     available, current = th._settings_model_profile_state(session, cfg, "trusted", cfg.model)
     assert available == []
     assert current == "(default)", f"Expected '(default)' but got '{current}'"

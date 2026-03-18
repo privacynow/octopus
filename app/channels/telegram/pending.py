@@ -1,4 +1,4 @@
-"""Telegram surface handlers for pending-request and recovery workflows."""
+"""Telegram pending-request and recovery channel handlers."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from app import work_queue
 
 
 def _th():
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     return th
 

@@ -14,7 +14,7 @@ from app.agents.state import load_agent_runtime_state
 from app.agents.types import RoutedTaskResult, TimelineEvent
 from app.config import BotConfig
 from app.identity import telegram_conversation_key
-from app.transport import InboundAction, InboundMessage, InboundUser, serialize_inbound
+from app.channels.telegram.normalization import InboundAction, InboundMessage, InboundUser, serialize_inbound
 from app.runtime.composition import conversation_channel_name
 from app.transports.types import InboundEnvelope
 

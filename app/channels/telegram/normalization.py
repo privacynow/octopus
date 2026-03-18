@@ -1,4 +1,4 @@
-"""Thin inbound transport normalization.
+"""Telegram channel normalization.
 
 Converts python-telegram-bot Update objects into a small set of internal
 event dataclasses.  Polling and (future) webhook entrypoints both produce

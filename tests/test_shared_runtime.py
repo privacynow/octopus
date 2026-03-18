@@ -9,7 +9,7 @@ from unittest.mock import patch
 from app import work_queue
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
-from app.transport import deserialize_inbound
+from app.channels.telegram.normalization import deserialize_inbound
 from tests.support.handler_support import (
     FakeCallbackQuery,
     FakeChat,
@@ -36,7 +36,7 @@ def _conv(chat_id: int) -> str:
 
 async def test_shared_build_application_registers_shared_dispatch_handlers():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, cfg, prov):
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         from telegram.ext import CallbackQueryHandler, CommandHandler
 
         app = th.build_application(cfg, prov)
@@ -65,7 +65,7 @@ async def test_shared_build_application_registers_shared_dispatch_handlers():
 
 async def test_shared_message_path_remains_persist_first():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -83,7 +83,7 @@ async def test_shared_message_path_remains_persist_first():
 
 async def test_shared_command_dispatch_persists_action_without_inline_execution():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -102,7 +102,7 @@ async def test_shared_command_dispatch_persists_action_without_inline_execution(
 
 async def test_shared_callback_dispatch_persists_action_without_inline_execution():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -124,7 +124,7 @@ async def test_shared_callback_dispatch_persists_action_without_inline_execution
 
 async def test_shared_worker_executes_persisted_approve_action():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat_id = 12345
         session = default_session(prov.name, prov.new_provider_state(), "off")
@@ -155,7 +155,7 @@ async def test_shared_worker_executes_persisted_approve_action():
 
 async def test_shared_cancel_records_action_and_sets_durable_flag():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat_id = 12345
         payload = (
@@ -193,7 +193,7 @@ async def test_shared_cancel_records_action_and_sets_durable_flag():
 
 async def test_shared_chat_lock_skips_asyncio_lock_for_worker_path():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, _cfg, _prov):
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         lock = th.CHAT_LOCKS[12345]
         await lock.acquire()
@@ -211,7 +211,7 @@ async def test_shared_chat_lock_skips_asyncio_lock_for_worker_path():
 
 async def test_shared_chat_lock_still_locks_for_inline_commands():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, _cfg, _prov):
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         lock = th.CHAT_LOCKS[12345]
         await lock.acquire()
@@ -233,7 +233,7 @@ async def test_shared_chat_lock_still_locks_for_inline_commands():
 
 async def test_worker_id_is_traceable():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, cfg, prov):
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         th.build_application(cfg, prov)
         parts = th._boot_id.split(":")

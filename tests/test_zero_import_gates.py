@@ -118,6 +118,31 @@ def test_telegram_pending_module_has_no_ingress_import() -> None:
     )
 
 
+def test_telegram_session_io_module_has_no_ingress_import() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    session_io_path = repo_root / "app" / "channels" / "telegram" / "session_io.py"
+    text = session_io_path.read_text()
+    assert "app.channels.telegram.ingress" not in text, (
+        f"telegram ingress import still referenced in {session_io_path}"
+    )
+
+
+def test_ingress_no_longer_defines_session_io_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    text = ingress_path.read_text()
+    forbidden_defs = (
+        "def _conversation_key(",
+        "def _actor_key(",
+        "def _event_key(",
+        "def _telegram_chat_id(",
+        "def _load(",
+        "def _save(",
+    )
+    for token in forbidden_defs:
+        assert token not in text, f"{token} still defined in {ingress_path}"
+
+
 def test_telegram_runtime_owner_modules_do_not_define_singletons() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_path = repo_root / "app" / "channels" / "telegram" / "state.py"

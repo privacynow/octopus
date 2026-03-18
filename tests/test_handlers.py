@@ -11,6 +11,10 @@ from app.agents.bridge import conversation_key_for_ref
 from app.agents.state import AgentRuntimeState, save_agent_runtime_state
 from app.agents.delivery import handle_registry_delivery
 from app.channels.telegram.bootstrap import build_bootstrap
+from app.channels.telegram.session_io import (
+    load as telegram_load_session,
+    save as telegram_save_session,
+)
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.providers.base import RunContext, RunResult
 from app.runtime.inbound_types import InboundMessage, InboundUser
@@ -3590,15 +3594,15 @@ async def test_model_inherit_works_when_no_profiles_configured():
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
         # Manually set a stale model_profile override
-        session = th._load(current_runtime(), 1001)
+        session = telegram_load_session(current_runtime(), 1001)
         session.model_profile = "fast"
-        th._save(current_runtime(), 1001, session)
+        telegram_save_session(current_runtime(), 1001, session)
         # /model inherit should clear it even with no profiles
         msg = await send_command(th.cmd_model, chat, user, "/model", args=["inherit"])
         reply = last_reply(msg)
         assert "cleared" in reply.lower()
         # Verify the override is gone
-        session = th._load(current_runtime(), 1001)
+        session = telegram_load_session(current_runtime(), 1001)
         assert session.model_profile == ""
 
 
@@ -3614,14 +3618,14 @@ async def test_settings_callback_policy_inherit():
         await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
         # Set explicit edit
         await send_command(th.cmd_policy, chat, user, "/policy", args=["edit"])
-        session = th._load(current_runtime(), 1001)
+        session = telegram_load_session(current_runtime(), 1001)
         assert session.file_policy == "edit"
         # Send inherit callback
         query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_policy:inherit")
         reply = last_reply(cb_msg)
         assert "cleared" in reply.lower() or "effective" in reply.lower()
         # Verify override cleared
-        session = th._load(current_runtime(), 1001)
+        session = telegram_load_session(current_runtime(), 1001)
         assert session.file_policy == ""
 
 
@@ -3637,13 +3641,13 @@ async def test_settings_callback_model_inherit():
         # Switch to project, set explicit best
         await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
         await send_command(th.cmd_model, chat, user, "/model", args=["best"])
-        session = th._load(current_runtime(), 1001)
+        session = telegram_load_session(current_runtime(), 1001)
         assert session.model_profile == "best"
         # Send inherit callback
         query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_model:inherit")
         reply = last_reply(cb_msg)
         assert "cleared" in reply.lower()
-        session = th._load(current_runtime(), 1001)
+        session = telegram_load_session(current_runtime(), 1001)
         assert session.model_profile == ""
 
 
@@ -3739,9 +3743,9 @@ async def test_model_no_profiles_with_stale_override_hints_inherit():
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
         # Set stale override
-        session = th._load(current_runtime(), 1001)
+        session = telegram_load_session(current_runtime(), 1001)
         session.model_profile = "fast"
-        th._save(current_runtime(), 1001, session)
+        telegram_save_session(current_runtime(), 1001, session)
         # /model should mention inherit, not just "no profiles configured"
         msg = await send_command(th.cmd_model, chat, user, "/model")
         reply = last_reply(msg)
@@ -3771,9 +3775,9 @@ async def test_settings_shows_inherit_button_when_stale_model_override():
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
         # Set stale override
-        session = th._load(current_runtime(), 1001)
+        session = telegram_load_session(current_runtime(), 1001)
         session.model_profile = "fast"
-        th._save(current_runtime(), 1001, session)
+        telegram_save_session(current_runtime(), 1001, session)
         # /settings should show an inherit button
         msg = await send_command(th.cmd_settings, chat, user, "/settings")
         # Check keyboard for inherit callback
@@ -3796,9 +3800,9 @@ async def test_model_inherit_no_double_default():
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
         # Set stale override
-        session = th._load(current_runtime(), 1001)
+        session = telegram_load_session(current_runtime(), 1001)
         session.model_profile = "fast"
-        th._save(current_runtime(), 1001, session)
+        telegram_save_session(current_runtime(), 1001, session)
         # /model inherit
         msg = await send_command(th.cmd_model, chat, user, "/model", args=["inherit"])
         reply = last_reply(msg)
@@ -3816,9 +3820,9 @@ async def test_settings_callback_model_inherit_no_double_default():
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
         # Set stale override
-        session = th._load(current_runtime(), 1001)
+        session = telegram_load_session(current_runtime(), 1001)
         session.model_profile = "fast"
-        th._save(current_runtime(), 1001, session)
+        telegram_save_session(current_runtime(), 1001, session)
         # Callback inherit
         query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_model:inherit")
         reply = last_reply(cb_msg)

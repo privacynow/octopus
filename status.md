@@ -93,12 +93,19 @@ Completed slices:
    - Added a guard that `tests/support/handler_support.py` does not mutate
      legacy ingress globals or call deleted ingress global accessors.
 
+12. `this commit` `Track C / C1: move registry UI shell rendering into ui.py`
+   - The large `/ui` shell HTML/CSS/JS block now lives in
+     `app/channels/registry/ui.py` instead of `app/channels/registry/http.py`.
+   - Added a focused shell-render helper test and a structural guard proving
+     `http.py` stays below the line-count threshold and no longer embeds the
+     large UI shell markup.
+
 ## Latest Verified Test Baseline
 
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1511 passed, 23 skipped`
+- result: `1513 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -142,7 +149,7 @@ Required scope:
 
 ### Track C. Decompose Registry HTTP and UI
 
-Status: not started
+Status: in progress
 
 Required scope:
 
@@ -217,18 +224,28 @@ Next required slice:
 
 - `Track C / C1: move registry UI templates out of http.py`
 
+Completed:
+
+- `C1` move registry UI shell rendering into `ui.py`
+
+Remaining:
+
+- `C2` reduce `http.py` to route registration, boundary auth/session checks,
+  ingress calls, and response mapping
+
 Before-state:
 
-- `app/channels/registry/http.py` still mixes HTTP route handlers with large
-  inline HTML/CSS/JS template blocks.
+- `app/channels/registry/http.py` is no longer the UI-shell owner, but it still
+  mixes HTTP boundary code with additional registry auth/session and route-local
+  orchestration that should be pushed into the correct registry channel owners.
 
 After-state required:
 
-- large UI/template content moves into `app/channels/registry/ui.py`
-- `http.py` becomes a thinner HTTP boundary over registry ingress and UI
+- `http.py` becomes a thinner HTTP boundary over registry ingress, auth, and UI
   rendering helpers
-- focused tests and guard tests prove that large template blocks are no longer
-  embedded in `http.py`
+- displaced non-boundary auth/session logic moves into
+  `app/channels/registry/auth.py`
+- focused tests and guard tests keep `http.py` structural ownership narrow
 
 ## Working Rules
 

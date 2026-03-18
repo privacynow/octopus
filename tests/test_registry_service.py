@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 import app.content_store as content_store_mod
 from app.channels.registry.http import app
-from app.channels.registry import ingress
+from app.channels.registry import ingress, ui
 from app.registry_service.store import RegistrySQLiteStore
 from app.runtime_health import (
     QueueSnapshot,
@@ -704,6 +704,35 @@ def test_ui_shell_includes_rich_registry_editors(monkeypatch, tmp_path: Path):
     assert "/v1/provider-guidance/${encodeURIComponent(providerName)}/draft" in response.text
     assert "/v1/provider-guidance/${encodeURIComponent(providerName)}/${action}" in response.text
     assert 'data-provider-guidance-action="publish"' in response.text
+
+
+def test_registry_ui_render_shell_helper_includes_editor_markers():
+    html_text = ui.render_shell_html(
+        title_text="Agent Registry",
+        heading_text="Agent Registry",
+        logout_link='<a href="/ui/logout" class="nav-link">Logout</a>',
+        token="ui-secret",
+    )
+
+    assert "registry-editor-ready" in html_text
+    assert "@codemirror/state" in html_text
+    assert "@codemirror/view" in html_text
+    assert "runtime-skill-editor-textarea" in html_text
+    assert "provider-guidance-editor-textarea" in html_text
+    assert "const token = 'ui-secret';" in html_text
+
+
+def test_registry_http_module_has_no_inline_ui_shell_and_stays_under_guard_threshold():
+    repo_root = Path(__file__).resolve().parents[1]
+    http_path = repo_root / "app" / "channels" / "registry" / "http.py"
+    text = http_path.read_text()
+    lowered = text.lower()
+
+    assert len(text.splitlines()) <= 1800
+    assert "<!doctype html>" not in lowered
+    assert "<html" not in lowered
+    assert "<script" not in lowered
+    assert "<style" not in lowered
 
 
 def test_ui_bootstrap_still_accepts_bearer_token(monkeypatch, tmp_path: Path):

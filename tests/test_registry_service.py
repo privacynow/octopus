@@ -7,6 +7,7 @@ import sqlite3
 
 from fastapi.testclient import TestClient
 
+import app.content_store as content_store_mod
 from app.channels.registry.http import app
 from app.channels.registry import ingress
 from app.registry_service.store import RegistrySQLiteStore
@@ -337,6 +338,80 @@ def test_registry_lifecycle_endpoints_cover_skill_and_guidance(monkeypatch, tmp_
     assert "Registry Guidance" in preview_after.json()["effective_guidance"]
 
 
+def test_registry_lifecycle_endpoints_are_replay_safe(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    _configure_runtime_surface(monkeypatch, tmp_path)
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer ui-secret"}
+
+    created = client.put(
+        "/v1/catalog/skills/replay-skill/draft",
+        headers=headers,
+        json={
+            "actor_key": "reg:ui",
+            "body": "Replay-safe skill body.",
+            "description": "Replay test",
+            "changelog": "initial draft",
+        },
+    )
+    assert created.status_code == 200
+
+    first_submit = client.post(
+        "/v1/catalog/skills/replay-skill/submit",
+        headers=headers,
+        json={"actor_key": "reg:ui", "note": "submit"},
+    )
+    assert first_submit.status_code == 200
+    assert first_submit.json()["status"] == "submitted"
+
+    second_submit = client.post(
+        "/v1/catalog/skills/replay-skill/submit",
+        headers=headers,
+        json={"actor_key": "reg:ui", "note": "submit-again"},
+    )
+    assert second_submit.status_code == 200
+    assert second_submit.json()["status"] == "already_submitted"
+
+    first_approve = client.post(
+        "/v1/catalog/skills/replay-skill/approve",
+        headers=headers,
+        json={"actor_key": "reg:ui", "note": "approve"},
+    )
+    assert first_approve.status_code == 200
+    assert first_approve.json()["status"] == "approved"
+
+    second_approve = client.post(
+        "/v1/catalog/skills/replay-skill/approve",
+        headers=headers,
+        json={"actor_key": "reg:ui", "note": "approve-again"},
+    )
+    assert second_approve.status_code == 200
+    assert second_approve.json()["status"] == "already_approved"
+
+    lifecycle_before_publish = client.get("/v1/catalog/skills/replay-skill/lifecycle", headers=headers)
+    assert lifecycle_before_publish.status_code == 200
+    active_revision_id = lifecycle_before_publish.json()["active_revision_id"]
+
+    store = content_store_mod.get_content_store()
+    store.set_skill_revision_status("replay-skill", active_revision_id, "published")
+
+    repaired_publish = client.post(
+        "/v1/catalog/skills/replay-skill/publish",
+        headers=headers,
+        json={"actor_key": "reg:ui", "note": "publish"},
+    )
+    assert repaired_publish.status_code == 200
+    assert repaired_publish.json()["status"] == "published"
+
+    lifecycle_after_publish = client.get("/v1/catalog/skills/replay-skill/lifecycle", headers=headers)
+    assert lifecycle_after_publish.status_code == 200
+    detail = lifecycle_after_publish.json()
+    assert detail["published_revision_id"] == active_revision_id
+    assert sum(1 for item in detail["approvals"] if item["action"] == "submitted") == 1
+    assert sum(1 for item in detail["approvals"] if item["action"] == "approved") == 1
+    assert sum(1 for item in detail["approvals"] if item["action"] == "published") == 1
+
+
 def test_registry_conversation_skill_activation_surface(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     data_dir = _configure_runtime_surface(monkeypatch, tmp_path)
@@ -624,7 +699,11 @@ def test_ui_shell_includes_rich_registry_editors(monkeypatch, tmp_path: Path):
     assert "provider-guidance-select" in response.text
     assert "provider-guidance-editor-textarea" in response.text
     assert "/v1/catalog/skills/${encodeURIComponent(skillName)}/draft" in response.text
+    assert "/v1/catalog/skills/${encodeURIComponent(skillName)}/${action}" in response.text
+    assert 'data-runtime-skill-lifecycle-action="publish"' in response.text
     assert "/v1/provider-guidance/${encodeURIComponent(providerName)}/draft" in response.text
+    assert "/v1/provider-guidance/${encodeURIComponent(providerName)}/${action}" in response.text
+    assert 'data-provider-guidance-action="publish"' in response.text
 
 
 def test_ui_bootstrap_still_accepts_bearer_token(monkeypatch, tmp_path: Path):

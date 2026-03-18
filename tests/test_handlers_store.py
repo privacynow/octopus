@@ -385,8 +385,14 @@ async def test_handler_skill_lifecycle_commands(monkeypatch, tmp_path: Path):
         submitted = await send_command(th.cmd_skills, chat, regular, "/skills submit release-notes", ["submit", "release-notes"])
         assert "Submitted" in last_reply(submitted)
 
+        submitted_again = await send_command(th.cmd_skills, chat, regular, "/skills submit release-notes", ["submit", "release-notes"])
+        assert "already submitted" in last_reply(submitted_again).lower()
+
         approved = await send_command(th.cmd_skills, chat, admin, "/skills approve release-notes", ["approve", "release-notes"])
         assert "Approved" in last_reply(approved)
+
+        approved_again = await send_command(th.cmd_skills, chat, admin, "/skills approve release-notes", ["approve", "release-notes"])
+        assert "already approved" in last_reply(approved_again).lower()
 
         published = await send_command(th.cmd_skills, chat, admin, "/skills publish release-notes", ["publish", "release-notes"])
         assert "Published" in last_reply(published)
@@ -395,6 +401,9 @@ async def test_handler_skill_lifecycle_commands(monkeypatch, tmp_path: Path):
         archived = await send_command(th.cmd_skills, chat, admin, "/skills archive release-notes", ["archive", "release-notes"])
         assert "Archived" in last_reply(archived)
         assert get_skill_catalog_service().resolve_runtime_track("release-notes") is None
+
+        archived_again = await send_command(th.cmd_skills, chat, admin, "/skills archive release-notes", ["archive", "release-notes"])
+        assert "already archived" in last_reply(archived_again).lower()
     finally:
         _cleanup_runtime(data_dir)
 
@@ -419,11 +428,20 @@ async def test_handler_provider_guidance_lifecycle_commands(monkeypatch, tmp_pat
         submitted = await send_command(th.cmd_guidance, chat, admin, "/guidance submit claude", ["submit", "claude"])
         assert "Submitted provider guidance" in last_reply(submitted)
 
+        submitted_again = await send_command(th.cmd_guidance, chat, admin, "/guidance submit claude", ["submit", "claude"])
+        assert "already submitted" in last_reply(submitted_again).lower()
+
         approved = await send_command(th.cmd_guidance, chat, admin, "/guidance approve claude", ["approve", "claude"])
         assert "Approved provider guidance" in last_reply(approved)
 
+        approved_again = await send_command(th.cmd_guidance, chat, admin, "/guidance approve claude", ["approve", "claude"])
+        assert "already approved" in last_reply(approved_again).lower()
+
         published = await send_command(th.cmd_guidance, chat, admin, "/guidance publish claude", ["publish", "claude"])
         assert "Published provider guidance" in last_reply(published)
+
+        published_again = await send_command(th.cmd_guidance, chat, admin, "/guidance publish claude", ["publish", "claude"])
+        assert "already published" in last_reply(published_again).lower()
 
         preview = await send_command(th.cmd_guidance, chat, admin, "/guidance preview claude", ["preview", "claude"])
         assert "Use edited guidance" in last_reply(preview)

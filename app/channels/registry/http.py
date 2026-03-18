@@ -2,21 +2,26 @@
 
 from __future__ import annotations
 
-import hmac
 import html
-import logging
-import os
-import secrets
-from dataclasses import dataclass
+import hmac
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Form, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
-from starlette.middleware.sessions import SessionMiddleware
 
+from app.channels.registry.auth import (
+    clear_ui_session,
+    configure_session_middleware,
+    load_settings,
+    mark_ui_session_authenticated,
+    require_agent_token,
+    require_ui_session,
+    require_ui_token,
+    ui_password_matches,
+    ui_session_is_valid,
+)
 from app.capability_service import CapabilityService
 from app.channels.registry import ui
 from app.channels.registry.ingress import (
@@ -51,18 +56,6 @@ from app.channels.registry.ingress import (
 from app.registry_service.backend import get_registry_store
 from app.registry_service.store_base import AbstractRegistryStore, CapabilityDisabledError
 from app.session_state import session_to_dict
-
-log = logging.getLogger(__name__)
-_SESSION_TTL_SECONDS = 24 * 60 * 60
-_WARNED_MISSING_UI_TOKEN = False
-
-
-@dataclass(frozen=True)
-class RegistrySettings:
-    db_path: Path
-    enroll_token: str
-    ui_token: str
-    display_name: str
 
 
 class CreateConversationRequest(BaseModel):
@@ -113,65 +106,12 @@ def _float_value(value: Any) -> float:
         return 0.0
 
 
-def load_settings() -> RegistrySettings:
-    db_path = Path(os.environ.get("REGISTRY_DB_PATH", "/tmp/telegram-agent-registry/registry.sqlite3"))
-    enroll_token = os.environ.get("REGISTRY_ENROLL_TOKEN", "dev-enroll-token")
-    ui_token = os.environ.get("REGISTRY_UI_TOKEN", "").strip()
-    display_name = os.environ.get("REGISTRY_DISPLAY_NAME", "").strip()
-    global _WARNED_MISSING_UI_TOKEN
-    if not ui_token and not _WARNED_MISSING_UI_TOKEN:
-        log.warning("REGISTRY_UI_TOKEN is not set — Registry UI is running unauthenticated.")
-        _WARNED_MISSING_UI_TOKEN = True
-    return RegistrySettings(db_path=db_path, enroll_token=enroll_token, ui_token=ui_token, display_name=display_name)
-
-
 def get_store() -> AbstractRegistryStore:
     return get_registry_store()
 
 
-def require_agent_token(
-    authorization: str | None = Header(default=None),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> str:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing bearer token")
-    return authorization.removeprefix("Bearer ").strip()
-
-
-def require_ui_token(
-    authorization: str | None = Header(default=None),
-) -> None:
-    settings = load_settings()
-    if not settings.ui_token:
-        return
-    token = ""
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization.removeprefix("Bearer ").strip()
-    if not hmac.compare_digest(token, settings.ui_token):
-        raise HTTPException(status_code=401, detail="Invalid UI token")
-
-
-def _session_is_valid(request: Request) -> bool:
-    settings = load_settings()
-    if not settings.ui_token:
-        return True
-    return request.session.get("ui_authenticated") is True
-
-
-def _require_session(request: Request) -> None:
-    if _session_is_valid(request):
-        return
-    raise HTTPException(status_code=302, headers={"Location": "/ui/login"})
-
-
 app = FastAPI(title="Telegram Agent Registry", version="0.1.0")
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=os.environ.get("REGISTRY_SESSION_SECRET", secrets.token_hex(32)),
-    session_cookie="registry_session",
-    same_site="strict",
-    max_age=_SESSION_TTL_SECONDS,
-)
+configure_session_middleware(app)
 
 
 @app.get("/healthz")
@@ -679,7 +619,7 @@ def api_provider_guidance_archive(
 @app.get("/ui/login", response_class=HTMLResponse)
 def ui_login_page(request: Request):
     settings = load_settings()
-    if _session_is_valid(request):
+    if ui_session_is_valid(request):
         return RedirectResponse("/ui", status_code=303)
     if not settings.ui_token:
         return RedirectResponse("/ui", status_code=303)
@@ -689,25 +629,25 @@ def ui_login_page(request: Request):
 @app.post("/ui/login")
 async def ui_login(request: Request, password: str = Form(default="")):
     settings = load_settings()
-    if _session_is_valid(request):
+    if ui_session_is_valid(request):
         return RedirectResponse("/ui", status_code=303)
-    if settings.ui_token and not hmac.compare_digest(password, settings.ui_token):
+    if settings.ui_token and not ui_password_matches(password, settings=settings):
         return HTMLResponse(
             ui.render_login_html(settings.display_name or "Agent Registry", error="Incorrect password.")
         )
-    request.session["ui_authenticated"] = True
+    mark_ui_session_authenticated(request)
     return RedirectResponse("/ui", status_code=303)
 
 
 @app.get("/ui/logout")
 def ui_logout(request: Request):
-    request.session.clear()
+    clear_ui_session(request)
     return RedirectResponse("/ui/login", status_code=303)
 
 
 @app.get("/ui", response_class=HTMLResponse)
 def ui_shell(request: Request) -> str:
-    _require_session(request)
+    require_ui_session(request)
     settings = load_settings()
     title_text = f"{settings.display_name} — Agent Registry" if settings.display_name else "Agent Registry"
     heading_text = settings.display_name or "Agent Registry"

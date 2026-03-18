@@ -8,6 +8,7 @@ import sqlite3
 from fastapi.testclient import TestClient
 
 import app.content_store as content_store_mod
+from app.channels.registry import auth as registry_auth
 from app.channels.registry.http import app
 from app.channels.registry import ingress, ui
 from app.registry_service.store import RegistrySQLiteStore
@@ -733,6 +734,31 @@ def test_registry_http_module_has_no_inline_ui_shell_and_stays_under_guard_thres
     assert "<html" not in lowered
     assert "<script" not in lowered
     assert "<style" not in lowered
+
+
+def test_registry_auth_load_settings_reads_registry_env(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    monkeypatch.setenv("REGISTRY_DISPLAY_NAME", "QA Registry")
+
+    settings = registry_auth.load_settings()
+
+    assert settings.db_path == tmp_path / "registry.sqlite3"
+    assert settings.enroll_token == "enroll-secret"
+    assert settings.ui_token == "ui-secret"
+    assert settings.display_name == "QA Registry"
+
+
+def test_registry_http_module_delegates_auth_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    http_path = repo_root / "app" / "channels" / "registry" / "http.py"
+    text = http_path.read_text()
+
+    assert "class RegistrySettings" not in text
+    assert "SessionMiddleware" not in text
+    assert "def require_agent_token" not in text
+    assert "def require_ui_token" not in text
+    assert "def _session_is_valid" not in text
+    assert "def _require_session" not in text
 
 
 def test_ui_bootstrap_still_accepts_bearer_token(monkeypatch, tmp_path: Path):

@@ -13,14 +13,7 @@ from typing import Any
 from telegram import Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import BadRequest
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
+from telegram.ext import ContextTypes
 
 from app import access
 from app import user_messages as _msg
@@ -2992,113 +2985,6 @@ async def _shared_callback_dispatch(update: Update, context: ContextTypes.DEFAUL
 
     await query.answer()
     await _enqueue_shared_action(runtime, update, action)
-
-
-def build_application(runtime: TelegramRuntime) -> Application:
-    from app.content_store import init_content_store_for_config
-    from app.credential_store import init_credential_store_for_config
-
-    config = runtime.config
-    init_content_store_for_config(config)
-    init_credential_store_for_config(config)
-    if config.allow_open and config.rate_limit_per_minute == 0 and config.rate_limit_per_hour == 0:
-        log.info("Public mode: applying default rate limits (5/min, 30/hr)")
-
-    # Sequential update processing; live runs are worker-owned so /cancel is delivered promptly.
-    builder = Application.builder().token(config.telegram_token)
-    if config.telegram_api_base_url:
-        builder = builder.base_url(config.telegram_api_base_url)
-    if config.telegram_file_api_base_url:
-        builder = builder.base_file_url(config.telegram_file_api_base_url)
-    app = builder.build()
-    runtime.bot_instance = app.bot
-    app.bot_data["telegram_boot_id"] = runtime.boot_id
-    app.bot_data["telegram_runtime"] = runtime
-    if config.runtime_mode == "shared":
-        app.add_handler(CommandHandler("start", cmd_start))
-        app.add_handler(CommandHandler("help", cmd_help))
-        app.add_handler(CommandHandler("session", cmd_session))
-        app.add_handler(CommandHandler("clear_credentials", cmd_clear_credentials))
-        app.add_handler(CommandHandler("raw", cmd_raw))
-        app.add_handler(CommandHandler("send", cmd_send))
-        app.add_handler(CommandHandler("id", cmd_id))
-        app.add_handler(CommandHandler("doctor", cmd_doctor))
-        app.add_handler(CommandHandler("discover", cmd_discover))
-        app.add_handler(CommandHandler("settings", cmd_settings))
-        app.add_handler(CommandHandler("allowuser", cmd_allowuser))
-        app.add_handler(CommandHandler("blockuser", cmd_blockuser))
-        app.add_handler(CommandHandler("listaccess", cmd_listaccess))
-        app.add_handler(CommandHandler("export", cmd_export))
-        app.add_handler(CommandHandler("admin", cmd_admin))
-        for command in (
-            "new",
-            "approval",
-            "approve",
-            "reject",
-            "skills",
-            "cancel",
-            "role",
-            "compact",
-            "project",
-            "policy",
-            "model",
-        ):
-            app.add_handler(CommandHandler(command, _shared_command_dispatch))
-        app.add_handler(CallbackQueryHandler(_shared_callback_dispatch, pattern=r"^(retry_|approval_)"))
-        app.add_handler(CallbackQueryHandler(_shared_callback_dispatch, pattern=r"^delegation_"))
-        app.add_handler(CallbackQueryHandler(_shared_callback_dispatch, pattern=r"^recovery_"))
-        app.add_handler(CallbackQueryHandler(_shared_callback_dispatch, pattern=r"^setting_"))
-        app.add_handler(CallbackQueryHandler(handle_expand_callback, pattern=r"^expand:"))
-        app.add_handler(CallbackQueryHandler(handle_collapse_callback, pattern=r"^collapse:"))
-        app.add_handler(CallbackQueryHandler(_shared_callback_dispatch, pattern=r"^skill_add_"))
-        app.add_handler(CallbackQueryHandler(handle_skill_update_callback, pattern=r"^skill_update_"))
-        app.add_handler(CallbackQueryHandler(handle_clear_cred_callback, pattern=r"^clear_cred_"))
-    else:
-        app.add_handler(CommandHandler("start", cmd_start))
-        app.add_handler(CommandHandler("help", cmd_help))
-        app.add_handler(CommandHandler("new", cmd_new))
-        app.add_handler(CommandHandler("session", cmd_session))
-        app.add_handler(CommandHandler("approval", cmd_approval))
-        app.add_handler(CommandHandler("approve", cmd_approve))
-        app.add_handler(CommandHandler("reject", cmd_reject))
-        app.add_handler(CommandHandler("skills", cmd_skills))
-        app.add_handler(CommandHandler("guidance", cmd_guidance))
-        app.add_handler(CommandHandler("cancel", cmd_cancel))
-        app.add_handler(CommandHandler("clear_credentials", cmd_clear_credentials))
-        app.add_handler(CommandHandler("role", cmd_role))
-        app.add_handler(CommandHandler("compact", cmd_compact))
-        app.add_handler(CommandHandler("raw", cmd_raw))
-        app.add_handler(CommandHandler("send", cmd_send))
-        app.add_handler(CommandHandler("id", cmd_id))
-        app.add_handler(CommandHandler("doctor", cmd_doctor))
-        app.add_handler(CommandHandler("discover", cmd_discover))
-        app.add_handler(CommandHandler("settings", cmd_settings))
-        app.add_handler(CommandHandler("project", cmd_project))
-        app.add_handler(CommandHandler("policy", cmd_policy))
-        app.add_handler(CommandHandler("model", cmd_model))
-        app.add_handler(CommandHandler("allowuser", cmd_allowuser))
-        app.add_handler(CommandHandler("blockuser", cmd_blockuser))
-        app.add_handler(CommandHandler("listaccess", cmd_listaccess))
-        app.add_handler(CommandHandler("export", cmd_export))
-        app.add_handler(CommandHandler("admin", cmd_admin))
-        app.add_handler(CallbackQueryHandler(handle_callback, pattern=r"^(retry_|approval_)"))
-        app.add_handler(CallbackQueryHandler(handle_delegation_callback, pattern=r"^delegation_"))
-        app.add_handler(CallbackQueryHandler(handle_recovery_callback, pattern=r"^recovery_"))
-        app.add_handler(CallbackQueryHandler(handle_settings_callback, pattern=r"^setting_"))
-        app.add_handler(CallbackQueryHandler(handle_expand_callback, pattern=r"^expand:"))
-        app.add_handler(CallbackQueryHandler(handle_collapse_callback, pattern=r"^collapse:"))
-        app.add_handler(CallbackQueryHandler(handle_skill_add_callback, pattern=r"^skill_add_"))
-        app.add_handler(CallbackQueryHandler(handle_skill_update_callback, pattern=r"^skill_update_"))
-        app.add_handler(CallbackQueryHandler(handle_clear_cred_callback, pattern=r"^clear_cred_"))
-    app.add_handler(
-        MessageHandler(
-            (filters.TEXT | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
-            handle_message,
-        )
-    )
-    app.add_error_handler(_global_error_handler)
-    return app
-
 
 async def _global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Catch unhandled exceptions so the user always gets feedback."""

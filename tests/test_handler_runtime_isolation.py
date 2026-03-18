@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 
 import app.storage as storage_mod
-import app.channels.telegram.routing as th
+import app.channels.telegram.ingress as th
 import app.work_queue as work_queue_mod
 from tests.support.config_support import make_config as make_bot_config
 from tests.support.handler_support import (

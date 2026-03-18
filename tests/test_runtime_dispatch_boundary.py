@@ -68,7 +68,7 @@ def _execution_runtime(th) -> ExecutionRuntime:
 
 
 async def test_run_provider_request_uses_explicit_runtime_plumbing():
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (_data_dir, _cfg, prov):
         chat = FakeChat(12345)
@@ -91,7 +91,7 @@ async def test_run_provider_request_uses_explicit_runtime_plumbing():
 
 
 async def test_execute_request_runs_from_explicit_execution_runtime():
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (_data_dir, _cfg, prov):
         chat = FakeChat(12345)
@@ -113,7 +113,7 @@ async def test_execute_request_runs_from_explicit_execution_runtime():
 
 
 async def test_request_approval_runs_from_explicit_execution_runtime():
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     approval_prompts: list[str] = []
 

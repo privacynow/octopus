@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import app.channels.telegram.routing as _th
+import app.channels.telegram.ingress as _th
 from app import work_queue
 from app.agents.bridge import build_registry_message_delivery
 from tests.support.handler_support import (

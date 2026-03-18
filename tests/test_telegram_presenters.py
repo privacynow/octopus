@@ -398,7 +398,7 @@ def test_runtime_skill_history_message_renders_revisions_and_approvals():
 
 
 async def test_cmd_compact_status_uses_presenter(monkeypatch):
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
     import app.channels.telegram.conversation as conversation
 
     rendered = TelegramRenderedMessage(
@@ -422,7 +422,7 @@ async def test_cmd_compact_status_uses_presenter(monkeypatch):
 
 
 async def test_skills_add_confirmation_uses_presenter(monkeypatch):
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
     import app.channels.telegram.runtime_skills as runtime_skills
     from tests.support import skill_test_helpers as skills_mod
 
@@ -460,7 +460,7 @@ async def test_skills_add_confirmation_uses_presenter(monkeypatch):
 
 
 async def test_send_approval_prompt_uses_presenter(monkeypatch):
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     rendered = TelegramRenderedMessage(
         text="patched approval presenter",
@@ -478,7 +478,7 @@ async def test_send_approval_prompt_uses_presenter(monkeypatch):
 
 
 async def test_show_setup_prompt_uses_presenter(monkeypatch):
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     rendered = TelegramRenderedMessage(text="patched setup prompt", parse_mode=ParseMode.HTML)
     monkeypatch.setattr(th.telegram_presenters, "ingress_setup_prompt_message", lambda *args, **kwargs: rendered)
@@ -491,7 +491,7 @@ async def test_show_setup_prompt_uses_presenter(monkeypatch):
 
 
 async def test_send_formatted_reply_uses_presenter(monkeypatch):
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     rendered = TelegramRenderedMessage(text="patched formatted chunk", parse_mode=ParseMode.HTML)
     monkeypatch.setattr(th.telegram_presenters, "formatted_reply_messages", lambda text: [rendered])
@@ -504,7 +504,7 @@ async def test_send_formatted_reply_uses_presenter(monkeypatch):
 
 
 async def test_send_compact_reply_uses_presenter(monkeypatch):
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     rendered = TelegramRenderedMessage(text="patched compact reply", parse_mode=ParseMode.HTML)
     monkeypatch.setattr(th.telegram_presenters, "compact_reply_blockquote_message", lambda text: rendered)
@@ -517,7 +517,7 @@ async def test_send_compact_reply_uses_presenter(monkeypatch):
 
 
 async def test_propose_delegation_plan_uses_presenter(monkeypatch):
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
     from app.channels.telegram.state import build_telegram_runtime
 
     async def _noop_publish(*args, **kwargs):
@@ -559,7 +559,7 @@ async def test_propose_delegation_plan_uses_presenter(monkeypatch):
 
 
 async def test_cmd_raw_usage_uses_presenter(monkeypatch):
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     rendered = TelegramRenderedMessage(text="patched raw usage")
     monkeypatch.setattr(th.telegram_presenters, "raw_usage_message", lambda: rendered)
@@ -577,7 +577,7 @@ async def test_cmd_raw_usage_uses_presenter(monkeypatch):
 
 
 async def test_handle_message_welcome_uses_presenter(monkeypatch):
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     rendered = TelegramRenderedMessage(text="patched welcome")
     monkeypatch.setattr(th.telegram_presenters, "welcome_message", lambda **kwargs: rendered)
@@ -595,7 +595,7 @@ async def test_handle_message_welcome_uses_presenter(monkeypatch):
 
 
 async def test_cmd_help_uses_presenter(monkeypatch):
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     rendered = TelegramRenderedMessage(text="patched help presenter", parse_mode=ParseMode.HTML)
     monkeypatch.setattr(th.telegram_presenters, "main_help_message", lambda **kwargs: rendered)
@@ -613,7 +613,7 @@ async def test_cmd_help_uses_presenter(monkeypatch):
 
 
 async def test_cmd_session_uses_presenter(monkeypatch):
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     rendered = TelegramRenderedMessage(text="patched session presenter", parse_mode=ParseMode.HTML)
     monkeypatch.setattr(th.telegram_presenters, "session_overview_message", lambda **kwargs: rendered)
@@ -631,7 +631,7 @@ async def test_cmd_session_uses_presenter(monkeypatch):
 
 
 async def test_cmd_discover_uses_presenter(monkeypatch):
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     class _FakeClient:
         async def search(self, query):
@@ -664,7 +664,7 @@ async def test_cmd_discover_uses_presenter(monkeypatch):
 
 
 async def test_cmd_admin_uses_presenter(monkeypatch):
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     rendered = TelegramRenderedMessage(text="patched admin presenter", parse_mode=ParseMode.HTML)
     monkeypatch.setattr(th.telegram_presenters, "admin_sessions_summary_message", lambda **kwargs: rendered)
@@ -689,7 +689,7 @@ async def test_cmd_admin_uses_presenter(monkeypatch):
 
 
 async def test_cmd_guidance_admin_only_uses_presenter(monkeypatch):
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     rendered = TelegramRenderedMessage(text="patched guidance admin presenter")
     monkeypatch.setattr(th.telegram_presenters, "guidance_admin_only_message", lambda action: rendered)

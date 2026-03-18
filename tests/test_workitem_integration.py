@@ -60,7 +60,7 @@ def _event(value):
 
 @pytest.mark.asyncio
 async def test_fresh_message_does_not_consume_stale_recovered_item():
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 9001
@@ -106,7 +106,7 @@ async def test_fresh_message_does_not_consume_stale_recovered_item():
 
 @pytest.mark.asyncio
 async def test_concurrent_messages_each_claim_own_item():
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 9002
@@ -203,7 +203,7 @@ async def test_claim_for_update_blocked_by_existing_claimed_item():
 
 @pytest.mark.asyncio
 async def test_approval_callback_does_not_consume_stale_item():
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
         chat_id = 9004
@@ -255,7 +255,7 @@ async def test_approval_callback_does_not_consume_stale_item():
 
 @pytest.mark.asyncio
 async def test_project_switch_waits_for_inflight_request():
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={
         "projects": (("proj1", "/tmp/p1", ()), ("proj2", "/tmp/p2", ())),
@@ -303,7 +303,7 @@ async def test_project_switch_waits_for_inflight_request():
 
 @pytest.mark.asyncio
 async def test_preflight_and_execution_use_same_model():
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={
         "approval_mode": "on",
@@ -365,7 +365,7 @@ async def test_preflight_and_execution_use_same_model():
 
 @pytest.mark.asyncio
 async def test_live_command_blocked_by_worker_claimed_item():
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
     from tests.support.handler_support import send_command
 
     with fresh_env() as (data_dir, cfg, prov):
@@ -420,7 +420,7 @@ async def test_live_command_blocked_by_worker_claimed_item():
 
 @pytest.mark.asyncio
 async def test_live_message_blocked_by_worker_claimed_item():
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 9008
@@ -471,7 +471,7 @@ async def test_live_message_blocked_by_worker_claimed_item():
 
 @pytest.mark.asyncio
 async def test_queued_item_processable_after_worker_completes():
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 9009
@@ -525,7 +525,7 @@ async def test_queued_item_processable_after_worker_completes():
 
 @pytest.mark.asyncio
 async def test_live_callback_blocked_by_worker_and_query_answered():
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
         chat_id = 9010
@@ -614,7 +614,7 @@ class _FakeBot:
 async def test_worker_dispatch_sends_recovery_notice():
     """Recovered InboundMessage gets a recovery notice with buttons,
     not an automatic replay through the provider."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
     from app.runtime.inbound_types import InboundMessage, InboundUser
 
     with fresh_env() as (data_dir, cfg, prov):
@@ -676,7 +676,7 @@ async def test_worker_dispatch_sends_recovery_notice():
 async def test_recovery_discard_callback_finalizes_item():
     """Clicking Discard on a recovery notice finalizes the item as
     'discarded' and edits the message."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 12001
@@ -736,7 +736,7 @@ async def test_recovery_discard_callback_finalizes_item():
 async def test_recovery_replay_callback_executes_original():
     """Clicking Replay on a recovery notice replays the original message
     through execute_request."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
     from app.runtime.inbound_types import serialize_inbound, InboundMessage, InboundUser
 
     with fresh_env() as (data_dir, cfg, prov):
@@ -806,7 +806,7 @@ async def test_fresh_message_supersedes_pending_recovery():
     """A fresh message arriving for a chat with a pending_recovery item
     supersedes the recovery — the fresh message proceeds and the old
     item is finalized as superseded."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 14001
@@ -855,7 +855,7 @@ async def test_fresh_message_supersedes_pending_recovery():
 async def test_recovery_double_click_is_idempotent():
     """Clicking Replay or Discard twice on the same recovery notice
     is safe — second click gets 'already handled'."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 15001
@@ -935,7 +935,7 @@ class _ExplodingBot(_FakeBot):
 async def test_failed_notice_delivery_marks_item_failed_via_worker_loop():
     """If the recovery notice cannot be delivered, worker_loop must mark
     the item failed — not done, not pending_recovery."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
     from app.worker import worker_loop
     from app.runtime.inbound_types import serialize_inbound, InboundMessage, InboundUser
 
@@ -995,7 +995,7 @@ async def test_failed_notice_delivery_marks_item_failed_via_worker_loop():
 async def test_multiple_pending_recovery_items_each_addressable():
     """Two pending_recovery items for the same chat: clicking Discard
     on the older one must finalize it, not the newer one."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 17001
@@ -1080,7 +1080,7 @@ async def test_multiple_pending_recovery_items_each_addressable():
 async def test_discard_race_after_replay_answers_already_handled():
     """If the item was already reclaimed for replay before discard runs,
     discard must report 'already handled', not 'Discarded.'."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 18001
@@ -1145,7 +1145,7 @@ async def test_discard_race_after_replay_answers_already_handled():
 async def test_replay_reclaim_blocked_by_existing_claimed_item():
     """reclaim_for_replay must reject if another item for the same chat
     is already claimed — preserving the per-chat single-claimed invariant."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 19001
@@ -1195,7 +1195,7 @@ async def test_replay_callback_blocked_by_claimed_item_answers_user():
     """When the user clicks Replay but another item is already claimed
     for the chat, the callback must inform the user rather than silently
     failing or creating two claimed rows."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
     from app.runtime.inbound_types import serialize_inbound, InboundMessage, InboundUser
 
     with fresh_env() as (data_dir, cfg, prov):
@@ -1270,7 +1270,7 @@ async def test_replay_callback_blocked_by_claimed_item_answers_user():
 async def test_command_does_not_supersede_pending_recovery():
     """A command going through _chat_lock must not supersede
     pending_recovery items — only handle_message should."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 21001
@@ -1371,7 +1371,7 @@ async def test_fresh_command_item_created_as_claimed():
     """_dedup_update creates work items as 'claimed' (handler-owned),
     not 'queued'.  The worker's claim_next_any must not be able to
     steal them."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 12001
@@ -1438,7 +1438,7 @@ async def test_worker_cannot_steal_handler_owned_item():
 async def test_no_false_recovery_for_compact():
     """Fresh /compact must never trigger a recovery notice, even with
     an active worker.  Reproduces incident 1 from dont_make_false_claims.md."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 12003
@@ -1471,7 +1471,7 @@ async def test_no_false_recovery_for_compact():
 async def test_no_false_recovery_for_doctor():
     """Fresh /doctor must never trigger a recovery notice, even with
     an active worker.  Reproduces incident 2 from dont_make_false_claims.md."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 12004
@@ -1495,7 +1495,7 @@ async def test_no_false_recovery_for_doctor():
 @pytest.mark.asyncio
 async def test_no_false_recovery_for_session():
     """Adjacent lock-free command: /session must also be immune."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 12005
@@ -1525,7 +1525,7 @@ async def test_no_false_recovery_for_session():
 async def test_handler_crash_leaves_item_claimed_for_recovery():
     """If a handler raises before completing its work item, the item
     stays 'claimed' — recoverable by stale claim detection."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 12006
@@ -1674,7 +1674,7 @@ async def test_preclaim_falls_back_to_queued_when_item_already_claimed():
 @pytest.mark.asyncio
 async def test_second_message_while_chat_has_runnable_queues_fifo():
     """Admit A, then B before worker runs A. B is accepted into the durable queue behind A."""
-    import app.channels.telegram.routing as th
+    import app.channels.telegram.ingress as th
     from tests.support.handler_support import last_reply
     from app import user_messages as _msg
 

@@ -13,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.agents.delivery import build_registry_delivery_runtime
-import app.channels.telegram.routing as _th
+import app.channels.telegram.ingress as _th
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
 from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.providers.base import RunResult

@@ -20,8 +20,8 @@ from app.agents.bridge import (
 )
 from app.agents.types import RoutedTaskResult
 from app.config import BotConfig
-from app.transports import factory
 from app.transports.admission import enqueue_inbound_envelope, record_inbound_envelope
+from app.runtime import composition
 
 log = logging.getLogger(__name__)
 
@@ -171,7 +171,7 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
             serialized,
         )
         if admit_status == "admitted":
-            surface = factory.create_outbound_surface(
+            surface = composition.create_channel_egress(
                 parent_conversation_id,
                 config=config,
                 bot=th._bot_instance,

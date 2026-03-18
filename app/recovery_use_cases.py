@@ -11,7 +11,7 @@ from app.recovery_port import (
     RecoveryPort,
 )
 from app import work_queue
-from app.transports import factory
+from app.runtime import composition
 from app.transport import InboundMessage, deserialize_inbound
 from app.workflows.results import TransportStateCorruption
 
@@ -120,7 +120,7 @@ class RecoveryUseCases(RecoveryPort):
                 status="not_message",
                 edit_message=_msg.recovery_replay_failed_edit(),
             )
-        trust_tier = factory.trust_tier_for_source(
+        trust_tier = composition.trust_tier_for_source(
             getattr(event, "source", "telegram"),
             event.user,
             config=config,

@@ -1,4 +1,4 @@
-"""Registry-backed conversation surface for registry UI and routed work."""
+"""Registry channel egress implementation."""
 
 from __future__ import annotations
 
@@ -16,18 +16,18 @@ from app.agents.state import load_agent_runtime_state
 from app.agents.types import TimelineEvent
 from app.config import BotConfig
 from app.formatting import trim_text
-from app.transports.ports import (
-    InteractionSurface,
-    SurfaceCapabilities,
-    SurfaceEditableHandle,
+from app.ports.egress import (
+    ChannelCapabilities,
+    ChannelEgress,
+    EditableHandle,
 )
 
 log = logging.getLogger(__name__)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
-class RegistryEditableHandle(SurfaceEditableHandle):
-    def __init__(self, conversation: "RegistryConversationIO", *, event_id: str, kind: str, title: str) -> None:
+class RegistryEditableHandle(EditableHandle):
+    def __init__(self, conversation: "RegistryChannelEgress", *, event_id: str, kind: str, title: str) -> None:
         self._conversation = conversation
         self._event_id = event_id
         self._kind = kind
@@ -44,7 +44,7 @@ class RegistryEditableHandle(SurfaceEditableHandle):
         return None
 
 
-class RegistryConversationIO(InteractionSurface):
+class RegistryChannelEgress(ChannelEgress):
     def __init__(
         self,
         config: BotConfig,
@@ -68,8 +68,8 @@ class RegistryConversationIO(InteractionSurface):
         self.chat = _RegistryChatShim(self)
 
     @property
-    def capabilities(self) -> SurfaceCapabilities:
-        return SurfaceCapabilities(
+    def capabilities(self) -> ChannelCapabilities:
+        return ChannelCapabilities(
             can_edit_message=True,
             can_answer_action=True,
             can_send_photo=False,
@@ -77,7 +77,7 @@ class RegistryConversationIO(InteractionSurface):
             can_render_timeline=True,
             can_present_actions=True,
             can_share_conversation=True,
-            surface_name="registry",
+            channel_name="registry",
         )
 
     def _metadata(self) -> dict[str, Any]:
@@ -152,7 +152,7 @@ class RegistryConversationIO(InteractionSurface):
             event_id=event_id,
         )
 
-    async def send_text(self, text: str, **kwargs: Any) -> SurfaceEditableHandle:
+    async def send_text(self, text: str, **kwargs: Any) -> EditableHandle:
         del kwargs
         event_id = uuid.uuid4().hex
         self.sent_messages.append(text)
@@ -184,20 +184,12 @@ class RegistryConversationIO(InteractionSurface):
         )
 
     async def send_action(self, action: str) -> None:
-        await self._publish_event(
-            kind="surface_action",
-            title="Bot action",
-            body=action,
-        )
+        await self._publish_event(kind="surface_action", title="Bot action", body=action)
 
     async def answer_action(self, text: str | None = None, show_alert: bool = False) -> None:
         detail = text or ("alert" if show_alert else "ack")
         self._append_output("answer", detail)
-        await self._publish_event(
-            kind="action_answer",
-            title="Action handled",
-            body=detail,
-        )
+        await self._publish_event(kind="action_answer", title="Action handled", body=detail)
 
     async def publish_timeline(self, event: Any) -> None:
         body = getattr(event, "body", "") or getattr(event, "text", "") or ""
@@ -258,11 +250,11 @@ class RegistryConversationIO(InteractionSurface):
             await self._publish_event(kind="failed", title="Failed", body="Timed out")
             return None
         if status == "cancelled":
-            await self._publish_event(kind="failed", title="Failed", body="Cancelled")
+            await self._publish_event(kind="cancelled", title="Cancelled", body="Cancelled")
             return None
-        error_body = getattr(outcome, "error_text", "") or "Failed"
-        await self._publish_event(kind="failed", title="Failed", body=trim_text(error_body, 400))
-        return None
+        if status:
+            body = getattr(outcome, "error_text", "") or status
+            await self._publish_event(kind="failed", title="Failed", body=trim_text(body, 400))
 
     async def send_recovery_notice(
         self,
@@ -273,49 +265,21 @@ class RegistryConversationIO(InteractionSurface):
         skip_label: str,
         update_id: int,
     ) -> None:
-        del preview, run_again_label, skip_label
-        self._append_output("send", prompt)
+        del run_again_label, skip_label
         await self._publish_event(
             kind="recovery_notice",
-            title="Interrupted work needs replay",
-            body=prompt,
-            metadata={
-                "update_id": update_id,
-            },
+            title="Recovery available",
+            body=f"{preview}\n\n{prompt}".strip(),
+            metadata={"update_id": update_id},
         )
 
-    async def reply_text(self, text: str, **kwargs: Any) -> SurfaceEditableHandle:
+    async def reply_text(self, text: str, **kwargs: Any) -> EditableHandle:
         return await self.send_text(text, **kwargs)
-
-    async def reply_document(self, document: Any, **kwargs: Any) -> None:
-        await self.send_document(document, **kwargs)
-
-    async def reply_photo(self, photo: Any, **kwargs: Any) -> None:
-        await self.send_photo(photo, **kwargs)
-
-    async def send_message(self, text: str, **kwargs: Any) -> Any:
-        return await self.send_text(text, **kwargs)
-
-    async def edit_text(self, text: str, **kwargs: Any) -> None:
-        del kwargs
-        self.last_status_text = text
-        self._append_output("edit", html.unescape(text))
-        await self._publish_progress(text)
-
-    async def edit_reply_markup(self, reply_markup: Any = None, **kwargs: Any) -> None:
-        del reply_markup, kwargs
-        return None
-
-    async def delete(self) -> None:
-        return None
 
 
 class _RegistryChatShim:
-    def __init__(self, conversation: RegistryConversationIO) -> None:
+    def __init__(self, conversation: RegistryChannelEgress) -> None:
         self._conversation = conversation
 
     async def send_message(self, text: str, **kwargs: Any) -> Any:
-        return await self._conversation.send_message(text, **kwargs)
-
-    async def send_action(self, action: str) -> None:
-        await self._conversation.send_action(action)
+        return await self._conversation.send_text(text, **kwargs)

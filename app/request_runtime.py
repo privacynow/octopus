@@ -148,15 +148,15 @@ async def execute_request(
     label = _msg.progress_resuming() if is_resume else _msg.progress_working()
     conversation_ref = ""
     routed_task_id = ""
-    if getattr(message, "capabilities", None) and getattr(message.capabilities, "surface_name", "") == "registry":
+    if getattr(message, "capabilities", None) and getattr(message.capabilities, "channel_name", "") == "registry":
         conversation_ref = getattr(message, "conversation_ref", "")
         routed_task_id = getattr(message, "routed_task_id", "")
     elif cfg.agent_mode == "registry":
         conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
 
     timeline_cb = None
-    surface_name = getattr(getattr(message, "capabilities", None), "surface_name", "telegram")
-    if conversation_ref and surface_name != "registry":
+    channel_name = getattr(getattr(message, "capabilities", None), "channel_name", "telegram")
+    if conversation_ref and channel_name != "registry":
         timeline_cb = lambda html_text, force=False: th._progress_timeline_callback(
             conversation_ref,
             routed_task_id,
@@ -344,13 +344,13 @@ async def request_approval(
 
     status_msg = await message.reply_text(_msg.approval_preparing())
     conversation_ref = ""
-    if getattr(message, "capabilities", None) and getattr(message.capabilities, "surface_name", "") == "registry":
+    if getattr(message, "capabilities", None) and getattr(message.capabilities, "channel_name", "") == "registry":
         conversation_ref = getattr(message, "conversation_ref", "")
     elif cfg.agent_mode == "registry":
         conversation_ref = th.telegram_conversation_ref(cfg, th._telegram_chat_id(chat_id))
     timeline_cb = None
-    surface_name = getattr(getattr(message, "capabilities", None), "surface_name", "telegram")
-    if conversation_ref and surface_name != "registry":
+    channel_name = getattr(getattr(message, "capabilities", None), "channel_name", "telegram")
+    if conversation_ref and channel_name != "registry":
         timeline_cb = lambda html_text, force=False: th._progress_timeline_callback(
             conversation_ref,
             "",

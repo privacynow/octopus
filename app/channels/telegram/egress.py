@@ -1,4 +1,4 @@
-"""Telegram transport adapter. Wraps PTB Bot and Message behind the conversation port."""
+"""Telegram channel egress implementation."""
 
 from __future__ import annotations
 
@@ -11,15 +11,15 @@ from telegram.constants import ParseMode
 from app import user_messages as _msg
 from app.agents.bridge import bind_conversation, publish_timeline_event
 from app.config import BotConfig
-from app.transports.ports import (
-    EditableMessageHandle,
-    InteractionSurface,
-    TransportCapabilities,
+from app.ports.egress import (
+    ChannelCapabilities,
+    ChannelEgress,
+    EditableHandle,
 )
 
 
-class TelegramEditableMessageHandle(EditableMessageHandle):
-    """Wraps a PTB Message (or send_message result) for edits."""
+class TelegramEditableHandle(EditableHandle):
+    """Wrap a PTB message for later edits."""
 
     def __init__(self, message: Any) -> None:
         self._message = message
@@ -35,8 +35,8 @@ class TelegramEditableMessageHandle(EditableMessageHandle):
         await self._message.edit_message_reply_markup(reply_markup=reply_markup, **kwargs)
 
 
-class TelegramConversationIO(InteractionSurface):
-    """Conversation port implemented via PTB Bot API. Used for worker-owned output."""
+class TelegramChannelEgress(ChannelEgress):
+    """PTB-backed channel egress for Telegram conversations."""
 
     def __init__(
         self,
@@ -59,13 +59,13 @@ class TelegramConversationIO(InteractionSurface):
         self.replies: list[str] = []
 
     @property
-    def capabilities(self) -> TransportCapabilities:
-        return TransportCapabilities()
+    def capabilities(self) -> ChannelCapabilities:
+        return ChannelCapabilities(channel_name="telegram")
 
-    async def send_text(self, text: str, **kwargs: Any) -> EditableMessageHandle:
+    async def send_text(self, text: str, **kwargs: Any) -> EditableHandle:
         sent = await self._bot.send_message(self.chat_id, text, **kwargs)
         self.replies.append(text)
-        return TelegramEditableMessageHandle(sent)
+        return TelegramEditableHandle(sent)
 
     async def send_photo(self, photo: Path | str | bytes, **kwargs: Any) -> None:
         await self._bot.send_photo(self.chat_id, photo, **kwargs)
@@ -80,7 +80,8 @@ class TelegramConversationIO(InteractionSurface):
             pass
 
     async def answer_action(self, text: str | None = None, show_alert: bool = False) -> None:
-        pass  # Worker path has no callback query to answer
+        del text, show_alert
+        return None
 
     async def bind(self, *, title: str, config: Any) -> None:
         if not self.conversation_ref:
@@ -157,8 +158,7 @@ class TelegramConversationIO(InteractionSurface):
             reply_markup=keyboard,
         )
 
-    # Compatibility with existing execute_request/request_approval (message.reply_text, etc.)
-    async def reply_text(self, text: str, **kwargs: Any) -> EditableMessageHandle:
+    async def reply_text(self, text: str, **kwargs: Any) -> EditableHandle:
         return await self.send_text(text, **kwargs)
 
     async def reply_document(self, document: Any, **kwargs: Any) -> None:
@@ -191,13 +191,13 @@ class TelegramConversationIO(InteractionSurface):
         )
 
     async def delete(self) -> None:
-        pass
+        return None
 
 
 class _ChatShim:
     """Minimal chat shim for keep_typing(message.chat)."""
 
-    def __init__(self, conversation: TelegramConversationIO) -> None:
+    def __init__(self, conversation: TelegramChannelEgress) -> None:
         self._conversation = conversation
 
     async def send_message(self, text: str, **kwargs: Any) -> Any:

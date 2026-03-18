@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+from app.credential_service import get_credential_service
+from app.provider_guidance_service import (
+    PROMPT_SIZE_WARNING_THRESHOLD,
+    get_provider_guidance_service,
+)
 from app.session_state import SessionState
-from app.skill_lifecycle_service import get_skill_lifecycle_service
+from app.skill_activation_service import get_skill_activation_service
 from app.workflows.runtime_skills.contracts import (
     ConversationSkillItem,
     ConversationSkillListing,
@@ -11,16 +16,26 @@ from app.workflows.runtime_skills.contracts import (
     RuntimeSkillActivationPort,
 )
 from app.workflows.runtime_skills.catalog import get_runtime_skill_catalog_use_cases
+from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
 
 
 class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
     """Canonical activation flows shared by Telegram and registry."""
 
-    def _lifecycle(self):
-        return get_skill_lifecycle_service()
-
     def _catalog(self):
         return get_runtime_skill_catalog_use_cases()
+
+    def _activation(self):
+        return get_skill_activation_service()
+
+    def _credentials(self):
+        return get_credential_service()
+
+    def _guidance(self):
+        return get_provider_guidance_service()
+
+    def _setup(self):
+        return get_runtime_skill_setup_use_cases()
 
     def list_conversation_skills(self, active_skills: list[str]) -> ConversationSkillListing:
         active = tuple(active_skills)
@@ -57,30 +72,60 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
         skill_name: str,
         confirm: bool = False,
     ) -> ConversationSkillMutationOutcome:
-        decision = self._lifecycle().begin_add(
-            session,
-            user_id=user_id,
-            skill_name=skill_name,
+        detail = self._catalog().get_skill(skill_name)
+        if detail is None:
+            return ConversationSkillMutationOutcome(status="unknown")
+        if not detail.can_activate:
+            return ConversationSkillMutationOutcome(status="not_published")
+
+        requirements = self._catalog().requirements(skill_name)
+        if requirements:
+            user_creds = self._credentials().load(user_id)
+            missing = self._credentials().missing_requirements(
+                requirements,
+                user_creds.get(skill_name, {}),
+            )
+            if missing:
+                setup_outcome = self._setup().begin_setup(
+                    session,
+                    user_id=user_id,
+                    skill_name=skill_name,
+                    requirements=list(missing),
+                )
+                return ConversationSkillMutationOutcome(
+                    status=setup_outcome.status,
+                    mutated=setup_outcome.mutated,
+                    first_requirement=setup_outcome.first_requirement,
+                    foreign_setup_user=setup_outcome.foreign_setup.user_id if setup_outcome.foreign_setup else "",
+                    foreign_setup=setup_outcome.foreign_setup,
+                )
+
+        if skill_name in self._activation().list_active(session):
+            return ConversationSkillMutationOutcome(status="already_active")
+
+        projected_size, over = self._guidance().estimate_prompt_size(
+            session.role,
+            self._activation().list_active(session),
+            skill_name,
         )
-        if decision.status == "needs_confirmation" and confirm:
-            decision = self._lifecycle().confirm_add(session, skill_name)
+        if over and not confirm:
+            return ConversationSkillMutationOutcome(
+                status="needs_confirmation",
+                projected_size=projected_size,
+                prompt_size_threshold=PROMPT_SIZE_WARNING_THRESHOLD,
+            )
+
+        mutated = self._activation().activate(session, skill_name)
         return ConversationSkillMutationOutcome(
-            status=decision.status,
-            mutated=decision.mutated,
-            first_requirement=decision.first_requirement,
-            projected_size=decision.projected_size,
-            prompt_size_threshold=decision.prompt_size_threshold,
-            foreign_setup_user=decision.foreign_setup.user_id if decision.foreign_setup else "",
-            foreign_setup=decision.foreign_setup,
+            status="activated" if mutated else "already_active",
+            mutated=mutated,
         )
 
     def confirm_activate(self, session: SessionState, skill_name: str) -> ConversationSkillMutationOutcome:
-        decision = self._lifecycle().confirm_add(session, skill_name)
+        mutated = self._activation().activate(session, skill_name)
         return ConversationSkillMutationOutcome(
-            status=decision.status,
-            mutated=decision.mutated,
-            projected_size=decision.projected_size,
-            prompt_size_threshold=decision.prompt_size_threshold,
+            status="activated" if mutated else "already_active",
+            mutated=mutated,
         )
 
     def begin_setup(
@@ -90,7 +135,20 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
         user_id: str,
         skill_name: str,
     ) -> ConversationSkillMutationOutcome:
-        decision = self._lifecycle().begin_setup(session, user_id=user_id, skill_name=skill_name)
+        detail = self._catalog().get_skill(skill_name)
+        if detail is None:
+            return ConversationSkillMutationOutcome(status="unknown")
+        if not detail.can_activate:
+            return ConversationSkillMutationOutcome(status="not_published")
+        requirements = self._catalog().requirements(skill_name)
+        if not requirements:
+            return ConversationSkillMutationOutcome(status="no_requirements")
+        decision = self._setup().begin_setup(
+            session,
+            user_id=user_id,
+            skill_name=skill_name,
+            requirements=list(requirements),
+        )
         return ConversationSkillMutationOutcome(
             status=decision.status,
             mutated=decision.mutated,
@@ -106,12 +164,25 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
         user_id: str,
         skill_name: str,
     ) -> ConversationSkillMutationOutcome:
-        decision = self._lifecycle().remove(session, user_id=user_id, skill_name=skill_name)
+        setup = self._setup().apply_cleared_credentials(
+            session,
+            user_id=user_id,
+            removed_skills=[],
+            skill_name=skill_name,
+        )
+        if session.awaiting_skill_setup is not None and setup.setup_cleared is False:
+            foreign = self._setup().foreign_setup(session, user_id=user_id, skill_name=skill_name)
+            if foreign.status == "foreign_setup":
+                return ConversationSkillMutationOutcome(
+                    status="foreign_setup",
+                    mutated=False,
+                    foreign_setup_user=foreign.setup.user_id if foreign.setup else "",
+                    foreign_setup=foreign.setup,
+                )
+        removed = self._activation().deactivate(session, skill_name)
         return ConversationSkillMutationOutcome(
-            status=decision.status,
-            mutated=decision.mutated,
-            foreign_setup_user=decision.foreign_setup.user_id if decision.foreign_setup else "",
-            foreign_setup=decision.foreign_setup,
+            status="removed" if removed else "not_active",
+            mutated=setup.mutated or removed,
         )
 
     def clear(
@@ -120,12 +191,20 @@ class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):
         *,
         user_id: str,
     ) -> ConversationSkillMutationOutcome:
-        decision = self._lifecycle().clear(session, user_id=user_id)
+        foreign = self._setup().foreign_setup(session, user_id=user_id)
+        if foreign.status == "foreign_setup":
+            return ConversationSkillMutationOutcome(
+                status="foreign_setup",
+                mutated=False,
+                foreign_setup_user=foreign.setup.user_id if foreign.setup else "",
+                foreign_setup=foreign.setup,
+            )
+        setup_cancel = self._setup().cancel(session, user_id=user_id)
+        had_active = bool(self._activation().list_active(session))
+        self._activation().clear(session)
         return ConversationSkillMutationOutcome(
-            status=decision.status,
-            mutated=decision.mutated,
-            foreign_setup_user=decision.foreign_setup.user_id if decision.foreign_setup else "",
-            foreign_setup=decision.foreign_setup,
+            status="cleared",
+            mutated=setup_cancel.mutated or had_active,
         )
 
 

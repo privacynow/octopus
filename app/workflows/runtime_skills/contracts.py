@@ -260,6 +260,15 @@ class RuntimeSkillCredentialClearOutcome:
 
 
 class RuntimeSkillSetupPort(Protocol):
+    def begin_setup(
+        self,
+        session: SessionState,
+        *,
+        user_id: str,
+        skill_name: str,
+        requirements: list[SkillRequirement | dict[str, object]],
+    ) -> RuntimeSkillCredentialSatisfactionOutcome: ...
+
     def foreign_setup(
         self,
         session: SessionState,
@@ -292,6 +301,15 @@ class RuntimeSkillSetupPort(Protocol):
         raw_value: str,
         validator: CredentialValidator,
     ) -> RuntimeSkillSetupAdvanceOutcome: ...
+
+    def apply_cleared_credentials(
+        self,
+        session: SessionState,
+        *,
+        user_id: str,
+        removed_skills: list[str],
+        skill_name: str | None,
+    ) -> RuntimeSkillCredentialClearOutcome: ...
 
 
 @dataclass(frozen=True)
@@ -363,12 +381,3 @@ class RuntimeSkillApprovalPort(Protocol):
     def approve(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation: ...
 
     def reject(self, skill_name: str, *, actor_key: str, note: str = "") -> RuntimeSkillLifecycleMutation: ...
-
-    def apply_cleared_credentials(
-        self,
-        session: SessionState,
-        *,
-        user_id: str,
-        removed_skills: list[str],
-        skill_name: str | None,
-    ) -> RuntimeSkillCredentialClearOutcome: ...

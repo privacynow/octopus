@@ -232,3 +232,59 @@ def test_setup_use_case_detects_foreign_setup_without_skill_filter(tmp_path: Pat
     finally:
         close_db(data_dir)
         content_store_mod.reset_for_test()
+
+
+def test_activation_use_case_blocks_active_foreign_setup_until_stale(tmp_path: Path):
+    _, data_dir = _init_runtime_content(tmp_path)
+    try:
+        activation = get_runtime_skill_activation_use_cases()
+        raw = default_session("claude", {"session_id": "test", "started": False}, "on")
+        raw["awaiting_skill_setup"] = {
+            "user_id": telegram_actor_key(7),
+            "skill": "code-review",
+            "started_at": time.time(),
+            "remaining": [{"key": "OTHER_TOKEN", "prompt": "Paste token"}],
+        }
+        session = session_from_dict(raw)
+
+        outcome = activation.begin_setup(
+            session,
+            user_id=telegram_actor_key(42),
+            skill_name="github-integration",
+        )
+
+        assert outcome.status == "foreign_setup"
+        assert session.awaiting_skill_setup is not None
+        assert session.awaiting_skill_setup.user_id == telegram_actor_key(7)
+    finally:
+        close_db(data_dir)
+        content_store_mod.reset_for_test()
+
+
+def test_activation_use_case_replaces_stale_foreign_setup(tmp_path: Path):
+    _, data_dir = _init_runtime_content(tmp_path)
+    try:
+        activation = get_runtime_skill_activation_use_cases()
+        raw = default_session("claude", {"session_id": "test", "started": False}, "on")
+        raw["awaiting_skill_setup"] = {
+            "user_id": telegram_actor_key(7),
+            "skill": "github-integration",
+            "started_at": 0,
+            "remaining": [{"key": "OLD_TOKEN", "prompt": "Paste token"}],
+        }
+        session = session_from_dict(raw)
+
+        outcome = activation.begin_setup(
+            session,
+            user_id=telegram_actor_key(42),
+            skill_name="github-integration",
+        )
+
+        assert outcome.status == "needs_setup"
+        assert outcome.mutated is True
+        assert session.awaiting_skill_setup is not None
+        assert session.awaiting_skill_setup.user_id == telegram_actor_key(42)
+        assert session.awaiting_skill_setup.skill == "github-integration"
+    finally:
+        close_db(data_dir)
+        content_store_mod.reset_for_test()

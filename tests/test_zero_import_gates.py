@@ -25,6 +25,7 @@ FORBIDDEN_APP_REFERENCES = (
     "app.pending_request_use_cases",
     "app.recovery_use_cases",
     "app.provider_guidance_use_cases",
+    "app.skill_lifecycle_service",
 )
 
 
@@ -113,3 +114,23 @@ def test_handler_support_does_not_mutate_legacy_ingress_globals() -> None:
     )
     for token in forbidden:
         assert token not in text, f"{token} still referenced in {handler_support_path}"
+
+
+def test_deleted_skill_lifecycle_service_path_is_gone() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    deleted_path = repo_root / "app" / "skill_lifecycle_service.py"
+    assert not deleted_path.exists(), f"legacy setup owner still exists at {deleted_path}"
+
+
+def test_runtime_skill_setup_is_the_only_app_owner_of_awaiting_skill_setup_writes() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    app_root = repo_root / "app"
+    allowed = {app_root / "workflows" / "runtime_skills" / "setup.py"}
+    hits: list[Path] = []
+    for path in sorted(app_root.rglob("*.py")):
+        if path.name == "session_state.py":
+            continue
+        text = path.read_text()
+        if "session.awaiting_skill_setup =" in text:
+            hits.append(path)
+    assert hits == sorted(allowed), f"unexpected awaiting_skill_setup write owners: {hits}"

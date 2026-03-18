@@ -4,43 +4,167 @@ from __future__ import annotations
 
 import asyncio
 import html
+import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Awaitable, Callable, MutableMapping
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 
 from app import user_messages as _msg
-from app.channels.telegram.cancellation import get_cancellation_registry
-from app.channels.telegram.state import get_channel_state
+from app.agents.bridge import publish_timeline_event, telegram_conversation_ref
+from app.approvals import build_preflight_prompt, format_denials_html
+from app.config import BotConfig
 from app.credential_flow import foreign_setup_message, format_credential_prompt
+from app.execution_context import ResolvedExecutionContext
+from app.formatting import extract_send_directives
+from app.identity import (
+    parse_actor_key,
+    parse_conversation_key,
+    telegram_actor_key,
+    telegram_conversation_key,
+    telegram_numeric_id,
+)
 from app.provider_guidance_service import get_provider_guidance_service
+from app.providers.base import Provider
 from app.runtime import composition
+from app.runtime.session_runtime import (
+    load_runtime_session,
+    resolve_session_context,
+    save_runtime_session,
+)
+from app.session_state import PendingApproval, PendingRetry, SessionState
+from app.summarize import save_raw
+from app.storage import chat_upload_dir
+from app.skill_activation_service import get_skill_activation_service
 from app import work_queue
 
-
-def _th():
-    import app.channels.telegram.ingress as th
-
-    return th
+log = logging.getLogger(__name__)
 
 
-def _state():
-    return get_channel_state()
+@dataclass(frozen=True)
+class RuntimeDispatchRuntime:
+    """Explicit runtime-owned execution collaborators.
+
+    This object exists to keep runtime dispatch independent of any concrete
+    channel module while Track A removes the old Telegram back-import seam.
+    Channel-specific presentation and lifecycle hooks are passed explicitly.
+    """
+
+    config: BotConfig
+    provider: Provider
+    boot_id: str
+    cancellations: MutableMapping[int | str, asyncio.Event]
+    progress_factory: Callable[..., Any]
+    keep_typing: Callable[..., Awaitable[None]]
+    heartbeat: Callable[..., Awaitable[None]]
+    format_provider_error: Callable[[str, int], Awaitable[str]]
+    run_result_was_interrupted: Callable[[int], bool]
+    progress_timeline_callback: Callable[..., Awaitable[None]]
+    send_formatted_reply: Callable[..., Awaitable[None]]
+    send_directed_artifacts: Callable[..., Awaitable[None]]
+    send_compact_reply: Callable[..., Awaitable[None]]
+    propose_delegation_plan: Callable[..., Awaitable["RequestExecutionOutcome"]]
 
 
-def _cancellations():
-    return get_cancellation_registry()
+@dataclass(frozen=True)
+class RequestExecutionOutcome:
+    status: str
+    reply_text: str = ""
+    error_text: str = ""
+    denials: tuple[dict[str, Any], ...] = ()
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
 
 
-def check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
-    th = _th()
-    cfg = _state().config
+def _conversation_key(chat_id: int | str) -> str:
+    if isinstance(chat_id, str):
+        return parse_conversation_key(chat_id)
+    return telegram_conversation_key(chat_id)
+
+
+def _actor_key(user_id: int | str) -> str:
+    if isinstance(user_id, str):
+        return parse_actor_key(user_id)
+    return telegram_actor_key(user_id)
+
+
+def _telegram_chat_id(chat_id: int | str) -> int:
+    if isinstance(chat_id, int):
+        return chat_id
+    numeric = telegram_numeric_id(chat_id)
+    if numeric is None:
+        raise ValueError(f"conversation_key {chat_id!r} is not a Telegram chat")
+    return numeric
+
+
+def _load(runtime: RuntimeDispatchRuntime, chat_id: int | str) -> SessionState:
+    cfg = runtime.config
+    provider = runtime.provider
+    session = load_runtime_session(
+        cfg.data_dir,
+        _conversation_key(chat_id),
+        provider_name=provider.name,
+        provider_state_factory=provider.new_provider_state,
+        approval_mode=cfg.approval_mode,
+        default_role=cfg.role,
+        default_skills=cfg.default_skills,
+    )
+    if get_skill_activation_service().normalize(session):
+        _save(runtime, chat_id, session)
+    return session
+
+
+def _save(runtime: RuntimeDispatchRuntime, chat_id: int | str, session: SessionState) -> None:
+    save_runtime_session(runtime.config.data_dir, _conversation_key(chat_id), session)
+
+
+def _resolve_context(
+    runtime: RuntimeDispatchRuntime,
+    session: SessionState,
+    *,
+    trust_tier: str,
+) -> ResolvedExecutionContext:
+    return resolve_session_context(
+        session,
+        config=runtime.config,
+        provider_name=runtime.provider.name,
+        trust_tier=trust_tier,
+    )
+
+
+async def _publish_progress_timeline(
+    runtime: RuntimeDispatchRuntime,
+    conversation_ref: str,
+    routed_task_id: str,
+    html_text: str,
+    *,
+    force: bool = False,
+) -> None:
+    del force
+    await runtime.progress_timeline_callback(
+        conversation_ref,
+        routed_task_id,
+        html_text,
+        force=force,
+    )
+
+
+def check_prompt_size_cross_chat(
+    data_dir: Path,
+    skill_name: str,
+    *,
+    runtime: RuntimeDispatchRuntime,
+) -> list[str]:
+    cfg = runtime.config
     return get_provider_guidance_service().check_prompt_size_cross_chat(
         data_dir,
         skill_name,
         cfg.provider_name,
-        _state().provider.new_provider_state,
+        runtime.provider.new_provider_state,
         cfg.approval_mode,
     )
 
@@ -52,15 +176,15 @@ def prompt_weight(role: str, active_skills: list[str]) -> int:
 async def check_credential_satisfaction(
     chat_id: int | str,
     user_id: int | str,
-    session,
+    session: SessionState,
     message,
     *,
-    resolved,
+    resolved: ResolvedExecutionContext,
+    runtime: RuntimeDispatchRuntime,
 ) -> dict[str, str] | None:
-    th = _th()
     outcome = composition.workflows().runtime_skills.setup.check_satisfaction(
         session,
-        user_id=th._actor_key(user_id),
+        user_id=_actor_key(user_id),
         active_skills=resolved.active_skills,
     )
     if outcome.status == "satisfied":
@@ -68,9 +192,13 @@ async def check_credential_satisfaction(
     if outcome.status == "foreign_setup" and outcome.foreign_setup is not None:
         await message.reply_text(foreign_setup_message(outcome.foreign_setup))
         return None
-    if outcome.status != "needs_setup" or outcome.setup_state is None or outcome.first_requirement is None:
+    if (
+        outcome.status != "needs_setup"
+        or outcome.setup_state is None
+        or outcome.first_requirement is None
+    ):
         return None
-    th._save(chat_id, session)
+    _save(runtime, chat_id, session)
     await message.reply_text(
         f"Skill <code>{html.escape(outcome.missing_skill)}</code> needs setup.\n\n"
         f"{format_credential_prompt(outcome.first_requirement)}",
@@ -89,13 +217,14 @@ async def execute_request(
     skip_permissions: bool = False,
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
-):
-    th = _th()
-    cfg = _state().config
-    prov = _state().provider
+    *,
+    runtime: RuntimeDispatchRuntime,
+) -> RequestExecutionOutcome | None:
+    cfg = runtime.config
+    prov = runtime.provider
     guidance = get_provider_guidance_service()
-    session = th._load(chat_id)
-    resolved = th._resolve_context(session, trust_tier=trust_tier)
+    session = _load(runtime, chat_id)
+    resolved = _resolve_context(runtime, session, trust_tier=trust_tier)
 
     credential_env = await check_credential_satisfaction(
         chat_id,
@@ -103,17 +232,18 @@ async def execute_request(
         session,
         message,
         resolved=resolved,
+        runtime=runtime,
     )
     if credential_env is None:
         return None
 
-    upload_dir = str(th.chat_upload_dir(cfg.data_dir, th._conversation_key(chat_id)))
+    upload_dir = str(chat_upload_dir(cfg.data_dir, _conversation_key(chat_id)))
     all_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs) + (extra_dirs or [])
 
     if prov.name == "codex":
         scripts_dir = guidance.stage_codex_scripts(
             cfg.data_dir,
-            th._conversation_key(chat_id),
+            _conversation_key(chat_id),
             resolved.active_skills,
         )
         if scripts_dir:
@@ -140,19 +270,19 @@ async def execute_request(
         stored_boot = session.provider_state.get("boot_id")
         stale_thread = (
             (stored_hash and stored_hash != context_hash)
-            or (stored_boot and stored_boot != _state().boot_id)
+            or (stored_boot and stored_boot != runtime.boot_id)
         )
         if stale_thread and session.provider_state.get("thread_id"):
-            th.log.info(
-                "Clearing stale codex thread for chat %d (hash_match=%s, boot_match=%s)",
+            log.info(
+                "Clearing stale codex thread for chat %s (hash_match=%s, boot_match=%s)",
                 chat_id,
                 stored_hash == context_hash,
-                stored_boot == _state().boot_id,
+                stored_boot == runtime.boot_id,
             )
             session.provider_state["thread_id"] = None
         session.provider_state["context_hash"] = context_hash
-        session.provider_state["boot_id"] = _state().boot_id
-        th._save(chat_id, session)
+        session.provider_state["boot_id"] = runtime.boot_id
+        _save(runtime, chat_id, session)
 
     is_resume = bool(session.provider_state.get("thread_id") or session.provider_state.get("started"))
     label = _msg.progress_resuming() if is_resume else _msg.progress_working()
@@ -162,12 +292,13 @@ async def execute_request(
         conversation_ref = getattr(message, "conversation_ref", "")
         routed_task_id = getattr(message, "routed_task_id", "")
     elif cfg.agent_mode == "registry":
-        conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
+        conversation_ref = telegram_conversation_ref(cfg, _telegram_chat_id(chat_id))
 
     timeline_cb = None
     channel_name = getattr(getattr(message, "capabilities", None), "channel_name", "telegram")
     if conversation_ref and channel_name != "registry":
-        timeline_cb = lambda html_text, force=False: th._progress_timeline_callback(
+        timeline_cb = lambda html_text, force=False: _publish_progress_timeline(
+            runtime,
             conversation_ref,
             routed_task_id,
             html_text,
@@ -175,14 +306,14 @@ async def execute_request(
         )
 
     status_msg = await message.reply_text(label)
-    progress = th.TelegramProgress(status_msg, cfg, timeline_callback=timeline_cb)
+    progress = runtime.progress_factory(status_msg, cfg, timeline_callback=timeline_cb)
     content_started = asyncio.Event()
     progress.content_started = content_started
-    typing_task = asyncio.create_task(th.keep_typing(message.chat))
-    heartbeat_task = asyncio.create_task(th._heartbeat(progress, content_started))
+    typing_task = asyncio.create_task(runtime.keep_typing(message.chat))
+    heartbeat_task = asyncio.create_task(runtime.heartbeat(progress, content_started))
 
     local_cancel_event = cancel_event or asyncio.Event()
-    _cancellations()[chat_id] = local_cancel_event
+    runtime.cancellations[chat_id] = local_cancel_event
     try:
         result = await prov.run(
             session.provider_state,
@@ -193,28 +324,28 @@ async def execute_request(
             cancel=local_cancel_event,
         )
     finally:
-        _cancellations().pop(chat_id, None)
+        runtime.cancellations.pop(chat_id, None)
         heartbeat_task.cancel()
         typing_task.cancel()
         await asyncio.gather(heartbeat_task, typing_task, return_exceptions=True)
 
     if result.cancelled:
-        session = th._load(chat_id)
+        session = _load(runtime, chat_id)
         session.provider_state.update(result.provider_state_updates)
-        th._save(chat_id, session)
+        _save(runtime, chat_id, session)
         await progress.update(_msg.cancel_live_completed(), force=True)
-        return th.RequestExecutionOutcome(status="cancelled")
+        return RequestExecutionOutcome(status="cancelled")
 
-    if th._run_result_was_interrupted(result.returncode):
-        th.log.info("%s interrupted for chat %d (rc=%s); leaving work item claimed", prov.name, chat_id, result.returncode)
+    if runtime.run_result_was_interrupted(result.returncode):
+        log.info("%s interrupted for chat %s (rc=%s); leaving work item claimed", prov.name, chat_id, result.returncode)
         raise work_queue.LeaveClaimed()
 
-    session = th._load(chat_id)
+    session = _load(runtime, chat_id)
     session.provider_state.update(result.provider_state_updates)
 
     if result.resume_failed:
-        th.log.warning(
-            "%s resume target invalid (rc=%s) for chat %d — resetting session state",
+        log.warning(
+            "%s resume target invalid (rc=%s) for chat %s — resetting session state",
             prov.name,
             result.returncode,
             chat_id,
@@ -224,26 +355,26 @@ async def execute_request(
         else:
             session.provider_state.update(prov.new_provider_state())
     elif prov.name == "codex" and is_resume and not result.timed_out and result.returncode and result.returncode != 0:
-        th.log.warning("codex resume error (rc=%s) for chat %d — clearing thread_id", result.returncode, chat_id)
+        log.warning("codex resume error (rc=%s) for chat %s — clearing thread_id", result.returncode, chat_id)
         session.provider_state["thread_id"] = None
 
-    th._save(chat_id, session)
+    _save(runtime, chat_id, session)
 
     if result.timed_out:
         await progress.update(_msg.progress_request_timed_out(cfg.timeout_seconds), force=True)
-        return th.RequestExecutionOutcome(status="timed_out")
+        return RequestExecutionOutcome(status="timed_out")
 
     if result.returncode != 0:
-        error_text = await th._format_provider_error(result.text, result.returncode)
+        error_text = await runtime.format_provider_error(result.text, result.returncode)
         if result.resume_failed:
             error_text += _msg.progress_session_not_resumed()
         await progress.update(error_text, force=True)
-        return th.RequestExecutionOutcome(status="failed", error_text=error_text)
+        return RequestExecutionOutcome(status="failed", error_text=error_text)
 
     if result.denials:
         await progress.update(_msg.progress_completed_with_blocked(), force=True)
-        session = th._load(chat_id)
-        session.pending_retry = th.PendingRetry(
+        session = _load(runtime, chat_id)
+        session.pending_retry = PendingRetry(
             request_user_id=request_user_id,
             prompt=prompt,
             image_paths=image_paths,
@@ -252,23 +383,23 @@ async def execute_request(
             trust_tier=trust_tier,
             created_at=time.time(),
         )
-        th._save(chat_id, session)
+        _save(runtime, chat_id, session)
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("\u2705 " + _msg.retry_button_grant(), callback_data="retry_allow"),
             InlineKeyboardButton("\u274c " + _msg.retry_button_skip(), callback_data="retry_skip"),
         ]])
         await message.chat.send_message(
             f"\u26a0\ufe0f <b>{_msg.retry_permission_prompt()}</b>\n"
-            f"{th.format_denials_html(result.denials)}\n\n"
+            f"{format_denials_html(result.denials)}\n\n"
             f"{_msg.retry_grant_and_retry_question()}",
             parse_mode=ParseMode.HTML,
             reply_markup=keyboard,
         )
-        cleaned_reply, directives = th.extract_send_directives(result.text)
+        cleaned_reply, directives = extract_send_directives(result.text)
         if cleaned_reply.strip():
-            await th.send_formatted_reply(message, cleaned_reply)
-            await th.send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
-        return th.RequestExecutionOutcome(
+            await runtime.send_formatted_reply(message, cleaned_reply)
+            await runtime.send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
+        return RequestExecutionOutcome(
             status="completed_with_denials",
             reply_text=cleaned_reply,
             denials=tuple(result.denials),
@@ -279,26 +410,26 @@ async def execute_request(
 
     if result.delegation_tasks:
         await progress.update("Delegation plan ready.", force=True)
-        session = th._load(chat_id)
-        return await th._propose_delegation_plan(
+        session = _load(runtime, chat_id)
+        return await runtime.propose_delegation_plan(
             chat_id,
             message,
             session,
-            conversation_ref=conversation_ref or th.telegram_conversation_ref(cfg, chat_id),
+            conversation_ref=conversation_ref or telegram_conversation_ref(cfg, _telegram_chat_id(chat_id)),
             result=result,
         )
 
     await progress.update(_msg.progress_completed(), force=True)
-    cleaned_reply, directives = th.extract_send_directives(result.text)
-    slot = th.save_raw(cfg.data_dir, th._conversation_key(chat_id), prompt, cleaned_reply)
+    cleaned_reply, directives = extract_send_directives(result.text)
+    slot = save_raw(cfg.data_dir, _conversation_key(chat_id), prompt, cleaned_reply)
 
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
     if compact and len(cleaned_reply) > 800:
-        await th._send_compact_reply(message, cleaned_reply, chat_id, slot)
+        await runtime.send_compact_reply(message, cleaned_reply, _telegram_chat_id(chat_id), slot)
     else:
-        await th.send_formatted_reply(message, cleaned_reply)
-    await th.send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
-    return th.RequestExecutionOutcome(
+        await runtime.send_formatted_reply(message, cleaned_reply)
+    await runtime.send_directed_artifacts(chat_id, message, directives, resolved_ctx=resolved)
+    return RequestExecutionOutcome(
         status="completed",
         reply_text=cleaned_reply,
         prompt_tokens=result.prompt_tokens,
@@ -316,30 +447,32 @@ async def request_approval(
     request_user_id: int | str = "",
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
+    *,
+    runtime: RuntimeDispatchRuntime,
 ) -> None:
-    th = _th()
-    cfg = _state().config
-    prov = _state().provider
+    cfg = runtime.config
+    prov = runtime.provider
     guidance = get_provider_guidance_service()
-    session = th._load(chat_id)
+    session = _load(runtime, chat_id)
 
     if session.has_pending:
         await message.reply_text(_msg.approval_already_waiting())
         return
 
-    resolved = th._resolve_context(session, trust_tier=trust_tier)
+    resolved = _resolve_context(runtime, session, trust_tier=trust_tier)
     credential_env = await check_credential_satisfaction(
         chat_id,
         request_user_id,
         session,
         message,
         resolved=resolved,
+        runtime=runtime,
     )
     if credential_env is None:
         return
     del credential_env
 
-    upload_dir = str(th.chat_upload_dir(cfg.data_dir, th._conversation_key(chat_id)))
+    upload_dir = str(chat_upload_dir(cfg.data_dir, _conversation_key(chat_id)))
     preflight_extra_dirs = [upload_dir] + list(resolved.base_extra_dirs)
     preflight_context = guidance.build_preflight_context(
         resolved.role,
@@ -357,25 +490,26 @@ async def request_approval(
     if getattr(message, "capabilities", None) and getattr(message.capabilities, "channel_name", "") == "registry":
         conversation_ref = getattr(message, "conversation_ref", "")
     elif cfg.agent_mode == "registry":
-        conversation_ref = th.telegram_conversation_ref(cfg, th._telegram_chat_id(chat_id))
+        conversation_ref = telegram_conversation_ref(cfg, _telegram_chat_id(chat_id))
     timeline_cb = None
     channel_name = getattr(getattr(message, "capabilities", None), "channel_name", "telegram")
     if conversation_ref and channel_name != "registry":
-        timeline_cb = lambda html_text, force=False: th._progress_timeline_callback(
+        timeline_cb = lambda html_text, force=False: _publish_progress_timeline(
+            runtime,
             conversation_ref,
             "",
             html_text,
             force=force,
         )
-    progress = th.TelegramProgress(status_msg, cfg, timeline_callback=timeline_cb)
+    progress = runtime.progress_factory(status_msg, cfg, timeline_callback=timeline_cb)
     content_started = asyncio.Event()
     progress.content_started = content_started
-    typing_task = asyncio.create_task(th.keep_typing(message.chat))
-    heartbeat_task = asyncio.create_task(th._heartbeat(progress, content_started))
+    typing_task = asyncio.create_task(runtime.keep_typing(message.chat))
+    heartbeat_task = asyncio.create_task(runtime.heartbeat(progress, content_started))
 
-    preflight_prompt = th.build_preflight_prompt(prompt, prov.name)
+    preflight_prompt = build_preflight_prompt(prompt, prov.name)
     local_cancel_event = cancel_event or asyncio.Event()
-    _cancellations()[chat_id] = local_cancel_event
+    runtime.cancellations[chat_id] = local_cancel_event
     try:
         plan_result = await prov.run_preflight(
             preflight_prompt,
@@ -385,7 +519,7 @@ async def request_approval(
             cancel=local_cancel_event,
         )
     finally:
-        _cancellations().pop(chat_id, None)
+        runtime.cancellations.pop(chat_id, None)
         heartbeat_task.cancel()
         typing_task.cancel()
         await asyncio.gather(heartbeat_task, typing_task, return_exceptions=True)
@@ -394,8 +528,8 @@ async def request_approval(
         await progress.update(_msg.cancel_live_completed(), force=True)
         return
 
-    if th._run_result_was_interrupted(plan_result.returncode):
-        th.log.info("Preflight interrupted for chat %d (rc=%s); leaving work item claimed", chat_id, plan_result.returncode)
+    if runtime.run_result_was_interrupted(plan_result.returncode):
+        log.info("Preflight interrupted for chat %s (rc=%s); leaving work item claimed", chat_id, plan_result.returncode)
         raise work_queue.LeaveClaimed()
 
     if plan_result.timed_out:
@@ -403,7 +537,7 @@ async def request_approval(
         return
 
     if plan_result.returncode != 0:
-        error_text = await th._format_provider_error(plan_result.text, plan_result.returncode)
+        error_text = await runtime.format_provider_error(plan_result.text, plan_result.returncode)
         await progress.update(f"{_msg.approval_check_failed_prefix()}\n{error_text}", force=True)
         return
 
@@ -411,7 +545,7 @@ async def request_approval(
         {"path": str(a.path), "original_name": a.original_name, "is_image": a.is_image}
         for a in attachments
     ]
-    session.pending_approval = th.PendingApproval(
+    session.pending_approval = PendingApproval(
         request_user_id=request_user_id,
         prompt=prompt,
         image_paths=image_paths,
@@ -420,7 +554,7 @@ async def request_approval(
         trust_tier=trust_tier,
         created_at=time.time(),
     )
-    th._save(chat_id, session)
+    _save(runtime, chat_id, session)
 
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("\u2705 " + _msg.approval_button_approve(), callback_data="approval_approve"),
@@ -428,6 +562,6 @@ async def request_approval(
     ]])
     await progress.update(_msg.approval_required(), force=True)
     plan_text = plan_result.text or "[empty plan]"
-    th.save_raw(cfg.data_dir, th._conversation_key(chat_id), prompt, plan_text, kind="approval")
-    await th.send_formatted_reply(message, "**Approval plan:**\n\n" + plan_text)
+    save_raw(cfg.data_dir, _conversation_key(chat_id), prompt, plan_text, kind="approval")
+    await runtime.send_formatted_reply(message, "**Approval plan:**\n\n" + plan_text)
     await message.chat.send_message(_msg.approval_plan_question(), reply_markup=keyboard)

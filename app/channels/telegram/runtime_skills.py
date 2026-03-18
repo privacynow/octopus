@@ -48,6 +48,7 @@ class TelegramRuntimeSkillsRuntime:
     state: TelegramChannelState
     chat_lock: Callable[..., Any]
     validate_credential: Callable[[Any, str], Awaitable[tuple[bool, str]]]
+    check_prompt_size_cross_chat: Callable[[Path, str], list[str]]
 
 
 def _flows():
@@ -123,8 +124,12 @@ async def _public_guard(runtime: TelegramRuntimeSkillsRuntime, event, update: Up
     return False
 
 
-def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
-    return runtime_check_prompt_size_cross_chat(data_dir, skill_name)
+def _check_prompt_size_cross_chat(
+    runtime: TelegramRuntimeSkillsRuntime,
+    data_dir: Path,
+    skill_name: str,
+) -> list[str]:
+    return runtime.check_prompt_size_cross_chat(data_dir, skill_name)
 
 
 async def skills_show(event, update: Update, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
@@ -502,7 +507,7 @@ async def skills_install(event, update: Update, name: str, *, runtime: TelegramR
             registry_url,
         )
         msg = result.message
-        size_warnings = _check_prompt_size_cross_chat(runtime.state.config.data_dir, name) if result.ok else []
+        size_warnings = _check_prompt_size_cross_chat(runtime, runtime.state.config.data_dir, name) if result.ok else []
         if size_warnings:
             msg += "\n\nPrompt size warnings:\n" + "\n".join(size_warnings)
         await update.effective_message.reply_text(html.escape(msg), parse_mode=ParseMode.HTML)
@@ -564,7 +569,7 @@ async def skills_update(event, update: Update, target: str, *, runtime: Telegram
             status = "✔" if result.ok else "✘"
             lines.append(f"  {status} {html.escape(result.message)}")
             if result.ok:
-                all_size_warnings.extend(_check_prompt_size_cross_chat(runtime.state.config.data_dir, result.name))
+                all_size_warnings.extend(_check_prompt_size_cross_chat(runtime, runtime.state.config.data_dir, result.name))
         if all_size_warnings:
             lines.append("")
             lines.append("<b>Prompt size warnings:</b>")
@@ -575,7 +580,7 @@ async def skills_update(event, update: Update, target: str, *, runtime: Telegram
     result = await asyncio.to_thread(imports.update, target)
     msg = result.message
     if result.ok:
-        size_warnings = _check_prompt_size_cross_chat(runtime.state.config.data_dir, target)
+        size_warnings = _check_prompt_size_cross_chat(runtime, runtime.state.config.data_dir, target)
         if size_warnings:
             msg += "\n\nPrompt size warnings:\n" + "\n".join(size_warnings)
     await update.effective_message.reply_text(html.escape(msg), parse_mode=ParseMode.HTML)
@@ -732,7 +737,7 @@ async def handle_skill_update_callback(event, query, *, runtime: TelegramRuntime
             name,
         )
         msg = result.message
-        size_warnings = _check_prompt_size_cross_chat(runtime.state.config.data_dir, name) if result.ok else []
+        size_warnings = _check_prompt_size_cross_chat(runtime, runtime.state.config.data_dir, name) if result.ok else []
         if size_warnings:
             msg += "\n\nPrompt size warnings:\n" + "\n".join(size_warnings)
         await query.edit_message_reply_markup(reply_markup=None)
@@ -753,7 +758,7 @@ async def handle_skill_update_callback(event, query, *, runtime: TelegramRuntime
             status = "✔" if result.ok else "✘"
             lines.append(f"  {status} {html.escape(result.message)}")
             if result.ok:
-                all_size_warnings.extend(_check_prompt_size_cross_chat(runtime.state.config.data_dir, result.name))
+                all_size_warnings.extend(_check_prompt_size_cross_chat(runtime, runtime.state.config.data_dir, result.name))
         if all_size_warnings:
             lines.append("")
             lines.append("<b>Prompt size warnings:</b>")

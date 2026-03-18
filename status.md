@@ -52,19 +52,28 @@ Completed slices:
    - ingress now passes explicit runtime-skills collaborators instead of
      being imported as the hidden owner.
 
-7. `pending commit` `Track A / A2: detach telegram pending slice from ingress`
+7. `1213a6e` `Track A / A2: detach telegram pending slice from ingress`
    - `app/channels/telegram/pending.py` no longer imports Telegram ingress.
    - Pending approval / retry / recovery handling now runs through explicit
      `TelegramPendingRuntime` injection.
    - ingress now passes pending/recovery collaborators explicitly instead of
      being imported as the hidden owner.
 
+8. `this commit` `Track A / A2: detach runtime dispatch slice from ingress`
+   - `app/runtime/dispatch.py` no longer imports Telegram channel modules.
+   - Request execution and approval plumbing now run through explicit
+     `RuntimeDispatchRuntime` injection from Telegram ingress.
+   - `RequestExecutionOutcome` ownership moved into the runtime boundary
+     instead of being defined inside Telegram ingress.
+   - Added focused positive and negative tests for the dispatch boundary and
+     the new import-direction gate.
+
 ## Latest Verified Test Baseline
 
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1503 passed, 23 skipped`
+- result: `1505 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -83,10 +92,10 @@ Completed:
 - `A2` conversation concern slice
 - `A2` runtime skills concern slice
 - `A2` pending concern slice
+- `A2` runtime dispatch concern slice
 
 Remaining:
 
-- `A2` runtime dispatch concern slice
 - `A2` agents delivery concern slice
 - `A2` agents delegation concern slice
 - `A5` finish test support migration and remove any remaining global-state test coupling
@@ -181,21 +190,20 @@ status.
 
 Next required slice:
 
-- `Track A / A2: detach runtime dispatch slice from Telegram ingress`
+- `Track A / A2: detach agents delivery slice from Telegram ingress`
 
 Before-state:
 
-- `app/runtime/dispatch.py` still reaches back into
-  `app/channels/telegram/ingress.py` for Telegram-owned collaborators and
-  still violates the runtime layer boundary.
+- `app/agents/delivery.py` still imports Telegram ingress-owned collaborators
+  and still violates the agents layer boundary.
 
 After-state required:
 
-- `runtime/dispatch.py` accepts explicit injected context/collaborators or
-  moves Telegram-specific behavior back under the channel.
-- runtime remains channel-agnostic plumbing.
-- negative gate tests prove `runtime/*` no longer imports Telegram ingress and
-  eventually no longer imports channel packages at all.
+- `app/agents/delivery.py` becomes a thin bridge over explicit injected
+  collaborators or shared workflow/runtime owners.
+- `agents/*` no longer import Telegram ingress and move toward zero channel
+  imports entirely.
+- negative gate tests prove the old back-import pattern is gone.
 
 ## Working Rules
 

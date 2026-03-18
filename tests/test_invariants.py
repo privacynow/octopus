@@ -179,6 +179,7 @@ async def test_registry_search_does_not_block_event_loop():
             state=get_channel_state(),
             chat_lock=noop_chat_lock,
             validate_credential=validate_credential,
+            check_prompt_size_cross_chat=lambda data_dir, skill_name: [],
         )
 
         with patch("app.channels.telegram.runtime_skills.asyncio.to_thread", side_effect=slow_to_thread):

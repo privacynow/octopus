@@ -31,6 +31,7 @@ from tests.support.handler_support import (
     load_session_disk,
     drain_one_worker_item,
     make_config,
+    make_registry_delivery_runtime,
     public_user_config_overrides,
     send_callback,
     send_command,
@@ -53,6 +54,10 @@ def _event(value):
 
 def _reg_conv(conversation_ref: str) -> str:
     return conversation_key_for_ref(conversation_ref)
+
+
+def _registry_delivery_runtime(cfg, prov):
+    return make_registry_delivery_runtime(cfg, prov)
 
 
 async def async_noop(*args, **kwargs):
@@ -417,6 +422,7 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
                     "payload": {},
                 },
             },
+            runtime=_registry_delivery_runtime(cfg, prov),
         )
         assert await drain_one_worker_item(data_dir) is True
 
@@ -469,6 +475,7 @@ async def test_cancel_delegation_from_registry_delivery():
                     "payload": {},
                 },
             },
+            runtime=_registry_delivery_runtime(cfg, prov),
         )
         assert await drain_one_worker_item(data_dir) is True
 
@@ -683,6 +690,7 @@ async def test_registry_routed_result_resumes_parent_conversation_without_new_ap
                     },
                 },
             },
+            runtime=_registry_delivery_runtime(cfg, prov),
         )
 
         assert outcome == "accepted"
@@ -740,6 +748,7 @@ async def test_delegation_completion_sends_final_message_all_completed():
                     },
                 },
             },
+            runtime=_registry_delivery_runtime(cfg, prov),
         )
 
         assert outcome == "accepted"
@@ -797,6 +806,7 @@ async def test_delegation_completion_sends_final_message_partial_failed():
                     },
                 },
             },
+            runtime=_registry_delivery_runtime(cfg, prov),
         )
         second = await handle_registry_delivery(
             cfg,
@@ -812,6 +822,7 @@ async def test_delegation_completion_sends_final_message_partial_failed():
                     },
                 },
             },
+            runtime=_registry_delivery_runtime(cfg, prov),
         )
 
         assert first == "accepted"
@@ -868,6 +879,7 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
                     },
                 },
             },
+            runtime=_registry_delivery_runtime(cfg, prov),
         )
 
         assert outcome == "accepted"
@@ -925,6 +937,7 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
                     },
                 },
             },
+            runtime=_registry_delivery_runtime(cfg, prov),
         )
 
         assert outcome == "accepted"
@@ -986,6 +999,7 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
                     },
                 },
             },
+            runtime=_registry_delivery_runtime(cfg, prov),
         )
 
         assert first_outcome == "accepted"
@@ -1011,6 +1025,7 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
                     },
                 },
             },
+            runtime=_registry_delivery_runtime(cfg, prov),
         )
 
         assert final_outcome == "accepted"
@@ -1088,6 +1103,7 @@ async def test_registry_surface_parent_resumes_through_registry_surface(monkeypa
                     },
                 },
             },
+            runtime=_registry_delivery_runtime(cfg, prov),
         )
 
         assert outcome == "accepted"
@@ -1135,6 +1151,7 @@ async def test_registry_surface_action_retry_skip_clears_pending_retry():
                     "payload": {},
                 },
             },
+            runtime=_registry_delivery_runtime(cfg, prov),
         )
         assert await drain_one_worker_item(data_dir) is True
 
@@ -1179,6 +1196,7 @@ async def test_registry_surface_action_retry_allow_executes_request():
                     "payload": {},
                 },
             },
+            runtime=_registry_delivery_runtime(cfg, prov),
         )
         assert await drain_one_worker_item(data_dir) is True
 
@@ -1223,6 +1241,7 @@ async def test_registry_surface_action_recovery_discard_discards_pending_recover
                     "payload": {"update_id": 600},
                 },
             },
+            runtime=_registry_delivery_runtime(cfg, prov),
         )
         assert await drain_one_worker_item(data_dir) is True
 
@@ -1269,6 +1288,7 @@ async def test_registry_surface_action_recovery_replay_executes_request():
                     "payload": {"update_id": 601},
                 },
             },
+            runtime=_registry_delivery_runtime(cfg, prov),
         )
         assert await drain_one_worker_item(data_dir) is True
 

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 from app import work_queue
 from app.agents.orchestration import (
@@ -22,9 +25,57 @@ from app.agents.types import RoutedTaskResult
 from app.config import BotConfig
 from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
 from app.runtime import composition
-from app.channels.telegram.state import peek_channel_state
+from app.runtime.session_runtime import load_runtime_session, save_runtime_session
+from app.skill_activation_service import get_skill_activation_service
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RegistryDeliveryRuntime:
+    provider_name: str
+    provider_state_factory: Callable[[], dict[str, Any]]
+    bot: Any | None = None
+
+
+def build_registry_delivery_runtime(
+    *,
+    provider_name: str,
+    provider_state_factory: Callable[[], dict[str, Any]],
+    bot: Any | None = None,
+) -> RegistryDeliveryRuntime:
+    return RegistryDeliveryRuntime(
+        provider_name=provider_name,
+        provider_state_factory=provider_state_factory,
+        bot=bot,
+    )
+
+
+def _load_session(
+    config: BotConfig,
+    runtime: RegistryDeliveryRuntime,
+    conversation_key: str,
+):
+    session = load_runtime_session(
+        config.data_dir,
+        conversation_key,
+        provider_name=runtime.provider_name,
+        provider_state_factory=runtime.provider_state_factory,
+        approval_mode=config.approval_mode,
+        default_role=config.role,
+        default_skills=config.default_skills,
+    )
+    if get_skill_activation_service().normalize(session):
+        _save_session(config, conversation_key, session)
+    return session
+
+
+def _save_session(
+    config: BotConfig,
+    conversation_key: str,
+    session,
+) -> None:
+    save_runtime_session(config.data_dir, conversation_key, session)
 
 
 def _registry_semantic_action(
@@ -64,7 +115,12 @@ def _registry_semantic_action(
     )
 
 
-async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object]) -> str:
+async def handle_registry_delivery(
+    config: BotConfig,
+    delivery: dict[str, object],
+    *,
+    runtime: RegistryDeliveryRuntime,
+) -> str:
     kind = str(delivery.get("kind", ""))
     delivery_id = str(delivery.get("delivery_id", ""))
     if kind in {"surface_input", "routed_task"}:
@@ -137,12 +193,11 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
             metadata={"routed_task_id": routed_task_id},
             event_id=f"delegated-result:{routed_task_id}",
         )
-        state = peek_channel_state()
-        if state is None:
+        channel_name = composition.conversation_channel_name(parent_conversation_id)
+        if channel_name == "telegram" and runtime.bot is None:
             return "retry_later"
         conversation_key = conversation_key_for_ref(parent_conversation_id)
-        from app.channels.telegram import ingress as th
-        session = th._load(conversation_key)
+        session = _load_session(config, runtime, conversation_key)
         pending, matched = apply_routed_result(
             session.pending_delegation,
             routed_task_id=routed_task_id,
@@ -151,7 +206,7 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
         if not matched:
             return "accepted"
         session.pending_delegation = pending
-        th._save(conversation_key, session)
+        _save_session(config, conversation_key, session)
         if not delegation_ready_to_resume(pending):
             return "accepted"
         continuation_text = build_resume_prompt(pending)
@@ -175,7 +230,7 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
             surface = composition.create_channel_egress(
                 parent_conversation_id,
                 config=config,
-                bot=state.bot_instance,
+                bot=runtime.bot,
                 conversation_key=conversation_key,
                 source="registry",
             )

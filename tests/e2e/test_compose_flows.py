@@ -839,7 +839,13 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
     from app.agents.types import AgentCard, RoutedTaskResult
     from app.providers.base import RunResult
     from tests.support.config_support import make_config
-    from tests.support.handler_support import FakeProvider, drain_one_worker_item, setup_globals
+    from tests.support.handler_support import (
+        FakeProvider,
+        current_bot_instance,
+        drain_one_worker_item,
+        make_registry_delivery_runtime,
+        setup_globals,
+    )
 
     ctx = _registry_ui_ctx(postgres_up)
     registry_up = _compose(ctx, "--profile", "registry", "up", "-d", "registry")
@@ -951,6 +957,11 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
             RunResult(text="Final parent answer from delegation."),
         ]
         setup_globals(cfg, provider)
+        delivery_runtime = make_registry_delivery_runtime(
+            cfg,
+            provider,
+            bot_instance=current_bot_instance(),
+        )
 
         conversation = _http_json(
             "POST",
@@ -967,7 +978,11 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
         initial_poll = await parent_client.poll(cursor="0", limit=20, wait_seconds=0)
         initial_delivery = initial_poll["deliveries"][0]
         assert initial_delivery["kind"] == "surface_input"
-        assert await handle_registry_delivery(cfg, initial_delivery) == "accepted"
+        assert await handle_registry_delivery(
+            cfg,
+            initial_delivery,
+            runtime=delivery_runtime,
+        ) == "accepted"
         await parent_client.ack([initial_delivery["delivery_id"]], classification="accepted")
         assert await drain_one_worker_item(cfg.data_dir) is True
 
@@ -993,7 +1008,11 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
 
         approve_poll = await parent_client.poll(cursor=initial_poll["next_cursor"], limit=20, wait_seconds=0)
         approve_delivery = next(item for item in approve_poll["deliveries"] if item["kind"] == "surface_action")
-        assert await handle_registry_delivery(cfg, approve_delivery) == "accepted"
+        assert await handle_registry_delivery(
+            cfg,
+            approve_delivery,
+            runtime=delivery_runtime,
+        ) == "accepted"
         await parent_client.ack([approve_delivery["delivery_id"]], classification="accepted")
         assert await drain_one_worker_item(cfg.data_dir) is True
 
@@ -1012,7 +1031,11 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
 
         routed_result_poll = await parent_client.poll(cursor=approve_poll["next_cursor"], limit=20, wait_seconds=0)
         routed_result_delivery = next(item for item in routed_result_poll["deliveries"] if item["kind"] == "routed_result")
-        assert await handle_registry_delivery(cfg, routed_result_delivery) == "accepted"
+        assert await handle_registry_delivery(
+            cfg,
+            routed_result_delivery,
+            runtime=delivery_runtime,
+        ) == "accepted"
         await parent_client.ack([routed_result_delivery["delivery_id"]], classification="accepted")
         assert await drain_one_worker_item(cfg.data_dir) is True
         return conversation_id

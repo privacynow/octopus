@@ -10,7 +10,7 @@ from app.config import BotConfig, ProcessRole, fail_fast, load_config, load_conf
 from app.providers.base import Provider
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
-from app.agents.delivery import handle_registry_delivery
+from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.runtime import start_agent_runtime_task
 from app.content_store import init_content_store_for_config
 from app.credential_store import init_credential_store_for_config
@@ -252,9 +252,18 @@ def main() -> None:
                 heartbeat_enabled=(config.runtime_mode == "shared"),
             )
         if _runs_registry_runtime(config):
+            delivery_runtime = build_registry_delivery_runtime(
+                provider_name=provider.name,
+                provider_state_factory=provider.new_provider_state,
+                bot=app.bot,
+            )
             _agent_task, _agent_stop = start_agent_runtime_task(
                 config,
-                delivery_handler=lambda delivery: handle_registry_delivery(config, delivery),
+                delivery_handler=lambda delivery: handle_registry_delivery(
+                    config,
+                    delivery,
+                    runtime=delivery_runtime,
+                ),
                 runtime_health_provider=CanonicalRuntimeHealthProvider(),
                 provider=provider,
             )

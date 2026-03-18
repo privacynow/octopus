@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 
 from app.agents.bridge import admit_registry_delivery, conversation_key_for_ref
-from app.agents.delivery import handle_registry_delivery
+from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.runtime import AgentRuntime
 from app.agents.state import load_agent_runtime_state
 from app.config import derive_agent_slug
@@ -471,7 +471,7 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
             "kind": "routed_result",
             "payload": {
                 "routed_task_id": "task-1",
-                "parent_conversation_id": "conv-1",
+                "parent_conversation_id": "telegram:agent-1:12345",
                 "result": {
                     "status": "completed",
                     "summary": "Summary",
@@ -479,12 +479,17 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
                 },
             },
         },
+        runtime=build_registry_delivery_runtime(
+            provider_name="claude",
+            provider_state_factory=dict,
+            bot=None,
+        ),
     )
 
     assert outcome == "retry_later"
     assert published == [
         {
-            "conversation_ref": "conv-1",
+            "conversation_ref": "telegram:agent-1:12345",
             "kind": "delegated_result",
             "title": "Delegated result received",
             "body": "Delegated task completed successfully.",
@@ -510,6 +515,12 @@ async def test_handle_registry_surface_action_and_control_dispatch(monkeypatch, 
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, _prov):
+        runtime = build_registry_delivery_runtime(
+            provider_name=_prov.name,
+            provider_state_factory=_prov.new_provider_state,
+            bot=None,
+        )
+
         approve_outcome = await handle_registry_delivery(
             cfg,
             {
@@ -517,6 +528,7 @@ async def test_handle_registry_surface_action_and_control_dispatch(monkeypatch, 
                 "kind": "surface_action",
                 "payload": {"conversation_id": "conv-approve", "action": "approve"},
             },
+            runtime=runtime,
         )
         control_outcome = await handle_registry_delivery(
             cfg,
@@ -525,6 +537,7 @@ async def test_handle_registry_surface_action_and_control_dispatch(monkeypatch, 
                 "kind": "surface_action",
                 "payload": {"conversation_id": "conv-cancel", "action": "cancel_conversation"},
             },
+            runtime=runtime,
         )
 
         assert approve_outcome == "accepted"

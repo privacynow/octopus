@@ -665,7 +665,7 @@ Just completed:
 
 Before-state for `G3`:
 
-- `complete in current worktree` `Phase 7 / G2: restore Telegram bootstrap and ingress ownership`
+- `4166599` `Phase 7 / G2: restore Telegram bootstrap and ingress ownership`
   - `app/channels/telegram/bootstrap.py` now owns PTB application
     construction and handler registration directly
   - `app/channels/telegram/ingress.py` is now the live Telegram ingress owner

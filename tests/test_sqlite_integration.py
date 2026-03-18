@@ -34,6 +34,7 @@ from tests.support.handler_support import (
     FakeChat,
     FakeProvider,
     FakeUser,
+    current_runtime,
     last_reply,
     load_session_disk,
     make_config,
@@ -326,7 +327,7 @@ async def test_prompt_size_cross_chat_reads_sqlite():
         assert len(with_skill) == 2
 
         # Call the function directly (it's a module-level helper)
-        warnings = th._check_prompt_size_cross_chat(data_dir, "big-skill")
+        warnings = th._check_prompt_size_cross_chat(current_runtime(), data_dir, "big-skill")
         # The skill doesn't actually exist so it gets filtered out — no warnings expected.
         # The point is that it doesn't crash and successfully iterates SQLite rows.
         assert isinstance(warnings, list)

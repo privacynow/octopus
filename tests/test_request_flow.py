@@ -53,6 +53,7 @@ from app.storage import default_session, save_session
 from tests.support.config_support import make_config as _make_config
 from tests.support.handler_support import (
     current_bot_instance,
+    current_runtime,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -200,8 +201,8 @@ def test_is_public_user_open_with_allowed_list():
         )
         setup_globals(cfg, FakeProvider("claude"))
 
-        assert th.is_public_user(FakeUser(uid=999, username="stranger")) is True
-        assert th.is_public_user(FakeUser(uid=100, username="admin")) is False
+        assert th.is_public_user(current_runtime(), FakeUser(uid=999, username="stranger")) is True
+        assert th.is_public_user(current_runtime(), FakeUser(uid=100, username="admin")) is False
 
 
 def test_is_public_user_open_no_allowed_list():
@@ -214,7 +215,7 @@ def test_is_public_user_open_no_allowed_list():
                           allowed_usernames=frozenset())
         setup_globals(cfg, FakeProvider("claude"))
 
-        assert th.is_public_user(FakeUser(uid=42)) is True
+        assert th.is_public_user(current_runtime(), FakeUser(uid=42)) is True
 
 
 def test_is_public_user_closed():
@@ -229,8 +230,8 @@ def test_is_public_user_closed():
         )
         setup_globals(cfg, FakeProvider("claude"))
 
-        assert th.is_public_user(FakeUser(uid=42)) is False
-        assert th.is_public_user(FakeUser(uid=999)) is False
+        assert th.is_public_user(current_runtime(), FakeUser(uid=42)) is False
+        assert th.is_public_user(current_runtime(), FakeUser(uid=999)) is False
 
 
 # =====================================================================
@@ -402,10 +403,10 @@ async def test_is_allowed_mixed_mode_admits_stranger():
         trusted_user = FakeUser(uid=42, username="trustedguy")
         stranger = FakeUser(uid=999, username="nobody")
 
-        assert th.is_allowed(trusted_user)
-        assert th.is_allowed(stranger)
-        assert not th.is_public_user(trusted_user)
-        assert th.is_public_user(stranger)
+        assert th.is_allowed(current_runtime(), trusted_user)
+        assert th.is_allowed(current_runtime(), stranger)
+        assert not th.is_public_user(current_runtime(), trusted_user)
+        assert th.is_public_user(current_runtime(), stranger)
 
 
 @pytest.mark.asyncio
@@ -420,8 +421,8 @@ async def test_is_allowed_closed_mode_rejects_stranger():
         trusted_user = FakeUser(uid=42)
         stranger = FakeUser(uid=999, username="nobody")
 
-        assert th.is_allowed(trusted_user)
-        assert not th.is_allowed(stranger)
+        assert th.is_allowed(current_runtime(), trusted_user)
+        assert not th.is_allowed(current_runtime(), stranger)
 
 
 # =====================================================================
@@ -459,6 +460,7 @@ async def test_execute_request_public_user_gets_inspect_policy():
         await th.execute_request(
             chat.id, "test prompt", [], msg,
             request_user_id=telegram_actor_key(999), trust_tier="public",
+            runtime=current_runtime(),
         )
 
         # Provider should have been called with public restrictions
@@ -495,6 +497,7 @@ async def test_execute_request_trusted_user_gets_edit_policy():
         await th.execute_request(
             chat.id, "test prompt", [], msg,
             request_user_id=telegram_actor_key(42), trust_tier="trusted",
+            runtime=current_runtime(),
         )
 
         assert len(prov.run_calls) == 1
@@ -867,9 +870,9 @@ async def test_export_uses_resolved_skills_not_raw_session():
         "allowed_user_ids": frozenset(),  # no trusted users
     }) as (data_dir, cfg, prov):
         # Create a session as a trusted user first, add skills
-        session = th._load(8005)
+        session = th._load(current_runtime(), 8005)
         session.active_skills = ["github-integration", "secret-tool"]
-        th._save(8005, session)
+        th._save(current_runtime(), 8005, session)
 
         # Export as a public user (not in allowed_user_ids)
         chat = FakeChat(chat_id=8005)
@@ -877,9 +880,9 @@ async def test_export_uses_resolved_skills_not_raw_session():
         await send_command(th.cmd_export, chat, public_user, "/export")
 
         # Verify the resolved context gives [] for public users
-        session_after = th._load(8005)
-        trust = th._trust_tier(public_user)
-        resolved = th._resolve_context(session_after, trust_tier=trust)
+        session_after = th._load(current_runtime(), 8005)
+        trust = th._trust_tier(current_runtime(), public_user)
+        resolved = th._resolve_context(current_runtime(), session_after, trust_tier=trust)
         assert resolved.active_skills == [], (
             f"Public user should resolve to zero skills, got: {resolved.active_skills}"
         )

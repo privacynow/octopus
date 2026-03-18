@@ -7,6 +7,7 @@ from app.storage import default_session, save_session
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     current_bot_instance,
+    current_runtime,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -599,7 +600,7 @@ async def test_stale_pending_ttl():
         save_session(data_dir, telegram_conversation_key(12345), session)
 
         msg = FakeMessage(chat=chat, text="")
-        await th.approve_pending(12345, msg)
+        await th.approve_pending(12345, msg, runtime=current_runtime())
 
         reply = " ".join(r.get("text", "") for r in msg.replies)
         assert "expired" in reply.lower()

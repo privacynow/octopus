@@ -14,7 +14,7 @@ from telegram.constants import ChatAction
 from app import access
 from app import user_messages as _msg
 from app.channels.telegram import presenters as telegram_presenters
-from app.channels.telegram.state import TelegramChannelState
+from app.channels.telegram.state import TelegramRuntime
 from app.execution_context import ResolvedExecutionContext
 from app.identity import (
     telegram_actor_key,
@@ -43,7 +43,7 @@ class TelegramRuntimeSkillsRuntime:
     runtime collaborators that do not already have a better owner elsewhere.
     """
 
-    state: TelegramChannelState
+    state: TelegramRuntime
     chat_lock: Callable[..., Any]
     validate_credential: Callable[[Any, str], Awaitable[tuple[bool, str]]]
     check_prompt_size_cross_chat: Callable[[Path, str], list[str]]

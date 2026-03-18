@@ -7,11 +7,13 @@ import time
 from unittest.mock import patch
 
 from app import work_queue
+from app.channels.telegram.bootstrap import build_bootstrap
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
 from app.runtime.inbound_types import deserialize_inbound
 from tests.support.handler_support import (
     current_boot_id,
+    current_runtime,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -40,7 +42,7 @@ async def test_shared_build_application_registers_shared_dispatch_handlers():
         import app.channels.telegram.routing as th
         from telegram.ext import CallbackQueryHandler, CommandHandler
 
-        app = th.build_application(cfg, prov)
+        app = build_bootstrap(cfg, prov).application
         command_callbacks: dict[str, str] = {}
         callback_patterns: list[tuple[str, str]] = []
         for group_handlers in app.handlers.values():
@@ -196,11 +198,11 @@ async def test_shared_chat_lock_skips_asyncio_lock_for_worker_path():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, _cfg, _prov):
         import app.channels.telegram.routing as th
 
-        lock = th.CHAT_LOCKS[12345]
+        lock = current_runtime().chat_locks[12345]
         await lock.acquire()
         try:
             async def run_lock():
-                async with th._chat_lock(12345, worker_item={"id": "claimed-item"}):
+                async with th._chat_lock(current_runtime(), 12345, worker_item={"id": "claimed-item"}):
                     return "ok"
 
             result = await asyncio.wait_for(run_lock(), timeout=0.1)
@@ -214,12 +216,12 @@ async def test_shared_chat_lock_still_locks_for_inline_commands():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, _cfg, _prov):
         import app.channels.telegram.routing as th
 
-        lock = th.CHAT_LOCKS[12345]
+        lock = current_runtime().chat_locks[12345]
         await lock.acquire()
         entered = asyncio.Event()
 
         async def waiter():
-            async with th._chat_lock(12345):
+            async with th._chat_lock(current_runtime(), 12345):
                 entered.set()
 
         task = asyncio.create_task(waiter())
@@ -236,8 +238,8 @@ async def test_worker_id_is_traceable():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, cfg, prov):
         import app.channels.telegram.routing as th
 
-        th.build_application(cfg, prov)
-        parts = current_boot_id().split(":")
+        telegram_bootstrap = build_bootstrap(cfg, prov)
+        parts = telegram_bootstrap.runtime.boot_id.split(":")
         assert len(parts) == 3
         assert parts[1].isdigit()
         assert len(parts[2]) == 12

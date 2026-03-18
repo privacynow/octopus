@@ -10,6 +10,7 @@ import pytest
 from app.agents.bridge import conversation_key_for_ref
 from app.agents.state import AgentRuntimeState, save_agent_runtime_state
 from app.agents.delivery import handle_registry_delivery
+from app.channels.telegram.bootstrap import build_bootstrap
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.providers.base import RunContext, RunResult
 from app.runtime.inbound_types import InboundMessage, InboundUser
@@ -17,6 +18,7 @@ from app.storage import debug_session_connection, default_session, save_session
 from app import work_queue
 from tests.support.handler_support import (
     current_bot_instance,
+    current_runtime,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -128,7 +130,7 @@ async def test_worker_dispatch_schedules_completion_webhook_for_terminal_outcome
         )
         item = {"id": "webhook-item-1", "conversation_key": _conv(12345), "event_id": _event(7001), "dispatch_mode": "fresh"}
 
-        await th.worker_dispatch("message", event, item)
+        await th.worker_dispatch("message", event, item, runtime=current_runtime())
         await asyncio.sleep(0)
 
         assert len(called) == 1
@@ -187,7 +189,7 @@ async def test_worker_dispatch_skips_completion_webhook_for_delegation_proposed(
         )
         item = {"id": "webhook-item-2", "conversation_key": _reg_conv("registry:conv-webhook"), "event_id": _event(7002), "dispatch_mode": "fresh"}
 
-        await th.worker_dispatch("message", event, item)
+        await th.worker_dispatch("message", event, item, runtime=current_runtime())
         await asyncio.sleep(0)
 
         assert called == []
@@ -358,7 +360,7 @@ async def test_registry_surface_input_respects_approval_mode():
         )
         item = {"id": "registry-item-1", "conversation_key": _reg_conv("registry-conv-1"), "event_id": _event(7001), "dispatch_mode": "fresh"}
 
-        await th.worker_dispatch("message", event, item)
+        await th.worker_dispatch("message", event, item, runtime=current_runtime())
 
         session = load_session_disk(data_dir, _reg_conv("registry-conv-1"), prov)
         assert len(prov.preflight_calls) == 1
@@ -529,7 +531,7 @@ async def test_delegation_proposed_event_published(monkeypatch):
         )
         item = {"id": "registry-item-proposed", "conversation_key": _reg_conv("registry:conv-proposed"), "event_id": _event(7101), "dispatch_mode": "fresh"}
 
-        await th.worker_dispatch("message", event, item)
+        await th.worker_dispatch("message", event, item, runtime=current_runtime())
 
         assert any(kind == "delegation_proposed" for kind, _title, _body in published)
 
@@ -584,7 +586,7 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
         )
         item = {"id": "registry-item-2", "conversation_key": _reg_conv("routed-task-1"), "event_id": _event(7002), "dispatch_mode": "fresh"}
 
-        await th.worker_dispatch("message", event, item)
+        await th.worker_dispatch("message", event, item, runtime=current_runtime())
 
         assert len(prov.preflight_calls) == 0
         assert len(prov.run_calls) == 1
@@ -642,7 +644,7 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
         )
         item = {"id": "registry-item-3", "conversation_key": _reg_conv("routed-task-2"), "event_id": _event(7003), "dispatch_mode": "fresh"}
 
-        await th.worker_dispatch("message", event, item)
+        await th.worker_dispatch("message", event, item, runtime=current_runtime())
 
         assert len(prov.run_calls) == 1
 
@@ -1332,7 +1334,7 @@ async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch)
             item = {"id": "registry-item-4", "conversation_key": event.conversation_key, "event_id": _event(8123), "dispatch_mode": "recovery"}
 
             with pytest.raises(work_queue.PendingRecovery):
-                await th.worker_dispatch("message", event, item)
+                await th.worker_dispatch("message", event, item, runtime=current_runtime())
 
             recovery_events = [item for item in published if item["kind"] == "recovery_notice"]
             assert recovery_events
@@ -1683,7 +1685,7 @@ def test_bucket_b_command_registration_parity():
         import app.channels.telegram.routing as th
         from telegram.ext import CommandHandler
 
-        app = th.build_application(cfg, prov)
+        app = build_bootstrap(cfg, prov).application
         registered = set()
         for group_handlers in app.handlers.values():
             for h in group_handlers:
@@ -1702,7 +1704,7 @@ def test_build_application_sequential_updates():
     with fresh_env() as (_, cfg, prov):
         import app.channels.telegram.routing as th
 
-        app = th.build_application(cfg, prov)
+        app = build_bootstrap(cfg, prov).application
         # Default sequential processing (no custom update processor)
         assert app.update_processor is None or "CancelPriority" not in type(app.update_processor).__name__
 
@@ -3588,15 +3590,15 @@ async def test_model_inherit_works_when_no_profiles_configured():
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
         # Manually set a stale model_profile override
-        session = th._load(1001)
+        session = th._load(current_runtime(), 1001)
         session.model_profile = "fast"
-        th._save(1001, session)
+        th._save(current_runtime(), 1001, session)
         # /model inherit should clear it even with no profiles
         msg = await send_command(th.cmd_model, chat, user, "/model", args=["inherit"])
         reply = last_reply(msg)
         assert "cleared" in reply.lower()
         # Verify the override is gone
-        session = th._load(1001)
+        session = th._load(current_runtime(), 1001)
         assert session.model_profile == ""
 
 
@@ -3612,14 +3614,14 @@ async def test_settings_callback_policy_inherit():
         await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
         # Set explicit edit
         await send_command(th.cmd_policy, chat, user, "/policy", args=["edit"])
-        session = th._load(1001)
+        session = th._load(current_runtime(), 1001)
         assert session.file_policy == "edit"
         # Send inherit callback
         query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_policy:inherit")
         reply = last_reply(cb_msg)
         assert "cleared" in reply.lower() or "effective" in reply.lower()
         # Verify override cleared
-        session = th._load(1001)
+        session = th._load(current_runtime(), 1001)
         assert session.file_policy == ""
 
 
@@ -3635,13 +3637,13 @@ async def test_settings_callback_model_inherit():
         # Switch to project, set explicit best
         await send_command(th.cmd_project, chat, user, "/project", args=["use", "fe"])
         await send_command(th.cmd_model, chat, user, "/model", args=["best"])
-        session = th._load(1001)
+        session = th._load(current_runtime(), 1001)
         assert session.model_profile == "best"
         # Send inherit callback
         query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_model:inherit")
         reply = last_reply(cb_msg)
         assert "cleared" in reply.lower()
-        session = th._load(1001)
+        session = th._load(current_runtime(), 1001)
         assert session.model_profile == ""
 
 
@@ -3737,9 +3739,9 @@ async def test_model_no_profiles_with_stale_override_hints_inherit():
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
         # Set stale override
-        session = th._load(1001)
+        session = th._load(current_runtime(), 1001)
         session.model_profile = "fast"
-        th._save(1001, session)
+        th._save(current_runtime(), 1001, session)
         # /model should mention inherit, not just "no profiles configured"
         msg = await send_command(th.cmd_model, chat, user, "/model")
         reply = last_reply(msg)
@@ -3769,9 +3771,9 @@ async def test_settings_shows_inherit_button_when_stale_model_override():
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
         # Set stale override
-        session = th._load(1001)
+        session = th._load(current_runtime(), 1001)
         session.model_profile = "fast"
-        th._save(1001, session)
+        th._save(current_runtime(), 1001, session)
         # /settings should show an inherit button
         msg = await send_command(th.cmd_settings, chat, user, "/settings")
         # Check keyboard for inherit callback
@@ -3794,9 +3796,9 @@ async def test_model_inherit_no_double_default():
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
         # Set stale override
-        session = th._load(1001)
+        session = th._load(current_runtime(), 1001)
         session.model_profile = "fast"
-        th._save(1001, session)
+        th._save(current_runtime(), 1001, session)
         # /model inherit
         msg = await send_command(th.cmd_model, chat, user, "/model", args=["inherit"])
         reply = last_reply(msg)
@@ -3814,9 +3816,9 @@ async def test_settings_callback_model_inherit_no_double_default():
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
         # Set stale override
-        session = th._load(1001)
+        session = th._load(current_runtime(), 1001)
         session.model_profile = "fast"
-        th._save(1001, session)
+        th._save(current_runtime(), 1001, session)
         # Callback inherit
         query, cb_msg = await send_callback(th.handle_settings_callback, chat, user, "setting_model:inherit")
         reply = last_reply(cb_msg)
@@ -3837,7 +3839,7 @@ async def test_allowuser_grants_access_without_restart():
         admin = FakeUser(uid=1, username="admin")
         stranger = FakeUser(uid=99999, username="stranger")
 
-        assert th.is_allowed(stranger) is False
+        assert th.is_allowed(current_runtime(), stranger) is False
         msg = await send_command(
             th.cmd_allowuser,
             chat,
@@ -3846,7 +3848,7 @@ async def test_allowuser_grants_access_without_restart():
             args=["99999", "incident", "access"],
         )
         assert last_reply(msg) == "Actor tg:99999 added to allowed list."
-        assert th.is_allowed(stranger) is True
+        assert th.is_allowed(current_runtime(), stranger) is True
 
         await send_text(chat, stranger, "hello after allow")
         await drain_one_worker_item(data_dir)
@@ -3865,7 +3867,7 @@ async def test_blockuser_blocks_allowed_user_without_restart():
         admin = FakeUser(uid=1, username="admin")
         target = FakeUser(uid=100, username="trusted")
 
-        assert th.is_allowed(target) is True
+        assert th.is_allowed(current_runtime(), target) is True
         msg = await send_command(
             th.cmd_blockuser,
             chat,
@@ -3874,7 +3876,7 @@ async def test_blockuser_blocks_allowed_user_without_restart():
             args=["100", "abuse"],
         )
         assert last_reply(msg) == "Actor tg:100 blocked."
-        assert th.is_allowed(target) is False
+        assert th.is_allowed(current_runtime(), target) is False
 
         await send_text(chat, target, "hello after block")
         assert len(prov.run_calls) == 0

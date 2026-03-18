@@ -46,9 +46,11 @@ from app.workflows.runtime_skills.contracts import (
 )
 from tests.support.handler_support import (
     FakeChat,
+    FakeContext,
     FakeMessage,
     FakeUpdate,
     FakeUser,
+    current_runtime,
     fresh_data_dir,
     send_command,
     setup_globals,
@@ -516,6 +518,7 @@ async def test_send_compact_reply_uses_presenter(monkeypatch):
 
 async def test_propose_delegation_plan_uses_presenter(monkeypatch):
     import app.channels.telegram.routing as th
+    from app.channels.telegram.state import build_telegram_runtime
 
     async def _noop_publish(*args, **kwargs):
         return None
@@ -540,8 +543,10 @@ async def test_propose_delegation_plan_uses_presenter(monkeypatch):
             },
         ],
     )
+    runtime = build_telegram_runtime(make_config(Path("/tmp/telegram-presenters")), FakeProvider("codex"))
 
     outcome = await th._propose_delegation_plan(
+        runtime,
         12345,
         message,
         session,
@@ -584,7 +589,7 @@ async def test_handle_message_welcome_uses_presenter(monkeypatch):
         chat = FakeChat(12345)
         update = FakeUpdate(message=FakeMessage(chat=chat, text="hello"), user=FakeUser(42), chat=chat)
 
-        await th.handle_message(update, SimpleNamespace())
+        await th.handle_message(update, FakeContext())
 
         assert chat.sent_messages[-1]["text"] == "patched welcome"
 
@@ -741,7 +746,6 @@ async def test_guidance_preview_uses_presenter(monkeypatch):
 async def test_runtime_skills_show_uses_presenter(monkeypatch):
     import contextlib
 
-    from app.channels.telegram.state import get_channel_state
     import app.channels.telegram.runtime_skills as runtime_skills
     from app.credential_validation import validate_credential
 
@@ -762,7 +766,7 @@ async def test_runtime_skills_show_uses_presenter(monkeypatch):
         update = FakeUpdate(message=message, chat=chat)
         event = SimpleNamespace(chat_id=chat.id, user=InboundUser(id="telegram:42", username="testuser"))
         runtime = runtime_skills.TelegramRuntimeSkillsRuntime(
-            state=get_channel_state(),
+            state=current_runtime(),
             chat_lock=_noop_chat_lock,
             validate_credential=validate_credential,
             check_prompt_size_cross_chat=lambda data_dir, skill_name: [],
@@ -819,7 +823,6 @@ async def test_runtime_skills_history_uses_presenter(monkeypatch):
 async def test_runtime_skills_setup_uses_presenter(monkeypatch):
     import contextlib
 
-    from app.channels.telegram.state import get_channel_state
     import app.channels.telegram.runtime_skills as runtime_skills
     from app.credential_validation import validate_credential
 
@@ -868,7 +871,7 @@ async def test_runtime_skills_setup_uses_presenter(monkeypatch):
         update = FakeUpdate(message=message, chat=chat, user=FakeUser(42))
         event = SimpleNamespace(chat_id=chat.id, user=FakeUser(42))
         runtime = runtime_skills.TelegramRuntimeSkillsRuntime(
-            state=get_channel_state(),
+            state=current_runtime(),
             chat_lock=_noop_chat_lock,
             validate_credential=validate_credential,
             check_prompt_size_cross_chat=lambda data_dir, skill_name: [],
@@ -882,8 +885,6 @@ async def test_runtime_skills_setup_uses_presenter(monkeypatch):
 async def test_conversation_cmd_role_uses_presenter(monkeypatch):
     import contextlib
 
-    from app.channels.telegram.cancellation import get_cancellation_registry
-    from app.channels.telegram.state import get_channel_state
     import app.channels.telegram.conversation as conversation
 
     @contextlib.asynccontextmanager
@@ -903,8 +904,8 @@ async def test_conversation_cmd_role_uses_presenter(monkeypatch):
         update = FakeUpdate(message=message, chat=chat, user=FakeUser(42))
         event = SimpleNamespace(chat_id=chat.id, user=InboundUser(id="telegram:42", username="testuser"), args=[])
         runtime = conversation.TelegramConversationRuntime(
-            state=get_channel_state(),
-            cancellations=get_cancellation_registry(),
+            state=current_runtime(),
+            cancellations=current_runtime().cancellation_registry,
             chat_lock=_noop_chat_lock,
             edit_or_reply_text=lambda *args, **kwargs: None,
         )
@@ -921,7 +922,6 @@ async def test_conversation_cmd_role_uses_presenter(monkeypatch):
 async def test_pending_reject_uses_presenter(monkeypatch):
     import contextlib
 
-    from app.channels.telegram.state import get_channel_state
     import app.channels.telegram.pending as pending
 
     @contextlib.asynccontextmanager
@@ -963,7 +963,7 @@ async def test_pending_reject_uses_presenter(monkeypatch):
         chat = FakeChat(12345)
         message = FakeMessage(chat=chat, text="pending")
         runtime = pending.TelegramPendingRuntime(
-            state=get_channel_state(),
+            state=current_runtime(),
             chat_lock=_noop_chat_lock,
             edit_or_reply_text=_noop_edit_or_reply_text,
             execute_request=lambda *args, **kwargs: None,

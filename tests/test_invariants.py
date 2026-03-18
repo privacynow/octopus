@@ -33,7 +33,7 @@ from app.providers.codex import CodexProvider
 from app.storage import close_db, default_session, ensure_data_dirs, save_session
 from app.work_queue import debug_transport_connection
 from tests.support.config_support import make_config as _make_config
-from tests.support.handler_support import current_bot_instance
+from tests.support.handler_support import current_bot_instance, current_runtime
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeCallbackQuery,
@@ -136,7 +136,6 @@ async def test_registry_search_does_not_block_event_loop():
         setup_globals(cfg, prov)
 
         import app.channels.telegram.runtime_skills as sc
-        from app.channels.telegram.state import get_channel_state
         from app.credential_validation import validate_credential
         from app.runtime.inbound_types import InboundCommand, InboundUser
 
@@ -176,7 +175,7 @@ async def test_registry_search_does_not_block_event_loop():
             yield False
 
         runtime = sc.TelegramRuntimeSkillsRuntime(
-            state=get_channel_state(),
+            state=current_runtime(),
             chat_lock=noop_chat_lock,
             validate_credential=validate_credential,
             check_prompt_size_cross_chat=lambda data_dir, skill_name: [],
@@ -547,13 +546,13 @@ async def test_chat_lock_sends_message_feedback_when_locked():
         chat = FakeChat(1)
         msg = FakeMessage(chat=chat)
 
-        lock = th.CHAT_LOCKS[1]
+        lock = current_runtime().chat_locks[1]
         await lock.acquire()
         try:
             # _chat_lock should send feedback then block; run in a task
             # so we can release the lock
             async def use_lock():
-                async with th._chat_lock(1, message=msg):
+                async with th._chat_lock(current_runtime(), 1, message=msg):
                     pass
 
             task = asyncio.create_task(use_lock())
@@ -577,13 +576,13 @@ async def test_chat_lock_sends_callback_feedback_when_locked():
     with fresh_env() as (data_dir, cfg, prov):
         query = FakeCallbackQuery("test", message=FakeMessage(chat=FakeChat(1)))
 
-        lock = th.CHAT_LOCKS[1]
+        lock = current_runtime().chat_locks[1]
         await lock.acquire()
         try:
             yielded = None
             async def use_lock():
                 nonlocal yielded
-                async with th._chat_lock(1, query=query) as sent:
+                async with th._chat_lock(current_runtime(), 1, query=query) as sent:
                     yielded = sent
 
             task = asyncio.create_task(use_lock())
@@ -608,7 +607,7 @@ async def test_chat_lock_no_feedback_when_free():
     with fresh_env() as (data_dir, cfg, prov):
         msg = FakeMessage(chat=FakeChat(1))
 
-        async with th._chat_lock(1, message=msg) as sent:
+        async with th._chat_lock(current_runtime(), 1, message=msg) as sent:
             assert sent is False, "Expected _chat_lock to yield False when lock was free"
 
         all_text = " ".join(str(r.get("text", "")) for r in msg.replies)
@@ -633,20 +632,20 @@ async def test_contended_approval_callback_single_answer():
         chat_id = 1
         chat = FakeChat(chat_id)
         user = FakeUser(next(iter(cfg.allowed_user_ids)))
-        session = th._load(chat_id)
+        session = th._load(current_runtime(), chat_id)
         from app.session_state import PendingApproval
-        ctx_hash = th._resolve_context(session).context_hash
+        ctx_hash = th._resolve_context(current_runtime(), session).context_hash
         session.pending_approval = PendingApproval(
             request_user_id=_actor(user.id), prompt="test", image_paths=[],
             attachment_dicts=[], context_hash=ctx_hash,
             created_at=0, trust_tier="trusted",
         )
-        th._save(chat_id, session)
+        th._save(current_runtime(), chat_id, session)
 
         from app.providers.base import RunResult
         prov.run_results.append(RunResult(text="done"))
 
-        lock = th.CHAT_LOCKS[chat_id]
+        lock = current_runtime().chat_locks[chat_id]
         await lock.acquire()
         try:
             async def contended_approve():
@@ -676,10 +675,10 @@ async def test_contended_settings_callback_single_answer():
         chat_id = 1
         chat = FakeChat(chat_id)
         user = FakeUser(next(iter(cfg.allowed_user_ids)))
-        session = th._load(chat_id)
-        th._save(chat_id, session)
+        session = th._load(current_runtime(), chat_id)
+        th._save(current_runtime(), chat_id, session)
 
-        lock = th.CHAT_LOCKS[chat_id]
+        lock = current_runtime().chat_locks[chat_id]
         await lock.acquire()
         try:
             async def contended_settings():
@@ -709,10 +708,10 @@ async def test_contended_clear_cred_callback_single_answer():
         chat_id = 1
         chat = FakeChat(chat_id)
         user = FakeUser(next(iter(cfg.allowed_user_ids)))
-        session = th._load(chat_id)
-        th._save(chat_id, session)
+        session = th._load(current_runtime(), chat_id)
+        th._save(current_runtime(), chat_id, session)
 
-        lock = th.CHAT_LOCKS[chat_id]
+        lock = current_runtime().chat_locks[chat_id]
         await lock.acquire()
         try:
             async def contended_clear():
@@ -844,7 +843,7 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
             }
 
             with pytest.raises(PendingRecovery):
-                await th.worker_dispatch("message", event, item)
+                await th.worker_dispatch("message", event, item, runtime=current_runtime())
 
             # Provider must NOT have been called — no auto-replay.
             assert len(prov.run_calls) == 0, (
@@ -1112,7 +1111,7 @@ async def test_command_exception_marks_work_item_failed():
 
         # Patch _load to raise inside cmd_session
         original_load = th._load
-        def exploding_load(chat_id):
+        def exploding_load(_runtime, chat_id):
             raise RuntimeError("session DB corrupt")
 
         th._load = exploding_load
@@ -1793,7 +1792,7 @@ async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
             }
 
             # Should return normally (not raise PendingRecovery)
-            await th.worker_dispatch("message", event, item)
+            await th.worker_dispatch("message", event, item, runtime=current_runtime())
 
             # No notice sent, no provider call
             assert len(bot.sent) == 0
@@ -1827,7 +1826,7 @@ async def test_worker_dispatch_command_still_notifies():
                 "id": "cmd-item",
             }
 
-            await th.worker_dispatch("command", event, item)
+            await th.worker_dispatch("command", event, item, runtime=current_runtime())
 
             # Notification about interrupted command
             cmd_msgs = [s for s in bot.sent if "interrupted" in s.get("text", "")]
@@ -1867,7 +1866,7 @@ async def test_claude_resume_error_resets_provider_state():
         assert len(prov.run_calls) == 1
 
         # Verify session now has started=True
-        session = th._load(5001)
+        session = th._load(current_runtime(), 5001)
         assert session.provider_state["started"] is True
 
         # Second request: provider signals resume target is dead
@@ -1878,7 +1877,7 @@ async def test_claude_resume_error_resets_provider_state():
         await drain_one_worker_item(data_dir)
 
         # Session must be reset to fresh state
-        session = th._load(5001)
+        session = th._load(current_runtime(), 5001)
         assert session.provider_state["started"] is False, (
             "started should be reset after resume error"
         )
@@ -1917,11 +1916,11 @@ async def test_codex_resume_error_still_clears_thread():
 
     with fresh_env(provider_name="codex") as (data_dir, cfg, prov):
         # Simulate a session with an existing thread_id
-        session = th._load(6001)
+        session = th._load(current_runtime(), 6001)
         session.provider_state["thread_id"] = "t-existing"
         session.provider_state["context_hash"] = "hash1"
         session.provider_state["boot_id"] = "test-boot"
-        th._save(6001, session)
+        th._save(current_runtime(), 6001, session)
 
         # Provider fails with non-zero rc
         prov.run_results = [RunResult(text="codex error", returncode=1)]
@@ -1932,7 +1931,7 @@ async def test_codex_resume_error_still_clears_thread():
         await th.handle_message(upd, FakeContext())
         await drain_one_worker_item(data_dir)
 
-        session = th._load(6001)
+        session = th._load(current_runtime(), 6001)
         assert session.provider_state["thread_id"] is None, (
             "Codex thread_id should be cleared on resume error"
         )
@@ -1960,7 +1959,7 @@ async def test_claude_generic_error_during_resume_does_not_reset():
         await th.handle_message(upd1, FakeContext())
         await drain_one_worker_item(data_dir)
 
-        session = th._load(7001)
+        session = th._load(current_runtime(), 7001)
         assert session.provider_state["started"] is True
         old_session_id = session.provider_state["session_id"]
 
@@ -1972,7 +1971,7 @@ async def test_claude_generic_error_during_resume_does_not_reset():
         await drain_one_worker_item(data_dir)
 
         # Session must NOT be reset — still started=True with same session_id
-        session = th._load(7001)
+        session = th._load(current_runtime(), 7001)
         assert session.provider_state["started"] is True, (
             "Generic error should not reset started flag"
         )

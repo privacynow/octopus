@@ -17,7 +17,7 @@ from app.credential_store import init_credential_store_for_config
 from app.storage import close_db, ensure_data_dirs
 from app.work_queue import close_transport_db, recover_stale_claims, purge_old
 from app.worker import poll_interval_for_runtime, start_worker_task
-from app.channels.telegram.bootstrap import build_application, worker_dispatch
+from app.channels.telegram.bootstrap import build_bootstrap
 from app.runtime_health import CanonicalRuntimeHealthProvider
 
 PROVIDERS: dict[str, type] = {
@@ -206,19 +206,9 @@ def main() -> None:
         log.warning("Bot is open to everyone (BOT_ALLOW_OPEN=1)")
 
     log.info("Process role: %s", config.process_role)
-    app = build_application(config, provider)
-
-    from app.channels.telegram.state import make_boot_id, peek_channel_state
-
-    boot_id = None
-    bot_data = getattr(app, "bot_data", None)
-    if isinstance(bot_data, dict):
-        boot_id = bot_data.get("telegram_boot_id")
-    if boot_id is None:
-        boot_id = vars(app).get("telegram_boot_id")
-    if not isinstance(boot_id, str) or not boot_id:
-        state = peek_channel_state()
-        boot_id = state.boot_id if state is not None else make_boot_id()
+    telegram_bootstrap = build_bootstrap(config, provider)
+    app = telegram_bootstrap.application
+    boot_id = telegram_bootstrap.runtime.boot_id
 
     if _runs_worker(config):
         # Recover stale work items from previous boot and purge old transport data
@@ -243,7 +233,7 @@ def main() -> None:
             _worker_task, _worker_stop = start_worker_task(
                 config.data_dir,
                 boot_id,
-                worker_dispatch,
+                telegram_bootstrap.worker_dispatch,
                 poll_interval=poll_interval_for_runtime(config.runtime_mode),
                 lease_ttl=config.claim_lease_ttl_seconds,
                 sweep_interval=config.claim_sweep_interval_seconds,

@@ -10,26 +10,25 @@ import asyncio
 import contextlib
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.agents.delivery import build_registry_delivery_runtime
 import app.channels.telegram.routing as _th
-from app.channels.telegram.cancellation import (
-    get_cancellation_registry,
-    reset_cancellation_registry,
-)
-from app.channels.telegram.state import (
-    build_channel_state,
-    get_channel_state,
-    install_channel_state,
-    peek_channel_state,
-    reset_channel_state,
-    set_bot_instance as set_channel_bot_instance,
-)
+from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
 from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.providers.base import RunResult
 from app.storage import close_db, ensure_data_dirs, load_session
 from app import work_queue as _work_queue
 from tests.support.config_support import make_config as _make_config
+
+
+_TEST_RUNTIME: TelegramRuntime | None = None
+
+
+def current_runtime() -> TelegramRuntime:
+    if _TEST_RUNTIME is None:
+        raise RuntimeError("Telegram test runtime is not configured")
+    return _TEST_RUNTIME
 
 
 def reset_handler_test_runtime() -> None:
@@ -46,14 +45,17 @@ def reset_handler_test_runtime() -> None:
     import app.credential_store as _creds
     _creds.reset_for_test()
 
-    reset_channel_state()
-    _th._pending_work_items.clear()
-    _th.CHAT_LOCKS.clear()
-    reset_cancellation_registry()
-    try:
-        _th._current_update_id.set(None)
-    except LookupError:
-        pass
+    global _TEST_RUNTIME
+    if _TEST_RUNTIME is not None:
+        _TEST_RUNTIME.pending_work_items.clear()
+        _TEST_RUNTIME.chat_locks.clear()
+        _TEST_RUNTIME.cancellation_registry.clear()
+        _TEST_RUNTIME.bot_instance = None
+        try:
+            _TEST_RUNTIME.current_update_id.set(None)
+        except LookupError:
+            pass
+    _TEST_RUNTIME = None
     global _next_update_id
     _next_update_id = 0
     # Backend lifecycle is owned by runtime_backend.reset_for_test() above; no duplicate close.
@@ -248,8 +250,25 @@ class FakeCallbackQuery:
 
 
 class FakeContext:
-    def __init__(self, args=None):
+    def __init__(self, args=None, runtime: TelegramRuntime | None = None):
         self.args = args or []
+        telegram_runtime = runtime
+        try:
+            if telegram_runtime is None:
+                telegram_runtime = current_runtime()
+        except RuntimeError:
+            telegram_runtime = None
+        self.telegram_runtime = telegram_runtime
+        if telegram_runtime is not None:
+            self.application = SimpleNamespace(
+                bot=telegram_runtime.bot_instance,
+                bot_data={
+                    "telegram_runtime": telegram_runtime,
+                    "telegram_boot_id": telegram_runtime.boot_id,
+                },
+            )
+        else:
+            self.application = SimpleNamespace(bot=None, bot_data={})
 
 
 class FakeProvider:
@@ -313,21 +332,23 @@ def make_config(data_dir, **overrides):
 
 def set_bot_instance(bot_instance) -> None:
     """Set the handler's bot instance (for worker_dispatch etc.)."""
-    set_channel_bot_instance(bot_instance)
+    current_runtime().bot_instance = bot_instance
 
 
 def set_provider(provider) -> None:
     """Set the current provider on the installed Telegram channel state."""
-    get_channel_state().provider = provider
+    current_runtime().provider = provider
 
 
 def current_bot_instance():
-    state = peek_channel_state()
-    return None if state is None else state.bot_instance
+    try:
+        return current_runtime().bot_instance
+    except RuntimeError:
+        return None
 
 
 def current_boot_id() -> str:
-    return get_channel_state().boot_id
+    return current_runtime().boot_id
 
 
 def make_registry_delivery_runtime(config, provider, *, bot_instance=None):
@@ -340,13 +361,15 @@ def make_registry_delivery_runtime(config, provider, *, bot_instance=None):
 
 
 def live_cancel_registry():
-    return get_cancellation_registry()
+    return current_runtime().cancellation_registry
 
 
 def _append_simulator_output_log(kind: str, text: str) -> None:
     """When the bot has _output_log (simulator), append one user-visible output for a single ordered stream."""
-    state = peek_channel_state()
-    bot = None if state is None else state.bot_instance
+    try:
+        bot = current_runtime().bot_instance
+    except RuntimeError:
+        bot = None
     if bot is not None and getattr(bot, "_output_log", None) is not None:
         bot._output_log.append({"type": kind, "text": text})
 
@@ -419,6 +442,7 @@ class MinimalFakeBot:
 def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
     """Install explicit Telegram channel state for tests."""
     reset_handler_test_runtime()
+    global _TEST_RUNTIME
     import app.content_store as _cs
     import app.credential_store as _creds
     from app.content_seed import track_from_skill_dir
@@ -443,13 +467,11 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
                         created_by="test",
                     )
                 )
-    install_channel_state(
-        build_channel_state(
-            config,
-            provider,
-            boot_id=boot_id,
-            bot_instance=bot_instance if bot_instance is not None else MinimalFakeBot(),
-        )
+    _TEST_RUNTIME = build_telegram_runtime(
+        config,
+        provider,
+        boot_id=boot_id,
+        bot_instance=bot_instance if bot_instance is not None else MinimalFakeBot(),
     )
 
 
@@ -489,7 +511,8 @@ async def drain_one_worker_item(data_dir: Path) -> bool:
     from app.runtime.inbound_types import deserialize_inbound
     from app.workflows.recovery.results import TransportStateCorruption
 
-    boot_id = get_channel_state().boot_id
+    runtime = current_runtime()
+    boot_id = runtime.boot_id
     item = _work_queue.claim_next_any(data_dir, boot_id)
     if item is None:
         return False
@@ -502,7 +525,7 @@ async def drain_one_worker_item(data_dir: Path) -> bool:
         _work_queue.fail_work_item(data_dir, item_id, error="deserialize_error")
         return True
     try:
-        await _th.worker_dispatch(kind, event, item)
+        await _th.worker_dispatch(kind, event, item, runtime=runtime)
         _work_queue.complete_work_item(data_dir, item_id)
     except _work_queue.PendingRecovery:
         pass
@@ -520,12 +543,20 @@ async def running_worker(data_dir: Path, *, poll_interval: float = 0.01):
     """Start the real worker loop in the background; stop cleanly on exit.
 
     Use for tests that need real concurrency (cancel while run active, busy while run active).
-    Yields (task, stop_event). Worker uses _th.worker_dispatch.
+    Yields (task, stop_event). Worker uses explicit runtime-bound dispatch.
     """
     from app.worker import start_worker_task
 
+    runtime = current_runtime()
+
+    async def _dispatch(kind: str, event, item: dict) -> None:
+        await _th.worker_dispatch(kind, event, item, runtime=runtime)
+
     task, stop_event = start_worker_task(
-        data_dir, get_channel_state().boot_id, _th.worker_dispatch, poll_interval=poll_interval
+        data_dir,
+        runtime.boot_id,
+        _dispatch,
+        poll_interval=poll_interval,
     )
     try:
         yield task, stop_event

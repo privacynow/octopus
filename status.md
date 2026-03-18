@@ -13,7 +13,28 @@ Feature work remains frozen until every acceptance gate in the plan passes.
 
 ## Current State
 
-The remediation track is in progress.
+The remediation track is reopened and not complete.
+
+Post-closure audit originally found four remaining gaps that blocked the
+acceptance gates in
+[`store_plan.md`](/Users/tinker/output/bots/telegram-agent-bot/store_plan.md):
+
+1. `G1` has now closed the singleton-runtime gap:
+   - Telegram runtime and cancellation ownership are explicit runtime objects,
+     not installed module singletons.
+2. `app/channels/telegram/routing.py` remains a large mixed owner and still
+   needs to be split back into the plan’s bootstrap/ingress ownership model.
+3. Telegram-heavy tests still depend too heavily on routing internals rather
+   than the explicit production boundary.
+4. `status.md` and `docs/orchestration_inventory.md` still need their final
+   post-remediation truth pass so they match the actual code ownership and
+   test seam state.
+
+Feature work remains frozen.
+
+Historical execution log follows below. Some older entries reference the
+pre-audit `ingress.py`/`routing.py` closure state and are preserved as history,
+not as the current authoritative shape.
 
 Completed slices:
 
@@ -436,7 +457,7 @@ Completed slices:
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1605 passed, 23 skipped`
+- result: `1608 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -615,9 +636,32 @@ status.
 
 ## Current Slice
 
-Next required slice:
+Active slice:
 
-- none
+- `G2` restore the bootstrap/ingress ownership split and delete the
+  transitional Telegram mega-owner
+
+Just completed in the current worktree:
+
+- `G1` replace singleton Telegram runtime ownership with explicit
+  bootstrap-owned runtime
+  - `app/channels/telegram/state.py` now defines the explicit
+    `TelegramRuntime` owner and `build_telegram_runtime(...)`
+  - `app/channels/telegram/cancellation.py` now defines only the explicit
+    cancellation registry type
+  - `app/channels/telegram/bootstrap.py` now constructs the runtime, PTB
+    application, and bound worker dispatch instead of re-exporting routing
+  - `app/main.py` now consumes the bootstrap result rather than peeking
+    installed singleton state
+  - `app/channels/telegram/routing.py` now receives runtime explicitly through
+    bootstrap/context wiring instead of singleton install/get helpers
+  - `tests/support/handler_support.py` now constructs and injects an explicit
+    Telegram runtime instead of restoring singleton state
+  - focused G1 suites passed
+  - full suite passed: `1608 passed, 23 skipped`
+
+Current before-state inventory for `G2` is still pending and will be captured
+before editing that slice.
 
 Committed Track B slices after `B1`:
 
@@ -681,7 +725,16 @@ Worktree now in progress for final acceptance closure:
 
 ## Remaining Work
 
-- none
+- Phase 7. Closure Correction Stage
+  - `G2` restore the bootstrap/ingress ownership split, delete
+    `app/channels/telegram/routing.py`, and make `bootstrap.py` the real PTB
+    owner
+  - `G3` finish the Telegram test-boundary migration so Telegram-heavy tests use
+    the explicit runtime/boundary instead of routing internals
+  - `G4` repair status/inventory docs and strengthen structural gates to catch
+    the regressions that escaped the previous closure
+
+Acceptance remains blocked until the reopened Phase 7 gates pass.
      - negative structural guards proving inline rendering is gone from both
        channel modules
    - focused verification passed:

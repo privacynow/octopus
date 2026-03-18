@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -248,13 +249,19 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
     def _fake_conn():
         yield MagicMock()
 
+    bootstrap = SimpleNamespace(
+        application=mock_app,
+        runtime=SimpleNamespace(boot_id="test-boot"),
+        worker_dispatch=MagicMock(),
+    )
+
     with patch("app.main.load_config", return_value=cfg), \
          patch("app.main.make_provider", return_value=provider), \
          patch("app.main.fail_fast"), \
          patch("app.runtime_backend.init"), \
          patch("app.main.ensure_data_dirs"), \
          patch("app.main.init_content_store_for_config"), \
-         patch("app.main.build_application", return_value=mock_app), \
+         patch("app.main.build_bootstrap", return_value=bootstrap), \
          patch("app.main.close_db"), \
          patch("app.main.close_transport_db"), \
          patch("app.main.recover_stale_claims"), \

@@ -140,6 +140,7 @@ from app.runtime.work_admission import (
     admit_fresh_message,
     enqueue_inbound_envelope,
     record_inbound_envelope,
+    trust_tier_for_source,
 )
 from app.credential_validation import validate_credential
 from app.skill_activation_service import get_skill_activation_service
@@ -2554,7 +2555,7 @@ async def _execute_worker_action(
     cancel_event: asyncio.Event | None,
 ) -> None:
     surface, runtime_chat, chat_id, conversation_ref, source = _build_action_surface(event, item=item)
-    trust = composition.trust_tier_for_source(source, event.user, config=_cfg())
+    trust = trust_tier_for_source(source, event.user, config=_cfg())
     action = event.action
     params = dict(event.params)
 
@@ -2675,7 +2676,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             return
         prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
         user_id = event.user.id
-        trust = composition.trust_tier_for_source(source, event.user, config=_cfg())
+        trust = trust_tier_for_source(source, event.user, config=_cfg())
         await bot_msg.bind(title=title, config=_cfg())
         await bot_msg.on_message_received(event.text)
         try:

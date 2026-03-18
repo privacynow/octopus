@@ -24,3 +24,7 @@ def test_workflow_composition_groups_current_workflow_singletons() -> None:
     assert flows.pending.requests is get_pending_request_use_cases()
     assert flows.recovery.replay is get_recovery_use_cases()
     assert flows.provider_guidance.preview is get_provider_guidance_use_cases()
+
+
+def test_runtime_composition_does_not_own_trust_tier_routing() -> None:
+    assert not hasattr(composition, "trust_tier_for_source")

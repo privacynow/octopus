@@ -1,4 +1,5 @@
 from app.identity import telegram_actor_key, telegram_conversation_key
+from app.channels.telegram.delegation_channel import propose_delegation_plan
 from app.channels.telegram.progress import TelegramProgress, heartbeat, keep_typing
 from app.runtime.dispatch import (
     RuntimeDispatchRuntime,
@@ -57,7 +58,7 @@ def _execution_runtime(th) -> ExecutionRuntime:
             runtime=telegram_runtime,
         ),
         send_compact_reply=th._send_compact_reply,
-        propose_delegation_plan=lambda chat_id, message, session, conversation_ref, result: th._propose_delegation_plan(
+        propose_delegation_plan=lambda chat_id, message, session, conversation_ref, result: propose_delegation_plan(
             telegram_runtime,
             chat_id,
             message,
@@ -134,7 +135,14 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
             send_formatted_reply=th.send_formatted_reply,
             send_directed_artifacts=th.send_directed_artifacts,
             send_compact_reply=th._send_compact_reply,
-            propose_delegation_plan=th._propose_delegation_plan,
+            propose_delegation_plan=lambda chat_id, message, session, conversation_ref, result: propose_delegation_plan(
+                current_runtime(),
+                chat_id,
+                message,
+                session,
+                conversation_ref=conversation_ref,
+                result=result,
+            ),
         )
 
         await request_approval(

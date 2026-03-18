@@ -51,7 +51,7 @@ Phase 8 is now active.
       `_conversation_key`, `_actor_key`, `_event_key`, or `_telegram_chat_id`
     - focused structural gates for the extracted module are in place
     - verified against the full suite: `1620 passed, 23 skipped`
-  - `Phase 8 / H1 progress slice` is complete in the current branch state:
+  - `8c12f44` `Phase 8 / H1: extract progress from ingress`
     - Telegram progress lifecycle now lives in
       `app/channels/telegram/progress.py`
     - `app/channels/telegram/ingress.py` no longer defines `TelegramProgress`,
@@ -61,10 +61,19 @@ Phase 8 is now active.
       progress module owner
     - focused suite: `173 passed`
     - verified against the full suite: `1624 passed, 23 skipped`
+  - `Phase 8 / H1 delegation channel slice` is complete in the current branch state:
+    - Telegram delegation proposal publication and callback parsing/approval
+      flow now live in `app/channels/telegram/delegation_channel.py`
+    - no new `surface`-named Telegram owner was introduced in this slice;
+      channel-oriented naming is retained
+    - `app/channels/telegram/ingress.py` no longer defines delegation proposal,
+      callback parsing, or callback-approve/cancel helpers
+    - focused suite: `90 passed`
+    - verified against the full suite: `1627 passed, 23 skipped`
 - Remaining verified-but-uncommitted Phase 8 work in this branch state:
-  - progress lifecycle extraction is ready to commit after this status update
+  - delegation channel extraction is ready to commit after this status update
 - Remaining Phase 8 work is still pending:
-  - H1 delegation surface / execution / worker / shared dispatch extraction
+  - H1 execution / worker / shared dispatch extraction
     and ingress cleanup
   - H2 presenter rendering blind-spot closure
   - H3 Telegram test-boundary hardening

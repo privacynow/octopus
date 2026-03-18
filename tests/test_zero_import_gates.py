@@ -136,6 +136,15 @@ def test_telegram_progress_module_has_no_ingress_import() -> None:
     )
 
 
+def test_telegram_delegation_channel_module_has_no_ingress_import() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    delegation_path = repo_root / "app" / "channels" / "telegram" / "delegation_channel.py"
+    text = delegation_path.read_text()
+    assert "app.channels.telegram.ingress" not in text, (
+        f"telegram ingress import still referenced in {delegation_path}"
+    )
+
+
 def test_ingress_no_longer_defines_session_io_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
@@ -166,6 +175,24 @@ def test_ingress_no_longer_defines_progress_helpers() -> None:
         assert token not in text, f"{token} still defined in {ingress_path}"
 
 
+def test_ingress_no_longer_defines_delegation_channel_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    text = ingress_path.read_text()
+    forbidden_defs = (
+        "def _delegation_keyboard(",
+        "class _DelegationCallbackEditableHandle:",
+        "class _DelegationCallbackSurface:",
+        "def _parse_delegation_callback(",
+        "async def _publish_delegation_proposed_event(",
+        "async def _propose_delegation_plan(",
+        "async def _handle_delegation_approve(",
+        "async def _handle_delegation_cancel(",
+    )
+    for token in forbidden_defs:
+        assert token not in text, f"{token} still defined in {ingress_path}"
+
+
 def test_telegram_runtime_owner_modules_do_not_define_singletons() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_path = repo_root / "app" / "channels" / "telegram" / "state.py"
@@ -186,6 +213,12 @@ def test_deleted_telegram_routing_path_is_gone() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     deleted_path = repo_root / "app" / "channels" / "telegram" / "routing.py"
     assert not deleted_path.exists(), f"legacy telegram routing path still exists at {deleted_path}"
+
+
+def test_telegram_delegation_surface_path_is_gone() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    deleted_path = repo_root / "app" / "channels" / "telegram" / "delegation_surface.py"
+    assert not deleted_path.exists(), f"incorrect telegram delegation surface path still exists at {deleted_path}"
 
 
 def test_only_telegram_bootstrap_imports_the_live_ingress_owner_from_app_code() -> None:

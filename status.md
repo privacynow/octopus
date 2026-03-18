@@ -68,7 +68,7 @@ Completed slices:
    - Added focused positive and negative tests for the dispatch boundary and
      the new import-direction gate.
 
-9. `this commit` `Track A / A2: detach agents delivery slice from ingress`
+9. `531856c` `Track A / A2: detach agents delivery slice from ingress`
    - `app/agents/delivery.py` no longer imports Telegram ingress or Telegram
      channel state.
    - Registry delivery handling now runs through explicit
@@ -78,12 +78,20 @@ Completed slices:
      and a negative gate now proves the agents delivery module has no channel
      imports.
 
+10. `this commit` `Track A / A2: detach agents delegation slice from ingress`
+   - `app/agents/delegation.py` no longer imports Telegram ingress or Telegram
+     channel state.
+   - Delegation approve/cancel flows now run through explicit
+     `DelegationRuntime` injection from Telegram ingress.
+   - Added direct delegation-boundary tests and a negative gate proving the
+     delegation module has no channel imports.
+
 ## Latest Verified Test Baseline
 
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1506 passed, 23 skipped`
+- result: `1509 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -104,10 +112,10 @@ Completed:
 - `A2` pending concern slice
 - `A2` runtime dispatch concern slice
 - `A2` agents delivery concern slice
+- `A2` agents delegation concern slice
 
 Remaining:
 
-- `A2` agents delegation concern slice
 - `A5` finish test support migration and remove any remaining global-state test coupling
 
 ### Track B. Build the Telegram Presenter Layer
@@ -200,20 +208,21 @@ status.
 
 Next required slice:
 
-- `Track A / A2: detach agents delegation slice from Telegram ingress`
+- `Track A / A5: finish test support migration and global-state cleanup`
 
 Before-state:
 
-- `app/agents/delegation.py` still imports Telegram ingress-owned collaborators
-  and still violates the agents layer boundary.
+- test support and handler-facing suites still need a final explicit check that
+  they no longer preserve or depend on Telegram ingress globals through
+  `setup_globals`.
 
 After-state required:
 
-- `app/agents/delegation.py` becomes a thin bridge over explicit injected
-  collaborators or shared workflow/runtime owners.
-- `agents/*` no longer import Telegram ingress and move toward zero channel
-  imports entirely.
-- negative gate tests prove the old back-import pattern is gone.
+- `tests/support/handler_support.py` remains the only test runtime setup owner.
+- no test helper mutates Telegram ingress globals or reaches for removed global
+  state slots.
+- the supporting tests and gates make that contract explicit before Track A is
+  considered complete.
 
 ## Working Rules
 

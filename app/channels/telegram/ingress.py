@@ -64,6 +64,7 @@ from app.agents.bridge import (
 )
 from app.agents.client import RegistryClientError
 from app.agents.delegation import (
+    build_delegation_runtime,
     handle_delegation_approve as handle_surface_delegation_approve,
     handle_delegation_cancel as handle_surface_delegation_cancel,
 )
@@ -439,6 +440,15 @@ def _dispatch_runtime() -> RuntimeDispatchRuntime:
         send_directed_artifacts=send_directed_artifacts,
         send_compact_reply=_send_compact_reply,
         propose_delegation_plan=_propose_delegation_plan,
+    )
+
+
+def _delegation_runtime():
+    state = _state()
+    return build_delegation_runtime(
+        config=state.config,
+        provider_name=state.provider.name,
+        provider_state_factory=state.provider.new_provider_state,
     )
 
 
@@ -1449,6 +1459,7 @@ async def _handle_delegation_approve(chat_id: int, query) -> None:
         chat_id,
         conversation_ref,
         _DelegationCallbackSurface(query),
+        runtime=_delegation_runtime(),
         retry_markup=_delegation_keyboard(chat_id),
     )
 
@@ -1459,6 +1470,7 @@ async def _handle_delegation_cancel(chat_id: int, query) -> None:
         chat_id,
         conversation_ref,
         _DelegationCallbackSurface(query),
+        runtime=_delegation_runtime(),
     )
 
 
@@ -2653,7 +2665,12 @@ async def _execute_worker_action(
             numeric = telegram_numeric_id(target)
             if numeric is not None:
                 target_runtime = numeric
-        await handle_surface_delegation_approve(target_runtime, conversation_ref, surface)
+        await handle_surface_delegation_approve(
+            target_runtime,
+            conversation_ref,
+            surface,
+            runtime=_delegation_runtime(),
+        )
         return
 
     if action == "delegation_cancel":
@@ -2663,7 +2680,12 @@ async def _execute_worker_action(
             numeric = telegram_numeric_id(target)
             if numeric is not None:
                 target_runtime = numeric
-        await handle_surface_delegation_cancel(target_runtime, conversation_ref, surface)
+        await handle_surface_delegation_cancel(
+            target_runtime,
+            conversation_ref,
+            surface,
+            runtime=_delegation_runtime(),
+        )
         return
 
     if action in {"skills_add", "skills_remove", "skills_setup", "skills_clear"}:

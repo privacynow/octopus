@@ -3,12 +3,52 @@
 from __future__ import annotations
 
 import html
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from app.agents.bridge import registry_client
 from app.agents.state import load_agent_runtime_state
 from app.agents.types import RoutedTaskRequest
-from app.channels.telegram.state import get_channel_state
+from app.config import BotConfig
+from app.identity import parse_conversation_key
+from app.runtime.session_runtime import load_runtime_session, save_runtime_session
+
+
+@dataclass(frozen=True)
+class DelegationRuntime:
+    config: BotConfig
+    provider_name: str
+    provider_state_factory: Callable[[], dict[str, Any]]
+
+
+def build_delegation_runtime(
+    *,
+    config: BotConfig,
+    provider_name: str,
+    provider_state_factory: Callable[[], dict[str, Any]],
+) -> DelegationRuntime:
+    return DelegationRuntime(
+        config=config,
+        provider_name=provider_name,
+        provider_state_factory=provider_state_factory,
+    )
+
+
+def _load_session(runtime: DelegationRuntime, chat_id: int | str):
+    return load_runtime_session(
+        runtime.config.data_dir,
+        parse_conversation_key(chat_id),
+        provider_name=runtime.provider_name,
+        provider_state_factory=runtime.provider_state_factory,
+        approval_mode=runtime.config.approval_mode,
+        default_role=runtime.config.role,
+        default_skills=runtime.config.default_skills,
+    )
+
+
+def _save_session(runtime: DelegationRuntime, chat_id: int | str, session) -> None:
+    save_runtime_session(runtime.config.data_dir, parse_conversation_key(chat_id), session)
 
 
 async def handle_delegation_approve(
@@ -16,12 +56,11 @@ async def handle_delegation_approve(
     conversation_ref: str,
     surface: Any,
     *,
+    runtime: DelegationRuntime,
     retry_markup: Any = None,
 ) -> None:
     """Approve a pending delegation plan on any conversation surface."""
-    import app.channels.telegram.ingress as th
-
-    cfg = get_channel_state().config
+    cfg = runtime.config
     state = load_agent_runtime_state(cfg.data_dir)
     if state.connectivity_state != "connected":
         detail = f" Last error: {state.last_error}" if state.last_error else ""
@@ -32,7 +71,7 @@ async def handle_delegation_approve(
         )
         return
 
-    session = th._load(chat_id)
+    session = _load_session(runtime, chat_id)
     delegation = session.pending_delegation
     if (
         delegation is None
@@ -72,7 +111,7 @@ async def handle_delegation_approve(
     except Exception as exc:
         if submitted_ids:
             delegation.status = "submitted"
-        th._save(chat_id, session)
+        _save_session(runtime, chat_id, session)
         await surface.send_text(
             f"Delegation submission failed after {len(submitted_ids)} request(s)."
             f" {html.escape(str(exc))}",
@@ -80,7 +119,7 @@ async def handle_delegation_approve(
         )
         return
 
-    th._save(chat_id, session)
+    _save_session(runtime, chat_id, session)
     await surface.send_text(
         f"Delegation approved. {len(submitted_ids)} request(s) sent to specialist bots."
         " I'll continue when results arrive."
@@ -91,11 +130,11 @@ async def handle_delegation_cancel(
     chat_id: int | str,
     conversation_ref: str,
     surface: Any,
+    *,
+    runtime: DelegationRuntime,
 ) -> None:
     """Cancel a pending delegation plan on any conversation surface."""
-    import app.channels.telegram.ingress as th
-
-    session = th._load(chat_id)
+    session = _load_session(runtime, chat_id)
     delegation = session.pending_delegation
     if (
         delegation is None
@@ -104,5 +143,5 @@ async def handle_delegation_cancel(
         await surface.send_text("Nothing to cancel.")
         return
     session.pending_delegation = None
-    th._save(chat_id, session)
+    _save_session(runtime, chat_id, session)
     await surface.send_text("Delegation cancelled. No requests were sent.")

@@ -77,7 +77,7 @@ class DelegatedTask:
     title: str = ""
     target_agent_id: str = ""
     instructions: str = ""
-    status: str = "proposed"  # valid values: proposed, submitted, completed, failed
+    status: str = "proposed"  # valid values: proposed, queued, leased, running, submitted, completed, failed
     summary: str = ""
     full_text: str = ""
     follow_up_questions: list[str] = field(default_factory=list)
@@ -91,7 +91,7 @@ class PendingDelegation:
     title: str = ""
     resume_instruction: str = ""
     tasks: list[DelegatedTask] = field(default_factory=list)
-    status: str = ""  # valid values: "", submitted, completed, partial_failed
+    status: str = ""  # valid values: "", proposed, submitted, completed, partial_failed, cancelled
     created_at: float | str = field(default_factory=time.time)
 
 

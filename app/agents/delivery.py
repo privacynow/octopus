@@ -8,12 +8,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from app import work_queue
-from app.agents.orchestration import (
-    apply_routed_result,
-    build_resume_prompt,
-    delegation_ready_to_resume,
-    send_delegation_completion_message,
-)
 from app.agents.bridge import (
     admit_registry_delivery,
     build_registry_action_envelope,
@@ -27,6 +21,7 @@ from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_
 from app.runtime import composition
 from app.runtime.session_runtime import load_runtime_session, save_runtime_session
 from app.skill_activation_service import get_skill_activation_service
+from app.workflows.delegation.coordination import apply_routed_result, send_delegation_completion_message
 
 log = logging.getLogger(__name__)
 
@@ -198,19 +193,21 @@ async def handle_registry_delivery(
             return "retry_later"
         conversation_key = conversation_key_for_ref(parent_conversation_id)
         session = _load_session(config, runtime, conversation_key)
-        pending, matched = apply_routed_result(
+        applied = apply_routed_result(
             session.pending_delegation,
             routed_task_id=routed_task_id,
             result=routed_result,
         )
-        if not matched:
+        if not applied.matched:
             return "accepted"
-        session.pending_delegation = pending
+        session.pending_delegation = applied.pending
         _save_session(config, conversation_key, session)
-        if not delegation_ready_to_resume(pending):
+        if not applied.ready_to_resume or applied.pending is None:
             return "accepted"
-        continuation_text = build_resume_prompt(pending)
-        resume_delivery_id = f"delegation-resume:{parent_conversation_id}:{int(pending.created_at * 1000)}"
+        continuation_text = applied.resume_prompt
+        resume_delivery_id = (
+            f"delegation-resume:{parent_conversation_id}:{int(applied.pending.created_at * 1000)}"
+        )
         conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
             conversation_ref=parent_conversation_id,
             text=continuation_text,
@@ -235,7 +232,7 @@ async def handle_registry_delivery(
                 source="registry",
             )
             try:
-                await send_delegation_completion_message(pending, surface)
+                await send_delegation_completion_message(applied.pending, surface)
             except Exception:
                 log.warning(
                     "Failed to send delegation completion summary for %s",

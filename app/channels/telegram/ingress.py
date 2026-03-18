@@ -68,7 +68,6 @@ from app.agents.delegation import (
     handle_delegation_approve as handle_surface_delegation_approve,
     handle_delegation_cancel as handle_surface_delegation_cancel,
 )
-from app.agents.orchestration import build_delegation_plan
 from app.agents.state import load_agent_runtime_state
 from app.agents.types import AgentDiscoveryQuery, RoutedTaskResult, TimelineEvent
 from app.channels.telegram.cancellation import get_cancellation_registry
@@ -165,6 +164,7 @@ from app.summarize import export_chat_history, load_raw, save_raw
 from app import work_queue
 from app.workflows.results import TransportStateCorruption
 from app.worker import poll_interval_for_runtime
+from app.workflows.delegation.coordination import build_delegation_plan, finalize_resumed_delegation
 
 log = logging.getLogger(__name__)
 
@@ -2812,12 +2812,11 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
             await bot_msg.on_outcome(outcome)
             if getattr(event, "skip_approval", False) and source == "registry":
                 session_after = _load(runtime_chat)
-                delegation = session_after.pending_delegation
-                if (
-                    delegation is not None
-                    and delegation.conversation_ref == conversation_ref
-                    and delegation.status in {"completed", "partial_failed"}
-                ):
+                finalized = finalize_resumed_delegation(
+                    session_after.pending_delegation,
+                    conversation_ref=conversation_ref,
+                )
+                if finalized.status == "cleared_after_resume":
                     session_after.pending_delegation = None
                     _save(runtime_chat, session_after)
         if routed_task_id:

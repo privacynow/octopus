@@ -26,6 +26,7 @@ FORBIDDEN_APP_REFERENCES = (
     "app.recovery_use_cases",
     "app.provider_guidance_use_cases",
     "app.skill_lifecycle_service",
+    "app.agents.orchestration",
 )
 
 
@@ -134,3 +135,27 @@ def test_runtime_skill_setup_is_the_only_app_owner_of_awaiting_skill_setup_write
         if "session.awaiting_skill_setup =" in text:
             hits.append(path)
     assert hits == sorted(allowed), f"unexpected awaiting_skill_setup write owners: {hits}"
+
+
+def test_deleted_agents_orchestration_path_is_gone() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    deleted_path = repo_root / "app" / "agents" / "orchestration.py"
+    assert not deleted_path.exists(), f"legacy delegation owner still exists at {deleted_path}"
+
+
+def test_agents_do_not_edit_delegation_status_strings_directly() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    agent_paths = (
+        repo_root / "app" / "agents" / "delegation.py",
+        repo_root / "app" / "agents" / "delivery.py",
+    )
+    forbidden = (
+        "task.status =",
+        "delegation.status =",
+        "PendingDelegation(",
+        "DelegatedTask(",
+    )
+    for path in agent_paths:
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"

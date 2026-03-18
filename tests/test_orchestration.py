@@ -1,4 +1,4 @@
-from app.agents.orchestration import (
+from app.workflows.delegation.coordination import (
     all_tasks_terminal,
     any_task_failed,
     apply_routed_result,
@@ -80,22 +80,24 @@ def test_pending_delegation_status_transitions_completed():
     plan.tasks[0].status = "submitted"
     plan.tasks[1].status = "submitted"
 
-    plan, matched = apply_routed_result(
+    outcome = apply_routed_result(
         plan,
         routed_task_id="task-1",
         result=RoutedTaskResult(routed_task_id="task-1", status="completed", summary="done"),
     )
-    assert matched is True
+    assert outcome.matched is True
+    plan = outcome.pending
     assert plan is not None
-    assert plan.status == ""
+    assert plan.status == "submitted"
     assert all_tasks_terminal(plan) is False
 
-    plan, matched = apply_routed_result(
+    outcome = apply_routed_result(
         plan,
         routed_task_id="task-2",
         result=RoutedTaskResult(routed_task_id="task-2", status="completed", summary="done"),
     )
-    assert matched is True
+    assert outcome.matched is True
+    plan = outcome.pending
     assert plan is not None
     assert plan.status == "completed"
     assert all_tasks_terminal(plan) is True
@@ -125,16 +127,18 @@ def test_pending_delegation_status_transitions_partial_failed():
     for task in plan.tasks:
         task.status = "submitted"
 
-    plan, _ = apply_routed_result(
+    first = apply_routed_result(
         plan,
         routed_task_id="task-1",
         result=RoutedTaskResult(routed_task_id="task-1", status="completed", summary="done"),
     )
-    plan, _ = apply_routed_result(
-        plan,
+    assert first.pending is not None
+    second = apply_routed_result(
+        first.pending,
         routed_task_id="task-2",
         result=RoutedTaskResult(routed_task_id="task-2", status="failed", summary="boom", full_text="Tool crashed"),
     )
+    plan = second.pending
     assert plan is not None
     assert plan.status == "partial_failed"
     assert all_tasks_terminal(plan) is True

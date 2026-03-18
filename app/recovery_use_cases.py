@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app import user_messages as _msg
-from app.recovery_port import (
+from app.workflows.recovery.contracts import (
     RecoveryActionOutcome,
     RecoveryReplayPlan,
     RecoveryPort,

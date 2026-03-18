@@ -6,10 +6,11 @@ from pathlib import Path
 
 from app import user_messages as _msg
 from app import work_queue
-from app.conversation_control_port import (
+from app.workflows.conversation.contracts import (
     ConversationCancelOutcome,
     ConversationResetOutcome,
     ConversationControlPort,
+    ProviderStateFactory,
 )
 from app.session_state import SessionState, session_from_dict
 from app.runtime_skill_setup_use_cases import get_runtime_skill_setup_use_cases

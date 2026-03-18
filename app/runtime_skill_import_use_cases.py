@@ -6,7 +6,7 @@ from app.provider_guidance_service import get_provider_guidance_service
 from app.runtime_skill_catalog_use_cases import (
     get_runtime_skill_catalog_use_cases,
 )
-from app.runtime_skill_import_port import (
+from app.workflows.runtime_skills.contracts import (
     PromptWarningContext,
     RegistryRuntimeSkillSearchHit,
     RuntimeSkillSearchResults,

@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from app.credential_management_port import CredentialManagementPort
-from app.conversation_control_port import ConversationControlPort
-from app.conversation_settings_port import ConversationSettingsPort
-from app.pending_request_port import PendingRequestPort
-from app.provider_guidance_port import ProviderGuidancePort
-from app.recovery_port import RecoveryPort
-from app.runtime_skill_activation_port import RuntimeSkillActivationPort
-from app.runtime_skill_catalog_port import RuntimeSkillCatalogPort
-from app.runtime_skill_import_port import RuntimeSkillImportPort
-from app.runtime_skill_setup_port import RuntimeSkillSetupPort
+from app.workflows.conversation.contracts import ConversationControlPort, ConversationSettingsPort
+from app.workflows.credentials.contracts import CredentialManagementPort
+from app.workflows.pending.contracts import PendingRequestPort
+from app.workflows.provider_guidance.contracts import ProviderGuidancePort
+from app.workflows.recovery.contracts import RecoveryPort
+from app.workflows.runtime_skills.contracts import (
+    RuntimeSkillActivationPort,
+    RuntimeSkillCatalogPort,
+    RuntimeSkillImportPort,
+    RuntimeSkillSetupPort,
+)
 
 
 def get_runtime_skill_catalog_use_cases() -> RuntimeSkillCatalogPort:

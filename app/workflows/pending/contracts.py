@@ -1,4 +1,4 @@
-"""Contracts for pending approval and retry workflows."""
+"""Workflow-local contracts for pending approval and retry flows."""
 
 from __future__ import annotations
 

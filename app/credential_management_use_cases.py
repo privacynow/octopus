@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from app.credential_management_port import CredentialClearOutcome, CredentialManagementPort
 from app.credential_service import get_credential_service
 from app.session_state import SessionState
+from app.workflows.credentials.contracts import CredentialClearOutcome, CredentialManagementPort
 
 
 class CredentialManagementUseCases(CredentialManagementPort):

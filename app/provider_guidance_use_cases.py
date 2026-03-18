@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from app.provider_guidance_port import ProviderGuidancePreview, ProviderGuidancePort
 from app.provider_guidance_service import get_provider_guidance_service
+from app.workflows.provider_guidance.contracts import ProviderGuidancePreview, ProviderGuidancePort
 
 
 class ProviderGuidanceUseCases(ProviderGuidancePort):

@@ -1,4 +1,4 @@
-"""Contracts for credential-management workflows."""
+"""Workflow-local contracts for credential-management flows."""
 
 from __future__ import annotations
 

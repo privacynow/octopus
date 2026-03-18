@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from app import user_messages as _msg
 from app.config import BotConfig
-from app.conversation_settings_port import (
+from app.workflows.conversation.contracts import (
     ModelProfileState,
     SettingMutationOutcome,
     ConversationSettingsPort,
+    ProviderStateFactory,
 )
 from app.execution_context import resolve_execution_context
 from app.session_state import SessionState

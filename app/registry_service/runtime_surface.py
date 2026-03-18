@@ -29,7 +29,7 @@ from app import runtime_backend
 from app.config import BotConfig, load_config_provider_health
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
-from app.runtime_skill_import_port import PromptWarningContext
+from app.workflows.runtime_skills.contracts import PromptWarningContext
 from app.session_state import SessionState, session_from_dict, session_to_dict
 from app.storage import load_session, save_session
 

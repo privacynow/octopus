@@ -13,7 +13,7 @@ from app.workflows.recovery.contracts import (
 from app import work_queue
 from app.runtime.inbound_types import InboundMessage, deserialize_inbound
 from app.runtime.work_admission import trust_tier_for_source
-from app.workflows.results import TransportStateCorruption
+from app.workflows.recovery.results import TransportStateCorruption
 
 
 class RecoveryUseCases(RecoveryPort):

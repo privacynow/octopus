@@ -12,15 +12,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from app.runtime_health import QueueSnapshot, WorkerHeartbeat
-from app.transport_contract import (
+from app.workflows.recovery.transport_contract import (
     ApplyResult,
     CancelRequestResult,
     DiscardResult,
     ReclaimBlocked,
     _validate_work_item_row,
 )
-from app.workflows.results import TransportDisposition, TransportStateCorruption
-from app.workflows.transport_recovery import (
+from app.workflows.recovery.results import TransportDisposition, TransportStateCorruption
+from app.workflows.recovery.machine import (
     TRANSPORT_STATES,
     TransportWorkflowModel,
     run_transport_event,

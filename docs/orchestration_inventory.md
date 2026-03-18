@@ -47,9 +47,9 @@ handoff, but they do not own durable business transitions.
 
 - Concern: pending approval and pending retry state transitions
 - Current owners:
-  - `app/workflows/pending_request.py`
+  - `app/workflows/pending/machine.py`
   - `app/workflows/pending/requests.py`
-- Current style: `python-statemachine` machine plus procedural workflow consumer
+- Current style: functional decision machine plus procedural workflow consumer
 - Classification: `explicit machine required`
 - Authoritative destination:
   - `app/workflows/pending/machine.py`
@@ -57,18 +57,18 @@ handoff, but they do not own durable business transitions.
 - Why:
   - the state is durable and replay-sensitive
   - transition legality is already explicit
-  - the problem is package placement and machine-style inconsistency, not whether a machine is needed
-- Follow-on owner: Track F / F5
+  - the concern now follows the repo-standard machine style under a concern-owned package
+- Follow-on owner: Track F / F5 complete
 
 ### 3. Transport Recovery
 
 - Concern: queue claim, stale recovery, replay reclaim, discard, and supersede transitions
 - Current owners:
-  - `app/workflows/transport_recovery.py`
-  - `app/workflows/results.py`
-  - `app/transport_contract.py`
+  - `app/workflows/recovery/machine.py`
+  - `app/workflows/recovery/results.py`
+  - `app/workflows/recovery/transport_contract.py`
   - `app/work_queue*.py` consumers
-- Current style: `python-statemachine` machine plus result/contract helpers outside the owning concern package
+- Current style: functional decision machine with concern-owned result/contract helpers
 - Classification: `explicit machine required`
 - Authoritative destination:
   - `app/workflows/recovery/machine.py`
@@ -77,8 +77,8 @@ handoff, but they do not own durable business transitions.
 - Why:
   - queue/recovery is a durable transition system
   - replay and stale-claim semantics are first-class runtime contracts
-  - current ownership is split across root modules and a legacy-named contract file
-- Follow-on owner: Track F / F5
+  - the concern now owns its machine, result, and contract types together
+- Follow-on owner: Track F / F5 complete
 
 ### 4. Credential / Setup Progression
 

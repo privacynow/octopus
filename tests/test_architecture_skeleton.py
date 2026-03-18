@@ -39,10 +39,14 @@ EXPECTED_MODULES = (
     "app.workflows.conversation.settings",
     "app.workflows.pending",
     "app.workflows.pending.contracts",
+    "app.workflows.pending.machine",
     "app.workflows.pending.requests",
     "app.workflows.recovery",
     "app.workflows.recovery.contracts",
+    "app.workflows.recovery.machine",
     "app.workflows.recovery.replay",
+    "app.workflows.recovery.results",
+    "app.workflows.recovery.transport_contract",
     "app.workflows.provider_guidance",
     "app.workflows.provider_guidance.contracts",
     "app.workflows.provider_guidance.preview",
@@ -79,9 +83,13 @@ REMOVED_TOP_LEVEL_PORT_MODULES = (
     "app/telegram_conversation_surface.py",
     "app/telegram_pending_request_surface.py",
     "app/transport.py",
+    "app/transport_contract.py",
     "app/transports/admission.py",
     "app/transports/__init__.py",
     "app/transports/types.py",
+    "app/workflows/pending_request.py",
+    "app/workflows/transport_recovery.py",
+    "app/workflows/results.py",
 )
 
 

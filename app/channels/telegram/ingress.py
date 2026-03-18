@@ -162,7 +162,7 @@ from app.storage import (
 from app.ratelimit import RateLimiter
 from app.summarize import export_chat_history, load_raw, save_raw
 from app import work_queue
-from app.workflows.results import TransportStateCorruption
+from app.workflows.recovery.results import TransportStateCorruption
 from app.worker import poll_interval_for_runtime
 from app.workflows.delegation.coordination import build_delegation_plan, finalize_resumed_delegation
 

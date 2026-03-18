@@ -11,7 +11,7 @@ from app.workflows.pending.contracts import (
 )
 from app.request_flow import classify_pending_validation, extra_dirs_from_denials, validate_pending
 from app.session_state import PendingApproval, PendingRetry, SessionState
-from app.workflows.pending_request import (
+from app.workflows.pending.machine import (
     PendingRequestDisposition,
     PendingRequestWorkflowModel,
     run_pending_request_event,

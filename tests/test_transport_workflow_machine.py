@@ -1,26 +1,16 @@
-"""Contract tests for transport/recovery workflow (library-backed).
-
-Covers allowed/forbidden transitions, guards (per-chat single-claimed,
-pre-claimed same worker, recover_stale_claim requires is_stale), and outcome
-classification. Uses the real TransportRecoveryMachine and run_transport_event.
-already_handled is repository-level; the machine never returns it. Integration
-with work_queue and handlers stays in test_work_queue.py and
-test_workitem_integration.py.
-"""
+"""Contract tests for the transport/recovery functional machine."""
 
 import pytest
 
-from app.workflows.results import TransportDisposition
-from app.workflows.transport_recovery import (
-    TransportRecoveryMachine,
+from app.workflows.recovery.results import TransportDisposition, TransportStateCorruption
+from app.workflows.recovery.machine import (
+    ClaimInlineAction,
+    ReclaimForReplayAction,
+    TransportSnapshot,
     TransportWorkflowModel,
+    decide_transport_action,
     run_transport_event,
 )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def model(
@@ -39,11 +29,6 @@ def model(
     )
 
 
-# ---------------------------------------------------------------------------
-# Allowed transitions (via run_transport_event)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "event,from_state,to_state,disposition,kwargs",
     [
@@ -60,203 +45,199 @@ def model(
         ("supersede_recovery", "pending_recovery", "done", TransportDisposition.superseded, {}),
     ],
 )
-def test_allowed_transitions(event, from_state, to_state, disposition, kwargs):
-    is_stale = event == "recover_stale_claim"
-    m = model(from_state, is_stale=is_stale, **{k: v for k, v in kwargs.items() if k == "requesting_worker_id" and v})
-    result = run_transport_event(m, event, **kwargs)
+def test_allowed_transitions(
+    event: str,
+    from_state: str,
+    to_state: str,
+    disposition: TransportDisposition,
+    kwargs: dict[str, str],
+) -> None:
+    workflow_model = model(
+        from_state,
+        is_stale=event == "recover_stale_claim",
+        **{k: v for k, v in kwargs.items() if k == "requesting_worker_id" and v},
+    )
+    result = run_transport_event(workflow_model, event, **kwargs)
     assert result.allowed is True, result.reason
     assert result.new_state == to_state
     assert result.disposition == disposition
 
 
-def test_claim_inline_from_claimed_same_worker_no_op():
-    """Pre-claimed inline item: same worker re-claiming is allowed (no state change)."""
-    m = model("claimed", worker_id="worker-1", requesting_worker_id="worker-1")
-    result = run_transport_event(m, "claim_inline", requesting_worker_id="worker-1")
+def test_claim_inline_from_claimed_same_worker_no_op() -> None:
+    workflow_model = model("claimed", worker_id="worker-1", requesting_worker_id="worker-1")
+    result = run_transport_event(workflow_model, "claim_inline", requesting_worker_id="worker-1")
     assert result.allowed is True
     assert result.new_state == "claimed"
     assert result.disposition == TransportDisposition.already_claimed_by_worker
 
 
-def test_claim_inline_from_claimed_other_worker_blocked():
-    """Item claimed by one worker; different worker cannot claim_inline (ownership)."""
-    m = model(
+def test_claim_inline_from_claimed_other_worker_blocked() -> None:
+    workflow_model = model(
         "claimed",
         worker_id="owner",
         requesting_worker_id="other",
         has_other_claimed=False,
     )
-    result = run_transport_event(m, "claim_inline", requesting_worker_id="other")
+    result = run_transport_event(workflow_model, "claim_inline", requesting_worker_id="other")
     assert result.allowed is False
     assert result.disposition == TransportDisposition.other_claimed_for_chat
     assert "other_claimed_for_chat" in result.reason or result.reason
 
 
-def test_claim_inline_from_claimed_ownerless_blocked():
-    """Item in claimed with no worker_id (ownerless) blocks claim_inline by any worker."""
-    m = TransportWorkflowModel(
+def test_claim_inline_from_claimed_ownerless_blocked() -> None:
+    workflow_model = TransportWorkflowModel(
         state="claimed",
         worker_id=None,
         requesting_worker_id="other",
         has_other_claimed_for_chat=False,
     )
-    result = run_transport_event(m, "claim_inline", requesting_worker_id="other")
+    result = run_transport_event(workflow_model, "claim_inline", requesting_worker_id="other")
     assert result.allowed is False
     assert result.disposition == TransportDisposition.other_claimed_for_chat
 
 
-def test_claim_inline_from_queued_requires_requester():
-    """claim_inline from queued without requesting_worker_id is rejected."""
-    m = model("queued")
-    result = run_transport_event(m, "claim_inline")  # no requesting_worker_id
+def test_claim_inline_from_queued_requires_requester() -> None:
+    workflow_model = model("queued")
+    result = run_transport_event(workflow_model, "claim_inline")
     assert result.allowed is False
     assert result.disposition == TransportDisposition.other_claimed_for_chat
 
 
-# ---------------------------------------------------------------------------
-# Forbidden transitions (invalid from state)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("from_state,event", [
-    ("queued", "move_to_pending_recovery"),
-    ("queued", "reclaim_for_replay"),
-    ("queued", "recover_stale_claim"),
-    ("done", "claim_inline"),
-    ("done", "complete"),
-    ("failed", "claim_worker"),
-    ("claimed", "reclaim_for_replay"),
-    ("claimed", "discard_recovery"),
-    ("pending_recovery", "claim_inline"),
-    ("pending_recovery", "complete"),
-])
-def test_forbidden_transitions(from_state, event):
-    m = model(from_state)
+@pytest.mark.parametrize(
+    "from_state,event",
+    [
+        ("queued", "move_to_pending_recovery"),
+        ("queued", "reclaim_for_replay"),
+        ("queued", "recover_stale_claim"),
+        ("done", "claim_inline"),
+        ("done", "complete"),
+        ("failed", "claim_worker"),
+        ("claimed", "reclaim_for_replay"),
+        ("claimed", "discard_recovery"),
+        ("pending_recovery", "claim_inline"),
+        ("pending_recovery", "complete"),
+    ],
+)
+def test_forbidden_transitions(from_state: str, event: str) -> None:
+    workflow_model = model(from_state)
     kwargs = {"requesting_worker_id": "w1"} if event == "claim_inline" else {}
-    result = run_transport_event(m, event, **kwargs)
+    result = run_transport_event(workflow_model, event, **kwargs)
     assert result.allowed is False
     assert result.disposition == TransportDisposition.invalid_transition
-    assert result.reason  # machine or adapter provides a reason
+    assert result.reason
 
 
-def test_unknown_state_raises_corruption():
-    """Unknown model state raises TransportStateCorruption so callers surface corruption."""
-    from app.workflows.results import TransportStateCorruption
-
-    m = TransportWorkflowModel(state="bogus")
+def test_unknown_state_raises_corruption() -> None:
+    workflow_model = TransportWorkflowModel(state="bogus")
     with pytest.raises(TransportStateCorruption) as exc_info:
-        run_transport_event(m, "complete")
+        run_transport_event(workflow_model, "complete")
     assert "unknown state" in str(exc_info.value) and "bogus" in str(exc_info.value)
 
 
-# ---------------------------------------------------------------------------
-# Guards: per-chat single-claimed
-# ---------------------------------------------------------------------------
-
-
-def test_claim_inline_blocked_when_other_claimed_for_chat():
-    m = model("queued", has_other_claimed=True)
-    result = run_transport_event(m, "claim_inline", requesting_worker_id="w1")
+def test_claim_inline_blocked_when_other_claimed_for_chat() -> None:
+    workflow_model = model("queued", has_other_claimed=True)
+    result = run_transport_event(workflow_model, "claim_inline", requesting_worker_id="w1")
     assert result.allowed is False
     assert result.disposition == TransportDisposition.other_claimed_for_chat
 
 
-def test_claim_worker_blocked_when_other_claimed_for_chat():
-    m = model("queued", has_other_claimed=True)
-    result = run_transport_event(m, "claim_worker")
+def test_claim_worker_blocked_when_other_claimed_for_chat() -> None:
+    workflow_model = model("queued", has_other_claimed=True)
+    result = run_transport_event(workflow_model, "claim_worker")
     assert result.allowed is False
     assert result.disposition == TransportDisposition.other_claimed_for_chat
 
 
-def test_claim_worker_succeeds_when_no_other_claimed():
-    """Multiple queued items are legal; claiming depends only on claimed-item presence."""
-    m = model("queued", has_other_claimed=False)
-    result = run_transport_event(m, "claim_worker")
+def test_claim_worker_succeeds_when_no_other_claimed() -> None:
+    workflow_model = model("queued", has_other_claimed=False)
+    result = run_transport_event(workflow_model, "claim_worker")
     assert result.allowed is True
     assert result.new_state == "claimed"
     assert result.disposition == TransportDisposition.ok
 
 
-def test_reclaim_for_replay_blocked_when_other_claimed_for_chat():
-    """Replay button clicked but another item for same chat is already claimed."""
-    m = model("pending_recovery", has_other_claimed=True)
-    result = run_transport_event(m, "reclaim_for_replay")
+def test_reclaim_for_replay_blocked_when_other_claimed_for_chat() -> None:
+    workflow_model = model("pending_recovery", has_other_claimed=True)
+    result = run_transport_event(workflow_model, "reclaim_for_replay")
     assert result.allowed is False
     assert result.disposition == TransportDisposition.blocked_replay
 
 
-# ---------------------------------------------------------------------------
-# Real machine: direct instantiation and event methods
-# ---------------------------------------------------------------------------
+def test_decision_machine_claim_inline() -> None:
+    decision = decide_transport_action(
+        TransportSnapshot(state="queued", requesting_worker_id="w1"),
+        ClaimInlineAction(requesting_worker_id="w1"),
+    )
+    assert decision.ok is True
+    assert decision.status == "claimed"
+    assert decision.effects.new_state == "claimed"
+    assert decision.effects.disposition == TransportDisposition.ok
 
 
-def test_machine_direct_claim_inline():
-    """Real StateMachine updates model.state and model.disposition when requester is set."""
-    m = model("queued", requesting_worker_id="w1")
-    sm = TransportRecoveryMachine(model=m, rtc=True, allow_event_without_transition=False)
-    sm.claim_inline()
-    assert m.state == "claimed"
-    assert m.disposition == TransportDisposition.ok
+def test_decision_machine_same_worker_reclaim() -> None:
+    decision = decide_transport_action(
+        TransportSnapshot(state="claimed", worker_id="w1", requesting_worker_id="w1"),
+        ClaimInlineAction(requesting_worker_id="w1"),
+    )
+    assert decision.ok is True
+    assert decision.status == "already_claimed_by_worker"
+    assert decision.effects.disposition == TransportDisposition.already_claimed_by_worker
 
 
-def test_machine_same_worker_reclaim():
-    m = model("claimed", worker_id="w1", requesting_worker_id="w1")
-    sm = TransportRecoveryMachine(model=m, rtc=True, allow_event_without_transition=False)
-    sm.claim_inline()
-    assert m.state == "claimed"
-    assert m.disposition == TransportDisposition.already_claimed_by_worker
+def test_decision_machine_invalid_transition() -> None:
+    decision = decide_transport_action(
+        TransportSnapshot(state="done"),
+        ClaimInlineAction(requesting_worker_id="w1"),
+    )
+    assert decision.ok is False
+    assert decision.status == "invalid_transition"
+    assert "claim_inline" in decision.reason
 
 
-def test_machine_transition_not_allowed_raises():
-    """TransitionNotAllowed when event has no transition from current state."""
-    from statemachine.exceptions import TransitionNotAllowed
-
-    m = model("done")
-    sm = TransportRecoveryMachine(model=m, rtc=True, allow_event_without_transition=False)
-    with pytest.raises(TransitionNotAllowed):
-        sm.complete()
-
-
-# ---------------------------------------------------------------------------
-# Outcome classification (dispositions)
-# ---------------------------------------------------------------------------
+def test_decision_and_adapter_stay_equivalent_for_reclaim_for_replay() -> None:
+    snapshot = TransportSnapshot(state="pending_recovery", has_other_claimed_for_chat=False)
+    decision = decide_transport_action(snapshot, ReclaimForReplayAction())
+    workflow_model = TransportWorkflowModel(state="pending_recovery", has_other_claimed_for_chat=False)
+    result = run_transport_event(workflow_model, "reclaim_for_replay")
+    assert decision.ok is True
+    assert result.allowed is True
+    assert result.new_state == decision.effects.new_state
+    assert result.disposition == decision.effects.disposition
 
 
-def test_discard_recovery_disposition():
-    m = model("pending_recovery")
-    result = run_transport_event(m, "discard_recovery")
+def test_discard_recovery_disposition() -> None:
+    workflow_model = model("pending_recovery")
+    result = run_transport_event(workflow_model, "discard_recovery")
     assert result.disposition == TransportDisposition.discarded
     assert result.new_state == "done"
 
 
-def test_supersede_recovery_disposition():
-    m = model("pending_recovery")
-    result = run_transport_event(m, "supersede_recovery")
+def test_supersede_recovery_disposition() -> None:
+    workflow_model = model("pending_recovery")
+    result = run_transport_event(workflow_model, "supersede_recovery")
     assert result.disposition == TransportDisposition.superseded
     assert result.new_state == "done"
 
 
-def test_stale_recovered_disposition():
-    """recover_stale_claim allowed only when repository passed is_stale=True."""
-    m = model("claimed", worker_id="dead-worker", is_stale=True)
-    result = run_transport_event(m, "recover_stale_claim")
+def test_stale_recovered_disposition() -> None:
+    workflow_model = model("claimed", worker_id="dead-worker", is_stale=True)
+    result = run_transport_event(workflow_model, "recover_stale_claim")
     assert result.disposition == TransportDisposition.stale_recovered
     assert result.new_state == "queued"
 
 
-def test_recover_stale_claim_requires_stale_guard():
-    """recover_stale_claim from claimed with is_stale=False is guard_failed (fresh work)."""
-    m = model("claimed", worker_id="current-worker", is_stale=False)
-    result = run_transport_event(m, "recover_stale_claim")
+def test_recover_stale_claim_requires_stale_guard() -> None:
+    workflow_model = model("claimed", worker_id="current-worker", is_stale=False)
+    result = run_transport_event(workflow_model, "recover_stale_claim")
     assert result.allowed is False
     assert result.disposition == TransportDisposition.guard_failed
     assert "not_stale" in result.reason or result.reason
 
 
-def test_done_and_failed_are_terminal_dispositions():
-    m_claimed = model("claimed")
-    r_done = run_transport_event(m_claimed, "complete")
-    assert r_done.disposition == TransportDisposition.done
-    m_claimed2 = model("claimed")
-    r_failed = run_transport_event(m_claimed2, "fail")
-    assert r_failed.disposition == TransportDisposition.failed
+def test_done_and_failed_are_terminal_dispositions() -> None:
+    claimed_model = model("claimed")
+    done_result = run_transport_event(claimed_model, "complete")
+    assert done_result.disposition == TransportDisposition.done
+    claimed_model_2 = model("claimed")
+    failed_result = run_transport_event(claimed_model_2, "fail")
+    assert failed_result.disposition == TransportDisposition.failed

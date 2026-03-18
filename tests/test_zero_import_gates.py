@@ -27,6 +27,18 @@ FORBIDDEN_APP_REFERENCES = (
     "app.provider_guidance_use_cases",
     "app.skill_lifecycle_service",
     "app.agents.orchestration",
+    "app.workflows.pending_request",
+    "from app.workflows.pending_request",
+    "import app.workflows.pending_request",
+    "app.workflows.transport_recovery",
+    "from app.workflows.transport_recovery",
+    "import app.workflows.transport_recovery",
+    "app.workflows.results",
+    "from app.workflows.results",
+    "import app.workflows.results",
+    "app.transport_contract",
+    "from app.transport_contract",
+    "import app.transport_contract",
 )
 
 
@@ -141,6 +153,18 @@ def test_deleted_agents_orchestration_path_is_gone() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     deleted_path = repo_root / "app" / "agents" / "orchestration.py"
     assert not deleted_path.exists(), f"legacy delegation owner still exists at {deleted_path}"
+
+
+def test_deleted_pending_and_recovery_root_paths_are_gone() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    deleted_paths = (
+        repo_root / "app" / "workflows" / "pending_request.py",
+        repo_root / "app" / "workflows" / "transport_recovery.py",
+        repo_root / "app" / "workflows" / "results.py",
+        repo_root / "app" / "transport_contract.py",
+    )
+    for deleted_path in deleted_paths:
+        assert not deleted_path.exists(), f"legacy machine path still exists at {deleted_path}"
 
 
 def test_agents_do_not_edit_delegation_status_strings_directly() -> None:

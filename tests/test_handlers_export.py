@@ -1,6 +1,6 @@
 """Tests for /export handler."""
 
-import app.channels.telegram.routing as th
+import app.channels.telegram.ingress as th
 from app.summarize import save_raw
 from tests.support.handler_support import (
     FakeChat,

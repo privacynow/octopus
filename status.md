@@ -22,9 +22,12 @@ acceptance gates in
 1. `G1` has now closed the singleton-runtime gap:
    - Telegram runtime and cancellation ownership are explicit runtime objects,
      not installed module singletons.
-2. `app/channels/telegram/routing.py` remains a large mixed owner and still
-   needs to be split back into the plan’s bootstrap/ingress ownership model.
-3. Telegram-heavy tests still depend too heavily on routing internals rather
+2. `G2` has now closed the bootstrap/routing ownership gap:
+   - `app/channels/telegram/bootstrap.py` now owns PTB application
+     construction and handler registration.
+   - `app/channels/telegram/ingress.py` is the live Telegram dispatch owner.
+   - `app/channels/telegram/routing.py` is deleted.
+3. Telegram-heavy tests still depend too heavily on ingress internals rather
    than the explicit production boundary.
 4. `status.md` and `docs/orchestration_inventory.md` still need their final
    post-remediation truth pass so they match the actual code ownership and
@@ -638,8 +641,7 @@ status.
 
 Active slice:
 
-- `G2` restore the bootstrap/ingress ownership split and delete the
-  transitional Telegram mega-owner
+- `G3` finish the Telegram test-boundary migration
 
 Just completed:
 
@@ -661,25 +663,28 @@ Just completed:
   - focused G1 suites passed
   - full suite passed: `1608 passed, 23 skipped`
 
-Before-state for `G2`:
+Before-state for `G3`:
 
-- `app/channels/telegram/bootstrap.py`
-  - now constructs the Telegram runtime and PTB app
-  - still delegates all Telegram handler ownership to
-    `app/channels/telegram/routing.py`
-- `app/channels/telegram/routing.py`
-  - still owns:
-    - PTB handler registration
-    - message/callback/command entrypoints
-    - shared command/callback dispatch
-    - worker dispatch
-    - Telegram-specific orchestration that should be split between bootstrap,
-      ingress, and channel concern modules
-- current app caller inventory for the transitional owner:
+- `complete in current worktree` `Phase 7 / G2: restore Telegram bootstrap and ingress ownership`
+  - `app/channels/telegram/bootstrap.py` now owns PTB application
+    construction and handler registration directly
+  - `app/channels/telegram/ingress.py` is now the live Telegram ingress owner
+    for normalized event translation, shared dispatch, and worker dispatch
+  - `app/channels/telegram/routing.py` is deleted with no compatibility alias
+  - app and test imports were rewritten off the deleted routing module
+  - focused G2 suites passed
+  - full suite passed: `1608 passed, 23 skipped`
+
+Current test-boundary inventory for `G3`:
+
+- production boundary is now:
   - `app/channels/telegram/bootstrap.py`
-- current app/test entrypoint inventory for the transitional owner:
+  - `app/channels/telegram/ingress.py`
+- test support and simulator still import the ingress owner directly:
   - `tests/support/handler_support.py`
   - `tests/support/conversation_simulator.py`
+- Telegram-heavy suites still import ingress directly, including:
+  - `tests/support/handler_support.py`
   - `tests/test_handlers*.py`
   - `tests/test_request_flow.py`
   - `tests/test_workitem_integration.py`
@@ -690,20 +695,24 @@ Before-state for `G2`:
   - `tests/test_telegram_presenters.py`
   - `tests/test_sqlite_integration.py`
   - `tests/test_store_e2e.py`
-  - additional focused Telegram boundary suites found by `rg`
+- many of those suites still call ingress internals such as:
+  - `_load(...)`
+  - `_save(...)`
+  - `_chat_lock(...)`
+  - `execute_request(...)`
+  - shared dispatch helpers
 
-Required after-state for `G2`:
+Required after-state for `G3`:
 
-- `app/channels/telegram/bootstrap.py` becomes the only owner of PTB
-  application construction and handler registration
-- `app/channels/telegram/ingress.py` is restored as the owner of normalized
-  Telegram event translation and dispatch
-- `app/channels/telegram/routing.py` is deleted, not aliased
-- channel concern modules keep owning their specific workflows; bootstrap and
-  ingress do not absorb them back into a new mega-owner
-- tests and helpers that currently import routing directly move to the new
-  bootstrap/ingress boundary or await explicit G3 migration inventory if they
-  are intentionally test-heavy boundary suites
+- `tests/support/handler_support.py` constructs runtime the same way production
+  bootstrap does and no longer imports the transitional Telegram owner just to
+  reach internals
+- Telegram-heavy tests prove contracts through the production boundary or the
+  explicit runtime object, not by coupling themselves to ingress internals that
+  are not part of the intended public seam
+- no test imports the deleted `routing.py` path
+- structural gates cover both app and test trees for the final Telegram
+  boundary shape
 
 Committed Track B slices after `B1`:
 
@@ -768,9 +777,6 @@ Worktree now in progress for final acceptance closure:
 ## Remaining Work
 
 - Phase 7. Closure Correction Stage
-  - `G2` restore the bootstrap/ingress ownership split, delete
-    `app/channels/telegram/routing.py`, and make `bootstrap.py` the real PTB
-    owner
   - `G3` finish the Telegram test-boundary migration so Telegram-heavy tests use
     the explicit runtime/boundary instead of routing internals
   - `G4` repair status/inventory docs and strengthen structural gates to catch

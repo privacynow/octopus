@@ -4,7 +4,7 @@ from pathlib import Path
 
 import app.channels.telegram.bootstrap as telegram_bootstrap
 import app.channels.telegram.cancellation as telegram_cancellation
-import app.channels.telegram.routing as th
+import app.channels.telegram.ingress as th
 import app.channels.telegram.state as telegram_state
 from app.channels.telegram.cancellation import TelegramCancellationRegistry
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime

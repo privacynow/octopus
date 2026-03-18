@@ -71,16 +71,10 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
             approvals=approvals,
         )
 
-    def _latest_action_for_revision(self, skill_name: str, revision_id: str) -> str:
-        for item in self._store().list_skill_approvals(skill_name):
-            if item.revision_id == revision_id:
-                return item.action
-        return ""
-
     def _lifecycle_snapshot(self, track: RuntimeSkillTrackRecord):
         return build_lifecycle_snapshot(
             track,
-            self._latest_action_for_revision(track.slug, track.active_revision_id),
+            self._store().get_latest_skill_approval_action(track.slug, track.active_revision_id),
         )
 
     def _transition_message(self, skill_name: str, action: str, decision: LifecycleDecision, track: RuntimeSkillTrackRecord) -> str:

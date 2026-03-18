@@ -69,29 +69,12 @@ class ProviderGuidanceManagementUseCases(ProviderGuidanceManagementPort):
             approvals=approvals,
         )
 
-    def _latest_action(
-        self,
-        provider_name: str,
-        *,
-        revision_id: str,
-        scope_kind: str,
-        scope_key: str,
-    ) -> str:
-        for item in self._store().list_provider_guidance_approvals(
-            provider_name,
-            scope_kind=scope_kind,
-            scope_key=scope_key,
-        ):
-            if item.revision_id == revision_id:
-                return item.action
-        return ""
-
     def _lifecycle_snapshot(self, track: ProviderGuidanceTrackRecord):
         return build_lifecycle_snapshot(
             track,
-            self._latest_action(
+            self._store().get_latest_provider_guidance_approval_action(
                 track.provider,
-                revision_id=track.active_revision_id,
+                track.active_revision_id,
                 scope_kind=track.scope_kind,
                 scope_key=track.scope_key,
             ),

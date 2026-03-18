@@ -37,7 +37,7 @@ class RuntimeSkillApprovalUseCases(RuntimeSkillApprovalPort):
     def _lifecycle_snapshot(self, track):
         return build_lifecycle_snapshot(
             track,
-            self._authoring()._latest_action_for_revision(track.slug, track.active_revision_id),
+            self._store().get_latest_skill_approval_action(track.slug, track.active_revision_id),
         )
 
     def _transition_message(self, skill_name: str, action: str, decision: LifecycleDecision) -> str:

@@ -55,6 +55,22 @@ def test_setup_globals_does_not_restore_legacy_ingress_globals():
     assert not hasattr(th, "_LIVE_CANCEL")
 
 
+def test_setup_globals_installs_explicit_channel_state():
+    cfg = make_bot_config(data_dir=Path("/tmp/iso-test-explicit-channel-state"))
+    from tests.support.handler_support import FakeProvider
+
+    prov = FakeProvider("claude")
+    bot = object()
+    setup_globals(cfg, prov, boot_id="explicit-boot", bot_instance=bot)
+
+    state = peek_channel_state()
+    assert state is not None
+    assert state.config is cfg
+    assert state.provider is prov
+    assert state.boot_id == "explicit-boot"
+    assert state.bot_instance is bot
+
+
 def test_reset_closes_session_and_transport_db_caches():
     """Open session and transport DBs, then reset; assert new backend has empty caches."""
     from app import runtime_backend

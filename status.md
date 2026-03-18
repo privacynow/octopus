@@ -122,7 +122,7 @@ Completed slices:
    - Added focused positive helper coverage and a negative structural guard
      proving the duplicate runtime-skill `_snapshot()` helpers are gone.
 
-15. `this commit` `Track D / D2: add explicit latest-approval store queries`
+15. `c19abfd` `Track D / D2: add explicit latest-approval store queries`
    - Added explicit content-store contract methods for latest approval lookup:
      - `get_latest_skill_approval_action(...)`
      - `get_latest_provider_guidance_approval_action(...)`
@@ -133,7 +133,7 @@ Completed slices:
      - newest matching action is returned
      - missing revisions return an empty string
 
-16. `this commit` `Track D / D3: remove private cross-workflow latest-action access`
+16. `ce3b6ef` `Track D / D3: remove private cross-workflow latest-action access`
    - Runtime-skill authoring now uses the explicit store query directly for
      lifecycle snapshot construction.
    - Runtime-skill approval no longer reaches into authoring’s private helper;
@@ -143,12 +143,21 @@ Completed slices:
    - Added a structural guard proving the removed private/helper paths no longer
      exist in the workflow modules.
 
+17. `this commit` `Track F / F1: commit orchestration inventory`
+   - Added `docs/orchestration_inventory.md` as the committed inventory of the
+     durable and semi-durable orchestration concerns named by the plan.
+   - Classified lifecycle, pending approval/retry, transport recovery,
+     credential/setup progression, delegation progression, and request
+     execution/preflight using the fixed F1 vocabulary.
+   - Added guard tests proving the inventory names the required live modules and
+     does not leave placeholder or unclassified entries behind.
+
 ## Latest Verified Test Baseline
 
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1521 passed, 23 skipped`
+- result: `1523 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -213,7 +222,7 @@ Remaining:
 
 ### Track D. Lifecycle and Workflow Hygiene Cleanup
 
-Status: in progress
+Status: complete
 
 Required scope:
 
@@ -244,11 +253,23 @@ Required scope:
 
 ### Track F. Orchestration and State-Machine Consolidation
 
-Status: not started
+Status: in progress
 
 Required scope:
 
 - `F1` committed orchestration inventory
+- `F2` repo-standard functional decision-machine conventions
+- `F3` runtime skill setup machine
+- `F4` delegation machine/workflow
+- `F5` pending/recovery migration off `python-statemachine`
+- `F6` dispatch ownership cleanup
+
+Completed:
+
+- `F1` committed orchestration inventory in `docs/orchestration_inventory.md`
+
+Remaining:
+
 - `F2` repo-standard functional decision-machine conventions
 - `F3` runtime skill setup machine
 - `F4` delegation machine/workflow
@@ -285,38 +306,32 @@ status.
 
 Next required slice:
 
-- `Track F / F1: write committed orchestration inventory`
+- `Track F / F2: commit the repo-standard functional decision-machine conventions`
 
 Completed:
 
 - `C1` move registry UI shell rendering into `ui.py`
 - `C2` move registry auth/session helpers out of `http.py`
+- `D1` centralize lifecycle snapshot construction
+- `D2` add explicit latest-approval store queries
+- `D3` remove private cross-workflow latest-action access
+- `F1` commit the orchestration inventory
 
 Remaining:
 
-- `Track F / F1-F2`
+- `Track F / F2`
 - all Phase 4-6 remediation slices after Phase 3 completes
 
 Before-state:
 
-- the orchestration inventory and repo-standard machine conventions are not yet
-  committed, so the Phase 4 machine migration work still lacks its explicit
-  recorded owner model and standard.
+- the orchestration inventory now exists, but the repo-standard machine
+  conventions are not yet committed as a shared standard for the Phase 4
+  machine migrations.
 
 After-state required next:
 
-- `docs/orchestration_inventory.md` exists and classifies every durable
-  orchestration concern named in the plan
 - the repo-standard functional decision-machine conventions are documented and
   committed before Phase 4 begins
-
-After-state required:
-
-- `http.py` becomes a thinner HTTP boundary over registry ingress, auth, and UI
-  rendering helpers
-- displaced non-boundary auth/session logic moves into
-  `app/channels/registry/auth.py`
-- focused tests and guard tests keep `http.py` structural ownership narrow
 
 ## Working Rules
 

@@ -8,6 +8,7 @@ import app.channels.telegram.ingress as th
 import app.work_queue as work_queue_mod
 from tests.support.config_support import make_config as make_bot_config
 from tests.support.handler_support import (
+    FakeContext,
     FakeProvider,
     current_runtime,
     reset_handler_test_runtime,
@@ -47,6 +48,9 @@ def test_setup_globals_builds_explicit_runtime_shape():
     assert runtime.bot_instance is bot
     assert runtime.cancellation_registry.get(12345) is None
     assert runtime.pending_work_items == {}
+    fake_context = FakeContext()
+    assert fake_context.application.bot_data["telegram_runtime"] is runtime
+    assert fake_context.application.bot_data["telegram_boot_id"] == "explicit-boot"
 
 
 def test_setup_globals_does_not_restore_deleted_routing_globals():

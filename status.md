@@ -27,8 +27,10 @@ acceptance gates in
      construction and handler registration.
    - `app/channels/telegram/ingress.py` is the live Telegram dispatch owner.
    - `app/channels/telegram/routing.py` is deleted.
-3. Telegram-heavy tests still depend too heavily on ingress internals rather
-   than the explicit production boundary.
+3. `G3` has now closed the Telegram harness/test-boundary gap:
+   - test setup runs through the real Telegram application builder
+   - test support no longer depends on deleted routing or singleton seams
+   - structural gates now lock the final Telegram test boundary
 4. `status.md` and `docs/orchestration_inventory.md` still need their final
    post-remediation truth pass so they match the actual code ownership and
    test seam state.
@@ -641,7 +643,7 @@ status.
 
 Active slice:
 
-- `G3` finish the Telegram test-boundary migration
+- `G4` repair documentation and final structural gates
 
 Just completed:
 
@@ -663,7 +665,7 @@ Just completed:
   - focused G1 suites passed
   - full suite passed: `1608 passed, 23 skipped`
 
-Before-state for `G3`:
+Before-state for `G4`:
 
 - `4166599` `Phase 7 / G2: restore Telegram bootstrap and ingress ownership`
   - `app/channels/telegram/bootstrap.py` now owns PTB application
@@ -675,44 +677,39 @@ Before-state for `G3`:
   - focused G2 suites passed
   - full suite passed: `1608 passed, 23 skipped`
 
-Current test-boundary inventory for `G3`:
+- `complete in current worktree` `Phase 7 / G3: finish Telegram test-boundary migration`
+  - `tests/support/handler_support.py` now runs test setup through the real
+    Telegram application builder instead of constructing an out-of-band runtime
+    shape
+  - Telegram harness tests still use explicit runtime state, but the runtime is
+    now wired through the same bootstrap application path production uses
+  - zero-import gates now explicitly lock out routing references and legacy
+    singleton accessors from the Telegram harness
+  - focused G3 suites passed
+  - full suite passed: `1608 passed, 23 skipped`
+
+Current documentation/gate inventory for `G4`:
 
 - production boundary is now:
   - `app/channels/telegram/bootstrap.py`
   - `app/channels/telegram/ingress.py`
-- test support and simulator still import the ingress owner directly:
-  - `tests/support/handler_support.py`
-  - `tests/support/conversation_simulator.py`
-- Telegram-heavy suites still import ingress directly, including:
-  - `tests/support/handler_support.py`
-  - `tests/test_handlers*.py`
-  - `tests/test_request_flow.py`
-  - `tests/test_workitem_integration.py`
-  - `tests/test_invariants.py`
-  - `tests/test_transport.py`
-  - `tests/test_shared_runtime.py`
-  - `tests/test_execution_context.py`
-  - `tests/test_telegram_presenters.py`
-  - `tests/test_sqlite_integration.py`
-  - `tests/test_store_e2e.py`
-- many of those suites still call ingress internals such as:
-  - `_load(...)`
-  - `_save(...)`
-  - `_chat_lock(...)`
-  - `execute_request(...)`
-  - shared dispatch helpers
+- docs still needing the final truth pass:
+  - `status.md`
+  - `docs/orchestration_inventory.md`
+- structural gates still to add/finish under G4:
+  - bootstrap is not a re-export shim
+  - final bootstrap/ingress ownership split is asserted positively
+  - documentation names only live owners and live paths
 
-Required after-state for `G3`:
+Required after-state for `G4`:
 
-- `tests/support/handler_support.py` constructs runtime the same way production
-  bootstrap does and no longer imports the transitional Telegram owner just to
-  reach internals
-- Telegram-heavy tests prove contracts through the production boundary or the
-  explicit runtime object, not by coupling themselves to ingress internals that
-  are not part of the intended public seam
-- no test imports the deleted `routing.py` path
-- structural gates cover both app and test trees for the final Telegram
-  boundary shape
+- `status.md` truthfully reflects the current committed architecture and gates
+- `docs/orchestration_inventory.md` names only the actual current owners
+- structural gates catch the regressions that escaped the first closure:
+  - singleton Telegram runtime authority
+  - deleted routing imports
+  - stale documentation ownership
+  - bootstrap regressing back into a shim
 
 Committed Track B slices after `B1`:
 
@@ -777,8 +774,6 @@ Worktree now in progress for final acceptance closure:
 ## Remaining Work
 
 - Phase 7. Closure Correction Stage
-  - `G3` finish the Telegram test-boundary migration so Telegram-heavy tests use
-    the explicit runtime/boundary instead of routing internals
   - `G4` repair status/inventory docs and strengthen structural gates to catch
     the regressions that escaped the previous closure
 

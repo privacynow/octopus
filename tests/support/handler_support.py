@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 from app.agents.delivery import build_registry_delivery_runtime
 import app.channels.telegram.ingress as _th
+from app.channels.telegram.bootstrap import build_application
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
 from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.providers.base import RunResult
@@ -23,6 +24,7 @@ from tests.support.config_support import make_config as _make_config
 
 
 _TEST_RUNTIME: TelegramRuntime | None = None
+_TEST_APPLICATION = None
 
 
 def current_runtime() -> TelegramRuntime:
@@ -45,7 +47,7 @@ def reset_handler_test_runtime() -> None:
     import app.credential_store as _creds
     _creds.reset_for_test()
 
-    global _TEST_RUNTIME
+    global _TEST_RUNTIME, _TEST_APPLICATION
     if _TEST_RUNTIME is not None:
         _TEST_RUNTIME.pending_work_items.clear()
         _TEST_RUNTIME.chat_locks.clear()
@@ -56,6 +58,7 @@ def reset_handler_test_runtime() -> None:
         except LookupError:
             pass
     _TEST_RUNTIME = None
+    _TEST_APPLICATION = None
     global _next_update_id
     _next_update_id = 0
     # Backend lifecycle is owned by runtime_backend.reset_for_test() above; no duplicate close.
@@ -440,9 +443,9 @@ class MinimalFakeBot:
 
 
 def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
-    """Install explicit Telegram channel state for tests."""
+    """Install explicit Telegram channel state for tests via bootstrap wiring."""
     reset_handler_test_runtime()
-    global _TEST_RUNTIME
+    global _TEST_RUNTIME, _TEST_APPLICATION
     import app.content_store as _cs
     import app.credential_store as _creds
     from app.content_seed import track_from_skill_dir
@@ -467,12 +470,15 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
                         created_by="test",
                     )
                 )
+    test_bot = bot_instance if bot_instance is not None else MinimalFakeBot()
     _TEST_RUNTIME = build_telegram_runtime(
         config,
         provider,
         boot_id=boot_id,
-        bot_instance=bot_instance if bot_instance is not None else MinimalFakeBot(),
+        bot_instance=test_bot,
     )
+    _TEST_APPLICATION = build_application(_TEST_RUNTIME)
+    _TEST_RUNTIME.bot_instance = test_bot
 
 
 def load_session_disk(data_dir, chat_id, provider):

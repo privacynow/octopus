@@ -1,4 +1,4 @@
-"""Concern-owned use cases for conversation reset and cancellation flows."""
+"""Conversation control workflow ownership."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from app.workflows.conversation.contracts import (
     ProviderStateFactory,
 )
 from app.session_state import SessionState, session_from_dict
-from app.runtime_skill_setup_use_cases import get_runtime_skill_setup_use_cases
+from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
 from app.storage import default_session
 
 

@@ -1,4 +1,4 @@
-"""Concern-owned use cases for session-backed runtime skill activation flows."""
+"""Runtime-skill activation workflow ownership."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from app.workflows.runtime_skills.contracts import (
     ConversationSkillMutationOutcome,
     RuntimeSkillActivationPort,
 )
-from app.runtime_skill_catalog_use_cases import get_runtime_skill_catalog_use_cases
+from app.workflows.runtime_skills.catalog import get_runtime_skill_catalog_use_cases
 
 
 class RuntimeSkillActivationUseCases(RuntimeSkillActivationPort):

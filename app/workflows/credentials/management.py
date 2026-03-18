@@ -1,11 +1,11 @@
-"""Concern-owned use cases for credential management workflows."""
+"""Credential management workflow ownership."""
 
 from __future__ import annotations
 
 from app.credential_service import get_credential_service
-from app.runtime import composition
 from app.session_state import SessionState
 from app.workflows.credentials.contracts import CredentialClearOutcome, CredentialManagementPort
+from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
 
 
 class CredentialManagementUseCases(CredentialManagementPort):
@@ -26,7 +26,7 @@ class CredentialManagementUseCases(CredentialManagementPort):
         skill_name: str | None,
     ) -> CredentialClearOutcome:
         removed = tuple(self._credentials().delete(actor_key, skill_name))
-        outcome = composition.workflows().runtime_skills.setup.apply_cleared_credentials(
+        outcome = get_runtime_skill_setup_use_cases().apply_cleared_credentials(
             session,
             user_id=actor_key,
             removed_skills=list(removed),

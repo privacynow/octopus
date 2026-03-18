@@ -1,4 +1,4 @@
-"""Concern-owned use cases for recovery replay and discard workflows."""
+"""Recovery replay workflow ownership."""
 
 from __future__ import annotations
 

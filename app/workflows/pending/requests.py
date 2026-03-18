@@ -1,4 +1,4 @@
-"""Concern-owned use cases for pending approval and retry workflows."""
+"""Pending request workflow ownership."""
 
 from __future__ import annotations
 

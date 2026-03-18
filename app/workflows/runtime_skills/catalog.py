@@ -1,4 +1,4 @@
-"""Concern-owned use cases for runtime skill catalog reads and draft creation."""
+"""Runtime-skill catalog workflow ownership."""
 
 from __future__ import annotations
 

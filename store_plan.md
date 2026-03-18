@@ -745,40 +745,51 @@ This plan assumes:
 
 ## Executive Summary
 
-The architecture-and-lifecycle recovery plan is complete through Milestone 13.
+The architecture recovery work through Milestone 10 is complete, but lifecycle
+acceptance is reopened.
 
-What is now true:
+What remains true:
 
 1. the repo shape follows the `channels/`, `workflows/`, `ports/`, and `runtime/` model
 2. the old `transports/` ownership and ingress monoliths are no longer the live architecture
-3. lifecycle schema, lifecycle workflows, Telegram parity, registry parity, and registry rich editing are all landed
+3. lifecycle schema, lifecycle workflows, Telegram parity, registry parity, and registry rich editing are all landed structurally
 4. the registry browser UI mutates through registry HTTP ingress rather than a server-side shortcut path
 
-The feature freeze that existed earlier in this plan is now lifted.
+What changed after review:
+
+1. Milestone 11 did not fully satisfy the plan’s lifecycle hardening gate
+2. Milestones 12 and 13 are therefore structurally landed but not finally accepted
+3. lifecycle-dependent feature expansion is re-frozen until the remediation track below completes
 
 The plan below remains authoritative as an architectural contract and milestone
-record, but the gating condition has changed:
+record, but the gating condition has changed again:
 
-- foundational recovery work is complete
-- lifecycle work is complete through the planned editor milestone
-- new feature work is unblocked
-- hardening is now a normal follow-up slice, not a global blocker
+- foundational recovery work remains complete
+- lifecycle schema remains accepted
+- lifecycle implementation, lifecycle parity, and registry rich editing are reopened for hardening and revalidation
+- new lifecycle-dependent feature work is blocked until the reopened milestones are complete
 
 ## Current Plan State
 
 As of 2026-03-17:
 
-- Milestones 1-13 are complete
-- the earlier feature freeze is lifted
-- no additional architecture freeze milestone remains open in this plan
+- Milestones 1-10 are accepted complete
+- Milestones 11-13 are reopened for remediation and revalidation
+- the broad architecture freeze remains lifted, but lifecycle-dependent feature work is temporarily re-frozen
 - future work must preserve the channel/workflow/runtime ownership model rather than reopen it
 
 ### Feature Freeze Status
 
 The earlier freeze existed to prevent new work from landing on bad
-foundations. That condition no longer applies.
+foundations. The architecture-level version of that condition no longer applies,
+but lifecycle review found that the hardening gate was lifted too early.
 
-Feature work is now allowed under the normal rules:
+Feature work policy is therefore split:
+
+- architecture-independent feature work is allowed under the normal rules
+- lifecycle-dependent feature work is temporarily frozen again until the remediation track completes
+
+Allowed work under the temporary lifecycle freeze:
 
 - no parallel paths
 - no channel-owned workflow logic
@@ -1619,22 +1630,102 @@ Only after lifecycle contracts are correct.
 
 - rich editing exists as a UI enhancement over the correct registry channel ingress/workflow boundary
 
+## Reopened Lifecycle Remediation Track
+
+Review after the first Milestone 13 landing found that Milestone 11 did not
+meet this plan’s own hardening gate. The remediation track below is now part of
+the authoritative plan and must be completed before lifecycle-dependent feature
+work resumes.
+
+### Milestone 11R. Lifecycle Hardening
+
+This milestone reopens Milestone 11 at the workflow/store boundary.
+
+#### Required work
+
+- define an explicit lifecycle state machine / transition inventory
+- define one completion owner for each lifecycle transition
+- replace multi-step lifecycle durable writes with atomic store operations
+- make duplicate/replay calls idempotent or explicitly rejected with a stable result
+- make retry after interrupted partial transitions repair durable state instead of creating split state
+- add tests for:
+  - interruption repair
+  - duplicate/replay submit
+  - duplicate/replay approve
+  - rejection transition
+  - partial publish repair
+  - partial archive repair
+
+#### Hard rules
+
+- string status checks in workflow code are not enough by themselves; the lifecycle machine must be explicit
+- no lifecycle transition may span multiple independent store commits
+- approval history ordering assumptions must be explicit at the contract boundary
+- retry after partial durable mutation must converge to one correct durable end state
+
+#### Exit criteria
+
+- lifecycle transitions are explicitly modeled and owned
+- multi-step lifecycle transitions are atomic at the store boundary
+- duplicate/replay calls have stable behavior
+- interrupted partial lifecycle transitions are repairable on retry
+
+### Milestone 12R. Channel Revalidation Over Hardened Lifecycle
+
+This milestone reopens Milestone 12 after Milestone 11R.
+
+#### Required work
+
+- re-run Telegram and registry lifecycle flows against the hardened workflow layer
+- update channel messages/status handling where hardened lifecycle outcomes introduce explicit replay/idempotent results
+- add parity tests for the hardened outcomes, not just the happy path
+
+#### Hard rules
+
+- channel parity must be proven against the hardened lifecycle semantics, not assumed from the earlier structural landing
+- no channel may paper over lifecycle replay/repair results with a fake success path
+
+#### Exit criteria
+
+- Telegram and registry expose the same hardened lifecycle semantics
+- parity tests cover at least one replay/idempotent lifecycle path in both channels
+
+### Milestone 13R. Registry Editor Revalidation
+
+This milestone reopens Milestone 13 after Milestone 12R.
+
+#### Required work
+
+- revalidate the registry editor against hardened lifecycle semantics
+- ensure the editor works through the same repaired HTTP ingress/workflow path
+- add UI tests for lifecycle draft/edit/submit/publish flows that exercise the hardened path
+
+#### Hard rules
+
+- editor richness must not mask lifecycle repair gaps
+- the browser UI must continue to mutate only through registry HTTP ingress
+
+#### Exit criteria
+
+- the rich editor is accepted on top of the hardened lifecycle behavior
+- registry editor tests cover the repaired lifecycle path, not just the original happy path
+
 ## Next Execution Track
 
-The architecture recovery track is complete. There is no Milestone 14 in this
-plan.
+The next concrete work is the reopened lifecycle remediation track:
 
-The next concrete work is ordinary feature delivery on top of the now-stable
-architecture.
+1. Milestone 11R: lifecycle hardening
+2. Milestone 12R: channel revalidation over the hardened lifecycle
+3. Milestone 13R: registry editor revalidation
 
-Execution policy for post-M13 work:
+Execution policy for the reopened track:
 
-1. new feature slices are allowed and no longer blocked by the earlier freeze
-2. hardening work is optional follow-up work, not a prerequisite to shipping new features
-3. any new feature must land directly on `channels/*`, `workflows/*`, `ports/*`, and `runtime/*`
-4. if a proposed feature requires reopening the architecture, that architectural work must be planned explicitly rather than smuggled into feature code
+1. do not add lifecycle-dependent feature work until 11R-13R are complete
+2. keep work on the current `channels/*`, `workflows/*`, `ports/*`, and `runtime/*` shape
+3. prefer rewriting flawed lifecycle code cleanly over preserving the earlier M11 shape
+4. revalidate channels and editor after the workflow/store fix rather than assuming earlier acceptance still holds
 
-Implementation guidance for post-M13 work:
+Implementation guidance for the reopened track:
 
 - prefer adding new behavior to the correct current owner over preserving transitional shapes
 - preserve valid contracts and tests, not legacy file paths
@@ -1642,14 +1733,7 @@ Implementation guidance for post-M13 work:
 - do not add aliases to “smooth” a new feature onto the wrong layer
 - if a feature needs a new channel, add a new channel package rather than branching inside an existing one
 - if a feature needs a new workflow concern, add a concern-owned workflow module rather than expanding a generic dispatcher
-
-Allowed next-track work now includes:
-
-- new product features
-- lifecycle UX improvements
-- approval-policy enhancements
-- additional channels
-- non-blocking hardening and audit slices
+- explicit lifecycle machine and durable transition repair are preferred over ad hoc conditional checks
 
 ## Required Audits At Every Milestone
 

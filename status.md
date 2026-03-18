@@ -361,7 +361,7 @@ Completed slices:
      - full suite:
        - `1550 passed, 23 skipped`
 
-23. `pending commit` `Track E / E1-E4: finalize dead ownership cleanup and test gates`
+23. `7a39e96` `Track E / E1-E4: finalize dead ownership cleanup and test gates`
    - Before-state inventory captured before editing:
      - `app/workflows/__init__.py`
        - already reduced to a package docstring
@@ -396,12 +396,47 @@ Completed slices:
      - full suite:
        - `1554 passed, 23 skipped`
 
+24. `pending commit` `Track B / B1: centralize Telegram reply-markup builders`
+   - Before-state inventory captured before editing:
+     - `app/channels/telegram/ingress.py`
+       - still built retry/approval/delegation/expand-collapse keyboards inline
+       - still carried dead `_settings_*_buttons()` helpers with no callers
+     - `app/channels/telegram/conversation.py`
+       - still built all settings keyboards inline
+     - `app/channels/telegram/runtime_skills.py`
+       - still built the skill-add confirmation keyboard inline
+       - still built the clear-credentials confirmation keyboard inline
+     - `app/channels/telegram/presenters.py`
+       - still only owned `extract_summary(...)`
+   - Completed implementation in the current worktree:
+     - `app/channels/telegram/presenters.py` now owns:
+       - shared `TelegramRenderedMessage`
+       - approval/retry prompt rendering
+       - delegation/expand-collapse reply-markup builders
+       - conversation settings reply-markup builders
+       - runtime-skill confirmation reply-markup builders
+     - removed `InlineKeyboardButton` / `InlineKeyboardMarkup` construction from:
+       - `app/channels/telegram/ingress.py`
+       - `app/channels/telegram/conversation.py`
+       - `app/channels/telegram/runtime_skills.py`
+     - deleted dead inline settings-button helpers from Telegram ingress
+     - added focused presenter unit/regression coverage in:
+       - `tests/test_telegram_presenters.py`
+       - `tests/test_zero_import_gates.py`
+     - rewrote stale settings-button tests to assert the presenter owner
+       instead of deleted ingress internals
+   - Verification completed before commit:
+     - focused Track B1 suite:
+       - `314 passed`
+     - full suite:
+       - `1562 passed, 23 skipped`
+
 ## Latest Verified Test Baseline
 
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1554 passed, 23 skipped`
+- result: `1562 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -430,7 +465,7 @@ Remaining:
 
 ### Track B. Build the Telegram Presenter Layer
 
-Status: not started
+Status: in progress
 
 Required scope:
 
@@ -442,6 +477,16 @@ Required scope:
   - `app/channels/telegram/guidance.py`
 - into:
   - `app/channels/telegram/presenters.py`
+
+Completed in the current worktree:
+
+- `B1` centralized the scoped Telegram reply-markup builders in
+  `app/channels/telegram/presenters.py`
+
+Remaining:
+
+- `B2` move the remaining Telegram text/HTML rendering into presenters and
+  add workflow-family regression coverage
 
 ### Track C. Decompose Registry HTTP and UI
 
@@ -486,7 +531,7 @@ Remaining:
 
 ### Track E. Dead Code, Naming, and Test-Gate Cleanup
 
-Status: pending commit
+Status: complete
 
 Required scope:
 
@@ -504,6 +549,11 @@ Completed in the current worktree:
 - `E3` expanded zero-import gates to scan both `app/` and `tests/`
 - `E4` deleted stale transport-era test file names and replaced them with
   channel-owned test file names
+
+Verified outcome:
+
+- focused Track E suite passed: `24 passed`
+- full suite passed: `1554 passed, 23 skipped`
 
 ### Track F. Orchestration and State-Machine Consolidation
 
@@ -561,7 +611,7 @@ status.
 
 Next required slice:
 
-- `Track B / B1-B2: move Telegram rendering into presenters.py`
+- `Track B / B2: move remaining Telegram text and HTML rendering into presenters.py`
 
 Completed:
 
@@ -593,6 +643,18 @@ Completed in `Track E / E1-E4`:
   - `24 passed`
 - full suite passed:
   - `1554 passed, 23 skipped`
+
+Completed in `Track B / B1`:
+
+- Telegram reply-markup construction now lives in
+  `app/channels/telegram/presenters.py`
+- the scoped Telegram channel modules no longer construct inline keyboards
+  directly
+- dead ingress-only settings button helpers are gone
+- focused verification passed:
+  - `314 passed`
+- full suite passed:
+  - `1562 passed, 23 skipped`
 
 Completed in `F6`:
 

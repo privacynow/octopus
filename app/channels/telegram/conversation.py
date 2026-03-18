@@ -6,12 +6,13 @@ import html
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Update
 from telegram.constants import ParseMode
 
 from app import access
 from app import user_messages as _msg
 from app.channels.telegram.cancellation import TelegramCancellationRegistry
+from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.state import TelegramChannelState
 from app.credential_flow import foreign_setup_message
 from app.execution_context import ResolvedExecutionContext
@@ -143,86 +144,6 @@ def _settings_model_profile_state(
     return (list(state.available_profiles), state.current_profile)
 
 
-def _settings_model_buttons(
-    available: list[str],
-    current: str,
-    has_explicit_override: bool = False,
-) -> list[InlineKeyboardButton]:
-    buttons = [
-        InlineKeyboardButton(
-            f"\u2705 {profile}" if profile == current else profile,
-            callback_data=f"setting_model:{profile}",
-        )
-        for profile in available
-    ]
-    if has_explicit_override:
-        buttons.append(InlineKeyboardButton("Inherit", callback_data="setting_model:inherit"))
-    return buttons
-
-
-def _settings_project_buttons(
-    runtime: TelegramConversationRuntime,
-    session: SessionState,
-) -> list[list[InlineKeyboardButton]]:
-    rows: list[list[InlineKeyboardButton]] = []
-    if not runtime.state.config.projects:
-        return rows
-    row: list[InlineKeyboardButton] = []
-    for proj in runtime.state.config.projects:
-        label = f"\u2705 {proj.name}" if proj.name == session.project_id else proj.name
-        row.append(InlineKeyboardButton(label, callback_data=f"setting_project:{proj.name}"))
-    if row:
-        rows.append(row)
-    if session.project_id:
-        rows.append([InlineKeyboardButton("Clear project", callback_data="setting_project:clear")])
-    return rows
-
-
-def _settings_policy_buttons(
-    policy: str,
-    has_explicit_override: bool = False,
-) -> list[InlineKeyboardButton]:
-    buttons = [
-        InlineKeyboardButton(
-            "\u2705 Read only" if policy == "inspect" else "Read only",
-            callback_data="setting_policy:inspect",
-        ),
-        InlineKeyboardButton(
-            "\u2705 Read & write" if policy == "edit" else "Read & write",
-            callback_data="setting_policy:edit",
-        ),
-    ]
-    if has_explicit_override:
-        buttons.append(InlineKeyboardButton("Inherit", callback_data="setting_policy:inherit"))
-    return buttons
-
-
-def _settings_compact_buttons(compact: bool) -> list[InlineKeyboardButton]:
-    return [
-        InlineKeyboardButton(
-            "\u2705 Short answers" if compact else "Short answers",
-            callback_data="setting_compact:on",
-        ),
-        InlineKeyboardButton(
-            "\u2705 Full answers" if not compact else "Full answers",
-            callback_data="setting_compact:off",
-        ),
-    ]
-
-
-def _settings_approval_buttons(approval: str) -> list[InlineKeyboardButton]:
-    return [
-        InlineKeyboardButton(
-            "\u2705 Review first" if approval == "on" else "Review first",
-            callback_data="setting_approval:on",
-        ),
-        InlineKeyboardButton(
-            "\u2705 Run immediately" if approval == "off" else "Run immediately",
-            callback_data="setting_approval:off",
-        ),
-    ]
-
-
 async def cmd_new(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
     del context
     chat_id = event.chat_id
@@ -339,11 +260,8 @@ async def cmd_approval(event, update: Update, context, *, runtime: TelegramConve
         if arg == "status":
             mode = session.approval_mode
             source = _approval_mode_source(session)
-            await update.effective_message.reply_text(
-                f"Approval mode is <b>{mode}</b> ({source}).",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([_settings_approval_buttons(mode)]),
-            )
+            rendered = telegram_presenters.approval_mode_status(mode, source)
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
         outcome = _flows().conversation.settings.set_approval_mode(session, arg)
         if outcome.mutated:
@@ -363,12 +281,8 @@ async def cmd_compact(event, update: Update, context, *, runtime: TelegramConver
             if session.compact_mode is not None
             else runtime.state.config.compact_mode
         )
-        state = "on" if current else "off"
-        await update.effective_message.reply_text(
-            f"Compact mode is <b>{state}</b>.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([_settings_compact_buttons(current)]),
-        )
+        rendered = telegram_presenters.compact_mode_status(current)
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
 
     mode = args[0].lower()
@@ -475,24 +389,13 @@ async def cmd_model(event, update: Update, context, *, runtime: TelegramConversa
         await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
         return
 
-    buttons = _settings_model_buttons(
+    rendered = telegram_presenters.model_profile_status(
         available,
         current,
+        effective or cfg.model or "(default)",
         has_explicit_override=bool(session.model_profile),
     )
-    text = (
-        f"Model profile: <b>{html.escape(current)}</b>\n"
-        f"Effective model: <code>{html.escape(effective or cfg.model or '(default)')}</code>"
-    )
-    if buttons:
-        text += "\n\n" + _msg.model_choose_profile_hint()
-        await msg.reply_text(
-            text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([buttons]),
-        )
-        return
-    await msg.reply_text(text, parse_mode=ParseMode.HTML)
+    await msg.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def cmd_project(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
@@ -545,16 +448,12 @@ async def cmd_project(event, update: Update, context, *, runtime: TelegramConver
     proj = _resolve_project(runtime, session)
     working_dir = str(proj.root_dir) if proj else str(cfg.working_dir)
     project_label = proj.name if proj else "No project"
-    lines = [
-        f"Project: <b>{html.escape(project_label)}</b>",
-        f"Working dir: <code>{html.escape(working_dir)}</code>",
-        _msg.project_use_buttons_or_list_hint(),
-    ]
-    await msg.reply_text(
-        "\n".join(lines),
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(_settings_project_buttons(runtime, session)),
+    rendered = telegram_presenters.project_status(
+        [proj.name for proj in cfg.projects],
+        proj.name if proj else None,
+        working_dir,
     )
+    await msg.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def cmd_settings(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
@@ -571,7 +470,6 @@ async def cmd_settings(event, update: Update, context, *, runtime: TelegramConve
     working_dir = resolved.working_dir
     policy = resolved.file_policy or "edit"
     compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
-    compact_label = "on" if compact else "off"
     effective_model = resolved.effective_model
     model_available, model_display = _settings_model_profile_state(
         runtime,
@@ -580,48 +478,22 @@ async def cmd_settings(event, update: Update, context, *, runtime: TelegramConve
         effective_model or "",
     )
     approval = session.approval_mode
-
-    lines = [
-        "<b>Chat settings</b>",
-        f"Project: <code>{html.escape(project_display)}</code> → "
-        f"<code>{html.escape(working_dir)}</code>",
-        f"Model profile: <code>{html.escape(model_display)}</code>",
-        f"File policy: <code>{html.escape(policy)}</code>",
-        f"Compact mode: <b>{compact_label}</b>",
-        f"Approval mode: <b>{approval}</b>",
-        _msg.settings_use_buttons_hint(),
-    ]
-    if effective_model:
-        lines.insert(3, f"Effective model: <code>{html.escape(effective_model)}</code>")
-    if trust == "public":
-        lines.append(_msg.trust_settings_managed_public())
-
-    keyboard: list[list[Any]] = []
-    if trust != "public":
-        keyboard.extend(_settings_project_buttons(runtime, session))
-        keyboard.append(
-            _settings_policy_buttons(policy, has_explicit_override=bool(session.file_policy))
-        )
-    if model_available:
-        keyboard.append(
-            _settings_model_buttons(
-                model_available,
-                model_display,
-                has_explicit_override=bool(session.model_profile),
-            )
-        )
-    elif session.model_profile:
-        keyboard.append(
-            [InlineKeyboardButton("Clear model override", callback_data="setting_model:inherit")]
-        )
-    keyboard.append(_settings_compact_buttons(compact))
-    keyboard.append(_settings_approval_buttons(approval))
-
-    await msg.reply_text(
-        "\n".join(lines),
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(keyboard),
+    rendered = telegram_presenters.settings_overview(
+        project_display=project_display,
+        working_dir=working_dir,
+        policy=policy,
+        compact=compact,
+        approval=approval,
+        model_display=model_display,
+        effective_model=effective_model or "",
+        trust_public=(trust == "public"),
+        project_names=[proj.name for proj in cfg.projects],
+        current_project=session.project_id,
+        model_available=model_available,
+        has_model_override=bool(session.model_profile),
+        has_policy_override=bool(session.file_policy),
     )
+    await msg.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def cmd_policy(event, update: Update, context, *, runtime: TelegramConversationRuntime) -> None:
@@ -657,13 +529,11 @@ async def cmd_policy(event, update: Update, context, *, runtime: TelegramConvers
         session = _load(runtime, event.chat_id)
         resolved = _resolve_context(runtime, session, _trust_tier(runtime, event.user))
         policy = resolved.file_policy or "edit"
-        await msg.reply_text(
-            f"File policy: <b>{html.escape(policy)}</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(
-                [_settings_policy_buttons(policy, has_explicit_override=bool(session.file_policy))]
-            ),
+        rendered = telegram_presenters.policy_status(
+            policy,
+            has_explicit_override=bool(session.file_policy),
         )
+        await msg.reply_text(rendered.text, **rendered.kwargs())
         return
 
     await msg.reply_text(_msg.policy_usage())

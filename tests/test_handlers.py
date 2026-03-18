@@ -3671,8 +3671,10 @@ async def test_settings_callback_model_inherit_already():
 
 async def test_policy_buttons_show_inherit_when_override_set():
     """Policy buttons include Inherit button when session has explicit override."""
-    import app.channels.telegram.ingress as th
-    buttons = th._settings_policy_buttons("inspect", has_explicit_override=True)
+    from app.channels.telegram.presenters import policy_status
+
+    rendered = policy_status("inspect", has_explicit_override=True)
+    buttons = rendered.reply_markup.inline_keyboard[0]
     labels = [b.text for b in buttons]
     assert any("Inherit" in l for l in labels)
     callbacks = [b.callback_data for b in buttons]
@@ -3681,16 +3683,25 @@ async def test_policy_buttons_show_inherit_when_override_set():
 
 async def test_policy_buttons_no_inherit_when_no_override():
     """Policy buttons omit Inherit button when no explicit override."""
-    import app.channels.telegram.ingress as th
-    buttons = th._settings_policy_buttons("edit", has_explicit_override=False)
+    from app.channels.telegram.presenters import policy_status
+
+    rendered = policy_status("edit", has_explicit_override=False)
+    buttons = rendered.reply_markup.inline_keyboard[0]
     labels = [b.text for b in buttons]
     assert not any("Inherit" in l for l in labels)
 
 
 async def test_model_buttons_show_inherit_when_override_set():
     """Model buttons include Inherit button when session has explicit override."""
-    import app.channels.telegram.ingress as th
-    buttons = th._settings_model_buttons(["fast", "best"], "fast", has_explicit_override=True)
+    from app.channels.telegram.presenters import model_profile_status
+
+    rendered = model_profile_status(
+        ["fast", "best"],
+        "fast",
+        "gpt-5.4",
+        has_explicit_override=True,
+    )
+    buttons = rendered.reply_markup.inline_keyboard[0]
     labels = [b.text for b in buttons]
     assert any("Inherit" in l for l in labels)
     callbacks = [b.callback_data for b in buttons]
@@ -3699,8 +3710,15 @@ async def test_model_buttons_show_inherit_when_override_set():
 
 async def test_model_buttons_no_inherit_when_no_override():
     """Model buttons omit Inherit button when no explicit override."""
-    import app.channels.telegram.ingress as th
-    buttons = th._settings_model_buttons(["fast", "best"], "fast", has_explicit_override=False)
+    from app.channels.telegram.presenters import model_profile_status
+
+    rendered = model_profile_status(
+        ["fast", "best"],
+        "fast",
+        "gpt-5.4",
+        has_explicit_override=False,
+    )
+    buttons = rendered.reply_markup.inline_keyboard[0]
     labels = [b.text for b in buttons]
     assert not any("Inherit" in l for l in labels)
 

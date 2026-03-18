@@ -132,6 +132,22 @@ def test_runtime_dispatch_has_no_telegram_rendering_or_workflow_branches() -> No
         assert token not in text, f"{token} still referenced in {dispatch_path}"
 
 
+def test_telegram_reply_markup_builders_live_only_in_presenters() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    scoped_paths = (
+        repo_root / "app" / "channels" / "telegram" / "ingress.py",
+        repo_root / "app" / "channels" / "telegram" / "conversation.py",
+        repo_root / "app" / "channels" / "telegram" / "runtime_skills.py",
+        repo_root / "app" / "channels" / "telegram" / "pending.py",
+        repo_root / "app" / "channels" / "telegram" / "guidance.py",
+    )
+    forbidden = ("InlineKeyboardButton", "InlineKeyboardMarkup")
+    for path in scoped_paths:
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
 def test_agents_delivery_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     delivery_path = repo_root / "app" / "agents" / "delivery.py"

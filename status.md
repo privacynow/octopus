@@ -86,26 +86,38 @@ Completed slices:
    - Added direct delegation-boundary tests and a negative gate proving the
      delegation module has no channel imports.
 
-11. `this commit` `Track A / A5: finish test support migration and global-state cleanup`
+11. `8a6b656` `Track A / A5: finish test support migration and global-state cleanup`
    - Test support now has explicit positive and negative coverage proving
      `setup_globals()` installs Telegram channel state through the new state
      owner rather than restoring deleted ingress globals.
    - Added a guard that `tests/support/handler_support.py` does not mutate
      legacy ingress globals or call deleted ingress global accessors.
 
-12. `this commit` `Track C / C1: move registry UI shell rendering into ui.py`
+12. `57fd205` `Track C / C1: move registry UI shell rendering into ui.py`
    - The large `/ui` shell HTML/CSS/JS block now lives in
      `app/channels/registry/ui.py` instead of `app/channels/registry/http.py`.
    - Added a focused shell-render helper test and a structural guard proving
      `http.py` stays below the line-count threshold and no longer embeds the
      large UI shell markup.
 
+13. `this commit` `Track C / C2: move registry auth and session helpers out of http`
+   - Added `app/channels/registry/auth.py` as the registry channel owner for:
+     - `RegistrySettings`
+     - session middleware configuration
+     - bearer-token auth helpers
+     - UI-session validation/login/logout helpers
+   - `app/channels/registry/http.py` now imports these helpers instead of
+     defining them inline.
+   - Added focused positive coverage for the new auth owner and a negative
+     structural guard proving `http.py` no longer defines the displaced auth
+     and session helpers.
+
 ## Latest Verified Test Baseline
 
 At the end of the latest completed slice:
 
 - full suite passed
-- result: `1513 passed, 23 skipped`
+- result: `1515 passed, 23 skipped`
 
 This baseline must be re-established after every subsequent slice before
 committing.
@@ -149,14 +161,24 @@ Required scope:
 
 ### Track C. Decompose Registry HTTP and UI
 
-Status: in progress
+Status: complete
 
-Required scope:
+Completed:
 
-- move large HTML/CSS/JS blocks out of `app/channels/registry/http.py`
-- expand `app/channels/registry/ui.py`
-- keep `http.py` as a thin HTTP boundary
-- move displaced non-boundary auth/session logic to `app/channels/registry/auth.py`
+- `C1` move large `/ui` shell HTML/CSS/JS rendering into `app/channels/registry/ui.py`
+- `C2` move displaced registry auth/session helpers to `app/channels/registry/auth.py`
+
+Verified outcomes:
+
+- `app/channels/registry/http.py` is reduced to route registration,
+  request parsing/validation, HTTP-boundary auth/session checks, ingress calls,
+  and response mapping
+- `app/channels/registry/ui.py` owns the large registry browser shell rendering
+- `app/channels/registry/auth.py` owns reusable registry auth/session helpers
+
+Remaining:
+
+- none
 
 ### Track D. Lifecycle and Workflow Hygiene Cleanup
 
@@ -222,22 +244,30 @@ status.
 
 Next required slice:
 
-- `Track C / C1: move registry UI templates out of http.py`
+- `Track D / D1: deduplicate lifecycle snapshot construction`
 
 Completed:
 
 - `C1` move registry UI shell rendering into `ui.py`
+- `C2` move registry auth/session helpers out of `http.py`
 
 Remaining:
 
-- `C2` reduce `http.py` to route registration, boundary auth/session checks,
-  ingress calls, and response mapping
+- `Track D / D1-D3`
+- `Track F / F1-F2`
+- all Phase 4-6 remediation slices after Phase 3 completes
 
 Before-state:
 
-- `app/channels/registry/http.py` is no longer the UI-shell owner, but it still
-  mixes HTTP boundary code with additional registry auth/session and route-local
-  orchestration that should be pushed into the correct registry channel owners.
+- `app/workflows/runtime_skills/authoring.py` and
+  `app/workflows/runtime_skills/approval.py` still duplicate lifecycle snapshot
+  construction and still rely on indirect latest-approval lookup ownership.
+
+After-state required next:
+
+- lifecycle snapshot construction lives in one shared helper
+- latest-approval lookup is owned by the store contract explicitly
+- approval no longer reaches across workflow-private helper boundaries
 
 After-state required:
 

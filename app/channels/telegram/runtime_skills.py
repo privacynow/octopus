@@ -24,7 +24,6 @@ from app.identity import (
     telegram_numeric_id,
 )
 from app.runtime import composition
-from app.runtime.dispatch import check_prompt_size_cross_chat as runtime_check_prompt_size_cross_chat
 from app.runtime.session_runtime import (
     load_runtime_session,
     resolve_session_context,

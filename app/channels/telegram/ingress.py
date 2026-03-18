@@ -27,10 +27,7 @@ from telegram.ext import (
 
 from app import access
 from app import user_messages as _msg
-from app.approvals import (
-    build_preflight_prompt,
-    format_denials_html,
-)
+from app.approvals import format_denials_html
 from app.config import BotConfig
 from app.formatting import extract_send_directives, md_to_telegram_html, split_html, trim_text
 from app.identity import (
@@ -125,13 +122,17 @@ from app.channels.telegram.pending import (
 )
 from app.runtime import composition
 from app.runtime.inbound_types import InboundUser
-from app.runtime.dispatch import (
-    check_prompt_size_cross_chat as runtime_check_prompt_size_cross_chat,
-    execute_request as runtime_execute_request,
-    prompt_weight as runtime_prompt_weight,
-    request_approval as runtime_request_approval,
+from app.runtime.dispatch import RuntimeDispatchRuntime
+from app.workflows.execution.contracts import (
+    ExecutionRuntime,
+    ExecutionSurfaceContext,
     RequestExecutionOutcome,
-    RuntimeDispatchRuntime,
+)
+from app.workflows.execution.requests import (
+    check_prompt_size_cross_chat as execution_check_prompt_size_cross_chat,
+    execute_request as execution_execute_request,
+    prompt_weight as execution_prompt_weight,
+    request_approval as execution_request_approval,
 )
 from app.runtime.inbound_types import (
     InboundAction,
@@ -435,7 +436,81 @@ def _dispatch_runtime() -> RuntimeDispatchRuntime:
         heartbeat=_heartbeat,
         format_provider_error=_format_provider_error,
         run_result_was_interrupted=_run_result_was_interrupted,
-        progress_timeline_callback=_progress_timeline_callback,
+    )
+
+
+def _execution_surface_context(message, chat_id: int | str) -> ExecutionSurfaceContext:
+    conversation_ref = ""
+    routed_task_id = ""
+    if getattr(message, "capabilities", None) and getattr(message.capabilities, "channel_name", "") == "registry":
+        conversation_ref = getattr(message, "conversation_ref", "")
+        routed_task_id = getattr(message, "routed_task_id", "")
+    elif _state().config.agent_mode == "registry" and isinstance(chat_id, int):
+        conversation_ref = telegram_conversation_ref(_state().config, _telegram_chat_id(chat_id))
+    channel_name = getattr(getattr(message, "capabilities", None), "channel_name", "telegram")
+    if conversation_ref and channel_name != "registry":
+        async def timeline_callback(html_text: str, force: bool = False) -> None:
+            await _progress_timeline_callback(
+                conversation_ref,
+                routed_task_id,
+                html_text,
+                force=force,
+            )
+
+        return ExecutionSurfaceContext(
+            conversation_ref=conversation_ref,
+            routed_task_id=routed_task_id,
+            timeline_callback=timeline_callback,
+        )
+    return ExecutionSurfaceContext(
+        conversation_ref=conversation_ref,
+        routed_task_id=routed_task_id,
+        timeline_callback=None,
+    )
+
+
+async def _show_foreign_setup(message, foreign_setup) -> None:
+    await message.reply_text(foreign_setup_message(foreign_setup))
+
+
+async def _show_setup_prompt(message, missing_skill: str, first_requirement: dict[str, object]) -> None:
+    await message.reply_text(
+        f"Skill <code>{html.escape(missing_skill)}</code> needs setup.\n\n"
+        f"{format_credential_prompt(first_requirement)}",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def _send_retry_prompt(message, denials: tuple[dict[str, Any], ...]) -> None:
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("\u2705 " + _msg.retry_button_grant(), callback_data="retry_allow"),
+        InlineKeyboardButton("\u274c " + _msg.retry_button_skip(), callback_data="retry_skip"),
+    ]])
+    await message.chat.send_message(
+        f"\u26a0\ufe0f <b>{_msg.retry_permission_prompt()}</b>\n"
+        f"{format_denials_html(list(denials))}\n\n"
+        f"{_msg.retry_grant_and_retry_question()}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+    )
+
+
+async def _send_approval_prompt(message) -> None:
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("\u2705 " + _msg.approval_button_approve(), callback_data="approval_approve"),
+        InlineKeyboardButton("\u274c " + _msg.approval_button_reject(), callback_data="approval_reject"),
+    ]])
+    await message.chat.send_message(_msg.approval_plan_question(), reply_markup=keyboard)
+
+
+def _execution_runtime() -> ExecutionRuntime:
+    return ExecutionRuntime(
+        dispatch=_dispatch_runtime(),
+        build_surface_context=_execution_surface_context,
+        show_foreign_setup=_show_foreign_setup,
+        show_setup_prompt=_show_setup_prompt,
+        send_retry_prompt=_send_retry_prompt,
+        send_approval_prompt=_send_approval_prompt,
         send_formatted_reply=send_formatted_reply,
         send_directed_artifacts=send_directed_artifacts,
         send_compact_reply=_send_compact_reply,
@@ -924,10 +999,10 @@ def _callback_handler(fn):
 
 def _check_prompt_size_cross_chat(data_dir: Path, skill_name: str) -> list[str]:
     """Telegram-side helper for prompt-size impact warnings."""
-    return runtime_check_prompt_size_cross_chat(
+    return execution_check_prompt_size_cross_chat(
         data_dir,
         skill_name,
-        runtime=_dispatch_runtime(),
+        runtime=_execution_runtime(),
     )
 
 
@@ -1339,24 +1414,6 @@ def _save(chat_id: int, session: SessionState) -> None:
     save_runtime_session(_state().config.data_dir, _conversation_key(chat_id), session)
 
 
-# -- Credential helpers ----------------------------------------------------
-
-async def _check_credential_satisfaction(
-    chat_id: int | str, user_id: int | str, session: SessionState, message,
-    resolved: ResolvedExecutionContext,
-) -> dict[str, str] | None:
-    from app.runtime.dispatch import check_credential_satisfaction as runtime_check_credential_satisfaction
-
-    return await runtime_check_credential_satisfaction(
-        chat_id,
-        user_id,
-        session,
-        message,
-        resolved=resolved,
-        runtime=_dispatch_runtime(),
-    )
-
-
 # -- Core execution --------------------------------------------------------
 
 async def execute_request(
@@ -1370,7 +1427,7 @@ async def execute_request(
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
 ) -> RequestExecutionOutcome:
-    return await runtime_execute_request(
+    return await execution_execute_request(
         chat_id,
         prompt,
         image_paths,
@@ -1380,7 +1437,7 @@ async def execute_request(
         skip_permissions=skip_permissions,
         trust_tier=trust_tier,
         cancel_event=cancel_event,
-        runtime=_dispatch_runtime(),
+        runtime=_execution_runtime(),
     )
 
 
@@ -1394,7 +1451,7 @@ async def request_approval(
     trust_tier: str = "trusted",
     cancel_event: asyncio.Event | None = None,
 ) -> None:
-    await runtime_request_approval(
+    await execution_request_approval(
         chat_id,
         prompt,
         image_paths,
@@ -1403,7 +1460,7 @@ async def request_approval(
         request_user_id=request_user_id,
         trust_tier=trust_tier,
         cancel_event=cancel_event,
-        runtime=_dispatch_runtime(),
+        runtime=_execution_runtime(),
     )
 
 
@@ -1678,7 +1735,7 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
     compact_display = "on" if compact else "off"
 
     # Prompt weight estimate (chars of system prompt)
-    prompt_weight_count = runtime_prompt_weight(resolved.role, resolved.active_skills)
+    prompt_weight_count = execution_prompt_weight(resolved.role, resolved.active_skills)
     prompt_weight = f"~{prompt_weight_count} chars" if prompt_weight_count else "minimal"
 
     body = (
@@ -1798,7 +1855,7 @@ async def cmd_doctor(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Prompt weight from resolved execution context (respects trust tier)
     if session is not None:
         resolved = _resolve_context(session, trust_tier=_trust_tier(event.user))
-        prompt_weight_count = runtime_prompt_weight(resolved.role, resolved.active_skills)
+        prompt_weight_count = execution_prompt_weight(resolved.role, resolved.active_skills)
         if prompt_weight_count:
             parts.append(f"Prompt weight: ~{prompt_weight_count} chars")
     if parts:

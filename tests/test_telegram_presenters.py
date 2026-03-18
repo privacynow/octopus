@@ -11,6 +11,8 @@ from app.channels.telegram.presenters import (
     provider_guidance_history_message,
     provider_guidance_mutation_message,
     provider_guidance_preview_message,
+    runtime_skill_active_summary_message,
+    runtime_skill_history_message,
     settings_overview,
     skill_add_confirmation,
 )
@@ -19,6 +21,12 @@ from app.workflows.provider_guidance.contracts import (
     ProviderGuidanceLifecycleDetail,
     ProviderGuidanceLifecycleRevision,
     ProviderGuidancePreview,
+)
+from app.runtime.inbound_types import InboundUser
+from app.workflows.runtime_skills.contracts import (
+    RuntimeSkillLifecycleApproval,
+    RuntimeSkillLifecycleDetail,
+    RuntimeSkillLifecycleRevision,
 )
 from tests.support.handler_support import (
     FakeChat,
@@ -148,6 +156,56 @@ def test_provider_guidance_mutation_message_escapes_html():
     assert rendered.text == "&lt;saved&gt;"
 
 
+def test_runtime_skill_active_summary_message_renders_expected_html():
+    rendered = runtime_skill_active_summary_message(["Planner", "Reviewer"], 7)
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "<b>Active skills (2):</b>" in rendered.text
+    assert "Planner" in rendered.text
+    assert "7 skill(s) available" in rendered.text
+
+
+def test_runtime_skill_history_message_renders_revisions_and_approvals():
+    detail = RuntimeSkillLifecycleDetail(
+        name="release-notes",
+        display_name="Release Notes",
+        description="Summarize releases",
+        visibility="private",
+        body="body",
+        lifecycle_status="published",
+        active_revision_id="rev-current",
+        published_revision_id="rev-current",
+        runtime_available=True,
+        revisions=(
+            RuntimeSkillLifecycleRevision(
+                revision_id="rev-current",
+                version_label="v1",
+                status="published",
+                changelog="First version",
+                created_by="owner",
+                created_at="2026-03-18T00:00:00+00:00",
+                is_published=True,
+            ),
+        ),
+        approvals=(
+            RuntimeSkillLifecycleApproval(
+                revision_id="rev-current",
+                action="approved",
+                actor="admin",
+                note="ship it",
+                created_at="2026-03-18T00:00:00+00:00",
+            ),
+        ),
+    )
+
+    rendered = runtime_skill_history_message(detail)
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "Status: <code>published</code>" in rendered.text
+    assert "approved by admin" in rendered.text
+    assert "[published]" in rendered.text
+
+
 async def test_cmd_compact_status_uses_presenter(monkeypatch):
     import app.channels.telegram.ingress as th
     import app.channels.telegram.conversation as conversation
@@ -263,3 +321,144 @@ async def test_guidance_preview_uses_presenter(monkeypatch):
     await guidance.guidance_preview(SimpleNamespace(user=FakeUser(42)), update, "claude")
 
     assert update.effective_message.replies[-1]["text"] == "patched guidance preview"
+
+
+async def test_runtime_skills_show_uses_presenter(monkeypatch):
+    import contextlib
+
+    from app.channels.telegram.state import get_channel_state
+    import app.channels.telegram.runtime_skills as runtime_skills
+    from app.credential_validation import validate_credential
+
+    @contextlib.asynccontextmanager
+    async def _noop_chat_lock(*args, **kwargs):
+        del args, kwargs
+        yield False
+
+    rendered = TelegramRenderedMessage(text="patched skill summary", parse_mode=ParseMode.HTML)
+    monkeypatch.setattr(runtime_skills.telegram_presenters, "runtime_skill_active_summary_message", lambda *args, **kwargs: rendered)
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        message = FakeMessage(chat=chat, text="/skills")
+        update = FakeUpdate(message=message, chat=chat)
+        event = SimpleNamespace(chat_id=chat.id, user=InboundUser(id="telegram:42", username="testuser"))
+        runtime = runtime_skills.TelegramRuntimeSkillsRuntime(
+            state=get_channel_state(),
+            chat_lock=_noop_chat_lock,
+            validate_credential=validate_credential,
+            check_prompt_size_cross_chat=lambda data_dir, skill_name: [],
+        )
+
+        await runtime_skills.skills_show(event, update, runtime=runtime)
+
+        assert message.replies[-1]["text"] == "patched skill summary"
+
+
+async def test_runtime_skills_history_uses_presenter(monkeypatch):
+    import app.channels.telegram.runtime_skills as runtime_skills
+
+    rendered = TelegramRenderedMessage(text="patched history presenter", parse_mode=ParseMode.HTML)
+    monkeypatch.setattr(runtime_skills.telegram_presenters, "runtime_skill_history_message", lambda detail: rendered)
+
+    detail = RuntimeSkillLifecycleDetail(
+        name="release-notes",
+        display_name="Release Notes",
+        description="Summarize releases",
+        visibility="private",
+        body="body",
+        lifecycle_status="draft",
+        active_revision_id="rev-current",
+        published_revision_id="",
+        runtime_available=False,
+        revisions=(),
+        approvals=(),
+    )
+    monkeypatch.setattr(
+        runtime_skills,
+        "_flows",
+        lambda: type(
+            "Flows",
+            (),
+            {
+                "runtime_skills": type(
+                    "RuntimeSkillFlows",
+                    (),
+                    {"authoring": type("AuthoringFlows", (), {"detail": lambda *args, **kwargs: detail})()},
+                )(),
+            },
+        )(),
+    )
+
+    message = FakeMessage(chat=FakeChat(), text="/skills history release-notes")
+    update = FakeUpdate(message=message, user=FakeUser(42))
+
+    await runtime_skills.skills_history(SimpleNamespace(user=FakeUser(42)), update, "release-notes", runtime=None)
+
+    assert message.replies[-1]["text"] == "patched history presenter"
+
+
+async def test_runtime_skills_setup_uses_presenter(monkeypatch):
+    import contextlib
+
+    from app.channels.telegram.state import get_channel_state
+    import app.channels.telegram.runtime_skills as runtime_skills
+    from app.credential_validation import validate_credential
+
+    @contextlib.asynccontextmanager
+    async def _noop_chat_lock(*args, **kwargs):
+        del args, kwargs
+        yield False
+
+    rendered = TelegramRenderedMessage(text="patched setup presenter", parse_mode=ParseMode.HTML)
+    monkeypatch.setattr(runtime_skills.telegram_presenters, "runtime_skill_setup_started_message", lambda *args, **kwargs: rendered)
+    monkeypatch.setattr(
+        runtime_skills,
+        "_flows",
+        lambda: type(
+            "Flows",
+            (),
+            {
+                "runtime_skills": type(
+                    "RuntimeSkillFlows",
+                    (),
+                    {
+                        "catalog": type("CatalogFlows", (), {"has_skill": lambda *args, **kwargs: True})(),
+                        "activation": type(
+                            "ActivationFlows",
+                            (),
+                            {
+                                "begin_setup": lambda *args, **kwargs: SimpleNamespace(
+                                    status="needs_setup",
+                                    first_requirement={"kind": "token", "key": "API_TOKEN"},
+                                    mutated=False,
+                                )
+                            },
+                        )(),
+                    },
+                )(),
+            },
+        )(),
+    )
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        message = FakeMessage(chat=chat, text="/skills setup helper")
+        update = FakeUpdate(message=message, chat=chat, user=FakeUser(42))
+        event = SimpleNamespace(chat_id=chat.id, user=FakeUser(42))
+        runtime = runtime_skills.TelegramRuntimeSkillsRuntime(
+            state=get_channel_state(),
+            chat_lock=_noop_chat_lock,
+            validate_credential=validate_credential,
+            check_prompt_size_cross_chat=lambda data_dir, skill_name: [],
+        )
+
+        await runtime_skills.skills_setup(event, update, "helper", runtime=runtime)
+
+        assert message.replies[-1]["text"] == "patched setup presenter"

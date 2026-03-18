@@ -163,6 +163,23 @@ def test_telegram_guidance_channel_has_no_inline_html_formatting() -> None:
         assert token not in text, f"{token} still referenced in {guidance_path}"
 
 
+def test_telegram_runtime_skills_channel_has_no_inline_html_or_credential_formatting() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    runtime_skills_path = repo_root / "app" / "channels" / "telegram" / "runtime_skills.py"
+    text = runtime_skills_path.read_text()
+    forbidden = (
+        "html.escape(",
+        "ParseMode.HTML",
+        "from app.credential_flow",
+        "format_credential_prompt(",
+        "<b>",
+        "<pre>",
+        "<code>",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in {runtime_skills_path}"
+
+
 def test_agents_delivery_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     delivery_path = repo_root / "app" / "agents" / "delivery.py"

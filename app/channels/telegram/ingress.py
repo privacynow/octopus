@@ -6,7 +6,6 @@ import contextvars
 import dataclasses
 import html
 import logging
-import re
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -29,7 +28,7 @@ from app import access
 from app import user_messages as _msg
 from app.channels.telegram import presenters as telegram_presenters
 from app.config import BotConfig
-from app.formatting import extract_send_directives, md_to_telegram_html, split_html, trim_text
+from app.formatting import extract_send_directives, trim_text
 from app.identity import (
     parse_actor_key,
     parse_conversation_key,
@@ -40,10 +39,6 @@ from app.identity import (
 )
 from app.execution_context import ResolvedExecutionContext
 from app.providers.base import Provider
-from app.credential_flow import (
-    foreign_setup_message,
-    format_credential_prompt,
-)
 from app.session_state import (
     DelegatedTask,
     PendingDelegation,
@@ -69,7 +64,6 @@ from app.agents.state import load_agent_runtime_state
 from app.agents.types import AgentDiscoveryQuery, RoutedTaskResult, TimelineEvent
 from app.channels.telegram.cancellation import get_cancellation_registry
 from app.channels.telegram.normalization import normalize_callback, normalize_command, normalize_message, normalize_user
-from app.channels.telegram.presenters import extract_summary as _extract_summary
 from app.channels.telegram.state import (
     build_channel_state,
     get_channel_state,
@@ -470,15 +464,13 @@ def _execution_surface_context(message, chat_id: int | str) -> ExecutionSurfaceC
 
 
 async def _show_foreign_setup(message, foreign_setup) -> None:
-    await message.reply_text(foreign_setup_message(foreign_setup))
+    rendered = telegram_presenters.conversation_foreign_setup_message(foreign_setup)
+    await message.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def _show_setup_prompt(message, missing_skill: str, first_requirement: dict[str, object]) -> None:
-    await message.reply_text(
-        f"Skill <code>{html.escape(missing_skill)}</code> needs setup.\n\n"
-        f"{format_credential_prompt(first_requirement)}",
-        parse_mode=ParseMode.HTML,
-    )
+    rendered = telegram_presenters.ingress_setup_prompt_message(missing_skill, first_requirement)
+    await message.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def _send_retry_prompt(message, denials: tuple[dict[str, Any], ...]) -> None:
@@ -1068,16 +1060,11 @@ def build_user_prompt(text: str, attachments: list[InboundAttachment]) -> tuple[
 
 
 async def send_formatted_reply(message, text: str) -> None:
-    formatted = md_to_telegram_html(text) if text else "<i>[empty]</i>"
-    for chunk in split_html(formatted, 4096):
+    for rendered in telegram_presenters.formatted_reply_messages(text):
         try:
-            await message.reply_text(
-                chunk, parse_mode=ParseMode.HTML, disable_web_page_preview=True
-            )
+            await message.reply_text(rendered.text, **rendered.kwargs())
         except BadRequest:
-            # Strip HTML tags so the fallback doesn't show raw markup
-            plain = re.sub(r"<[^>]+>", "", chunk)
-            await message.reply_text(plain[:4096])
+            await message.reply_text(telegram_presenters.formatted_reply_fallback_text(rendered.text))
 
 
 async def _edit_or_reply_text(message, text: str, **kwargs) -> None:
@@ -1094,46 +1081,20 @@ async def _edit_or_reply_text(message, text: str, **kwargs) -> None:
     await message.reply_text(text, **kwargs)
 
 async def _send_compact_reply(message, text: str, chat_id: int, slot: int) -> None:
-    """Send a compact response using expandable blockquote or expand button."""
-    summary, detail = _extract_summary(text)
-    formatted_summary = md_to_telegram_html(summary) if summary else ""
-
-    if detail:
-        # Use expandable blockquote for the detail
-        formatted_detail = md_to_telegram_html(detail)
-        compact_html = (
-            f"{formatted_summary}\n\n"
-            f"<blockquote expandable>{formatted_detail}</blockquote>"
-        )
-
-        # If the combined text fits in a single message, send with expandable blockquote
-        if len(compact_html) <= 4000:
-            try:
-                await message.reply_text(
-                    compact_html, parse_mode=ParseMode.HTML,
-                    disable_web_page_preview=True,
-                )
-                return
-            except BadRequest:
-                pass  # Fall through to button approach
-
-        # Too long for blockquote — send summary with "Show full" button
-        button_text = f"{formatted_summary}\n\n<i>Response truncated</i>"
+    blockquote_rendered = telegram_presenters.compact_reply_blockquote_message(text)
+    if blockquote_rendered is not None:
         try:
-            rendered = telegram_presenters.collapsed_response_message(
-                formatted_summary,
-                chat_id,
-                slot,
-            )
-            await message.reply_text(
-                rendered.text,
-                **rendered.kwargs(),
-            )
+            await message.reply_text(blockquote_rendered.text, **blockquote_rendered.kwargs())
             return
         except BadRequest:
             pass
-
-    # Fallback: send as regular formatted reply
+    if "\n" in text:
+        try:
+            rendered = telegram_presenters.compact_reply_button_message(text, chat_id, slot)
+            await message.reply_text(rendered.text, **rendered.kwargs())
+            return
+        except BadRequest:
+            pass
     await send_formatted_reply(message, text)
 
 
@@ -1153,30 +1114,14 @@ async def send_directed_artifacts(
     for dtype, raw_path in directives:
         allowed_path = resolve_allowed_path(raw_path, _allowed_roots(chat_id, resolved_ctx))
         if not allowed_path:
-            await message.reply_text(f"[Cannot send: {raw_path}]")
+            rendered = telegram_presenters.cannot_send_path_message(raw_path)
+            await message.reply_text(rendered.text, **rendered.kwargs())
             continue
         await send_path_to_chat(message, allowed_path, force_image=(dtype == "IMAGE"))
 
 
 def _delegation_keyboard(chat_id: int):
     return telegram_presenters.delegation_reply_markup(chat_id)
-
-
-def _format_delegation_plan_message(delegation: PendingDelegation) -> str:
-    lines = [
-        "<b>Delegation plan</b>",
-        "",
-        "I'd like to delegate the following to specialist bots:",
-        "",
-    ]
-    for index, task in enumerate(delegation.tasks, start=1):
-        lines.extend([
-            f"<b>{index}. {html.escape(task.title or task.routed_task_id)}</b>",
-            f"\u2192 {html.escape(task.target_agent_id or 'unassigned')}",
-            "",
-        ])
-    lines.append("Approve to send these requests, or cancel to continue without delegation.")
-    return "\n".join(lines)
 
 
 class _DelegationCallbackEditableHandle:
@@ -1251,9 +1196,10 @@ async def _propose_delegation_plan(
     await _publish_delegation_proposed_event(message, delegation)
 
     send_plan = getattr(message, "send_text", None) or getattr(message, "reply_text")
+    rendered = telegram_presenters.delegation_plan_message(delegation)
     await send_plan(
-        _format_delegation_plan_message(delegation),
-        parse_mode=ParseMode.HTML,
+        rendered.text,
+        parse_mode=rendered.parse_mode,
         reply_markup=_delegation_keyboard(chat_id),
     )
     return RequestExecutionOutcome(status="delegation_proposed")
@@ -2169,12 +2115,14 @@ async def cmd_raw(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         try:
             n = int(args[0])
         except ValueError:
-            await update.effective_message.reply_text("Usage: /raw [N] — N is the Nth most recent response (default: 1)")
+            rendered = telegram_presenters.raw_usage_message()
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
 
     raw_text = load_raw(cfg.data_dir, _conversation_key(chat_id), n)
     if raw_text is None:
-        await update.effective_message.reply_text("No stored responses found.")
+        rendered = telegram_presenters.raw_missing_message()
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
 
     await send_formatted_reply(update.effective_message, raw_text)
@@ -2245,13 +2193,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if status == "duplicate":
         return
     if status == "admitted" and needs_welcome:
-        welcome = "I'm ready. Send me a message or type /help to see what I can do."
-        if cfg.approval_mode == "on":
-            welcome += "\nApproval mode is on \u2014 I'll show a plan before acting."
-        effective_compact = cfg.compact_mode
-        if effective_compact:
-            welcome += "\nCompact mode is on \u2014 long answers are summarized. Use /compact off for full answers."
-        await message.chat.send_message(welcome)
+        rendered = telegram_presenters.welcome_message(
+            approval_mode=cfg.approval_mode,
+            compact_mode=cfg.compact_mode,
+        )
+        await message.chat.send_message(rendered.text, **rendered.kwargs())
     if status == "queued":
         await message.reply_text(
             f"<i>{_msg.queue_accepted()}</i>",
@@ -2349,31 +2295,22 @@ async def handle_expand_callback(event, query) -> None:
         )
         return
 
-    # Replace the compact message with the full response
-    formatted = md_to_telegram_html(raw_text)
-    # If it fits in one message, edit in-place with a Collapse button
-    if len(formatted) <= 4000:
+    rendered = telegram_presenters.expanded_response_message(raw_text, target_chat, slot)
+    if rendered is not None:
         try:
-            await query.message.edit_text(
-                formatted,
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
-                reply_markup=telegram_presenters.expanded_response_reply_markup(target_chat, slot),
-            )
+            await query.message.edit_text(rendered.text, **rendered.kwargs())
             return
         except BadRequest:
             pass
     # Too long to edit — send as new messages, remove button
     await query.edit_message_reply_markup(reply_markup=None)
-    for chunk in split_html(formatted, 4096):
+    for rendered in telegram_presenters.formatted_reply_messages(raw_text):
         try:
-            await query.message.chat.send_message(
-                chunk, parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
-            )
+            await query.message.chat.send_message(rendered.text, **rendered.kwargs())
         except BadRequest:
-            plain = re.sub(r"<[^>]+>", "", chunk)
-            await query.message.chat.send_message(plain[:4096])
+            await query.message.chat.send_message(
+                telegram_presenters.formatted_reply_fallback_text(rendered.text)
+            )
 
 
 @_callback_handler
@@ -2392,14 +2329,7 @@ async def handle_collapse_callback(event, query) -> None:
         await query.edit_message_reply_markup(reply_markup=None)
         return
 
-    # Re-render compact version with "Show full answer" button
-    summary, detail = _extract_summary(raw_text)
-    formatted_summary = md_to_telegram_html(summary) if summary else ""
-    rendered = telegram_presenters.collapsed_response_message(
-        formatted_summary if formatted_summary else "",
-        target_chat,
-        slot,
-    )
+    rendered = telegram_presenters.compact_reply_button_message(raw_text, target_chat, slot)
     try:
         await query.message.edit_text(
             rendered.text,

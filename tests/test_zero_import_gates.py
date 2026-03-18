@@ -211,6 +211,26 @@ def test_telegram_pending_channel_has_no_inline_html_formatting() -> None:
         assert token not in text, f"{token} still referenced in {pending_path}"
 
 
+def test_telegram_ingress_request_and_compact_rendering_is_presenter_owned() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    text = ingress_path.read_text()
+    forbidden = (
+        "from app.credential_flow import",
+        "format_credential_prompt(",
+        "md_to_telegram_html(",
+        "split_html(",
+        "<blockquote expandable>",
+        "I'd like to delegate the following to specialist bots:",
+        "[Cannot send:",
+        "Usage: /raw [N]",
+        "No stored responses found.",
+        "I'm ready. Send me a message or type /help to see what I can do.",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in {ingress_path}"
+
+
 def test_agents_delivery_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     delivery_path = repo_root / "app" / "agents" / "delivery.py"

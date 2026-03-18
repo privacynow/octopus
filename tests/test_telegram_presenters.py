@@ -8,15 +8,22 @@ from app.channels.telegram.presenters import (
     TelegramRenderedMessage,
     approval_prompt,
     collapsed_response_message,
+    delegation_plan_message,
+    extract_summary,
+    formatted_reply_messages,
+    ingress_setup_prompt_message,
     provider_guidance_history_message,
     provider_guidance_mutation_message,
     provider_guidance_preview_message,
     conversation_role_current_message,
     pending_html_outcome_message,
+    raw_missing_message,
+    raw_usage_message,
     runtime_skill_active_summary_message,
     runtime_skill_history_message,
     settings_overview,
     skill_add_confirmation,
+    welcome_message,
 )
 from app.workflows.provider_guidance.contracts import (
     ProviderGuidanceLifecycleApproval,
@@ -25,6 +32,7 @@ from app.workflows.provider_guidance.contracts import (
     ProviderGuidancePreview,
 )
 from app.runtime.inbound_types import InboundUser
+from app.session_state import DelegatedTask, PendingDelegation, SessionState
 from app.workflows.runtime_skills.contracts import (
     RuntimeSkillLifecycleApproval,
     RuntimeSkillLifecycleDetail,
@@ -172,6 +180,68 @@ def test_pending_html_outcome_message_renders_expected_html():
     assert rendered.text == "<b>Replay queued</b>"
 
 
+def test_ingress_setup_prompt_message_renders_expected_html():
+    rendered = ingress_setup_prompt_message(
+        "planner",
+        {"kind": "token", "key": "API_TOKEN", "prompt": "Enter API_TOKEN"},
+    )
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "planner" in rendered.text
+    assert "API_TOKEN" in rendered.text
+
+
+def test_formatted_reply_messages_render_html_chunks():
+    rendered = formatted_reply_messages("**hello**")
+
+    assert rendered
+    assert all(item.parse_mode == ParseMode.HTML for item in rendered)
+    assert any("hello" in item.text for item in rendered)
+
+
+def test_extract_summary_splits_at_line_boundary():
+    summary, rest = extract_summary(
+        "Line one\nLine two\nLine three\nLine four\nLine five\nLine six",
+        max_lines=3,
+    )
+
+    assert "Line one" in summary
+    assert "Line three" in summary
+    assert "Line five" in rest
+
+
+def test_delegation_plan_message_renders_expected_html():
+    rendered = delegation_plan_message(
+        PendingDelegation(
+            conversation_ref="conv-1",
+            tasks=[
+                DelegatedTask(
+                    routed_task_id="task-1",
+                    title="Review docs",
+                    target_agent_id="agent-reviewer",
+                ),
+            ],
+        )
+    )
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "Delegation plan" in rendered.text
+    assert "Review docs" in rendered.text
+    assert "agent-reviewer" in rendered.text
+
+
+def test_welcome_message_mentions_current_modes():
+    rendered = welcome_message(approval_mode="on", compact_mode=True)
+
+    assert "Approval mode is on" in rendered.text
+    assert "Compact mode is on" in rendered.text
+
+
+def test_raw_messages_render_expected_text():
+    assert "Usage: /raw [N]" in raw_usage_message().text
+    assert raw_missing_message().text == "No stored responses found."
+
+
 def test_runtime_skill_active_summary_message_renders_expected_html():
     rendered = runtime_skill_active_summary_message(["Planner", "Reviewer"], 7)
 
@@ -300,6 +370,120 @@ async def test_send_approval_prompt_uses_presenter(monkeypatch):
 
     assert chat.sent_messages[-1]["text"] == "patched approval presenter"
     assert chat.sent_messages[-1]["reply_markup"].inline_keyboard[0][0].callback_data == "patched:approval"
+
+
+async def test_show_setup_prompt_uses_presenter(monkeypatch):
+    import app.channels.telegram.ingress as th
+
+    rendered = TelegramRenderedMessage(text="patched setup prompt", parse_mode=ParseMode.HTML)
+    monkeypatch.setattr(th.telegram_presenters, "ingress_setup_prompt_message", lambda *args, **kwargs: rendered)
+
+    message = FakeMessage(chat=FakeChat(12345), text="setup")
+
+    await th._show_setup_prompt(message, "planner", {"kind": "token", "key": "API_TOKEN"})
+
+    assert message.replies[-1]["text"] == "patched setup prompt"
+
+
+async def test_send_formatted_reply_uses_presenter(monkeypatch):
+    import app.channels.telegram.ingress as th
+
+    rendered = TelegramRenderedMessage(text="patched formatted chunk", parse_mode=ParseMode.HTML)
+    monkeypatch.setattr(th.telegram_presenters, "formatted_reply_messages", lambda text: [rendered])
+
+    message = FakeMessage(chat=FakeChat(12345), text="reply")
+
+    await th.send_formatted_reply(message, "ignored")
+
+    assert message.replies[-1]["text"] == "patched formatted chunk"
+
+
+async def test_send_compact_reply_uses_presenter(monkeypatch):
+    import app.channels.telegram.ingress as th
+
+    rendered = TelegramRenderedMessage(text="patched compact reply", parse_mode=ParseMode.HTML)
+    monkeypatch.setattr(th.telegram_presenters, "compact_reply_blockquote_message", lambda text: rendered)
+
+    message = FakeMessage(chat=FakeChat(12345), text="reply")
+
+    await th._send_compact_reply(message, "ignored", 12345, 7)
+
+    assert message.replies[-1]["text"] == "patched compact reply"
+
+
+async def test_propose_delegation_plan_uses_presenter(monkeypatch):
+    import app.channels.telegram.ingress as th
+
+    async def _noop_publish(*args, **kwargs):
+        return None
+
+    rendered = TelegramRenderedMessage(text="patched delegation plan", parse_mode=ParseMode.HTML)
+    monkeypatch.setattr(th, "_publish_delegation_proposed_event", _noop_publish)
+    monkeypatch.setattr(th, "_save", lambda *args, **kwargs: None)
+    monkeypatch.setattr(th.telegram_presenters, "delegation_plan_message", lambda delegation: rendered)
+
+    message = FakeMessage(chat=FakeChat(12345), text="delegate")
+    session = SessionState(provider="codex", provider_state={}, approval_mode="off")
+    result = SimpleNamespace(
+        delegation_title="Delegate this",
+        text="delegate this work",
+        delegation_resume_instruction="resume",
+        delegation_tasks=[
+            {
+                "routed_task_id": "task-1",
+                "title": "Review docs",
+                "target_agent_id": "agent-reviewer",
+                "instructions": "Review the current docs",
+            },
+        ],
+    )
+
+    outcome = await th._propose_delegation_plan(
+        12345,
+        message,
+        session,
+        conversation_ref="conv-1",
+        result=result,
+    )
+
+    assert outcome.status == "delegation_proposed"
+    assert message.replies[-1]["text"] == "patched delegation plan"
+
+
+async def test_cmd_raw_usage_uses_presenter(monkeypatch):
+    import app.channels.telegram.ingress as th
+
+    rendered = TelegramRenderedMessage(text="patched raw usage")
+    monkeypatch.setattr(th.telegram_presenters, "raw_usage_message", lambda: rendered)
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+
+        msg = await send_command(th.cmd_raw, chat, user, "/raw nope", args=["nope"])
+
+        assert msg.replies[-1]["text"] == "patched raw usage"
+
+
+async def test_handle_message_welcome_uses_presenter(monkeypatch):
+    import app.channels.telegram.ingress as th
+
+    rendered = TelegramRenderedMessage(text="patched welcome")
+    monkeypatch.setattr(th.telegram_presenters, "welcome_message", lambda **kwargs: rendered)
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+        chat = FakeChat(12345)
+        update = FakeUpdate(message=FakeMessage(chat=chat, text="hello"), user=FakeUser(42), chat=chat)
+
+        await th.handle_message(update, SimpleNamespace())
+
+        assert chat.sent_messages[-1]["text"] == "patched welcome"
 
 
 async def test_guidance_preview_uses_presenter(monkeypatch):

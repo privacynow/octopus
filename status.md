@@ -611,7 +611,81 @@ status.
 
 Next required slice:
 
-- `Track B / B2c2: move remaining ingress Telegram rendering into presenters.py`
+- `Track B / B2c2a: move ingress request/setup/compact/delegation rendering into presenters.py`
+  - complete and ready to commit
+
+Live worktree for `B2c2a`:
+
+- modified files:
+  - `app/channels/telegram/ingress.py`
+  - `app/channels/telegram/presenters.py`
+  - `status.md`
+- caller inventory captured before finishing the slice:
+  - `ingress.py`
+    - `_show_setup_prompt(...)`
+    - `send_formatted_reply(...)`
+    - `_send_compact_reply(...)`
+    - `send_directed_artifacts(...)`
+    - `_propose_delegation_plan(...)`
+    - `cmd_raw(...)`
+    - `handle_message(...)`
+    - `handle_expand_callback(...)`
+    - `handle_collapse_callback(...)`
+  - `presenters.py`
+    - now owns the new rendering helpers for setup prompts, formatted reply
+      chunking/fallback, compact/expanded response rendering, path errors,
+      delegation-plan formatting, welcome text, and `/raw` output text
+- before-state:
+  - these ingress flows still counted as Telegram-rendering ownership even
+    though the presenter functions had been partially introduced
+  - no focused tests yet proved ingress consumed the new presenter helpers for
+    request/setup/compact/delegation rendering
+  - no negative structural guard yet proved the moved strings/helpers were gone
+- after-state required by this slice:
+  - ingress uses named presenter functions for:
+    - setup prompt rendering
+    - formatted reply chunk generation and fallback
+    - compact/expanded response rendering
+    - delegation-plan formatting
+    - welcome/raw/path-error output
+  - focused regression tests prove ingress calls presenter functions for these
+    paths
+  - negative structural guards prove the removed inline strings/helpers are
+    gone from ingress
+- contract tests for this slice:
+  - `tests/test_telegram_presenters.py`
+  - `tests/test_handlers_output.py`
+  - `tests/test_request_flow.py`
+  - `tests/test_zero_import_gates.py`
+
+28. `pending` `Track B / B2c2a: move ingress request/setup/compact/delegation rendering into presenters.py`
+   - Added named ingress/request presenter functions in
+     `app/channels/telegram/presenters.py` for:
+     - setup-prompt rendering
+     - formatted-reply chunk rendering and plain-text fallback
+     - compact/expanded response rendering
+     - directed-path failure text
+     - delegation-plan formatting
+     - welcome output
+     - `/raw` usage/missing-response output
+   - `app/channels/telegram/ingress.py` now applies presenter output instead of
+     owning inline setup/delegation/compact/raw/welcome rendering logic.
+   - Added:
+     - presenter unit tests for setup prompts, formatted replies, summary
+       extraction, delegation plans, welcome text, and `/raw` text
+     - ingress regression tests proving presenter ownership for:
+       - setup prompts
+       - formatted replies
+       - compact replies
+       - delegation-plan output
+       - `/raw` usage output
+       - welcome output
+     - a negative structural guard proving the moved setup/compact/delegation/
+       raw/welcome formatting tokens are gone from ingress
+   - focused verification passed:
+     - `118 passed`
+   - full suite passed:
+     - `1592 passed, 23 skipped`
 
 Completed:
 
@@ -873,6 +947,47 @@ Before-state for `Track B / B2c2`:
   - focused regression coverage proves ingress uses presenters for the remaining
     rendered outputs
   - negative structural guards prove the removed inline formatting is gone
+
+Before-state for `Track B / B2c2a`:
+
+- files that will change:
+  - `app/channels/telegram/ingress.py`
+  - `app/channels/telegram/presenters.py`
+  - `tests/test_telegram_presenters.py`
+  - `tests/test_handlers_output.py`
+  - `tests/test_request_flow.py`
+  - `tests/test_zero_import_gates.py`
+- current caller and owner inventory:
+  - `ingress.py` still owns setup prompts and foreign-setup notices
+  - `ingress.py` still owns compact/full-answer formatting and chunking
+  - `ingress.py` still owns delegation-plan message formatting
+  - `ingress.py` still owns welcome/path-error/raw command output text
+- after-state required by this slice:
+  - these request/setup/delegation/compact rendering paths move to presenters
+  - ingress becomes orchestration only for these flows
+  - focused regression coverage proves ingress calls presenters for them
+  - negative structural guards prove the moved inline formatting is gone
+
+Before-state for `Track B / B2c2b`:
+
+- files expected after `B2c2a`:
+  - `app/channels/telegram/ingress.py`
+  - `app/channels/telegram/presenters.py`
+  - `tests/test_telegram_presenters.py`
+  - `tests/test_handlers.py`
+  - `tests/test_handlers_output.py`
+  - `tests/test_zero_import_gates.py`
+- current caller and owner inventory:
+  - `ingress.py` will still own help/session/discover/admin/reporting text
+- after-state required by this slice:
+  - remaining help/session/discover/admin/reporting rendering moves to
+    `presenters.py`
+  - `ingress.py` becomes orchestration and PTB wiring only
+  - final acceptance audit follows immediately after this slice
+
+Next required slice:
+
+- `Track B / B2c2b: move ingress help/session/discover/admin/reporting rendering into presenters.py`
 
 Completed in `Track B / B2c1`:
 

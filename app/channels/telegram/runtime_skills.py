@@ -129,6 +129,12 @@ async def skills_add(event, update: Update, name: str) -> None:
                 reply_markup=kb,
             )
             return
+        if decision.status == "not_published":
+            await update.effective_message.reply_text(
+                f"Skill <code>{html.escape(name)}</code> is not published yet.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
     await update.effective_message.reply_text(
         f"Skill <code>{html.escape(name)}</code> activated.",
         parse_mode=ParseMode.HTML,
@@ -185,6 +191,12 @@ async def skills_setup(event, update: Update, name: str) -> None:
                 parse_mode=ParseMode.HTML,
             )
             return
+        if decision.status == "not_published":
+            await update.effective_message.reply_text(
+                f"Skill <code>{html.escape(name)}</code> is not published yet.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
         if decision.mutated:
             th._save(chat_id, session)
     first_req = decision.first_requirement
@@ -217,18 +229,102 @@ async def skills_clear(event, update: Update) -> None:
 
 async def skills_create(event, update: Update, name: str) -> None:
     try:
-        record = _flows().runtime_skills.catalog.create_custom_draft(
+        result = _flows().runtime_skills.authoring.create_draft(
             name,
             owner_actor=str(event.user.id),
         )
+        if not result.ok or result.detail is None:
+            await update.effective_message.reply_text(result.message)
+            return
         await update.effective_message.reply_text(
             f"Created custom skill <code>{html.escape(name)}</code>\n"
-            f"Draft visibility: <code>{html.escape(record.visibility)}</code>\n"
-            "Use the registry UI or upcoming guided edit flow to update its instructions.",
+            f"Draft visibility: <code>{html.escape(result.detail.visibility)}</code>\n"
+            "Use /skills edit, /skills submit, and /skills history to continue the lifecycle.",
             parse_mode=ParseMode.HTML,
         )
     except ValueError as exc:
         await update.effective_message.reply_text(str(exc))
+
+
+async def skills_edit(event, update: Update, name: str, body: str) -> None:
+    result = _flows().runtime_skills.authoring.edit_draft(
+        name,
+        actor_key=str(event.user.id),
+        body=body,
+    )
+    await update.effective_message.reply_text(html.escape(result.message), parse_mode=ParseMode.HTML)
+
+
+async def skills_history(event, update: Update, name: str) -> None:
+    detail = _flows().runtime_skills.authoring.detail(name)
+    if detail is None:
+        await update.effective_message.reply_text(
+            f"Custom skill <code>{html.escape(name)}</code> not found.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    lines = [
+        f"<b>{html.escape(detail.display_name)}</b>",
+        f"Status: <code>{html.escape(detail.lifecycle_status)}</code>",
+        f"Runtime available: {'yes' if detail.runtime_available else 'no'}",
+        f"Published revision: <code>{html.escape(detail.published_revision_id or '(none)')}</code>",
+        "",
+        "<b>Revisions</b>",
+    ]
+    for item in detail.revisions[:8]:
+        pub = " [published]" if item.is_published else ""
+        lines.append(
+            f"  <code>{html.escape(item.revision_id[:12])}</code> — "
+            f"{html.escape(item.status)}{pub}"
+        )
+    if detail.approvals:
+        lines.append("")
+        lines.append("<b>Approvals</b>")
+        for item in detail.approvals[:8]:
+            note = f" — {html.escape(item.note)}" if item.note else ""
+            lines.append(f"  {html.escape(item.action)} by {html.escape(item.actor)}{note}")
+    await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def skills_submit(event, update: Update, name: str) -> None:
+    result = _flows().runtime_skills.authoring.submit(name, actor_key=str(event.user.id))
+    await update.effective_message.reply_text(html.escape(result.message), parse_mode=ParseMode.HTML)
+
+
+async def skills_approve(event, update: Update, name: str) -> None:
+    th = _th()
+    if not th.is_admin(event.user):
+        await update.effective_message.reply_text("Only admins can approve skill drafts.")
+        return
+    result = _flows().runtime_skills.approval.approve(name, actor_key=str(event.user.id))
+    await update.effective_message.reply_text(html.escape(result.message), parse_mode=ParseMode.HTML)
+
+
+async def skills_reject(event, update: Update, name: str) -> None:
+    th = _th()
+    if not th.is_admin(event.user):
+        await update.effective_message.reply_text("Only admins can reject skill drafts.")
+        return
+    result = _flows().runtime_skills.approval.reject(name, actor_key=str(event.user.id))
+    await update.effective_message.reply_text(html.escape(result.message), parse_mode=ParseMode.HTML)
+
+
+async def skills_publish(event, update: Update, name: str) -> None:
+    th = _th()
+    if not th.is_admin(event.user):
+        await update.effective_message.reply_text("Only admins can publish skill drafts.")
+        return
+    result = _flows().runtime_skills.authoring.publish(name, actor_key=str(event.user.id))
+    await update.effective_message.reply_text(html.escape(result.message), parse_mode=ParseMode.HTML)
+
+
+async def skills_archive(event, update: Update, name: str) -> None:
+    th = _th()
+    if not th.is_admin(event.user):
+        await update.effective_message.reply_text("Only admins can archive skill drafts.")
+        return
+    result = _flows().runtime_skills.authoring.archive(name, actor_key=str(event.user.id))
+    await update.effective_message.reply_text(html.escape(result.message), parse_mode=ParseMode.HTML)
 
 
 async def skills_search(event, update: Update, query: str) -> None:

@@ -20,17 +20,31 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.capability_service import CapabilityService
 from app.channels.registry import ui
 from app.channels.registry.ingress import (
+    approve_catalog_skill,
+    approve_provider_guidance,
+    archive_catalog_skill,
+    archive_provider_guidance,
     RegistryIngressError,
     activate_conversation_skill,
     catalog_skill_detail,
+    catalog_skill_lifecycle_detail,
     clear_conversation_skills,
     conversation_skill_state,
     deactivate_conversation_skill,
     diff_catalog_skill,
+    edit_catalog_skill_draft,
+    edit_provider_guidance_draft,
     install_catalog_skill,
     list_catalog_skills,
+    provider_guidance_detail,
     preview_provider_guidance,
+    publish_catalog_skill,
+    publish_provider_guidance,
+    reject_catalog_skill,
+    reject_provider_guidance,
     search_catalog_skills,
+    submit_catalog_skill,
+    submit_provider_guidance,
     uninstall_catalog_skill,
     update_catalog_skill,
 )
@@ -66,6 +80,23 @@ class ProviderGuidancePreviewRequest(BaseModel):
     role: str = Field(default="", description="Role/persona text to include")
     active_skills: list[str] = Field(default_factory=list, description="Active runtime skill slugs")
     compact_mode: bool = Field(default=False, description="Whether compact-mode instructions should be appended")
+
+
+class LifecycleActionRequest(BaseModel):
+    actor_key: str = Field(..., min_length=1, description="Actor performing the lifecycle action")
+    note: str = Field(default="", description="Optional lifecycle note")
+
+
+class RuntimeSkillDraftUpdateRequest(LifecycleActionRequest):
+    body: str = Field(..., min_length=1, description="Draft instruction body")
+    description: str = Field(default="", description="Optional skill description override")
+    changelog: str = Field(default="", description="Optional changelog entry")
+
+
+class ProviderGuidanceDraftUpdateRequest(LifecycleActionRequest):
+    body: str = Field(..., min_length=1, description="Draft provider-guidance body")
+    scope_kind: str = Field(default="system", description="Guidance scope kind")
+    scope_key: str = Field(default="", description="Guidance scope key")
 
 
 def _int_value(value: Any) -> int:
@@ -332,6 +363,95 @@ def api_catalog_skill_detail(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
+@app.get("/v1/catalog/skills/{skill_name}/lifecycle")
+def api_catalog_skill_lifecycle_detail(
+    skill_name: str,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return catalog_skill_lifecycle_detail(skill_name)
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.put("/v1/catalog/skills/{skill_name}/draft")
+def api_catalog_skill_edit_draft(
+    skill_name: str,
+    payload: RuntimeSkillDraftUpdateRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return edit_catalog_skill_draft(
+            skill_name,
+            actor_key=payload.actor_key,
+            body=payload.body,
+            description=payload.description or None,
+            changelog=payload.changelog,
+        )
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.post("/v1/catalog/skills/{skill_name}/submit")
+def api_catalog_skill_submit(
+    skill_name: str,
+    payload: LifecycleActionRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return submit_catalog_skill(skill_name, actor_key=payload.actor_key, note=payload.note)
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.post("/v1/catalog/skills/{skill_name}/approve")
+def api_catalog_skill_approve(
+    skill_name: str,
+    payload: LifecycleActionRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return approve_catalog_skill(skill_name, actor_key=payload.actor_key, note=payload.note)
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.post("/v1/catalog/skills/{skill_name}/reject")
+def api_catalog_skill_reject(
+    skill_name: str,
+    payload: LifecycleActionRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return reject_catalog_skill(skill_name, actor_key=payload.actor_key, note=payload.note)
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.post("/v1/catalog/skills/{skill_name}/publish")
+def api_catalog_skill_publish(
+    skill_name: str,
+    payload: LifecycleActionRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return publish_catalog_skill(skill_name, actor_key=payload.actor_key, note=payload.note)
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.post("/v1/catalog/skills/{skill_name}/archive")
+def api_catalog_skill_archive(
+    skill_name: str,
+    payload: LifecycleActionRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return archive_catalog_skill(skill_name, actor_key=payload.actor_key, note=payload.note)
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
 @app.post("/v1/catalog/skills/{skill_name}/install")
 def api_catalog_skill_install(
     skill_name: str,
@@ -457,6 +577,101 @@ def api_provider_guidance_preview(
             active_skills=list(payload.active_skills),
             compact_mode=payload.compact_mode,
         )
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.get("/v1/provider-guidance/{provider_name}")
+def api_provider_guidance_detail(
+    provider_name: str,
+    scope_kind: str = Query(default="system"),
+    scope_key: str = Query(default=""),
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return provider_guidance_detail(
+            provider_name,
+            scope_kind=scope_kind,
+            scope_key=scope_key,
+        )
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.put("/v1/provider-guidance/{provider_name}/draft")
+def api_provider_guidance_edit_draft(
+    provider_name: str,
+    payload: ProviderGuidanceDraftUpdateRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return edit_provider_guidance_draft(
+            provider_name,
+            actor_key=payload.actor_key,
+            body=payload.body,
+            scope_kind=payload.scope_kind,
+            scope_key=payload.scope_key,
+        )
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.post("/v1/provider-guidance/{provider_name}/submit")
+def api_provider_guidance_submit(
+    provider_name: str,
+    payload: LifecycleActionRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return submit_provider_guidance(provider_name, actor_key=payload.actor_key, note=payload.note)
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.post("/v1/provider-guidance/{provider_name}/approve")
+def api_provider_guidance_approve(
+    provider_name: str,
+    payload: LifecycleActionRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return approve_provider_guidance(provider_name, actor_key=payload.actor_key, note=payload.note)
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.post("/v1/provider-guidance/{provider_name}/reject")
+def api_provider_guidance_reject(
+    provider_name: str,
+    payload: LifecycleActionRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return reject_provider_guidance(provider_name, actor_key=payload.actor_key, note=payload.note)
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.post("/v1/provider-guidance/{provider_name}/publish")
+def api_provider_guidance_publish(
+    provider_name: str,
+    payload: LifecycleActionRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return publish_provider_guidance(provider_name, actor_key=payload.actor_key, note=payload.note)
+    except RegistryIngressError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@app.post("/v1/provider-guidance/{provider_name}/archive")
+def api_provider_guidance_archive(
+    provider_name: str,
+    payload: LifecycleActionRequest,
+    _: None = Depends(require_ui_token),
+) -> dict[str, Any]:
+    try:
+        return archive_provider_guidance(provider_name, actor_key=payload.actor_key, note=payload.note)
     except RegistryIngressError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 

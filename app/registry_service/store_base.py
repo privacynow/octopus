@@ -189,8 +189,5 @@ class AbstractRegistryStore(Protocol):
     ) -> dict[str, Any]:
         """Queue a surface_action for an existing conversation."""
 
-    def cancel_conversation(self, conversation_id: str) -> dict[str, Any]:
-        """Queue a cancel control delivery and mirror it to the registry timeline."""
-
     def list_tasks(self) -> list[dict[str, Any]]:
         """Return routed tasks in UI-ready form."""

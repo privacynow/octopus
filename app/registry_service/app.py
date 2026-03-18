@@ -2184,9 +2184,10 @@ def ui_shell(request: Request) -> str:
 
       async function cancelConversation() {{
         if (!currentConversationId) return;
-        const response = await fetch(`/v1/ui/conversations/${{currentConversationId}}/cancel`, {{
+        const response = await fetch(`/v1/ui/conversations/${{currentConversationId}}/actions`, {{
           method: "POST",
           headers: authHeaders({{ "Content-Type": "application/json" }}),
+          body: JSON.stringify({{ action: "cancel_conversation" }}),
         }});
         if (!response.ok) {{
           setStatus(await response.text());
@@ -2552,15 +2553,6 @@ def ui_add_conversation_action(
         payload.get("action", ""),
         payload.get("payload", {}),
     )
-
-
-@app.post("/v1/ui/conversations/{conversation_id}/cancel")
-def ui_cancel_conversation(
-    conversation_id: str,
-    _: None = Depends(require_ui_token),
-    store: AbstractRegistryStore = Depends(get_store),
-) -> dict[str, Any]:
-    return store.cancel_conversation(conversation_id)
 
 
 @app.get("/v1/ui/tasks")

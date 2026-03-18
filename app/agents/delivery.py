@@ -36,7 +36,7 @@ def _registry_semantic_action(
     semantic = {
         "approve": "approve_pending",
         "reject": "reject_pending",
-        "cancel": "cancel_conversation",
+        "cancel_conversation": "cancel_conversation",
         "retry_skip": "retry_skip",
         "retry_allow": "retry_allow",
         "approve_delegation": "delegation_approve",
@@ -93,7 +93,7 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
         )
         if envelope is None:
             return "rejected"
-        if action == "cancel":
+        if action == "cancel_conversation":
             is_new = record_inbound_envelope(config.data_dir, envelope)
             if not is_new:
                 return "accepted"
@@ -111,36 +111,6 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
                 )
             return "accepted"
         enqueue_inbound_envelope(config.data_dir, envelope)
-        return "accepted"
-
-    if kind == "control":
-        conversation_ref = str(payload.get("conversation_ref", "") or payload.get("conversation_id", ""))
-        if not conversation_ref:
-            return "rejected"
-        action = str(payload.get("action", "")).lower()
-        envelope = _registry_semantic_action(
-            conversation_ref=conversation_ref,
-            action=action,
-            payload={},
-            delivery_id=delivery_id,
-        )
-        if envelope is None:
-            return "rejected"
-        is_new = record_inbound_envelope(config.data_dir, envelope)
-        if not is_new:
-            return "accepted"
-        result = work_queue.request_cancel(
-            config.data_dir,
-            envelope.conversation_key,
-            envelope.actor_key,
-            cancel_request_event_id=envelope.event_id,
-        )
-        if result == work_queue.CancelRequestResult.nothing_to_cancel:
-            work_queue.enqueue_work_item(
-                config.data_dir,
-                envelope.conversation_key,
-                envelope.event_id,
-            )
         return "accepted"
 
     if kind == "routed_result":

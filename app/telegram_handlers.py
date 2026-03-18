@@ -83,11 +83,7 @@ from app.transports.admission import (
 from app.transports.types import InboundEnvelope
 from app.credential_validation import validate_credential
 from app.inbound_use_case_factory import (
-    get_credential_management_use_cases,
-    get_conversation_control_use_cases,
     get_conversation_settings_use_cases,
-    get_pending_request_use_cases,
-    get_recovery_use_cases,
     get_runtime_skill_activation_use_cases,
     get_runtime_skill_catalog_use_cases,
     get_runtime_skill_import_use_cases,
@@ -117,6 +113,38 @@ from app.transport import (
     normalize_message,
     normalize_user,
     serialize_inbound,
+)
+from app.telegram_runtime_skill_surface import (
+    cmd_clear_credentials as runtime_skill_cmd_clear_credentials,
+    handle_clear_cred_callback as runtime_skill_handle_clear_cred_callback,
+    handle_skill_add_callback as runtime_skill_handle_skill_add_callback,
+    handle_skill_update_callback as runtime_skill_handle_skill_update_callback,
+    handle_worker_skill_action as runtime_skill_handle_worker_skill_action,
+    maybe_handle_setup_message as runtime_skill_maybe_handle_setup_message,
+)
+from app.telegram_conversation_surface import (
+    cancel_chat_operation as conversation_cancel_chat_operation,
+    cmd_approval as conversation_cmd_approval,
+    cmd_cancel as conversation_cmd_cancel,
+    cmd_compact as conversation_cmd_compact,
+    cmd_model as conversation_cmd_model,
+    cmd_new as conversation_cmd_new,
+    cmd_policy as conversation_cmd_policy,
+    cmd_project as conversation_cmd_project,
+    cmd_role as conversation_cmd_role,
+    cmd_settings as conversation_cmd_settings,
+    handle_settings_callback as conversation_handle_settings_callback,
+    handle_worker_conversation_action as conversation_handle_worker_action,
+)
+from app.telegram_pending_request_surface import (
+    approve_pending as pending_approve_pending,
+    handle_pending_callback as pending_handle_callback,
+    handle_recovery_action as pending_handle_recovery_action,
+    handle_recovery_callback as pending_handle_recovery_callback,
+    handle_worker_pending_action as pending_handle_worker_action,
+    reject_pending as pending_reject_pending,
+    retry_allow_pending as pending_retry_allow_pending,
+    retry_skip_pending as pending_retry_skip_pending,
 )
 from app.worker import poll_interval_for_runtime
 
@@ -1695,44 +1723,15 @@ async def approve_pending(
     *,
     cancel_event: asyncio.Event | None = None,
 ) -> None:
-    session = _load(chat_id)
-    outcome = get_pending_request_use_cases().approve(
-        session,
-        cfg=_cfg(),
-        provider_name=_prov().name,
-    )
-    if outcome.mutated:
-        _save(chat_id, session)
-    if outcome.execution_plan is None:
-        await message.reply_text(outcome.message)
-        return
-    await execute_request(
-        chat_id,
-        outcome.execution_plan.prompt,
-        list(outcome.execution_plan.image_paths),
-        message,
-        extra_dirs=list(outcome.execution_plan.extra_dirs) or None,
-        request_user_id=outcome.execution_plan.request_user_id,
-        skip_permissions=True,
-        trust_tier=outcome.execution_plan.trust_tier,
-        cancel_event=cancel_event,
-    )
+    await pending_approve_pending(chat_id, message, cancel_event=cancel_event)
 
 
 async def reject_pending(chat_id: int, message) -> None:
-    session = _load(chat_id)
-    outcome = get_pending_request_use_cases().reject(session)
-    if outcome.mutated:
-        _save(chat_id, session)
-    await message.reply_text(outcome.message)
+    await pending_reject_pending(chat_id, message)
 
 
 async def retry_skip_pending(chat_id: int, message) -> None:
-    session = _load(chat_id)
-    outcome = get_pending_request_use_cases().retry_skip(session)
-    if outcome.mutated:
-        _save(chat_id, session)
-    await _edit_or_reply_text(message, outcome.message)
+    await pending_retry_skip_pending(chat_id, message)
 
 
 async def retry_allow_pending(
@@ -1741,28 +1740,7 @@ async def retry_allow_pending(
     *,
     cancel_event: asyncio.Event | None = None,
 ) -> None:
-    session = _load(chat_id)
-    outcome = get_pending_request_use_cases().retry_allow(
-        session,
-        cfg=_cfg(),
-        provider_name=_prov().name,
-    )
-    if outcome.mutated:
-        _save(chat_id, session)
-    if outcome.execution_plan is None:
-        await _edit_or_reply_text(message, outcome.message)
-        return
-    await execute_request(
-        chat_id,
-        outcome.execution_plan.prompt,
-        list(outcome.execution_plan.image_paths),
-        message,
-        list(outcome.execution_plan.extra_dirs),
-        request_user_id=outcome.execution_plan.request_user_id,
-        skip_permissions=True,
-        trust_tier=outcome.execution_plan.trust_tier,
-        cancel_event=cancel_event,
-    )
+    await pending_retry_allow_pending(chat_id, message, cancel_event=cancel_event)
 
 
 def _parse_delegation_callback(data: str) -> tuple[str, int] | None:
@@ -1949,33 +1927,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 @_command_handler
 async def cmd_new(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = event.chat_id
-    cfg = _cfg()
-    prov = _prov()
-    async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
-        old_session = _load(chat_id)
-        outcome = get_conversation_control_use_cases().reset_session(
-            old_session,
-            user_id=_actor_key(event.user.id),
-            provider_name=prov.name,
-            provider_state_factory=prov.new_provider_state,
-            approval_mode_default=cfg.approval_mode,
-            default_role=cfg.role,
-            default_skills=cfg.default_skills,
-        )
-        if outcome.status == "foreign_setup":
-            await update.effective_message.reply_text(
-                foreign_setup_message(old_session.awaiting_skill_setup),
-            )
-            return
-        if outcome.replacement_session is None:
-            return
-        _save(chat_id, outcome.replacement_session)
-        if outcome.cleanup_scripts:
-            get_provider_guidance_service().cleanup_codex_scripts(
-                cfg.data_dir, _conversation_key(chat_id)
-            )
-    await update.effective_message.reply_text(outcome.message)
+    await conversation_cmd_new(event, update, context)
 
 
 @_command_handler
@@ -2057,26 +2009,7 @@ async def cmd_session(event, update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @_command_handler
 async def cmd_approval(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = event.chat_id
-    arg = (event.args[0].lower() if event.args else "status")
-    if arg not in {"on", "off", "status"}:
-        await update.effective_message.reply_text(_msg.approval_usage())
-        return
-    async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
-        session = _load(chat_id)
-        if arg == "status":
-            mode = session.approval_mode
-            source = _approval_mode_source(session)
-            await update.effective_message.reply_text(
-                f"Approval mode is <b>{mode}</b> ({source}).",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup([_settings_approval_buttons(mode)]),
-            )
-            return
-        outcome = get_conversation_settings_use_cases().set_approval_mode(session, arg)
-        if outcome.mutated:
-            _save(chat_id, session)
-    await update.effective_message.reply_text(outcome.message)
+    await conversation_cmd_approval(event, update, context)
 
 
 @_command_handler
@@ -2467,203 +2400,22 @@ async def cmd_skills(event, update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 @_command_handler
 async def cmd_cancel(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if await _public_guard(event, update):
-        return
-    await cancel_chat_operation(
-        event.chat_id,
-        update.effective_message,
-        actor_user_id=event.user.id,
-        allow_admin_override=is_admin(event.user),
-        update_id=update.update_id,
-    )
-
-
-async def cancel_chat_operation(
-    chat_id: int | str,
-    message,
-    *,
-    actor_user_id: int | str = "",
-    allow_admin_override: bool = False,
-    update_id: int | None = None,
-) -> None:
-    fast_outcome = _request_cancel_fast_path(
-        chat_id,
-        actor_key=_actor_key(actor_user_id),
-        cancel_request_event_id=_event_key(update_id) if update_id is not None else "",
-        allow_override=allow_admin_override,
-    )
-    if fast_outcome is not None:
-        await message.reply_text(fast_outcome.message)
-        return
-
-    async with _chat_lock(chat_id, message=message, update_id=update_id):
-        session = _load(chat_id)
-        outcome = get_conversation_control_use_cases().cancel_conversation(
-            session,
-            data_dir=_cfg().data_dir,
-            conversation_key=_conversation_key(chat_id),
-            actor_key=_actor_key(actor_user_id),
-            cancel_request_event_id=_event_key(update_id) if update_id is not None else "",
-            allow_override=allow_admin_override,
-        )
-        if outcome.mutated:
-            _save(chat_id, session)
-    await message.reply_text(outcome.message)
-
-
-def _request_cancel_fast_path(
-    chat_id: int | str,
-    *,
-    actor_key: str,
-    cancel_request_event_id: str = "",
-    allow_override: bool = False,
-):
-    session = _load(chat_id)
-    outcome = get_conversation_control_use_cases().cancel_conversation(
-        session,
-        data_dir=_cfg().data_dir,
-        conversation_key=_conversation_key(chat_id),
-        actor_key=actor_key,
-        live_cancel_event=_LIVE_CANCEL.get(chat_id),
-        cancel_request_event_id=cancel_request_event_id,
-        allow_override=allow_override,
-    )
-    if outcome.status in {"live_cancel_requested", "queued_cancelled"}:
-        return outcome
-    return None
+    await conversation_cmd_cancel(event, update, context)
 
 
 @_command_handler
 async def cmd_clear_credentials(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if await _public_guard(event, update):
-        return
-    user_id = telegram_numeric_id(_actor_key(event.user.id)) or 0
-    args = event.args
-    skill_name = args[0] if args else None
-
-    stored = list(get_credential_management_use_cases().list_stored_skills(_actor_key(user_id)))
-
-    if skill_name:
-        if skill_name not in stored:
-            await update.effective_message.reply_text(
-                f"No stored credentials for <code>{html.escape(skill_name)}</code>.",
-                parse_mode=ParseMode.HTML,
-            )
-            return
-        affected = [skill_name]
-        msg = (f"This will remove your credentials for "
-               f"<code>{html.escape(skill_name)}</code> and deactivate it "
-               f"in this chat. Continue?")
-        cb_data = f"clear_cred_confirm:{user_id}:{skill_name}"
-    else:
-        if not stored:
-            await update.effective_message.reply_text("No stored credentials found.")
-            return
-        affected = stored
-        names = html.escape(", ".join(affected))
-        msg = (f"This will remove all your stored credentials "
-               f"({names}) and deactivate affected skills. Continue?")
-        cb_data = f"clear_cred_confirm_all:{user_id}"
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("Yes, clear", callback_data=cb_data),
-        InlineKeyboardButton("Cancel", callback_data=f"clear_cred_cancel:{user_id}"),
-    ]])
-    await update.effective_message.reply_text(msg, parse_mode=ParseMode.HTML,
-                                              reply_markup=keyboard)
-
-
-async def _execute_clear_credentials(
-    query, chat_id: int, user_id: int, skill_name: str | None,
-) -> None:
-    """Shared logic for clearing credentials after confirmation."""
-    async with _chat_lock(chat_id, query=query) as already_answered:
-        if not already_answered:
-            await query.answer()
-        session = _load(chat_id)
-        outcome = get_credential_management_use_cases().clear_credentials(
-            session,
-            actor_key=_actor_key(user_id),
-            skill_name=skill_name,
-        )
-        if outcome.mutated:
-            _save(chat_id, session)
-
-    parts = []
-    if outcome.removed_skills:
-        parts.append(f"Credentials cleared for: {html.escape(', '.join(outcome.removed_skills))}.")
-    if outcome.setup_cleared:
-        parts.append(_msg.credential_setup_cancelled())
-    if outcome.deactivated_skills:
-        parts.append(f"Deactivated in this chat: {html.escape(', '.join(outcome.deactivated_skills))}.")
-    if not parts:
-        parts.append("No credentials to clear (may have already been removed).")
-    await query.edit_message_text("\n".join(parts), parse_mode=ParseMode.HTML)
+    await runtime_skill_cmd_clear_credentials(event, update, context)
 
 
 @_callback_handler
 async def handle_clear_cred_callback(event, query) -> None:
-    chat_id = event.chat_id
-    clicker_id = telegram_numeric_id(_actor_key(event.user.id)) or 0
-
-    # All callback data encodes the initiating user: clear_cred_<action>:<uid>[:<skill>]
-    # Reject if a different user clicks the button.
-    parts = event.data.split(":")
-    # parts[0] = "clear_cred_cancel" | "clear_cred_confirm" | "clear_cred_confirm_all"
-    if len(parts) >= 2:
-        try:
-            owner_id = int(parts[1])
-        except (ValueError, IndexError):
-            owner_id = 0
-        if owner_id and clicker_id != owner_id:
-            await query.answer(_msg.callback_wrong_user(), show_alert=True)
-            return
-
-    if parts[0] == "clear_cred_cancel":
-        await query.answer()
-        await query.edit_message_reply_markup(reply_markup=None)
-        await query.edit_message_text(_msg.credential_clear_cancelled())
-        return
-
-    if parts[0] == "clear_cred_confirm_all":
-        await query.edit_message_reply_markup(reply_markup=None)
-        await _execute_clear_credentials(query, chat_id, clicker_id, None)
-        return
-
-    if parts[0] == "clear_cred_confirm" and len(parts) >= 3:
-        skill_name = parts[2]
-        await query.edit_message_reply_markup(reply_markup=None)
-        await _execute_clear_credentials(query, chat_id, clicker_id, skill_name)
-        return
+    await runtime_skill_handle_clear_cred_callback(event, query)
 
 
 @_command_handler
 async def cmd_compact(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = event.chat_id
-    args = event.args
-
-    if not args:
-        session = _load(chat_id)
-        current = session.compact_mode if session.compact_mode is not None else _cfg().compact_mode
-        state = "on" if current else "off"
-        await update.effective_message.reply_text(
-            f"Compact mode is <b>{state}</b>.",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([_settings_compact_buttons(current)]),
-        )
-        return
-
-    mode = args[0].lower()
-    if mode not in {"on", "off"}:
-        await update.effective_message.reply_text("Usage: /compact on|off")
-        return
-
-    async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
-        session = _load(chat_id)
-        outcome = get_conversation_settings_use_cases().set_compact_mode(session, mode == "on")
-        if outcome.mutated:
-            _save(chat_id, session)
-    await update.effective_message.reply_text(outcome.message, parse_mode=ParseMode.HTML)
+    await conversation_cmd_compact(event, update, context)
 
 
 @_command_handler
@@ -2690,118 +2442,12 @@ async def cmd_raw(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 @_command_handler
 async def cmd_role(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if await _public_guard(event, update):
-        return
-    chat_id = event.chat_id
-    args = event.args
-
-    if not args:
-        session = _load(chat_id)
-        role = session.role
-        if role:
-            await update.effective_message.reply_text(
-                f"Current role: <code>{html.escape(role)}</code>", parse_mode=ParseMode.HTML,
-            )
-        else:
-            await update.effective_message.reply_text("No role set (using instance default).")
-        return
-
-    if args[0].lower() == "clear":
-        async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
-            session = _load(chat_id)
-            outcome = get_conversation_settings_use_cases().set_role(
-                session,
-                "",
-                default_role=_cfg().role,
-            )
-            if outcome.mutated:
-                _save(chat_id, session)
-        await update.effective_message.reply_text(outcome.message)
-        return
-
-    role_text = " ".join(args)
-    async with _chat_lock(chat_id, message=update.effective_message, update_id=update.update_id):
-        session = _load(chat_id)
-        outcome = get_conversation_settings_use_cases().set_role(
-            session,
-            role_text,
-            default_role=_cfg().role,
-        )
-        if outcome.mutated:
-            _save(chat_id, session)
-    await update.effective_message.reply_text(outcome.message, parse_mode=ParseMode.HTML)
+    await conversation_cmd_role(event, update, context)
 
 
 @_command_handler
 async def cmd_model(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    cfg = _cfg()
-    msg = update.effective_message
-    chat_id = event.chat_id
-    settings = get_conversation_settings_use_cases()
-    trust = _trust_tier(event.user)
-
-    arg = event.args[0].lower() if event.args else ""
-
-    # inherit must run even when model_profiles is empty — clears stale overrides
-    if arg == "inherit":
-        async with _chat_lock(chat_id, message=msg, update_id=update.update_id):
-            session = _load(chat_id)
-            outcome = settings.set_model_profile(
-                session,
-                "",
-                cfg=cfg,
-                provider_name=_prov().name,
-                trust_tier=trust,
-            )
-            if outcome.mutated:
-                _save(chat_id, session)
-        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
-        return
-
-    if not cfg.model_profiles:
-        session = _load(chat_id)
-        outcome = settings.set_model_profile(
-            session,
-            arg if arg and arg != "status" else "fast",
-            cfg=cfg,
-            provider_name=_prov().name,
-            trust_tier=trust,
-        )
-        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
-        return
-
-    session = _load(chat_id)
-    resolved = _resolve_context(session, trust)
-    effective = resolved.effective_model
-    available, current = _settings_model_profile_state(session, cfg, trust, effective or "")
-
-    if arg and arg != "status":
-        async with _chat_lock(chat_id, message=msg, update_id=update.update_id):
-            session = _load(chat_id)
-            outcome = settings.set_model_profile(
-                session,
-                arg,
-                cfg=cfg,
-                provider_name=_prov().name,
-                trust_tier=trust,
-            )
-            if outcome.mutated:
-                _save(chat_id, session)
-        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
-        return
-
-    # Show current + inline keyboard (same effective-profile source as /settings)
-    buttons = _settings_model_buttons(available, current, has_explicit_override=bool(session.model_profile))
-    text = (
-        f"Model profile: <b>{html.escape(current)}</b>\n"
-        f"Effective model: <code>{html.escape(effective or cfg.model or '(default)')}</code>"
-    )
-    if buttons:
-        text += "\n\n" + _msg.model_choose_profile_hint()
-        await msg.reply_text(text, parse_mode=ParseMode.HTML,
-                             reply_markup=InlineKeyboardMarkup([buttons]))
-    else:
-        await msg.reply_text(text, parse_mode=ParseMode.HTML)
+    await conversation_cmd_model(event, update, context)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2838,67 +2484,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     needs_welcome = not session_exists(cfg.data_dir, _conversation_key(chat_id))
 
     data_dir = cfg.data_dir
-    session = _load(chat_id)
-    setup = session.awaiting_skill_setup
-    if setup and setup.user_id == _actor_key(user_id):
-        # Credential setup: record update for dedupe only; handle inline. No work item so worker
-        # never sees this message as provider work (avoids race and secret-leak path).
-        if not work_queue.record_update(
-            data_dir,
-            _event_key(uid),
-            _conversation_key(chat_id),
-            _actor_key(user_id),
-            "message",
-            payload=payload,
-        ):
-            return  # duplicate update_id
-        try:
-            async with _chat_lock(chat_id, message=message, update_id=uid, supersede_recovery=True):
-                session = _load(chat_id)
-                setup = session.awaiting_skill_setup
-                if not setup or setup.user_id != _actor_key(user_id):
-                    return
-                await message.chat.send_action(ChatAction.TYPING)
-                raw_value = (message.text or "").strip()
-                if not raw_value:
-                    await message.reply_text("Please send the credential value as a text message.")
-                    return
-                outcome = await get_runtime_skill_setup_use_cases().submit_credential_value(
-                    session,
-                    user_id=_actor_key(user_id),
-                    raw_value=raw_value,
-                    validator=validate_credential,
-                )
-                if outcome.status == "validation_failed":
-                    try:
-                        await message.delete()
-                    except Exception:
-                        log.warning("Could not delete credential message for user %d", user_id)
-                    await message.reply_text(
-                        f"Credential validation failed for <code>{html.escape(outcome.validation_key)}</code>: "
-                        f"{html.escape(outcome.validation_error)}\nPlease try again.",
-                        parse_mode=ParseMode.HTML,
-                    )
-                    return
-                try:
-                    await message.delete()
-                except Exception:
-                    log.warning("Could not delete credential message for user %d", user_id)
-                if outcome.status == "next_requirement" and outcome.next_requirement:
-                    _save(chat_id, session)
-                    await message.reply_text(
-                        format_credential_prompt(outcome.next_requirement),
-                        parse_mode=ParseMode.HTML,
-                    )
-                else:
-                    skill_name = outcome.skill_name or setup.skill
-                    _save(chat_id, session)
-                    await message.reply_text(
-                        f"Skill <code>{html.escape(skill_name)}</code> is ready.",
-                        parse_mode=ParseMode.HTML,
-                    )
-        except Exception:
-            raise
+    if await runtime_skill_maybe_handle_setup_message(update, msg, payload):
         return
 
     envelope = InboundEnvelope(
@@ -2935,29 +2521,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 @_callback_handler
 async def handle_callback(event, query) -> None:
-    chat_id = event.chat_id
-
-    async with _chat_lock(chat_id, query=query) as already_answered:
-        if not already_answered:
-            await query.answer()
-        if event.data == "approval_approve":
-            await query.edit_message_reply_markup(reply_markup=None)
-            await approve_pending(chat_id, query.message)
-            return
-
-        if event.data == "approval_reject":
-            await query.edit_message_reply_markup(reply_markup=None)
-            await reject_pending(chat_id, query.message)
-            return
-
-        if event.data == "retry_skip":
-            await query.edit_message_reply_markup(reply_markup=None)
-            await retry_skip_pending(chat_id, query.message)
-            return
-
-        if event.data == "retry_allow":
-            await query.edit_message_reply_markup(reply_markup=None)
-            await retry_allow_pending(chat_id, query.message)
+    await pending_handle_callback(event, query)
 
 
 @_callback_handler
@@ -2981,39 +2545,7 @@ async def handle_delegation_callback(event, query) -> None:
 
 
 async def handle_recovery_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle Replay / Discard buttons from post-restart recovery notices.
-
-    This handler bypasses ``_callback_handler`` because:
-    - The callback's own update_id should not create a work item.
-    - Replay creates a fresh execution with ``_chat_lock`` using the
-      recovered item, not the callback's update.
-    """
-    query = update.callback_query
-    user = access.to_inbound_user(update.effective_user)
-    if user is None or not is_allowed(user):
-        await query.answer(_msg.trust_not_authorized(), show_alert=True)
-        return
-
-    data = query.data or ""
-    parts = data.split(":", 1)
-    if len(parts) != 2:
-        await query.answer(_msg.recovery_invalid_action())
-        return
-    action, update_id_str = parts
-    try:
-        update_id = int(update_id_str)
-    except (ValueError, TypeError):
-        await query.answer(_msg.recovery_invalid_action())
-        return
-
-    chat_id = update.effective_chat.id
-    await handle_recovery_action(
-        chat_id,
-        action,
-        update_id,
-        query.message,
-        answer_action=query.answer,
-    )
+    await pending_handle_recovery_callback(update, context)
 
 
 async def handle_recovery_action(
@@ -3025,80 +2557,14 @@ async def handle_recovery_action(
     answer_action=None,
     cancel_event: asyncio.Event | None = None,
 ) -> None:
-    if answer_action is None:
-        async def answer_action(text=None, show_alert=False):
-            del text, show_alert
-            return None
-
-    cfg = _cfg()
-    data_dir = cfg.data_dir
-    outcome = get_recovery_use_cases().prepare_action(
-        data_dir=data_dir,
-        conversation_key=_conversation_key(chat_id),
-        event_id=_event_key(update_id),
-        action=action,
-        worker_id=_boot_id,
-        ignore_claimed_item_id=str(getattr(message, "_worker_item_id", "")),
-        config=cfg,
+    await pending_handle_recovery_action(
+        chat_id,
+        action,
+        update_id,
+        message,
+        answer_action=answer_action,
+        cancel_event=cancel_event,
     )
-    if outcome.toast_message:
-        await answer_action(outcome.toast_message, show_alert=outcome.show_alert)
-    if outcome.edit_message:
-        try:
-            await _edit_or_reply_text(
-                message,
-                outcome.edit_message,
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception:
-            pass
-    if outcome.replay_plan is None:
-        return
-
-    prompt, image_paths = build_user_prompt(
-        outcome.replay_plan.event.text,
-        list(outcome.replay_plan.event.attachments),
-    )
-    try:
-        async with _chat_lock(chat_id, message=message, worker_item={"id": outcome.replay_plan.item_id}):
-            session = _load(chat_id)
-            if not getattr(outcome.replay_plan.event, "routed_task_id", "") and session.approval_mode == "on":
-                await request_approval(
-                    chat_id, prompt, image_paths, list(outcome.replay_plan.event.attachments),
-                    message,
-                    request_user_id=outcome.replay_plan.event.user.id,
-                    trust_tier=outcome.replay_plan.trust_tier,
-                    cancel_event=cancel_event,
-                )
-            else:
-                await execute_request(
-                    chat_id, prompt, image_paths, message,
-                    request_user_id=outcome.replay_plan.event.user.id,
-                    trust_tier=outcome.replay_plan.trust_tier,
-                    cancel_event=cancel_event,
-                )
-        get_recovery_use_cases().complete_replay(
-            data_dir=data_dir,
-            item_id=outcome.replay_plan.item_id,
-        )
-    except work_queue.LeaveClaimed:
-        # Replay interrupted by another restart — item stays claimed.
-        # Next boot will recover it and send a new notice.
-        log.warning("Replay interrupted for chat %d; item stays claimed for re-recovery", chat_id)
-    except Exception:
-        log.exception("Replay failed for chat %d", chat_id)
-        get_recovery_use_cases().fail_replay(
-            data_dir=data_dir,
-            item_id=outcome.replay_plan.item_id,
-        )
-        try:
-            await _edit_or_reply_text(
-                message,
-                _msg.recovery_replay_failed_edit(),
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception:
-            pass
 
 
 # -- Expand/collapse callback handler --------------------------------------
@@ -3206,116 +2672,7 @@ async def handle_collapse_callback(event, query) -> None:
 
 @_callback_handler
 async def handle_settings_callback(event, query) -> None:
-    """Handle inline-keyboard callbacks for session settings."""
-    chat_id = event.chat_id
-    data = event.data  # e.g. "setting_model:fast", "setting_approval:on"
-
-    if not data.startswith("setting_"):
-        await query.answer()
-        return
-
-    _, rest = data.split("_", 1)
-    if ":" not in rest:
-        await query.answer()
-        return
-    setting, value = rest.split(":", 1)
-
-    async with _chat_lock(chat_id, query=query) as already_answered:
-        if not already_answered:
-            await query.answer()
-        session = _load(chat_id)
-        settings = get_conversation_settings_use_cases()
-
-        if setting == "model":
-            if value == "inherit":
-                cfg = _cfg()
-                trust = _trust_tier(event.user)
-                outcome = settings.set_model_profile(
-                    session,
-                    "",
-                    cfg=cfg,
-                    provider_name=_prov().name,
-                    trust_tier=trust,
-                )
-                if outcome.mutated:
-                    _save(chat_id, session)
-                await query.edit_message_reply_markup(reply_markup=None)
-                await query.edit_message_text(outcome.message, parse_mode=ParseMode.HTML)
-                return
-            cfg = _cfg()
-            trust = _trust_tier(event.user)
-            outcome = settings.set_model_profile(
-                session,
-                value,
-                cfg=cfg,
-                provider_name=_prov().name,
-                trust_tier=trust,
-            )
-            if outcome.mutated:
-                _save(chat_id, session)
-            await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(outcome.message, parse_mode=ParseMode.HTML)
-
-        elif setting == "approval":
-            if value not in {"on", "off"}:
-                return
-            outcome = settings.set_approval_mode(session, value)
-            if outcome.mutated:
-                _save(chat_id, session)
-            await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(
-                outcome.message)
-
-        elif setting == "compact":
-            outcome = settings.set_compact_mode(session, value == "on")
-            if outcome.mutated:
-                _save(chat_id, session)
-            await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(
-                outcome.message,
-                parse_mode=ParseMode.HTML,
-            )
-
-        elif setting == "policy":
-            if is_public_user(event.user):
-                await query.edit_message_text(_msg.trust_file_policy_public())
-                return
-            mapped = "" if value == "inherit" else value
-            outcome = settings.set_file_policy(
-                session,
-                mapped,
-                cfg=_cfg(),
-                provider_name=_prov().name,
-                trust_tier=_trust_tier(event.user),
-                provider_state_factory=_prov().new_provider_state,
-            )
-            if outcome.status == "invalid":
-                return
-            if outcome.mutated:
-                _save(chat_id, session)
-            await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(
-                outcome.message,
-                parse_mode=ParseMode.HTML,
-            )
-
-        elif setting == "project":
-            if is_public_user(event.user):
-                await query.edit_message_text(_msg.trust_project_public())
-                return
-            if not _cfg().projects:
-                await query.edit_message_text(_msg.no_projects_configured())
-                return
-            outcome = settings.set_project(
-                session,
-                value,
-                cfg=_cfg(),
-                provider_state_factory=_prov().new_provider_state,
-            )
-            if outcome.mutated:
-                _save(chat_id, session)
-            await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(outcome.message, parse_mode=ParseMode.HTML)
+    await conversation_handle_settings_callback(event, query)
 
 
 # -- Application builder ---------------------------------------------------
@@ -3323,260 +2680,26 @@ async def handle_settings_callback(event, query) -> None:
 
 @_callback_handler
 async def handle_skill_add_callback(event, query) -> None:
-    chat_id = event.chat_id
-
-    if event.data == "skill_add_cancel":
-        await query.answer()
-        await query.edit_message_reply_markup(reply_markup=None)
-        await query.edit_message_text("Skill activation cancelled.")
-        return
-
-    if event.data.startswith("skill_add_confirm:"):
-        name = event.data.split(":", 1)[1]
-        async with _chat_lock(chat_id, query=query) as already_answered:
-            if not already_answered:
-                await query.answer()
-            session = _load(chat_id)
-            if get_runtime_skill_activation_use_cases().confirm_activate(session, name).mutated:
-                _save(chat_id, session)
-            await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(
-                f"Skill <code>{html.escape(name)}</code> activated.",
-                parse_mode=ParseMode.HTML)
+    await runtime_skill_handle_skill_add_callback(event, query)
 
 
 @_callback_handler
 async def handle_skill_update_callback(event, query) -> None:
-    if not is_admin(event.user):
-        await query.answer("Only admins can update skills.", show_alert=True)
-        return
-
-    await query.answer()
-
-    if event.data == "skill_update_cancel":
-        await query.edit_message_reply_markup(reply_markup=None)
-        await query.edit_message_text("Update cancelled.")
-        return
-
-    if event.data.startswith("skill_update_confirm:"):
-        name = event.data.split(":", 1)[1]
-        result = await asyncio.to_thread(
-            get_runtime_skill_import_use_cases().update,
-            name,
-        )
-        msg = result.message
-        size_warnings = _check_prompt_size_cross_chat(_cfg().data_dir, name) if result.ok else []
-        if size_warnings:
-            msg += "\n\nPrompt size warnings:\n" + "\n".join(size_warnings)
-        await query.edit_message_reply_markup(reply_markup=None)
-        await query.edit_message_text(html.escape(msg), parse_mode=ParseMode.HTML)
-        return
-
-    if event.data == "skill_update_all_confirm":
-        results = await asyncio.to_thread(
-            get_runtime_skill_import_use_cases().update_all,
-        )
-        if not results:
-            await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text("No imported skills need updating.")
-            return
-        lines = ["<b>Update results:</b>"]
-        all_size_warnings: list[str] = []
-        for result in results:
-            status = "\u2714" if result.ok else "\u2718"
-            lines.append(f"  {status} {html.escape(result.message)}")
-            if result.ok:
-                all_size_warnings.extend(_check_prompt_size_cross_chat(_cfg().data_dir, result.name))
-        if all_size_warnings:
-            lines.append("")
-            lines.append("<b>Prompt size warnings:</b>")
-            for w in all_size_warnings:
-                lines.append(f"  {html.escape(w)}")
-        await query.edit_message_reply_markup(reply_markup=None)
-        await query.edit_message_text("\n".join(lines), parse_mode=ParseMode.HTML)
+    await runtime_skill_handle_skill_update_callback(event, query)
 
 @_command_handler
 async def cmd_project(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if await _public_guard(event, update):
-        return
-    cfg = _cfg()
-    msg = update.effective_message
-    arg = event.args[0].lower() if event.args else ""
-
-    # No projects configured: early exit for all subcommands
-    if not cfg.projects:
-        await msg.reply_text(_msg.no_projects_configured())
-        return
-
-    if arg == "list":
-        session = _load(event.chat_id)
-        current = session.project_id
-        lines = ["<b>Available projects:</b>"]
-        for proj in cfg.projects:
-            marker = " (active)" if proj.name == current else ""
-            lines.append(f"  <code>{html.escape(proj.name)}</code> \u2192 {html.escape(proj.root_dir)}{marker}")
-        await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
-        return
-
-    if arg == "use" and len(event.args) >= 2:
-        project_name = event.args[1]
-        async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
-            session = _load(event.chat_id)
-            outcome = get_conversation_settings_use_cases().set_project(
-                session,
-                project_name,
-                cfg=cfg,
-                provider_state_factory=_prov().new_provider_state,
-            )
-            if outcome.mutated:
-                _save(event.chat_id, session)
-        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
-        return
-
-    if arg == "clear":
-        async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
-            session = _load(event.chat_id)
-            outcome = get_conversation_settings_use_cases().set_project(
-                session,
-                "clear",
-                cfg=cfg,
-                provider_state_factory=_prov().new_provider_state,
-            )
-            if outcome.mutated:
-                _save(event.chat_id, session)
-        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
-        return
-
-
-    # Default: show current project with discoverable inline choices
-    session = _load(event.chat_id)
-    proj = _resolve_project(session)
-    working_dir = proj.root_dir if proj else str(cfg.working_dir)
-    project_label = proj.name if proj else "No project"
-    lines = [
-        f"Project: <b>{html.escape(project_label)}</b>",
-        f"Working dir: <code>{html.escape(working_dir)}</code>",
-    ]
-    buttons = _settings_project_buttons(cfg, session)
-    lines.append(_msg.project_use_buttons_or_list_hint())
-    text = "\n".join(lines)
-    await msg.reply_text(
-        text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
+    await conversation_cmd_project(event, update, context)
 
 
 @_command_handler
 async def cmd_settings(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Discoverability surface: current chat settings and inline controls (same mutations as commands)."""
-    cfg = _cfg()
-    msg = update.effective_message
-    chat_id = event.chat_id
-    session = _load(chat_id)
-    trust = _trust_tier(event.user)
-    resolved = _resolve_context(session, trust_tier=trust)
-
-    # Display from resolved context only (public-safe: no trusted project/path leak)
-    project_display = resolved.project_id or "No project"
-    if trust == "public":
-        project_display = "No project"
-    working_dir = resolved.working_dir
-    policy = resolved.file_policy or "edit"
-    compact = session.compact_mode if session.compact_mode is not None else cfg.compact_mode
-    compact_label = "on" if compact else "off"
-    effective_model = resolved.effective_model
-    model_available, model_display = _settings_model_profile_state(
-        session, cfg, trust, effective_model or ""
-    )
-    approval = session.approval_mode
-
-    lines = [
-        "<b>Chat settings</b>",
-        f"Project: <code>{html.escape(project_display)}</code> \u2192 <code>{html.escape(working_dir)}</code>",
-        f"Model profile: <code>{html.escape(model_display)}</code>",
-        f"File policy: <code>{html.escape(policy)}</code>",
-        f"Compact mode: <b>{compact_label}</b>",
-        f"Approval mode: <b>{approval}</b>",
-        _msg.settings_use_buttons_hint(),
-    ]
-    if effective_model:
-        lines.insert(3, f"Effective model: <code>{html.escape(effective_model)}</code>")
-    if trust == "public":
-        lines.append(_msg.trust_settings_managed_public())
-    text = "\n".join(lines)
-
-    # Inline keyboard: omit project and policy controls for public users
-    keyboard: list[list[InlineKeyboardButton]] = []
-    if trust != "public":
-        keyboard.extend(_settings_project_buttons(cfg, session))
-        keyboard.append(_settings_policy_buttons(policy, has_explicit_override=bool(session.file_policy)))
-    if model_available:
-        keyboard.append(_settings_model_buttons(model_available, model_display, has_explicit_override=bool(session.model_profile)))
-    elif session.model_profile:
-        # No profiles configured but stale override exists — show inherit-only button
-        keyboard.append([InlineKeyboardButton("Clear model override", callback_data="setting_model:inherit")])
-    keyboard.append(_settings_compact_buttons(compact))
-    keyboard.append(_settings_approval_buttons(approval))
-
-    await msg.reply_text(
-        text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
+    await conversation_cmd_settings(event, update, context)
 
 
 @_command_handler
 async def cmd_policy(event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if await _public_guard(event, update):
-        return
-    msg = update.effective_message
-    arg = event.args[0].lower() if event.args else ""
-
-    if arg == "inherit":
-        async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
-            session = _load(event.chat_id)
-            outcome = get_conversation_settings_use_cases().set_file_policy(
-                session,
-                "",
-                cfg=_cfg(),
-                provider_name=_prov().name,
-                trust_tier=_trust_tier(event.user),
-                provider_state_factory=_prov().new_provider_state,
-            )
-            if outcome.mutated:
-                _save(event.chat_id, session)
-        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
-        return
-
-    if arg in ("inspect", "edit"):
-        async with _chat_lock(event.chat_id, message=msg, update_id=update.update_id):
-            session = _load(event.chat_id)
-            outcome = get_conversation_settings_use_cases().set_file_policy(
-                session,
-                arg,
-                cfg=_cfg(),
-                provider_name=_prov().name,
-                trust_tier=_trust_tier(event.user),
-                provider_state_factory=_prov().new_provider_state,
-            )
-            if outcome.mutated:
-                _save(event.chat_id, session)
-        await msg.reply_text(outcome.message, parse_mode=ParseMode.HTML)
-        return
-
-    if arg == "" or arg == "status":
-        session = _load(event.chat_id)
-        resolved = _resolve_context(session, _trust_tier(event.user))
-        policy = resolved.file_policy or "edit"
-        await msg.reply_text(
-            f"File policy: <b>{html.escape(policy)}</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([_settings_policy_buttons(policy, has_explicit_override=bool(session.file_policy))]),
-        )
-        return
-
-    await msg.reply_text(_msg.policy_usage())
+    await conversation_cmd_policy(event, update, context)
 
 
 @_command_handler
@@ -3644,17 +2767,6 @@ async def cmd_listaccess(event, update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 _bot_instance = None  # Set by build_application
-
-
-@dataclasses.dataclass(frozen=True)
-class _WorkerSkillEvent:
-    chat_id: int | str
-    user: Any
-
-
-class _WorkerSkillUpdate:
-    def __init__(self, message: Any) -> None:
-        self.effective_message = message
 
 
 async def _poll_cancel_requested(item_id: str, cancel_event: asyncio.Event) -> None:
@@ -3730,89 +2842,29 @@ async def _execute_worker_action(
     *,
     cancel_event: asyncio.Event | None,
 ) -> None:
-    from app.skill_commands import skills_add, skills_clear, skills_remove, skills_setup
-
     surface, runtime_chat, chat_id, conversation_ref, source = _build_action_surface(event, item=item)
     trust = factory.trust_tier_for_source(source, event.user, config=_cfg())
-    settings = get_conversation_settings_use_cases()
     action = event.action
     params = dict(event.params)
 
-    if action == "session_new":
-        cfg = _cfg()
-        prov = _prov()
-        old_session = _load(runtime_chat)
-        outcome = get_conversation_control_use_cases().reset_session(
-            old_session,
-            user_id=_actor_key(event.user.id),
-            provider_name=prov.name,
-            provider_state_factory=prov.new_provider_state,
-            approval_mode_default=cfg.approval_mode,
-            default_role=cfg.role,
-            default_skills=cfg.default_skills,
-        )
-        if outcome.status == "foreign_setup":
-            await surface.reply_text(
-                foreign_setup_message(old_session.awaiting_skill_setup),
-            )
-            return
-        if outcome.replacement_session is None:
-            return
-        _save(runtime_chat, outcome.replacement_session)
-        if outcome.cleanup_scripts:
-            get_provider_guidance_service().cleanup_codex_scripts(
-                cfg.data_dir, _conversation_key(runtime_chat)
-            )
-        await surface.reply_text(outcome.message)
+    if await conversation_handle_worker_action(
+        event,
+        item,
+        surface,
+        runtime_chat=runtime_chat,
+        source=source,
+        trust=trust,
+    ):
         return
 
-    if action == "set_approval_mode":
-        value = str(params.get("value", "")).lower()
-        session = _load(runtime_chat)
-        outcome = settings.set_approval_mode(session, value)
-        if outcome.status == "invalid":
-            return
-        if outcome.mutated:
-            _save(runtime_chat, session)
-        await surface.edit_reply_markup(reply_markup=None)
-        await _edit_or_reply_text(surface, outcome.message)
-        return
-
-    if action == "approve_pending":
-        await surface.edit_reply_markup(reply_markup=None)
-        await approve_pending(runtime_chat, surface, cancel_event=cancel_event)
-        return
-
-    if action == "reject_pending":
-        await surface.edit_reply_markup(reply_markup=None)
-        await reject_pending(runtime_chat, surface)
-        return
-
-    if action == "retry_skip":
-        await surface.edit_reply_markup(reply_markup=None)
-        await retry_skip_pending(runtime_chat, surface)
-        return
-
-    if action == "retry_allow":
-        await surface.edit_reply_markup(reply_markup=None)
-        await retry_allow_pending(runtime_chat, surface, cancel_event=cancel_event)
-        return
-
-    if action in {"recovery_replay", "recovery_discard"}:
-        update_id = int(params.get("update_id") or 0)
-        if update_id <= 0:
-            await surface.reply_text(_msg.recovery_invalid_action())
-            return
-        if action == "recovery_replay":
-            work_queue.complete_work_item(_cfg().data_dir, str(item.get("id", "")))
-        await surface.edit_reply_markup(reply_markup=None)
-        await handle_recovery_action(
-            runtime_chat,
-            action,
-            update_id,
-            surface,
-            cancel_event=cancel_event,
-        )
+    if await pending_handle_worker_action(
+        event,
+        item,
+        params,
+        surface,
+        runtime_chat=runtime_chat,
+        cancel_event=cancel_event,
+    ):
         return
 
     if action == "delegation_approve":
@@ -3835,137 +2887,10 @@ async def _execute_worker_action(
         await handle_surface_delegation_cancel(target_runtime, conversation_ref, surface)
         return
 
-    if action == "cancel_conversation":
-        live_outcome = _request_cancel_fast_path(
-            runtime_chat,
-            actor_key=_actor_key(event.user.id),
-            cancel_request_event_id=str(item.get("event_id", "")),
-            allow_override=(source != "telegram" or is_admin(event.user)),
-        )
-        if live_outcome is not None:
-            await surface.reply_text(live_outcome.message)
-            return
-
-        session = _load(runtime_chat)
-        outcome = get_conversation_control_use_cases().cancel_conversation(
-            session,
-            data_dir=_cfg().data_dir,
-            conversation_key=_conversation_key(runtime_chat),
-            actor_key=_actor_key(event.user.id),
-            cancel_request_event_id=str(item.get("event_id", "")),
-            allow_override=(source != "telegram" or is_admin(event.user)),
-        )
-        if outcome.mutated:
-            _save(runtime_chat, session)
-        await surface.reply_text(outcome.message)
-        return
-
-    if action == "set_compact_mode":
-        value = bool(params.get("value", False))
-        session = _load(runtime_chat)
-        outcome = settings.set_compact_mode(session, value)
-        if outcome.mutated:
-            _save(runtime_chat, session)
-        await surface.edit_reply_markup(reply_markup=None)
-        await _edit_or_reply_text(
-            surface,
-            outcome.message,
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    if action == "set_role":
-        if is_public_user(event.user):
-            await surface.reply_text(_msg.trust_command_not_available_public())
-            return
-        value = str(params.get("value", ""))
-        session = _load(runtime_chat)
-        outcome = settings.set_role(session, value, default_role=_cfg().role)
-        if outcome.mutated:
-            _save(runtime_chat, session)
-        await surface.reply_text(
-            outcome.message,
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    if action == "set_model_profile":
-        cfg = _cfg()
-        session = _load(runtime_chat)
-        profile = str(params.get("profile", ""))
-        outcome = settings.set_model_profile(
-            session,
-            profile,
-            cfg=cfg,
-            provider_name=_prov().name,
-            trust_tier=trust,
-        )
-        if outcome.mutated:
-            _save(runtime_chat, session)
-        await surface.edit_reply_markup(reply_markup=None)
-        await _edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
-        return
-
-    if action == "set_project":
-        if is_public_user(event.user):
-            await _edit_or_reply_text(surface, _msg.trust_project_public())
-            return
-        cfg = _cfg()
-        if not cfg.projects:
-            await _edit_or_reply_text(surface, _msg.no_projects_configured())
-            return
-        session = _load(runtime_chat)
-        outcome = settings.set_project(
-            session,
-            str(params.get("value", "")),
-            cfg=cfg,
-            provider_state_factory=_prov().new_provider_state,
-        )
-        if outcome.mutated:
-            _save(runtime_chat, session)
-        await surface.edit_reply_markup(reply_markup=None)
-        await _edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
-        return
-
-    if action == "set_file_policy":
-        if is_public_user(event.user):
-            await _edit_or_reply_text(surface, _msg.trust_file_policy_public())
-            return
-        value = str(params.get("value", ""))
-        session = _load(runtime_chat)
-        outcome = settings.set_file_policy(
-            session,
-            value,
-            cfg=_cfg(),
-            provider_name=_prov().name,
-            trust_tier=trust,
-            provider_state_factory=_prov().new_provider_state,
-        )
-        if outcome.status == "invalid":
-            return
-        if outcome.mutated:
-            _save(runtime_chat, session)
-        await surface.edit_reply_markup(reply_markup=None)
-        await _edit_or_reply_text(surface, outcome.message, parse_mode=ParseMode.HTML)
-        return
-
     if action in {"skills_add", "skills_remove", "skills_setup", "skills_clear"}:
-        if is_public_user(event.user):
-            await surface.reply_text(_msg.trust_command_not_available_public())
+        worker_event = dataclasses.replace(event, conversation_key=_conversation_key(runtime_chat))
+        if await runtime_skill_handle_worker_skill_action(worker_event, surface):
             return
-        proxy_event = _WorkerSkillEvent(chat_id=runtime_chat, user=event.user)
-        proxy_update = _WorkerSkillUpdate(surface)
-        name = str(params.get("name", ""))
-        if action == "skills_add":
-            await skills_add(proxy_event, proxy_update, name)
-            return
-        if action == "skills_remove":
-            await skills_remove(proxy_event, proxy_update, name)
-            return
-        if action == "skills_setup":
-            await skills_setup(proxy_event, proxy_update, name)
-            return
-        await skills_clear(proxy_event, proxy_update)
         return
 
     log.warning("Worker dispatch: unknown semantic action %s for item %s", action, item.get("id"))
@@ -4238,32 +3163,14 @@ async def _shared_cancel_command(update: Update, event, action: InboundAction) -
     is_new, envelope = _record_shared_action(update, action)
     if not is_new:
         return
-    chat_id = event.chat_id
-    actor_key = _actor_key(event.user.id)
-    message = update.effective_message
     del envelope
-    live_outcome = _request_cancel_fast_path(
-        chat_id,
-        actor_key=actor_key,
-        cancel_request_event_id=_event_key(update.update_id),
-        allow_override=is_admin(event.user),
+    await conversation_cancel_chat_operation(
+        event.chat_id,
+        update.effective_message,
+        actor_user_id=event.user.id,
+        allow_admin_override=is_admin(event.user),
+        update_id=update.update_id,
     )
-    if live_outcome is not None:
-        await message.reply_text(live_outcome.message)
-        return
-    async with _chat_lock(chat_id, message=message, update_id=update.update_id):
-        session = _load(chat_id)
-        outcome = get_conversation_control_use_cases().cancel_conversation(
-            session,
-            data_dir=_cfg().data_dir,
-            conversation_key=_conversation_key(chat_id),
-            actor_key=actor_key,
-            cancel_request_event_id=_event_key(update.update_id),
-            allow_override=is_admin(event.user),
-        )
-        if outcome.mutated:
-            _save(chat_id, session)
-    await message.reply_text(outcome.message)
 
 
 async def _shared_command_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

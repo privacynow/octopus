@@ -1410,42 +1410,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 now=now,
                 delivery_id=uuid.uuid4().hex,
             )
+            is_cancel = action == "cancel_conversation"
             self._publish_ui_timeline_conn(
                 conn,
                 conversation_id=conversation_id,
-                title=f"Action: {action}",
-                body=json.dumps(action_payload) if action_payload else "",
-                kind="surface_action",
-            )
-        return {"conversation_id": conversation_id, "accepted": True}
-
-    def cancel_conversation(self, conversation_id: str) -> dict[str, Any]:
-        with self._connect() as conn:
-            conversation = conn.execute(
-                "SELECT target_agent_id FROM conversations WHERE conversation_id = ?",
-                (conversation_id,),
-            ).fetchone()
-            if conversation is None:
-                raise KeyError(conversation_id)
-            now = utcnow_iso()
-            self._create_delivery(
-                conn,
-                target_agent_id=conversation["target_agent_id"],
-                kind="control",
-                payload={
-                    "conversation_id": conversation_id,
-                    "action": "cancel",
-                    "surface": "registry",
-                },
-                now=now,
-                delivery_id=uuid.uuid4().hex,
-            )
-            self._publish_ui_timeline_conn(
-                conn,
-                conversation_id=conversation_id,
-                title="Cancel requested",
-                body="",
-                kind="control",
+                title="Cancel requested" if is_cancel else f"Action: {action}",
+                body="" if is_cancel else json.dumps(action_payload) if action_payload else "",
+                kind="control" if is_cancel else "surface_action",
             )
         return {"conversation_id": conversation_id, "accepted": True}
 

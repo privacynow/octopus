@@ -1037,8 +1037,9 @@ def test_cancel_conversation_marks_status_cancelling_and_late_progress_does_not_
     conversation_id = create.json()["conversation_id"]
 
     cancel = client.post(
-        f"/v1/ui/conversations/{conversation_id}/cancel",
+        f"/v1/ui/conversations/{conversation_id}/actions",
         headers={"Authorization": "Bearer ui-secret"},
+        json={"action": "cancel_conversation"},
     )
     assert cancel.status_code == 200
 

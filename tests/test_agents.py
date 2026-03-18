@@ -243,7 +243,11 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
             return {
                 "deliveries": [
                     {"delivery_id": "d1", "kind": "surface_input", "payload": {"conversation_id": "c1", "text": "hello"}},
-                    {"delivery_id": "d2", "kind": "control", "payload": {"conversation_id": "c1", "action": "cancel"}},
+                    {
+                        "delivery_id": "d2",
+                        "kind": "surface_action",
+                        "payload": {"conversation_id": "c1", "action": "cancel_conversation"},
+                    },
                 ],
                 "next_cursor": "2",
             }
@@ -518,8 +522,8 @@ async def test_handle_registry_surface_action_and_control_dispatch(monkeypatch, 
             cfg,
             {
                 "delivery_id": "d-cancel",
-                "kind": "control",
-                "payload": {"conversation_id": "conv-cancel", "action": "cancel"},
+                "kind": "surface_action",
+                "payload": {"conversation_id": "conv-cancel", "action": "cancel_conversation"},
             },
         )
 

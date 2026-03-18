@@ -22,7 +22,7 @@ async def test_execute_request_proposes_delegation_and_persists_pending_delegati
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         from tests.support.handler_support import FakeChat, FakeUser
 
         chat = FakeChat()
@@ -75,7 +75,7 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         from tests.support.handler_support import FakeChat, FakeUser
 
         submitted = []
@@ -137,7 +137,7 @@ async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_s
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         from tests.support.handler_support import FakeChat, FakeUser
 
         called = []
@@ -184,7 +184,7 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         from tests.support.handler_support import FakeChat, FakeUser
 
         called = []
@@ -241,7 +241,7 @@ async def test_delegation_approve_no_pending_is_a_no_op():
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, _, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         from tests.support.handler_support import FakeChat, FakeUser
 
         save_agent_runtime_state(

@@ -76,7 +76,7 @@ async def test_happy_path():
         user = FakeUser(42)
         msg = FakeMessage(chat=chat, text="hi there")
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
@@ -101,7 +101,7 @@ async def test_worker_dispatch_schedules_completion_webhook_for_terminal_outcome
     with fresh_env(
         config_overrides={"completion_webhook_url": "https://hooks.example.com/completed"}
     ) as (data_dir, _cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         called: list[dict[str, object]] = []
 
@@ -145,7 +145,7 @@ async def test_worker_dispatch_skips_completion_webhook_for_delegation_proposed(
             "completion_webhook_url": "https://hooks.example.com/completed",
         }
     ) as (_data_dir, _cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         called: list[dict[str, object]] = []
 
@@ -204,7 +204,7 @@ async def test_help_and_start_include_discover_in_registry_mode():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -224,7 +224,7 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, _cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         from app.agents.state import AgentRuntimeState, save_agent_runtime_state
 
         seen_queries: list[object] = []
@@ -287,7 +287,7 @@ async def test_discover_standalone_reports_unavailable():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -310,7 +310,7 @@ async def test_discover_degraded_reports_registry_connectivity():
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, _cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         from app.agents.state import AgentRuntimeState, save_agent_runtime_state
 
         save_agent_runtime_state(
@@ -347,7 +347,7 @@ async def test_registry_surface_input_respects_approval_mode():
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         event = InboundMessage(
             user=InboundUser(id=_actor(42), username="registry-ui"),
@@ -493,7 +493,7 @@ async def test_delegation_proposed_event_published(monkeypatch):
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (_, _, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         from app.channels.registry.egress import RegistryChannelEgress
 
         published: list[tuple[str, str, str]] = []
@@ -543,7 +543,7 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (_, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         import app.agents.bridge as bridge
         from app.channels.registry.egress import RegistryChannelEgress
 
@@ -613,7 +613,7 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (_, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         import app.agents.bridge as bridge
 
         class FakeRegistryClient:
@@ -656,7 +656,7 @@ async def test_registry_routed_result_resumes_parent_conversation_without_new_ap
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat_id = 12345
         conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
@@ -715,7 +715,7 @@ async def test_delegation_completion_sends_final_message_all_completed():
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat_id = 12345
         conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
@@ -768,7 +768,7 @@ async def test_delegation_completion_sends_final_message_partial_failed():
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat_id = 12345
         conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
@@ -842,7 +842,7 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat_id = 12345
         conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
@@ -900,7 +900,7 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat_id = 12345
         conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
@@ -960,7 +960,7 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat_id = 12345
         conversation_ref = th.telegram_conversation_ref(cfg, chat_id)
@@ -1047,7 +1047,7 @@ async def test_registry_surface_parent_resumes_through_registry_surface(monkeypa
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         import app.agents.bridge as bridge
         from app.channels.registry.egress import RegistryChannelEgress
 
@@ -1125,7 +1125,7 @@ async def test_registry_surface_action_retry_skip_clears_pending_retry():
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat_id = 12345
         session = default_session(prov.name, prov.new_provider_state(), "on")
@@ -1169,7 +1169,7 @@ async def test_registry_surface_action_retry_allow_executes_request():
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat_id = 12345
         session = default_session(prov.name, prov.new_provider_state(), "on")
@@ -1215,7 +1215,7 @@ async def test_registry_surface_action_recovery_discard_discards_pending_recover
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         import app.runtime_backend as runtime_backend
 
         chat_id = 12345
@@ -1261,7 +1261,7 @@ async def test_registry_surface_action_recovery_replay_executes_request():
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         import app.runtime_backend as runtime_backend
 
         chat_id = 12345
@@ -1309,7 +1309,7 @@ async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch)
             "agent_registry_enroll_token": "enroll-secret",
         }
         ) as (_, cfg, prov):
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
             from app.channels.registry.egress import RegistryChannelEgress
 
             published: list[dict[str, object]] = []
@@ -1357,7 +1357,7 @@ async def test_cmd_new():
         user = FakeUser(42)
         msg = FakeMessage(chat=chat, text="/new")
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         await th.cmd_new(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
 
@@ -1379,13 +1379,13 @@ async def test_provider_timeout():
         user = FakeUser(42)
         msg = FakeMessage(chat=chat, text="long running task")
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
-        import app.channels.telegram.ingress as _th
+        import app.channels.telegram.routing as _th
         reply_texts = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "partial output" not in reply_texts
         assert sum(1 for m in current_bot_instance().sent_messages if m.get("text")) >= 1
@@ -1404,13 +1404,13 @@ async def test_provider_error_returncode():
         user = FakeUser(42)
         msg = FakeMessage(chat=chat, text="crash me")
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
-        import app.channels.telegram.ingress as _th
+        import app.channels.telegram.routing as _th
         reply_texts = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "segfault" not in reply_texts
         assert sum(1 for m in current_bot_instance().sent_messages if m.get("text")) >= 1
@@ -1424,7 +1424,7 @@ async def test_cmd_role():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -1452,7 +1452,7 @@ async def test_role_in_provider_context():
         prov.run_results = [RunResult(text="ok")]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -1481,7 +1481,7 @@ async def test_new_preserves_default_skills():
         session["active_skills"] = ["github-integration", "extra-skill"]
         save_session(data_dir, telegram_conversation_key(12345), session)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -1497,7 +1497,7 @@ async def test_help_topics():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -1530,7 +1530,7 @@ async def test_help_and_start_include_settings():
     with fresh_env(config_overrides={
         "projects": (("testproj", "/tmp", ()),),
     }) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         chat = FakeChat(12345)
         user = FakeUser(42)
         help_msg = FakeMessage(chat=chat, text="/help")
@@ -1565,7 +1565,7 @@ async def test_help_and_start_include_settings():
 async def test_help_and_start_no_model_when_profiles_empty():
     """Phase 14: /help and /start must NOT advertise /model when no model profiles configured."""
     with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         chat = FakeChat(12345)
         user = FakeUser(42)
         help_msg = FakeMessage(chat=chat, text="/help")
@@ -1585,7 +1585,7 @@ async def test_help_and_start_no_model_when_profiles_empty():
 async def test_help_and_start_no_project_when_projects_empty():
     """Phase 14: /help and /start must NOT advertise /project when no projects configured."""
     with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         chat = FakeChat(12345)
         user = FakeUser(42)
         help_msg = FakeMessage(chat=chat, text="/help")
@@ -1613,7 +1613,7 @@ async def test_help_and_start_public_user_excludes_project_and_policy():
         )
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         chat = FakeChat(12345)
         user = FakeUser(999)
         help_msg = FakeMessage(chat=chat, text="/help")
@@ -1638,7 +1638,7 @@ async def test_help_and_start_non_admin_excludes_admin_sessions():
         cfg = make_config(data_dir, admin_user_ids=frozenset(), admin_usernames=frozenset())
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         chat = FakeChat(12345)
         user = FakeUser(42)
         help_msg = FakeMessage(chat=chat, text="/help")
@@ -1658,7 +1658,7 @@ async def test_help_and_start_admin_sees_admin_sessions_and_trusted_commands():
         "admin_usernames": frozenset(),
         "projects": (("testproj", "/tmp", ()),),
     }) as (data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         chat = FakeChat(12345)
         user = FakeUser(42)
         help_msg = FakeMessage(chat=chat, text="/help")
@@ -1680,7 +1680,7 @@ def test_bucket_b_command_registration_parity():
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         from telegram.ext import CommandHandler
 
         app = th.build_application(cfg, prov)
@@ -1700,7 +1700,7 @@ def test_bucket_b_command_registration_parity():
 def test_build_application_sequential_updates():
     """build_application uses sequential update processing; live runs are worker-owned so /cancel works."""
     with fresh_env() as (_, cfg, prov):
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         app = th.build_application(cfg, prov)
         # Default sequential processing (no custom update processor)
@@ -1714,7 +1714,7 @@ async def test_first_run_welcome():
         prov.preflight_results = [RunResult(text="plan: read files")]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -1738,7 +1738,7 @@ async def test_first_run_welcome_compact_mode():
         prov.run_results = [RunResult(text="hi")]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -1758,7 +1758,7 @@ async def test_first_run_welcome_no_compact():
         prov.run_results = [RunResult(text="hi")]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -1776,7 +1776,7 @@ async def test_start_deep_link():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -1799,7 +1799,7 @@ async def test_doctor_admin_warning():
         session = default_session("claude", prov.new_provider_state(), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(1)
         user = FakeUser(1)
@@ -1822,7 +1822,7 @@ async def test_doctor_no_warning_explicit_admin():
         session = default_session("claude", prov.new_provider_state(), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(1)
         user = FakeUser(1)
@@ -1855,7 +1855,7 @@ async def test_prompt_size_warning_before_activation():
             session = default_session("claude", prov.new_provider_state(), "off")
             save_session(data_dir, telegram_conversation_key(1), session)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
             chat = FakeChat(1)
             user = FakeUser(42)
             msg = await send_command(
@@ -1897,7 +1897,7 @@ async def test_prompt_size_no_warning_small_skill():
             session = default_session("claude", prov.new_provider_state(), "off")
             save_session(data_dir, telegram_conversation_key(1), session)
 
-            import app.channels.telegram.ingress as th
+            import app.channels.telegram.routing as th
             chat = FakeChat(1)
             user = FakeUser(42)
             msg = await send_command(
@@ -1931,7 +1931,7 @@ async def test_doctor_stale_session_warnings():
         session3 = default_session("claude", prov.new_provider_state(), "off")
         save_session(data_dir, telegram_conversation_key(300), session3)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         chat = FakeChat(1)
         user = FakeUser(42)
         msg = await send_command(th.cmd_doctor, chat, user, "/doctor")
@@ -1956,7 +1956,7 @@ async def test_doctor_no_warning_explicit_admin_equal_to_allowed():
         session = default_session("claude", prov.new_provider_state(), "off")
         save_session(data_dir, telegram_conversation_key(1), session)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         chat = FakeChat(1)
         user = FakeUser(1)
         msg = await send_command(th.cmd_doctor, chat, user, "/doctor")
@@ -1979,7 +1979,7 @@ async def test_doctor_no_stale_warning_for_fresh_sessions():
         session2["awaiting_skill_setup"] = {"user_id": "tg:42", "skill": "test", "started_at": _time.time()}
         save_session(data_dir, telegram_conversation_key(200), session2)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         chat = FakeChat(1)
         user = FakeUser(42)
         msg = await send_command(th.cmd_doctor, chat, user, "/doctor")
@@ -2082,7 +2082,7 @@ async def test_cmd_doctor_corrupt_db_telegram():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         chat = FakeChat(1)
         user = FakeUser(42)
 
@@ -2151,7 +2151,7 @@ async def test_doctor_schema_mismatch_telegram():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         chat = FakeChat(1)
         user = FakeUser(42)
 
@@ -2179,7 +2179,7 @@ async def test_send_file_directive():
         await send_text(chat, user, "generate a file")
         await drain_one_worker_item(data_dir)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         bot = current_bot_instance()
         doc_sent = [m for m in bot.sent_messages if m.get("document") is not None]
         assert len(doc_sent) >= 1
@@ -2203,7 +2203,7 @@ async def test_send_image_directive():
         await send_text(chat, user, "make a chart")
         await drain_one_worker_item(data_dir)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         bot = current_bot_instance()
         photo_sent = [m for m in bot.sent_messages if m.get("photo") is not None]
         assert len(photo_sent) >= 1
@@ -2215,7 +2215,7 @@ async def test_send_image_directive():
 
 async def test_project_list_no_projects():
     """When no projects are configured, /project list says so."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(1)
         user = FakeUser(1)
@@ -2226,7 +2226,7 @@ async def test_project_list_no_projects():
 
 async def test_project_list_shows_projects():
     """When projects are configured, /project list shows them."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides={
             "projects": (("myapp", proj_dir, ()),),
@@ -2241,7 +2241,7 @@ async def test_project_list_shows_projects():
 
 async def test_project_use_switches_project():
     """'/project use <name>' binds the chat to a project and resets provider state."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides={
             "projects": (("frontend", proj_dir, ()),),
@@ -2270,7 +2270,7 @@ async def test_project_use_switches_project():
 
 async def test_project_use_unknown_project():
     """'/project use <unknown>' returns error."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "projects": (("myapp", "/tmp", ()),),
     }) as (data_dir, cfg, prov):
@@ -2283,7 +2283,7 @@ async def test_project_use_unknown_project():
 
 async def test_project_clear_resets_to_default():
     """'/project clear' removes the project binding and resets provider state."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides={
             "projects": (("myapp", proj_dir, ()),),
@@ -2308,7 +2308,7 @@ async def test_project_clear_resets_to_default():
 
 async def test_project_show_current():
     """'/project' with no args shows the current project."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides={
             "projects": (("backend", proj_dir, ()),),
@@ -2330,7 +2330,7 @@ async def test_project_show_current():
 
 async def test_project_switch_invalidates_pending():
     """Switching projects clears pending approval requests."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides={
             "projects": (("proj1", proj_dir, ()),),
@@ -2353,7 +2353,7 @@ async def test_project_switch_invalidates_pending():
 
 async def test_session_shows_project():
     """/session shows the active project when one is bound."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides={
             "projects": (("webapp", proj_dir, ()),),
@@ -2386,7 +2386,7 @@ async def test_context_hash_changes_with_project():
 
 async def test_policy_default_is_edit():
     """/policy with no args shows current policy; default is edit."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
@@ -2397,7 +2397,7 @@ async def test_policy_default_is_edit():
 
 async def test_policy_set_inspect():
     """/policy inspect switches to read-only mode and resets provider state."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
@@ -2421,7 +2421,7 @@ async def test_policy_set_inspect():
 
 async def test_policy_set_edit():
     """/policy edit switches back to edit mode."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
@@ -2439,7 +2439,7 @@ async def test_policy_set_edit():
 
 async def test_policy_same_value_noop():
     """/policy edit when already edit shows already-set message, no reset."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
@@ -2451,7 +2451,7 @@ async def test_policy_same_value_noop():
 
 async def test_policy_invalid_arg():
     """/policy with bad argument shows usage hint."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
@@ -2462,7 +2462,7 @@ async def test_policy_invalid_arg():
 
 async def test_policy_shown_in_session():
     """/session output includes file policy."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
@@ -2477,7 +2477,7 @@ async def test_policy_shown_in_session():
 
 async def test_policy_inspect_passed_to_provider():
     """When file_policy=inspect, provider run() receives it in context."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
@@ -2495,7 +2495,7 @@ async def test_policy_inspect_passed_to_provider():
 
 async def test_policy_edit_passed_to_provider():
     """When file_policy=edit (default), provider run() gets empty or 'edit'."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
@@ -2537,7 +2537,7 @@ _PROFILES = {"fast": "claude-haiku-4-5-20251001", "balanced": "claude-sonnet-4-6
 
 async def test_model_command_shows_profiles():
     """/model with no args shows current profile and inline buttons."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "model_profiles": _PROFILES, "default_model_profile": "balanced",
     }) as (data_dir, cfg, prov):
@@ -2553,7 +2553,7 @@ async def test_model_command_shows_profiles():
 
 async def test_model_command_switches_profile():
     """/model fast should switch the session model profile."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "model_profiles": _PROFILES, "default_model_profile": "balanced",
     }) as (data_dir, cfg, prov):
@@ -2568,7 +2568,7 @@ async def test_model_command_switches_profile():
 
 async def test_model_command_no_profiles_configured():
     """/model should say no profiles if none configured."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(1)
         user = FakeUser(42)
@@ -2579,7 +2579,7 @@ async def test_model_command_no_profiles_configured():
 
 async def test_settings_callback_model():
     """Inline button setting_model:fast should switch model profile."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import send_callback
     with fresh_env(config_overrides={
         "model_profiles": _PROFILES, "default_model_profile": "balanced",
@@ -2593,7 +2593,7 @@ async def test_settings_callback_model():
 
 async def test_settings_callback_approval():
     """Inline button setting_approval:off should change approval mode."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import send_callback
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
         chat = FakeChat(1)
@@ -2605,7 +2605,7 @@ async def test_settings_callback_approval():
 
 async def test_settings_callback_compact():
     """Inline button setting_compact:on should enable compact mode."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import send_callback
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(1)
@@ -2617,7 +2617,7 @@ async def test_settings_callback_compact():
 
 async def test_settings_callback_policy():
     """Inline button setting_policy:inspect should change file policy."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import send_callback
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(1)
@@ -2629,7 +2629,7 @@ async def test_settings_callback_policy():
 
 async def test_compact_change_does_not_reset_provider_state():
     """Changing compact mode via callback must not reset provider_state."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import send_callback
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(1)
@@ -2647,7 +2647,7 @@ async def test_compact_change_does_not_reset_provider_state():
 
 async def test_settings_command_shows_current_values():
     """/settings shows current project, model, policy, compact, approval and inline controls."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import get_callback_data_values
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides={
@@ -2681,7 +2681,7 @@ async def test_settings_command_shows_current_values():
 
 async def test_project_default_shows_inline_keyboard():
     """/project with no args shows inline project selection when projects configured."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import get_callback_data_values
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides={
@@ -2703,7 +2703,7 @@ async def test_project_default_shows_inline_keyboard():
 
 async def test_project_includes_next_step_hint():
     """Phase 14: /project (with projects) includes actionability hint (buttons or /project list)."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app.user_messages import project_use_buttons_or_list_hint
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides={
@@ -2719,7 +2719,7 @@ async def test_project_includes_next_step_hint():
 
 async def test_project_no_projects_shows_no_projects_configured():
     """Phase 14 follow-up: /project when no projects configured shows truthful message, not /project list hint."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app.user_messages import no_projects_configured
     with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
         chat = FakeChat(1)
@@ -2732,7 +2732,7 @@ async def test_project_no_projects_shows_no_projects_configured():
 
 async def test_project_use_no_projects_shows_no_projects_configured():
     """Phase 14: /project use <name> with no projects returns no-projects message, not unknown-project."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app.user_messages import no_projects_configured
     with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
         chat = FakeChat(1)
@@ -2746,7 +2746,7 @@ async def test_project_use_no_projects_shows_no_projects_configured():
 
 async def test_project_clear_no_projects_shows_no_projects_configured():
     """Phase 14: /project clear with no projects returns no-projects message."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app.user_messages import no_projects_configured
     with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
         chat = FakeChat(1)
@@ -2760,7 +2760,7 @@ async def test_project_clear_no_projects_shows_no_projects_configured():
 
 async def test_settings_callback_project_use():
     """setting_project:<name> callback switches project and resets provider state."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import send_callback
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides={
@@ -2782,7 +2782,7 @@ async def test_settings_callback_project_use():
 
 async def test_settings_callback_project_clear():
     """setting_project:clear callback clears project and resets provider state."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import send_callback
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides={
@@ -2800,7 +2800,7 @@ async def test_settings_callback_project_clear():
 
 async def test_settings_command_minimal_config_shows_compact_approval_only():
     """Phase 14: /settings with no projects and no model profiles shows only compact/approval buttons."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
         chat = FakeChat(1)
         user = FakeUser(42)
@@ -2829,7 +2829,7 @@ async def test_settings_command_minimal_config_shows_compact_approval_only():
 
 async def test_settings_callback_model_no_profiles_configured():
     """Phase 14: setting_model:* callback with no model profiles returns no-profiles message."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import send_callback
     from app.user_messages import trust_no_model_profiles
     with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
@@ -2844,7 +2844,7 @@ async def test_settings_callback_model_no_profiles_configured():
 
 async def test_settings_callback_project_no_projects_configured():
     """Phase 14: setting_project:* callback with no projects returns no-projects message, not mutation."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import send_callback
     from app.user_messages import no_projects_configured
     with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
@@ -2859,7 +2859,7 @@ async def test_settings_callback_project_no_projects_configured():
 
 async def test_settings_callback_project_clear_no_projects_no_mutation():
     """Phase 14: setting_project:clear with no projects must not clear persisted project_id."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import send_callback
     from app.storage import default_session, save_session
     from app.user_messages import no_projects_configured
@@ -2880,7 +2880,7 @@ async def test_settings_callback_project_clear_no_projects_no_mutation():
 
 async def test_public_settings_shows_managed_and_no_project_policy_buttons():
     """Bucket D: public user /settings shows managed message and no project/policy buttons."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app.user_messages import trust_settings_managed_public
 
     with fresh_env(config_overrides=public_user_config_overrides(
@@ -2906,7 +2906,7 @@ async def test_public_settings_model_text_and_button_agree_when_default_restrict
     When default_model_profile is restricted (e.g. balanced) and public only has fast,
     the screen must show Model profile: fast and the fast button must be checked.
     """
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides=public_user_config_overrides(
         model_profiles={"fast": "m1", "balanced": "m2"},
@@ -2936,7 +2936,7 @@ async def test_public_settings_model_text_and_button_agree_when_default_restrict
 
 async def test_public_session_shows_resolved_and_managed_message():
     """Bucket D: public user /session shows resolved context and operator-managed message."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app.user_messages import trust_settings_managed_public
 
     with fresh_env(config_overrides=public_user_config_overrides(
@@ -2954,7 +2954,7 @@ async def test_public_session_shows_resolved_and_managed_message():
 
 async def test_public_model_shows_only_public_profiles():
     """Bucket D: public user /model shows only public_model_profiles in buttons."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides=public_user_config_overrides(
         model_profiles={"fast": "m1", "balanced": "m2", "best": "m3"},
@@ -2972,7 +2972,7 @@ async def test_public_model_shows_only_public_profiles():
 
 async def test_model_includes_choose_profile_hint():
     """Phase 14: /model (with profiles) includes selection hint."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app.user_messages import model_choose_profile_hint
     with fresh_env(config_overrides={
         "model_profiles": {"fast": "m1", "balanced": "m2"},
@@ -2987,7 +2987,7 @@ async def test_model_includes_choose_profile_hint():
 
 async def test_settings_callback_policy_denial_public():
     """Bucket D: public user clicking policy button gets trust_file_policy_public (command/callback parity)."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app.user_messages import trust_file_policy_public
 
     with fresh_env(config_overrides=public_user_config_overrides()) as (data_dir, cfg, prov):
@@ -3004,7 +3004,7 @@ async def test_settings_callback_policy_denial_public():
 
 async def test_settings_callback_project_denial_public():
     """Bucket D: public user clicking project button gets trust_project_public (command/callback parity)."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app.user_messages import trust_project_public
 
     with fresh_env(config_overrides=public_user_config_overrides(
@@ -3023,7 +3023,7 @@ async def test_settings_callback_project_denial_public():
 
 async def test_settings_callback_project_clears_pending():
     """Project change via callback clears pending approval/retry."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from tests.support.handler_support import send_callback
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides={
@@ -3041,7 +3041,7 @@ async def test_settings_callback_project_clears_pending():
 
 async def test_session_shows_model_profile():
     """/session should display the model profile and effective model."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "model_profiles": _PROFILES, "default_model_profile": "balanced",
     }) as (data_dir, cfg, prov):
@@ -3055,7 +3055,7 @@ async def test_session_shows_model_profile():
 
 async def test_session_shows_prompt_weight():
     """/session should display prompt weight estimate."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(1)
         user = FakeUser(42)
@@ -3066,7 +3066,7 @@ async def test_session_shows_prompt_weight():
 
 async def test_session_includes_control_surface_hint_trusted():
     """Phase 14: /session for trusted user includes pointer to /settings, /project, /model (chat settings)."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "model_profiles": {"fast": "m1", "balanced": "m2"},
         "default_model_profile": "balanced",
@@ -3084,7 +3084,7 @@ async def test_session_includes_control_surface_hint_trusted():
 
 async def test_session_hint_minimal_config_shows_settings_only():
     """Phase 14: /session with no projects and no model profiles shows only /settings."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={}) as (data_dir, cfg, prov):
         chat = FakeChat(1)
         user = FakeUser(42)
@@ -3102,7 +3102,7 @@ async def test_session_hint_minimal_config_shows_settings_only():
 
 async def test_session_control_surface_hint_trusted_no_projects_omits_project():
     """Phase 14: /session for trusted user with no projects omits /project from hint."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "model_profiles": {"fast": "m1"},
         "default_model_profile": "fast",
@@ -3121,7 +3121,7 @@ async def test_session_control_surface_hint_trusted_no_projects_omits_project():
 
 async def test_session_control_surface_hint_public_no_project():
     """Phase 14: /session for public user must not advertise /project; hint says change chat settings."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides=public_user_config_overrides(
         model_profiles={"fast": "m1"},
         public_model_profiles=frozenset({"fast"}),
@@ -3143,7 +3143,7 @@ async def test_session_control_surface_hint_public_no_project():
 
 async def test_session_command_shows_public_context():
     """/session display reflects public-user restrictions (resolved context)."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides=public_user_config_overrides(public_working_dir="/tmp/public-sandbox")) as (data_dir, cfg, prov):
         chat = FakeChat(12345)
         stranger = FakeUser(uid=999, username="nobody")
@@ -3155,7 +3155,7 @@ async def test_session_command_shows_public_context():
 
 async def test_skills_command_hides_unresolvable_session_skills():
     """/skills display must use resolved active skills, not stale raw session.active_skills."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(12345)
         user = FakeUser(uid=42, username="owner")
@@ -3171,7 +3171,7 @@ async def test_skills_command_hides_unresolvable_session_skills():
 
 async def test_settings_command_public_user_no_trusted_leak():
     """/settings for public user must not leak trusted project/path; use resolved context."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides=public_user_config_overrides(
             public_working_dir="/tmp/public-sandbox",
@@ -3192,7 +3192,7 @@ async def test_settings_command_public_user_no_trusted_leak():
 
 async def test_settings_command_public_user_keyboard_no_project_or_policy():
     """/settings keyboard for public user must not include setting_project:* or setting_policy:*."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides=public_user_config_overrides(
             public_working_dir="/tmp/pub",
@@ -3214,7 +3214,7 @@ async def test_settings_command_public_user_keyboard_no_project_or_policy():
 
 async def test_model_command_public_user_can_switch_to_allowed_profile():
     """/model fast succeeds for public user; reply is exact canonical success message."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app import user_messages as uimsg
     with fresh_env(config_overrides=public_user_config_overrides(
         model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
@@ -3230,7 +3230,7 @@ async def test_model_command_public_user_can_switch_to_allowed_profile():
 
 async def test_model_command_public_user_rejected_for_restricted_profile():
     """/model best fails for public user; reply is exact canonical denial message."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app import user_messages as uimsg
     with fresh_env(config_overrides=public_user_config_overrides(
         model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
@@ -3246,7 +3246,7 @@ async def test_model_command_public_user_rejected_for_restricted_profile():
 
 async def test_model_callback_public_user_rejected_for_restricted_profile():
     """setting_model:best callback fails for public user; edit_text is exact canonical denial."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app import user_messages as uimsg
     with fresh_env(config_overrides=public_user_config_overrides(
         model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
@@ -3264,7 +3264,7 @@ async def test_model_callback_public_user_rejected_for_restricted_profile():
 
 async def test_model_callback_public_user_allowed_for_available_profile():
     """setting_model:fast callback succeeds for public user; edit_text is exact canonical success."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app import user_messages as uimsg
     with fresh_env(config_overrides=public_user_config_overrides(
         model_profiles={"fast": "claude-haiku-4-5-20251001", "best": "claude-opus-4-6"},
@@ -3282,7 +3282,7 @@ async def test_model_callback_public_user_allowed_for_available_profile():
 
 async def test_model_command_and_callback_same_denial_contract():
     """Parity: /model <restricted> and setting_model:<restricted> produce the same denial message."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app import user_messages as uimsg
     with fresh_env(config_overrides=public_user_config_overrides(
         model_profiles={"fast": "claude-haiku", "best": "claude-opus"},
@@ -3302,7 +3302,7 @@ async def test_model_command_and_callback_same_denial_contract():
 
 async def test_model_command_and_callback_same_success_contract():
     """Parity: /model <allowed> and setting_model:<allowed> produce the same success message."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app import user_messages as uimsg
     with fresh_env(config_overrides=public_user_config_overrides(
         model_profiles={"fast": "claude-haiku", "best": "claude-opus"},
@@ -3323,7 +3323,7 @@ async def test_model_command_and_callback_same_success_contract():
 
 async def test_project_callback_public_user_denied():
     """setting_project:<name> callback is denied for public user; edit_text equals trust_project_public()."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     from app.user_messages import trust_project_public
     with tempfile.TemporaryDirectory() as proj_dir:
         with fresh_env(config_overrides=public_user_config_overrides(
@@ -3353,7 +3353,7 @@ async def test_empty_message_ignored():
 
 async def test_session_codex_shows_thread():
     """/session with codex provider shows thread info."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(provider_name="codex") as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
@@ -3365,7 +3365,7 @@ async def test_session_codex_shows_thread():
 
 async def test_message_after_new_gets_fresh_session():
     """/new then message should use fresh provider_state, not stale."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
@@ -3415,7 +3415,7 @@ from app.session_state import ProjectBinding
 
 async def test_policy_status_shows_project_default():
     """/policy status reflects project-inherited file_policy when session has none."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),),
     }) as (data_dir, cfg, prov):
@@ -3431,7 +3431,7 @@ async def test_policy_status_shows_project_default():
 
 async def test_policy_status_session_overrides_project():
     """/policy status shows session-explicit value even if project has a different default."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),),
     }) as (data_dir, cfg, prov):
@@ -3449,7 +3449,7 @@ async def test_policy_status_session_overrides_project():
 
 async def test_project_switch_shows_inherited_defaults():
     """Project switch confirmation message includes inherited file_policy and model_profile."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect", model_profile="fast"),),
         "model_profiles": {"fast": "haiku", "best": "opus"},
@@ -3464,7 +3464,7 @@ async def test_project_switch_shows_inherited_defaults():
 
 async def test_project_switch_no_defaults_no_extra_lines():
     """Project with no inherited defaults shows basic switch message."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "projects": (ProjectBinding(name="fe", root_dir="/tmp"),),
     }) as (data_dir, cfg, prov):
@@ -3478,7 +3478,7 @@ async def test_project_switch_no_defaults_no_extra_lines():
 
 async def test_model_status_shows_project_default():
     """/model status reflects project-inherited model_profile when session has none."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "projects": (ProjectBinding(name="fe", root_dir="/tmp", model_profile="fast"),),
         "model_profiles": {"fast": "haiku", "best": "opus"},
@@ -3496,7 +3496,7 @@ async def test_model_status_shows_project_default():
 
 async def test_policy_same_as_project_default_shows_already():
     """/policy inspect when project default is inspect and session has no override → already message."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),),
     }) as (data_dir, cfg, prov):
@@ -3512,7 +3512,7 @@ async def test_policy_same_as_project_default_shows_already():
 
 async def test_policy_inherit_clears_session_override():
     """/policy inherit clears session-explicit policy, falls back to project default."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),),
     }) as (data_dir, cfg, prov):
@@ -3531,7 +3531,7 @@ async def test_policy_inherit_clears_session_override():
 
 async def test_policy_inherit_already_inherited():
     """/policy inherit when already inherited shows already-inherited."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
@@ -3542,7 +3542,7 @@ async def test_policy_inherit_already_inherited():
 
 async def test_model_inherit_clears_session_override():
     """/model inherit clears session-explicit model_profile, falls back to project default."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "projects": (ProjectBinding(name="fe", root_dir="/tmp", model_profile="fast"),),
         "model_profiles": {"fast": "haiku", "best": "opus"},
@@ -3563,7 +3563,7 @@ async def test_model_inherit_clears_session_override():
 
 async def test_model_inherit_already_inherited():
     """/model inherit when already inherited shows already-inherited."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "model_profiles": {"fast": "haiku"},
     }) as (data_dir, cfg, prov):
@@ -3581,7 +3581,7 @@ async def test_model_inherit_already_inherited():
 
 async def test_model_inherit_works_when_no_profiles_configured():
     """/model inherit clears stale override even when model_profiles is empty."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "model_profiles": {},
     }) as (data_dir, cfg, prov):
@@ -3602,7 +3602,7 @@ async def test_model_inherit_works_when_no_profiles_configured():
 
 async def test_settings_callback_policy_inherit():
     """setting_policy:inherit callback clears session file_policy override."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "projects": (ProjectBinding(name="fe", root_dir="/tmp", file_policy="inspect"),),
     }) as (data_dir, cfg, prov):
@@ -3625,7 +3625,7 @@ async def test_settings_callback_policy_inherit():
 
 async def test_settings_callback_model_inherit():
     """setting_model:inherit callback clears session model_profile override."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "projects": (ProjectBinding(name="fe", root_dir="/tmp", model_profile="fast"),),
         "model_profiles": {"fast": "haiku", "best": "opus"},
@@ -3647,7 +3647,7 @@ async def test_settings_callback_model_inherit():
 
 async def test_settings_callback_policy_inherit_already():
     """setting_policy:inherit when already inherited shows already message."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
@@ -3658,7 +3658,7 @@ async def test_settings_callback_policy_inherit_already():
 
 async def test_settings_callback_model_inherit_already():
     """setting_model:inherit when already inherited shows already message."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "model_profiles": {"fast": "haiku"},
     }) as (data_dir, cfg, prov):
@@ -3730,7 +3730,7 @@ async def test_model_buttons_no_inherit_when_no_override():
 
 async def test_model_no_profiles_with_stale_override_hints_inherit():
     """/model with no profiles but stale override hints /model inherit."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "model_profiles": {},
     }) as (data_dir, cfg, prov):
@@ -3749,7 +3749,7 @@ async def test_model_no_profiles_with_stale_override_hints_inherit():
 
 async def test_model_no_profiles_no_override_shows_standard_message():
     """/model with no profiles and no stale override shows standard message."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "model_profiles": {},
     }) as (data_dir, cfg, prov):
@@ -3762,7 +3762,7 @@ async def test_model_no_profiles_no_override_shows_standard_message():
 
 async def test_settings_shows_inherit_button_when_stale_model_override():
     """/settings renders inherit button when profiles empty but stale override exists."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "model_profiles": {},
     }) as (data_dir, cfg, prov):
@@ -3787,7 +3787,7 @@ async def test_settings_shows_inherit_button_when_stale_model_override():
 
 async def test_model_inherit_no_double_default():
     """/model inherit does not render '(default) ((default))'."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "model_profiles": {},
     }) as (data_dir, cfg, prov):
@@ -3807,7 +3807,7 @@ async def test_model_inherit_no_double_default():
 
 async def test_settings_callback_model_inherit_no_double_default():
     """setting_model:inherit callback does not render double default."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
     with fresh_env(config_overrides={
         "model_profiles": {},
     }) as (data_dir, cfg, prov):
@@ -3826,7 +3826,7 @@ async def test_settings_callback_model_inherit_no_double_default():
 
 
 async def test_allowuser_grants_access_without_restart():
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={
         "allow_open": False,
@@ -3854,7 +3854,7 @@ async def test_allowuser_grants_access_without_restart():
 
 
 async def test_blockuser_blocks_allowed_user_without_restart():
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={
         "allow_open": False,
@@ -3881,7 +3881,7 @@ async def test_blockuser_blocks_allowed_user_without_restart():
 
 
 async def test_listaccess_shows_rows():
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={
         "allow_open": False,
@@ -3907,7 +3907,7 @@ async def test_listaccess_shows_rows():
 
 @pytest.mark.parametrize("handler_name", ["cmd_allowuser", "cmd_blockuser"])
 async def test_access_commands_reject_non_admin(handler_name):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -3922,7 +3922,7 @@ async def test_access_commands_reject_non_admin(handler_name):
 
 
 async def test_allowuser_usage_hint_for_missing_arg():
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={
         "allow_open": False,
@@ -3941,7 +3941,7 @@ async def test_allowuser_usage_hint_for_missing_arg():
     [("abc", "abc"), ("42x", "42x"), ("99999", "tg:99999")],
 )
 async def test_allowuser_accepts_actor_keys_and_user_ids(arg, expected_actor):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={
         "allow_open": False,

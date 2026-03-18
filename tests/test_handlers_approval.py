@@ -42,7 +42,7 @@ async def test_approval_flow():
         user = FakeUser(42)
         update = FakeUpdate(message=msg, user=user, chat=chat)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         await th.handle_message(update, FakeContext())
         await drain_one_worker_item(data_dir)
@@ -95,7 +95,7 @@ async def test_approval_wording():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -142,7 +142,7 @@ async def test_denial_retry_flow():
         user = FakeUser(42)
         update = FakeUpdate(message=msg, user=user, chat=chat)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         await th.handle_message(update, FakeContext())
         await drain_one_worker_item(data_dir)
@@ -209,7 +209,7 @@ async def test_retry_skip():
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         await th.handle_callback(cb_update, FakeContext())
 
@@ -241,7 +241,7 @@ async def test_retry_allow_no_pending():
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         await th.handle_callback(cb_update, FakeContext())
 
@@ -273,7 +273,7 @@ async def test_stale_context_hash():
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         await th.handle_callback(cb_update, FakeContext())
 
@@ -296,7 +296,7 @@ async def test_cross_user_approval():
         prov.run_results = [RunResult(text="Done")]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         alice = FakeUser(uid=100, username="alice")
@@ -338,7 +338,7 @@ async def test_approval_preflight_timeout():
         user = FakeUser(42)
         update = FakeUpdate(message=msg, user=user, chat=chat)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         await th.handle_message(update, FakeContext())
         await drain_one_worker_item(data_dir)
@@ -365,7 +365,7 @@ async def test_approval_preflight_error():
         user = FakeUser(42)
         update = FakeUpdate(message=msg, user=user, chat=chat)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         await th.handle_message(update, FakeContext())
         await drain_one_worker_item(data_dir)
@@ -384,7 +384,7 @@ async def test_duplicate_pending_blocked():
         prov.preflight_results = [RunResult(text="Plan 1"), RunResult(text="Plan 2")]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -416,7 +416,7 @@ async def test_denial_preserves_request_user_id():
         ]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         alice = FakeUser(uid=100, username="alice")
@@ -439,7 +439,7 @@ async def test_cancel_pending():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -474,7 +474,7 @@ async def test_cancel_nothing_to_cancel():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         from app.user_messages import nothing_to_cancel
 
         chat = FakeChat(12345)
@@ -497,7 +497,7 @@ async def test_approve_no_pending_shows_canonical_message():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         from app.user_messages import approval_no_pending_approve
 
         chat = FakeChat(12345)
@@ -518,7 +518,7 @@ async def test_reject_no_pending_shows_canonical_message():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         from app.user_messages import approval_no_pending_reject
 
         chat = FakeChat(12345)
@@ -539,7 +539,7 @@ async def test_approve_callback_no_pending_shows_canonical_message():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         from app.user_messages import approval_no_pending_approve
 
         chat = FakeChat(12345)
@@ -561,7 +561,7 @@ async def test_reject_callback_no_pending_shows_canonical_message():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         from app.user_messages import approval_no_pending_reject
 
         chat = FakeChat(12345)
@@ -582,7 +582,7 @@ async def test_stale_pending_ttl():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -625,7 +625,7 @@ async def test_approval_with_project_active():
         prov.run_results = [RunResult(text="Done")]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -690,7 +690,7 @@ async def test_retry_with_project_active():
         ]
         setup_globals(cfg, prov)
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -731,7 +731,7 @@ async def test_retry_with_project_active():
 
 async def test_approval_after_session_reset():
     """Approve callback after /new should not execute stale request."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
@@ -757,7 +757,7 @@ async def test_retry_callback_without_pending():
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
 
-        import app.channels.telegram.ingress as th
+        import app.channels.telegram.routing as th
         query, _ = await send_callback(th.handle_callback, chat, user, "retry_approve:/tmp/dir")
         assert query.answered
         assert len(prov.run_calls) == 0
@@ -765,7 +765,7 @@ async def test_retry_callback_without_pending():
 
 async def test_role_change_invalidates_pending_approval():
     """Changing role while approval is pending must invalidate it."""
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)

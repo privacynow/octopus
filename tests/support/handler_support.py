@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 from app.agents.delivery import build_registry_delivery_runtime
-import app.channels.telegram.ingress as _th
+import app.channels.telegram.routing as _th
 from app.channels.telegram.cancellation import (
     get_cancellation_registry,
     reset_cancellation_registry,

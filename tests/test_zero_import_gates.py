@@ -76,7 +76,7 @@ def test_telegram_conversation_module_has_no_ingress_import() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     conversation_path = repo_root / "app" / "channels" / "telegram" / "conversation.py"
     text = conversation_path.read_text()
-    assert "app.channels.telegram.ingress" not in text, (
+    assert "app.channels.telegram.routing" not in text, (
         f"telegram ingress import still referenced in {conversation_path}"
     )
 
@@ -85,7 +85,7 @@ def test_telegram_runtime_skills_module_has_no_ingress_import() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     runtime_skills_path = repo_root / "app" / "channels" / "telegram" / "runtime_skills.py"
     text = runtime_skills_path.read_text()
-    assert "app.channels.telegram.ingress" not in text, (
+    assert "app.channels.telegram.routing" not in text, (
         f"telegram ingress import still referenced in {runtime_skills_path}"
     )
 
@@ -94,9 +94,15 @@ def test_telegram_pending_module_has_no_ingress_import() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     pending_path = repo_root / "app" / "channels" / "telegram" / "pending.py"
     text = pending_path.read_text()
-    assert "app.channels.telegram.ingress" not in text, (
+    assert "app.channels.telegram.routing" not in text, (
         f"telegram ingress import still referenced in {pending_path}"
     )
+
+
+def test_deleted_telegram_ingress_path_is_gone() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    deleted_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    assert not deleted_path.exists(), f"legacy telegram ingress path still exists at {deleted_path}"
 
 
 def test_runtime_dispatch_has_no_channel_imports() -> None:
@@ -105,6 +111,15 @@ def test_runtime_dispatch_has_no_channel_imports() -> None:
     text = dispatch_path.read_text()
     assert "app.channels" not in text, (
         f"channel import still referenced in {dispatch_path}"
+    )
+
+
+def test_runtime_composition_has_no_channel_imports() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    composition_path = repo_root / "app" / "runtime" / "composition.py"
+    text = composition_path.read_text()
+    assert "app.channels" not in text, (
+        f"channel import still referenced in {composition_path}"
     )
 
 
@@ -135,7 +150,7 @@ def test_runtime_dispatch_has_no_telegram_rendering_or_workflow_branches() -> No
 def test_telegram_reply_markup_builders_live_only_in_presenters() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     scoped_paths = (
-        repo_root / "app" / "channels" / "telegram" / "ingress.py",
+        repo_root / "app" / "channels" / "telegram" / "routing.py",
         repo_root / "app" / "channels" / "telegram" / "conversation.py",
         repo_root / "app" / "channels" / "telegram" / "runtime_skills.py",
         repo_root / "app" / "channels" / "telegram" / "pending.py",
@@ -211,10 +226,10 @@ def test_telegram_pending_channel_has_no_inline_html_formatting() -> None:
         assert token not in text, f"{token} still referenced in {pending_path}"
 
 
-def test_telegram_ingress_request_and_compact_rendering_is_presenter_owned() -> None:
+def test_telegram_routing_request_and_compact_rendering_is_presenter_owned() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
-    text = ingress_path.read_text()
+    routing_path = repo_root / "app" / "channels" / "telegram" / "routing.py"
+    text = routing_path.read_text()
     forbidden = (
         "from app.credential_flow import",
         "format_credential_prompt(",
@@ -228,13 +243,13 @@ def test_telegram_ingress_request_and_compact_rendering_is_presenter_owned() -> 
         "I'm ready. Send me a message or type /help to see what I can do.",
     )
     for token in forbidden:
-        assert token not in text, f"{token} still referenced in {ingress_path}"
+        assert token not in text, f"{token} still referenced in {routing_path}"
 
 
-def test_telegram_ingress_help_and_admin_rendering_is_presenter_owned() -> None:
+def test_telegram_routing_help_and_admin_rendering_is_presenter_owned() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
-    text = ingress_path.read_text()
+    routing_path = repo_root / "app" / "channels" / "telegram" / "routing.py"
+    text = routing_path.read_text()
     forbidden = (
         "_help_command_lines(",
         "_build_main_help(",
@@ -254,7 +269,7 @@ def test_telegram_ingress_help_and_admin_rendering_is_presenter_owned() -> None:
         "Agent discovery is unavailable in standalone mode.",
     )
     for token in forbidden:
-        assert token not in text, f"{token} still referenced in {ingress_path}"
+        assert token not in text, f"{token} still referenced in {routing_path}"
 
 
 def test_agents_delivery_has_no_channel_imports() -> None:

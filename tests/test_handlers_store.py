@@ -60,7 +60,7 @@ def _cleanup_runtime(data_dir: Path) -> None:
 
 
 async def test_handler_nonadmin_install_rejected(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
     try:
@@ -80,7 +80,7 @@ async def test_handler_nonadmin_install_rejected(monkeypatch, tmp_path: Path):
 
 
 async def test_handler_admin_install_creates_imported_track(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
     try:
@@ -102,7 +102,7 @@ async def test_handler_admin_install_creates_imported_track(monkeypatch, tmp_pat
 
 
 async def test_handler_update_propagates_to_prompt(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
     try:
@@ -137,7 +137,7 @@ async def test_handler_update_propagates_to_prompt(monkeypatch, tmp_path: Path):
 
 
 async def test_handler_uninstall_removes_imported_track(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
     try:
@@ -156,7 +156,7 @@ async def test_handler_uninstall_removes_imported_track(monkeypatch, tmp_path: P
 
 
 async def test_handler_prompt_size_warning_lists_impacted_chats(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
     try:
@@ -183,7 +183,7 @@ async def test_handler_prompt_size_warning_lists_impacted_chats(monkeypatch, tmp
 
 
 async def test_skills_info_shows_imported_requirements(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
     try:
@@ -204,7 +204,7 @@ async def test_skills_info_shows_imported_requirements(monkeypatch, tmp_path: Pa
 
 
 async def test_skill_update_callback_nonadmin_alert(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
     try:
@@ -225,7 +225,7 @@ async def test_skill_update_callback_nonadmin_alert(monkeypatch, tmp_path: Path)
 
 
 async def test_skill_update_callback_admin_confirm(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
     try:
@@ -254,7 +254,7 @@ async def test_skill_update_callback_admin_confirm(monkeypatch, tmp_path: Path):
 
 
 async def test_skill_update_callback_cancel(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
     try:
@@ -273,7 +273,7 @@ async def test_skill_update_callback_cancel(monkeypatch, tmp_path: Path):
 
 
 async def test_skill_add_callback_confirm(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
     try:
@@ -301,7 +301,7 @@ async def test_skill_add_callback_confirm(monkeypatch, tmp_path: Path):
 
 
 async def test_skill_add_callback_cancel(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
     try:
@@ -327,7 +327,7 @@ async def test_skill_add_callback_cancel(monkeypatch, tmp_path: Path):
 
 
 async def test_callback_unauthorized_alert(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     data_dir = tmp_path / "data"
     ensure_data_dirs(data_dir)
@@ -361,7 +361,7 @@ async def test_callback_unauthorized_alert(monkeypatch, tmp_path: Path):
 
 
 async def test_handler_skill_lifecycle_commands(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
     try:
@@ -409,7 +409,7 @@ async def test_handler_skill_lifecycle_commands(monkeypatch, tmp_path: Path):
 
 
 async def test_handler_provider_guidance_lifecycle_commands(monkeypatch, tmp_path: Path):
-    import app.channels.telegram.ingress as th
+    import app.channels.telegram.routing as th
 
     data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
     try:

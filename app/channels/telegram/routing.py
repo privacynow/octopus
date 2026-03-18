@@ -114,6 +114,7 @@ from app.channels.telegram.pending import (
     retry_skip_pending as pending_retry_skip_pending,
     TelegramPendingRuntime,
 )
+from app.channel_egress_factory import create_channel_egress
 from app.runtime import composition
 from app.runtime.inbound_types import InboundUser
 from app.runtime.dispatch import RuntimeDispatchRuntime
@@ -2329,7 +2330,7 @@ def _build_action_surface(
         if source == "telegram" and chat_id is not None
         else conversation_key
     )
-    surface = composition.create_channel_egress(
+    surface = create_channel_egress(
         conversation_ref,
         config=_state().config,
         bot=bot_instance,
@@ -2451,7 +2452,7 @@ async def worker_dispatch(kind: str, event, item: dict) -> None:
         )
         routed_task_id = getattr(event, "routed_task_id", "")
         title = summarize_text(event.text) or "Conversation"
-        bot_msg = composition.create_channel_egress(
+        bot_msg = create_channel_egress(
             conversation_ref,
             config=_state().config,
             bot=bot,

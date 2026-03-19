@@ -5,11 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 
 from app import user_messages as _msg
 from app.agents.bridge import bind_conversation, publish_timeline_event
+from app.channels.telegram import presenters as telegram_presenters
 from app.config import BotConfig
 from app.ports.egress import (
     ChannelCapabilities,
@@ -147,10 +147,11 @@ class TelegramChannelEgress(ChannelEgress):
         skip_label: str,
         update_id: int,
     ) -> None:
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("\u25b6\ufe0f " + run_again_label, callback_data=f"recovery_replay:{update_id}"),
-            InlineKeyboardButton("\u2716 " + skip_label, callback_data=f"recovery_discard:{update_id}"),
-        ]])
+        keyboard = telegram_presenters.recovery_notice_markup(
+            update_id,
+            run_again_label,
+            skip_label,
+        )
         await self._bot.send_message(
             self.chat_id,
             f"<i>{_msg.recovery_notice_intro()}</i>\n\n{preview}\n\n{prompt}",

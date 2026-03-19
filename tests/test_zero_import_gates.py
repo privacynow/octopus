@@ -453,15 +453,11 @@ def test_runtime_dispatch_has_no_telegram_rendering_or_workflow_branches() -> No
 
 def test_telegram_reply_markup_builders_live_only_in_presenters() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    scoped_paths = (
-        repo_root / "app" / "channels" / "telegram" / "ingress.py",
-        repo_root / "app" / "channels" / "telegram" / "conversation.py",
-        repo_root / "app" / "channels" / "telegram" / "runtime_skills.py",
-        repo_root / "app" / "channels" / "telegram" / "pending.py",
-        repo_root / "app" / "channels" / "telegram" / "guidance.py",
-    )
+    telegram_root = repo_root / "app" / "channels" / "telegram"
     forbidden = ("InlineKeyboardButton", "InlineKeyboardMarkup")
-    for path in scoped_paths:
+    for path in sorted(telegram_root.glob("*.py")):
+        if path.name == "presenters.py":
+            continue
         text = path.read_text()
         for token in forbidden:
             assert token not in text, f"{token} still referenced in {path}"

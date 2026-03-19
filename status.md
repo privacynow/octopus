@@ -87,7 +87,7 @@ Phase 8 is now active.
       worker action execution, cancel polling, or completion webhook helpers
     - worker-focused suites: `376 passed`
     - verified against the full suite: `1634 passed, 23 skipped`
-- Remaining verified-but-uncommitted Phase 8 work in this branch state:
+- Additional committed Phase 8 slices:
   - `c2b3f33` `Phase 8 / H1: extract shared-mode dispatch from ingress`
     - Telegram shared-runtime command/callback persistence now lives in
       `app/channels/telegram/shared_mode_dispatch.py`
@@ -99,8 +99,7 @@ Phase 8 is now active.
     - ingress line count after the slice: `1574`
     - shared-runtime and structural suites: `222 passed`
     - verified against the full suite: `1636 passed, 23 skipped`
-  - `Phase 8 / H1 final ingress cleanup` is complete in the current branch
-    state:
+  - `29e1636` `Phase 8 / H1: complete ingress cleanup`
     - concern-owned command routing for `/skills` and `/guidance` now lives in
       `app/channels/telegram/runtime_skills.py` and
       `app/channels/telegram/guidance.py`
@@ -108,8 +107,18 @@ Phase 8 is now active.
       `1483` lines
     - focused suites: `282 passed`
     - verified against the full suite: `1639 passed, 23 skipped`
+- Remaining verified-but-uncommitted Phase 8 work in this branch state:
+  - `Phase 8 / H2 presenter ownership cleanup` is complete in the current
+    branch state:
+    - recovery notice reply markup now lives in
+      `app/channels/telegram/presenters.py`
+    - `app/channels/telegram/egress.py` no longer imports or constructs
+      `InlineKeyboardButton` or `InlineKeyboardMarkup`
+    - the Telegram markup-ownership gate now scans all `.py` files under
+      `app/channels/telegram/` except `presenters.py`
+    - focused suites: `282 passed`
+    - verified against the full suite: `1641 passed, 23 skipped`
 - Remaining Phase 8 work is still pending:
-  - H2 presenter rendering blind-spot closure
   - H3 Telegram test-boundary hardening
   - H4 documentation and structural gate tightening
 

@@ -15,7 +15,6 @@ from app import user_messages as _msg
 from app import work_queue
 from app.agents.bridge import (
     publish_timeline_event,
-    registry_client,
     summarize_text,
     telegram_conversation_ref,
 )
@@ -374,7 +373,7 @@ async def worker_dispatch(
                     session_after.pending_delegation = None
                     save_session(runtime, runtime_chat, session_after)
         if routed_task_id:
-            client = registry_client(runtime.config)
+            client = runtime.registry_client_factory(runtime.config)
             if client is not None and outcome is not None:
                 full_text = outcome.reply_text or html.unescape(getattr(channel_egress, "last_status_text", ""))
                 result_status = (

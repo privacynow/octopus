@@ -18,7 +18,7 @@ from app.storage import default_session
 
 
 class ConversationControlUseCases(ConversationControlPort):
-    """Canonical conversation-level control flows shared by surfaces."""
+    """Canonical conversation-level control flows shared by channels."""
 
     def _setup(self):
         return get_runtime_skill_setup_use_cases()

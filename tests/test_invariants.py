@@ -1068,9 +1068,10 @@ async def test_global_error_handler_sends_message_on_real_update():
 # =====================================================================
 
 @pytest.mark.asyncio
-async def test_command_exception_marks_work_item_failed():
+async def test_command_exception_marks_work_item_failed(monkeypatch):
     """A command handler that raises must leave the work item as failed."""
     import app.channels.telegram.ingress as th
+    from app.channels.telegram import session_io as telegram_session_io
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=9500)
@@ -1078,17 +1079,12 @@ async def test_command_exception_marks_work_item_failed():
         msg = FakeMessage(chat=chat, text="/session")
         upd = FakeUpdate(message=msg, user=user, chat=chat)
 
-        # Patch _load to raise inside cmd_session
-        original_load = th.load_session
         def exploding_load(_runtime, chat_id):
             raise RuntimeError("session DB corrupt")
 
-        th.load_session = exploding_load
-        try:
-            with pytest.raises(RuntimeError, match="session DB corrupt"):
-                await th.cmd_session(upd, FakeContext())
-        finally:
-            th.load_session = original_load
+        monkeypatch.setattr(telegram_session_io, "load", exploding_load)
+        with pytest.raises(RuntimeError, match="session DB corrupt"):
+            await th.cmd_session(upd, FakeContext())
 
         conn = debug_transport_connection(data_dir)
         row = conn.execute(
@@ -1099,9 +1095,10 @@ async def test_command_exception_marks_work_item_failed():
 
 
 @pytest.mark.asyncio
-async def test_callback_exception_marks_work_item_failed():
+async def test_callback_exception_marks_work_item_failed(monkeypatch):
     """A callback handler that raises must leave the work item as failed."""
     import app.channels.telegram.ingress as th
+    from app.channels.telegram import conversation as telegram_conversation
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=9501)
@@ -1111,17 +1108,12 @@ async def test_callback_exception_marks_work_item_failed():
                                   user=user)
         upd = FakeUpdate(callback_query=query, user=user, chat=chat)
 
-        original_handler = th.conversation_handle_settings_callback
-
         async def exploding_handler(event, query, *, runtime):
             raise RuntimeError("session DB corrupt")
 
-        th.conversation_handle_settings_callback = exploding_handler
-        try:
-            with pytest.raises(RuntimeError, match="session DB corrupt"):
-                await th.handle_settings_callback(upd, FakeContext())
-        finally:
-            th.conversation_handle_settings_callback = original_handler
+        monkeypatch.setattr(telegram_conversation, "handle_settings_callback", exploding_handler)
+        with pytest.raises(RuntimeError, match="session DB corrupt"):
+            await th.handle_settings_callback(upd, FakeContext())
 
         conn = debug_transport_connection(data_dir)
         row = conn.execute(
@@ -1182,9 +1174,10 @@ async def test_format_provider_error_kills_subprocess_on_timeout():
 # =====================================================================
 
 @pytest.mark.asyncio
-async def test_callback_none_event_completes_work_item():
+async def test_callback_none_event_completes_work_item(monkeypatch):
     """When normalize_callback returns None, the work item must be completed (not leaked)."""
     import app.channels.telegram.ingress as th
+    from app.channels.telegram import normalization as telegram_normalization
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=9600)
@@ -1194,13 +1187,8 @@ async def test_callback_none_event_completes_work_item():
             user=FakeUser(uid=42, username="testuser"), chat=chat,
         )
 
-        # Patch the symbol the handler actually imports
-        original = th.normalize_callback
-        th.normalize_callback = lambda update: None
-        try:
-            await th.handle_settings_callback(upd, FakeContext())
-        finally:
-            th.normalize_callback = original
+        monkeypatch.setattr(telegram_normalization, "normalize_callback", lambda update: None)
+        await th.handle_settings_callback(upd, FakeContext())
 
         conn = debug_transport_connection(data_dir)
         row = conn.execute(

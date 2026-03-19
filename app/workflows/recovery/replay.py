@@ -17,7 +17,7 @@ from app.workflows.recovery.results import TransportStateCorruption
 
 
 class RecoveryUseCases(RecoveryPort):
-    """Canonical replay/discard flows shared by surfaces."""
+    """Canonical replay/discard flows shared by channels."""
 
     def prepare_action(
         self,

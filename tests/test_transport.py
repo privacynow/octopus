@@ -380,20 +380,22 @@ def test_message_default_attachments_are_tuple():
 async def test_handlers_receive_normalized_user():
     """Verify that handlers receive InboundUser through normalization, not raw Telegram objects."""
     import app.channels.telegram.ingress as th
+    from app import access
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        original_is_allowed = th.is_allowed
         received_users = []
 
-        def tracking_is_allowed(runtime, user):
-            received_users.append(user)
-            return original_is_allowed(runtime, user)
+        original_is_allowed_user_with_override = access.is_allowed_user_with_override
 
-        th.is_allowed = tracking_is_allowed
+        def tracking_is_allowed_user_with_override(config, inbound_user, override):
+            received_users.append(inbound_user)
+            return original_is_allowed_user_with_override(config, inbound_user, override)
+
+        access.is_allowed_user_with_override = tracking_is_allowed_user_with_override
         try:
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -404,7 +406,7 @@ async def test_handlers_receive_normalized_user():
             assert isinstance(received_users[0], InboundUser)
             assert received_users[0].id == telegram_actor_key(42)
         finally:
-            th.is_allowed = original_is_allowed
+            access.is_allowed_user_with_override = original_is_allowed_user_with_override
 
 
 async def test_callback_handler_uses_normalized_data():

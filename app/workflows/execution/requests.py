@@ -210,7 +210,7 @@ async def execute_request(
 
     is_resume = bool(session.provider_state.get("thread_id") or session.provider_state.get("started"))
     label = _msg.progress_resuming() if is_resume else _msg.progress_working()
-    surface = runtime.build_surface_context(message, chat_id)
+    channel_context = runtime.build_channel_context(message, chat_id)
 
     dispatched = await run_provider_request(
         chat_id,
@@ -222,7 +222,7 @@ async def execute_request(
         cancel_event=cancel_event,
         label=label,
         runtime=runtime.dispatch,
-        timeline_callback=surface.timeline_callback,
+        timeline_callback=channel_context.timeline_callback,
     )
     progress = dispatched.progress
     result = dispatched.result
@@ -295,7 +295,7 @@ async def execute_request(
             chat_id,
             message,
             session,
-            conversation_ref=surface.conversation_ref,
+            conversation_ref=channel_context.conversation_ref,
             result=result,
         )
 
@@ -364,7 +364,7 @@ async def request_approval(
         effective_model=resolved.effective_model,
     )
     context_hash = resolved.context_hash
-    surface = runtime.build_surface_context(message, chat_id)
+    channel_context = runtime.build_channel_context(message, chat_id)
 
     dispatched = await run_provider_preflight(
         chat_id,
@@ -375,7 +375,7 @@ async def request_approval(
         cancel_event=cancel_event,
         label=_msg.approval_preparing(),
         runtime=runtime.dispatch,
-        timeline_callback=surface.timeline_callback,
+        timeline_callback=channel_context.timeline_callback,
     )
     progress = dispatched.progress
     plan_result = dispatched.result

@@ -262,7 +262,7 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
                 connectivity_state="connected",
             ),
         )
-        monkeypatch.setattr(th, "registry_client", lambda config: FakeRegistryClient())
+        current_runtime().registry_client_factory = lambda config: FakeRegistryClient()
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -571,7 +571,7 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
                 return {"ok": True}
 
         monkeypatch.setattr(bridge, "registry_client", lambda config: FakeRegistryClient())
-        monkeypatch.setattr(telegram_worker, "registry_client", lambda config: FakeRegistryClient())
+        current_runtime().registry_client_factory = lambda config: FakeRegistryClient()
         monkeypatch.setattr("app.channels.registry.egress.bind_conversation", async_noop)
 
         async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
@@ -636,7 +636,7 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
                 raise RuntimeError("registry unavailable")
 
         monkeypatch.setattr(bridge, "registry_client", lambda config: FakeRegistryClient())
-        monkeypatch.setattr(telegram_worker, "registry_client", lambda config: FakeRegistryClient())
+        current_runtime().registry_client_factory = lambda config: FakeRegistryClient()
         prov.run_results = [RunResult(text="Delegated review complete.")]
 
         event = InboundMessage(

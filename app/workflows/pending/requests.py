@@ -19,7 +19,7 @@ from app.workflows.pending.machine import (
 
 
 class PendingRequestUseCases(PendingRequestPort):
-    """Canonical pending approval/retry flows shared by surfaces."""
+    """Canonical pending approval/retry flows shared by channels."""
 
     def _invalid_result(
         self,

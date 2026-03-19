@@ -1,4 +1,4 @@
-"""Shared delegation action handlers usable from Telegram and registry surfaces."""
+"""Shared delegation action handlers usable from Telegram and registry channels."""
 
 from __future__ import annotations
 
@@ -59,17 +59,17 @@ def _save_session(runtime: DelegationRuntime, chat_id: int | str, session) -> No
 async def handle_delegation_approve(
     chat_id: int | str,
     conversation_ref: str,
-    surface: Any,
+    channel_egress: Any,
     *,
     runtime: DelegationRuntime,
     retry_markup: Any = None,
 ) -> None:
-    """Approve a pending delegation plan on any conversation surface."""
+    """Approve a pending delegation plan on any conversation channel."""
     cfg = runtime.config
     state = load_agent_runtime_state(cfg.data_dir)
     if state.connectivity_state != "connected":
         detail = f" Last error: {state.last_error}" if state.last_error else ""
-        await surface.send_text(
+        await channel_egress.send_text(
             "Delegation is unavailable because registry connectivity is degraded."
             " The request was not sent." + detail,
             reply_markup=retry_markup,
@@ -82,13 +82,13 @@ async def handle_delegation_approve(
         conversation_ref=conversation_ref,
     )
     if approval.status != "approve_ready" or approval.pending is None:
-        await surface.send_text("Nothing to approve.")
+        await channel_egress.send_text("Nothing to approve.")
         return
     delegation = approval.pending
 
     client = registry_client(cfg)
     if client is None:
-        await surface.send_text(
+        await channel_egress.send_text(
             "Delegation unavailable: registry not enrolled.",
             reply_markup=retry_markup,
         )
@@ -115,7 +115,7 @@ async def handle_delegation_approve(
             session.pending_delegation = submission.pending
     except Exception as exc:
         _save_session(runtime, chat_id, session)
-        await surface.send_text(
+        await channel_egress.send_text(
             f"Delegation submission failed after {len(submitted_ids)} request(s)."
             f" {html.escape(str(exc))}",
             reply_markup=retry_markup,
@@ -123,7 +123,7 @@ async def handle_delegation_approve(
         return
 
     _save_session(runtime, chat_id, session)
-    await surface.send_text(
+    await channel_egress.send_text(
         f"Delegation approved. {len(submitted_ids)} request(s) sent to specialist bots."
         " I'll continue when results arrive."
     )
@@ -132,19 +132,19 @@ async def handle_delegation_approve(
 async def handle_delegation_cancel(
     chat_id: int | str,
     conversation_ref: str,
-    surface: Any,
+    channel_egress: Any,
     *,
     runtime: DelegationRuntime,
 ) -> None:
-    """Cancel a pending delegation plan on any conversation surface."""
+    """Cancel a pending delegation plan on any conversation channel."""
     session = _load_session(runtime, chat_id)
     outcome = cancel_delegation(
         session.pending_delegation,
         conversation_ref=conversation_ref,
     )
     if outcome.status != "cancelled":
-        await surface.send_text("Nothing to cancel.")
+        await channel_egress.send_text("Nothing to cancel.")
         return
     session.pending_delegation = None
     _save_session(runtime, chat_id, session)
-    await surface.send_text("Delegation cancelled. No requests were sent.")
+    await channel_egress.send_text("Delegation cancelled. No requests were sent.")

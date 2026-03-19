@@ -1221,7 +1221,14 @@ gaps. The follow-up remediation is now in progress:
     command owners directly and no longer defines duplicate inline helpers
   - `app/channels/telegram/shared_mode_dispatch.py` is back under the hard cap
     at `434` lines, with a structural gate enforcing the limit
-- `F5` through `F8` remain open
+- `F5` complete in the current slice:
+  - `cmd_start` and `cmd_help` now use the shared `@_command_handler`
+    decorator path instead of manually duplicating normalize/dedup/gate logic
+  - the command decorator now supports the explicit “show not authorized
+    message” behavior these two handlers need without creating a parallel path
+  - a structural gate now enforces that ingress has only one
+    `normalize_command(update, context)` command path
+- `F6` through `F8` remain open
 
 Feature work remains frozen until the post-audit follow-up track closes.
 
@@ -1341,7 +1348,7 @@ Feature work remains frozen until the post-audit follow-up track closes.
      - `tests/test_zero_import_gates.py`
      - Result: `417 passed`
 
-4. `Post-audit / F4: remove shared-mode dispatch duplication` (current slice)
+4. `741e351` `Post-audit / F4: remove shared-mode dispatch duplication`
    - replaced the duplicated shared-mode skills command dispatcher with a call
      to `app/channels/telegram/runtime_skills.py:handle_skills_command`
    - removed the duplicate inline command helper path and routed shared-mode
@@ -1354,6 +1361,17 @@ Feature work remains frozen until the post-audit follow-up track closes.
      - `tests/test_handlers.py`
      - `tests/test_zero_import_gates.py`
      - Result: `233 passed`
+
+5. `Post-audit / F5: align start/help with command decorator` (current slice)
+   - moved `cmd_start` and `cmd_help` onto the shared command decorator path
+   - preserved their user-visible unauthorized response through a decorator
+     flag instead of bespoke command wiring
+   - added a structural gate proving ingress now has exactly one
+     `normalize_command(update, context)` command path
+   - focused F5 suite:
+     - `tests/test_handlers.py -k 'help or start'`
+     - `tests/test_zero_import_gates.py`
+     - Result: `24 passed`
 
 ### Acceptance Gates
 
@@ -1425,7 +1443,7 @@ Latest focused post-Phase-8 correction suite:
 
 Latest full-suite remediation baseline:
 
-- Result: `1654 passed, 23 skipped`
+- Result: `1655 passed, 23 skipped`
 
 ### Notes
 

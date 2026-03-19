@@ -2,14 +2,24 @@
   <title id="title">Connect a bot to a remote registry</title>
   <desc id="desc">Terminal panel showing an existing bot being connected to a remote registry URL and token.</desc>
   <style>
-    .bg { fill: #2a2d2a; }
-    .panel { fill: #141714; }
-    .rule { stroke: #2d382d; stroke-width: 1; }
-    .dot { fill: #596459; }
-    .label { fill: #cad4c4; font: 600 16px "Courier New", "Lucida Console", Monaco, monospace; letter-spacing: 0.3px; }
-    .line { fill: #9dff8c; font: 18px "Courier New", "Lucida Console", Monaco, monospace; letter-spacing: 0.15px; }
-    .prompt { fill: #eeffe3; }
+    .bg { fill: #262a26; }
+    .panel { fill: #131713; }
+    .rule { stroke: #274227; stroke-width: 1; opacity: 0.65; }
+    .dot { fill: #5a665a; }
+    .label { fill: #cfd8c9; font: 600 16px "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace; letter-spacing: 0.2px; }
+    .line { fill: #8cff58; font: 19px "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace; letter-spacing: 0.05px; filter: url(#crt-glow); }
+    .prompt { fill: #f1ffe6; }
   </style>
+  <defs>
+    <filter id="crt-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.7" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.55 0 0 0 0 1 0 0 0 0 0.35 0 0 0 0.8 0" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
   <rect class="bg" x="0" y="0" width="1200" height="580" rx="24"/>
   <g transform="translate(28 24)">
     <rect class="panel" x="0" y="0" width="1144" height="524" rx="18"/>

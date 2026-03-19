@@ -989,6 +989,56 @@ async def test_failed_notice_delivery_marks_item_failed_via_worker_loop():
             set_bot_instance(None)
 
 
+@pytest.mark.asyncio
+async def test_usage_recording_failure_keeps_item_done_via_worker_loop(monkeypatch):
+    """Usage accounting failures are non-blocking; worker_loop still owns completion."""
+    from app.worker import worker_loop
+    from app.runtime.inbound_types import InboundMessage, InboundUser, serialize_inbound
+
+    with fresh_env(config_overrides={"allowed_user_ids": frozenset({42})}) as (data_dir, _cfg, prov):
+        chat_id = 16002
+        worker_id = "test-worker-usage"
+        prov.run_results = [RunResult(text="usage still completes")]
+
+        event = InboundMessage(
+            user=InboundUser(id=_actor(42), username="alice"),
+            conversation_key=_conv(chat_id),
+            text="count tokens",
+            attachments=(),
+        )
+        payload = serialize_inbound(event)
+        _, item_id = work_queue.record_and_enqueue(
+            data_dir,
+            _event(1601),
+            _conv(chat_id),
+            _actor(42),
+            "message",
+            payload=payload,
+        )
+
+        def exploding_usage(*args, **kwargs):
+            raise RuntimeError("usage store unavailable")
+
+        monkeypatch.setattr(work_queue, "record_usage", exploding_usage)
+
+        stop = asyncio.Event()
+        original_dispatch = telegram_worker.worker_dispatch
+
+        async def dispatch_then_stop(kind, event, item):
+            try:
+                return await original_dispatch(kind, event, item, runtime=current_runtime())
+            finally:
+                stop.set()
+
+        await worker_loop(data_dir, worker_id, dispatch_then_stop, stop_event=stop, poll_interval=0)
+
+        row = work_queue.debug_transport_connection(data_dir).execute(
+            "SELECT state FROM work_items WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        assert row["state"] == "done"
+
+
 # ---------------------------------------------------------------------------
 # 17. Multiple pending_recovery items for same chat: each addressable
 #

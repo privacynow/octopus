@@ -510,6 +510,37 @@ def test_runtime_dispatch_has_no_telegram_rendering_or_workflow_branches() -> No
         assert token not in text, f"{token} still referenced in {dispatch_path}"
 
 
+def test_execution_finalization_workflow_has_no_channel_imports() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    finalization_path = repo_root / "app" / "workflows" / "execution" / "finalization.py"
+    text = finalization_path.read_text()
+    assert "app.channels" not in text, f"channel import still referenced in {finalization_path}"
+
+
+def test_worker_dispatch_no_longer_contains_inline_execution_workflow_logic() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
+    text = worker_path.read_text()
+    forbidden = (
+        "session.approval_mode",
+        "load_session(runtime, runtime_chat).approval_mode",
+        "finalize_resumed_delegation(",
+        "record_usage(",
+        "publish_timeline_event(",
+        "routed_task_result(",
+        'source == "registry"',
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in {worker_path}"
+
+
+def test_worker_dispatch_documents_completion_ownership() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
+    text = worker_path.read_text()
+    assert "Completion ownership:" in text, f"completion ownership note missing from {worker_path}"
+
+
 def test_telegram_reply_markup_builders_live_only_in_presenters() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     telegram_root = repo_root / "app" / "channels" / "telegram"

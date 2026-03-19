@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from pathlib import Path
 
 from app import user_messages as _msg
@@ -9,6 +10,8 @@ from app.workflows.recovery.contracts import (
     RecoveryActionOutcome,
     RecoveryReplayPlan,
     RecoveryPort,
+    WorkerRecoveryNotice,
+    WorkerRecoveryOutcome,
 )
 from app import work_queue
 from app.runtime.inbound_types import InboundMessage, deserialize_inbound
@@ -141,6 +144,30 @@ class RecoveryUseCases(RecoveryPort):
 
     def fail_replay(self, *, data_dir: Path, item_id: str, error: str = "replay_failed") -> None:
         work_queue.fail_work_item(data_dir, item_id, error=error)
+
+    async def dispatch_worker_recovery(
+        self,
+        *,
+        data_dir: Path,
+        item_id: str,
+        original_text: str,
+        update_id: int,
+        bind_egress,
+        send_notice,
+    ) -> WorkerRecoveryOutcome:
+        notice = WorkerRecoveryNotice(
+            update_id=update_id,
+            preview=html.escape(
+                original_text[:200] + ("\u2026" if len(original_text) > 200 else "")
+            ),
+            prompt=_msg.recovery_notice_prompt(),
+            run_again_label=_msg.recovery_button_run_again(),
+            skip_label=_msg.recovery_button_skip(),
+        )
+        await bind_egress()
+        await send_notice(notice)
+        work_queue.mark_pending_recovery(data_dir, item_id)
+        return WorkerRecoveryOutcome(status="pending_recovery", notice=notice)
 
 
 _USE_CASES = RecoveryUseCases()

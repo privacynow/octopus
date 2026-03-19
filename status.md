@@ -20,16 +20,15 @@ the earlier closure attempt, and the preserved Phase 8 H4 entry is no longer
 the final closure state.
 
 - `## Historical Phase 7 Closure Status` (preserved Phase 7 baseline)
-- `## Current Authoritative Status` (live post-audit remediation state)
+- `## Current Authoritative Status` (live post-audit closure state)
 
 ## Current State
 
-Architecture remediation is reopened for the live post-audit F9-F10 tail and
-final verification pass.
+Architecture remediation is complete.
 The initial Phase 8 closure at `7804cf4` was followed by committed
-post-Phase-8 correction slices and post-audit F1-F8 follow-up. F9 is now
-landed and verified, and F10 is complete in the current worktree pending its
-commit and the final acceptance audit.
+post-Phase-8 correction slices, post-audit F1-F8 follow-up, and the final F9
+and F10 tail slices. The remaining store-parity and delivery-kind migration
+gaps are now closed.
 
 Latest committed correction slices:
 
@@ -37,14 +36,13 @@ Latest committed correction slices:
 - `837b4ed` `Post-Phase 8 / slice 2: rename live surface contracts to channel`
 - `a686565` `Post-Phase 8 / slice 3: align live channel terminology`
 - `dbf9176` `Post-audit / F9: remove dead backend-only store methods`
-- current worktree slice: `Post-audit / F10: close delivery-kind migration gap`
+- `584d700` `Post-audit / F10: close delivery-kind migration gap`
 
 Latest verified full-suite baseline:
 
 - `1668 passed, 23 skipped`
 
-Feature work remains frozen until the F10 commit lands and the final post-audit
-gates pass.
+Feature work may resume.
 
 ### Historical In-Progress Snapshot
 
@@ -1172,8 +1170,7 @@ for the current remediation state and the latest verified remediation baseline.
 
 ### Current State
 
-Architecture remediation is reopened for the remaining post-audit tail and
-final acceptance audit.
+Architecture remediation is complete.
 
 Phase 8 closed the remaining Telegram ingress decomposition and test-boundary
 gaps left after Phase 7. The post-Phase-8 correction slices and the post-audit
@@ -1256,7 +1253,7 @@ The post-audit follow-up is now closed:
     content-store public method sets match their abstract contracts across
     SQLite and Postgres
   - `dbf9176` is the committed F9 parity baseline
-- `F10` complete in current worktree:
+- `F10` complete:
   - added Postgres migration `0009_rename_delivery_kinds.sql` to rewrite
     persisted legacy delivery kinds
   - added temporary backwards-compatibility readers in `app/agents/bridge.py`
@@ -1264,12 +1261,15 @@ The post-audit follow-up is now closed:
     as `channel_*` with a deprecation warning
   - added migration and compatibility tests proving old deliveries are not
     stranded during update
+  - `584d700` is the committed F10 migration/compatibility baseline
 - final cap-restore complete:
   - `99939f0` trims `app/channels/telegram/ingress.py` back to `1470` lines
   - the structural gate now enforces the strict `≤1500` ingress cap again
 
-Feature work remains frozen until the F10 commit lands and the final
-post-audit verification passes.
+The final acceptance audit verified all Architecture Remediation, Phase 8, and
+post-audit gates against the committed tree and the full test suite baseline.
+
+Feature work may resume.
 
 ### Phase 8 Slice Log
 
@@ -1471,7 +1471,7 @@ post-audit verification passes.
      - `tests/contracts/test_content_store_contract.py`
      - Result: `57 passed`
 
-11. current worktree slice: `Post-audit / F10: close delivery-kind migration gap`
+11. `584d700` `Post-audit / F10: close delivery-kind migration gap`
    - added Postgres migration
      `app/db/migrations/postgres/0009_rename_delivery_kinds.sql` so persisted
      `surface_input`/`surface_action` rows are rewritten in-place
@@ -1559,8 +1559,9 @@ These mirror the authoritative
   plan diff for the accepted post-audit state.
 - [x] registry-store and content-store public method sets are identical across
   SQLite/Postgres and match their abstract contracts.
-- [x] delivery-kind migration/compatibility closure is landed and verified in
-  the current worktree.
+- [x] Postgres migration `0009_rename_delivery_kinds.sql` exists and renames
+  delivery kinds.
+- [x] delivery-kind migration/compatibility closure is landed and verified.
 
 ### Verification Baseline
 

@@ -8,7 +8,7 @@ from typing import Any
 
 from app.runtime_health import QueueSnapshot, WorkerHeartbeat
 from app import work_queue_sqlite_impl
-from app.transport_contract import CancelRequestResult, DiscardResult
+from app.workflows.recovery.transport_contract import CancelRequestResult, DiscardResult
 
 
 class SQLiteTransportStore:

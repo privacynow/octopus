@@ -141,7 +141,7 @@ class AgentRegistryClient:
         *,
         conversation_id: str,
         title: str,
-        origin_surface: str,
+        origin_channel: str,
         external_id: str,
     ) -> dict[str, Any]:
         return await self._request(
@@ -150,7 +150,7 @@ class AgentRegistryClient:
             json_data={
                 "conversation_id": conversation_id,
                 "title": title,
-                "origin_surface": origin_surface,
+                "origin_channel": origin_channel,
                 "external_id": external_id,
             },
         )

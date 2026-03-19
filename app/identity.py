@@ -1,6 +1,6 @@
-"""Shared surface-neutral identity helpers.
+"""Shared channel-neutral identity helpers.
 
-Durable runtime storage uses text keys so multiple surfaces can coexist
+Durable runtime storage uses text keys so multiple channels can coexist
 without Telegram-specific integer assumptions. Telegram keys keep a stable
 ``tg:`` prefix and preserve legacy numeric filesystem layout where needed.
 """

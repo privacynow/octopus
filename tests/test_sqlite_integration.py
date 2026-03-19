@@ -34,6 +34,8 @@ from tests.support.handler_support import (
     FakeChat,
     FakeProvider,
     FakeUser,
+    current_execution_runtime,
+    current_runtime,
     last_reply,
     load_session_disk,
     make_config,
@@ -151,7 +153,7 @@ async def test_doctor_reads_sqlite_not_json():
     """Verify cmd_doctor's stale session scan actually reads from SQLite.
     Create sessions directly in SQLite (no JSON files), run /doctor,
     and verify the scan finds them."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         # Create stale pending session directly via storage API
@@ -298,9 +300,10 @@ async def test_multiple_chats_save_independently():
 # ---------------------------------------------------------------------------
 
 async def test_prompt_size_cross_chat_reads_sqlite():
-    """Verify _check_prompt_size_cross_chat iterates sessions from SQLite,
+    """Verify telegram execution prompt-size warnings iterate sessions from SQLite,
     not from JSON files."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.execution as telegram_execution
+    from app.workflows.execution.requests import check_prompt_size_cross_chat
 
     with fresh_env(config_overrides={
         "admin_user_ids": frozenset({100}),
@@ -325,8 +328,11 @@ async def test_prompt_size_cross_chat_reads_sqlite():
         with_skill = [s for s in sessions if "big-skill" in s.get("active_skills", [])]
         assert len(with_skill) == 2
 
-        # Call the function directly (it's a module-level helper)
-        warnings = th._check_prompt_size_cross_chat(data_dir, "big-skill")
+        warnings = check_prompt_size_cross_chat(
+            data_dir,
+            "big-skill",
+            runtime=current_execution_runtime(),
+        )
         # The skill doesn't actually exist so it gets filtered out — no warnings expected.
         # The point is that it doesn't crash and successfully iterates SQLite rows.
         assert isinstance(warnings, list)

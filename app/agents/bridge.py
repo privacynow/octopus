@@ -14,15 +14,20 @@ from app.agents.state import load_agent_runtime_state
 from app.agents.types import RoutedTaskResult, TimelineEvent
 from app.config import BotConfig
 from app.identity import telegram_conversation_key
-from app.transport import InboundAction, InboundMessage, InboundUser, serialize_inbound
-from app.transports.factory import conversation_surface_name
-from app.transports.types import InboundEnvelope
+from app.runtime.inbound_types import (
+    InboundAction,
+    InboundEnvelope,
+    InboundMessage,
+    InboundUser,
+    serialize_inbound,
+)
+from app.runtime.composition import conversation_channel_name
 
 log = logging.getLogger(__name__)
 
 
 def conversation_key_for_ref(conversation_ref: str) -> str:
-    if conversation_surface_name(conversation_ref) == "telegram":
+    if conversation_channel_name(conversation_ref) == "telegram":
         try:
             return telegram_conversation_key(conversation_ref.rsplit(":", 1)[1])
         except (IndexError, ValueError):
@@ -53,7 +58,7 @@ async def bind_conversation(
     *,
     conversation_ref: str,
     title: str,
-    origin_surface: str,
+    origin_channel: str,
     external_id: str,
 ) -> None:
     client = registry_client(config)
@@ -63,7 +68,7 @@ async def bind_conversation(
         await client.sync_binding(
             conversation_id=conversation_ref,
             title=title,
-            origin_surface=origin_surface,
+            origin_channel=origin_channel,
             external_id=external_id,
         )
     except RegistryClientError as exc:
@@ -160,12 +165,12 @@ def build_registry_action_envelope(
 
 async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -> str:
     """Convert a registry delivery into a normal local work item or control action."""
-    kind = delivery.get("kind", "")
+    kind = str(delivery.get("kind", ""))
     payload = delivery.get("payload", {})
     delivery_id = delivery.get("delivery_id", "")
     data_dir = config.data_dir
 
-    if kind == "surface_input":
+    if kind == "channel_input":
         conversation_ref = payload["conversation_id"]
         conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
             conversation_ref=conversation_ref,
@@ -186,13 +191,13 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
                 config,
                 conversation_ref=conversation_ref,
                 title=payload.get("title", "Registry conversation"),
-                origin_surface="registry",
+                origin_channel="registry",
                 external_id=conversation_ref,
             )
             await publish_timeline_event(
                 config,
                 conversation_ref=conversation_ref,
-                kind="surface_input",
+                kind="channel_input",
                 title="Registry message",
                 body=payload.get("text", ""),
             )
@@ -235,7 +240,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
                 config,
                 conversation_ref=conversation_ref,
                 title=request.get("title", "Delegated task"),
-                origin_surface="registry",
+                origin_channel="registry",
                 external_id=request["routed_task_id"],
             )
             await publish_timeline_event(

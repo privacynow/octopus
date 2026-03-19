@@ -10,13 +10,14 @@ from app.config import BotConfig, ProcessRole, fail_fast, load_config, load_conf
 from app.providers.base import Provider
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
-from app.agents.delivery import handle_registry_delivery
+from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.runtime import start_agent_runtime_task
+from app.content_store import init_content_store_for_config
+from app.credential_store import init_credential_store_for_config
 from app.storage import close_db, ensure_data_dirs
 from app.work_queue import close_transport_db, recover_stale_claims, purge_old
 from app.worker import poll_interval_for_runtime, start_worker_task
-from app.store import startup_recovery
-from app.telegram_handlers import build_application
+from app.channels.telegram.bootstrap import build_bootstrap
 from app.runtime_health import CanonicalRuntimeHealthProvider
 
 PROVIDERS: dict[str, type] = {
@@ -187,7 +188,8 @@ def main() -> None:
             sys.exit(1)
 
     ensure_data_dirs(config.data_dir, database_url=config.database_url or "")
-    startup_recovery()
+    init_content_store_for_config(config)
+    init_credential_store_for_config(config)
 
     log.info("Instance: %s", config.instance)
     log.info("Provider: %s", provider.name)
@@ -204,9 +206,9 @@ def main() -> None:
         log.warning("Bot is open to everyone (BOT_ALLOW_OPEN=1)")
 
     log.info("Process role: %s", config.process_role)
-    app = build_application(config, provider)
-
-    from app.telegram_handlers import _boot_id as boot_id
+    telegram_bootstrap = build_bootstrap(config, provider)
+    app = telegram_bootstrap.application
+    boot_id = telegram_bootstrap.runtime.boot_id
 
     if _runs_worker(config):
         # Recover stale work items from previous boot and purge old transport data
@@ -227,12 +229,11 @@ def main() -> None:
 
     async def _on_post_init(_app) -> None:
         nonlocal _worker_task, _worker_stop, _agent_task, _agent_stop
-        from app.telegram_handlers import worker_dispatch
         if _runs_worker(config):
             _worker_task, _worker_stop = start_worker_task(
                 config.data_dir,
                 boot_id,
-                worker_dispatch,
+                telegram_bootstrap.worker_dispatch,
                 poll_interval=poll_interval_for_runtime(config.runtime_mode),
                 lease_ttl=config.claim_lease_ttl_seconds,
                 sweep_interval=config.claim_sweep_interval_seconds,
@@ -240,9 +241,18 @@ def main() -> None:
                 heartbeat_enabled=(config.runtime_mode == "shared"),
             )
         if _runs_registry_runtime(config):
+            delivery_runtime = build_registry_delivery_runtime(
+                provider_name=provider.name,
+                provider_state_factory=provider.new_provider_state,
+                bot=app.bot,
+            )
             _agent_task, _agent_stop = start_agent_runtime_task(
                 config,
-                delivery_handler=lambda delivery: handle_registry_delivery(config, delivery),
+                delivery_handler=lambda delivery: handle_registry_delivery(
+                    config,
+                    delivery,
+                    runtime=delivery_runtime,
+                ),
                 runtime_health_provider=CanonicalRuntimeHealthProvider(),
                 provider=provider,
             )

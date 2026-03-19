@@ -3,10 +3,15 @@
 from app.execution_context import ResolvedExecutionContext, resolve_execution_context
 from app.providers.base import RunContext, RunResult
 from app.session_state import session_from_dict
-from app.skills import derive_encryption_key, get_provider_config_digest, save_user_credential
+from tests.support.skill_test_helpers import (
+    derive_encryption_key,
+    get_provider_config_digest,
+    save_user_credential,
+)
 from app.storage import default_session, save_session
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
+    current_bot_instance,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -37,7 +42,7 @@ async def test_codex_context_hash_invalidation():
         msg = FakeMessage(chat=chat, text="do something")
         user = FakeUser(42)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
@@ -65,7 +70,7 @@ async def test_codex_script_staging():
         msg = FakeMessage(chat=chat, text="use github")
         user = FakeUser(42)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
@@ -111,7 +116,7 @@ async def test_codex_retry_clears_thread():
         query = FakeCallbackQuery("retry_allow", message=cb_msg)
         user = FakeUser(42)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         update = FakeUpdate(user=user, chat=chat, callback_query=query)
         update.effective_message = cb_msg
@@ -135,7 +140,7 @@ async def test_codex_failed_resume_clears_thread():
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_message(
             FakeUpdate(message=FakeMessage(chat=chat, text="continue working"), user=user, chat=chat),
@@ -161,7 +166,7 @@ async def test_codex_timed_out_resume_preserves_thread():
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_message(
             FakeUpdate(message=FakeMessage(chat=chat, text="continue working"), user=user, chat=chat),
@@ -186,7 +191,7 @@ async def test_codex_new_exec_failure_preserves_no_thread():
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_message(
             FakeUpdate(message=FakeMessage(chat=chat, text="do something"), user=user, chat=chat),
@@ -223,7 +228,7 @@ async def test_codex_error_text_is_html_escaped():
         user = FakeUser(42)
         msg = CaptureReplyMessage(chat=chat, text="do something")
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_message(
             FakeUpdate(message=msg, user=user, chat=chat),
@@ -235,7 +240,7 @@ async def test_codex_error_text_is_html_escaped():
         # final error is shown via progress.update (edit_text). Escaping must produce &lt;MODEL&gt;.
         assert len(prov.run_calls) == 1
         all_bot_text = " ".join(
-            (m.get("text") or m.get("edit_text") or "") for m in th._bot_instance.sent_messages
+            (m.get("text") or m.get("edit_text") or "") for m in current_bot_instance().sent_messages
         )
         assert "&lt;MODEL&gt;" in all_bot_text, (
             "Codex error text must be HTML-escaped so <MODEL> appears as &lt;MODEL&gt; in user-visible output"
@@ -260,7 +265,7 @@ async def test_codex_boot_id_clears_stale_thread():
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_message(
             FakeUpdate(message=FakeMessage(chat=chat, text="hello"), user=user, chat=chat),
@@ -287,7 +292,7 @@ async def test_codex_same_boot_preserves_thread():
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_message(
             FakeUpdate(message=FakeMessage(chat=chat, text="hello"), user=user, chat=chat),
@@ -312,7 +317,7 @@ async def test_scripts_dir_in_run_context():
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_message(
             FakeUpdate(message=FakeMessage(chat=chat, text="use github"), user=user, chat=chat),
@@ -329,7 +334,7 @@ async def test_scripts_dir_in_run_context():
 
 
 async def test_script_staging_removes_stale():
-    from app.skills import stage_codex_scripts
+    from tests.support.skill_test_helpers import stage_codex_scripts
 
     with fresh_data_dir() as data_dir:
 
@@ -357,7 +362,7 @@ async def test_context_hash_role_sensitivity():
         ]
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)

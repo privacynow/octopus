@@ -15,7 +15,7 @@ Owner suite for (distinct contract from test_handlers):
 - Cross-feature: compact + long reply + public user
 - Export resolved skills (not raw session)
 
-Re-homed to test_handlers (Milestone E): handler-surface tests for /session, /settings, /model,
+Re-homed to test_handlers (Milestone E): handler-channel tests for /session, /settings, /model,
 setting_model:*, setting_project:* (test_session_command_shows_public_context,
 test_settings_command_public_user_no_trusted_leak, test_settings_command_public_user_keyboard_*,
 test_model_command_public_user_*, test_model_callback_public_user_*, test_project_callback_public_user_denied).
@@ -35,6 +35,10 @@ from pathlib import Path
 
 import pytest
 
+from app.channels.telegram.session_io import (
+    load as telegram_load_session,
+    save as telegram_save_session,
+)
 from app.execution_context import (
     ResolvedExecutionContext,
     resolve_execution_context,
@@ -42,6 +46,7 @@ from app.execution_context import (
 from app.identity import telegram_actor_key, telegram_conversation_key
 from app.providers.base import RunResult
 from app.request_flow import extra_dirs_from_denials as _extra_dirs_from_denials
+from app.runtime.work_admission import trust_tier_for_source
 from app.session_state import (
     PendingApproval,
     PendingRetry,
@@ -52,6 +57,9 @@ from app.session_state import (
 from app.storage import default_session, save_session
 from tests.support.config_support import make_config as _make_config
 from tests.support.handler_support import (
+    current_bot_instance,
+    current_execution_runtime,
+    current_runtime,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -128,6 +136,19 @@ def test_public_trust_strips_skills():
     assert ctx.active_skills == []
 
 
+def test_trusted_context_filters_unresolvable_skills():
+    """Trusted resolved context must ignore raw session skills that do not resolve."""
+    with fresh_env() as (_data_dir, cfg, _prov):
+        session = SessionState(
+            provider="claude",
+            provider_state={},
+            approval_mode="off",
+            active_skills=["code-review", "missing-skill", "code-review"],
+        )
+        ctx = resolve_execution_context(session, cfg, "claude", trust_tier="trusted")
+        assert ctx.active_skills == ["code-review"]
+
+
 def test_public_trust_strips_project():
     """Public users must have no project binding."""
     project_dir = tempfile.mkdtemp()
@@ -175,7 +196,7 @@ def test_public_vs_trusted_different_context_hash():
 
 def test_is_public_user_open_with_allowed_list():
     """User not in allowed list + allow_open=True -> public."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(
@@ -186,13 +207,13 @@ def test_is_public_user_open_with_allowed_list():
         )
         setup_globals(cfg, FakeProvider("claude"))
 
-        assert th.is_public_user(FakeUser(uid=999, username="stranger")) is True
-        assert th.is_public_user(FakeUser(uid=100, username="admin")) is False
+        assert th.is_public_user(current_runtime(), FakeUser(uid=999, username="stranger")) is True
+        assert th.is_public_user(current_runtime(), FakeUser(uid=100, username="admin")) is False
 
 
 def test_is_public_user_open_no_allowed_list():
     """allow_open=True with no allowed list -> everyone is public."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, allow_open=True,
@@ -200,12 +221,12 @@ def test_is_public_user_open_no_allowed_list():
                           allowed_usernames=frozenset())
         setup_globals(cfg, FakeProvider("claude"))
 
-        assert th.is_public_user(FakeUser(uid=42)) is True
+        assert th.is_public_user(current_runtime(), FakeUser(uid=42)) is True
 
 
 def test_is_public_user_closed():
     """allow_open=False -> no one is public (they wouldn't pass is_allowed)."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(
@@ -215,8 +236,8 @@ def test_is_public_user_closed():
         )
         setup_globals(cfg, FakeProvider("claude"))
 
-        assert th.is_public_user(FakeUser(uid=42)) is False
-        assert th.is_public_user(FakeUser(uid=999)) is False
+        assert th.is_public_user(current_runtime(), FakeUser(uid=42)) is False
+        assert th.is_public_user(current_runtime(), FakeUser(uid=999)) is False
 
 
 # =====================================================================
@@ -238,7 +259,7 @@ _GATED_COMMANDS = [
                          ids=[c[0] for c in _GATED_COMMANDS])
 async def test_public_user_blocked_from_restricted_command(cmd_name, args):
     """Public users get a denial message from restricted commands."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(
@@ -259,7 +280,7 @@ async def test_public_user_blocked_from_restricted_command(cmd_name, args):
 
 async def test_trusted_user_not_blocked_from_restricted_command():
     """Trusted users can invoke restricted commands normally."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=7002)
@@ -331,7 +352,7 @@ def test_compact_mode_works_for_public_users():
 def test_public_mode_applies_default_rate_limits():
     """build_application should apply conservative rate-limit defaults when
     allow_open=True and no explicit limits are set."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(
@@ -353,7 +374,7 @@ def test_public_mode_applies_default_rate_limits():
 
 def test_explicit_rate_limits_not_overridden():
     """When operator sets explicit rate limits, they should not be overridden."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(
@@ -379,7 +400,7 @@ def test_explicit_rate_limits_not_overridden():
 @pytest.mark.asyncio
 async def test_is_allowed_mixed_mode_admits_stranger():
     """Stranger admitted when allow_open + allow-lists both set."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -388,16 +409,16 @@ async def test_is_allowed_mixed_mode_admits_stranger():
         trusted_user = FakeUser(uid=42, username="trustedguy")
         stranger = FakeUser(uid=999, username="nobody")
 
-        assert th.is_allowed(trusted_user)
-        assert th.is_allowed(stranger)
-        assert not th.is_public_user(trusted_user)
-        assert th.is_public_user(stranger)
+        assert th.is_allowed(current_runtime(), trusted_user)
+        assert th.is_allowed(current_runtime(), stranger)
+        assert not th.is_public_user(current_runtime(), trusted_user)
+        assert th.is_public_user(current_runtime(), stranger)
 
 
 @pytest.mark.asyncio
 async def test_is_allowed_closed_mode_rejects_stranger():
     """Stranger rejected when allow_open=False, even with allow-lists."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={
         "allow_open": False,
@@ -406,8 +427,8 @@ async def test_is_allowed_closed_mode_rejects_stranger():
         trusted_user = FakeUser(uid=42)
         stranger = FakeUser(uid=999, username="nobody")
 
-        assert th.is_allowed(trusted_user)
-        assert not th.is_allowed(stranger)
+        assert th.is_allowed(current_runtime(), trusted_user)
+        assert not th.is_allowed(current_runtime(), stranger)
 
 
 # =====================================================================
@@ -417,7 +438,8 @@ async def test_is_allowed_closed_mode_rejects_stranger():
 @pytest.mark.asyncio
 async def test_execute_request_public_user_gets_inspect_policy():
     """execute_request with trust_tier='public' resolves inspect file_policy."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.execution as telegram_execution
+    from app.workflows.execution.requests import execute_request
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -442,9 +464,10 @@ async def test_execute_request_public_user_gets_inspect_policy():
 
         # Execute as public
         msg = FakeMessage(chat=chat, text="hello")
-        await th.execute_request(
+        await execute_request(
             chat.id, "test prompt", [], msg,
             request_user_id=telegram_actor_key(999), trust_tier="public",
+            runtime=current_execution_runtime(),
         )
 
         # Provider should have been called with public restrictions
@@ -457,7 +480,8 @@ async def test_execute_request_public_user_gets_inspect_policy():
 @pytest.mark.asyncio
 async def test_execute_request_trusted_user_gets_edit_policy():
     """execute_request with trust_tier='trusted' preserves session file_policy."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.execution as telegram_execution
+    from app.workflows.execution.requests import execute_request
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -478,9 +502,10 @@ async def test_execute_request_trusted_user_gets_edit_policy():
         save_session(data_dir, telegram_conversation_key(chat.id), session)
 
         msg = FakeMessage(chat=chat, text="hello")
-        await th.execute_request(
+        await execute_request(
             chat.id, "test prompt", [], msg,
             request_user_id=telegram_actor_key(42), trust_tier="trusted",
+            runtime=current_execution_runtime(),
         )
 
         assert len(prov.run_calls) == 1
@@ -492,7 +517,7 @@ async def test_execute_request_trusted_user_gets_edit_policy():
 @pytest.mark.asyncio
 async def test_handle_message_public_user_threads_trust_tier():
     """Full handle_message path for a public user passes trust_tier through."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -514,7 +539,7 @@ async def test_handle_message_public_user_threads_trust_tier():
 @pytest.mark.asyncio
 async def test_handle_message_trusted_user_not_forced_inspect():
     """Full handle_message path for a trusted user does NOT force inspect."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -711,41 +736,43 @@ def test_classify_pending_validation_accepts_iso_created_at():
 
 def test_credential_check_uses_resolved_skills_not_session():
     """Credential check with empty resolved skills skips all checks."""
-    from app.request_flow import check_credential_satisfaction
+    from app.credential_store import init_credential_store_for_config
+    from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
+    from tests.support.config_support import make_config
 
     with fresh_data_dir() as data_dir:
         session = SessionState(provider="claude", provider_state={}, approval_mode="off")
         # Session has skills, but resolved list is empty (public user)
         session.active_skills = ["github-integration"]
+        init_credential_store_for_config(make_config(data_dir=data_dir))
 
-        result = check_credential_satisfaction(
-            active_skills=[],  # resolved: public user gets no skills
+        result = get_runtime_skill_setup_use_cases().check_satisfaction(
             session=session,
             user_id=telegram_actor_key(999),
-            data_dir=data_dir,
-            encryption_key=b"test-key-1234567",
+            active_skills=[],  # resolved: public user gets no skills
         )
-        assert result.satisfied
+        assert result.status == "satisfied"
         assert result.credential_env == {}
 
 
 def test_credential_check_with_resolved_skills():
     """Credential check with non-empty resolved skills actually checks them."""
-    from app.request_flow import check_credential_satisfaction
+    from app.credential_store import init_credential_store_for_config
+    from app.workflows.runtime_skills.setup import get_runtime_skill_setup_use_cases
+    from tests.support.config_support import make_config
 
     with fresh_data_dir() as data_dir:
         session = SessionState(provider="claude", provider_state={}, approval_mode="off")
+        init_credential_store_for_config(make_config(data_dir=data_dir))
 
         # Use a fake skill name — check_credentials returns [] for unknown skills
-        result = check_credential_satisfaction(
-            active_skills=["nonexistent-skill"],
+        result = get_runtime_skill_setup_use_cases().check_satisfaction(
             session=session,
             user_id=telegram_actor_key(42),
-            data_dir=data_dir,
-            encryption_key=b"test-key-1234567",
+            active_skills=["nonexistent-skill"],
         )
         # Unknown skills have no requirements, so satisfied
-        assert result.satisfied
+        assert result.status == "satisfied"
 
 
 # =====================================================================
@@ -805,7 +832,7 @@ def test_extra_dirs_from_denials_mixed():
 @pytest.mark.asyncio
 async def test_compact_long_reply_public_user():
     """Public user + compact mode + long response -> blockquote/expand, inspect enforced."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -823,10 +850,10 @@ async def test_compact_long_reply_public_user():
         await drain_one_worker_item(data_dir)
 
         # Worker sends via bot
-        all_text = " ".join(str(m.get("text", "")) for m in th._bot_instance.sent_messages)
+        all_text = " ".join(str(m.get("text", "")) for m in current_bot_instance().sent_messages)
         # Should have compact rendering (blockquote or expand button)
         has_blockquote = "blockquote" in all_text
-        has_expand_button = any(m.get("reply_markup") is not None for m in th._bot_instance.sent_messages)
+        has_expand_button = any(m.get("reply_markup") is not None for m in current_bot_instance().sent_messages)
         assert has_blockquote or has_expand_button, (
             f"Expected compact rendering for public user, got: {all_text[:200]}")
 
@@ -844,16 +871,18 @@ async def test_compact_long_reply_public_user():
 @pytest.mark.asyncio
 async def test_export_uses_resolved_skills_not_raw_session():
     """/export header shows resolved skills, not raw session.active_skills."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.execution as telegram_execution
+    import app.channels.telegram.ingress as th
+    from app.channels.telegram.normalization import normalize_user
 
     with fresh_env(config_overrides={
         "allow_open": True,
         "allowed_user_ids": frozenset(),  # no trusted users
     }) as (data_dir, cfg, prov):
         # Create a session as a trusted user first, add skills
-        session = th._load(8005)
+        session = telegram_load_session(current_runtime(), 8005)
         session.active_skills = ["github-integration", "secret-tool"]
-        th._save(8005, session)
+        telegram_save_session(current_runtime(), 8005, session)
 
         # Export as a public user (not in allowed_user_ids)
         chat = FakeChat(chat_id=8005)
@@ -861,9 +890,9 @@ async def test_export_uses_resolved_skills_not_raw_session():
         await send_command(th.cmd_export, chat, public_user, "/export")
 
         # Verify the resolved context gives [] for public users
-        session_after = th._load(8005)
-        trust = th._trust_tier(public_user)
-        resolved = th._resolve_context(session_after, trust_tier=trust)
+        session_after = telegram_load_session(current_runtime(), 8005)
+        trust = trust_tier_for_source("telegram", normalize_user(public_user), config=current_runtime().config)
+        resolved = telegram_execution.resolve_context(current_runtime(), session_after, trust_tier=trust)
         assert resolved.active_skills == [], (
             f"Public user should resolve to zero skills, got: {resolved.active_skills}"
         )

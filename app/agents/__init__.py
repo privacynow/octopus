@@ -1,4 +1,4 @@
-"""Agent/registry foundation for multi-surface, multi-bot runtime."""
+"""Agent/registry foundation for multi-channel, multi-bot runtime."""
 
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.runtime import AgentRuntime, start_agent_runtime_task
@@ -10,8 +10,8 @@ from app.agents.types import (
     RoutedTaskRequest,
     RoutedTaskResult,
     RoutedTaskUpdate,
-    SurfaceBinding,
-    SurfaceEvent,
+    ChannelBinding,
+    ChannelEvent,
     TimelineEvent,
 )
 
@@ -26,8 +26,8 @@ __all__ = [
     "RoutedTaskRequest",
     "RoutedTaskResult",
     "RoutedTaskUpdate",
-    "SurfaceBinding",
-    "SurfaceEvent",
+    "ChannelBinding",
+    "ChannelEvent",
     "TimelineEvent",
     "load_agent_runtime_state",
     "save_agent_runtime_state",

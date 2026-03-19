@@ -13,10 +13,15 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.agents.types import TimelineEvent
+from app.capability_service import (
+    declared_capabilities,
+    query_capabilities,
+    requested_routed_capabilities,
+)
 from app.db.postgres import get_connection
 from app.registry_service.store_base import (
     AbstractRegistryStore,
-    SkillDisabledError,
+    CapabilityDisabledError,
     conversation_status_for_event,
     decode_json_field,
     effective_connectivity_state,
@@ -106,7 +111,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "display_name": row["display_name"],
             "slug": row["slug"],
             "role": row["role"],
-            "skills": decode_json_field(row["skills_json"], []),
+            "capabilities": decode_json_field(row["skills_json"], []),
             "tags": decode_json_field(row["tags_json"], []),
             "description": row["description"],
             "provider": row["provider"],
@@ -114,7 +119,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "connectivity_state": effective_state,
             "current_capacity": row["current_capacity"],
             "max_capacity": row["max_capacity"],
-            "surface_capabilities": decode_json_field(row["surface_capabilities_json"], []),
+            "channel_capabilities": decode_json_field(row["channel_capabilities_json"], []),
             "version": row["version"],
             "last_heartbeat_at": row["last_heartbeat_at"],
             "updated_at": row["updated_at"],
@@ -315,7 +320,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         agent_id, agent_token, display_name, slug, role,
                         skills_json, tags_json, description, provider, mode,
                         connectivity_state, current_capacity, max_capacity,
-                        surface_capabilities_json, version, created_at, updated_at, last_heartbeat_at
+                        channel_capabilities_json, version, created_at, updated_at, last_heartbeat_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
@@ -324,7 +329,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         requested_card.get("display_name") or slug,
                         slug,
                         requested_card.get("role", ""),
-                        _jsonb(requested_card.get("skills", [])),
+                        _jsonb(declared_capabilities(requested_card)),
                         _jsonb(requested_card.get("tags", [])),
                         requested_card.get("description", ""),
                         requested_card.get("provider", ""),
@@ -332,7 +337,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         requested_card.get("connectivity_state", "degraded"),
                         int(requested_card.get("current_capacity", 0)),
                         max(1, int(requested_card.get("max_capacity", 1))),
-                        _jsonb(requested_card.get("surface_capabilities", [])),
+                        _jsonb(requested_card.get("channel_capabilities", [])),
                         requested_card.get("version", ""),
                         now,
                         now,
@@ -359,14 +364,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     UPDATE {_SCHEMA}.agents
                     SET display_name = %s, role = %s, skills_json = %s, tags_json = %s,
                         description = %s, provider = %s, mode = %s, connectivity_state = %s,
-                        current_capacity = %s, max_capacity = %s, surface_capabilities_json = %s,
+                        current_capacity = %s, max_capacity = %s, channel_capabilities_json = %s,
                         version = %s, updated_at = %s, last_heartbeat_at = %s
                     WHERE agent_token = %s
                     """,
                     (
                         card.get("display_name", row["display_name"]),
                         card.get("role", row["role"]),
-                        _jsonb(card.get("skills", [])),
+                        _jsonb(declared_capabilities(card)),
                         _jsonb(card.get("tags", [])),
                         card.get("description", row["description"]),
                         card.get("provider", row["provider"]),
@@ -374,7 +379,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         payload.get("connectivity_state", row["connectivity_state"]),
                         int(payload.get("current_capacity", 0)),
                         max(1, int(payload.get("max_capacity", 1))),
-                        _jsonb(card.get("surface_capabilities", [])),
+                        _jsonb(card.get("channel_capabilities", [])),
                         card.get("version", row["version"]),
                         now,
                         now,
@@ -486,27 +491,27 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 cur.execute(
                     f"""
                     INSERT INTO {_SCHEMA}.conversations (
-                        conversation_id, target_agent_id, title, origin_surface, status, created_at, updated_at
+                        conversation_id, target_agent_id, title, origin_channel, status, created_at, updated_at
                     ) VALUES (%s, %s, %s, %s, 'open', %s, %s)
                     ON CONFLICT(conversation_id) DO UPDATE SET
                         target_agent_id = EXCLUDED.target_agent_id,
                         title = EXCLUDED.title,
-                        origin_surface = EXCLUDED.origin_surface,
+                        origin_channel = EXCLUDED.origin_channel,
                         updated_at = EXCLUDED.updated_at
                     """,
                     (
                         payload["conversation_id"],
                         row["agent_id"],
                         payload.get("title", ""),
-                        payload.get("origin_surface", "telegram"),
+                        payload.get("origin_channel", "telegram"),
                         now,
                         now,
                     ),
                 )
         return self.get_conversation(payload["conversation_id"])
 
-    def get_skill_override(self, skill_name: str) -> bool | None:
-        normalized = skill_name.strip().lower()
+    def get_capability_override(self, capability_name: str) -> bool | None:
+        normalized = capability_name.strip().lower()
         with self._connect() as conn:
             with _cur(conn) as cur:
                 cur.execute(
@@ -518,8 +523,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
             return None
         return bool(row["enabled"])
 
-    def set_skill_override(self, skill_name: str, enabled: bool, set_by: str = "ui") -> None:
-        normalized = skill_name.strip().lower()
+    def set_capability_override(self, capability_name: str, enabled: bool, set_by: str = "ui") -> None:
+        normalized = capability_name.strip().lower()
         with self._connect() as conn, _write_tx(conn):
             with _cur(conn) as cur:
                 cur.execute(
@@ -534,7 +539,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     (normalized, 1 if enabled else 0, set_by, datetime.now(timezone.utc).timestamp()),
                 )
 
-    def list_skills(self) -> list[dict[str, Any]]:
+    def list_capabilities(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             with _cur(conn) as cur:
                 cur.execute(
@@ -550,15 +555,15 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         END != 'offline'
                     ),
                     declared AS (
-                        SELECT lower(je.value) AS skill_key, je.value AS skill_name, live_agents.slug
+                        SELECT lower(je.value) AS capability_key, je.value AS capability_name, live_agents.slug
                         FROM live_agents
                         CROSS JOIN LATERAL jsonb_array_elements_text(live_agents.skills_json) AS je(value)
                     )
-                    SELECT skill_key, MIN(skill_name) AS skill_name,
+                    SELECT capability_key, MIN(capability_name) AS capability_name,
                            array_agg(DISTINCT slug ORDER BY slug) AS declared_by_agents
                     FROM declared
-                    GROUP BY skill_key
-                    ORDER BY skill_key
+                    GROUP BY capability_key
+                    ORDER BY capability_key
                     """,
                     (self._offline_before(),),
                 )
@@ -573,8 +578,8 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 override_rows = cur.fetchall()
         merged: dict[str, dict[str, Any]] = {}
         for row in declared_rows:
-            merged[row["skill_key"]] = {
-                "skill_name": row["skill_name"],
+            merged[row["capability_key"]] = {
+                "capability_name": row["capability_name"],
                 "declared_by_agents": row["declared_by_agents"] or [],
                 "enabled": None,
             }
@@ -583,15 +588,15 @@ class RegistryPostgresStore(AbstractRegistryStore):
             item = merged.setdefault(
                 key,
                 {
-                    "skill_name": row["skill_name"],
+                    "capability_name": row["skill_name"],
                     "declared_by_agents": [],
                     "enabled": None,
                 },
             )
             item["enabled"] = bool(row["enabled"])
-        return sorted(merged.values(), key=lambda item: item["skill_name"].lower())
+        return sorted(merged.values(), key=lambda item: item["capability_name"].lower())
 
-    def _disabled_skills(self, conn) -> set[str]:
+    def _disabled_capabilities(self, conn) -> set[str]:
         with _cur(conn) as cur:
             cur.execute(
                 f"SELECT skill_name FROM {_SCHEMA}.skills_override WHERE enabled = 0"
@@ -602,14 +607,14 @@ class RegistryPostgresStore(AbstractRegistryStore):
     def search_agents(self, query: dict[str, Any]) -> list[dict[str, Any]]:
         role = query.get("role", "").strip().lower()
         required_state = query.get("required_state", "connected")
-        skills = {s.lower() for s in query.get("skills", []) if s}
+        capabilities = query_capabilities(query)
         tags = {t.lower() for t in query.get("tags", []) if t}
         free_text = query.get("free_text", "").strip()
         exclude = sorted(set(query.get("exclude_agent_ids", [])))
         with self._connect() as conn:
-            disabled_skills = self._disabled_skills(conn)
-            skills = skills - disabled_skills
-            if query.get("skills") and not skills:
+            disabled_capabilities = self._disabled_capabilities(conn)
+            capabilities = capabilities - disabled_capabilities
+            if (query.get("capabilities") or query.get("skills")) and not capabilities:
                 return []
             sql = [
                 f"""
@@ -639,7 +644,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             if role:
                 sql.append(" AND role ILIKE %s")
                 params.append(f"%{role}%")
-            for skill in sorted(skills):
+            for capability in sorted(capabilities):
                 sql.append(
                     """
                     AND EXISTS (
@@ -649,7 +654,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     )
                     """
                 )
-                params.append(skill)
+                params.append(capability)
             for tag in sorted(tags):
                 sql.append(
                     """
@@ -744,9 +749,10 @@ class RegistryPostgresStore(AbstractRegistryStore):
     def create_routed_task(self, request: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
         with self._connect() as conn, _write_tx(conn):
-            requested_skill = str(request.get("skill") or "").strip()
-            if requested_skill and requested_skill.lower() in self._disabled_skills(conn):
-                raise SkillDisabledError(requested_skill)
+            disabled_capabilities = self._disabled_capabilities(conn)
+            for capability in requested_routed_capabilities(request):
+                if capability.lower() in disabled_capabilities:
+                    raise CapabilityDisabledError(capability)
             with _cur(conn) as cur:
                 cur.execute(
                     f"""
@@ -988,7 +994,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 cur.execute(
                     f"""
                     INSERT INTO {_SCHEMA}.conversations (
-                        conversation_id, target_agent_id, title, origin_surface, status, created_at, updated_at
+                        conversation_id, target_agent_id, title, origin_channel, status, created_at, updated_at
                     ) VALUES (%s, %s, %s, 'registry', 'open', %s, %s)
                     """,
                     (conversation_id, target_agent_id, title, now, now),
@@ -996,12 +1002,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
             self._create_delivery(
                 conn,
                 target_agent_id=target_agent_id,
-                kind="surface_input",
+                kind="channel_input",
                 payload={
                     "conversation_id": conversation_id,
                     "title": title,
                     "text": message_text,
-                    "surface": "registry",
+                    "channel": "registry",
                 },
                 now=now,
                 delivery_id=uuid.uuid4().hex,
@@ -1011,7 +1017,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conversation_id=conversation_id,
                 title="Conversation started",
                 body=message_text,
-                kind="surface_input",
+                kind="channel_input",
             )
         return self.get_conversation(conversation_id)
 
@@ -1027,7 +1033,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     FROM {_SCHEMA}.conversations c
                     LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
                     LEFT JOIN {_SCHEMA}.timeline_events t ON t.conversation_id = c.conversation_id
-                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_surface, c.status, c.created_at, c.updated_at, a.display_name
+                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.status, c.created_at, c.updated_at, a.display_name
                     ORDER BY c.updated_at DESC
                     """
                 )
@@ -1059,7 +1065,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
                     LEFT JOIN {_SCHEMA}.timeline_events t ON t.conversation_id = c.conversation_id
                     WHERE c.conversation_id = %s
-                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_surface, c.status, c.created_at, c.updated_at, a.display_name
+                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.status, c.created_at, c.updated_at, a.display_name
                     """,
                     (conversation_id,),
                 )
@@ -1203,12 +1209,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
             self._create_delivery(
                 conn,
                 target_agent_id=conversation["target_agent_id"],
-                kind="surface_input",
+                kind="channel_input",
                 payload={
                     "conversation_id": conversation_id,
                     "title": conversation["title"],
                     "text": text,
-                    "surface": "registry",
+                    "channel": "registry",
                 },
                 now=now,
                 delivery_id=uuid.uuid4().hex,
@@ -1218,7 +1224,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conversation_id=conversation_id,
                 title="User message",
                 body=text,
-                kind="surface_input",
+                kind="channel_input",
             )
         return {"conversation_id": conversation_id, "accepted": True}
 
@@ -1239,55 +1245,24 @@ class RegistryPostgresStore(AbstractRegistryStore):
             self._create_delivery(
                 conn,
                 target_agent_id=conversation["target_agent_id"],
-                kind="surface_action",
+                kind="channel_action",
                 payload={
                     "conversation_id": conversation_id,
                     "conversation_ref": conversation_id,
                     "action": action,
                     "payload": action_payload,
-                    "surface": "registry",
+                    "channel": "registry",
                 },
                 now=now,
                 delivery_id=uuid.uuid4().hex,
             )
+            is_cancel = action == "cancel_conversation"
             self._publish_ui_timeline_conn(
                 conn,
                 conversation_id=conversation_id,
-                title=f"Action: {action}",
-                body=json.dumps(action_payload) if action_payload else "",
-                kind="surface_action",
-            )
-        return {"conversation_id": conversation_id, "accepted": True}
-
-    def cancel_conversation(self, conversation_id: str) -> dict[str, Any]:
-        with self._connect() as conn, _write_tx(conn):
-            with _cur(conn) as cur:
-                cur.execute(
-                    f"SELECT target_agent_id FROM {_SCHEMA}.conversations WHERE conversation_id = %s",
-                    (conversation_id,),
-                )
-                conversation = cur.fetchone()
-            if conversation is None:
-                raise KeyError(conversation_id)
-            now = utcnow_iso()
-            self._create_delivery(
-                conn,
-                target_agent_id=conversation["target_agent_id"],
-                kind="control",
-                payload={
-                    "conversation_id": conversation_id,
-                    "action": "cancel",
-                    "surface": "registry",
-                },
-                now=now,
-                delivery_id=uuid.uuid4().hex,
-            )
-            self._publish_ui_timeline_conn(
-                conn,
-                conversation_id=conversation_id,
-                title="Cancel requested",
-                body="",
-                kind="control",
+                title="Cancel requested" if is_cancel else f"Action: {action}",
+                body="" if is_cancel else json.dumps(action_payload) if action_payload else "",
+                kind="control" if is_cancel else "channel_action",
             )
         return {"conversation_id": conversation_id, "accepted": True}
 

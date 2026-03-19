@@ -755,16 +755,16 @@ async def test_heartbeat_does_not_overwrite_provider_liveness():
     Heartbeat must not overwrite a recent Liveness update (same as for
     tool/command updates). Proves only one visible update per interval.
     """
-    import app.telegram_handlers as th
+    import app.channels.telegram.progress as telegram_progress
     from unittest.mock import patch
 
     progress = FakeProgress()
     content_started = progress.content_started
 
     # Use same cadence as test_heartbeat_stops_when_content_starts so first beat fires
-    with patch.object(th, "_HEARTBEAT_FIRST", 0.05), \
-         patch.object(th, "_HEARTBEAT_SUBSEQUENT", 0.05):
-        task = asyncio.create_task(th._heartbeat(progress, content_started))
+    with patch.object(telegram_progress, "_HEARTBEAT_FIRST", 0.05), \
+         patch.object(telegram_progress, "_HEARTBEAT_SUBSEQUENT", 0.05):
+        task = asyncio.create_task(telegram_progress.heartbeat(progress, content_started))
 
         await asyncio.sleep(0.10)  # First beat at 0.05s
         count_after_first_beat = len(progress.updates)
@@ -799,11 +799,11 @@ async def test_rate_limit_preserves_semantic_command_events():
     command/tool events. Sends a burst so that some updates are suppressed;
     asserts CommandStart and CommandFinish still appear (plan Priority 3b).
     """
-    import app.telegram_handlers as th
+    import app.channels.telegram.progress as telegram_progress
 
     msg = FakeMessage()
     cfg = make_bot_config(stream_update_interval_seconds=0.2)
-    progress = th.TelegramProgress(msg, cfg)
+    progress = telegram_progress.TelegramProgress(msg, cfg)
     progress.content_started = asyncio.Event()  # do not trigger content-first bypass
 
     # Burst: CommandStart (first update goes through), then filler within same interval

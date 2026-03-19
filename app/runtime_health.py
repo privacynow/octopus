@@ -61,7 +61,7 @@ class WorkerHeartbeat:
 
 @dataclass(frozen=True)
 class SharedRuntimeSnapshot:
-    """Combined queue and worker summary for operator surfaces."""
+    """Combined queue and worker summary for operator channels."""
 
     queue: QueueSnapshot = field(default_factory=QueueSnapshot)
     workers: tuple[WorkerHeartbeat, ...] = ()
@@ -96,7 +96,7 @@ class RuntimeHealthSummary:
 
 @dataclass(frozen=True)
 class RuntimeHealthReport:
-    """Canonical runtime-health report shared by all operator surfaces."""
+    """Canonical runtime-health report shared by all operator channels."""
 
     schema_version: int = _RUNTIME_HEALTH_SCHEMA_VERSION
     generated_at: str = field(
@@ -113,7 +113,7 @@ class SessionHealthContext:
 
     session: dict[str, Any]
     user_id: str
-    encryption_key: bytes
+    resolved_active_skills: tuple[str, ...] = ()
 
 
 class RuntimeHealthProvider(Protocol):
@@ -134,14 +134,14 @@ T = TypeVar("T")
 
 
 class RuntimeHealthProjector(Protocol, Generic[T]):
-    """Project canonical health into another surface's wire/storage shape."""
+    """Project canonical health into another channel's wire/storage shape."""
 
     def project(self, report: RuntimeHealthReport) -> T:
         ...
 
 
 class RuntimeHealthFormatter(Protocol):
-    """Format canonical health for human-readable surfaces."""
+    """Format canonical health for human-readable channels."""
 
     def format(self, report: RuntimeHealthReport) -> list[str] | str:
         ...
@@ -266,7 +266,7 @@ class RuntimeHealthJsonProjector(RuntimeHealthProjector[dict[str, Any]]):
 
 
 class DoctorTextFormatter(RuntimeHealthFormatter):
-    """Render canonical runtime health for Telegram/CLI doctor surfaces."""
+    """Render canonical runtime health for Telegram/CLI doctor channels."""
 
     def format(self, report: RuntimeHealthReport) -> list[str]:
         parts: list[str] = []
@@ -322,14 +322,13 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
         )
 
         try:
-            from app.store import check_schema, ensure_managed_dirs
+            from app.content_store import get_content_store
 
-            ensure_managed_dirs()
-            check_schema()
+            get_content_store()
         except RuntimeError as exc:
-            diagnostics.append(_diag("error", "managed_store.health_failed", str(exc)))
+            diagnostics.append(_diag("error", "content_store.health_failed", str(exc)))
         except Exception as exc:
-            diagnostics.append(_diag("error", "managed_store.health_failed", f"Managed store check failed: {exc}"))
+            diagnostics.append(_diag("error", "content_store.health_failed", f"Content store check failed: {exc}"))
 
         if not any(item.level == "error" for item in diagnostics) and config.process_role != ProcessRole.WEBHOOK.value:
             diagnostics.extend(
@@ -338,17 +337,27 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
             )
 
         if session_context is not None:
-            from app.skills import validate_active_skills
+            from app.skill_catalog_service import get_skill_catalog_service
+            from app.credential_service import get_credential_service
 
-            diagnostics.extend(
-                _diag("error", "skills.invalid_active_selection", message)
-                for message in validate_active_skills(
-                    session_context.session.get("active_skills", []),
-                    user_id=session_context.user_id,
-                    data_dir=config.data_dir,
-                    encryption_key=session_context.encryption_key,
+            credential_service = get_credential_service()
+
+            user_credentials = credential_service.load(session_context.user_id)
+            for skill_name in session_context.resolved_active_skills:
+                missing = credential_service.missing_requirements(
+                    get_skill_catalog_service().requirements(skill_name),
+                    user_credentials.get(skill_name, {}),
                 )
-            )
+                if not missing:
+                    continue
+                missing_keys = ", ".join(item.key for item in missing)
+                diagnostics.append(
+                    _diag(
+                        "warning",
+                        "skills.missing_credentials",
+                        f"Missing credentials for {skill_name}: {missing_keys}",
+                    )
+                )
 
         total_users = len(config.allowed_actor_keys) + len(config.allowed_usernames)
         if total_users > 1 and not config.admin_users_explicit:

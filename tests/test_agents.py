@@ -3,14 +3,16 @@
 import asyncio
 from pathlib import Path
 
+from app import work_queue
 from app.agents.bridge import admit_registry_delivery, conversation_key_for_ref
-from app.agents.delivery import handle_registry_delivery
+from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.runtime import AgentRuntime
 from app.agents.state import load_agent_runtime_state
 from app.config import derive_agent_slug
+from app.runtime.inbound_types import deserialize_inbound
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
 from tests.support.config_support import make_config
-from tests.support.handler_support import drain_one_worker_item, fresh_env
+from tests.support.handler_support import fresh_env
 
 
 def _reg_conv(conversation_ref: str) -> str:
@@ -20,6 +22,19 @@ def _reg_conv(conversation_ref: str) -> str:
 def test_derive_agent_slug_normalizes_display_name():
     assert derive_agent_slug(" Product Bot / Reviewer ") == "product-bot-reviewer"
     assert derive_agent_slug("!!!", fallback="fallback-agent") == "fallback-agent"
+
+
+def test_requested_card_uses_agent_capabilities_without_default_skill_fallback(tmp_path: Path):
+    config = make_config(
+        data_dir=tmp_path,
+        default_skills=("github-integration",),
+        agent_capabilities=(),
+        agent_display_name="Product Bot",
+    )
+
+    card = AgentRuntime(config).requested_card()
+
+    assert card.capabilities == ()
 
 
 async def test_agent_runtime_standalone_marks_state(tmp_path: Path):
@@ -90,7 +105,7 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
         agent_display_name="Product Bot",
         agent_slug="product-bot",
         agent_role="product",
-        agent_skills=("planning", "delegation"),
+        agent_capabilities=("planning", "delegation"),
         agent_registry_url="http://registry.test",
         agent_registry_enroll_token="enroll-secret",
     )
@@ -229,8 +244,12 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
             calls.append(("poll", cursor))
             return {
                 "deliveries": [
-                    {"delivery_id": "d1", "kind": "surface_input", "payload": {"conversation_id": "c1", "text": "hello"}},
-                    {"delivery_id": "d2", "kind": "control", "payload": {"conversation_id": "c1", "action": "cancel"}},
+                    {"delivery_id": "d1", "kind": "channel_input", "payload": {"conversation_id": "c1", "text": "hello"}},
+                    {
+                        "delivery_id": "d2",
+                        "kind": "channel_action",
+                        "payload": {"conversation_id": "c1", "action": "cancel_conversation"},
+                    },
                 ],
                 "next_cursor": "2",
             }
@@ -244,7 +263,7 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
 
     async def handler(delivery):
         seen_deliveries.append(delivery["delivery_id"])
-        return "accepted" if delivery["kind"] == "surface_input" else "rejected"
+        return "accepted" if delivery["kind"] == "channel_input" else "rejected"
 
     config = make_config(
         data_dir=tmp_path,
@@ -295,8 +314,8 @@ async def test_agent_runtime_poll_isolates_bad_delivery_and_acks_rest(monkeypatc
             calls.append(("poll", cursor))
             return {
                 "deliveries": [
-                    {"delivery_id": "d1", "kind": "surface_input", "payload": {"conversation_id": "c1", "text": "hello"}},
-                    {"delivery_id": "d2", "kind": "surface_input", "payload": {"conversation_id": "c2", "text": "world"}},
+                    {"delivery_id": "d1", "kind": "channel_input", "payload": {"conversation_id": "c1", "text": "hello"}},
+                    {"delivery_id": "d2", "kind": "channel_input", "payload": {"conversation_id": "c2", "text": "world"}},
                 ],
                 "next_cursor": "2",
             }
@@ -385,7 +404,7 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
     outcome_message = await admit_registry_delivery(
         config,
         {
-            "kind": "surface_input",
+            "kind": "channel_input",
             "delivery_id": "delivery-1",
             "payload": {"conversation_id": "conv-1", "text": "hello"},
         },
@@ -411,6 +430,43 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
     assert ("timeline", "conv-1") in seen
     assert ("bind", "task-1") in seen
     assert ("timeline", "task-1") in seen
+
+
+async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
+    seen: list[tuple[str, str]] = []
+
+    async def fake_bind(*args, **kwargs):
+        del args
+        seen.append(("bind", str(kwargs.get("conversation_ref", ""))))
+
+    async def fake_timeline(*args, **kwargs):
+        del args
+        seen.append(("timeline", str(kwargs.get("conversation_ref", ""))))
+
+    monkeypatch.setattr("app.agents.bridge.bind_conversation", fake_bind)
+    monkeypatch.setattr("app.agents.bridge.publish_timeline_event", fake_timeline)
+    monkeypatch.setattr(
+        "app.agents.bridge.work_queue.record_and_admit_message",
+        lambda *args, **kwargs: ("queued", "queued-item"),
+    )
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registry_url="http://registry.test",
+        agent_registry_enroll_token="enroll-secret",
+    )
+
+    outcome = await admit_registry_delivery(
+        config,
+        {
+            "kind": "surface_input",
+            "delivery_id": "delivery-legacy",
+            "payload": {"conversation_id": "conv-legacy", "text": "hello"},
+        },
+    )
+
+    assert outcome == "rejected"
+    assert seen == []
 
 
 async def test_handle_registry_routed_result_publishes_parent_timeline_before_retry_on_startup_race(monkeypatch, tmp_path: Path):
@@ -454,7 +510,7 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
             "kind": "routed_result",
             "payload": {
                 "routed_task_id": "task-1",
-                "parent_conversation_id": "conv-1",
+                "parent_conversation_id": "telegram:agent-1:12345",
                 "result": {
                     "status": "completed",
                     "summary": "Summary",
@@ -462,12 +518,17 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
                 },
             },
         },
+        runtime=build_registry_delivery_runtime(
+            provider_name="claude",
+            provider_state_factory=dict,
+            bot=None,
+        ),
     )
 
     assert outcome == "retry_later"
     assert published == [
         {
-            "conversation_ref": "conv-1",
+            "conversation_ref": "telegram:agent-1:12345",
             "kind": "delegated_result",
             "title": "Delegated result received",
             "body": "Delegated task completed successfully.",
@@ -477,15 +538,7 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
     ]
 
 
-async def test_handle_registry_surface_action_and_control_dispatch(monkeypatch, tmp_path: Path):
-    seen: list[tuple[str, str, str]] = []
-
-    async def fake_execute_worker_action(event, item, *, cancel_event=None) -> None:
-        del item, cancel_event
-        seen.append((event.action, event.conversation_key, event.conversation_ref))
-
-    monkeypatch.setattr("app.telegram_handlers._execute_worker_action", fake_execute_worker_action)
-
+async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Path):
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
@@ -493,28 +546,118 @@ async def test_handle_registry_surface_action_and_control_dispatch(monkeypatch, 
             "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (data_dir, cfg, _prov):
+        runtime = build_registry_delivery_runtime(
+            provider_name=_prov.name,
+            provider_state_factory=_prov.new_provider_state,
+            bot=None,
+        )
+
         approve_outcome = await handle_registry_delivery(
             cfg,
             {
                 "delivery_id": "d-approve",
-                "kind": "surface_action",
+                "kind": "channel_action",
                 "payload": {"conversation_id": "conv-approve", "action": "approve"},
             },
+            runtime=runtime,
         )
         control_outcome = await handle_registry_delivery(
             cfg,
             {
                 "delivery_id": "d-cancel",
-                "kind": "control",
-                "payload": {"conversation_id": "conv-cancel", "action": "cancel"},
+                "kind": "channel_action",
+                "payload": {"conversation_id": "conv-cancel", "action": "cancel_conversation"},
             },
+            runtime=runtime,
         )
 
         assert approve_outcome == "accepted"
         assert control_outcome == "accepted"
-        assert await drain_one_worker_item(data_dir) is True
-        assert await drain_one_worker_item(data_dir) is True
-        assert seen == [
-            ("approve_pending", _reg_conv("conv-approve"), "conv-approve"),
-            ("cancel_conversation", _reg_conv("conv-cancel"), "conv-cancel"),
-        ]
+        approve_payload = work_queue.get_update_payload(data_dir, "reg:d-approve")
+        cancel_payload = work_queue.get_update_payload(data_dir, "reg:d-cancel")
+        assert approve_payload is not None
+        assert cancel_payload is not None
+
+        approve_event = deserialize_inbound("action", approve_payload)
+        cancel_event = deserialize_inbound("action", cancel_payload)
+        assert (
+            approve_event.action,
+            approve_event.conversation_key,
+            approve_event.conversation_ref,
+        ) == ("approve_pending", _reg_conv("conv-approve"), "conv-approve")
+        assert (
+            cancel_event.action,
+            cancel_event.conversation_key,
+            cancel_event.conversation_ref,
+        ) == ("cancel_conversation", _reg_conv("conv-cancel"), "conv-cancel")
+
+
+async def test_handle_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
+    seen: list[tuple[str, str]] = []
+
+    async def fake_bind(*args, **kwargs):
+        del args
+        seen.append(("bind", str(kwargs.get("conversation_ref", ""))))
+
+    async def fake_timeline(*args, **kwargs):
+        del args
+        seen.append(("timeline", str(kwargs.get("conversation_ref", ""))))
+
+    monkeypatch.setattr("app.agents.bridge.bind_conversation", fake_bind)
+    monkeypatch.setattr("app.agents.bridge.publish_timeline_event", fake_timeline)
+    monkeypatch.setattr(
+        "app.agents.bridge.work_queue.record_and_admit_message",
+        lambda *args, **kwargs: ("queued", "queued-item"),
+    )
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registry_url="http://registry.test",
+        agent_registry_enroll_token="enroll-secret",
+    )
+
+    outcome = await handle_registry_delivery(
+        config,
+        {
+            "delivery_id": "d-legacy-input",
+            "kind": "surface_input",
+            "payload": {"conversation_id": "conv-legacy-input", "text": "hello"},
+        },
+        runtime=build_registry_delivery_runtime(
+            provider_name="claude",
+            provider_state_factory=dict,
+            bot=None,
+        ),
+    )
+
+    assert outcome == "rejected"
+    assert seen == []
+
+
+async def test_handle_registry_delivery_rejects_legacy_surface_action_kind(tmp_path: Path):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, _prov):
+        runtime = build_registry_delivery_runtime(
+            provider_name=_prov.name,
+            provider_state_factory=_prov.new_provider_state,
+            bot=None,
+        )
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-legacy-approve",
+                "kind": "surface_action",
+                "payload": {"conversation_id": "conv-legacy-approve", "action": "approve"},
+            },
+            runtime=runtime,
+        )
+
+        assert outcome == "rejected"
+        approve_payload = work_queue.get_update_payload(data_dir, "reg:d-legacy-approve")
+        assert approve_payload is None

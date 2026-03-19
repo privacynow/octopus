@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app import access
 from app.identity import telegram_actor_key
-from app.transport import InboundUser
+from app.runtime.inbound_types import InboundUser
 from app.work_queue_sqlite_impl import (
     _create_new_transport_db,
     get_user_access_override,
@@ -56,6 +56,21 @@ def test_is_allowed_user_with_override_none_falls_through_to_config():
     stranger = InboundUser(id=telegram_actor_key(200), username="stranger")
     assert access.is_allowed_user_with_override(cfg, trusted, None) is True
     assert access.is_allowed_user_with_override(cfg, stranger, None) is False
+
+
+def test_access_helpers_require_inbound_user() -> None:
+    cfg = _config()
+
+    class RawUser:
+        id = 100
+        username = "trusted"
+
+    try:
+        access.is_allowed_user(cfg, RawUser())
+    except TypeError as exc:
+        assert str(exc) == "access helpers require InboundUser"
+    else:
+        raise AssertionError("raw channel-native user should be rejected")
 
 
 def test_get_user_access_override_missing_returns_none():

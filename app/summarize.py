@@ -30,6 +30,22 @@ Rules:
 Response to summarize:
 """
 
+_ERROR_DISPLAY_LIMIT = 1500
+
+_ERROR_SUMMARY_PROMPT = """\
+Summarize the following provider error for a chat user.
+
+Rules:
+- Keep it under 400 characters.
+- Preserve: error type, root cause, actionable next step if obvious.
+- Drop: full stack traces, repeated lines, internal paths.
+- If the error is empty or uninformative, say so.
+- Output plain text, no markdown headers.
+
+Error (rc={rc}):
+{text}
+"""
+
 
 # -- Ring buffer ---------------------------------------------------------------
 
@@ -171,6 +187,52 @@ async def summarize(text: str, model: str, timeout: int = 30) -> str:
 
     result = stdout.decode("utf-8", errors="replace").strip()
     return result if result else text
+
+
+async def format_provider_error(
+    raw_text: str,
+    returncode: int,
+    *,
+    model: str = "claude-haiku-4-5-20251001",
+    timeout: int = 15,
+) -> str:
+    """Return a plain-text provider error summary safe for channel-specific rendering."""
+
+    raw_text = raw_text.strip()
+    if not raw_text:
+        return f"Provider exited with code {returncode} (no output)."
+    if len(raw_text) <= _ERROR_DISPLAY_LIMIT:
+        return raw_text
+
+    proc = None
+    try:
+        prompt = _ERROR_SUMMARY_PROMPT.format(rc=returncode, text=raw_text[:4000])
+        proc = await asyncio.create_subprocess_exec(
+            "claude",
+            "-p",
+            "--model",
+            model,
+            "--output-format",
+            "text",
+            "--",
+            prompt,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_clean_env(),
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        if proc.returncode == 0:
+            summary = stdout.decode("utf-8", errors="replace").strip()
+            if summary:
+                return summary
+    except Exception:
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+
+    head = raw_text[:800]
+    tail = raw_text[-400:]
+    return f"{head}\n\n[…truncated…]\n\n{tail}"
 
 
 def _clean_env() -> dict[str, str]:

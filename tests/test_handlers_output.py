@@ -2,9 +2,10 @@
 
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
-from app.telegram_handlers import _extract_summary
+from app.channels.telegram.presenters import extract_summary
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
+    current_bot_instance,
     FakeChat,
     FakeProvider,
     FakeUser,
@@ -32,7 +33,7 @@ async def test_compact_toggle():
         chat = FakeChat(1)
         user = FakeUser(42)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         msg1 = await send_command(th.cmd_compact, chat, user, "/compact")
         assert "off" in last_reply(msg1).lower()
@@ -64,7 +65,7 @@ async def test_raw_retrieves_response():
         await send_text(chat, user, "hello")
         await drain_one_worker_item(data_dir)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         msg = await send_command(th.cmd_raw, chat, user, "/raw")
         assert "full response" in last_reply(msg)
@@ -74,7 +75,7 @@ async def test_raw_retrieves_response():
 
 
 async def test_e2e_table_in_provider_response():
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -99,7 +100,7 @@ async def test_e2e_table_in_provider_response():
         await drain_one_worker_item(data_dir)
 
         # Worker sends via bot
-        all_replies = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
+        all_replies = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "<pre>" in all_replies
         assert "Alice" in all_replies
         assert "---|---" not in all_replies
@@ -107,7 +108,7 @@ async def test_e2e_table_in_provider_response():
 
 async def test_e2e_compact_mode_uses_blockquote():
     """Compact mode should use expandable blockquote for long responses."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -128,24 +129,24 @@ async def test_e2e_compact_mode_uses_blockquote():
         await drain_one_worker_item(data_dir)
 
         # Worker sends via bot
-        all_replies = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
+        all_replies = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         # Should contain expandable blockquote or a "Show full" button
         has_blockquote = "blockquote" in all_replies
         has_expand_button = any(
-            m.get("reply_markup") is not None for m in th._bot_instance.sent_messages
+            m.get("reply_markup") is not None for m in current_bot_instance().sent_messages
         )
         assert has_blockquote or has_expand_button, (
             f"Expected blockquote or expand button, got: {all_replies[:200]}"
         )
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         msg2 = await send_command(th.cmd_raw, chat, user, "/raw")
         raw_reply = last_reply(msg2)
         assert "Detailed analysis paragraph" in raw_reply
 
 
 async def test_e2e_compact_off_no_summarize():
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -163,7 +164,7 @@ async def test_e2e_compact_off_no_summarize():
         msg = await send_text(chat, user, "do something")
         await drain_one_worker_item(data_dir)
 
-        all_replies = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
+        all_replies = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "Full verbose response" in all_replies
         assert "/raw for full" not in all_replies
 
@@ -173,7 +174,7 @@ async def test_e2e_compact_off_no_summarize():
 
 async def test_e2e_compact_mode_short_response_no_blockquote():
     """Compact mode should not use blockquote for short responses (<800 chars)."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -192,16 +193,16 @@ async def test_e2e_compact_mode_short_response_no_blockquote():
         msg = await send_text(chat, user, "what is the answer")
         await drain_one_worker_item(data_dir)
 
-        all_replies = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
+        all_replies = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "42" in all_replies
         assert "blockquote" not in all_replies
 
 
-# -- _extract_summary unit tests --
+# -- extract_summary unit tests --
 
 def test_extract_summary_splits_at_line_boundary():
     text = "Line one\nLine two\nLine three\nLine four\nLine five\nLine six"
-    summary, rest = _extract_summary(text, max_lines=3)
+    summary, rest = extract_summary(text, max_lines=3)
     assert "Line one" in summary
     assert "Line three" in summary
     assert "Line five" in rest
@@ -209,7 +210,7 @@ def test_extract_summary_splits_at_line_boundary():
 
 def test_extract_summary_short_text():
     text = "Just one line"
-    summary, rest = _extract_summary(text, max_lines=4)
+    summary, rest = extract_summary(text, max_lines=4)
     assert summary == "Just one line"
     assert rest == ""
 
@@ -270,7 +271,7 @@ def _button_path_response() -> str:
     """Generate a response that forces the expand-button path.
 
     _send_compact_reply uses blockquote when compact HTML ≤ 4000.
-    _extract_summary splits on non-empty lines (default max_lines=4).
+    extract_summary splits on non-empty lines (default max_lines=4).
     """
     summary = ["Summary one.", "Summary two.", "Summary three.", "Summary four."]
     detail_lines = [f"Detail {i}: " + "Detailed explanation with plenty of content here. " * 5 for i in range(25)]
@@ -279,7 +280,7 @@ def _button_path_response() -> str:
 
 async def test_compact_long_response_shows_expand_button():
     """Compact mode with long response should show 'Show full answer' button."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -299,7 +300,7 @@ async def test_compact_long_response_shows_expand_button():
 
         # Must have taken the button path, not blockquote (worker sends via bot)
         expand_markup = None
-        for m in th._bot_instance.sent_messages:
+        for m in current_bot_instance().sent_messages:
             rm = m.get("reply_markup")
             if rm is not None:
                 expand_markup = rm
@@ -314,14 +315,14 @@ async def test_compact_long_response_shows_expand_button():
         assert button.callback_data.startswith("expand:")
 
         # The reply text should show "truncated" indicator (worker sends via bot)
-        for m in th._bot_instance.sent_messages:
+        for m in current_bot_instance().sent_messages:
             if m.get("reply_markup") is not None:
                 assert "truncated" in m.get("text", "").lower()
 
 
 async def test_expand_callback_shows_full_response():
     """Expand callback loads raw text and shows it (new messages for long content)."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -341,14 +342,14 @@ async def test_expand_callback_shows_full_response():
 
         # Get expand callback data (worker sends via bot)
         cb_data = None
-        for m in th._bot_instance.sent_messages:
+        for m in current_bot_instance().sent_messages:
             rm = m.get("reply_markup")
             if rm is not None:
                 cb_data = rm.inline_keyboard[0][0].callback_data
                 break
         assert cb_data is not None
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         # Clear chat.sent_messages so we only see expand-generated messages
         chat.sent_messages.clear()
         query, expanded_msg = await send_callback(th.handle_expand_callback, chat, user, cb_data)
@@ -385,7 +386,7 @@ async def test_expand_collapse_round_trip_with_short_full_text():
         short_text = "Summary.\n\nLine two.\nLine three.\nLine four.\nLine five.\nDetail: the answer is 42."
         slot = save_raw(cfg.data_dir, 1, "test prompt", short_text)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         # Expand: should edit in-place with Collapse button
         expand_data = f"expand:1:{slot}"
@@ -439,7 +440,7 @@ async def test_collapse_callback_restores_compact_with_expand_button():
         text = "Summary.\n\nLine two.\nLine three.\nLine four.\nLine five.\nDetail content."
         slot = save_raw(cfg.data_dir, 1, "prompt", text)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         collapse_data = f"collapse:1:{slot}"
         query, msg = await send_callback(th.handle_collapse_callback, FakeChat(1), FakeUser(42), collapse_data)
 
@@ -470,7 +471,7 @@ async def test_expand_callback_rotated_buffer():
         save_session(data_dir, telegram_conversation_key(1), session)
 
         # Fire expand callback for a slot that was never written
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         query, msg = await send_callback(th.handle_expand_callback, chat=FakeChat(1), user=FakeUser(42), data="expand:1:999")
 
         found_unavailable = False

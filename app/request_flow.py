@@ -1,9 +1,8 @@
 """Request orchestration — pure business logic, no transport dependency.
 
 This module contains the service-layer logic for request execution,
-approval validation, credential satisfaction, and denial handling.
-Handlers call these functions and handle the transport (message sending,
-progress bars, inline buttons) themselves.
+approval validation, and denial handling. Credential setup lives in the
+credential-domain modules.
 
 Design rules:
 - No Telegram imports.  No message sending.  No progress updates.
@@ -15,169 +14,21 @@ Design rules:
 
 from __future__ import annotations
 
-import html
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.execution_context import resolve_execution_context
-from app.time_utils import age_seconds, utc_now, utc_now_timestamp
+from app.time_utils import age_seconds, utc_now
 from app.user_messages import (
     approval_context_changed,
     approval_expired,
     approval_expired_fallback,
 )
-from app.session_state import (
-    AwaitingSkillSetup,
-    PendingApproval,
-    PendingRetry,
-    SessionState,
-)
-from app.skills import (
-    SkillRequirement,
-    build_credential_env,
-    check_credentials,
-    load_user_credentials,
-)
+from app.session_state import PendingApproval, PendingRetry, SessionState
 
 if TYPE_CHECKING:
     from app.config import BotConfig
     from app.execution_context import ResolvedExecutionContext
-
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-SETUP_TIMEOUT_SECONDS = 300  # 5 minutes
-
-
-# ---------------------------------------------------------------------------
-# Credential flow
-# ---------------------------------------------------------------------------
-
-def build_setup_state(
-    user_id: str,
-    skill_name: str,
-    missing: list[SkillRequirement],
-) -> AwaitingSkillSetup:
-    """Build credential-collection state for a skill."""
-    return AwaitingSkillSetup(
-        user_id=user_id,
-        skill=skill_name,
-        started_at=utc_now_timestamp(),
-        remaining=[
-            {"key": r.key, "prompt": r.prompt, "help_url": r.help_url,
-             "validate": r.validate}
-            for r in missing
-        ],
-    )
-
-
-def format_credential_prompt(req: dict) -> str:
-    """Format a credential prompt for a single requirement.
-
-    Returns HTML-safe text. help_url is rendered as a clickable Telegram link.
-    """
-    text = html.escape(req["prompt"])
-    if req.get("help_url"):
-        url = html.escape(req["help_url"])
-        text += f'\n(<a href="{url}">setup guide</a>)'
-    return text
-
-
-def foreign_setup_message(setup: AwaitingSkillSetup) -> str:
-    """Format a message about another user's in-progress credential setup."""
-    uid = setup.user_id
-    elapsed = int(age_seconds(setup.started_at, now=utc_now()) or 0)
-    minutes = elapsed // 60
-    time_str = f"{minutes} min ago" if minutes >= 1 else "just now"
-    return (
-        f"User {uid} is completing credential setup (started {time_str}). "
-        f"Please wait or ask them to finish. An admin can use /cancel to clear it."
-    )
-
-
-def foreign_skill_setup(
-    session: SessionState,
-    user_id: str,
-    skill_name: str | None = None,
-) -> AwaitingSkillSetup | None:
-    """Return another user's in-progress setup, optionally filtered by skill.
-
-    Auto-expires setups older than SETUP_TIMEOUT_SECONDS so a disappeared
-    user can't wedge a shared chat indefinitely.  Mutates session on expiry.
-    """
-    setup = session.awaiting_skill_setup
-    if not setup or setup.user_id == user_id:
-        return None
-    if skill_name is not None and setup.skill != skill_name:
-        return None
-    age = age_seconds(setup.started_at, now=utc_now())
-    if age is None or age > SETUP_TIMEOUT_SECONDS:
-        session.awaiting_skill_setup = None
-        return None
-    return setup
-
-
-@dataclass
-class CredentialCheckResult:
-    """Result of checking credential satisfaction for active skills."""
-    satisfied: bool
-    credential_env: dict[str, str]
-    # If not satisfied, one of these is set:
-    foreign_setup: AwaitingSkillSetup | None = None  # another user is setting up
-    missing_skill: str = ""  # skill that needs setup
-    missing_reqs: list[SkillRequirement] | None = None
-    setup_state: AwaitingSkillSetup | None = None  # freshly created setup
-
-
-def check_credential_satisfaction(
-    active_skills: list[str],
-    session: SessionState,
-    user_id: str,
-    data_dir: Path,
-    encryption_key: bytes,
-) -> CredentialCheckResult:
-    """Check whether all active skills have credentials.
-
-    active_skills: the resolved skill list (from ResolvedExecutionContext),
-    NOT raw session.active_skills.  Public users pass an empty list.
-
-    Pure logic — does not send messages or save session.
-    Caller must handle the result (send prompts, save setup state, etc.).
-    """
-    if not active_skills:
-        return CredentialCheckResult(satisfied=True, credential_env={})
-
-    user_creds = load_user_credentials(data_dir, user_id, encryption_key)
-
-    all_missing: list[tuple[str, list[SkillRequirement]]] = []
-    for skill_name in active_skills:
-        missing = check_credentials(skill_name, user_creds)
-        if missing:
-            all_missing.append((skill_name, missing))
-
-    if not all_missing:
-        env = build_credential_env(active_skills, user_creds)
-        return CredentialCheckResult(satisfied=True, credential_env=env)
-
-    # Check for foreign setup blocking this user
-    foreign = foreign_skill_setup(session, user_id)
-    if foreign:
-        return CredentialCheckResult(
-            satisfied=False, credential_env={},
-            foreign_setup=session.awaiting_skill_setup,
-        )
-
-    # Start setup for first missing skill
-    skill_name, missing = all_missing[0]
-    setup = build_setup_state(user_id, skill_name, missing)
-    return CredentialCheckResult(
-        satisfied=False, credential_env={},
-        missing_skill=skill_name, missing_reqs=missing,
-        setup_state=setup,
-    )
 
 
 # ---------------------------------------------------------------------------

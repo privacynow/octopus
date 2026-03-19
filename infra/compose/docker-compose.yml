@@ -107,7 +107,7 @@ services:
       - registry-data:/data
     ports:
       - "${REGISTRY_PORT:-8787}:8787"
-    command: ["uvicorn", "app.registry_service.app:app", "--host", "0.0.0.0", "--port", "8787"]
+    command: ["uvicorn", "app.channels.registry.http:app", "--host", "0.0.0.0", "--port", "8787"]
 
   # TEST/DEV ONLY: stub-provider image for E2E when real provider unavailable (E2E_USE_STUB_IMAGE=1).
   bot-stub:

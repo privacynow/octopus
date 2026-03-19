@@ -52,6 +52,8 @@ bot_compose() {
   local provider
   provider="$(read_bot_env_value BOT_PROVIDER "$env_file")"
   local provider_auth_dir=".deploy/provider-auth/${provider:-claude}"
+  mkdir -p "$provider_auth_dir"
+  chmod 700 "$provider_auth_dir" 2>/dev/null || true
   ensure_network
   OCTOPUS_NETWORK="octopus-net" \
   PROVIDER_AUTH_DIR="$provider_auth_dir" \
@@ -111,7 +113,9 @@ provider_compose() {
   chmod 700 "$auth_dir"
   ensure_network
   OCTOPUS_NETWORK="octopus-net" \
+  BOT_PROVIDER="$provider" \
   PROVIDER_AUTH_DIR="$auth_dir" \
+  BOT_ENV_FILE="/dev/null" \
   REGISTRY_ENROLL_TOKEN="${REGISTRY_ENROLL_TOKEN:-placeholder-registry-enroll}" \
   REGISTRY_UI_TOKEN="${REGISTRY_UI_TOKEN:-placeholder-registry-ui}" \
   docker compose \

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Clear persisted provider auth state in the bot-home volume (best-effort).
+# Clear persisted provider auth state from the current provider paths (best-effort).
 # Use when switching accounts, troubleshooting, or changing providers.
-# Same image and volume as bot; does not remove the volume.
-# Providers may store auth in other paths; if logout seems ineffective, re-login or check provider docs.
+# Providers store auth in the shared provider-auth mount under /home/bot/.provider-auth.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -17,10 +16,10 @@ check_env_bot_required "$env_file"
 provider=$(get_bot_provider "$env_file")
 check_provider_image "$provider" >/dev/null
 
-echo "Clearing provider auth state from bot-home volume (no Postgres required)..."
+echo "Clearing provider auth state from shared provider-auth storage (no Postgres required)..."
 bot_compose run --rm bot-provider sh -c '
   removed=
-  for d in /home/bot/.config/Claude /home/bot/.config/claude /home/bot/.config/Codex /home/bot/.config/codex /home/bot/.config/openai /home/bot/.local/share/Claude /home/bot/.local/share/codex; do
+  for d in /home/bot/.claude /home/bot/.claude.json /home/bot/.codex; do
     if [ -d "$d" ] || [ -f "$d" ]; then
       rm -rf "$d"
       removed="$removed $d"

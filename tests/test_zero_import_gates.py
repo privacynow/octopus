@@ -163,6 +163,15 @@ def test_telegram_worker_module_has_no_ingress_import() -> None:
     )
 
 
+def test_telegram_shared_mode_dispatch_module_has_no_ingress_import() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    shared_mode_dispatch_path = repo_root / "app" / "channels" / "telegram" / "shared_mode_dispatch.py"
+    text = shared_mode_dispatch_path.read_text()
+    assert "app.channels.telegram.ingress" not in text, (
+        f"telegram ingress import still referenced in {shared_mode_dispatch_path}"
+    )
+
+
 def test_ingress_no_longer_defines_session_io_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
@@ -257,6 +266,28 @@ def test_ingress_no_longer_defines_worker_helpers() -> None:
         assert token not in text, f"{token} still defined in {ingress_path}"
 
 
+def test_ingress_no_longer_defines_shared_mode_dispatch_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    text = ingress_path.read_text()
+    forbidden_defs = (
+        "def _callback_message_id(",
+        "def _build_action_envelope(",
+        "def _worker_owned_command_action(",
+        "def _worker_owned_callback_action(",
+        "def _shared_inline_command_handler(",
+        "def _action_requires_public_guard(",
+        "async def _enqueue_shared_action(",
+        "def _shared_action_envelope(",
+        "def _record_shared_action(",
+        "async def _shared_cancel_command(",
+        "async def _shared_command_dispatch(",
+        "async def _shared_callback_dispatch(",
+    )
+    for token in forbidden_defs:
+        assert token not in text, f"{token} still defined in {ingress_path}"
+
+
 def test_telegram_runtime_owner_modules_do_not_define_singletons() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_path = repo_root / "app" / "channels" / "telegram" / "state.py"
@@ -313,7 +344,10 @@ def test_telegram_bootstrap_owns_application_construction_and_handler_registrati
         "app.add_handler(",
         "def build_bootstrap(",
         "from app.channels.telegram import ingress",
+        "from app.channels.telegram import shared_mode_dispatch as telegram_shared_mode_dispatch",
         "from app.channels.telegram import worker as telegram_worker",
+        "shared_command_handler = telegram_shared_mode_dispatch.build_shared_command_handler(",
+        "shared_callback_handler = telegram_shared_mode_dispatch.build_shared_callback_handler(",
         "worker_dispatch=functools.partial(telegram_worker.worker_dispatch, runtime=runtime)",
     )
     for token in required:

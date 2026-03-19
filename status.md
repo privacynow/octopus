@@ -78,8 +78,7 @@ Phase 8 is now active.
       extracted send/approval helpers
     - execution-focused suites: `300 passed`
     - verified against the full suite: `1632 passed, 23 skipped`
-- Remaining verified-but-uncommitted Phase 8 work in this branch state:
-  - `Phase 8 / H1 worker slice` is complete in the current branch state:
+  - `ac9fa9e` `Phase 8 / H1: extract worker from ingress`
     - Telegram worker dispatch and action execution now live in
       `app/channels/telegram/worker.py`
     - `app/channels/telegram/bootstrap.py` now wires
@@ -88,8 +87,21 @@ Phase 8 is now active.
       worker action execution, cancel polling, or completion webhook helpers
     - worker-focused suites: `376 passed`
     - verified against the full suite: `1634 passed, 23 skipped`
+- Remaining verified-but-uncommitted Phase 8 work in this branch state:
+  - `Phase 8 / H1 shared-mode dispatch slice` is complete in the current
+    branch state:
+    - Telegram shared-runtime command/callback persistence now lives in
+      `app/channels/telegram/shared_mode_dispatch.py`
+    - this owner is channel-specific, not a repo-wide shared layer
+    - `app/channels/telegram/bootstrap.py` now wires shared-mode handlers
+      directly from the extracted module
+    - `app/channels/telegram/ingress.py` no longer defines shared dispatch,
+      shared action-envelope helpers, or worker-owned shared action builders
+    - ingress line count after the slice: `1574`
+    - shared-runtime and structural suites: `222 passed`
+    - verified against the full suite: `1636 passed, 23 skipped`
 - Remaining Phase 8 work is still pending:
-  - H1 shared dispatch extraction and final ingress cleanup
+  - H1 final ingress cleanup to get `ingress.py` below the Phase 8 target
   - H2 presenter rendering blind-spot closure
   - H3 Telegram test-boundary hardening
   - H4 documentation and structural gate tightening

@@ -15,6 +15,7 @@ from telegram.ext import (
 )
 
 from app.channels.telegram import ingress
+from app.channels.telegram import shared_mode_dispatch as telegram_shared_mode_dispatch
 from app.channels.telegram import worker as telegram_worker
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
 from app.config import BotConfig
@@ -49,6 +50,14 @@ def build_application(runtime: TelegramRuntime) -> Application:
     runtime.bot_instance = app.bot
     app.bot_data["telegram_boot_id"] = runtime.boot_id
     app.bot_data["telegram_runtime"] = runtime
+    shared_command_handler = telegram_shared_mode_dispatch.build_shared_command_handler(
+        runtime=runtime,
+        chat_lock=ingress._chat_lock,
+    )
+    shared_callback_handler = telegram_shared_mode_dispatch.build_shared_callback_handler(
+        runtime=runtime,
+        chat_lock=ingress._chat_lock,
+    )
 
     if config.runtime_mode == "shared":
         app.add_handler(CommandHandler("start", ingress.cmd_start))
@@ -79,14 +88,14 @@ def build_application(runtime: TelegramRuntime) -> Application:
             "policy",
             "model",
         ):
-            app.add_handler(CommandHandler(command, ingress._shared_command_dispatch))
-        app.add_handler(CallbackQueryHandler(ingress._shared_callback_dispatch, pattern=r"^(retry_|approval_)"))
-        app.add_handler(CallbackQueryHandler(ingress._shared_callback_dispatch, pattern=r"^delegation_"))
-        app.add_handler(CallbackQueryHandler(ingress._shared_callback_dispatch, pattern=r"^recovery_"))
-        app.add_handler(CallbackQueryHandler(ingress._shared_callback_dispatch, pattern=r"^setting_"))
+            app.add_handler(CommandHandler(command, shared_command_handler))
+        app.add_handler(CallbackQueryHandler(shared_callback_handler, pattern=r"^(retry_|approval_)"))
+        app.add_handler(CallbackQueryHandler(shared_callback_handler, pattern=r"^delegation_"))
+        app.add_handler(CallbackQueryHandler(shared_callback_handler, pattern=r"^recovery_"))
+        app.add_handler(CallbackQueryHandler(shared_callback_handler, pattern=r"^setting_"))
         app.add_handler(CallbackQueryHandler(ingress.handle_expand_callback, pattern=r"^expand:"))
         app.add_handler(CallbackQueryHandler(ingress.handle_collapse_callback, pattern=r"^collapse:"))
-        app.add_handler(CallbackQueryHandler(ingress._shared_callback_dispatch, pattern=r"^skill_add_"))
+        app.add_handler(CallbackQueryHandler(shared_callback_handler, pattern=r"^skill_add_"))
         app.add_handler(CallbackQueryHandler(ingress.handle_skill_update_callback, pattern=r"^skill_update_"))
         app.add_handler(CallbackQueryHandler(ingress.handle_clear_cred_callback, pattern=r"^clear_cred_"))
     else:

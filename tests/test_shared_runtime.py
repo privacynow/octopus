@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from app import work_queue
 from app.channels.telegram.bootstrap import build_bootstrap
+from app.channels.telegram import shared_mode_dispatch as telegram_shared_mode_dispatch
 from app.channels.telegram.session_io import event_key
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
@@ -40,7 +41,6 @@ def _conv(chat_id: int) -> str:
 
 async def test_shared_build_application_registers_shared_dispatch_handlers():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
         from telegram.ext import CallbackQueryHandler, CommandHandler
 
         app = build_bootstrap(cfg, prov).application
@@ -54,11 +54,11 @@ async def test_shared_build_application_registers_shared_dispatch_handlers():
                 if isinstance(handler, CallbackQueryHandler):
                     callback_patterns.append((str(handler.pattern), getattr(handler.callback, "__name__", "")))
 
-        assert command_callbacks["approve"] == "_shared_command_dispatch"
-        assert command_callbacks["cancel"] == "_shared_command_dispatch"
+        assert command_callbacks["approve"] == "shared_command_dispatch"
+        assert command_callbacks["cancel"] == "shared_command_dispatch"
         assert command_callbacks["help"] == "cmd_help"
         assert any(
-            pattern.endswith("^(retry_|approval_)')") and callback == "_shared_callback_dispatch"
+            pattern.endswith("^(retry_|approval_)')") and callback == "shared_callback_dispatch"
             for pattern, callback in callback_patterns
         )
         assert any(
@@ -93,7 +93,12 @@ async def test_shared_command_dispatch_persists_action_without_inline_execution(
         user = FakeUser(42)
         update = FakeUpdate(message=FakeMessage(chat=chat, text="/approve"), user=user, chat=chat)
 
-        await th._shared_command_dispatch(update, FakeContext(args=[]))
+        await telegram_shared_mode_dispatch.shared_command_dispatch(
+            update,
+            FakeContext(args=[]),
+            runtime=current_runtime(),
+            chat_lock=th._chat_lock,
+        )
 
         assert prov.run_calls == []
         payload = work_queue.get_update_payload(data_dir, event_key(update.update_id))
@@ -114,7 +119,12 @@ async def test_shared_callback_dispatch_persists_action_without_inline_execution
         query = FakeCallbackQuery("approval_approve", message=callback_message, user=user)
         update = FakeUpdate(user=user, chat=chat, callback_query=query)
 
-        await th._shared_callback_dispatch(update, FakeContext())
+        await telegram_shared_mode_dispatch.shared_callback_dispatch(
+            update,
+            FakeContext(),
+            runtime=current_runtime(),
+            chat_lock=th._chat_lock,
+        )
 
         assert prov.run_calls == []
         assert query.answered is True
@@ -148,7 +158,12 @@ async def test_shared_worker_executes_persisted_approve_action():
         user = FakeUser(42)
         update = FakeUpdate(message=FakeMessage(chat=chat, text="/approve"), user=user, chat=chat)
 
-        await th._shared_command_dispatch(update, FakeContext(args=[]))
+        await telegram_shared_mode_dispatch.shared_command_dispatch(
+            update,
+            FakeContext(args=[]),
+            runtime=current_runtime(),
+            chat_lock=th._chat_lock,
+        )
 
         assert len(prov.run_calls) == 0
         assert await drain_one_worker_item(data_dir) is True
@@ -183,7 +198,12 @@ async def test_shared_cancel_records_action_and_sets_durable_flag():
         message = FakeMessage(chat=chat, text="/cancel")
         update = FakeUpdate(message=message, user=user, chat=chat)
 
-        await th._shared_command_dispatch(update, FakeContext(args=[]))
+        await telegram_shared_mode_dispatch.shared_command_dispatch(
+            update,
+            FakeContext(args=[]),
+            runtime=current_runtime(),
+            chat_lock=th._chat_lock,
+        )
 
         assert work_queue.is_cancel_requested(data_dir, claimed["id"]) is True
         payload = work_queue.get_update_payload(data_dir, event_key(update.update_id))

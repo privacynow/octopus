@@ -1374,7 +1374,6 @@ async def test_provider_timeout():
         await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
-        import app.channels.telegram.ingress as _th
         reply_texts = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "partial output" not in reply_texts
         assert sum(1 for m in current_bot_instance().sent_messages if m.get("text")) >= 1
@@ -1399,7 +1398,6 @@ async def test_provider_error_returncode():
         await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
-        import app.channels.telegram.ingress as _th
         reply_texts = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "segfault" not in reply_texts
         assert sum(1 for m in current_bot_instance().sent_messages if m.get("text")) >= 1

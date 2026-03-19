@@ -190,7 +190,6 @@ async def test_simulator_second_message_queues_fifo():
 async def test_simulator_credential_reply_while_worker_alive():
     """Credential reply while worker running: stays off queue, provider 0 for that message."""
     with fresh_data_dir() as data_dir:
-        import app.channels.telegram.execution as telegram_execution
         import app.channels.telegram.ingress as th
 
         cfg = make_config(data_dir)
@@ -205,16 +204,8 @@ async def test_simulator_credential_reply_while_worker_alive():
         }
         save_session(data_dir, _conv(12345), session)
 
-        async def fake_validate(req, value):
-            return (True, "")
-
-        original = telegram_execution.validate_credential
-        telegram_execution.validate_credential = fake_validate
-        try:
-            async with sim.running_worker():
-                await sim.inject_message_async(12345, 42, "my-secret-token")
-        finally:
-            telegram_execution.validate_credential = original
+        async with sim.running_worker():
+            await sim.inject_message_async(12345, 42, "my-secret-token")
 
         assert len(prov.run_calls) == 0
         session_after = load_session_disk(data_dir, _conv(12345), prov)

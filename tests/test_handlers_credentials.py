@@ -5,6 +5,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import httpx
+
 from app.providers.base import RunResult
 from tests.support.skill_test_helpers import (
     derive_encryption_key,
@@ -12,7 +14,6 @@ from tests.support.skill_test_helpers import (
     save_user_credential,
 )
 from app.storage import default_session, ensure_data_dirs, save_session
-import app.channels.telegram.execution as _te
 import app.channels.telegram.ingress as _th
 from app import work_queue
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
@@ -47,60 +48,63 @@ MARKER_ALPHA = "SKILL_ALPHA_e7f3"
 MARKER_BETA = "SKILL_BETA_a2c9"
 
 
-async def test_credential_capture():
+def _patch_credential_validation_status(monkeypatch, status_code: int) -> None:
+    async def fake_request(self, method, url, *, headers=None):
+        del self
+        return httpx.Response(
+            status_code,
+            request=httpx.Request(method, url, headers=headers),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
+
+
+async def test_credential_capture(monkeypatch):
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         prov.run_results = [RunResult(text="Used github token")]
         setup_globals(cfg, prov)
 
-        original_validate = _te.validate_credential
+        _patch_credential_validation_status(monkeypatch, 200)
+        chat = FakeChat(12345)
+        user = FakeUser(42)
 
-        async def fake_validate(req, value):
-            return (True, "")
+        msg1 = await send_command(_th.cmd_skills, chat, user, "/skills add github-integration", ["add", "github-integration"])
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
+        assert "github-integration" not in session.get("active_skills", [])
+        assert session.get("awaiting_skill_setup") is not None
+        setup = session["awaiting_skill_setup"]
+        assert setup["user_id"] == telegram_actor_key(42)
+        assert setup["skill"] == "github-integration"
+        assert any(r["key"] == "GITHUB_TOKEN" for r in setup["remaining"])
+        assert setup["remaining"][0].get("validate") is not None
+        assert "needs setup" in " ".join(r.get("text", "") for r in msg1.replies).lower()
 
-        _te.validate_credential = fake_validate
-        try:
-            chat = FakeChat(12345)
-            user = FakeUser(42)
+        secret_msg = FakeMessage(chat=chat, text="ghp_fake_token_12345")
+        await _th.handle_message(FakeUpdate(message=secret_msg, user=user, chat=chat), FakeContext())
+        assert secret_msg.deleted
 
-            msg1 = await send_command(_th.cmd_skills, chat, user, "/skills add github-integration", ["add", "github-integration"])
-            session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
-            assert "github-integration" not in session.get("active_skills", [])
-            assert session.get("awaiting_skill_setup") is not None
-            setup = session["awaiting_skill_setup"]
-            assert setup["user_id"] == telegram_actor_key(42)
-            assert setup["skill"] == "github-integration"
-            assert any(r["key"] == "GITHUB_TOKEN" for r in setup["remaining"])
-            assert setup["remaining"][0].get("validate") is not None
-            assert "needs setup" in " ".join(r.get("text", "") for r in msg1.replies).lower()
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
+        assert session.get("awaiting_skill_setup") is None
+        assert "github-integration" in session.get("active_skills", [])
 
-            secret_msg = FakeMessage(chat=chat, text="ghp_fake_token_12345")
-            await _th.handle_message(FakeUpdate(message=secret_msg, user=user, chat=chat), FakeContext())
-            assert secret_msg.deleted
+        key = derive_encryption_key(cfg.telegram_token)
+        creds = load_user_credentials(data_dir, telegram_actor_key(42), key)
+        assert "github-integration" in creds
+        assert creds["github-integration"].get("GITHUB_TOKEN") == "ghp_fake_token_12345"
+        assert "ready" in " ".join(r.get("text", "") for r in secret_msg.replies).lower()
 
-            session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
-            assert session.get("awaiting_skill_setup") is None
-            assert "github-integration" in session.get("active_skills", [])
-
-            key = derive_encryption_key(cfg.telegram_token)
-            creds = load_user_credentials(data_dir, telegram_actor_key(42), key)
-            assert "github-integration" in creds
-            assert creds["github-integration"].get("GITHUB_TOKEN") == "ghp_fake_token_12345"
-            assert "ready" in " ".join(r.get("text", "") for r in secret_msg.replies).lower()
-
-            msg3 = FakeMessage(chat=chat, text="list my repos")
-            await _th.handle_message(FakeUpdate(message=msg3, user=user, chat=chat), FakeContext())
-            await drain_one_worker_item(data_dir)
-            assert len(prov.run_calls) == 1
-            ctx = prov.run_calls[0]["context"]
-            assert "GITHUB_TOKEN" in ctx.credential_env
-            assert ctx.credential_env["GITHUB_TOKEN"] == "ghp_fake_token_12345"
-        finally:
-            _te.validate_credential = original_validate
+        msg3 = FakeMessage(chat=chat, text="list my repos")
+        await _th.handle_message(FakeUpdate(message=msg3, user=user, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
+        assert len(prov.run_calls) == 1
+        ctx = prov.run_calls[0]["context"]
+        assert "GITHUB_TOKEN" in ctx.credential_env
+        assert ctx.credential_env["GITHUB_TOKEN"] == "ghp_fake_token_12345"
 
 
-async def test_credential_validation_failure():
+async def test_credential_validation_failure(monkeypatch):
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
@@ -125,33 +129,25 @@ async def test_credential_validation_failure():
         }
         save_session(data_dir, telegram_conversation_key(12345), session)
 
-        original_validate = _te.validate_credential
+        _patch_credential_validation_status(monkeypatch, 401)
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = FakeMessage(chat=chat, text="bad_token_value")
+        await _th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
 
-        async def fake_validate_fail(req, value):
-            return (False, "Expected status 200, got 401")
+        assert msg.deleted
+        reply_texts = " ".join(r.get("text", "") for r in msg.replies)
+        assert "validation failed" in reply_texts.lower()
+        assert "401" in reply_texts
 
-        _te.validate_credential = fake_validate_fail
-        try:
-            chat = FakeChat(12345)
-            user = FakeUser(42)
-            msg = FakeMessage(chat=chat, text="bad_token_value")
-            await _th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
+        setup = session.get("awaiting_skill_setup")
+        assert setup is not None
+        assert len(setup["remaining"]) == 1
 
-            assert msg.deleted
-            reply_texts = " ".join(r.get("text", "") for r in msg.replies)
-            assert "validation failed" in reply_texts.lower()
-            assert "401" in reply_texts
-
-            session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
-            setup = session.get("awaiting_skill_setup")
-            assert setup is not None
-            assert len(setup["remaining"]) == 1
-
-            key = derive_encryption_key(cfg.telegram_token)
-            creds = load_user_credentials(data_dir, telegram_actor_key(42), key)
-            assert not creds.get("github-integration", {}).get("GITHUB_TOKEN")
-        finally:
-            _te.validate_credential = original_validate
+        key = derive_encryption_key(cfg.telegram_token)
+        creds = load_user_credentials(data_dir, telegram_actor_key(42), key)
+        assert not creds.get("github-integration", {}).get("GITHUB_TOKEN")
 
 
 async def test_credential_reply_while_worker_alive_no_provider_run():
@@ -172,30 +168,22 @@ async def test_credential_reply_while_worker_alive_no_provider_run():
         from tests.support.handler_support import MinimalFakeBot
         set_bot_instance(MinimalFakeBot())
 
-        async def fake_validate(req, value):
-            return (True, "")
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        secret_msg = FakeMessage(chat=chat, text="my-secret-token")
+        upd = FakeUpdate(message=secret_msg, user=user, chat=chat)
+        credential_update_id = upd.update_id
 
-        original_validate = _te.validate_credential
-        _te.validate_credential = fake_validate
-        try:
-            chat = FakeChat(12345)
-            user = FakeUser(42)
-            secret_msg = FakeMessage(chat=chat, text="my-secret-token")
-            upd = FakeUpdate(message=secret_msg, user=user, chat=chat)
-            credential_update_id = upd.update_id
+        async with running_worker(data_dir):
+            await _th.handle_message(upd, FakeContext())
+            await asyncio.sleep(0.05)
 
-            async with running_worker(data_dir):
-                await _th.handle_message(upd, FakeContext())
-                await asyncio.sleep(0.05)
-
-            assert len(prov.run_calls) == 0, "Credential reply must not be run as provider work"
-            conn = work_queue.debug_transport_connection(data_dir)
-            row = conn.execute(
-                "SELECT 1 FROM work_items WHERE event_id = ?", (telegram_event_id(credential_update_id),)
-            ).fetchone()
-            assert row is None, "Credential message must not create a work item (record_update only)"
-        finally:
-            _te.validate_credential = original_validate
+        assert len(prov.run_calls) == 0, "Credential reply must not be run as provider work"
+        conn = work_queue.debug_transport_connection(data_dir)
+        row = conn.execute(
+            "SELECT 1 FROM work_items WHERE event_id = ?", (telegram_event_id(credential_update_id),)
+        ).fetchone()
+        assert row is None, "Credential message must not create a work item (record_update only)"
 
 
 async def test_doctor_credential_check():
@@ -450,105 +438,88 @@ async def test_cross_user_credential_isolation():
         prov.run_results = [RunResult(text="Done with github")]
         setup_globals(cfg, prov)
 
-        original_validate = _te.validate_credential
+        key = derive_encryption_key(cfg.telegram_token)
+        save_user_credential(data_dir, telegram_actor_key(100), "github-integration", "GITHUB_TOKEN", "ghp_alice_token", key)
+        save_user_credential(data_dir, telegram_actor_key(200), "github-integration", "GITHUB_TOKEN", "ghp_bob_token", key)
 
-        async def fake_validate(req, value):
-            return (True, "")
+        chat = FakeChat(12345)
+        alice = FakeUser(uid=100, username="alice")
+        bob = FakeUser(uid=200, username="bob")
 
-        _te.validate_credential = fake_validate
-        try:
-            key = derive_encryption_key(cfg.telegram_token)
-            save_user_credential(data_dir, telegram_actor_key(100), "github-integration", "GITHUB_TOKEN", "ghp_alice_token", key)
-            save_user_credential(data_dir, telegram_actor_key(200), "github-integration", "GITHUB_TOKEN", "ghp_bob_token", key)
+        set_bot_instance(MinimalFakeBot())
+        await _th.handle_message(FakeUpdate(message=FakeMessage(chat=chat, text="list my repos"), user=alice, chat=chat), FakeContext())
+        await drain_one_worker_item(data_dir)
+        assert len(prov.preflight_calls) == 1
 
-            chat = FakeChat(12345)
-            alice = FakeUser(uid=100, username="alice")
-            bob = FakeUser(uid=200, username="bob")
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
+        assert session["pending_approval"]["request_user_id"] == telegram_actor_key(100)
 
-            set_bot_instance(MinimalFakeBot())
-            await _th.handle_message(FakeUpdate(message=FakeMessage(chat=chat, text="list my repos"), user=alice, chat=chat), FakeContext())
-            await drain_one_worker_item(data_dir)
-            assert len(prov.preflight_calls) == 1
+        cb_msg = FakeMessage(chat=chat)
+        query = FakeCallbackQuery("approval_approve", message=cb_msg)
+        update = FakeUpdate(user=bob, chat=chat, callback_query=query)
+        update.effective_message = cb_msg
+        await _th.handle_callback(update, FakeContext())
+        await drain_one_worker_item(data_dir)
 
-            session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
-            assert session["pending_approval"]["request_user_id"] == telegram_actor_key(100)
-
-            cb_msg = FakeMessage(chat=chat)
-            query = FakeCallbackQuery("approval_approve", message=cb_msg)
-            update = FakeUpdate(user=bob, chat=chat, callback_query=query)
-            update.effective_message = cb_msg
-            await _th.handle_callback(update, FakeContext())
-            await drain_one_worker_item(data_dir)
-
-            assert len(prov.run_calls) == 1
-            ctx = prov.run_calls[0]["context"]
-            assert ctx.credential_env.get("GITHUB_TOKEN") == "ghp_alice_token"
-            assert ctx.credential_env.get("GITHUB_TOKEN") != "ghp_bob_token"
-        finally:
-            _te.validate_credential = original_validate
+        assert len(prov.run_calls) == 1
+        ctx = prov.run_calls[0]["context"]
+        assert ctx.credential_env.get("GITHUB_TOKEN") == "ghp_alice_token"
+        assert ctx.credential_env.get("GITHUB_TOKEN") != "ghp_bob_token"
 
 
-async def test_group_chat_setup_isolation():
+async def test_group_chat_setup_isolation(monkeypatch):
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir, default_skills=("github-integration",))
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        original_validate = _te.validate_credential
+        _patch_credential_validation_status(monkeypatch, 200)
+        chat = FakeChat(12345)
+        alice = FakeUser(uid=100, username="alice")
+        bob = FakeUser(uid=200, username="bob")
 
-        async def fake_validate(req, value):
-            return (True, "")
+        await _th.cmd_skills(
+            FakeUpdate(message=FakeMessage(chat=chat, text="/skills add github-integration"), user=alice, chat=chat),
+            FakeContext(args=["add", "github-integration"]),
+        )
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
+        assert session.get("awaiting_skill_setup") is not None
+        assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(100)
 
-        _te.validate_credential = fake_validate
-        try:
-            chat = FakeChat(12345)
-            alice = FakeUser(uid=100, username="alice")
-            bob = FakeUser(uid=200, username="bob")
+        await _th.cmd_skills(
+            FakeUpdate(message=FakeMessage(chat=chat, text="/skills add github-integration"), user=bob, chat=chat),
+            FakeContext(args=["add", "github-integration"]),
+        )
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
+        assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(100)
 
-            await _th.cmd_skills(
-                FakeUpdate(message=FakeMessage(chat=chat, text="/skills add github-integration"), user=alice, chat=chat),
-                FakeContext(args=["add", "github-integration"]),
-            )
-            session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
-            assert session.get("awaiting_skill_setup") is not None
-            assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(100)
+        await _th.cmd_skills(
+            FakeUpdate(message=FakeMessage(chat=chat, text="/skills setup github-integration"), user=bob, chat=chat),
+            FakeContext(args=["setup", "github-integration"]),
+        )
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
+        assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(100)
 
-            await _th.cmd_skills(
-                FakeUpdate(message=FakeMessage(chat=chat, text="/skills add github-integration"), user=bob, chat=chat),
-                FakeContext(args=["add", "github-integration"]),
-            )
-            session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
-            assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(100)
+        bob_secret = FakeMessage(chat=chat, text="ghp_bob_secret_token")
+        await _th.handle_message(FakeUpdate(message=bob_secret, user=bob, chat=chat), FakeContext())
+        assert not bob_secret.deleted
 
-            await _th.cmd_skills(
-                FakeUpdate(message=FakeMessage(chat=chat, text="/skills setup github-integration"), user=bob, chat=chat),
-                FakeContext(args=["setup", "github-integration"]),
-            )
-            session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
-            assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(100)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
+        assert session.get("awaiting_skill_setup") is not None
+        assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(100)
 
-            bob_secret = FakeMessage(chat=chat, text="ghp_bob_secret_token")
-            await _th.handle_message(FakeUpdate(message=bob_secret, user=bob, chat=chat), FakeContext())
-            assert not bob_secret.deleted
+        alice_secret = FakeMessage(chat=chat, text="ghp_alice_real_token")
+        await _th.handle_message(FakeUpdate(message=alice_secret, user=alice, chat=chat), FakeContext())
+        assert alice_secret.deleted
 
-            session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
-            assert session.get("awaiting_skill_setup") is not None
-            assert session["awaiting_skill_setup"]["user_id"] == telegram_actor_key(100)
+        session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
+        assert session.get("awaiting_skill_setup") is None
 
-            alice_secret = FakeMessage(chat=chat, text="ghp_alice_real_token")
-            await _th.handle_message(FakeUpdate(message=alice_secret, user=alice, chat=chat), FakeContext())
-            assert alice_secret.deleted
-
-            session = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
-            assert session.get("awaiting_skill_setup") is None
-
-            key = derive_encryption_key(cfg.telegram_token)
-            alice_creds = load_user_credentials(data_dir, telegram_actor_key(100), key)
-            bob_creds = load_user_credentials(data_dir, telegram_actor_key(200), key)
-            assert alice_creds.get("github-integration", {}).get("GITHUB_TOKEN") == "ghp_alice_real_token"
-            assert not bob_creds.get("github-integration", {}).get("GITHUB_TOKEN")
-        finally:
-            _te.validate_credential = original_validate
+        key = derive_encryption_key(cfg.telegram_token)
+        alice_creds = load_user_credentials(data_dir, telegram_actor_key(100), key)
+        bob_creds = load_user_credentials(data_dir, telegram_actor_key(200), key)
+        assert alice_creds.get("github-integration", {}).get("GITHUB_TOKEN") == "ghp_alice_real_token"
+        assert not bob_creds.get("github-integration", {}).get("GITHUB_TOKEN")
 
 
 async def test_group_check_cred_satisfaction_no_overwrite():
@@ -789,29 +760,24 @@ async def test_handler_credential_activation_and_capture():
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            original_validate = _te.validate_credential
-            _te.validate_credential = lambda req, val: asyncio.coroutine(lambda: (True, ""))()
-            try:
-                chat = FakeChat(1001)
-                alice = FakeUser(uid=100, username="alice")
-                await send_command(_th.cmd_skills, chat, alice, "/skills add alpha", ["add", "alpha"])
-                session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
-                assert "alpha" not in session.get("active_skills", [])
-                assert session.get("awaiting_skill_setup") is not None
+            chat = FakeChat(1001)
+            alice = FakeUser(uid=100, username="alice")
+            await send_command(_th.cmd_skills, chat, alice, "/skills add alpha", ["add", "alpha"])
+            session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
+            assert "alpha" not in session.get("active_skills", [])
+            assert session.get("awaiting_skill_setup") is not None
 
-                secret_msg = FakeMessage(chat=chat, text="my-secret-token")
-                await _th.handle_message(FakeUpdate(message=secret_msg, user=alice, chat=chat), FakeContext())
-                assert secret_msg.deleted
+            secret_msg = FakeMessage(chat=chat, text="my-secret-token")
+            await _th.handle_message(FakeUpdate(message=secret_msg, user=alice, chat=chat), FakeContext())
+            assert secret_msg.deleted
 
-                session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
-                assert session.get("awaiting_skill_setup") is None
-                assert "alpha" in session.get("active_skills", [])
+            session = load_session_disk(data_dir, telegram_conversation_key(1001), prov)
+            assert session.get("awaiting_skill_setup") is None
+            assert "alpha" in session.get("active_skills", [])
 
-                key = derive_encryption_key(cfg.telegram_token)
-                creds = load_user_credentials(data_dir, telegram_actor_key(100), key)
-                assert creds.get("alpha", {}).get("ALPHA_TOKEN") == "my-secret-token"
-            finally:
-                _te.validate_credential = original_validate
+            key = derive_encryption_key(cfg.telegram_token)
+            creds = load_user_credentials(data_dir, telegram_actor_key(100), key)
+            assert creds.get("alpha", {}).get("ALPHA_TOKEN") == "my-secret-token"
     finally:
         skills_mod.CUSTOM_DIR = orig
 
@@ -1061,27 +1027,22 @@ async def test_smoke_credentialed_skill_flow():
             prov = FakeProvider("claude")
             setup_globals(cfg, prov)
 
-            original_validate = _te.validate_credential
-            _te.validate_credential = lambda req, val: asyncio.coroutine(lambda: (True, ""))()
-            try:
-                chat = FakeChat(1001)
-                alice = FakeUser(uid=100, username="alice")
+            chat = FakeChat(1001)
+            alice = FakeUser(uid=100, username="alice")
 
-                await send_command(_th.cmd_skills, chat, alice, "/skills add alpha", ["add", "alpha"])
-                secret_msg = FakeMessage(chat=chat, text="my-secret")
-                await _th.handle_message(FakeUpdate(message=secret_msg, user=alice, chat=chat), FakeContext())
-                assert secret_msg.deleted
+            await send_command(_th.cmd_skills, chat, alice, "/skills add alpha", ["add", "alpha"])
+            secret_msg = FakeMessage(chat=chat, text="my-secret")
+            await _th.handle_message(FakeUpdate(message=secret_msg, user=alice, chat=chat), FakeContext())
+            assert secret_msg.deleted
 
-                set_bot_instance(MinimalFakeBot())
-                prov.run_results = [RunResult(text="done")]
-                await send_text(chat, alice, "go")
-                await drain_one_worker_item(data_dir)
-                ctx = last_run_context(prov)
-                assert ctx is not None
-                assert MARKER_ALPHA in ctx.system_prompt
-                assert ctx.credential_env.get("ALPHA_TOKEN") == "my-secret"
-            finally:
-                _te.validate_credential = original_validate
+            set_bot_instance(MinimalFakeBot())
+            prov.run_results = [RunResult(text="done")]
+            await send_text(chat, alice, "go")
+            await drain_one_worker_item(data_dir)
+            ctx = last_run_context(prov)
+            assert ctx is not None
+            assert MARKER_ALPHA in ctx.system_prompt
+            assert ctx.credential_env.get("ALPHA_TOKEN") == "my-secret"
     finally:
         skills_mod.CUSTOM_DIR = orig
 

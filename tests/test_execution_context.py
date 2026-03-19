@@ -994,8 +994,15 @@ def test_phantom_profile_not_displayed_when_no_profiles_configured():
         project_id="fe",
     )
 
-    # Import the display helper
-    import app.channels.telegram.ingress as th
-    available, current = th._settings_model_profile_state(session, cfg, "trusted", cfg.model)
+    from app.runtime import composition
+
+    state = composition.workflows().conversation.settings.model_profile_state(
+        session,
+        cfg,
+        "trusted",
+        cfg.model,
+    )
+    available = list(state.available_profiles)
+    current = state.current_profile
     assert available == []
     assert current == "(default)", f"Expected '(default)' but got '{current}'"

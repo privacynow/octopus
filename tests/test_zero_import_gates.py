@@ -526,6 +526,47 @@ def test_telegram_pending_channel_has_no_inline_html_formatting() -> None:
         assert token not in text, f"{token} still referenced in {pending_path}"
 
 
+def test_test_suite_does_not_call_private_telegram_ingress_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    tests_root = repo_root / "tests"
+    gate_path = Path(__file__).resolve()
+    python_files = sorted(
+        path for path in tests_root.rglob("*.py") if "__pycache__" not in path.parts and path != gate_path
+    )
+    forbidden = (
+        "._load(",
+        "._save(",
+        "._execute_worker_action",
+        "._propose_delegation_plan(",
+        "._send_approval_prompt(",
+        "._show_setup_prompt(",
+        "._send_compact_reply(",
+        "._chat_lock(",
+        "._settings_model_profile_state(",
+    )
+    for path in python_files:
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_test_suite_does_not_stub_validate_credential_via_module_assignment() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    tests_root = repo_root / "tests"
+    gate_path = Path(__file__).resolve()
+    python_files = sorted(
+        path for path in tests_root.rglob("*.py") if "__pycache__" not in path.parts and path != gate_path
+    )
+    for path in python_files:
+        for line_no, line in enumerate(path.read_text().splitlines(), start=1):
+            assert ".validate_credential =" not in line, (
+                f"module-level validate_credential assignment still referenced in {path}:{line_no}"
+            )
+            assert not ("setattr(" in line and "validate_credential" in line), (
+                f"validate_credential monkeypatch still referenced in {path}:{line_no}"
+            )
+
+
 def test_telegram_ingress_request_and_compact_rendering_is_presenter_owned() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"

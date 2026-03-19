@@ -30,10 +30,13 @@
 ```
 
 Each bot `.env` contains everything needed to run that bot:
+- `BOT_INSTANCE=my-bot` (legacy-compatible local instance alias; same as slug for current build)
 - `BOT_SLUG=my-bot` (directory name, compose project suffix)
+- `BOT_AGENT_SLUG=my-bot` (registry agent mirror of slug)
 - `BOT_TELEGRAM_ID=123456789` (stable Telegram bot identity)
 - `BOT_TELEGRAM_USERNAME=my_support_bot` (public Telegram handle)
 - `BOT_DISPLAY_NAME=My Support Bot` (Octopus display label, editable)
+- `BOT_AGENT_DISPLAY_NAME=My Support Bot` (registry agent mirror of display name)
 - `TELEGRAM_BOT_TOKEN=...`
 - `BOT_PROVIDER=claude|codex`
 - `BOT_AGENT_MODE=standalone|registry`
@@ -60,6 +63,11 @@ Octopus persists these in the bot env and maps them to:
   existing deployment for the same Telegram bot
 - **BOT_TELEGRAM_USERNAME** — the public Telegram handle shown in
   status and manage views
+- **BOT_AGENT_* mirrors** — the runtime also consumes mirrored registry
+  agent fields such as `BOT_AGENT_SLUG`, `BOT_AGENT_DISPLAY_NAME`,
+  `BOT_AGENT_ROLE`, and `BOT_AGENT_CAPABILITIES`. These duplicate the
+  Octopus-facing fields intentionally so the registry runtime can read a
+  single consistent agent-oriented schema.
 - **slug** — derived from Telegram username, normalized. Used for Docker
   project names, volume names, filesystem paths. **Immutable after
   creation.** Renaming a slug would require Docker resource migration,

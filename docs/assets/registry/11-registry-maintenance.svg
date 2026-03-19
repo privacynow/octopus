@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="332" viewBox="0 0 1200 332" role="img" aria-labelledby="title desc">
+  <title id="title">Registry maintenance actions</title>
+  <desc id="desc">Terminal panel showing the local registry maintenance menu with options to follow logs or stop the registry.</desc>
+  <style>
+    .bg { fill: #2b2b2b; }
+    .panel { fill: #171717; stroke: #3a3a3a; stroke-width: 1; }
+    .rule { stroke: #303030; stroke-width: 1; }
+    .dot { fill: #505050; }
+    .label { fill: #bddba9; font: 600 15px SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace; }
+    .line { fill: #8dfc7c; font: 17px SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace; }
+    .prompt { fill: #dfffd2; }
+  </style>
+  <rect class="bg" x="0" y="0" width="1200" height="332" rx="24"/>
+  <g transform="translate(28 24)">
+    <rect class="panel" x="0" y="0" width="1144" height="284" rx="18"/>
+    <circle class="dot" cx="24" cy="24" r="6"/><circle class="dot" cx="44" cy="24" r="6"/><circle class="dot" cx="64" cy="24" r="6"/>
+    <text class="label" x="92" y="29">local registry maintenance</text>
+    <line class="rule" x1="0" y1="48" x2="1144" y2="48"/>
+    <text class="line" xml:space="preserve">
+      <tspan class="prompt" x="28" y="82">$ ./octopus registry</tspan>
+      <tspan x="28" dy="30">Registry:</tspan>
+      <tspan x="28" dy="30">  local      running    http://localhost:8787/ui</tspan>
+      <tspan x="28" dy="30"></tspan>
+      <tspan x="28" dy="30">  1. Follow local registry logs</tspan>
+      <tspan x="28" dy="30">  2. Stop local registry</tspan>
+      <tspan x="28" dy="30">  3. Back</tspan>
+      <tspan x="28" dy="30">Choose an option: 2</tspan>
+      <tspan x="28" dy="30">Local registry stopped.</tspan>
+    </text>
+  </g>
+</svg>

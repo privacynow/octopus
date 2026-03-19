@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="540" viewBox="0 0 1200 540" role="img" aria-labelledby="title desc">
+  <title id="title">Add a new bot directly into local registry mode</title>
+  <desc id="desc">Two terminal panels showing a new bot being added into local registry mode and the alternate prompt shown when no local registry exists yet.</desc>
+  <style>
+    .bg { fill: #2b2b2b; }
+    .panel { fill: #171717; stroke: #3a3a3a; stroke-width: 1; }
+    .rule { stroke: #303030; stroke-width: 1; }
+    .dot { fill: #505050; }
+    .label { fill: #bddba9; font: 600 15px SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace; }
+    .line { fill: #8dfc7c; font: 17px SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace; }
+    .prompt { fill: #dfffd2; }
+  </style>
+  <rect class="bg" x="0" y="0" width="1200" height="540" rx="24"/>
+  <g transform="translate(28 24)">
+    <rect class="panel" x="0" y="0" width="1144" height="342" rx="18"/>
+    <circle class="dot" cx="24" cy="24" r="6"/><circle class="dot" cx="44" cy="24" r="6"/><circle class="dot" cx="64" cy="24" r="6"/>
+    <text class="label" x="92" y="29">add a new bot directly into local registry mode</text>
+    <line class="rule" x1="0" y1="48" x2="1144" y2="48"/>
+    <text class="line" xml:space="preserve">
+      <tspan class="prompt" x="28" y="82">$ ./octopus</tspan>
+      <tspan x="28" dy="30">What would you like to do?</tspan>
+      <tspan x="28" dy="30">  1. Add a bot</tspan>
+      <tspan x="28" dy="30">  2. Manage bots</tspan>
+      <tspan x="28" dy="30">  3. Connect bot to registry</tspan>
+      <tspan x="28" dy="30">  4. Advanced</tspan>
+      <tspan x="28" dy="30">Choose an option: 1</tspan>
+      <tspan x="28" dy="30"></tspan>
+      <tspan x="28" dy="30">Paste your Telegram bot token:</tspan>
+      <tspan x="28" dy="30">This token belongs to Work Bot (@work_bot).</tspan>
+      <tspan x="28" dy="30">Provider (claude or codex) [claude]:</tspan>
+      <tspan x="28" dy="30">Connect to registry? [y/N] y</tspan>
+      <tspan x="28" dy="30">Press Enter to use the local registry, or type 'remote' to use a remote registry:</tspan>
+      <tspan x="28" dy="30">Bot work-bot is now connected to the local registry.</tspan>
+      <tspan x="28" dy="30">Registry UI: http://localhost:8787/ui</tspan>
+    </text>
+
+    <rect class="panel" x="0" y="368" width="1144" height="124" rx="18"/>
+    <circle class="dot" cx="24" cy="392" r="6"/><circle class="dot" cx="44" cy="392" r="6"/><circle class="dot" cx="64" cy="392" r="6"/>
+    <text class="label" x="92" y="397">alternate prompt when no local registry exists yet</text>
+    <line class="rule" x1="0" y1="416" x2="1144" y2="416"/>
+    <text class="line" xml:space="preserve">
+      <tspan x="28" y="450">Press Enter to start a local registry, or type 'remote' to use a remote registry:</tspan>
+    </text>
+  </g>
+</svg>

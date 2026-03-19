@@ -40,12 +40,18 @@ async def test_doctor_warns_when_registry_degraded(tmp_path: Path):
     provider = FakeProvider()
     save_agent_runtime_state(
         tmp_path,
-        AgentRuntimeState(connectivity_state="degraded", last_error="timeout"),
+        AgentRuntimeState(
+            connectivity_state="degraded",
+            last_error="registry_timeout",
+            last_error_detail="Registry poll timed out.",
+        ),
     )
 
     report = await _collect_health(config, provider)
 
-    assert any("Registry connectivity is degraded" in warning for warning in _diagnostic_messages(report, "warning"))
+    warnings = _diagnostic_messages(report, "warning")
+    assert any("Registry connectivity is degraded" in warning for warning in warnings)
+    assert any("Registry poll timed out." in warning for warning in warnings)
 
 
 async def test_doctor_warns_when_registry_not_enrolled(tmp_path: Path):
@@ -228,7 +234,11 @@ async def test_doctor_standalone_mode_no_registry_warnings_if_mode_is_standalone
     provider = FakeProvider()
     save_agent_runtime_state(
         tmp_path,
-        AgentRuntimeState(connectivity_state="degraded", last_error="timeout"),
+        AgentRuntimeState(
+            connectivity_state="degraded",
+            last_error="registry_timeout",
+            last_error_detail="Registry poll timed out.",
+        ),
     )
 
     report = await _collect_health(config, provider)

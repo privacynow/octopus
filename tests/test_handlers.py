@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.agents.bridge import conversation_key_for_ref, telegram_conversation_ref
+from app.agents.client import RegistryClientError
 from app.agents.state import AgentRuntimeState, save_agent_runtime_state
 from app.agents.delivery import handle_registry_delivery
 from app.channels.telegram.bootstrap import build_bootstrap
@@ -339,7 +340,8 @@ async def test_discover_degraded_reports_registry_connectivity():
                 agent_id="self-agent",
                 agent_token="agent-token",
                 connectivity_state="degraded",
-                last_error="registry unavailable",
+                last_error="registry_unreachable",
+                last_error_detail="Registry poll failed with ConnectError.",
             ),
         )
 
@@ -355,7 +357,55 @@ async def test_discover_degraded_reports_registry_connectivity():
 
         reply = msg.replies[0]["text"]
         assert "registry connectivity is degraded" in reply.lower()
-        assert "registry unavailable" in reply
+        assert "could not be reached" in reply.lower()
+        assert "connecterror" not in reply.lower()
+
+
+async def test_discover_registry_failure_omits_backend_response_details():
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.channels.telegram.ingress as th
+        from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+
+        class FakeRegistryClient:
+            async def search(self, query):
+                raise RegistryClientError(
+                    "Registry POST /v1/agents/discovery/search failed: HTTP 500",
+                    error_code="registry_server_error",
+                    operator_detail="Registry POST /v1/agents/discovery/search failed with HTTP 500.",
+                    status_code=500,
+                )
+
+        save_agent_runtime_state(
+            data_dir,
+            AgentRuntimeState(
+                agent_id="self-agent",
+                agent_token="agent-token",
+                connectivity_state="connected",
+            ),
+        )
+        current_runtime().registry_client_factory = lambda _cfg: FakeRegistryClient()
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_discover,
+            chat,
+            user,
+            "/discover role:developer",
+            args=["role:developer"],
+        )
+
+        reply = msg.replies[0]["text"]
+        assert "Agent discovery failed." in reply
+        assert "temporarily unavailable" in reply
+        assert "HTTP 500" not in reply
+        assert "/v1/agents/discovery/search" not in reply
 
 
 async def test_registry_channel_input_respects_approval_mode():

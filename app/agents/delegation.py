@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.agents.bridge import registry_client
+from app.registry_errors import registry_error_summary
 from app.agents.state import load_agent_runtime_state
 from app.agents.types import RoutedTaskRequest
 from app.config import BotConfig
@@ -68,7 +69,7 @@ async def handle_delegation_approve(
     cfg = runtime.config
     state = load_agent_runtime_state(cfg.data_dir)
     if state.connectivity_state != "connected":
-        detail = f" Last error: {state.last_error}" if state.last_error else ""
+        detail = f" {registry_error_summary(state.last_error)}" if state.last_error else ""
         await channel_egress.send_text(
             "Delegation is unavailable because registry connectivity is degraded."
             " The request was not sent." + detail,

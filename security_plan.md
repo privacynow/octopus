@@ -64,6 +64,7 @@ Sanitize registry client/user-facing error propagation.
 - Map degraded discovery failures to presenter-owned safe messages.
 - Remove residual raw `ValueError` strings from Telegram runtime-skill
   authoring flows.
+- Status: complete
 
 #### Slice S3
 Minimize subprocess environments.

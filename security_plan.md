@@ -111,6 +111,7 @@ Harden secret-bearing local files and token issuance/storage.
 - Stop printing registry secrets to stdout.
 - Hash registry agent tokens at rest while preserving one-time issuance
   on enroll.
+- Status: complete
 
 #### Slice S8
 Add archive extraction quotas.

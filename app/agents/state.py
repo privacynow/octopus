@@ -57,3 +57,4 @@ def save_agent_runtime_state(data_dir: Path, state: AgentRuntimeState) -> None:
     path = agent_state_path(data_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(asdict(state), indent=2, sort_keys=True))
+    path.chmod(0o600)

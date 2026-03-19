@@ -19,6 +19,7 @@ from app.channels.registry import auth as registry_auth
 from app.channels.registry.http import app
 from app.channels.registry import ingress, ui
 from app.registry_service.store import RegistrySQLiteStore
+from app.registry_service.store_base import hash_agent_token
 from app.runtime_health import (
     QueueSnapshot,
     RuntimeDiagnostic,
@@ -1573,6 +1574,20 @@ def test_registry_store_migrations_are_idempotent_and_upgrade_legacy_channel_col
         "updated_at TEXT NOT NULL, last_heartbeat_at TEXT NOT NULL)"
     )
     conn.execute(
+        """
+        INSERT INTO agents (
+            agent_id, agent_token, display_name, slug, role, skills_json, tags_json,
+            description, provider, mode, connectivity_state, current_capacity,
+            max_capacity, surface_capabilities_json, version, created_at, updated_at,
+            last_heartbeat_at
+        ) VALUES (
+            'agent-1', 'raw-agent-token', 'Agent 1', 'agent-1', '', '[]', '[]', '',
+            'codex', 'registry', 'connected', 0, 1, '[]', '', '2026-03-18T00:00:00+00:00',
+            '2026-03-18T00:00:00+00:00', '2026-03-18T00:00:00+00:00'
+        )
+        """
+    )
+    conn.execute(
         "CREATE TABLE deliveries ("
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, delivery_id TEXT NOT NULL UNIQUE, "
         "target_agent_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, "
@@ -1601,13 +1616,18 @@ def test_registry_store_migrations_are_idempotent_and_upgrade_legacy_channel_col
 
     conn = sqlite3.connect(db_path)
     version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-    assert version == "4"
+    assert version == "5"
     agent_columns = {
         row[1]
         for row in conn.execute("PRAGMA table_info(agents)").fetchall()
     }
     assert "channel_capabilities_json" in agent_columns
     assert "surface_capabilities_json" not in agent_columns
+    stored_agent_token = conn.execute(
+        "SELECT agent_token FROM agents WHERE agent_id = 'agent-1'"
+    ).fetchone()[0]
+    assert stored_agent_token == hash_agent_token("raw-agent-token")
+    assert stored_agent_token != "raw-agent-token"
     conversation_columns = {
         row[1]
         for row in conn.execute("PRAGMA table_info(conversations)").fetchall()

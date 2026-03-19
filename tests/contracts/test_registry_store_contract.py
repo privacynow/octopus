@@ -1,10 +1,12 @@
 """Registry store contract: backend-neutral behavior for SQLite and Postgres."""
 
 from pathlib import Path
+import re
 
 import pytest
 
 from app.registry_service.store import RegistrySQLiteStore
+from app.registry_service.store_base import hash_agent_token
 from app.registry_service.store_base import CapabilityDisabledError
 from app.runtime_health import (
     QueueSnapshot,
@@ -101,6 +103,33 @@ def _runtime_health_payload(*, worker_count: int = 2) -> dict:
     return report_to_dict(report)
 
 
+def _stored_agent_token(store, agent_id: str) -> str:
+    if isinstance(store, RegistrySQLiteStore):
+        with store._connect() as conn:
+            row = conn.execute(
+                "SELECT agent_token FROM agents WHERE agent_id = ?",
+                (agent_id,),
+            ).fetchone()
+        assert row is not None
+        return str(row["agent_token"])
+
+    from app.registry_service.store_postgres import RegistryPostgresStore, _SCHEMA
+
+    assert isinstance(store, RegistryPostgresStore)
+    with store._connect() as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                f"SELECT agent_token FROM {_SCHEMA}.agents WHERE agent_id = %s",
+                (agent_id,),
+            )
+            row = cur.fetchone()
+        finally:
+            cur.close()
+    assert row is not None
+    return str(row[0])
+
+
 @pytest.fixture(params=["sqlite", "postgres"])
 def store(request, tmp_path: Path):
     if request.param == "sqlite":
@@ -121,6 +150,16 @@ def test_enroll_and_register_returns_agent_id(store):
     agents = store.list_agents()
     assert len(agents) == 1
     assert agents[0]["agent_id"] == agent_id
+
+
+def test_enroll_hashes_agent_token_at_rest(store):
+    agent_id, agent_token = _enroll(store, "hashed-bot")
+
+    stored = _stored_agent_token(store, agent_id)
+
+    assert stored == hash_agent_token(agent_token)
+    assert stored != agent_token
+    assert re.fullmatch(r"[0-9a-f]{64}", stored)
 
 
 def test_poll_delivers_to_enrolled_agent(store):

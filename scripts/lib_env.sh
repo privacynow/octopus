@@ -93,6 +93,12 @@ registry_url_is_local() {
   return 1
 }
 
+restrict_secret_file_permissions() {
+  local path="${1:-}"
+  [ -n "$path" ] || return 1
+  chmod 600 "$path"
+}
+
 check_env_bot_required() {
   local env_file="${1:-$(current_bot_env_file)}"
   if [ ! -f "$env_file" ]; then

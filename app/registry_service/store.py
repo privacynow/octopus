@@ -24,13 +24,14 @@ from app.registry_service.store_base import (
     decode_json_field,
     effective_connectivity_state,
     ensure_json,
+    hash_agent_token,
     runtime_health_detail,
     runtime_health_generated_at,
     runtime_health_summary,
     utcnow_iso,
 )
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 _BASE_SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -269,6 +270,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "UPDATE deliveries SET kind = 'channel_action' WHERE kind = 'surface_action'"
         )
 
+    def _migrate_v5_agent_token_hashing(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("SELECT agent_id, agent_token FROM agents").fetchall()
+        for row in rows:
+            conn.execute(
+                "UPDATE agents SET agent_token = ? WHERE agent_id = ?",
+                (hash_agent_token(str(row["agent_token"])), row["agent_id"]),
+            )
+
     def _run_migrations(self, conn: sqlite3.Connection) -> None:
         current = self._current_schema_version(conn)
         if current > _SCHEMA_VERSION:
@@ -293,6 +302,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         if current < 4:
             self._migrate_v4_channel_vocabulary(conn)
             self._set_schema_version(conn, 4)
+            conn.commit()
+            current = 4
+        if current < 5:
+            self._migrate_v5_agent_token_hashing(conn)
+            self._set_schema_version(conn, 5)
             conn.commit()
 
     def _ensure_unique_slug(self, conn: sqlite3.Connection, requested: str) -> str:
@@ -396,7 +410,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
     def _token_row(self, conn: sqlite3.Connection, token: str) -> sqlite3.Row | None:
         return conn.execute(
             "SELECT * FROM agents WHERE agent_token = ?",
-            (token,),
+            (hash_agent_token(token),),
         ).fetchone()
 
     def _offline_before(self) -> str:
@@ -513,6 +527,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         now = utcnow_iso()
         agent_id = uuid.uuid4().hex
         agent_token = secrets.token_urlsafe(32)
+        agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn:
             slug = self._ensure_unique_slug(conn, requested_card.get("slug") or "agent")
             conn.execute(
@@ -526,7 +541,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 """,
                 (
                     agent_id,
-                    agent_token,
+                    agent_token_hash,
                     requested_card.get("display_name") or slug,
                     slug,
                     requested_card.get("role", ""),
@@ -555,6 +570,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
     def register(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
         card = payload["agent_card"]
+        agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -583,7 +599,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     card.get("version", row["version"]),
                     now,
                     now,
-                    agent_token,
+                    agent_token_hash,
                 ),
             )
             row = self._token_row(conn, agent_token)
@@ -592,6 +608,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
     def heartbeat(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
+        agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -616,7 +633,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                         if isinstance(runtime_health_payload, dict)
                         else row["runtime_health_json"]
                     ),
-                    agent_token,
+                    agent_token_hash,
                 ),
             )
             if isinstance(runtime_health_payload, dict):
@@ -1136,6 +1153,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
     def deregister(self, agent_token: str) -> dict[str, Any]:
         now = utcnow_iso()
+        agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn:
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -1146,7 +1164,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 SET connectivity_state = 'offline', updated_at = ?, last_heartbeat_at = ?
                 WHERE agent_token = ?
                 """,
-                (now, now, agent_token),
+                (now, now, agent_token_hash),
             )
             return {"agent_id": row["agent_id"], "connectivity_state": "offline"}
 

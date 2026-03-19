@@ -127,12 +127,13 @@ def test_container_provider_login_banners_explain_exit_steps():
 
 
 def test_registry_start_prints_enrollment_token():
-    """registry/start.sh should print the generated enrollment token for local setup."""
+    """registry/start.sh should keep generated secrets in .env.registry, not stdout."""
     repo = Path(__file__).resolve().parent.parent
     script = repo / "scripts" / "registry" / "start.sh"
     text = script.read_text()
-    assert "Enrollment token:" in text
-    assert "Registry UI password:" in text
+    assert "Enrollment token:" not in text
+    assert "Registry UI password:" not in text
+    assert "Registry secrets are stored in $ENV_FILE" in text
     assert "keep this file private" in text
 
 
@@ -163,6 +164,21 @@ def test_lib_env_exposes_channel_setup_help_for_telegram():
     assert "prompt_channel_token_with_help" in text
     assert "https://t.me/BotFather" in text
     assert "/newbot" in text
+    assert "restrict_secret_file_permissions" in text
+
+
+def test_secret_writing_scripts_harden_file_permissions():
+    repo = Path(__file__).resolve().parent.parent
+    guided = (repo / "scripts" / "app" / "guided_start.sh").read_text()
+    shared = (repo / "scripts" / "app" / "shared_start.sh").read_text()
+    registry = (repo / "scripts" / "registry" / "start.sh").read_text()
+
+    assert "umask 077" in guided
+    assert 'restrict_secret_file_permissions "$BOT_ENV_FILE"' in guided
+    assert "umask 077" in shared
+    assert 'restrict_secret_file_permissions "$BOT_ENV_FILE"' in shared
+    assert "umask 077" in registry
+    assert 'chmod 600 "$ENV_FILE"' in registry
 
 
 def test_guided_start_uses_channel_token_helper():

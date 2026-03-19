@@ -17,6 +17,7 @@ from app.agents.types import AgentDiscoveryQuery
 from app.config import derive_agent_slug
 from app.runtime.inbound_types import deserialize_inbound
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
+from app.agents.state import save_agent_runtime_state
 from tests.support.config_support import make_config
 from tests.support.handler_support import fresh_env
 
@@ -67,6 +68,18 @@ def test_load_agent_runtime_state_migrates_legacy_raw_last_error(tmp_path: Path)
 
     assert state.last_error == "registry_request_failed"
     assert state.last_error_detail == "registry unavailable"
+
+
+def test_save_agent_runtime_state_uses_private_file_permissions(tmp_path: Path):
+    save_agent_runtime_state(
+        tmp_path,
+        AgentRuntimeState(agent_id="agent-1", agent_token="secret-token"),
+    )
+
+    state_path = tmp_path / "agent" / "registry_state.json"
+    mode = state_path.stat().st_mode & 0o777
+
+    assert mode == 0o600
 
 
 async def test_agent_runtime_standalone_marks_state(tmp_path: Path):

@@ -11,11 +11,6 @@ Use registry mode when you want:
 Text-mode flows are shown as representative terminal transcripts. Screenshots are
 kept only for the browser UI stages where they add value.
 
-Note: exact Homebrew-style colors and custom fonts are not portable in plain
-Markdown rendered on GitHub. The terminal examples below use faux terminal
-framing in text so they still read like shell sessions without relying on
-images or custom CSS.
-
 ## Registry Modes
 
 Local registry:
@@ -40,8 +35,7 @@ Run:
 
 If the local registry has not been started yet, the flow looks like:
 
-```text
-╭─ octopus registry ─────────────────────────────
+```console
 $ ./octopus registry
 Registry:
   local      not configured
@@ -49,13 +43,11 @@ Registry:
   1. Start local registry
   2. Back
 Choose an option:
-╰────────────────────────────────────────────────
 ```
 
 If it already exists but is stopped:
 
-```text
-╭─ octopus registry ─────────────────────────────
+```console
 $ ./octopus registry
 Registry:
   local      stopped    http://localhost:8787/ui
@@ -63,13 +55,11 @@ Registry:
   1. Start local registry
   2. Back
 Choose an option:
-╰────────────────────────────────────────────────
 ```
 
 If it is already running:
 
-```text
-╭─ octopus registry ─────────────────────────────
+```console
 $ ./octopus registry
 Registry:
   local      running    http://localhost:8787/ui
@@ -78,7 +68,6 @@ Registry:
   2. Stop local registry
   3. Back
 Choose an option:
-╰────────────────────────────────────────────────
 ```
 
 ## Workflow 2: Start The Local Registry
@@ -87,8 +76,7 @@ From the menu above, choose `1. Start local registry`.
 
 Typical output:
 
-```text
-╭─ octopus registry ─────────────────────────────
+```console
 $ ./octopus registry
 Registry:
   local      not configured
@@ -97,7 +85,6 @@ Registry:
   2. Back
 Choose an option: 1
 Registry UI: http://localhost:8787/ui
-╰────────────────────────────────────────────────
 ```
 
 Important values after startup:
@@ -114,9 +101,7 @@ Open the printed browser URL and sign in with `REGISTRY_UI_TOKEN` from
 For the default local setup, that is usually:
 
 ```text
-╭─ browser URL ──────────────────────────────────
 http://localhost:8787/ui
-╰────────────────────────────────────────────────
 ```
 
 ![Registry login page](assets/registry/03-registry-login.png)
@@ -133,8 +118,7 @@ If you already have bots, choose `Manage bots` or `Connect bot to registry`.
 
 Representative flow for an existing standalone bot:
 
-```text
-╭─ octopus connect local ────────────────────────
+```console
 $ ./octopus
 What would you like to do?
   1. Add a bot
@@ -149,7 +133,6 @@ Bot slug or number: 1
 Press Enter to use the local registry, or type 'remote' to use a remote registry:
 Bot example-bot is now connected to the local registry.
 Registry UI: http://localhost:8787/ui
-╰────────────────────────────────────────────────
 ```
 
 Verify with:
@@ -160,8 +143,7 @@ Verify with:
 
 Representative status output:
 
-```text
-╭─ octopus status ───────────────────────────────
+```console
 Bots:
   Example Bot (@example_bot)    claude   registry     running
 
@@ -171,7 +153,6 @@ Registry:
 Provider auth:
   claude     authenticated
   codex      not configured
-╰────────────────────────────────────────────────
 ```
 
 ## Workflow 5: Add A New Bot Directly Into Registry Mode
@@ -181,8 +162,7 @@ connect to a registry.
 
 Representative flow:
 
-```text
-╭─ octopus add bot into registry ────────────────
+```console
 $ ./octopus
 What would you like to do?
   1. Add a bot
@@ -198,15 +178,12 @@ Connect to registry? [y/N] y
 Press Enter to use the local registry, or type 'remote' to use a remote registry:
 Bot work-bot is now connected to the local registry.
 Registry UI: http://localhost:8787/ui
-╰────────────────────────────────────────────────
 ```
 
 If no local registry exists yet, the prompt changes to:
 
-```text
-╭─ registry target prompt ───────────────────────
+```console
 Press Enter to start a local registry, or type 'remote' to use a remote registry:
-╰────────────────────────────────────────────────
 ```
 
 ## Workflow 6: Connect A Bot To A Remote Registry
@@ -215,8 +192,7 @@ Octopus supports remote registries per bot. The URL must start with `https://`.
 
 Representative flow:
 
-```text
-╭─ octopus connect remote ───────────────────────
+```console
 $ ./octopus
 What would you like to do?
   1. Add a bot
@@ -232,7 +208,6 @@ Press Enter to use the local registry, or type 'remote' to use a remote registry
 Remote registry URL (https://...): https://registry.example.com
 Remote enrollment token: ********
 Bot example-bot is now connected to the registry at https://registry.example.com.
-╰────────────────────────────────────────────────
 ```
 
 For remote registries:
@@ -247,8 +222,7 @@ Open the manage flow for a bot that already uses the local registry.
 
 Representative flow:
 
-```text
-╭─ octopus switch local -> remote ───────────────
+```console
 $ ./octopus
 What would you like to do?
   1. Add a bot
@@ -266,7 +240,6 @@ Choose an option: 1
 Remote registry URL (https://...): https://registry.example.com
 Remote enrollment token: ********
 Bot example-bot is now connected to the registry at https://registry.example.com.
-╰────────────────────────────────────────────────
 ```
 
 If no other bots still use the local registry, Octopus may offer to stop it.
@@ -275,8 +248,7 @@ If no other bots still use the local registry, Octopus may offer to stop it.
 
 Representative flow:
 
-```text
-╭─ octopus switch remote -> local ───────────────
+```console
 $ ./octopus
 What would you like to do?
   1. Add a bot
@@ -293,7 +265,6 @@ Bot: Example Bot (@example_bot) — claude, registry, running
 Choose an option: 1
 Bot example-bot is now connected to the local registry.
 Registry UI: http://localhost:8787/ui
-╰────────────────────────────────────────────────
 ```
 
 If the local registry is not running yet, Octopus starts it automatically.
@@ -304,8 +275,7 @@ Disconnecting a bot keeps bot data intact and changes only its registry mode.
 
 Representative flow:
 
-```text
-╭─ octopus disconnect registry ──────────────────
+```console
 $ ./octopus
 What would you like to do?
   1. Add a bot
@@ -322,7 +292,6 @@ Bot: Example Bot (@example_bot) — claude, registry, running
 Choose an option: 2
 Disconnect example-bot from registry? Bot data is preserved. [y/N] y
 Bot example-bot is now running standalone.
-╰────────────────────────────────────────────────
 ```
 
 If no other bots use the local registry, Octopus offers to stop it.
@@ -347,8 +316,7 @@ maintenance actions.
 
 Representative flow:
 
-```text
-╭─ octopus registry maintenance ─────────────────
+```console
 $ ./octopus registry
 Registry:
   local      running    http://localhost:8787/ui
@@ -358,7 +326,6 @@ Registry:
   3. Back
 Choose an option: 2
 Local registry stopped.
-╰────────────────────────────────────────────────
 ```
 
 If you choose `1. Follow local registry logs`, Octopus streams the registry

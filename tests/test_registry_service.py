@@ -697,7 +697,7 @@ def test_ui_shell_includes_runtime_skills_panel(monkeypatch, tmp_path: Path):
     assert "Catalog, prompt preview, and conversation activation" in response.text
 
 
-def test_ui_shell_includes_rich_registry_editors(monkeypatch, tmp_path: Path):
+def test_ui_shell_uses_local_textarea_editors_and_csp(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
 
@@ -705,14 +705,14 @@ def test_ui_shell_includes_rich_registry_editors(monkeypatch, tmp_path: Path):
 
     response = client.get("/ui")
     assert response.status_code == 200
-    assert "registry-editor-ready" in response.text
-    assert "@codemirror/state" in response.text
-    assert "@codemirror/view" in response.text
+    assert "https://esm.sh" not in response.text
     assert "runtime-skill-create-button" in response.text
     assert "runtime-skill-editor-textarea" in response.text
     assert "provider-guidance-select" in response.text
     assert "provider-guidance-editor-textarea" in response.text
     assert "/v1/catalog/skills/${encodeURIComponent(skillName)}/draft" in response.text
+    assert "default-src 'self'" in response.headers["content-security-policy"]
+    assert response.headers["x-frame-options"] == "DENY"
     assert "/v1/catalog/skills/${encodeURIComponent(skillName)}/${action}" in response.text
     assert 'data-runtime-skill-lifecycle-action="publish"' in response.text
     assert "/v1/provider-guidance/${encodeURIComponent(providerName)}/draft" in response.text
@@ -720,7 +720,7 @@ def test_ui_shell_includes_rich_registry_editors(monkeypatch, tmp_path: Path):
     assert 'data-provider-guidance-action="publish"' in response.text
 
 
-def test_registry_ui_render_shell_helper_includes_editor_markers():
+def test_registry_ui_render_shell_helper_uses_local_editors():
     html_text = ui.render_shell_html(
         title_text="Agent Registry",
         heading_text="Agent Registry",
@@ -728,9 +728,7 @@ def test_registry_ui_render_shell_helper_includes_editor_markers():
         csrf_token="csrf-secret",
     )
 
-    assert "registry-editor-ready" in html_text
-    assert "@codemirror/state" in html_text
-    assert "@codemirror/view" in html_text
+    assert "https://esm.sh" not in html_text
     assert "runtime-skill-editor-textarea" in html_text
     assert "provider-guidance-editor-textarea" in html_text
     assert 'name="registry-csrf-token" content="csrf-secret"' in html_text
@@ -746,6 +744,7 @@ def test_registry_ui_shell_source_no_longer_embeds_master_bearer_token():
     ui_text = Path(ui.__file__).read_text()
     assert "Authorization: `Bearer" not in ui_text
     assert "const token =" not in ui_text
+    assert "https://esm.sh" not in ui_text
 
 
 def test_registry_http_module_has_no_inline_ui_shell_and_stays_under_guard_threshold():
@@ -785,6 +784,18 @@ def test_registry_auth_validate_settings_rejects_missing_enroll_token(monkeypatc
         assert "REGISTRY_ENROLL_TOKEN must be set" in str(exc)
 
 
+def test_registry_auth_validate_settings_rejects_missing_ui_token(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
+    monkeypatch.delenv("REGISTRY_UI_TOKEN", raising=False)
+
+    try:
+        registry_auth.validate_settings()
+        assert False, "validate_settings should reject a missing UI token"
+    except RuntimeError as exc:
+        assert "REGISTRY_UI_TOKEN must be set" in str(exc)
+
+
 def test_registry_auth_validate_settings_rejects_default_tokens(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "dev-enroll-token")
@@ -819,6 +830,17 @@ def test_registry_auth_session_cookie_can_allow_http_for_local_dev(monkeypatch, 
     registry_auth.configure_session_middleware(local_app)
 
     assert local_app.user_middleware[0].kwargs["https_only"] is False
+
+
+def test_registry_login_page_has_security_headers(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/ui/login")
+
+    assert response.status_code == 200
+    assert "default-src 'self'" in response.headers["content-security-policy"]
+    assert response.headers["x-content-type-options"] == "nosniff"
 
 
 def test_registry_http_module_delegates_auth_helpers() -> None:

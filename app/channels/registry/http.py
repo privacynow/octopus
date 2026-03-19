@@ -61,6 +61,23 @@ from app.registry_service.backend import get_registry_store
 from app.registry_service.store_base import AbstractRegistryStore, CapabilityDisabledError
 from app.session_state import session_to_dict
 
+_REGISTRY_UI_SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self' data:; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'"
+    ),
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+}
+
 
 class CreateConversationRequest(BaseModel):
     target_agent_id: str = Field(..., min_length=1, description="Agent ID to target")
@@ -112,6 +129,14 @@ def _float_value(value: Any) -> float:
 
 def get_store() -> AbstractRegistryStore:
     return get_registry_store()
+
+
+def _secure_html_response(content: str, *, status_code: int = 200) -> HTMLResponse:
+    return HTMLResponse(
+        content,
+        status_code=status_code,
+        headers=dict(_REGISTRY_UI_SECURITY_HEADERS),
+    )
 
 
 @asynccontextmanager
@@ -639,9 +664,7 @@ def ui_login_page(request: Request):
     settings = load_settings()
     if ui_session_is_valid(request):
         return RedirectResponse("/ui", status_code=303)
-    if not settings.ui_token:
-        return RedirectResponse("/ui", status_code=303)
-    return HTMLResponse(ui.render_login_html(settings.display_name or "Agent Registry"))
+    return _secure_html_response(ui.render_login_html(settings.display_name or "Agent Registry"))
 
 
 @app.post("/ui/login")
@@ -649,8 +672,8 @@ async def ui_login(request: Request, password: str = Form(default="")):
     settings = load_settings()
     if ui_session_is_valid(request):
         return RedirectResponse("/ui", status_code=303)
-    if settings.ui_token and not ui_password_matches(password, settings=settings):
-        return HTMLResponse(
+    if not ui_password_matches(password, settings=settings):
+        return _secure_html_response(
             ui.render_login_html(settings.display_name or "Agent Registry", error="Incorrect password.")
         )
     mark_ui_session_authenticated(request)
@@ -669,19 +692,17 @@ def ui_shell(request: Request) -> str:
     settings = load_settings()
     title_text = f"{settings.display_name} — Agent Registry" if settings.display_name else "Agent Registry"
     heading_text = settings.display_name or "Agent Registry"
-    logout_link = (
-        '<a href="/ui/logout" class="nav-link">Logout</a>'
-        if settings.ui_token else
-        ""
-    )
+    logout_link = '<a href="/ui/logout" class="nav-link">Logout</a>'
     # TODO M11: add a read-only access panel once the registry has a bot-to-registry
     # sync protocol for user_access overrides; the registry service cannot read
     # the bot-local transport.db directly.
-    return ui.render_shell_html(
-        title_text=title_text,
-        heading_text=heading_text,
-        logout_link=logout_link,
-        csrf_token=current_ui_csrf_token(request),
+    return _secure_html_response(
+        ui.render_shell_html(
+            title_text=title_text,
+            heading_text=heading_text,
+            logout_link=logout_link,
+            csrf_token=current_ui_csrf_token(request),
+        )
     )
 
 @app.get("/v1/ui/bootstrap")

@@ -33,7 +33,7 @@ async def test_doctor_warns_when_registry_degraded(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
+        agent_registry_url="http://host.docker.internal:8787",
         agent_registry_enroll_token="enroll-secret",
         working_dir=tmp_path,
     )
@@ -58,7 +58,7 @@ async def test_doctor_warns_when_registry_not_enrolled(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
+        agent_registry_url="http://host.docker.internal:8787",
         agent_registry_enroll_token="enroll-secret",
     )
     provider = FakeProvider()
@@ -72,7 +72,7 @@ async def test_doctor_clean_when_registry_connected_and_enrolled(tmp_path: Path)
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
+        agent_registry_url="http://host.docker.internal:8787",
         agent_registry_enroll_token="enroll-secret",
         working_dir=tmp_path,
     )
@@ -99,7 +99,7 @@ async def test_doctor_warns_stale_last_contact(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
+        agent_registry_url="http://host.docker.internal:8787",
         agent_registry_enroll_token="enroll-secret",
     )
     provider = FakeProvider()
@@ -123,7 +123,7 @@ async def test_doctor_warns_when_registry_connected_without_agent_id(tmp_path: P
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
+        agent_registry_url="http://host.docker.internal:8787",
         agent_registry_enroll_token="enroll-secret",
         working_dir=tmp_path,
     )
@@ -147,7 +147,7 @@ async def test_doctor_warns_stale_pending_delegation(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
+        agent_registry_url="http://host.docker.internal:8787",
         agent_registry_enroll_token="enroll-secret",
     )
     provider = FakeProvider()
@@ -194,7 +194,7 @@ async def test_doctor_stale_pending_delegation_accepts_iso_timestamp(tmp_path: P
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
+        agent_registry_url="http://host.docker.internal:8787",
         agent_registry_enroll_token="enroll-secret",
     )
     provider = FakeProvider()

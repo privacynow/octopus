@@ -49,6 +49,8 @@ _SANITIZED_BEARER: Final[str] = "Bearer <redacted-bearer-token>"
 _SECRET_ENV_NAMES: Final[tuple[str, ...]] = (
     "TELEGRAM_BOT_TOKEN",
     "BOT_DATABASE_URL",
+    "BOT_WEBHOOK_SECRET",
+    "BOT_AGENT_REGISTRY_ENROLL_TOKEN",
     "REGISTRY_UI_TOKEN",
     "REGISTRY_ENROLL_TOKEN",
     "REGISTRY_SESSION_SECRET",
@@ -61,6 +63,20 @@ def _redacted_env_placeholder(env_name: str) -> str:
     return f"<redacted-{label}>"
 
 
+def _derived_secret_values(env_name: str, value: str) -> tuple[tuple[str, str], ...]:
+    derived: list[tuple[str, str]] = []
+    if env_name == "BOT_DATABASE_URL":
+        parsed = urlparse(value)
+        if parsed.password:
+            derived.append(
+                (
+                    parsed.password,
+                    f"{_redacted_env_placeholder(env_name)}-password",
+                )
+            )
+    return tuple(derived)
+
+
 def _configured_secret_values() -> tuple[tuple[str, str], ...]:
     values: list[tuple[str, str]] = []
     for env_name in _SECRET_ENV_NAMES:
@@ -68,6 +84,7 @@ def _configured_secret_values() -> tuple[tuple[str, str], ...]:
         if not value:
             continue
         values.append((value, _redacted_env_placeholder(env_name)))
+        values.extend(_derived_secret_values(env_name, value))
     values.sort(key=lambda item: len(item[0]), reverse=True)
     return tuple(values)
 

@@ -1508,6 +1508,32 @@ async def test_validate_credential_rejects_unapproved_host(monkeypatch):
     assert "unapproved host" in detail.lower()
 
 
+async def test_validate_credential_rejects_plain_http_even_for_allowed_host(monkeypatch):
+    req = SkillRequirement(
+        key="API_KEY",
+        prompt="Enter key",
+        help_url=None,
+        validate={
+            "method": "GET",
+            "url": "http://registry.example.test/health",
+            "header": "Authorization: Bearer ${API_KEY}",
+            "expect_status": 200,
+        },
+    )
+
+    async def unexpected_request(self, method, url, *, headers=None):
+        del self, method, url, headers
+        raise AssertionError("validation request should not be sent to plaintext HTTP endpoints")
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", unexpected_request)
+    monkeypatch.setenv("BOT_CREDENTIAL_VALIDATION_ALLOWED_HOSTS", "registry.example.test")
+
+    ok, detail = await validate_credential(req, "some-key-value", skill_name="registry-skill")
+
+    assert ok is False
+    assert "insecure http validation endpoint" in detail.lower()
+
+
 async def test_validate_credential_allows_configured_host_and_logs_target(monkeypatch, caplog):
     req = SkillRequirement(
         key="API_KEY",

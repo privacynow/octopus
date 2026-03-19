@@ -587,9 +587,9 @@ def validate_config(config: BotConfig) -> list[str]:
             "BOT_AGENT_REGISTRY_URL must be a valid http:// or https:// URL when set"
         )
     elif config.agent_registry_url.startswith("http://") and not _is_local_http_url(config.agent_registry_url):
-        log.warning(
+        errors.append(
             "BOT_AGENT_REGISTRY_URL uses plain HTTP over a non-local address. "
-            "Agent tokens will be transmitted in cleartext."
+            "Use https:// for remote registries."
         )
 
     if config.agent_poll_interval_seconds <= 0:

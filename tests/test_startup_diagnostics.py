@@ -91,6 +91,27 @@ def test_redact_sensitive_startup_text_masks_configured_secret_values(monkeypatc
     assert "<redacted-registry-ui-token>" in redacted
 
 
+def test_redact_sensitive_startup_text_masks_database_password_fragment(monkeypatch):
+    monkeypatch.setenv("BOT_DATABASE_URL", "postgresql://bot:supersecret@db.example.com/bot")
+
+    redacted = redact_sensitive_startup_text("driver surfaced password supersecret without DSN context")
+
+    assert "supersecret" not in redacted
+    assert "<redacted-bot-database-url>-password" in redacted
+
+
+def test_redact_sensitive_startup_text_masks_bot_side_secret_values(monkeypatch):
+    monkeypatch.setenv("BOT_AGENT_REGISTRY_ENROLL_TOKEN", "agent-enroll-secret")
+    monkeypatch.setenv("BOT_WEBHOOK_SECRET", "webhook-secret-value")
+    redacted = redact_sensitive_startup_text(
+        "registry agent-enroll-secret webhook webhook-secret-value"
+    )
+    assert "agent-enroll-secret" not in redacted
+    assert "webhook-secret-value" not in redacted
+    assert "<redacted-bot-agent-registry-enroll-token>" in redacted
+    assert "<redacted-bot-webhook-secret>" in redacted
+
+
 def test_sanitize_url_for_logging_strips_query_and_password():
     redacted = sanitize_url_for_logging(
         "https://alice:pw@example.com/hooks/completed?token=secret&mode=test#frag"

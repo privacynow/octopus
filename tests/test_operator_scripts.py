@@ -209,6 +209,7 @@ def test_registry_compose_requires_enroll_token_and_binds_localhost():
     compose = repo / "infra" / "compose" / "docker-compose.yml"
     text = compose.read_text()
     assert "REGISTRY_ENROLL_TOKEN: ${REGISTRY_ENROLL_TOKEN:?Set REGISTRY_ENROLL_TOKEN in .env.registry}" in text
+    assert "REGISTRY_UI_TOKEN: ${REGISTRY_UI_TOKEN:?Set REGISTRY_UI_TOKEN in .env.registry}" in text
     assert 'REGISTRY_BIND_HOST:-127.0.0.1' in text
 
 

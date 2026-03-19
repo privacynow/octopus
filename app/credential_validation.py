@@ -93,6 +93,17 @@ async def validate_credential(
             False,
             "This credential cannot be validated because the skill points to an unapproved host. Contact the bot operator.",
         )
+    if parsed.scheme != "https":
+        log.warning(
+            "Credential validation rejected for %s against %s (skill: %s): plaintext HTTP is not allowed",
+            req.key,
+            host,
+            skill_label,
+        )
+        return (
+            False,
+            "This credential cannot be validated because the skill uses an insecure HTTP validation endpoint. Contact the bot operator.",
+        )
 
     method = spec.get("method", "GET").upper()
     header_template = spec.get("header", "")

@@ -265,3 +265,61 @@ async def test_delegation_approve_no_pending_is_a_no_op():
         assert session_after.get("pending_delegation") is None
         assert last_reply(msg) == "Nothing to approve."
         assert query.answered is True
+
+
+async def test_delegation_approve_hides_registry_error_text(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, prov):
+        import app.channels.telegram.ingress as th
+        from app.agents.client import RegistryClientError
+        from tests.support.handler_support import FakeChat, FakeUser
+
+        class FakeRegistryClient:
+            async def submit_routed_task(self, request):
+                del request
+                raise RegistryClientError(
+                    "Registry POST /v1/tasks failed: HTTP 503",
+                    error_code="registry_server_error",
+                    operator_detail="Registry POST /v1/tasks failed with HTTP 503 and proxy banner.",
+                    status_code=503,
+                )
+
+        monkeypatch.setattr("app.agents.delegation.registry_client", lambda cfg: FakeRegistryClient())
+        save_agent_runtime_state(
+            data_dir,
+            AgentRuntimeState(
+                agent_id="origin-agent",
+                agent_token="secret",
+                connectivity_state="connected",
+            ),
+        )
+
+        chat = FakeChat()
+        user = FakeUser()
+        session = default_session(prov.name, prov.new_provider_state(), "off")
+        session["pending_delegation"] = {
+            "conversation_ref": telegram_conversation_ref(cfg, chat.id),
+            "title": "Feature delegation",
+            "tasks": [
+                {
+                    "routed_task_id": "task-1",
+                    "title": "Implement feature",
+                    "target_agent_id": "developer-1",
+                    "instructions": "Build the feature end to end.",
+                    "status": "proposed",
+                }
+            ],
+        }
+        save_session(data_dir, telegram_conversation_key(chat.id), session)
+
+        _, msg = await send_callback(th.handle_delegation_callback, chat, user, f"delegation_approve:{chat.id}")
+
+        text = last_reply(msg)
+        assert "temporarily unavailable" in text.lower()
+        assert "proxy banner" not in text.lower()
+        assert "http 503" not in text.lower()

@@ -8,7 +8,10 @@ import sys
 from app.db.postgres import get_connection
 from app.db.postgres_migrate import run_bootstrap, run_update
 from app.db.postgres_doctor import run_doctor
-from app.startup_diagnostics import format_database_startup_exception
+from app.startup_diagnostics import (
+    format_database_startup_exception,
+    redact_sensitive_startup_text,
+)
 
 
 def _get_url() -> str:
@@ -33,8 +36,7 @@ def _cmd_bootstrap() -> None:
             print(line, file=sys.stderr)
         sys.exit(1)
     if errors:
-        for e in errors:
-            print(f"  FAIL: {e}", file=sys.stderr)
+        _print_sanitized_failures(errors)
         sys.exit(1)
     print("Bootstrap complete.")
 
@@ -49,8 +51,7 @@ def _cmd_update() -> None:
             print(line, file=sys.stderr)
         sys.exit(1)
     if errors:
-        for e in errors:
-            print(f"  FAIL: {e}", file=sys.stderr)
+        _print_sanitized_failures(errors)
         sys.exit(1)
     print("Update complete.")
 
@@ -65,10 +66,14 @@ def _cmd_doctor() -> None:
             print(line, file=sys.stderr)
         sys.exit(1)
     if errors:
-        for e in errors:
-            print(f"  FAIL: {e}", file=sys.stderr)
+        _print_sanitized_failures(errors)
         sys.exit(1)
     print("All checks passed.")
+
+
+def _print_sanitized_failures(errors: list[str]) -> None:
+    for error in errors:
+        print(f"  FAIL: {redact_sensitive_startup_text(str(error))}", file=sys.stderr)
 
 
 def main() -> None:

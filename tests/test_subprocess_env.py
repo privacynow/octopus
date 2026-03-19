@@ -42,7 +42,11 @@ def test_build_subprocess_env_filters_ambient_secrets_and_keeps_explicit_env(mon
     monkeypatch.setenv("HOME", "/tmp/home")
     monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
     monkeypatch.setenv("BOT_TELEGRAM_TOKEN", "telegram-secret")
+    monkeypatch.setenv("CODEX_HOME", "/tmp/codex-home")
     monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+    monkeypatch.setenv("GIT_ASKPASS", "/tmp/askpass.sh")
+    monkeypatch.setenv("HTTPS_PROXY", "https://proxy.internal")
 
     env = build_subprocess_env(
         allowed_keys=("OPENAI_API_KEY",),
@@ -55,7 +59,11 @@ def test_build_subprocess_env_filters_ambient_secrets_and_keeps_explicit_env(mon
     assert env["OPENAI_API_KEY"] == "openai-secret"
     assert env["SKILL_TOKEN"] == "credential-secret"
     assert "BOT_TELEGRAM_TOKEN" not in env
+    assert "CODEX_HOME" not in env
     assert "CLAUDECODE" not in env
+    assert "SSH_AUTH_SOCK" not in env
+    assert "GIT_ASKPASS" not in env
+    assert "HTTPS_PROXY" not in env
 
 
 def test_summary_env_filters_runtime_secrets(monkeypatch):
@@ -103,7 +111,7 @@ async def test_codex_run_cmd_uses_allowlisted_builder_env(monkeypatch, tmp_path:
         working_dir=str(tmp_path),
     )
 
-    assert captured["allowed_keys"] == ("OPENAI_API_KEY",)
+    assert captured["allowed_keys"] == ("OPENAI_API_KEY", "CODEX_HOME")
     assert captured["extra_env"] == {"SKILL_TOKEN": "credential-secret"}
     assert captured["env"] == {
         "PATH": "/usr/bin",

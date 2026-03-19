@@ -14,7 +14,6 @@ from starlette.middleware.sessions import SessionMiddleware
 
 log = logging.getLogger(__name__)
 _SESSION_TTL_SECONDS = 24 * 60 * 60
-_WARNED_MISSING_UI_TOKEN = False
 _KNOWN_DEFAULT_TOKENS = {"dev-enroll-token", "dev-ui-token", "changeme"}
 
 
@@ -38,13 +37,6 @@ def load_settings() -> RegistrySettings:
     ui_token = os.environ.get("REGISTRY_UI_TOKEN", "").strip()
     display_name = os.environ.get("REGISTRY_DISPLAY_NAME", "").strip()
     allow_http = registry_allows_http()
-    global _WARNED_MISSING_UI_TOKEN
-    if not ui_token and not _WARNED_MISSING_UI_TOKEN:
-        log.warning(
-            "REGISTRY_UI_TOKEN is not set — Registry UI authentication is disabled. "
-            "Keep the service bound to localhost only."
-        )
-        _WARNED_MISSING_UI_TOKEN = True
     return RegistrySettings(
         db_path=db_path,
         enroll_token=enroll_token,
@@ -58,6 +50,8 @@ def validate_settings(settings: RegistrySettings | None = None) -> RegistrySetti
     current = settings or load_settings()
     if not current.enroll_token:
         raise RuntimeError("REGISTRY_ENROLL_TOKEN must be set before the registry can start.")
+    if not current.ui_token:
+        raise RuntimeError("REGISTRY_UI_TOKEN must be set before the registry can start.")
     if current.enroll_token in _KNOWN_DEFAULT_TOKENS:
         raise RuntimeError("REGISTRY_ENROLL_TOKEN must not use a known default token.")
     if current.ui_token in _KNOWN_DEFAULT_TOKENS:
@@ -72,6 +66,8 @@ def validate_settings(settings: RegistrySettings | None = None) -> RegistrySetti
 
 def configure_session_middleware(app) -> None:
     settings = load_settings()
+    # Dev fallback only: without REGISTRY_SESSION_SECRET, sessions reset on every
+    # registry restart and are not portable across multiple registry instances.
     app.add_middleware(
         SessionMiddleware,
         secret_key=os.environ.get("REGISTRY_SESSION_SECRET", secrets.token_hex(32)),
@@ -135,9 +131,6 @@ def require_ui_write_access(
 
 
 def ui_session_is_valid(request: Request) -> bool:
-    settings = load_settings()
-    if not settings.ui_token:
-        return True
     return request.session.get("ui_authenticated") is True
 
 
@@ -150,7 +143,7 @@ def require_ui_session(request: Request) -> None:
 def ui_password_matches(password: str, *, settings: RegistrySettings | None = None) -> bool:
     current = settings or load_settings()
     if not current.ui_token:
-        return True
+        return False
     return hmac.compare_digest(password, current.ui_token)
 
 

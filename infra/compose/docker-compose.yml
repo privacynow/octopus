@@ -102,7 +102,7 @@ services:
     environment:
       REGISTRY_DB_PATH: /data/registry.sqlite3
       REGISTRY_ENROLL_TOKEN: ${REGISTRY_ENROLL_TOKEN:?Set REGISTRY_ENROLL_TOKEN in .env.registry}
-      REGISTRY_UI_TOKEN: ${REGISTRY_UI_TOKEN-}
+      REGISTRY_UI_TOKEN: ${REGISTRY_UI_TOKEN:?Set REGISTRY_UI_TOKEN in .env.registry}
       REGISTRY_ALLOW_HTTP: ${REGISTRY_ALLOW_HTTP-}
     volumes:
       - registry-data:/data

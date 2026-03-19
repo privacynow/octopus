@@ -83,6 +83,16 @@ prompt_channel_token_with_help() {
   done
 }
 
+registry_url_is_local() {
+  local value="${1:-}"
+  case "$value" in
+    http://localhost:*|http://127.0.0.1:*|http://[::1]:*|http://host.docker.internal:*|http://172.17.0.1:*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 check_env_bot_required() {
   local env_file="${1:-$(current_bot_env_file)}"
   if [ ! -f "$env_file" ]; then

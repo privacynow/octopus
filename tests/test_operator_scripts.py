@@ -136,6 +136,14 @@ def test_registry_start_prints_enrollment_token():
     assert "keep this file private" in text
 
 
+def test_registry_start_bootstraps_local_http_acknowledgement():
+    repo = Path(__file__).resolve().parent.parent
+    script = repo / "scripts" / "registry" / "start.sh"
+    text = script.read_text()
+    assert "REGISTRY_ALLOW_HTTP=1" in text
+    assert "REGISTRY_BIND_HOST=127.0.0.1" in text
+
+
 def test_guided_start_offers_quick_setup_and_local_registry_token_reuse():
     """guided_start.sh should expose quick setup and auto-reuse local registry tokens."""
     repo = Path(__file__).resolve().parent.parent
@@ -144,6 +152,7 @@ def test_guided_start_offers_quick_setup_and_local_registry_token_reuse():
     assert "Setup mode (quick/full)" in text
     assert "_LOCAL_REGISTRY_ENROLL_TOKEN" in text
     assert "Using local registry enrollment token" in text
+    assert "Remote registry URLs should use https://" in text
 
 
 def test_lib_env_exposes_channel_setup_help_for_telegram():
@@ -170,6 +179,15 @@ def test_shared_start_can_bootstrap_env_with_channel_help():
     assert "create_env_file_if_missing" in text
     assert "prompt_channel_token_with_help telegram" in text
     assert "Public webhook URL (must end in /webhook)" in text
+    assert "Remote registry URLs should use https://" in text
+
+
+def test_registry_compose_requires_enroll_token_and_binds_localhost():
+    repo = Path(__file__).resolve().parent.parent
+    compose = repo / "infra" / "compose" / "docker-compose.yml"
+    text = compose.read_text()
+    assert "REGISTRY_ENROLL_TOKEN: ${REGISTRY_ENROLL_TOKEN:?Set REGISTRY_ENROLL_TOKEN in .env.registry}" in text
+    assert 'REGISTRY_BIND_HOST:-127.0.0.1' in text
 
 
 def test_guided_start_success_summary_uses_browser_registry_ui_url():

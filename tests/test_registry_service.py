@@ -2,14 +2,19 @@
 
 from datetime import datetime, timezone
 import inspect
+import os
 from pathlib import Path
 import re
 import shutil
 import sqlite3
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.content_store as content_store_mod
+
+os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
+
 from app.channels.registry import auth as registry_auth
 from app.channels.registry.http import app
 from app.channels.registry import ingress, ui
@@ -31,6 +36,7 @@ def _configure_registry(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
+    monkeypatch.setenv("REGISTRY_ALLOW_HTTP", "1")
 
 
 def _configure_runtime_surface(monkeypatch, tmp_path: Path) -> Path:
@@ -764,6 +770,54 @@ def test_registry_auth_load_settings_reads_registry_env(monkeypatch, tmp_path: P
     assert settings.enroll_token == "enroll-secret"
     assert settings.ui_token == "ui-secret"
     assert settings.display_name == "QA Registry"
+
+
+def test_registry_auth_validate_settings_rejects_missing_enroll_token(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.delenv("REGISTRY_ENROLL_TOKEN", raising=False)
+    monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
+
+    try:
+        registry_auth.validate_settings()
+        assert False, "validate_settings should reject a missing enroll token"
+    except RuntimeError as exc:
+        assert "REGISTRY_ENROLL_TOKEN must be set" in str(exc)
+
+
+def test_registry_auth_validate_settings_rejects_default_tokens(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "dev-enroll-token")
+    monkeypatch.setenv("REGISTRY_UI_TOKEN", "dev-ui-token")
+
+    try:
+        registry_auth.validate_settings()
+        assert False, "validate_settings should reject known default tokens"
+    except RuntimeError as exc:
+        assert "must not use a known default token" in str(exc)
+
+
+def test_registry_auth_session_cookie_is_secure_by_default(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
+    monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
+    monkeypatch.delenv("REGISTRY_ALLOW_HTTP", raising=False)
+    local_app = FastAPI()
+
+    registry_auth.configure_session_middleware(local_app)
+
+    assert local_app.user_middleware[0].kwargs["https_only"] is True
+
+
+def test_registry_auth_session_cookie_can_allow_http_for_local_dev(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
+    monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
+    monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
+    monkeypatch.setenv("REGISTRY_ALLOW_HTTP", "1")
+    local_app = FastAPI()
+
+    registry_auth.configure_session_middleware(local_app)
+
+    assert local_app.user_middleware[0].kwargs["https_only"] is False
 
 
 def test_registry_http_module_delegates_auth_helpers() -> None:

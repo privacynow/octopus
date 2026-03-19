@@ -211,6 +211,22 @@ def test_validate_config_rejects_malformed_registry_url():
     assert any("BOT_AGENT_REGISTRY_URL" in e and "valid http" in e for e in errors)
 
 
+def test_validate_config_warns_on_remote_http_registry_url(tmp_path: Path, caplog):
+    with caplog.at_level("WARNING"):
+        errors = validate_config(
+            make_config(
+                agent_registry_url="http://registry.example.com",
+                working_dir=tmp_path,
+            )
+        )
+
+    assert errors == []
+    assert any(
+        "BOT_AGENT_REGISTRY_URL uses plain HTTP over a non-local address" in record.message
+        for record in caplog.records
+    )
+
+
 def test_validate_config_rejects_malformed_postgres_url():
     errors = validate_config(make_config(database_url="postgresql://"))
     assert any("BOT_DATABASE_URL" in e and "valid postgresql" in e for e in errors)

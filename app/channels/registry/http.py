@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import html
 import hmac
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ from app.channels.registry.auth import (
     require_ui_write_access,
     ui_password_matches,
     ui_session_is_valid,
+    validate_settings,
 )
 from app.capability_service import CapabilityService
 from app.channels.registry import ui
@@ -112,7 +114,14 @@ def get_store() -> AbstractRegistryStore:
     return get_registry_store()
 
 
-app = FastAPI(title="Telegram Agent Registry", version="0.1.0")
+@asynccontextmanager
+async def _registry_lifespan(app: FastAPI):
+    del app
+    validate_settings()
+    yield
+
+
+app = FastAPI(title="Telegram Agent Registry", version="0.1.0", lifespan=_registry_lifespan)
 configure_session_middleware(app)
 
 

@@ -73,7 +73,14 @@ create_env_file_if_missing() {
     if [ "$(uname -s)" = "Linux" ]; then
       default_registry_url="http://172.17.0.1:8787"
     fi
-    registry_url="$(prompt_with_default "Registry URL" "$default_registry_url")"
+    while true; do
+      registry_url="$(prompt_with_default "Registry URL" "$default_registry_url")"
+      if [[ "$registry_url" == http://* ]] && ! registry_url_is_local "$registry_url"; then
+        echo "Remote registry URLs should use https:// to protect registry credentials." >&2
+        continue
+      fi
+      break
+    done
   fi
 
   {

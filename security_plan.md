@@ -86,6 +86,7 @@ Tighten registry defaults and transport posture.
   known-default.
 - Tighten UI/session behavior when HTTP is allowed only for explicit
   local-dev cases.
+- Status: complete
 
 #### Slice S5
 Expand redaction and doctor/log sanitization.

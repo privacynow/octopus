@@ -1,38 +1,38 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="444" viewBox="0 0 1200 444" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="610" viewBox="0 0 1200 610" role="img" aria-labelledby="title desc">
   <title id="title">Disconnect a bot from registry mode</title>
   <desc id="desc">Terminal panel showing a registry-connected bot being switched back to standalone mode while preserving data.</desc>
   <style>
-    .bg { fill: #2b2b2b; }
-    .panel { fill: #171717; stroke: #3a3a3a; stroke-width: 1; }
-    .rule { stroke: #303030; stroke-width: 1; }
-    .dot { fill: #505050; }
-    .label { fill: #bddba9; font: 600 15px SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace; }
-    .line { fill: #8dfc7c; font: 17px SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace; }
-    .prompt { fill: #dfffd2; }
+    .bg { fill: #2a2d2a; }
+    .panel { fill: #141714; }
+    .rule { stroke: #2d382d; stroke-width: 1; }
+    .dot { fill: #596459; }
+    .label { fill: #cad4c4; font: 600 16px "Courier New", "Lucida Console", Monaco, monospace; letter-spacing: 0.3px; }
+    .line { fill: #9dff8c; font: 18px "Courier New", "Lucida Console", Monaco, monospace; letter-spacing: 0.15px; }
+    .prompt { fill: #eeffe3; }
   </style>
-  <rect class="bg" x="0" y="0" width="1200" height="444" rx="24"/>
+  <rect class="bg" x="0" y="0" width="1200" height="610" rx="24"/>
   <g transform="translate(28 24)">
-    <rect class="panel" x="0" y="0" width="1144" height="396" rx="18"/>
-    <circle class="dot" cx="24" cy="24" r="6"/><circle class="dot" cx="44" cy="24" r="6"/><circle class="dot" cx="64" cy="24" r="6"/>
-    <text class="label" x="92" y="29">disconnect a bot from registry mode</text>
-    <line class="rule" x1="0" y1="48" x2="1144" y2="48"/>
+    <rect class="panel" x="0" y="0" width="1144" height="553" rx="18"/>
+    <circle class="dot" cx="26" cy="28" r="6.5"/><circle class="dot" cx="48" cy="28" r="6.5"/><circle class="dot" cx="70" cy="28" r="6.5"/>
+    <text class="label" x="102" y="34">disconnect a bot from registry mode</text>
+    <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>
     <text class="line" xml:space="preserve">
-      <tspan class="prompt" x="28" y="82">$ ./octopus</tspan>
-      <tspan x="28" dy="30">What would you like to do?</tspan>
-      <tspan x="28" dy="30">  1. Add a bot</tspan>
-      <tspan x="28" dy="30">  2. Manage bots</tspan>
-      <tspan x="28" dy="30">  3. Connect bot to registry</tspan>
-      <tspan x="28" dy="30">  4. Advanced</tspan>
-      <tspan x="28" dy="30">Choose an option: 2</tspan>
-      <tspan x="28" dy="30"></tspan>
-      <tspan x="28" dy="30">Bot: Example Bot (@example_bot) — claude, registry, running</tspan>
-      <tspan x="28" dy="30"></tspan>
-      <tspan x="28" dy="30">  1. Switch to remote registry</tspan>
-      <tspan x="28" dy="30">  2. Disconnect from registry</tspan>
-      <tspan x="28" dy="30">  3. Back</tspan>
-      <tspan x="28" dy="30">Choose an option: 2</tspan>
-      <tspan x="28" dy="30">Disconnect example-bot from registry? Bot data is preserved. [y/N] y</tspan>
-      <tspan x="28" dy="30">Bot example-bot is now running standalone.</tspan>
+      <tspan class="prompt" x="34" y="94">$ ./octopus</tspan>
+      <tspan x="34" dy="29">What would you like to do?</tspan>
+      <tspan x="34" dy="29">  1. Add a bot</tspan>
+      <tspan x="34" dy="29">  2. Manage bots</tspan>
+      <tspan x="34" dy="29">  3. Connect bot to registry</tspan>
+      <tspan x="34" dy="29">  4. Advanced</tspan>
+      <tspan x="34" dy="29">Choose an option: 2</tspan>
+      <tspan x="34" dy="29"></tspan>
+      <tspan x="34" dy="29">Bot: Example Bot (@example_bot) — claude, registry, running</tspan>
+      <tspan x="34" dy="29"></tspan>
+      <tspan x="34" dy="29">  1. Switch to remote registry</tspan>
+      <tspan x="34" dy="29">  2. Disconnect from registry</tspan>
+      <tspan x="34" dy="29">  3. Back</tspan>
+      <tspan x="34" dy="29">Choose an option: 2</tspan>
+      <tspan x="34" dy="29">Disconnect example-bot from registry? Bot data is preserved. [y/N] y</tspan>
+      <tspan x="34" dy="29">Bot example-bot is now running standalone.</tspan>
     </text>
   </g>
 </svg>

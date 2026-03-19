@@ -117,6 +117,7 @@ Harden secret-bearing local files and token issuance/storage.
 Add archive extraction quotas.
 
 - Cap expanded bytes, file count, and per-file size before extraction.
+- Status: complete
 
 ### Phase 3: Trust-boundary hardening
 

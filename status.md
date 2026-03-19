@@ -98,6 +98,16 @@
   - generated bot env files, `.env.registry`, and `registry_state.json` are permission-hardened to private file modes
   - `scripts/registry/start.sh` no longer prints registry secrets to stdout and instead points operators to the private env file
   Commit:
+  - `338c5b1`
+- Complete: S8 add artifact extraction quotas.
+  Tests:
+  - `python3 -m py_compile app/registry.py tests/test_registry.py`
+  - `.venv/bin/python -m pytest -q -n 4 tests/test_registry.py tests/test_registry_service.py`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Verified:
+  - registry artifact import now rejects oversized expanded payloads before extraction instead of only checking the compressed download size
+  - registry artifact import now rejects artifacts with too many files or any single file above the per-file quota
+  - existing registry import and digest verification flows still pass with the new pre-extraction quota checks in place
+  Commit:
   - pending current slice commit
-- Pending: S8 add artifact extraction quotas.
 - Pending: S9 restrict credential validation outbound targets.

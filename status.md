@@ -1167,12 +1167,13 @@ after Phase 8 and the latest verified remediation baseline.
 
 ### Current State
 
-Architecture remediation is reopened for the post-Phase-8 audit follow-up.
+Architecture remediation is complete.
 
 Phase 8 closed the remaining Telegram ingress decomposition and test-boundary
-gaps left after Phase 7, and the post-Phase-8 correction slices closed the
-remaining ingress-coupling and terminology drift. The live Telegram channel
-boundary is now:
+gaps left after Phase 7. The post-Phase-8 correction slices and the post-audit
+F1-F8 follow-up then closed the remaining ingress-coupling, workflow-ownership,
+machine-immutability, terminology, and documentation-traceability gaps. The
+live Telegram channel boundary is now:
 
 - `app/channels/telegram/bootstrap.py`
 - `app/channels/telegram/ingress.py`
@@ -1192,45 +1193,57 @@ The repo-standard explicit machine contract lives in:
 
 - `docs/machine_conventions.md`
 
-The post-Phase-8 audit found additional workflow-ownership and traceability
-gaps. The follow-up remediation is now in progress:
+The post-audit follow-up is now closed:
 
 - `F1` complete:
   - post-execution finalization moved out of Telegram worker code into
     `app/workflows/execution/finalization.py`
   - worker admission and recovery notice transitions now delegate to
     runtime/workflow owners instead of owning the durable decisions inline
-- `F2` complete in the current slice:
+- `F2` complete:
   - workflow-owned execution channel context construction now lives under
     `app/workflows/execution/context.py`
   - provider-error summarization moved to `app/summarize.py` as a plain-text
     utility, with Telegram-specific HTML escaping kept at the channel boundary
   - `app/channels/telegram/execution.py` no longer owns workflow passthrough
     wrappers for execute/request/approval transitions
-- `F3` complete in the current slice:
+- `F3` complete:
   - Telegram execution runtime builders now take explicit injected
     collaborators instead of importing sibling behavior directly
   - shared-mode dispatch now receives runtime-builder callables from bootstrap
     instead of importing execution builders directly
   - stronger structural gates now enforce sibling import discipline for the
     extracted Telegram modules
-- `F4` complete in the current slice:
+- `F4` complete:
   - shared-mode `/skills` now routes through `handle_skills_command` as the
     single owner instead of a duplicated inline dispatch table
   - shared-mode inline command handling now calls the existing conversation
     command owners directly and no longer defines duplicate inline helpers
   - `app/channels/telegram/shared_mode_dispatch.py` is back under the hard cap
     at `434` lines, with a structural gate enforcing the limit
-- `F5` complete in the current slice:
+- `F5` complete:
   - `cmd_start` and `cmd_help` now use the shared `@_command_handler`
     decorator path instead of manually duplicating normalize/dedup/gate logic
   - the command decorator now supports the explicit “show not authorized
     message” behavior these two handlers need without creating a parallel path
   - a structural gate now enforces that ingress has only one
     `normalize_command(update, context)` command path
-- `F6` through `F8` remain open
+- `F6` complete:
+  - pending and recovery machine adapters now use frozen workflow models and
+    return replacement state instead of mutating inputs in place
+- `F7` complete:
+  - the dead `surface_binding_id` runtime field is removed
+  - remaining channel/runtime docstrings now use `channels` vocabulary
+  - the legacy-vocabulary gate now prevents `surface_binding_id` from
+    reappearing
+- `F8` complete:
+  - the authoritative plan update is committed in `5a07330`
+  - the execution/orchestration inventory now reflects workflow-owned
+    finalization
+  - this status closeout records the verified remediation baseline and the full
+    committed correction chain through the F8 plan commit
 
-Feature work remains frozen until the post-audit follow-up track closes.
+Feature work may resume.
 
 ### Phase 8 Slice Log
 
@@ -1284,6 +1297,12 @@ Feature work remains frozen until the post-audit follow-up track closes.
      comments
    - added a structural gate preventing legacy live `surface` contract terms
      from reappearing outside storage-detail owners
+
+4. `829e9e7` `Post-Phase 8 / slice 4: reconcile status artifact`
+   - restored the historical status log while appending a live authoritative
+     closure section
+   - added a status guard proving the historical and live sections coexist
+     without deleting the audit trail
 
 ### Post-Audit Remediation Log
 
@@ -1387,6 +1406,25 @@ Feature work remains frozen until the post-audit follow-up track closes.
      - `tests/test_transport_workflow_machine.py`
      - Result: `80 passed`
 
+7. `6c58cae` `Post-audit / F7: remove stale surface vocabulary residue`
+   - removed the dead `surface_binding_id` field from
+     `app/runtime/inbound_types.py`
+   - normalized the remaining runtime/channel docstrings to `channels`
+     vocabulary
+   - extended the structural vocabulary gate so `surface_binding_id` cannot
+     reappear
+   - focused F7 suite:
+     - `tests/test_runtime_inbound_types.py`
+     - `tests/test_zero_import_gates.py`
+     - Result: `64 passed`
+
+8. `5a07330` `Post-audit / F8: commit authoritative plan with Phase 8 closure`
+   `and audit findings`
+   - committed the authoritative `store_plan.md` updates for the post-audit
+     F1-F8 follow-up
+   - sealed the current acceptance gates and post-audit remediation sequence in
+     committed history so the repo no longer depends on a local-only plan diff
+
 ### Acceptance Gates
 
 These mirror the authoritative
@@ -1434,6 +1472,32 @@ These mirror the authoritative
 - [x] Zero-import gates for singleton helpers cover both `app/` and `tests/`.
 - [x] Ingress line-count gate prevents growth above 1600 lines.
 
+### Post-Audit Acceptance Gates
+
+- [x] `worker.py` contains no inline workflow logic for approval branching,
+  delegation finalization, routed-task reporting, usage recording, or timeline
+  publication.
+- [x] `app/workflows/execution/finalization.py` exists and has no
+  `app.channels` imports.
+- [x] completion ownership is explicitly documented at the worker boundary.
+- [x] usage recording failure handling is explicitly documented as non-blocking
+  accounting.
+- [x] `execution_channel_context` is not defined in any `app/channels/` file.
+- [x] `format_provider_error` is not defined in any `app/channels/` file.
+- [x] `app/channels/telegram/execution.py` does not define workflow passthrough
+  wrappers.
+- [x] extracted Telegram sibling-import discipline is enforced by a structural
+  gate.
+- [x] `shared_mode_dispatch.py` no longer defines duplicated inline dispatch
+  helpers and remains ≤ `450` lines.
+- [x] `cmd_start` and `cmd_help` use `@_command_handler`.
+- [x] `PendingRequestWorkflowModel` and `TransportWorkflowModel` are frozen.
+- [x] `run_pending_request_event()` and `run_transport_event()` do not mutate
+  their inputs.
+- [x] `surface_binding_id` is deleted and blocked by the live vocabulary gate.
+- [x] `store_plan.md` is committed; the repo no longer depends on a local-only
+  plan diff for the accepted post-audit state.
+
 ### Verification Baseline
 
 Latest focused Phase 8 structural suite:
@@ -1457,7 +1521,7 @@ Latest focused post-Phase-8 correction suite:
 
 Latest full-suite remediation baseline:
 
-- Result: `1659 passed, 23 skipped`
+- Result: `1660 passed, 23 skipped`
 
 ### Notes
 

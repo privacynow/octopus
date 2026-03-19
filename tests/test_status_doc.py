@@ -43,16 +43,19 @@ def test_status_doc_records_live_phase8_state_and_owners_in_authoritative_sectio
         "07af844",
         "837b4ed",
         "a686565",
+        "829e9e7",
         "b56473d",
+        "0a2a3ef",
+        "6c58cae",
+        "5a07330",
+        "app/workflows/execution/finalization.py",
     )
 
     for fragment in required_fragments:
         assert fragment in authoritative
 
-    assert (
-        "Architecture remediation is complete." in authoritative
-        or "The post-Phase-8 audit found additional workflow-ownership and traceability" in authoritative
-    )
+    assert "Architecture remediation is complete." in authoritative
+    assert "Feature work may resume." in authoritative
     assert re.search(r"Result: `\d+ passed, 23 skipped`", authoritative)
 
 
@@ -68,6 +71,9 @@ def test_status_doc_includes_all_phase8_acceptance_gate_fragments() -> None:
         "`ingress.py` is ≤ 1500 lines",
         "No Telegram channel file except `presenters.py` creates",
         "No test file monkeypatches module-level ingress functions for stubbing.",
+        "`worker.py` contains no inline workflow logic",
+        "`app/workflows/execution/finalization.py` exists and has no",
+        "`surface_binding_id` is deleted and blocked by the live vocabulary gate.",
     )
 
     for fragment in required_fragments:
@@ -86,6 +92,8 @@ def test_status_doc_historical_and_live_closure_sections_are_both_present() -> N
         "42 passed",
         "62 passed",
         "273 passed",
+        "64 passed",
+        "80 passed",
     )
 
     for fragment in required_fragments:
@@ -100,6 +108,7 @@ def test_status_doc_lede_points_to_live_phase8_closure_and_marks_phase7_as_histo
         "`## Historical Phase 7 Closure Status` (preserved Phase 7 baseline)",
         "`## Current Authoritative Status` (live post-Phase-8 closure)",
         "The initial Phase 8 closure at",
+        "The post-audit follow-up is now closed:",
     )
 
     for fragment in required_fragments:

@@ -12,7 +12,7 @@ from app.runtime.dispatch import (
 )
 from app.workflows.execution.contracts import (
     ExecutionRuntime,
-    ExecutionSurfaceContext,
+    ExecutionChannelContext,
 )
 from app.workflows.execution.requests import execute_request, request_approval
 from tests.support.handler_support import (
@@ -81,7 +81,7 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
         message = FakeMessage(chat=chat, text="hello")
         runtime = ExecutionRuntime(
             dispatch=build_dispatch_runtime(current_runtime()),
-            build_surface_context=lambda _message, _chat_id: ExecutionSurfaceContext(),
+            build_channel_context=lambda _message, _chat_id: ExecutionChannelContext(),
             show_foreign_setup=_no_op,
             show_setup_prompt=_no_op,
             send_retry_prompt=_no_op,

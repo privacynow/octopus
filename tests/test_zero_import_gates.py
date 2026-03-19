@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 FORBIDDEN_APP_REFERENCES = (
@@ -569,24 +570,20 @@ def test_test_suite_does_not_call_private_telegram_ingress_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     tests_root = repo_root / "tests"
     gate_path = Path(__file__).resolve()
+    allowed_private_calls = {
+        (tests_root / "test_invariants.py", "global_error_handler"),
+    }
+    private_call_pattern = re.compile(r"\b(?:th|_th|ingress)\._([A-Za-z0-9_]+)")
     python_files = sorted(
         path for path in tests_root.rglob("*.py") if "__pycache__" not in path.parts and path != gate_path
     )
-    forbidden = (
-        "._load(",
-        "._save(",
-        "._execute_worker_action",
-        "._propose_delegation_plan(",
-        "._send_approval_prompt(",
-        "._show_setup_prompt(",
-        "._send_compact_reply(",
-        "._chat_lock(",
-        "._settings_model_profile_state(",
-    )
     for path in python_files:
         text = path.read_text()
-        for token in forbidden:
-            assert token not in text, f"{token} still referenced in {path}"
+        for match in private_call_pattern.finditer(text):
+            helper_name = match.group(1)
+            if (path, helper_name) in allowed_private_calls:
+                continue
+            assert False, f"private ingress helper {helper_name} still referenced in {path}"
 
 
 def test_test_suite_does_not_stub_validate_credential_via_module_assignment() -> None:
@@ -603,6 +600,26 @@ def test_test_suite_does_not_stub_validate_credential_via_module_assignment() ->
             )
             assert not ("setattr(" in line and "validate_credential" in line), (
                 f"validate_credential monkeypatch still referenced in {path}:{line_no}"
+            )
+
+
+def test_test_suite_does_not_override_telegram_ingress_module_attributes() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    tests_root = repo_root / "tests"
+    gate_path = Path(__file__).resolve()
+    python_files = sorted(
+        path for path in tests_root.rglob("*.py") if "__pycache__" not in path.parts and path != gate_path
+    )
+    for path in python_files:
+        for line_no, line in enumerate(path.read_text().splitlines(), start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            assert not re.search(r"\b(?:monkeypatch\.setattr|setattr)\((?:th|_th|ingress),", line), (
+                f"telegram ingress module monkeypatch still referenced in {path}:{line_no}"
+            )
+            assert not re.search(r"\b(?:th|_th|ingress)\.[A-Za-z_][A-Za-z0-9_]*\s*=", line), (
+                f"telegram ingress module attribute override still referenced in {path}:{line_no}"
             )
 
 

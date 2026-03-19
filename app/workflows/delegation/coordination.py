@@ -207,10 +207,9 @@ def build_delegation_completion_message(delegation: PendingDelegation | None) ->
 
 async def send_delegation_completion_message(
     delegation: PendingDelegation | None,
-    surface: Any,
+    channel_egress: Any,
 ) -> None:
     message = build_delegation_completion_message(delegation)
     if not message:
         return
-    await surface.send_text(message)
-
+    await channel_egress.send_text(message)

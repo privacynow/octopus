@@ -10,8 +10,8 @@ from app.channels.telegram.state import TelegramRuntime
 from app.agents.bridge import publish_timeline_event, summarize_text, telegram_conversation_ref
 from app.agents.delegation import (
     DelegationRuntime,
-    handle_delegation_approve as handle_surface_delegation_approve,
-    handle_delegation_cancel as handle_surface_delegation_cancel,
+    handle_delegation_approve as handle_channel_delegation_approve,
+    handle_delegation_cancel as handle_channel_delegation_cancel,
 )
 from app.agents.types import TimelineEvent
 from app.session_state import PendingDelegation, SessionState
@@ -127,7 +127,7 @@ async def handle_delegation_approve(
     delegation_runtime: DelegationRuntime,
 ) -> None:
     conversation_ref = telegram_conversation_ref(runtime.config, chat_id)
-    await handle_surface_delegation_approve(
+    await handle_channel_delegation_approve(
         chat_id,
         conversation_ref,
         DelegationCallbackChannel(query),
@@ -144,7 +144,7 @@ async def handle_delegation_cancel(
     delegation_runtime: DelegationRuntime,
 ) -> None:
     conversation_ref = telegram_conversation_ref(runtime.config, chat_id)
-    await handle_surface_delegation_cancel(
+    await handle_channel_delegation_cancel(
         chat_id,
         conversation_ref,
         DelegationCallbackChannel(query),

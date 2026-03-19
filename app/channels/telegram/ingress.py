@@ -22,9 +22,6 @@ from app.session_state import (
     SessionState,
     session_to_dict,
 )
-from app.agents.bridge import (
-    registry_client,
-)
 from app.agents.client import RegistryClientError
 from app.agents.state import load_agent_runtime_state
 from app.agents.types import AgentDiscoveryQuery
@@ -46,13 +43,9 @@ from app.channels.telegram.execution import (
     send_formatted_reply,
     send_path_to_chat,
 )
-from app.channels.telegram.normalization import normalize_callback, normalize_command, normalize_message, normalize_user
-from app.channels.telegram.session_io import (
-    actor_key,
-    conversation_key,
-    event_key,
-    load as load_session,
-)
+from app.channels.telegram import conversation as telegram_conversation
+from app.channels.telegram import normalization as telegram_normalization
+from app.channels.telegram import session_io as telegram_session_io
 from app.channels.telegram.state import TelegramRuntime
 from app.channels.telegram.runtime_skills import (
     cmd_clear_credentials as runtime_skill_cmd_clear_credentials,
@@ -75,7 +68,6 @@ from app.channels.telegram.conversation import (
     cmd_project as conversation_cmd_project,
     cmd_role as conversation_cmd_role,
     cmd_settings as conversation_cmd_settings,
-    handle_settings_callback as conversation_handle_settings_callback,
 )
 from app.channels.telegram.pending import (
     handle_pending_callback as pending_handle_callback,
@@ -93,6 +85,7 @@ from app.runtime.inbound_types import (
 )
 from app.runtime.work_admission import (
     admit_fresh_message,
+    trust_tier_for_source,
 )
 from app.storage import (
     resolve_allowed_path,
@@ -165,7 +158,7 @@ async def _chat_lock(
     own ``query.answer()`` when the yielded value is ``True``.
     """
     data_dir = runtime.config.data_dir
-    conversation_ref_key = conversation_key(chat_id)
+    conversation_ref_key = telegram_session_io.conversation_key(chat_id)
     if runtime.config.runtime_mode == "shared" and worker_item is not None:
         work_queue.supersede_pending_recovery(data_dir, conversation_ref_key)
         try:
@@ -205,7 +198,7 @@ async def _chat_lock(
                 item = work_queue.claim_for_update(
                     data_dir,
                     conversation_ref_key,
-                    event_key(effective_update_id),
+                    telegram_session_io.event_key(effective_update_id),
                     runtime.boot_id,
                 )
             else:
@@ -280,9 +273,9 @@ def _dedup_update(
     data_dir = runtime.config.data_dir
     is_new, item_id = work_queue.record_and_enqueue(
         data_dir,
-        event_key(uid),
-        conversation_key(chat_id),
-        actor_key(user_id),
+        telegram_session_io.event_key(uid),
+        telegram_session_io.conversation_key(chat_id),
+        telegram_session_io.actor_key(user_id),
         kind,
         payload=payload,
         worker_id=runtime.boot_id,
@@ -319,7 +312,7 @@ def _approval_mode_source(session: SessionState) -> str:
 
 def is_allowed(runtime: TelegramRuntime, user) -> bool:
     cfg = runtime.config
-    inbound = user if isinstance(user, InboundUser) else normalize_user(user)
+    inbound = user if isinstance(user, InboundUser) else telegram_normalization.normalize_user(user)
     if inbound is None:
         return False
     override = work_queue.get_user_access(cfg.data_dir, inbound.id)
@@ -328,7 +321,7 @@ def is_allowed(runtime: TelegramRuntime, user) -> bool:
 
 def is_admin(runtime: TelegramRuntime, user) -> bool:
     """Check if user is an admin (can import/uninstall/update runtime skills)."""
-    inbound = user if isinstance(user, InboundUser) else normalize_user(user)
+    inbound = user if isinstance(user, InboundUser) else telegram_normalization.normalize_user(user)
     return access.is_admin_user(runtime.config, inbound)
 
 
@@ -339,14 +332,8 @@ def is_public_user(runtime: TelegramRuntime, user) -> bool:
     any allowed-user set.  Returns False if allow_open is off (the user
     wouldn't have passed is_allowed at all).
     """
-    inbound = user if isinstance(user, InboundUser) else normalize_user(user)
+    inbound = user if isinstance(user, InboundUser) else telegram_normalization.normalize_user(user)
     return access.is_public_user(runtime.config, inbound)
-
-
-def _trust_tier(runtime: TelegramRuntime, user) -> str:
-    """Resolve the trust tier for a user: 'trusted' or 'public'."""
-    inbound = user if isinstance(user, InboundUser) else normalize_user(user)
-    return access.trust_tier(runtime.config, inbound)
 
 
 async def _public_guard(runtime: TelegramRuntime, event, update: Update) -> bool:
@@ -370,7 +357,7 @@ def _command_handler(fn):
         runtime: TelegramRuntime | None = None,
     ) -> None:
         runtime = runtime or _context_runtime(context)
-        event = normalize_command(update, context)
+        event = telegram_normalization.normalize_command(update, context)
         payload = serialize_inbound(event) if event else "{}"
         if _dedup_update(runtime, update, kind="command", payload=payload):
             return
@@ -412,7 +399,7 @@ def _callback_handler(fn):
         runtime: TelegramRuntime | None = None,
     ) -> None:
         runtime = runtime or _context_runtime(context)
-        event = normalize_callback(update)
+        event = telegram_normalization.normalize_callback(update)
         payload = serialize_inbound(event) if event else "{}"
         if _dedup_update(runtime, update, kind="callback", payload=payload):
             return
@@ -464,7 +451,7 @@ def _settings_model_profile_state(
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start — always show main help (ignores deep-link payloads)."""
     runtime = _context_runtime(context)
-    event = normalize_command(update, context)
+    event = telegram_normalization.normalize_command(update, context)
     payload = serialize_inbound(event) if event else "{}"
     if _dedup_update(runtime, update, kind="command", payload=payload):
         return
@@ -491,7 +478,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help [topic] — main help or topic-specific detail."""
     runtime = _context_runtime(context)
-    event = normalize_command(update, context)
+    event = telegram_normalization.normalize_command(update, context)
     payload = serialize_inbound(event) if event else "{}"
     if _dedup_update(runtime, update, kind="command", payload=payload):
         return
@@ -546,9 +533,9 @@ async def cmd_session(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
-    session = load_session(runtime, event.chat_id)
+    session = telegram_session_io.load(runtime, event.chat_id)
     cfg = runtime.config
-    trust = _trust_tier(runtime, event.user)
+    trust = trust_tier_for_source("telegram", event.user, config=runtime.config)
     resolved = resolve_context(runtime, session, trust_tier=trust)
     pstate = session.provider_state
 
@@ -658,8 +645,12 @@ async def cmd_send(runtime: TelegramRuntime, event, update: Update, context: Con
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     raw_path = " ".join(event.args)
-    session = load_session(runtime, event.chat_id)
-    resolved_ctx = resolve_context(runtime, session, trust_tier=_trust_tier(runtime, event.user))
+    session = telegram_session_io.load(runtime, event.chat_id)
+    resolved_ctx = resolve_context(
+        runtime,
+        session,
+        trust_tier=trust_tier_for_source("telegram", event.user, config=runtime.config),
+    )
     resolved = resolve_allowed_path(raw_path, allowed_roots(runtime, event.chat_id, resolved_ctx))
     if not resolved:
         rendered = telegram_presenters.send_path_not_allowed_message()
@@ -689,16 +680,20 @@ async def cmd_doctor(
         format_runtime_health_for_doctor,
     )
     try:
-        session = load_session(runtime, event.chat_id)
+        session = telegram_session_io.load(runtime, event.chat_id)
     except (sqlite3.DatabaseError, sqlite3.OperationalError, RuntimeError):
         session = None
     cfg = runtime.config
     session_context = None
     if session is not None:
-        resolved = resolve_context(runtime, session, trust_tier=_trust_tier(runtime, event.user))
+        resolved = resolve_context(
+            runtime,
+            session,
+            trust_tier=trust_tier_for_source("telegram", event.user, config=runtime.config),
+        )
         session_context = SessionHealthContext(
             session=session_to_dict(session),
-            user_id=actor_key(event.user.id),
+            user_id=telegram_session_io.actor_key(event.user.id),
             resolved_active_skills=tuple(resolved.active_skills),
         )
     report = await collect_runtime_health_report(
@@ -709,7 +704,11 @@ async def cmd_doctor(
     )
     prompt_weight_count = None
     if session is not None:
-        resolved = resolve_context(runtime, session, trust_tier=_trust_tier(runtime, event.user))
+        resolved = resolve_context(
+            runtime,
+            session,
+            trust_tier=trust_tier_for_source("telegram", event.user, config=runtime.config),
+        )
         prompt_weight_count = execution_prompt_weight(resolved.role, resolved.active_skills) or None
     rendered = telegram_presenters.doctor_report_message(
         format_runtime_health_for_doctor(report),
@@ -793,7 +792,7 @@ async def cmd_discover(
         rendered = telegram_presenters.discover_usage_message()
         await update.effective_message.reply_text(error or rendered.text, parse_mode=rendered.parse_mode)
         return
-    client = registry_client(cfg)
+    client = runtime.registry_client_factory(cfg)
     if client is None:
         rendered = telegram_presenters.discover_not_enrolled_message()
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
@@ -819,15 +818,15 @@ async def cmd_export(
     chat_id = event.chat_id
     cfg = runtime.config
 
-    history = export_chat_history(cfg.data_dir, conversation_key(chat_id))
+    history = export_chat_history(cfg.data_dir, telegram_session_io.conversation_key(chat_id))
     if not history:
         rendered = telegram_presenters.no_conversation_to_export_message()
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
 
     # Add session metadata header — use resolved context for user-visible data
-    session = load_session(runtime, chat_id)
-    trust = _trust_tier(runtime, update.effective_user)
+    session = telegram_session_io.load(runtime, chat_id)
+    trust = trust_tier_for_source("telegram", event.user, config=runtime.config)
     resolved = resolve_context(runtime, session, trust_tier=trust)
     skills = resolved.active_skills
     header_lines = [
@@ -1030,7 +1029,7 @@ async def cmd_raw(
             await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
 
-    raw_text = load_raw(cfg.data_dir, conversation_key(chat_id), n)
+    raw_text = load_raw(cfg.data_dir, telegram_session_io.conversation_key(chat_id), n)
     if raw_text is None:
         rendered = telegram_presenters.raw_missing_message()
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
@@ -1084,7 +1083,7 @@ async def handle_message(
     """
     runtime = runtime or _context_runtime(context)
     uid = update.update_id
-    user = normalize_user(update.effective_user)
+    user = telegram_normalization.normalize_user(update.effective_user)
     if user is None or not is_allowed(runtime, user):
         return
 
@@ -1098,7 +1097,7 @@ async def handle_message(
             await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
             return
 
-    msg = await normalize_message(update, context, runtime.config.data_dir)
+    msg = await telegram_normalization.normalize_message(update, context, runtime.config.data_dir)
     if msg is None:
         return
 
@@ -1109,7 +1108,7 @@ async def handle_message(
     payload = serialize_inbound(msg)
 
     cfg = runtime.config
-    needs_welcome = not session_exists(cfg.data_dir, conversation_key(chat_id))
+    needs_welcome = not session_exists(cfg.data_dir, telegram_session_io.conversation_key(chat_id))
 
     data_dir = cfg.data_dir
     if await runtime_skill_maybe_handle_setup_message(
@@ -1122,9 +1121,9 @@ async def handle_message(
 
     envelope = InboundEnvelope(
         transport="telegram",
-        event_id=event_key(uid),
-        conversation_key=conversation_key(chat_id),
-        actor_key=actor_key(user_id),
+        event_id=telegram_session_io.event_key(uid),
+        conversation_key=telegram_session_io.conversation_key(chat_id),
+        actor_key=telegram_session_io.actor_key(user_id),
         received_at=datetime.now(timezone.utc),
         event=msg,
     )
@@ -1247,7 +1246,7 @@ async def handle_expand_callback(runtime: TelegramRuntime, event, query) -> None
 
     from app.summarize import load_raw_by_slot
     cfg = runtime.config
-    raw_text = load_raw_by_slot(cfg.data_dir, conversation_key(target_chat), slot)
+    raw_text = load_raw_by_slot(cfg.data_dir, telegram_session_io.conversation_key(target_chat), slot)
     if raw_text is None:
         await query.edit_message_reply_markup(reply_markup=None)
         rendered = telegram_presenters.missing_collapsed_response_message()
@@ -1286,7 +1285,7 @@ async def handle_collapse_callback(runtime: TelegramRuntime, event, query) -> No
 
     from app.summarize import load_raw_by_slot
     cfg = runtime.config
-    raw_text = load_raw_by_slot(cfg.data_dir, conversation_key(target_chat), slot)
+    raw_text = load_raw_by_slot(cfg.data_dir, telegram_session_io.conversation_key(target_chat), slot)
     if raw_text is None:
         await query.edit_message_reply_markup(reply_markup=None)
         return
@@ -1306,7 +1305,7 @@ async def handle_collapse_callback(runtime: TelegramRuntime, event, query) -> No
 
 @_callback_handler
 async def handle_settings_callback(runtime: TelegramRuntime, event, query) -> None:
-    await conversation_handle_settings_callback(
+    await telegram_conversation.handle_settings_callback(
         event,
         query,
         runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
@@ -1401,7 +1400,7 @@ async def cmd_allowuser(
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     reason = " ".join(event.args[1:])
-    granted_by = actor_key(event.user.id if event.user else 0)
+    granted_by = telegram_session_io.actor_key(event.user.id if event.user else 0)
     cfg = runtime.config
     work_queue.set_user_access(cfg.data_dir, target_actor_key, "allowed", reason, granted_by)
     rendered = telegram_presenters.allowuser_success_message(target_actor_key)
@@ -1431,7 +1430,7 @@ async def cmd_blockuser(
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     reason = " ".join(event.args[1:])
-    granted_by = actor_key(event.user.id if event.user else 0)
+    granted_by = telegram_session_io.actor_key(event.user.id if event.user else 0)
     cfg = runtime.config
     work_queue.set_user_access(cfg.data_dir, target_actor_key, "blocked", reason, granted_by)
     rendered = telegram_presenters.blockuser_success_message(target_actor_key)

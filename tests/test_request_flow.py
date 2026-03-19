@@ -46,6 +46,7 @@ from app.execution_context import (
 from app.identity import telegram_actor_key, telegram_conversation_key
 from app.providers.base import RunResult
 from app.request_flow import extra_dirs_from_denials as _extra_dirs_from_denials
+from app.runtime.work_admission import trust_tier_for_source
 from app.session_state import (
     PendingApproval,
     PendingRetry,
@@ -869,6 +870,7 @@ async def test_export_uses_resolved_skills_not_raw_session():
     """/export header shows resolved skills, not raw session.active_skills."""
     import app.channels.telegram.execution as telegram_execution
     import app.channels.telegram.ingress as th
+    from app.channels.telegram.normalization import normalize_user
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -886,7 +888,7 @@ async def test_export_uses_resolved_skills_not_raw_session():
 
         # Verify the resolved context gives [] for public users
         session_after = telegram_load_session(current_runtime(), 8005)
-        trust = th._trust_tier(current_runtime(), public_user)
+        trust = trust_tier_for_source("telegram", normalize_user(public_user), config=current_runtime().config)
         resolved = telegram_execution.resolve_context(current_runtime(), session_after, trust_tier=trust)
         assert resolved.active_skills == [], (
             f"Public user should resolve to zero skills, got: {resolved.active_skills}"

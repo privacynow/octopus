@@ -31,7 +31,7 @@ from app.skill_activation_service import get_skill_activation_service
 class TelegramConversationRuntime:
     """Injected Telegram conversation dependencies.
 
-    The conversation surface owns its workflow logic directly and receives only
+    The conversation channel owner owns its workflow logic directly and receives only
     the Telegram-specific runtime collaborators it genuinely needs.
     """
 

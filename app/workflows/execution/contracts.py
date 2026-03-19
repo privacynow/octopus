@@ -9,7 +9,7 @@ from app.runtime.dispatch import RuntimeDispatchRuntime
 
 
 @dataclass(frozen=True)
-class ExecutionSurfaceContext:
+class ExecutionChannelContext:
     conversation_ref: str = ""
     routed_task_id: str = ""
     timeline_callback: Callable[[str, bool], Awaitable[None]] | None = None
@@ -29,7 +29,7 @@ class RequestExecutionOutcome:
 @dataclass(frozen=True)
 class ExecutionRuntime:
     dispatch: RuntimeDispatchRuntime
-    build_surface_context: Callable[[Any, int | str], ExecutionSurfaceContext]
+    build_channel_context: Callable[[Any, int | str], ExecutionChannelContext]
     show_foreign_setup: Callable[[Any, Any], Awaitable[None]]
     show_setup_prompt: Callable[[Any, str, dict[str, object]], Awaitable[None]]
     send_retry_prompt: Callable[[Any, tuple[dict[str, Any], ...]], Awaitable[None]]

@@ -39,7 +39,7 @@ from app.session_state import SessionState
 from app.storage import chat_upload_dir, is_image_path, resolve_allowed_path
 from app.workflows.execution.contracts import (
     ExecutionRuntime,
-    ExecutionSurfaceContext,
+    ExecutionChannelContext,
     RequestExecutionOutcome,
 )
 from app.workflows.execution.requests import (
@@ -303,7 +303,7 @@ def execution_channel_context(
     runtime: TelegramRuntime,
     message,
     chat_id: int | str,
-) -> ExecutionSurfaceContext:
+) -> ExecutionChannelContext:
     conversation_ref = ""
     routed_task_id = ""
     if getattr(message, "capabilities", None) and getattr(message.capabilities, "channel_name", "") == "registry":
@@ -323,12 +323,12 @@ def execution_channel_context(
                 force=force,
             )
 
-        return ExecutionSurfaceContext(
+        return ExecutionChannelContext(
             conversation_ref=conversation_ref,
             routed_task_id=routed_task_id,
             timeline_callback=timeline_callback,
         )
-    return ExecutionSurfaceContext(
+    return ExecutionChannelContext(
         conversation_ref=conversation_ref,
         routed_task_id=routed_task_id,
         timeline_callback=None,
@@ -338,7 +338,7 @@ def execution_channel_context(
 def build_execution_runtime(runtime: TelegramRuntime) -> ExecutionRuntime:
     return ExecutionRuntime(
         dispatch=build_dispatch_runtime(runtime),
-        build_surface_context=lambda message, chat_id: execution_channel_context(runtime, message, chat_id),
+        build_channel_context=lambda message, chat_id: execution_channel_context(runtime, message, chat_id),
         show_foreign_setup=show_foreign_setup,
         show_setup_prompt=show_setup_prompt,
         send_retry_prompt=send_retry_prompt,

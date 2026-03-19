@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from io import StringIO
 
 import pytest
 
@@ -164,4 +165,31 @@ def test_cli_doctor_requires_url(monkeypatch):
         assert "BOT_DATABASE_URL" in sys.stderr.getvalue()
     finally:
         sys.argv = old_argv
+        sys.stderr = old_stderr
+
+
+def test_db_cli_sanitizes_connection_errors(monkeypatch):
+    monkeypatch.setenv("BOT_DATABASE_URL", "postgresql://localhost:5432/bot")
+
+    class OperationalError(RuntimeError):
+        pass
+
+    def fake_get_connection(url):
+        del url
+        raise OperationalError("postgresql://bot:secret@example.com/bot refused connection")
+
+    monkeypatch.setattr("app.db.cli.get_connection", fake_get_connection)
+
+    import sys
+    old_stderr = sys.stderr
+    try:
+        sys.stderr = StringIO()
+        with pytest.raises(SystemExit) as exc_info:
+            from app.db.cli import _cmd_doctor
+            _cmd_doctor()
+        assert exc_info.value.code == 1
+        output = sys.stderr.getvalue()
+        assert "could not connect to the configured database" in output
+        assert "secret@example.com" not in output
+    finally:
         sys.stderr = old_stderr

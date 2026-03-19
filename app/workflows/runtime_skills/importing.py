@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from app.provider_guidance_service import get_provider_guidance_service
 from app.workflows.runtime_skills.catalog import (
     get_runtime_skill_catalog_use_cases,
@@ -15,6 +17,9 @@ from app.workflows.runtime_skills.contracts import (
     RuntimeSkillImportPort,
 )
 from app.skill_import_service import get_skill_import_service
+
+
+log = logging.getLogger(__name__)
 
 
 class RuntimeSkillImportUseCases(RuntimeSkillImportPort):
@@ -65,7 +70,13 @@ class RuntimeSkillImportUseCases(RuntimeSkillImportPort):
                     for item in self._imports().registry_search(registry_url, query_text)
                 )
             except Exception as exc:
-                registry_error = str(exc)[:200]
+                log.warning(
+                    "Registry runtime-skill search failed for query %r: %s",
+                    query_text,
+                    exc.__class__.__name__,
+                    exc_info=True,
+                )
+                registry_error = "Registry search unavailable. Try again later."
         return RuntimeSkillSearchResults(
             catalog=catalog_hits,
             registry=registry_hits,

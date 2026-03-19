@@ -121,6 +121,20 @@ async def _run_with_cancel_watch(
         await asyncio.gather(watcher, return_exceptions=True)
 
 
+async def notify_deserialize_failure(
+    item: dict[str, object],
+    *,
+    runtime: TelegramRuntime,
+) -> None:
+    conversation_key_value = str(item.get("conversation_key", ""))
+    chat_id = telegram_numeric_id(conversation_key_value)
+    bot = runtime.bot_instance
+    if chat_id is None or bot is None:
+        return
+    rendered = telegram_presenters.generic_error_try_again_message()
+    await bot.send_message(chat_id, rendered.text, **rendered.kwargs())
+
+
 def _action_target_message_id(event: InboundAction) -> int | None:
     raw = event.params.get("message_id")
     if isinstance(raw, int) and raw > 0:
@@ -373,7 +387,7 @@ async def worker_dispatch(
             raise
         if outcome is not None:
             await channel_egress.on_outcome(outcome)
-        await finalize_execution(
+        finalization = await finalize_execution(
             outcome,
             context=FinalizationContext(
                 config=cfg,
@@ -392,6 +406,8 @@ async def worker_dispatch(
                 publish_timeline_event=publish_timeline_event,
             ),
         )
+        if finalization.routed_result_warning_text:
+            await channel_egress.send_text(finalization.routed_result_warning_text)
         return
 
     if isinstance(event, InboundAction):
@@ -427,7 +443,11 @@ async def worker_dispatch(
             rendered = telegram_presenters.recovery_orphaned_command_message(detail)
             await bot.send_message(chat_id, rendered.text, **rendered.kwargs())
         except Exception:
-            pass
+            log.debug(
+                "Could not send orphaned command notice to chat %s",
+                chat_id,
+                exc_info=True,
+            )
         return
 
     log.warning("Worker dispatch: unknown event type for item %s", item.get("id"))

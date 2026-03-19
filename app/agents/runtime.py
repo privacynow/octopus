@@ -176,6 +176,9 @@ class AgentRuntime:
             try:
                 classification = await self._delivery_handler(delivery)
             except Exception:
+                # Delivery failures are acknowledged as rejected below so the
+                # registry can record them explicitly instead of leaving the
+                # delivery invisible in the poll loop.
                 log.exception(
                     "Agent delivery handler failed for %s on %s",
                     self.config.instance,

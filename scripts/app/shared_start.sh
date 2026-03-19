@@ -49,6 +49,17 @@ telegram_set_webhook() {
   fi
 }
 
+print_shared_startup_failure_help() {
+  echo "Shared Runtime failed to stay up after startup." >&2
+  echo "Running full app health check for a clearer diagnosis..." >&2
+  if ! bot_shared_compose --profile bot run --rm bot-webhook python -m app.main --doctor >&2; then
+    :
+  fi
+  echo "" >&2
+  echo "If you need raw container logs:" >&2
+  echo "  $(printf 'BOT_ENV_FILE=%s docker compose --project-directory . -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.shared.yml --profile bot logs -f bot-webhook bot-worker' "$BOT_ENV_FILE")" >&2
+}
+
 check_env_bot_required "$BOT_ENV_FILE"
 
 agent_mode="$(read_bot_env_value BOT_AGENT_MODE)"
@@ -64,6 +75,7 @@ worker_replicas="${BOT_WORKER_REPLICAS:-2}"
 provider="$(get_bot_provider "$BOT_ENV_FILE")"
 
 require_bot_env_value "TELEGRAM_BOT_TOKEN" "$telegram_token"
+require_real_telegram_token "$telegram_token" "$BOT_ENV_FILE"
 require_bot_env_value "BOT_WEBHOOK_URL" "$webhook_url"
 if [ "$agent_mode" = "registry" ]; then
   require_bot_env_value "BOT_AGENT_REGISTRY_URL" "$agent_registry_url"
@@ -103,6 +115,13 @@ telegram_set_webhook "$telegram_token" "$webhook_url" "$webhook_secret"
 
 echo "Starting shared runtime services..."
 bot_shared_compose --profile bot up -d --remove-orphans --scale "bot-worker=${worker_replicas}" bot-webhook bot-worker
+
+echo "Waiting a few seconds to confirm shared services stayed up..."
+sleep 5
+if bot_shared_compose ps -a --format '{{.Service}} {{.Status}}' bot-webhook bot-worker 2>/dev/null | grep -q "Exited"; then
+  print_shared_startup_failure_help
+  exit 1
+fi
 
 echo ""
 echo "Shared Runtime started."

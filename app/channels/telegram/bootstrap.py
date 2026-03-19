@@ -32,6 +32,7 @@ class TelegramBootstrap:
     application: Application
     runtime: TelegramRuntime
     worker_dispatch: Callable[[str, Any, dict], Awaitable[None]]
+    worker_deserialize_failure_notifier: Callable[[dict[str, object]], Awaitable[None]] | None = None
 
 
 def _execution_runtime(runtime: TelegramRuntime):
@@ -191,5 +192,9 @@ def build_bootstrap(config: BotConfig, provider: Provider) -> TelegramBootstrap:
             telegram_worker.worker_dispatch,
             runtime=runtime,
             execution_runtime=execution_runtime,
+        ),
+        worker_deserialize_failure_notifier=functools.partial(
+            telegram_worker.notify_deserialize_failure,
+            runtime=runtime,
         ),
     )

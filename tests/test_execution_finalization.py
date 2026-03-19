@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 import pytest
 
@@ -164,3 +165,32 @@ async def test_finalization_usage_recording_failure_is_non_blocking() -> None:
     assert result.usage_status == "record_failed_non_blocking"
     assert result.timeline_status == "published"
     assert len(timeline_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_finalization_report_failure_sets_user_warning(caplog) -> None:
+    class FailingClient:
+        async def routed_task_result(self, routed_task_id, result):
+            del routed_task_id, result
+            raise RuntimeError("registry internal stacktrace")
+
+    with caplog.at_level(logging.ERROR):
+        result = await finalize_execution(
+            RequestExecutionOutcome(
+                status="completed",
+                reply_text="done",
+            ),
+            context=FinalizationContext(
+                config=type("Cfg", (), {"data_dir": "/tmp/data", "provider_name": "claude", "completion_webhook_url": ""})(),
+                item_id="item-5",
+                conversation_key="registry:conv-5",
+                runtime_chat="registry:conv-5",
+                conversation_ref="registry:conv-5",
+                routed_task_id="task-5",
+                registry_client_factory=lambda config: FailingClient(),
+            ),
+        )
+
+    assert result.routed_result_status == "report_failed"
+    assert "could not be delivered to the requesting conversation" in result.routed_result_warning_text
+    assert any("Failed to report routed task result" in record.message for record in caplog.records)

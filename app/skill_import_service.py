@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import difflib
+import logging
 import shutil
 import tempfile
 from pathlib import Path
@@ -15,6 +16,9 @@ from app.content_models import RuntimeSkillTrackRecord
 from app.content_seed import track_from_skill_dir
 from app.content_store import get_content_store
 from app.skill_catalog_service import get_skill_catalog_service
+
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -107,6 +111,15 @@ def _diff_tracks(
     return text
 
 
+def _safe_registry_failure_message(action: str) -> str:
+    messages = {
+        "install": "Could not fetch skill from registry. Try again later.",
+        "update": "Could not update skill. Try again later.",
+        "diff": "Could not fetch skill for update check. Try again later.",
+    }
+    return messages[action]
+
+
 class SkillImportService:
     """Channel-neutral runtime skill import lifecycle service."""
 
@@ -186,7 +199,17 @@ class SkillImportService:
         try:
             record = self._incoming_registry_track(name, registry_url)
         except Exception as exc:
-            return SkillMutationResult(name=name, ok=False, message=str(exc))
+            log.warning(
+                "Registry install failed for skill %s: %s",
+                name,
+                exc.__class__.__name__,
+                exc_info=True,
+            )
+            return SkillMutationResult(
+                name=name,
+                ok=False,
+                message=_safe_registry_failure_message("install"),
+            )
         self._store().replace_skill_track(record)
         return SkillMutationResult(
             name=name,
@@ -271,7 +294,17 @@ class SkillImportService:
         try:
             incoming = self._incoming_registry_track(skill_name, registry_url)
         except Exception as exc:
-            return SkillMutationResult(name=name, ok=False, message=str(exc))
+            log.warning(
+                "Registry update failed for skill %s: %s",
+                name,
+                exc.__class__.__name__,
+                exc_info=True,
+            )
+            return SkillMutationResult(
+                name=name,
+                ok=False,
+                message=_safe_registry_failure_message("update"),
+            )
         if incoming.revision.digest == imported.revision.digest:
             return SkillMutationResult(name=name, ok=True, message=f"Skill '{name}' is already up to date.")
         self._store().replace_skill_track(incoming)
@@ -295,7 +328,17 @@ class SkillImportService:
         try:
             incoming = self._incoming_registry_track(skill_name, registry_url)
         except Exception as exc:
-            return SkillMutationResult(name=name, ok=False, message=str(exc))
+            log.warning(
+                "Registry diff fetch failed for skill %s: %s",
+                name,
+                exc.__class__.__name__,
+                exc_info=True,
+            )
+            return SkillMutationResult(
+                name=name,
+                ok=False,
+                message=_safe_registry_failure_message("diff"),
+            )
         return SkillMutationResult(
             name=name,
             ok=True,

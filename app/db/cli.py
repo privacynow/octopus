@@ -8,6 +8,7 @@ import sys
 from app.db.postgres import get_connection
 from app.db.postgres_migrate import run_bootstrap, run_update
 from app.db.postgres_doctor import run_doctor
+from app.startup_diagnostics import format_database_startup_exception
 
 
 def _get_url() -> str:
@@ -28,7 +29,8 @@ def _cmd_bootstrap() -> None:
         with get_connection(url) as conn:
             errors = run_bootstrap(conn)
     except Exception as e:
-        print(f"Database error: {e}", file=sys.stderr)
+        for line in format_database_startup_exception(e):
+            print(line, file=sys.stderr)
         sys.exit(1)
     if errors:
         for e in errors:
@@ -43,7 +45,8 @@ def _cmd_update() -> None:
         with get_connection(url) as conn:
             errors = run_update(conn)
     except Exception as e:
-        print(f"Database error: {e}", file=sys.stderr)
+        for line in format_database_startup_exception(e):
+            print(line, file=sys.stderr)
         sys.exit(1)
     if errors:
         for e in errors:
@@ -58,7 +61,8 @@ def _cmd_doctor() -> None:
         with get_connection(url) as conn:
             errors = run_doctor(conn)
     except Exception as e:
-        print(f"Database error: {e}", file=sys.stderr)
+        for line in format_database_startup_exception(e):
+            print(line, file=sys.stderr)
         sys.exit(1)
     if errors:
         for e in errors:

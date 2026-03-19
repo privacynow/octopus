@@ -135,7 +135,7 @@ class RegistryChannelEgress(ChannelEgress):
         try:
             await client.publish_timeline([event])
         except Exception:
-            log.debug("Timeline publish failed for %s (non-fatal)", self.conversation_ref, exc_info=True)
+            log.warning("Timeline publish failed for %s (non-fatal)", self.conversation_ref, exc_info=True)
 
     async def _publish_progress(self, html_text: str, *, event_id: str | None = None) -> None:
         snippet = self._plain_text_snippet(html_text)

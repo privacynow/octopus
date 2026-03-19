@@ -41,6 +41,7 @@ class FinalizationContext:
 class FinalizationOutcome:
     delegation_status: str = ""
     routed_result_status: str = ""
+    routed_result_warning_text: str = ""
     usage_status: str = "skipped"
     timeline_status: str = "skipped"
     webhook_status: str = "skipped"
@@ -76,6 +77,7 @@ async def finalize_execution(
             context.save_session(context.runtime_chat, session)
 
     routed_result_status = ""
+    routed_result_warning_text = ""
     if context.routed_task_id and context.registry_client_factory is not None:
         client = context.registry_client_factory(context.config)
         if client is not None:
@@ -100,7 +102,10 @@ async def finalize_execution(
                 routed_result_status = "reported"
             except Exception:
                 routed_result_status = "report_failed"
-                log.warning(
+                routed_result_warning_text = (
+                    "Your request completed, but the result could not be delivered to the requesting conversation."
+                )
+                log.error(
                     "Failed to report routed task result for %s",
                     context.routed_task_id,
                     exc_info=True,
@@ -156,7 +161,7 @@ async def finalize_execution(
                 timeline_status = "published"
             except Exception:
                 timeline_status = "publish_failed_non_blocking"
-                log.debug("Failed to publish usage timeline event", exc_info=True)
+                log.warning("Failed to publish usage timeline event", exc_info=True)
 
     webhook_status = "skipped"
     if context.config.completion_webhook_url and outcome.status != "delegation_proposed":
@@ -181,6 +186,7 @@ async def finalize_execution(
     return FinalizationOutcome(
         delegation_status=delegation_status,
         routed_result_status=routed_result_status,
+        routed_result_warning_text=routed_result_warning_text,
         usage_status=usage_status,
         timeline_status=timeline_status,
         webhook_status=webhook_status,

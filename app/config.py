@@ -664,8 +664,14 @@ def validate_config(config: BotConfig) -> list[str]:
             for skill_name in config.default_skills:
                 if skill_name not in known:
                     errors.append(f"BOT_SKILLS references unknown built-in skill: '{skill_name}'")
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning(
+                "Built-in skill catalog unavailable during config validation: %s",
+                exc.__class__.__name__,
+            )
+            errors.append(
+                "BOT_SKILLS could not be validated because the built-in skill catalog could not be loaded"
+            )
 
     # Validate data dir writability
     data_dir = config.data_dir

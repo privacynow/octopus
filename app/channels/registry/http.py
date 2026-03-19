@@ -114,6 +114,13 @@ app = FastAPI(title="Telegram Agent Registry", version="0.1.0")
 configure_session_middleware(app)
 
 
+def _agent_permission_http_error(exc: PermissionError) -> HTTPException:
+    detail = str(exc).strip().lower()
+    if detail == "unknown agent token":
+        return HTTPException(status_code=401, detail="Invalid or expired agent token.")
+    return HTTPException(status_code=403, detail="Not authorized for this agent resource.")
+
+
 @app.get("/healthz")
 def healthz(store: AbstractRegistryStore = Depends(get_store)) -> dict[str, Any]:
     return {"ok": True, "bots": len(store.list_agents())}
@@ -138,7 +145,7 @@ def register(
     try:
         return store.register(agent_token, payload)
     except PermissionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise _agent_permission_http_error(exc) from exc
 
 
 @app.post("/v1/agents/heartbeat")
@@ -150,7 +157,7 @@ def heartbeat(
     try:
         return store.heartbeat(agent_token, payload)
     except PermissionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise _agent_permission_http_error(exc) from exc
 
 
 @app.post("/v1/agents/timeline")
@@ -162,7 +169,7 @@ def publish_timeline(
     try:
         return store.publish_timeline(agent_token, payload.get("events", []))
     except PermissionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise _agent_permission_http_error(exc) from exc
 
 
 @app.post("/v1/agents/conversations/bind")
@@ -174,7 +181,7 @@ def bind_conversation(
     try:
         return store.bind_conversation(agent_token, payload)
     except PermissionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise _agent_permission_http_error(exc) from exc
 
 
 @app.post("/v1/agents/discovery/search")
@@ -187,7 +194,7 @@ def search_agents(
         # Auth check only; search itself does not need the token contents.
         store.heartbeat(agent_token, {"connectivity_state": "connected"})
     except PermissionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise _agent_permission_http_error(exc) from exc
     return {"agents": store.search_agents(payload)}
 
 
@@ -201,7 +208,7 @@ def create_routed_task(
         store.heartbeat(agent_token, {"connectivity_state": "connected"})
         return store.create_routed_task(payload)
     except PermissionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise _agent_permission_http_error(exc) from exc
     except CapabilityDisabledError as exc:
         raise HTTPException(status_code=409, detail="capability_disabled") from exc
 
@@ -218,7 +225,7 @@ def poll(
     try:
         return store.poll(agent_token, cursor=int(cursor or "0"), limit=limit)
     except PermissionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise _agent_permission_http_error(exc) from exc
 
 
 @app.post("/v1/agents/ack")
@@ -234,7 +241,7 @@ def ack(
             classification=payload.get("classification", "accepted"),
         )
     except PermissionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise _agent_permission_http_error(exc) from exc
 
 
 @app.post("/v1/agents/routed-tasks/{routed_task_id}/status")
@@ -247,7 +254,7 @@ def routed_task_status(
     try:
         return store.update_routed_task_status(agent_token, routed_task_id, payload)
     except PermissionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise _agent_permission_http_error(exc) from exc
 
 
 @app.post("/v1/agents/routed-tasks/{routed_task_id}/result")
@@ -260,7 +267,7 @@ def routed_task_result(
     try:
         return store.update_routed_task_result(agent_token, routed_task_id, payload)
     except PermissionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise _agent_permission_http_error(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown routed task: {routed_task_id}") from exc
 
@@ -273,7 +280,7 @@ def deregister(
     try:
         return store.deregister(agent_token)
     except PermissionError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise _agent_permission_http_error(exc) from exc
 
 
 @app.get("/v1/catalog/skills")

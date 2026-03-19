@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 # SQL files live in app/db/migrations/postgres/; names 0001_*.sql, 0002_*.sql, etc.
 _SQL_DIR = Path(__file__).resolve().parent / "migrations" / "postgres"
 _VERSION_RE = re.compile(r"^(\d+)_(.+)\.sql$")
+log = logging.getLogger(__name__)
 
 
 def _sql_files_sorted() -> list[tuple[int, Path]]:
@@ -46,7 +48,7 @@ def _get_max_applied_version(conn: Any) -> int | None:
             try:
                 conn.rollback()
             except Exception:
-                pass
+                log.debug("Rollback after schema version read failed", exc_info=True)
             return None
         raise
 
@@ -81,7 +83,7 @@ def run_bootstrap(conn: Any) -> list[str]:
             try:
                 conn.rollback()
             except Exception:
-                pass
+                log.debug("Rollback after failed bootstrap migration also failed", exc_info=True)
             return errors  # Stop at first failed migration
     return errors
 
@@ -117,7 +119,7 @@ def run_update(conn: Any) -> list[str]:
             try:
                 conn.rollback()
             except Exception:
-                pass
+                log.debug("Rollback after failed update migration also failed", exc_info=True)
             return errors  # Stop at first failed migration
     return errors
 

@@ -34,6 +34,35 @@ check_env_bot_required() {
   fi
 }
 
+read_bot_env_value() {
+  local key="$1" env_file="${2:-$(current_bot_env_file)}"
+  grep -E "^\s*${key}=" "$env_file" 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true
+}
+
+telegram_token_is_placeholder() {
+  local value="${1:-}" normalized
+  normalized="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  case "$normalized" in
+    ""|123:fake|fake|fake-token|changeme|replace-me|your-bot-token|your-telegram-bot-token|"<telegram-bot-token>"|"<botfather-token>")
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+require_real_telegram_token() {
+  local value="${1:-}" env_file="${2:-$(current_bot_env_file)}"
+  if [ -z "$value" ]; then
+    echo "TELEGRAM_BOT_TOKEN must be set in $env_file" >&2
+    exit 1
+  fi
+  if telegram_token_is_placeholder "$value"; then
+    echo "TELEGRAM_BOT_TOKEN in $env_file is still a placeholder." >&2
+    echo "Set a real token from @BotFather before running startup scripts." >&2
+    exit 1
+  fi
+}
+
 # Echo BOT_PROVIDER from the selected env file (claude or codex), default claude.
 get_bot_provider() {
   local env_file="${1:-$(current_bot_env_file)}"

@@ -176,7 +176,7 @@ def test_registry_digest_mismatch_leaves_no_content_residue(monkeypatch, tmp_pat
 
         result = imports.install_from_registry("tampered", cfg.registry_url)
         assert result.ok is False
-        assert "digest mismatch" in result.message.lower()
+        assert result.message == "Could not fetch skill from registry. Try again later."
         assert get_skill_catalog_service().resolve_track("tampered") is None
         assert store.list_skill_tracks("tampered") == []
         assert {item.slug for item in store.list_skill_summaries()} == before

@@ -211,3 +211,21 @@
   - the repo no longer ships or references the removed startup surface
   - the active shell/config/docs path is now coherent around `.deploy/` and `./octopus`
   - the cleanup did not leave stale breakage behind; the full suite passed after the regressions were fixed
+- Complete: Slice 11 added final CLI contract coverage and reran the full suite.
+  Scope:
+  - added `tests/test_octopus_cli_contracts.py` for slug normalization, state queries, menu routing, compose-wrapper contracts, provider-auth marker behavior, and the repo-wide no-legacy-surface assertion
+  - expanded README contract coverage so the shipped docs retain both the `./octopus` operator surface and the user-facing Telegram command list
+  - fixed a real shell bug in `provider_is_authed()` where the old `! ...; $?` pattern masked provider failures and could leave `.authed` markers stale
+  - cleaned `.gitignore` to drop old flat-env patterns and legacy comments so the repo-level zero-reference check is truthful
+  Tests:
+  - `bash -n octopus scripts/lib/state.sh scripts/lib/bot.sh scripts/lib/docker.sh scripts/lib/provider.sh scripts/lib/registry.sh`
+  - `.venv/bin/python -m pytest -q tests/test_octopus_cli_contracts.py tests/test_octopus_token_validation.py tests/test_octopus_provider_auth.py tests/test_octopus_registry_network.py tests/test_octopus_management.py tests/test_octopus_first_bot_flow.py tests/test_readme_commands.py tests/test_readme_operator.py`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified the repo-wide banned-surface scan stays clean without excluding shipped source files
+  - verified the compose-wrapper tests capture the actual argument ordering after the `.deploy/` cleanup
+  - verified the authoritative provider-auth check now sets and clears `.authed` markers correctly
+  Verified:
+  - the final CLI contract now has direct tests for the remaining slice-11 acceptance gaps instead of relying on incidental coverage
+  - the new tests found and drove out one real provider-auth bug before the final pass
+  - final suite status: `1769 passed, 23 skipped`

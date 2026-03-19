@@ -213,7 +213,7 @@ check_env_bot_required() {
 
 read_bot_env_value() {
   local key="$1" env_file="${2:-$(current_bot_env_file)}"
-  grep -E "^\s*${key}=" "$env_file" 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true
+  grep -E "^[[:space:]]*${key}=" "$env_file" 2>/dev/null | sed 's/^[^=]*=[[:space:]]*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true
 }
 
 telegram_token_is_placeholder() {
@@ -243,7 +243,7 @@ require_real_telegram_token() {
 get_bot_provider() {
   local env_file="${1:-$(current_bot_env_file)}"
   local p
-  p=$(grep -E '^\s*BOT_PROVIDER=' "$env_file" 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)
+  p=$(grep -E '^[[:space:]]*BOT_PROVIDER=' "$env_file" 2>/dev/null | sed 's/^[^=]*=[[:space:]]*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)
   echo "${p:-claude}"
 }
 

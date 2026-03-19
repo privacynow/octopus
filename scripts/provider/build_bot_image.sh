@@ -14,7 +14,7 @@ env_file="$(current_bot_env_file)"
 if [ -n "${1:-}" ]; then
   provider="$1"
 elif [ -f "$env_file" ]; then
-  provider=$(grep -E '^\s*BOT_PROVIDER=' "$env_file" 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)
+  provider=$(grep -E '^[[:space:]]*BOT_PROVIDER=' "$env_file" 2>/dev/null | sed 's/^[^=]*=[[:space:]]*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)
 fi
 if [ -z "$provider" ]; then
   provider="claude"

@@ -130,3 +130,23 @@
   - the first-run contract is now token-driven instead of asking the user to name the bot a second time
   - the first-bot flow preserves the token-repair and doctor-check behavior from the old guided path while moving state into `.deploy/bots/<slug>/.env`
   - Telegram identity is now the authoritative source for first-bot local identity, while the duplicate guard prevents accidental double deployment of the same Telegram bot
+- Complete: Slice 7 multi-bot management.
+  Scope:
+  - implemented `./octopus status`, `./octopus start`, `./octopus stop`, `./octopus logs`, and `./octopus doctor`
+  - added bot selection helpers with single-bot auto-selection and multi-bot interactive choice prompts
+  - added the top-level state-aware main menu plus the first management submenu shell
+  - switched status and management output to identity-aware labels using `BOT_DISPLAY_NAME` and `BOT_TELEGRAM_USERNAME`
+  - kept “Add a bot” on the same token-driven bootstrap path as first-run so additional bots do not reintroduce a naming prompt
+  - fixed a portability bug in env parsing where non-POSIX `\\s` handling in shell readers could corrupt values like `standalone`
+  Tests:
+  - `bash -n octopus scripts/lib/bot.sh scripts/app/start_instance.sh scripts/provider/build_bot_image.sh`
+  - `.venv/bin/python -m pytest -q tests/test_octopus_management.py tests/test_octopus_first_bot_flow.py`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified `cmd_status` prints the expected no-bots guidance when `.deploy/bots/` is empty
+  - verified a single configured bot is auto-selected for `start`, `stop`, `logs`, and `doctor`
+  - verified the manage menu header shows the human-facing bot identity instead of the raw slug
+  Verified:
+  - the public `./octopus` surface now supports day-2 bot operations instead of only first-run bootstrap
+  - multi-bot selection works without regressing the single-bot “don’t ask unnecessary questions” rule
+  - the shared env-reader fix closed a real bug in active scripts, not just in the new CLI path

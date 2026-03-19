@@ -110,7 +110,7 @@ def test_e2e_skip_fixture_skips_with_opt_in_message_when_env_unset():
             sys.executable,
             "-m",
             "pytest",
-            "tests/e2e/test_compose_flows.py::test_compose_postgres_up_without_env_bot",
+            "tests/e2e/test_compose_flows.py::test_compose_postgres_up_without_bot_env",
             "-v",
             "-rs",
             "--tb=no",

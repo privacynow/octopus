@@ -2,24 +2,16 @@
 
 Talk to Claude or Codex from Telegram.
 
-The normal path is simple:
+The primary command is:
 
-1. create a Telegram bot token with `@BotFather`
-2. run `./scripts/app/guided_start.sh`
-3. message your bot in Telegram
+```bash
+./octopus
+```
 
-You do not need to pick a database, understand the runtime, or learn Docker
-details to get started.
+It validates your Telegram bot token, handles provider login, writes bot
+configuration under `.deploy/`, and starts the bot in Docker.
 
 **Repo:** [github.com/privacynow/octopus](https://github.com/privacynow/octopus)
-
-## What This Bot Does
-
-- answers normal Telegram messages with Claude or Codex
-- can show a plan before execution
-- accepts file uploads and can send files back
-- supports reusable skills and credential setup
-- optionally connects to a Registry UI if you want a browser-based control panel
 
 ## What You Need
 
@@ -27,112 +19,64 @@ details to get started.
 - a Telegram bot token from `@BotFather`
 - one provider: `claude` or `codex`
 
-For one private bot, that is enough.
-
 ## First-Time Setup
 
-### Step 1 — Create your Telegram bot token
+### Step 1: Create your Telegram bot
 
-1. Open Telegram and search for **@BotFather**.
+1. Open Telegram and search for `@BotFather`.
 2. Send `/newbot`.
 3. Choose a display name and a username ending in `bot`.
 4. Copy the token BotFather gives you.
 
-### Step 2 — Clone the repo
+### Step 2: Clone the repo
 
 ```bash
 git clone git@github.com:privacynow/octopus.git ~/octopus
 cd ~/octopus
 ```
 
-### Step 3 — Run the guided setup
+### Step 3: Run Octopus
 
 ```bash
-./scripts/app/guided_start.sh
+./octopus
 ```
 
-The script will:
+Octopus will:
 
-- create `.env.bot` if needed
+- validate the Telegram token with Telegram before any Docker work
+- detect the bot identity from the token
 - help you choose `claude` or `codex`
-- walk you through provider login if required
-- start the bot in Docker
-- optionally start a local Registry if you choose registry mode
+- run provider login only if needed
+- create `.deploy/bots/<slug>/.env`
+- start the bot
 
-For most people:
-
-- choose `quick`
-- choose `standalone` if you want one private bot
-- choose `registry` only if you want the optional browser UI
-
-If you want multiple bots from one checkout, give each one an instance name:
+If you want advanced setup fields on first run:
 
 ```bash
-./scripts/app/guided_start.sh reviewer
-./scripts/app/guided_start.sh developer
+./octopus --full
 ```
 
-### Step 4 — Message the bot in Telegram
+### Step 4: Message the bot
 
-Find your bot by username, send `/start`, then send a normal request like:
+Open Telegram, find the bot by username, and send a normal message.
+
+Example:
 
 > Review this diff and suggest a safer refactor.
 
-## Verify it's working
+## Day-To-Day Commands
 
-After setup, send this message to the bot:
-
-> What files are in my working directory?
-
-You should get a reply within a few seconds.
-
-If you chose registry mode, the setup output also prints the Registry UI URL.
-
-## Registry UI
-
-Registry mode is optional. If you turn it on, setup prints a URL like:
-
-```text
-http://localhost:8787/ui
+```bash
+./octopus status
+./octopus start
+./octopus stop
+./octopus logs
+./octopus doctor
+./octopus registry
 ```
 
-Log in with `REGISTRY_UI_TOKEN` from `.env.registry`.
-
-![Registry UI screenshot](registry-ui-screenshot.png)
-
-Use the Registry UI when you want to:
-
-- see connected bots in one place
-- search conversations and timelines
-- start work from a browser instead of Telegram
-- approve or cancel delegation plans
-- manage skills centrally
-
-Telegram is still the main end-user surface. The Registry UI is optional.
-
-## Credentials
-
-If you use skills that need API keys or tokens, the bot stores them encrypted.
-
-For the safest setup, set `BOT_CREDENTIAL_KEY` in your bot env file before you
-start saving credentials. If you leave it unset, the bot falls back to
-`TELEGRAM_BOT_TOKEN` for compatibility.
-
-Credential validation is restricted by default. Built-in validation currently
-allows `api.github.com`, `*.openai.com`, `*.anthropic.com`, and
-`*.googleapis.com`. If you trust another provider, add it with
-`BOT_CREDENTIAL_VALIDATION_ALLOWED_HOSTS`.
-
-## Day-To-Day Use
-
-Most interaction is just normal Telegram chat.
-
-- send a message to ask for work
-- turn approval on if you want to review a plan first
-- upload files when you want the bot to inspect them
-- use `/cancel` to stop the current request
-- use `/settings` if you want to change chat behavior
-- use `/doctor` if you want a plain-language health check
+If more than one bot exists, Octopus will ask which bot to use only when the
+choice is ambiguous.
 
 ## Most Useful Commands
 
@@ -153,58 +97,51 @@ Most interaction is just normal Telegram chat.
 | `/session` | Show current session details |
 | `/doctor` | Run the bot health check |
 
+## Registry UI
+
+Registry mode is optional. You can connect a bot to a local or remote registry
+from the guided menu.
+
+For a local registry, Octopus prints a browser URL like:
+
+```text
+http://localhost:8787/ui
+```
+
+Log in with `REGISTRY_UI_TOKEN` from `.deploy/registry/.env`.
+
+![Registry UI screenshot](registry-ui-screenshot.png)
+
+## Verify It Works
+
+After setup, send this message to the bot:
+
+> What files are in my working directory?
+
+You should get a reply within a few seconds.
+
+Inside Telegram, `/doctor` runs a plain-language health check.
+
 ## Troubleshooting
 
-### Provider not authenticated or unavailable
+If the bot will not start:
 
-If startup tells you to run `./scripts/provider/provider_login.sh`, do that and
-then run `./scripts/app/guided_start.sh` again.
+1. Run `./octopus` again.
+2. If provider auth expired, Octopus will walk you through login again.
+3. Run `./octopus doctor`.
+4. Send `/doctor` to the bot in Telegram if it is reachable.
 
-If you want a health check from inside Telegram, use `/doctor`.
+If the registry UI is not updating:
 
-If you want the full local health check, use:
+1. Run `./octopus registry`.
+2. Confirm the bot is connected in registry mode.
+3. Re-run `./octopus` and choose the registry management path.
 
-```bash
-docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot --env-file .env.bot run --rm bot python -m app.main --doctor
-```
+If you use optional Postgres instead of the default SQLite runtime:
 
-### The bot will not start
-
-Try these in order:
-
-1. Run `./scripts/app/guided_start.sh` again.
-2. Complete provider login if the script asks for it.
-3. Send `/doctor` in Telegram.
-4. Run the full `app.main --doctor` command above.
-
-### The Registry UI is not updating
-
-If you are using registry mode:
-
-1. make sure the registry is running
-2. check that your bot appears in the UI
-3. rerun `./scripts/app/guided_start.sh`
-
-### After a `git pull`
-
-Run:
-
-```bash
-./scripts/app/guided_start.sh
-```
-
-That is the normal restart path.
-
-## Advanced Use
-
-If you later need a more advanced deployment with webhook ingress and separate
-workers, start with a working local bot first and then use:
-
-```bash
-./scripts/app/shared_start.sh
-```
-
-This is optional. Most users should stay with `guided_start.sh`.
+1. Run `./scripts/db/dev_up_postgres.sh`.
+2. Set `BOT_DATABASE_URL` in the bot env file.
+3. Restart with `./octopus`.
 
 ## More Documentation
 

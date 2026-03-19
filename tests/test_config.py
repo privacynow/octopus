@@ -83,7 +83,7 @@ def test_validate_config_missing_token():
         )
     )
     assert any("TOKEN" in e for e in errors2)
-    assert any(".env.bot" in e or "env file" in e for e in errors2)
+    assert any("env file" in e or "./octopus" in e for e in errors2)
 
 def test_validate_config_bad_provider():
     errors3 = validate_config(
@@ -109,7 +109,7 @@ def test_validate_config_no_users_no_open():
         )
     )
     assert any("BOT_ALLOWED_USERS" in e for e in errors4)
-    assert any("BOT_ALLOW_OPEN" in e or ".env.bot" in e for e in errors4)
+    assert any("BOT_ALLOW_OPEN" in e or "env file" in e for e in errors4)
 
 
 def test_startup_fails_with_clear_config_error():
@@ -130,7 +130,7 @@ def test_startup_fails_with_clear_config_error():
     assert result.returncode == 1
     assert "CONFIG ERROR" in result.stderr
     assert "TELEGRAM_BOT_TOKEN" in result.stderr
-    assert ".env.bot" in result.stderr or "env file" in result.stderr
+    assert "env file" in result.stderr or "./octopus" in result.stderr
 
 def test_validate_config_open_access():
     errors5 = validate_config(

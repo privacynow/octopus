@@ -6,7 +6,7 @@
 - Subcommands: `./octopus status`, `./octopus start`, `./octopus stop`,
   `./octopus logs`, `./octopus doctor`, `./octopus registry`
 - No-arg invocation: guided menu (state-aware)
-- Delete `guided_start.sh`, `shared_start.sh`, and `lib_env.sh` entirely
+- Delete the legacy guided starter, shared-runtime starter, and env shim entirely
 - Keep low-level helpers (`start_instance.sh`, `stop_instance.sh`,
   `logs_instance.sh`) as internal building blocks
 - README mentions exactly one primary command
@@ -283,12 +283,12 @@ scripts/
   registry/
     start.sh                      # Internal: start local registry container
     stop.sh                       # Internal: stop local registry container
-  lib_env.sh                      # DELETED (absorbed into scripts/lib/*.sh)
-  app/guided_start.sh             # DELETED
-  app/shared_start.sh             # DELETED
+  legacy env shim                 # DELETED (absorbed into scripts/lib/*.sh)
+  legacy guided starter           # DELETED
+  legacy shared-runtime starter   # DELETED
 ```
 
-`lib_env.sh` is split into focused files under `scripts/lib/`. The
+The legacy env shim is split into focused files under `scripts/lib/`. The
 current 319-line file mixes prompt helpers, env file I/O, Docker compose
 wrappers, token validation, and doctor output formatting — that split
 maps naturally to `bot.sh`, `docker.sh`, `ui.sh`, `provider.sh`.
@@ -711,7 +711,7 @@ bots using that provider.
 
 ## Token Validation via getMe
 
-Currently `guided_start.sh` validates the token format but doesn't call
+The legacy guided startup flow validated the token format but didn't call
 `getMe` until the Docker health check. The consolidated flow should
 validate early — before building the image or running provider auth.
 
@@ -765,12 +765,12 @@ nonzero exit on failure.
 ## Replacement of Old Scripts
 
 ### Files deleted
-- `scripts/app/guided_start.sh`
-- `scripts/app/shared_start.sh`
-- `scripts/lib_env.sh`
+- legacy guided startup script
+- legacy shared-runtime startup script
+- legacy env shim
 
 ### Files absorbed
-All reusable functions from `lib_env.sh` move to `scripts/lib/`:
+All reusable functions from the legacy env shim move to `scripts/lib/`:
 - `prompt_with_default`, `escape_env_value`, `write_env_assignment_line`,
   `upsert_env_file_value`, `prompt_channel_token_with_help`,
   `redact_value_for_prompt`, `print_channel_setup_help` → `scripts/lib/bot.sh`
@@ -826,7 +826,7 @@ Good:  Could not reach the registry at http://localhost:8787.
 
 ### Slice 1: Library foundation
 
-Create `scripts/lib/` directory. Split `lib_env.sh` into:
+Create `scripts/lib/` directory. Split the legacy env shim into:
 - `scripts/lib/bot.sh` — all bot env I/O and token helpers
 - `scripts/lib/docker.sh` — compose wrappers, network helpers
 - `scripts/lib/provider.sh` — provider auth: login, status, shared volume
@@ -835,9 +835,9 @@ Create `scripts/lib/` directory. Split `lib_env.sh` into:
 - `scripts/lib/registry.sh` — registry lifecycle
 
 Update `start_instance.sh`, `stop_instance.sh`, `logs_instance.sh` to
-source from `scripts/lib/` instead of `lib_env.sh`.
+source from `scripts/lib/` instead of the legacy env shim.
 
-Verify: all existing scripts that sourced `lib_env.sh` still work.
+Verify: all existing scripts that sourced the legacy env shim still work.
 Run existing tests.
 
 **Commit: "octopus-cli / slice 1: split lib_env into focused libraries"**
@@ -978,9 +978,9 @@ Implement:
 
 ### Slice 10: Delete old scripts, update docs
 
-- Delete `scripts/app/guided_start.sh`
-- Delete `scripts/app/shared_start.sh`
-- Delete `scripts/lib_env.sh`
+- Delete the legacy guided startup script
+- Delete the legacy shared-runtime startup script
+- Delete the legacy env shim
 - Update `README.md`: single entry point `./octopus`
 - Update `ARCHITECTURE.md` if it references old scripts
 - Update any test references
@@ -1046,6 +1046,6 @@ Implement:
 - [ ] All env files created with 0600 permissions
 - [ ] Provider-auth directories created with 0700 permissions
 - [ ] Provider-auth mount is read-write (tighten only after verification)
-- [ ] `guided_start.sh`, `shared_start.sh`, and `lib_env.sh` are deleted
+- [ ] the legacy startup scripts and env shim are deleted
 - [ ] README mentions only `./octopus` as the primary command
 - [ ] All existing tests pass

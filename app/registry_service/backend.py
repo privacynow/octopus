@@ -22,9 +22,7 @@ def get_registry_store() -> AbstractRegistryStore:
 
             _store = RegistryPostgresStore(database_url)
         else:
-            db_path = Path(
-                os.environ.get("REGISTRY_DB_PATH", "/tmp/telegram-agent-registry/registry.sqlite3")
-            )
+            db_path = Path(os.environ.get("REGISTRY_DB_PATH", "/tmp/octopus-registry/registry.sqlite3"))
             from app.registry_service.store import RegistrySQLiteStore
 
             _store = RegistrySQLiteStore(db_path)

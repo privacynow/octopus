@@ -6,18 +6,26 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
-# shellcheck source=scripts/lib_env.sh
-. "$REPO_DIR/scripts/lib_env.sh"
+#
+# Clear shared provider auth for one provider at a time.
+# Usage: ./scripts/provider/provider_logout.sh <claude|codex>
+. "$REPO_DIR/scripts/lib/bot.sh"
+. "$REPO_DIR/scripts/lib/docker.sh"
+. "$REPO_DIR/scripts/lib/provider.sh"
 
-env_file="$(current_bot_env_file)"
-BOT_ENV_FILE="$env_file"
-export BOT_ENV_FILE
-check_env_bot_required "$env_file"
-provider=$(get_bot_provider "$env_file")
+provider="${1:-${BOT_PROVIDER:-}}"
+case "$provider" in
+  claude|codex) ;;
+  *)
+    echo "Usage: ./scripts/provider/provider_logout.sh <claude|codex>" >&2
+    exit 1
+    ;;
+esac
 check_provider_image "$provider" >/dev/null
+ensure_provider_auth_dir "$provider"
 
 echo "Clearing provider auth state from shared provider-auth storage (no Postgres required)..."
-bot_compose run --rm bot-provider sh -c '
+provider_compose "$provider" run --rm bot-provider sh -c '
   removed=
   for d in /home/bot/.claude /home/bot/.claude.json /home/bot/.codex; do
     if [ -d "$d" ] || [ -f "$d" ]; then

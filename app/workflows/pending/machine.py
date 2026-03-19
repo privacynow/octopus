@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
 
@@ -22,9 +22,9 @@ class PendingRequestDisposition(str, Enum):
 PENDING_REQUEST_STATES = frozenset({"none", "pending_approval", "pending_retry"})
 
 
-@dataclass
+@dataclass(frozen=True)
 class PendingRequestWorkflowModel:
-    """Mutable workflow model consumed by the adapter."""
+    """Immutable workflow model consumed by the adapter."""
 
     state: str
     validation_result: str = "ok"
@@ -59,6 +59,7 @@ class PendingRequestTransitionResult:
     new_state: str | None
     disposition: PendingRequestDisposition
     reason: str = ""
+    model: PendingRequestWorkflowModel | None = None
 
 
 @dataclass(frozen=True)
@@ -325,6 +326,7 @@ def run_pending_request_event(
             new_state=None,
             disposition=PendingRequestDisposition.invalid_transition,
             reason=f"unknown event {event_name!r}",
+            model=model,
         )
 
     validation_result = str(kwargs.get("validation_result", model.validation_result))
@@ -335,6 +337,7 @@ def run_pending_request_event(
             new_state=None,
             disposition=PendingRequestDisposition.invalid_transition,
             reason=f"unknown event {event_name!r}",
+            model=model,
         )
 
     decision = decide_pending_request_action(
@@ -352,19 +355,20 @@ def run_pending_request_event(
             new_state=None,
             disposition=disposition,
             reason=decision.reason,
+            model=model,
         )
 
-    if decision.effects.new_state is not None:
-        model.state = decision.effects.new_state
-    if decision.effects.disposition is not None:
-        model.disposition = decision.effects.disposition
-    else:
-        model.disposition = PendingRequestDisposition.ok
-    model.validation_result = validation_result
+    next_model = replace(
+        model,
+        state=decision.effects.new_state or model.state,
+        validation_result=validation_result,
+        disposition=decision.effects.disposition or PendingRequestDisposition.ok,
+    )
 
     return PendingRequestTransitionResult(
         allowed=True,
-        new_state=model.state,
-        disposition=model.disposition,
+        new_state=next_model.state,
+        disposition=next_model.disposition or PendingRequestDisposition.ok,
         reason="",
+        model=next_model,
     )

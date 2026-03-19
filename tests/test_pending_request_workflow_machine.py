@@ -1,5 +1,7 @@
 """Contract tests for the pending approval/retry functional machine."""
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from app.workflows.pending.machine import (
@@ -164,6 +166,7 @@ def test_unknown_state_returns_invalid_transition() -> None:
     assert result.allowed is False
     assert result.disposition == PendingRequestDisposition.invalid_transition
     assert "unknown state" in result.reason
+    assert result.model == workflow_model
 
 
 def test_decision_machine_create_approval() -> None:
@@ -217,6 +220,28 @@ def test_decision_and_adapter_stay_equivalent_for_invalidate_stale() -> None:
     assert result.allowed is True
     assert result.new_state == decision.effects.new_state
     assert result.disposition == decision.effects.disposition
+    assert result.model is not None
+    assert result.model.state == decision.effects.new_state
+    assert workflow_model.state == "pending_retry"
+
+
+def test_pending_adapter_returns_new_model_without_mutating_input() -> None:
+    workflow_model = model("pending_approval", validation_result="ok")
+    result = run_pending_request_event(workflow_model, "approve_execute", validation_result="ok")
+    assert result.allowed is True
+    assert result.model is not None
+    assert result.model is not workflow_model
+    assert workflow_model.state == "pending_approval"
+    assert workflow_model.validation_result == "ok"
+    assert workflow_model.disposition is None
+    assert result.model.state == "none"
+    assert result.model.disposition == PendingRequestDisposition.executed
+
+
+def test_pending_workflow_model_is_frozen() -> None:
+    workflow_model = model("pending_retry")
+    with pytest.raises(FrozenInstanceError):
+        workflow_model.state = "none"  # type: ignore[misc]
 
 
 def test_executed_disposition() -> None:

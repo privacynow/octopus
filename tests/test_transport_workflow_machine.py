@@ -1,5 +1,7 @@
 """Contract tests for the transport/recovery functional machine."""
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from app.workflows.recovery.results import TransportDisposition, TransportStateCorruption
@@ -203,6 +205,9 @@ def test_decision_and_adapter_stay_equivalent_for_reclaim_for_replay() -> None:
     assert result.allowed is True
     assert result.new_state == decision.effects.new_state
     assert result.disposition == decision.effects.disposition
+    assert result.model is not None
+    assert result.model.state == decision.effects.new_state
+    assert workflow_model.state == "pending_recovery"
 
 
 def test_discard_recovery_disposition() -> None:
@@ -241,3 +246,23 @@ def test_done_and_failed_are_terminal_dispositions() -> None:
     claimed_model_2 = model("claimed")
     failed_result = run_transport_event(claimed_model_2, "fail")
     assert failed_result.disposition == TransportDisposition.failed
+
+
+def test_transport_adapter_returns_new_model_without_mutating_input() -> None:
+    workflow_model = model("queued", requesting_worker_id="")
+    result = run_transport_event(workflow_model, "claim_inline", requesting_worker_id="worker-1")
+    assert result.allowed is True
+    assert result.model is not None
+    assert result.model is not workflow_model
+    assert workflow_model.state == "queued"
+    assert workflow_model.requesting_worker_id == ""
+    assert workflow_model.disposition is None
+    assert result.model.state == "claimed"
+    assert result.model.requesting_worker_id == "worker-1"
+    assert result.model.disposition == TransportDisposition.ok
+
+
+def test_transport_workflow_model_is_frozen() -> None:
+    workflow_model = model("queued")
+    with pytest.raises(FrozenInstanceError):
+        workflow_model.state = "claimed"  # type: ignore[misc]

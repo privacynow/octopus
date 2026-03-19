@@ -47,3 +47,4 @@ class TransitionResult:
     reason: str = ""
     user_message_key: str | None = None
     extra: dict[str, Any] | None = None
+    model: Any | None = None

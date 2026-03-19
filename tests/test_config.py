@@ -9,6 +9,9 @@ from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from telegram.error import InvalidToken, NetworkError
+
 from app.config import _parse_projects, load_config, load_dotenv_file, parse_allowed_users, validate_config
 from app.session_state import ProjectBinding
 from tests.support.config_support import make_config
@@ -166,6 +169,18 @@ def test_validate_config_valid_skill():
     errors_good_skill = validate_config(make_config(default_skills=("github-integration",), provider_name="claude"))
     assert len([e for e in errors_good_skill if "BOT_SKILLS" in e and "github-integration" in e]) == 0
 
+
+def test_validate_config_reports_builtin_skill_catalog_load_failure(monkeypatch):
+    import app.content_seed as content_seed
+
+    def _raise_catalog_error():
+        raise RuntimeError("catalog unavailable")
+
+    monkeypatch.setattr(content_seed, "builtin_skill_tracks", _raise_catalog_error)
+    errors = validate_config(make_config(default_skills=("github-integration",), provider_name="claude"))
+    assert any("could not be validated" in e for e in errors)
+
+
 def test_validate_config_no_skills():
     errors_no_skills = validate_config(make_config(default_skills=(), provider_name="claude"))
     assert len([e for e in errors_no_skills if "BOT_SKILLS" in e]) == 0
@@ -281,6 +296,60 @@ def test_main_calls_run_polling_in_poll_mode():
         main()
     mock_app.run_polling.assert_called_once()
     mock_app.run_webhook.assert_not_called()
+
+
+def test_main_polling_invalid_token_exits_with_operator_message(capsys):
+    cfg = make_config(bot_mode="poll", database_url="postgresql://bot:bot@localhost:5432/bot")
+    mock_app = MagicMock()
+    mock_app.run_polling.side_effect = InvalidToken("The token was rejected")
+    with _patched_main_runtime(cfg, mock_app):
+        from app.main import main
+
+        with pytest.raises(SystemExit) as excinfo:
+            main()
+
+    assert excinfo.value.code == 1
+    err = capsys.readouterr().err
+    assert "Telegram rejected TELEGRAM_BOT_TOKEN" in err
+    assert "@BotFather" in err
+
+
+def test_main_polling_network_error_exits_with_connectivity_message(capsys):
+    cfg = make_config(bot_mode="poll", database_url="postgresql://bot:bot@localhost:5432/bot")
+    mock_app = MagicMock()
+    mock_app.run_polling.side_effect = NetworkError("timeout")
+    with _patched_main_runtime(cfg, mock_app):
+        from app.main import main
+
+        with pytest.raises(SystemExit) as excinfo:
+            main()
+
+    assert excinfo.value.code == 1
+    err = capsys.readouterr().err
+    assert "could not reach Telegram during startup" in err
+    assert "DNS" in err or "network" in err.lower()
+
+
+def test_main_database_error_is_sanitized(capsys):
+    class OperationalError(RuntimeError):
+        pass
+
+    cfg = make_config(bot_mode="poll", database_url="postgresql://bot:secret@localhost:5432/bot")
+    mock_app = MagicMock()
+    with _patched_main_runtime(cfg, mock_app):
+        with patch(
+            "app.db.postgres.get_connection",
+            side_effect=OperationalError("postgresql://bot:secret@localhost:5432/bot refused connection"),
+        ):
+            from app.main import main
+
+            with pytest.raises(SystemExit) as excinfo:
+                main()
+
+    assert excinfo.value.code == 1
+    err = capsys.readouterr().err
+    assert "could not connect to the configured database" in err
+    assert "postgresql://bot:secret@localhost:5432/bot" not in err
 
 
 def test_main_calls_run_webhook_in_webhook_mode():

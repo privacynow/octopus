@@ -101,6 +101,23 @@ def test_import_search_use_case_returns_registry_hits(monkeypatch, tmp_path: Pat
         content_store_mod.reset_for_test()
 
 
+def test_import_search_use_case_hides_registry_exception(monkeypatch, tmp_path: Path):
+    cfg, data_dir = _init_runtime_content(tmp_path)
+    try:
+        monkeypatch.setattr(
+            "app.skill_import_service.registry_client.fetch_index",
+            lambda registry_url: (_ for _ in ()).throw(RuntimeError("internal registry URL with secret")),
+        )
+
+        results = get_runtime_skill_import_use_cases().search("helper", registry_url=cfg.registry_url)
+
+        assert results.registry == ()
+        assert results.registry_error == "Registry search unavailable. Try again later."
+    finally:
+        close_db(data_dir)
+        content_store_mod.reset_for_test()
+
+
 def test_provider_guidance_preview_use_case_returns_effective_prompt(tmp_path: Path):
     cfg, data_dir = _init_runtime_content(tmp_path)
     try:

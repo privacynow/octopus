@@ -51,8 +51,8 @@ class TelegramProgress:
         if self._timeline_callback is not None:
             try:
                 await self._timeline_callback(html_text, force=force)
-            except Exception as exc:
-                log.debug("registry timeline callback failed: %s", exc)
+            except Exception:
+                log.warning("Registry timeline callback failed", exc_info=True)
 
 
 async def progress_timeline_callback(

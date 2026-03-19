@@ -6,6 +6,8 @@ import logging
 import signal
 import sys
 
+from telegram.error import Conflict, InvalidToken, NetworkError, TimedOut
+
 from app.config import BotConfig, ProcessRole, fail_fast, load_config, load_config_provider_health
 from app.providers.base import Provider
 from app.providers.claude import ClaudeProvider
@@ -19,6 +21,11 @@ from app.work_queue import close_transport_db, recover_stale_claims, purge_old
 from app.worker import poll_interval_for_runtime, start_worker_task
 from app.channels.telegram.bootstrap import build_bootstrap
 from app.runtime_health import CanonicalRuntimeHealthProvider
+from app.startup_diagnostics import (
+    collect_telegram_doctor_diagnostics,
+    format_database_startup_exception,
+    format_startup_exception,
+)
 
 PROVIDERS: dict[str, type] = {
     "claude": ClaudeProvider,
@@ -44,6 +51,12 @@ async def _run_doctor(config: BotConfig, provider: Provider) -> None:
     from app.runtime_health import collect_runtime_health_report, format_runtime_health_for_doctor
 
     report = await collect_runtime_health_report(config, provider)
+    extra_lines: list[str] = []
+    if _runs_ingress(config):
+        extra_lines = await collect_telegram_doctor_diagnostics(
+            config.telegram_token,
+            instance=config.instance,
+        )
     for line in format_runtime_health_for_doctor(report):
         if line.startswith("FAIL: "):
             print(f"  {line}", file=sys.stderr)
@@ -51,7 +64,9 @@ async def _run_doctor(config: BotConfig, provider: Provider) -> None:
             print(f"  {line}", file=sys.stderr)
         else:
             print(f"  {line}")
-    if report.summary.error_count:
+    for line in extra_lines:
+        print(f"  {line}", file=sys.stderr)
+    if report.summary.error_count or extra_lines:
         raise SystemExit(1)
     print("All checks passed.")
     raise SystemExit(0)
@@ -104,6 +119,22 @@ def _close_runtime_resources(config: BotConfig) -> None:
     else:
         close_transport_db(config.data_dir)
         close_db(config.data_dir)
+
+
+def _exit_startup_failure(exc: BaseException, config: BotConfig, *, mode: str) -> None:
+    lines = format_startup_exception(exc, instance=config.instance, mode=mode)
+    if isinstance(exc, (InvalidToken, Conflict, NetworkError, TimedOut)):
+        for line in lines:
+            print(line, file=sys.stderr)
+    else:
+        log.error(
+            "Unexpected startup failure in %s mode: %s",
+            mode,
+            exc.__class__.__name__,
+        )
+        for line in lines:
+            print(line, file=sys.stderr)
+    raise SystemExit(1)
 
 
 async def run_worker_process(app) -> None:
@@ -162,7 +193,9 @@ def main() -> None:
             ) as conn:
                 errors = run_postgres_doctor(conn)
         except Exception as e:
-            print(f"Database error: {e}", file=sys.stderr)
+            log.error("Database startup check failed: %s", e.__class__.__name__)
+            for line in format_database_startup_exception(e):
+                print(line, file=sys.stderr)
             sys.exit(1)
         if errors:
             for e in errors:
@@ -234,6 +267,7 @@ def main() -> None:
                 config.data_dir,
                 boot_id,
                 telegram_bootstrap.worker_dispatch,
+                deserialize_failure_notifier=telegram_bootstrap.worker_deserialize_failure_notifier,
                 poll_interval=poll_interval_for_runtime(config.runtime_mode),
                 lease_ttl=config.claim_lease_ttl_seconds,
                 sweep_interval=config.claim_sweep_interval_seconds,
@@ -282,6 +316,8 @@ def main() -> None:
             asyncio.run(run_worker_process(app))
         except KeyboardInterrupt:
             pass
+        except Exception as exc:
+            _exit_startup_failure(exc, config, mode="worker")
         finally:
             _close_runtime_resources(config)
     elif config.bot_mode == "webhook":
@@ -296,6 +332,8 @@ def main() -> None:
                 secret_token=config.webhook_secret or None,
                 url_path="/webhook",
             )
+        except Exception as exc:
+            _exit_startup_failure(exc, config, mode="webhook")
         finally:
             _close_runtime_resources(config)
     else:
@@ -304,7 +342,10 @@ def main() -> None:
         try:
             conflict_msg = asyncio.run(check_polling_conflict(config.telegram_token))
         except Exception as e:
-            log.debug("Startup conflict check failed: %s", e)
+            log.debug(
+                "Startup conflict check failed: %s",
+                e.__class__.__name__,
+            )
             conflict_msg = None
         if conflict_msg:
             log.error(
@@ -317,6 +358,8 @@ def main() -> None:
         log.info("Bot starting (long-poll)...")
         try:
             app.run_polling()
+        except Exception as exc:
+            _exit_startup_failure(exc, config, mode="polling")
         finally:
             _close_runtime_resources(config)
 

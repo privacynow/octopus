@@ -17,6 +17,7 @@ Before adding tests to this file:
 """
 
 import asyncio
+import logging
 import os
 import tempfile
 import time
@@ -114,7 +115,7 @@ def test_registry_digest_mismatch_leaves_no_residue():
                     result = get_skill_import_service().install_from_registry("tampered-skill", cfg.registry_url)
 
             assert result.ok is False
-            assert "digest mismatch" in result.message.lower()
+            assert result.message == "Could not fetch skill from registry. Try again later."
             assert get_skill_catalog_service().resolve_track("tampered-skill") is None
             assert get_content_store().list_skill_tracks("tampered-skill") == []
             assert {item.slug for item in get_content_store().list_skill_summaries()} == before
@@ -1064,6 +1065,32 @@ async def test_global_error_handler_sends_message_on_real_update():
 
     assert len(sent_messages) == 1
     assert "went wrong" in sent_messages[0]["text"].lower()
+
+
+@pytest.mark.asyncio
+async def test_global_error_handler_logs_when_notification_fails(caplog):
+    import app.channels.telegram.ingress as th
+    from telegram import Update, Chat, Message, User as TgUser
+
+    class FakeBotForError:
+        async def send_message(self, chat_id, text, **kwargs):
+            raise RuntimeError("blocked")
+
+    class FakeErrorContext:
+        error = RuntimeError("unexpected boom")
+        bot = FakeBotForError()
+
+    tg_chat = Chat(id=9401, type="private")
+    tg_user = TgUser(id=42, is_bot=False, first_name="Test")
+    tg_msg = Message(
+        message_id=1, date=None, chat=tg_chat, from_user=tg_user, text="x"
+    )
+    upd = Update(update_id=100000, message=tg_msg)
+
+    with caplog.at_level(logging.WARNING):
+        await th._global_error_handler(upd, FakeErrorContext())
+
+    assert "Could not send generic error message to chat 9401" in caplog.text
 
 
 # =====================================================================

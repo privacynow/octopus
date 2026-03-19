@@ -16,6 +16,7 @@ import asyncio
 import logging
 import time
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from app import work_queue
 from app.runtime_health import WorkerHeartbeat
@@ -45,11 +46,18 @@ def poll_interval_for_runtime(runtime_mode: str) -> float:
     return SHARED_POLL_INTERVAL if runtime_mode == "shared" else POLL_INTERVAL
 
 
+def _worker_error_code(exc: BaseException) -> str:
+    if isinstance(exc, TransportStateCorruption):
+        return "transport_state_corruption"
+    return "dispatch_exception"
+
+
 async def worker_loop(
     data_dir: Path,
     worker_id: str,
     dispatch,
     *,
+    deserialize_failure_notifier: Callable[[dict[str, object]], Awaitable[None]] | None = None,
     poll_interval: float = POLL_INTERVAL,
     lease_ttl: int = 300,
     sweep_interval: float = SWEEP_INTERVAL,
@@ -160,6 +168,15 @@ async def worker_loop(
                         log.warning("Failed to deserialize work item %s (kind=%s), marking failed",
                                     item_id, kind)
                         work_queue.fail_work_item(data_dir, item_id, error="deserialize_error")
+                        if deserialize_failure_notifier is not None:
+                            try:
+                                await deserialize_failure_notifier(item)
+                            except Exception:
+                                log.debug(
+                                    "Failed to notify user about deserialize failure for item %s",
+                                    item_id,
+                                    exc_info=True,
+                                )
                         current_item_id = ""
                         current_conversation_key = ""
                         current_kind = ""
@@ -182,12 +199,18 @@ async def worker_loop(
                             "Transport state corruption for item %s (dispatch path): %s",
                             item_id, e,
                         )
-                        last_error = f"{type(e).__name__}: {e}"
+                        last_error = _worker_error_code(e)
                         _publish_heartbeat(force=True)
                         raise
                     except Exception as exc:
+                        # Dispatch code owns best-effort user/channel-facing
+                        # error messages. This outer catch is the durable
+                        # fallback that prevents the item from staying claimed
+                        # forever if dispatch fails unexpectedly.
                         log.exception("Worker failed processing item %s", item_id)
-                        work_queue.fail_work_item(data_dir, item_id, error=str(exc)[:500])
+                        error_code = _worker_error_code(exc)
+                        last_error = error_code
+                        work_queue.fail_work_item(data_dir, item_id, error=error_code)
                     current_item_id = ""
                     current_conversation_key = ""
                     current_kind = ""
@@ -197,12 +220,12 @@ async def worker_loop(
 
             except TransportStateCorruption as e:
                 log.exception("Transport state corruption in worker loop (claim path): %s", e)
-                last_error = f"{type(e).__name__}: {e}"
+                last_error = _worker_error_code(e)
                 _publish_heartbeat(force=True)
                 raise
             except Exception as exc:
                 log.exception("Worker loop error")
-                last_error = f"{type(exc).__name__}: {exc}"
+                last_error = _worker_error_code(exc)
                 _publish_heartbeat(force=True)
 
             if processed:
@@ -231,6 +254,7 @@ def start_worker_task(
     worker_id: str,
     dispatch,
     *,
+    deserialize_failure_notifier: Callable[[dict[str, object]], Awaitable[None]] | None = None,
     poll_interval: float = POLL_INTERVAL,
     lease_ttl: int = 300,
     sweep_interval: float = SWEEP_INTERVAL,
@@ -245,6 +269,7 @@ def start_worker_task(
     stop_event = asyncio.Event()
     task = asyncio.create_task(
         worker_loop(data_dir, worker_id, dispatch,
+                    deserialize_failure_notifier=deserialize_failure_notifier,
                     poll_interval=poll_interval,
                     lease_ttl=lease_ttl,
                     sweep_interval=sweep_interval,

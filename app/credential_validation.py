@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 import httpx
 
 from app.skill_types import SkillRequirement
+
+
+log = logging.getLogger(__name__)
 
 
 async def validate_credential(req: SkillRequirement, value: str) -> tuple[bool, str]:
@@ -46,7 +50,13 @@ async def validate_credential(req: SkillRequirement, value: str) -> tuple[bool, 
                 return True, ""
             return False, _friendly_validation_error(resp.status_code, expect_status)
     except Exception as exc:
-        return False, f"Validation request failed: {exc}"
+        log.warning(
+            "Credential validation request failed for %s: %s",
+            req.key,
+            exc.__class__.__name__,
+            exc_info=True,
+        )
+        return False, "Could not validate this credential. Check the value and try again."
 
 
 def _friendly_validation_error(got: int, expected: int) -> str:

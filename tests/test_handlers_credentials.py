@@ -7,7 +7,9 @@ from pathlib import Path
 
 import httpx
 
+from app.credential_validation import validate_credential
 from app.providers.base import RunResult
+from app.skill_types import SkillRequirement
 from tests.support.skill_test_helpers import (
     derive_encryption_key,
     load_user_credentials,
@@ -1446,3 +1448,28 @@ async def test_bad_validate_spec_no_crash():
     ok2, detail2 = await validate_credential(req2, "some-key")
     assert ok2 == False
     assert "invalid" in detail2.lower()
+
+
+async def test_validate_credential_hides_transport_exception(monkeypatch):
+    req = SkillRequirement(
+        key="API_KEY",
+        prompt="Enter key",
+        help_url=None,
+        validate={
+            "method": "GET",
+            "url": "https://example.com/health",
+            "header": "Authorization: Bearer ${API_KEY}",
+            "expect_status": 200,
+        },
+    )
+
+    async def fake_request(self, method, url, *, headers=None):
+        del self, method, url, headers
+        raise RuntimeError("dns failure with internal token")
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
+
+    ok, detail = await validate_credential(req, "some-key-value")
+
+    assert ok is False
+    assert detail == "Could not validate this credential. Check the value and try again."

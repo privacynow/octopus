@@ -3,7 +3,7 @@
   <desc id="desc">Terminal panel showing an existing bot being connected to a remote registry URL and token.</desc>
   <style>
     .bg { fill: #262a26; }
-    .panel { fill: #131713; }
+    .panel { fill: #131713; stroke: #223122; stroke-width: 0.7; }
     .rule { stroke: #274227; stroke-width: 1; opacity: 0.65; }
     .dot { fill: #5a665a; }
     .label { fill: #cfd8c9; font: 600 16px "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace; letter-spacing: 0.2px; }
@@ -20,9 +20,9 @@
       </feMerge>
     </filter>
   </defs>
-  <rect class="bg" x="0" y="0" width="1200" height="580" rx="24"/>
+  <rect class="bg" x="0" y="0" width="1200" height="580" rx="14"/>
   <g transform="translate(28 24)">
-    <rect class="panel" x="0" y="0" width="1144" height="524" rx="18"/>
+    <rect class="panel" x="0" y="0" width="1144" height="524" rx="10"/>
     <circle class="dot" cx="26" cy="28" r="6.5"/><circle class="dot" cx="48" cy="28" r="6.5"/><circle class="dot" cx="70" cy="28" r="6.5"/>
     <text class="label" x="102" y="34">connect a bot to a remote registry</text>
     <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>

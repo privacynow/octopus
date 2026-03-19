@@ -250,6 +250,42 @@ def test_h1_extracted_telegram_modules_have_no_ingress_back_imports() -> None:
         )
 
 
+def test_extracted_telegram_modules_import_only_shared_types_and_routing_targets() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    telegram_root = repo_root / "app" / "channels" / "telegram"
+    allowed_imports = {
+        "session_io.py": {"state"},
+        "progress.py": {"state"},
+        "delegation_channel.py": {"presenters", "session_io", "state"},
+        "execution.py": {"presenters", "conversation", "pending", "runtime_skills", "session_io", "state"},
+        "worker.py": {"presenters", "conversation", "execution", "pending", "runtime_skills", "session_io", "state"},
+        "shared_mode_dispatch.py": {
+            "presenters",
+            "conversation",
+            "delegation_channel",
+            "normalization",
+            "runtime_skills",
+            "session_io",
+            "state",
+        },
+    }
+    sibling_import_pattern = re.compile(
+        r"^\s*from app\.channels\.telegram(?:\.(?P<submodule>[a-z_]+)|\s+import\s+(?P<pkgmodule>[a-z_]+))",
+        re.MULTILINE,
+    )
+
+    for filename, allowed in allowed_imports.items():
+        path = telegram_root / filename
+        text = path.read_text()
+        imports = {
+            match.group("submodule") or match.group("pkgmodule")
+            for match in sibling_import_pattern.finditer(text)
+        }
+        imports.discard(None)
+        unexpected = imports - allowed
+        assert not unexpected, f"{path} has unexpected sibling imports: {sorted(unexpected)}"
+
+
 def test_no_channel_module_constructs_execution_channel_context() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     channels_root = repo_root / "app" / "channels"
@@ -479,7 +515,9 @@ def test_telegram_bootstrap_owns_application_construction_and_handler_registrati
         "from app.channels.telegram import worker as telegram_worker",
         "shared_command_handler = telegram_shared_mode_dispatch.build_shared_command_handler(",
         "shared_callback_handler = telegram_shared_mode_dispatch.build_shared_callback_handler(",
-        "worker_dispatch=functools.partial(telegram_worker.worker_dispatch, runtime=runtime)",
+        "def _execution_runtime(runtime: TelegramRuntime):",
+        "execution_runtime=execution_runtime",
+        "worker_dispatch=functools.partial(",
     )
     for token in required:
         assert token in text, f"{token} missing from {bootstrap_path}"

@@ -16,6 +16,7 @@ from app.storage import default_session, save_session
 from app.runtime.inbound_types import deserialize_inbound
 from tests.support.handler_support import (
     current_boot_id,
+    current_shared_runtime_builders,
     current_runtime,
     FakeCallbackQuery,
     FakeChat,
@@ -96,12 +97,15 @@ async def test_shared_command_dispatch_persists_action_without_inline_execution(
         chat = FakeChat(12345)
         user = FakeUser(42)
         update = FakeUpdate(message=FakeMessage(chat=chat, text="/approve"), user=user, chat=chat)
+        build_conversation_runtime, build_runtime_skill_runtime = current_shared_runtime_builders()
 
         await telegram_shared_mode_dispatch.shared_command_dispatch(
             update,
             FakeContext(args=[]),
             runtime=current_runtime(),
             chat_lock=_permissive_chat_lock,
+            build_conversation_runtime=build_conversation_runtime,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
         )
 
         assert prov.run_calls == []
@@ -120,12 +124,14 @@ async def test_shared_callback_dispatch_persists_action_without_inline_execution
         callback_message = FakeMessage(chat=chat, text="approve?")
         query = FakeCallbackQuery("approval_approve", message=callback_message, user=user)
         update = FakeUpdate(user=user, chat=chat, callback_query=query)
+        _build_conversation_runtime, build_runtime_skill_runtime = current_shared_runtime_builders()
 
         await telegram_shared_mode_dispatch.shared_callback_dispatch(
             update,
             FakeContext(),
             runtime=current_runtime(),
             chat_lock=_permissive_chat_lock,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
         )
 
         assert prov.run_calls == []
@@ -157,12 +163,15 @@ async def test_shared_worker_executes_persisted_approve_action():
         chat = FakeChat(chat_id)
         user = FakeUser(42)
         update = FakeUpdate(message=FakeMessage(chat=chat, text="/approve"), user=user, chat=chat)
+        build_conversation_runtime, build_runtime_skill_runtime = current_shared_runtime_builders()
 
         await telegram_shared_mode_dispatch.shared_command_dispatch(
             update,
             FakeContext(args=[]),
             runtime=current_runtime(),
             chat_lock=_permissive_chat_lock,
+            build_conversation_runtime=build_conversation_runtime,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
         )
 
         assert len(prov.run_calls) == 0
@@ -195,12 +204,15 @@ async def test_shared_cancel_records_action_and_sets_durable_flag():
         user = FakeUser(42)
         message = FakeMessage(chat=chat, text="/cancel")
         update = FakeUpdate(message=message, user=user, chat=chat)
+        build_conversation_runtime, build_runtime_skill_runtime = current_shared_runtime_builders()
 
         await telegram_shared_mode_dispatch.shared_command_dispatch(
             update,
             FakeContext(args=[]),
             runtime=current_runtime(),
             chat_lock=_permissive_chat_lock,
+            build_conversation_runtime=build_conversation_runtime,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
         )
 
         assert work_queue.is_cancel_requested(data_dir, claimed["id"]) is True

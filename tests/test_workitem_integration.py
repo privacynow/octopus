@@ -29,6 +29,7 @@ from app.identity import (
 from app.providers.base import RunResult
 from tests.support.handler_support import (
     current_boot_id,
+    current_execution_runtime,
     current_runtime,
     FakeCallbackQuery,
     FakeChat,
@@ -654,7 +655,13 @@ async def test_worker_dispatch_sends_recovery_notice():
             }
 
             with pytest.raises(work_queue.PendingRecovery):
-                await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
+                await telegram_worker.worker_dispatch(
+                    "message",
+                    event,
+                    item,
+                    runtime=current_runtime(),
+                    execution_runtime=current_execution_runtime(),
+                )
 
             # Provider must NOT have been called
             assert len(prov.run_calls) == 0, "No auto-replay allowed"
@@ -1026,7 +1033,13 @@ async def test_usage_recording_failure_keeps_item_done_via_worker_loop(monkeypat
 
         async def dispatch_then_stop(kind, event, item):
             try:
-                return await original_dispatch(kind, event, item, runtime=current_runtime())
+                return await original_dispatch(
+                    kind,
+                    event,
+                    item,
+                    runtime=current_runtime(),
+                    execution_runtime=current_execution_runtime(),
+                )
             finally:
                 stop.set()
 

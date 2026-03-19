@@ -1207,7 +1207,14 @@ gaps. The follow-up remediation is now in progress:
     utility, with Telegram-specific HTML escaping kept at the channel boundary
   - `app/channels/telegram/execution.py` no longer owns workflow passthrough
     wrappers for execute/request/approval transitions
-- `F3` through `F8` remain open
+- `F3` complete in the current slice:
+  - Telegram execution runtime builders now take explicit injected
+    collaborators instead of importing sibling behavior directly
+  - shared-mode dispatch now receives runtime-builder callables from bootstrap
+    instead of importing execution builders directly
+  - stronger structural gates now enforce sibling import discipline for the
+    extracted Telegram modules
+- `F4` through `F8` remain open
 
 Feature work remains frozen until the post-audit follow-up track closes.
 
@@ -1286,8 +1293,8 @@ Feature work remains frozen until the post-audit follow-up track closes.
      - `tests/test_zero_import_gates.py`
      - Result: `325 passed`
 
-2. `Post-audit / F2: move execution context and provider-error formatting`
-   `out of the Telegram channel layer` (current slice)
+2. `bb966d8` `Post-audit / F2: move execution context and error formatting`
+   `out of channel layer`
    - moved execution-channel context construction to
      `app/workflows/execution/context.py`
    - moved provider-error summarization to `app/summarize.py` as a shared
@@ -1304,6 +1311,28 @@ Feature work remains frozen until the post-audit follow-up track closes.
      - `tests/test_telegram_execution_module.py`
      - `tests/test_zero_import_gates.py`
      - Result: `213 passed`
+
+3. `Post-audit / F3: enforce extracted Telegram sibling import discipline`
+   `(current slice)`
+   - removed direct sibling behavioral imports from
+     `app/channels/telegram/execution.py` by binding Telegram execution
+     collaborators explicitly at the caller boundary
+   - removed the execution-module dependency from
+     `app/channels/telegram/shared_mode_dispatch.py` by injecting shared
+     runtime builders from `bootstrap.py`
+   - added a scan-based structural gate proving extracted Telegram modules
+     only import allowed sibling types/helpers or routing targets
+   - focused F3 suite:
+     - `tests/test_runtime_dispatch_boundary.py`
+     - `tests/test_shared_runtime.py`
+     - `tests/test_handlers.py`
+     - `tests/test_invariants.py`
+     - `tests/test_workitem_integration.py`
+     - `tests/test_request_flow.py`
+     - `tests/test_sqlite_integration.py`
+     - `tests/test_handlers_approval.py`
+     - `tests/test_zero_import_gates.py`
+     - Result: `417 passed`
 
 ### Acceptance Gates
 
@@ -1375,7 +1404,7 @@ Latest focused post-Phase-8 correction suite:
 
 Latest full-suite remediation baseline:
 
-- Result: `1648 passed, 23 skipped`
+- Result: `1651 passed, 23 skipped`
 
 ### Notes
 

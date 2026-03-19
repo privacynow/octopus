@@ -23,6 +23,7 @@ from app.storage import debug_session_connection, default_session, save_session
 from app import work_queue
 from tests.support.handler_support import (
     current_bot_instance,
+    current_execution_runtime,
     current_runtime,
     FakeCallbackQuery,
     FakeChat,
@@ -135,7 +136,13 @@ async def test_worker_dispatch_schedules_completion_webhook_for_terminal_outcome
         )
         item = {"id": "webhook-item-1", "conversation_key": _conv(12345), "event_id": _event(7001), "dispatch_mode": "fresh"}
 
-        await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
         await asyncio.sleep(0)
 
         assert len(called) == 1
@@ -194,7 +201,13 @@ async def test_worker_dispatch_skips_completion_webhook_for_delegation_proposed(
         )
         item = {"id": "webhook-item-2", "conversation_key": _reg_conv("registry:conv-webhook"), "event_id": _event(7002), "dispatch_mode": "fresh"}
 
-        await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
         await asyncio.sleep(0)
 
         assert called == []
@@ -365,7 +378,13 @@ async def test_registry_channel_input_respects_approval_mode():
         )
         item = {"id": "registry-item-1", "conversation_key": _reg_conv("registry-conv-1"), "event_id": _event(7001), "dispatch_mode": "fresh"}
 
-        await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
 
         session = load_session_disk(data_dir, _reg_conv("registry-conv-1"), prov)
         assert len(prov.preflight_calls) == 1
@@ -536,7 +555,13 @@ async def test_delegation_proposed_event_published(monkeypatch):
         )
         item = {"id": "registry-item-proposed", "conversation_key": _reg_conv("registry:conv-proposed"), "event_id": _event(7101), "dispatch_mode": "fresh"}
 
-        await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
 
         assert any(kind == "delegation_proposed" for kind, _title, _body in published)
 
@@ -591,7 +616,13 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
         )
         item = {"id": "registry-item-2", "conversation_key": _reg_conv("routed-task-1"), "event_id": _event(7002), "dispatch_mode": "fresh"}
 
-        await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
 
         assert len(prov.preflight_calls) == 0
         assert len(prov.run_calls) == 1
@@ -649,7 +680,13 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
         )
         item = {"id": "registry-item-3", "conversation_key": _reg_conv("routed-task-2"), "event_id": _event(7003), "dispatch_mode": "fresh"}
 
-        await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
 
         assert len(prov.run_calls) == 1
 
@@ -1321,7 +1358,13 @@ async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch)
             item = {"id": "registry-item-4", "conversation_key": event.conversation_key, "event_id": _event(8123), "dispatch_mode": "recovery"}
 
             with pytest.raises(work_queue.PendingRecovery):
-                await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
+                await telegram_worker.worker_dispatch(
+                    "message",
+                    event,
+                    item,
+                    runtime=current_runtime(),
+                    execution_runtime=current_execution_runtime(),
+                )
 
             recovery_events = [item for item in published if item["kind"] == "recovery_notice"]
             assert recovery_events

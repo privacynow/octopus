@@ -24,7 +24,6 @@ from app.channels.telegram.conversation import handle_worker_conversation_action
 from app.channels.telegram.execution import (
     build_conversation_runtime,
     build_delegation_channel_runtime,
-    build_execution_runtime,
     build_pending_runtime,
     build_runtime_skill_runtime,
     build_user_prompt,
@@ -46,6 +45,7 @@ from app.runtime.inbound_types import (
     InboundUser,
 )
 from app.runtime.work_admission import admit_worker_message, trust_tier_for_source
+from app.workflows.execution.contracts import ExecutionRuntime
 from app.workflows.execution.finalization import FinalizationContext, finalize_execution
 from app.workflows.execution.requests import dispatch_message_request, load_approval_mode
 from app.workflows.recovery.replay import get_recovery_use_cases
@@ -189,6 +189,7 @@ async def _execute_worker_action(
     event: InboundAction,
     item: dict[str, Any],
     *,
+    execution_runtime: ExecutionRuntime,
     cancel_event: asyncio.Event | None,
 ) -> None:
     channel_egress, runtime_chat, _chat_id, conversation_ref, source = _build_action_channel_egress(
@@ -218,7 +219,11 @@ async def _execute_worker_action(
         channel_egress,
         runtime_chat=runtime_chat,
         cancel_event=cancel_event,
-        runtime=build_pending_runtime(runtime, chat_lock=_worker_chat_lock_adapter(runtime)),
+        runtime=build_pending_runtime(
+            runtime,
+            chat_lock=_worker_chat_lock_adapter(runtime),
+            execution_runtime=execution_runtime,
+        ),
     ):
         return
 
@@ -257,7 +262,11 @@ async def _execute_worker_action(
         if await handle_worker_skill_action(
             worker_event,
             channel_egress,
-            runtime=build_runtime_skill_runtime(runtime, chat_lock=_worker_chat_lock_adapter(runtime)),
+            runtime=build_runtime_skill_runtime(
+                runtime,
+                chat_lock=_worker_chat_lock_adapter(runtime),
+                execution_runtime=execution_runtime,
+            ),
         ):
             return
         return
@@ -271,6 +280,7 @@ async def worker_dispatch(
     item: dict,
     *,
     runtime: TelegramRuntime,
+    execution_runtime: ExecutionRuntime,
 ) -> None:
     """Dispatch a deserialized inbound event from the worker loop.
 
@@ -336,7 +346,6 @@ async def worker_dispatch(
         user_id = event.user.id
         await channel_egress.bind(title=title, config=runtime.config)
         await channel_egress.on_message_received(event.text)
-        execution_runtime = build_execution_runtime(runtime)
         try:
             async with _worker_chat_lock(runtime, runtime_chat, worker_item=item):
                 outcome = None
@@ -394,6 +403,7 @@ async def worker_dispatch(
                     runtime,
                     event,
                     item,
+                    execution_runtime=execution_runtime,
                     cancel_event=cancel_event,
                 ),
             )

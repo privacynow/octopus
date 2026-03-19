@@ -15,8 +15,11 @@ from telegram.ext import (
 )
 
 from app.channels.telegram import ingress
+from app.channels.telegram import execution as telegram_execution
+from app.channels.telegram import progress as telegram_progress
 from app.channels.telegram import shared_mode_dispatch as telegram_shared_mode_dispatch
 from app.channels.telegram import worker as telegram_worker
+from app.channels.telegram.delegation_channel import propose_delegation_plan
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
 from app.config import BotConfig
 from app.providers.base import Provider
@@ -29,6 +32,21 @@ class TelegramBootstrap:
     application: Application
     runtime: TelegramRuntime
     worker_dispatch: Callable[[str, Any, dict], Awaitable[None]]
+
+
+def _execution_runtime(runtime: TelegramRuntime):
+    execution_collaborators = telegram_execution.bind_execution_collaborators(
+        runtime,
+        progress_factory=telegram_progress.TelegramProgress,
+        keep_typing_fn=telegram_progress.keep_typing,
+        heartbeat_fn=telegram_progress.heartbeat,
+        progress_timeline_callback_fn=telegram_progress.progress_timeline_callback,
+        propose_delegation_plan_fn=propose_delegation_plan,
+    )
+    return telegram_execution.build_execution_runtime(
+        runtime,
+        collaborators=execution_collaborators,
+    )
 
 
 def build_application(runtime: TelegramRuntime) -> Application:
@@ -50,13 +68,28 @@ def build_application(runtime: TelegramRuntime) -> Application:
     runtime.bot_instance = app.bot
     app.bot_data["telegram_boot_id"] = runtime.boot_id
     app.bot_data["telegram_runtime"] = runtime
+    execution_runtime = _execution_runtime(runtime)
     shared_command_handler = telegram_shared_mode_dispatch.build_shared_command_handler(
         runtime=runtime,
         chat_lock=ingress._chat_lock,
+        build_conversation_runtime=lambda chat_lock: telegram_execution.build_conversation_runtime(
+            runtime,
+            chat_lock=chat_lock,
+        ),
+        build_runtime_skill_runtime=lambda chat_lock: telegram_execution.build_runtime_skill_runtime(
+            runtime,
+            chat_lock=chat_lock,
+            execution_runtime=execution_runtime,
+        ),
     )
     shared_callback_handler = telegram_shared_mode_dispatch.build_shared_callback_handler(
         runtime=runtime,
         chat_lock=ingress._chat_lock,
+        build_runtime_skill_runtime=lambda chat_lock: telegram_execution.build_runtime_skill_runtime(
+            runtime,
+            chat_lock=chat_lock,
+            execution_runtime=execution_runtime,
+        ),
     )
 
     if config.runtime_mode == "shared":
@@ -150,8 +183,13 @@ def build_bootstrap(config: BotConfig, provider: Provider) -> TelegramBootstrap:
 
     runtime = build_telegram_runtime(config, provider)
     application = build_application(runtime)
+    execution_runtime = _execution_runtime(runtime)
     return TelegramBootstrap(
         application=application,
         runtime=runtime,
-        worker_dispatch=functools.partial(telegram_worker.worker_dispatch, runtime=runtime),
+        worker_dispatch=functools.partial(
+            telegram_worker.worker_dispatch,
+            runtime=runtime,
+            execution_runtime=execution_runtime,
+        ),
     )

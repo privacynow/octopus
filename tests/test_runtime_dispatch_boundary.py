@@ -3,6 +3,7 @@ import pytest
 from app.identity import telegram_actor_key, telegram_conversation_key
 from app.channels.telegram.delegation_channel import propose_delegation_plan
 from app.channels.telegram.execution import (
+    TelegramExecutionCollaborators,
     build_dispatch_runtime,
     build_execution_runtime,
     send_compact_reply,
@@ -17,12 +18,14 @@ from app.workflows.execution.contracts import (
     ExecutionRuntime,
     ExecutionChannelContext,
     ExecutionChannelMetadata,
+    RequestExecutionOutcome,
 )
 from app.workflows.execution.context import build_execution_channel_context
 from app.workflows.execution.requests import execute_request, request_approval
 from tests.support.handler_support import (
     FakeChat,
     FakeMessage,
+    current_execution_runtime,
     current_runtime,
     fresh_env,
     load_session_disk,
@@ -38,7 +41,7 @@ async def test_run_provider_request_uses_explicit_runtime_plumbing():
     with fresh_env() as (_data_dir, _cfg, prov):
         chat = FakeChat(12345)
         message = FakeMessage(chat=chat, text="hello")
-        runtime = build_dispatch_runtime(current_runtime())
+        runtime = current_execution_runtime().dispatch
 
         outcome = await run_provider_request(
             chat.id,
@@ -55,11 +58,70 @@ async def test_run_provider_request_uses_explicit_runtime_plumbing():
         assert len(prov.run_calls) == 1
 
 
+def test_dispatch_runtime_uses_injected_collaborators() -> None:
+    async def fake_heartbeat(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def fake_propose(*args, **kwargs):
+        del args, kwargs
+        return RequestExecutionOutcome(status="completed")
+
+    with fresh_env():
+        collaborators = TelegramExecutionCollaborators(
+            progress_factory=FakeChat,
+            keep_typing=lambda chat: ("typing", chat),
+            heartbeat=fake_heartbeat,
+            build_timeline_callback=lambda conversation_ref, routed_task_id: (
+                lambda html_text, force=False: _no_op(
+                    conversation_ref,
+                    routed_task_id,
+                    html_text,
+                    force=force,
+                )
+            ),
+            propose_delegation_plan=fake_propose,
+        )
+
+        runtime = build_dispatch_runtime(current_runtime(), collaborators=collaborators)
+
+        assert runtime.progress_factory is FakeChat
+        assert runtime.keep_typing("chat-1") == ("typing", "chat-1")
+        assert runtime.heartbeat is fake_heartbeat
+
+
+def test_execution_runtime_uses_injected_timeline_and_delegation_callbacks() -> None:
+    async def fake_timeline(*args, **kwargs):
+        del args, kwargs
+        return None
+
+    async def fake_propose(*args, **kwargs):
+        del args, kwargs
+        return RequestExecutionOutcome(status="completed")
+
+    with fresh_env():
+        collaborators = TelegramExecutionCollaborators(
+            progress_factory=FakeChat,
+            keep_typing=lambda chat: chat,
+            heartbeat=_no_op,
+            build_timeline_callback=lambda _conversation_ref, _routed_task_id: fake_timeline,
+            propose_delegation_plan=fake_propose,
+        )
+
+        runtime = build_execution_runtime(current_runtime(), collaborators=collaborators)
+        message = FakeMessage(chat=FakeChat(12345))
+        message.conversation_ref = "tg:12345"
+        context = runtime.build_channel_context(message, 12345)
+
+        assert context.timeline_callback is fake_timeline
+        assert runtime.propose_delegation_plan is fake_propose
+
+
 async def test_execute_request_runs_from_explicit_execution_runtime():
     with fresh_env() as (_data_dir, _cfg, prov):
         chat = FakeChat(12345)
         message = FakeMessage(chat=chat, text="hello")
-        runtime = build_execution_runtime(current_runtime())
+        runtime = current_execution_runtime()
 
         outcome = await execute_request(
             chat.id,
@@ -85,14 +147,14 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
         chat = FakeChat(12345)
         message = FakeMessage(chat=chat, text="hello")
         runtime = ExecutionRuntime(
-            dispatch=build_dispatch_runtime(current_runtime()),
+            dispatch=current_execution_runtime().dispatch,
             build_channel_context=lambda _message, _chat_id: ExecutionChannelContext(),
             render_provider_error=lambda text: text,
             show_foreign_setup=_no_op,
             show_setup_prompt=_no_op,
             send_retry_prompt=_no_op,
             send_approval_prompt=send_approval_prompt,
-            send_formatted_reply=build_execution_runtime(current_runtime()).send_formatted_reply,
+            send_formatted_reply=current_execution_runtime().send_formatted_reply,
             send_directed_artifacts=lambda chat_id, message, directives, resolved_ctx=None: send_directed_artifacts(
                 chat_id,
                 message,

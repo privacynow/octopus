@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import html
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from telegram.error import BadRequest
 
@@ -12,20 +13,7 @@ from app.agents.bridge import telegram_conversation_ref
 from app.agents.delegation import build_delegation_runtime
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.conversation import TelegramConversationRuntime
-from app.channels.telegram.delegation_channel import propose_delegation_plan
-from app.channels.telegram.pending import (
-    TelegramPendingRuntime,
-    approve_pending as pending_approve_pending,
-    reject_pending as pending_reject_pending,
-    retry_allow_pending as pending_retry_allow_pending,
-    retry_skip_pending as pending_retry_skip_pending,
-)
-from app.channels.telegram.progress import (
-    TelegramProgress,
-    heartbeat,
-    keep_typing,
-    progress_timeline_callback,
-)
+from app.channels.telegram.pending import TelegramPendingRuntime
 from app.channels.telegram.runtime_skills import TelegramRuntimeSkillsRuntime
 from app.channels.telegram.session_io import conversation_key, telegram_chat_id
 from app.channels.telegram.state import TelegramRuntime
@@ -48,6 +36,55 @@ from app.workflows.execution.requests import (
     execute_request as execution_execute_request,
     request_approval as execution_request_approval,
 )
+
+
+@dataclass(frozen=True)
+class TelegramExecutionCollaborators:
+    """Bound Telegram runtime collaborators for execution runtime builders."""
+
+    progress_factory: type
+    keep_typing: Callable[[Any], Any]
+    heartbeat: Callable[..., Any]
+    build_timeline_callback: Callable[[str, str], Callable[[str, bool], Awaitable[None]]]
+    propose_delegation_plan: Callable[
+        [int | str, Any, SessionState, str, Any],
+        Awaitable[RequestExecutionOutcome],
+    ]
+
+
+def bind_execution_collaborators(
+    runtime: TelegramRuntime,
+    *,
+    progress_factory: type,
+    keep_typing_fn: Callable[[Any], Any],
+    heartbeat_fn: Callable[..., Any],
+    progress_timeline_callback_fn: Callable[..., Awaitable[None]],
+    propose_delegation_plan_fn: Callable[..., Awaitable[RequestExecutionOutcome]],
+) -> TelegramExecutionCollaborators:
+    return TelegramExecutionCollaborators(
+        progress_factory=progress_factory,
+        keep_typing=lambda chat: keep_typing_fn(chat, runtime=runtime),
+        heartbeat=heartbeat_fn,
+        build_timeline_callback=lambda conversation_ref, routed_task_id: (
+            lambda html_text, force=False: progress_timeline_callback_fn(
+                runtime,
+                conversation_ref,
+                routed_task_id,
+                html_text,
+                force=force,
+            )
+        ),
+        propose_delegation_plan=lambda chat_id, message, session, conversation_ref, result: (
+            propose_delegation_plan_fn(
+                runtime,
+                chat_id,
+                message,
+                session,
+                conversation_ref=conversation_ref,
+                result=result,
+            )
+        ),
+    )
 
 
 def run_result_was_interrupted(returncode: int) -> bool:
@@ -213,6 +250,7 @@ def build_runtime_skill_runtime(
     runtime: TelegramRuntime,
     *,
     chat_lock: Callable[..., Any],
+    execution_runtime: ExecutionRuntime,
 ) -> TelegramRuntimeSkillsRuntime:
     return TelegramRuntimeSkillsRuntime(
         state=runtime,
@@ -221,20 +259,24 @@ def build_runtime_skill_runtime(
         check_prompt_size_cross_chat=lambda data_dir, skill_name: execution_check_prompt_size_cross_chat(
             data_dir,
             skill_name,
-            runtime=build_execution_runtime(runtime),
+            runtime=execution_runtime,
         ),
     )
 
 
-def build_dispatch_runtime(runtime: TelegramRuntime) -> RuntimeDispatchRuntime:
+def build_dispatch_runtime(
+    runtime: TelegramRuntime,
+    *,
+    collaborators: TelegramExecutionCollaborators,
+) -> RuntimeDispatchRuntime:
     return RuntimeDispatchRuntime(
         config=runtime.config,
         provider=runtime.provider,
         boot_id=runtime.boot_id,
         cancellations=runtime.cancellation_registry,
-        progress_factory=TelegramProgress,
-        keep_typing=lambda chat: keep_typing(chat, runtime=runtime),
-        heartbeat=heartbeat,
+        progress_factory=collaborators.progress_factory,
+        keep_typing=collaborators.keep_typing,
+        heartbeat=collaborators.heartbeat,
         format_provider_error=lambda raw_text, returncode: format_provider_error(
             raw_text,
             returncode,
@@ -259,24 +301,20 @@ def execution_channel_metadata(
     )
 
 
-def build_execution_runtime(runtime: TelegramRuntime) -> ExecutionRuntime:
+def build_execution_runtime(
+    runtime: TelegramRuntime,
+    *,
+    collaborators: TelegramExecutionCollaborators,
+) -> ExecutionRuntime:
     return ExecutionRuntime(
-        dispatch=build_dispatch_runtime(runtime),
+        dispatch=build_dispatch_runtime(runtime, collaborators=collaborators),
         build_channel_context=lambda message, chat_id: build_execution_channel_context(
             execution_channel_metadata(runtime, message, chat_id),
             build_conversation_ref=lambda numeric_chat_id: telegram_conversation_ref(
                 runtime.config,
                 telegram_chat_id(numeric_chat_id),
             ),
-            timeline_callback_factory=lambda conversation_ref, routed_task_id: (
-                lambda html_text, force=False: progress_timeline_callback(
-                    runtime,
-                    conversation_ref,
-                    routed_task_id,
-                    html_text,
-                    force=force,
-                )
-            ),
+            timeline_callback_factory=collaborators.build_timeline_callback,
         ),
         render_provider_error=html.escape,
         show_foreign_setup=show_foreign_setup,
@@ -292,14 +330,7 @@ def build_execution_runtime(runtime: TelegramRuntime) -> ExecutionRuntime:
             runtime=runtime,
         ),
         send_compact_reply=send_compact_reply,
-        propose_delegation_plan=lambda chat_id, message, session, conversation_ref, result: propose_delegation_plan(
-            runtime,
-            chat_id,
-            message,
-            session,
-            conversation_ref=conversation_ref,
-            result=result,
-        ),
+        propose_delegation_plan=collaborators.propose_delegation_plan,
     )
 
 
@@ -319,8 +350,8 @@ def build_pending_runtime(
     runtime: TelegramRuntime,
     *,
     chat_lock: Callable[..., Any] = _unexpected_chat_lock,
+    execution_runtime: ExecutionRuntime,
 ) -> TelegramPendingRuntime:
-    execution_runtime = build_execution_runtime(runtime)
     return TelegramPendingRuntime(
         state=runtime,
         chat_lock=chat_lock,

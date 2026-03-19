@@ -1133,9 +1133,3 @@ class SQLiteContentStore(AbstractContentStore):
                     created_at=now,
                 )
         return record
-
-    def close(self) -> None:
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
-            conn.close()
-            self._local.conn = None

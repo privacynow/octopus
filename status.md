@@ -73,8 +73,19 @@
   - doctor/runtime health diagnostics no longer interpolate raw content-store or session-store exceptions into user/operator summaries
   - completion-webhook and startup URL logging now strip query secrets and embedded credentials
   Commit:
+  - `65e536b`
+- Complete: S6 add independent credential key management.
+  Tests:
+  - `python3 -m py_compile app/config.py app/credential_store.py app/credential_store_sqlite.py app/credential_store_postgres.py tests/support/config_support.py tests/test_credential_store_factory.py tests/test_config.py`
+  - `.venv/bin/python -m pytest -q -n 4 tests/test_credential_store_factory.py tests/contracts/test_credential_store_contract.py tests/test_config.py tests/test_handlers_credentials.py`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Verified:
+  - `BOT_CREDENTIAL_KEY` now provides independent credential-encryption key management through `BotConfig` and the credential-store factory
+  - Telegram-token fallback remains for backwards compatibility, but now emits an operator warning and explicit rotation guidance
+  - credential-store backends log a clear recovery hint when stored credentials can no longer be decrypted with the current key material
+  - repo operator docs and `.env.example` now describe the independent credential key and the bot-token-rotation impact
+  Commit:
   - pending current slice commit
-- Pending: S6 add independent credential key management.
 - Pending: S7 harden secret-bearing files and token storage.
 - Pending: S8 add artifact extraction quotas.
 - Pending: S9 restrict credential validation outbound targets.

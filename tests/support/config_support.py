@@ -78,6 +78,7 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         telegram_api_base_url="",
         telegram_file_api_base_url="",
         completion_webhook_url="",
+        credential_key="",
         projects=(),
         model_profiles={},
         default_model_profile="",

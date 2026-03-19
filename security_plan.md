@@ -102,6 +102,7 @@ Decouple credential encryption from the Telegram token.
 - Add `BOT_CREDENTIAL_KEY`.
 - Keep Telegram-token fallback only for backwards compatibility, with a
   warning and recovery guidance.
+- Status: complete
 
 #### Slice S7
 Harden secret-bearing local files and token issuance/storage.

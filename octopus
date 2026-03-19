@@ -562,7 +562,7 @@ manage_bot_menu() {
         cmd_doctor "$slug" || return $?
         printf '\n'
         ;;
-      5) unsupported_slice_command "Guided settings edits land in a later slice." ;;
+      5) edit_bot_settings_menu "$slug"; return $? ;;
       6) manage_bot_registry_flow "$slug"; return $? ;;
       7) return 0 ;;
       *) octopus_error "Choose one of the listed options." ;;
@@ -579,10 +579,10 @@ main_menu() {
   printf '  4. Advanced\n'
   read -r -p "Choose an option: " choice || return 1
   case "$choice" in
-    1) add_bot_flow ;;
+    1) add_bot_flow quick ;;
     2) manage_bot_menu ;;
     3) manage_bot_registry_flow ;;
-    4) unsupported_slice_command "Advanced deployment lands in a later slice." ;;
+    4) advanced_menu ;;
     *) octopus_error "Choose one of the listed options."; return 1 ;;
   esac
 }
@@ -717,10 +717,108 @@ ensure_provider_auth_ready() {
   fi
 }
 
+reset_bot_setup_overrides() {
+  BOT_SETUP_ROLE=""
+  BOT_SETUP_TAGS=""
+  BOT_SETUP_DESCRIPTION=""
+  BOT_SETUP_SKILLS=""
+  BOT_SETUP_ALLOWED_USERS=""
+  BOT_SETUP_TIMEOUT_SECONDS="3600"
+  BOT_SETUP_WORKING_DIR="/home/bot"
+  BOT_SETUP_COMPLETION_WEBHOOK_URL=""
+  REGISTRY_TARGET_KIND="standalone"
+  REGISTRY_TARGET_URL=""
+  REGISTRY_TARGET_TOKEN=""
+}
+
+prompt_timeout_seconds_value() {
+  local current="${1:-3600}" value=""
+  while true; do
+    value="$(prompt_with_default "Timeout seconds" "$current")"
+    case "$value" in
+      ''|*[!0-9]*)
+        octopus_error "Timeout must be a whole number of seconds."
+        ;;
+      0)
+        octopus_error "Timeout must be greater than zero."
+        ;;
+      *)
+        printf '%s\n' "$value"
+        return 0
+        ;;
+    esac
+  done
+}
+
+prompt_port_value() {
+  local current="${1:-8443}" value=""
+  while true; do
+    value="$(prompt_with_default "Webhook port" "$current")"
+    case "$value" in
+      ''|*[!0-9]*)
+        octopus_error "Webhook port must be a whole number."
+        ;;
+      0)
+        octopus_error "Webhook port must be greater than zero."
+        ;;
+      *)
+        printf '%s\n' "$value"
+        return 0
+        ;;
+    esac
+  done
+}
+
+prompt_allowed_users_value() {
+  local current="${1:-}" value=""
+  if [ -n "$current" ]; then
+    read -r -p "Allowed users (blank = open) [$current]: " value || return 1
+    printf '%s\n' "$value"
+    return 0
+  fi
+  read -r -p "Allowed users (blank = open): " value || return 1
+  printf '%s\n' "$value"
+}
+
+prompt_full_bot_setup_options() {
+  local registry_choice=""
+  BOT_SETUP_ROLE="$(prompt_with_default "Role" "$BOT_SETUP_ROLE")"
+  BOT_SETUP_TAGS="$(prompt_with_default "Tags (comma-separated)" "$BOT_SETUP_TAGS")"
+  BOT_SETUP_DESCRIPTION="$(prompt_with_default "Description" "$BOT_SETUP_DESCRIPTION")"
+  BOT_SETUP_SKILLS="$(prompt_with_default "Skills (comma-separated)" "$BOT_SETUP_SKILLS")"
+  BOT_SETUP_ALLOWED_USERS="$(prompt_allowed_users_value "$BOT_SETUP_ALLOWED_USERS")" || return 1
+  BOT_SETUP_WORKING_DIR="$(prompt_with_default "Working directory" "$BOT_SETUP_WORKING_DIR")"
+  BOT_SETUP_TIMEOUT_SECONDS="$(prompt_timeout_seconds_value "$BOT_SETUP_TIMEOUT_SECONDS")"
+  while true; do
+    registry_choice="$(prompt_with_default "Standalone or Registry" "standalone")"
+    case "$(printf '%s' "$registry_choice" | tr '[:upper:]' '[:lower:]')" in
+      standalone)
+        REGISTRY_TARGET_KIND="standalone"
+        REGISTRY_TARGET_URL=""
+        REGISTRY_TARGET_TOKEN=""
+        break
+        ;;
+      registry)
+        if has_local_registry; then
+          prompt_registry_target local_existing || return 1
+        else
+          prompt_registry_target local_new || return 1
+        fi
+        break
+        ;;
+      *)
+        octopus_error "Choose 'standalone' or 'registry'."
+        ;;
+    esac
+  done
+  BOT_SETUP_COMPLETION_WEBHOOK_URL="$(prompt_with_default "Completion webhook URL" "$BOT_SETUP_COMPLETION_WEBHOOK_URL")"
+}
+
 prepare_new_bot_setup() {
   local mode="${1:-quick}" existing_slug=""
   local telegram_id="" username="" display_name="" token=""
   ensure_deploy_dirs
+  reset_bot_setup_overrides
   prompt_first_bot_identity || return 1
   telegram_id="$FIRST_BOT_TELEGRAM_ID"
   username="$FIRST_BOT_TELEGRAM_USERNAME"
@@ -746,14 +844,18 @@ prepare_new_bot_setup() {
   NEW_BOT_TOKEN="$token"
   NEW_BOT_PROVIDER="$(prompt_provider_choice)"
 
-  if [ "$mode" != "quick" ]; then
-    octopus_error "Full setup lands in a later slice. Continuing with quick setup."
+  if [ "$mode" = "full" ]; then
+    prompt_full_bot_setup_options || return 1
   fi
 }
 
 write_first_bot_env() {
   local slug="$1" telegram_id="$2" username="$3" display_name="$4" token="$5" provider="$6"
   local env_file bot_dir
+  local role="${BOT_SETUP_ROLE:-}" tags="${BOT_SETUP_TAGS:-}" description="${BOT_SETUP_DESCRIPTION:-}"
+  local skills="${BOT_SETUP_SKILLS:-}" allowed_users="${BOT_SETUP_ALLOWED_USERS:-}"
+  local timeout_seconds="${BOT_SETUP_TIMEOUT_SECONDS:-3600}" working_dir="${BOT_SETUP_WORKING_DIR:-/home/bot}"
+  local completion_webhook_url="${BOT_SETUP_COMPLETION_WEBHOOK_URL:-}"
   bot_dir=".deploy/bots/$slug"
   env_file="$bot_dir/.env"
   mkdir -p "$bot_dir"
@@ -769,10 +871,32 @@ write_first_bot_env() {
     write_env_assignment_line BOT_PROVIDER "$provider"
     write_env_assignment_line BOT_AGENT_MODE "standalone"
     write_env_assignment_line BOT_COMPACT_MODE "1"
-    write_env_assignment_line BOT_ALLOW_OPEN "1"
-    write_env_assignment_line BOT_TIMEOUT_SECONDS "3600"
-    write_env_assignment_line BOT_WORKING_DIR "/home/bot"
+    if [ -n "$role" ]; then
+      write_env_assignment_line BOT_ROLE "$role"
+      write_env_assignment_line BOT_AGENT_ROLE "$role"
+    fi
+    if [ -n "$tags" ]; then
+      write_env_assignment_line BOT_AGENT_TAGS "$tags"
+    fi
+    if [ -n "$description" ]; then
+      write_env_assignment_line BOT_AGENT_DESCRIPTION "$description"
+    fi
+    if [ -n "$skills" ]; then
+      write_env_assignment_line BOT_SKILLS "$skills"
+      write_env_assignment_line BOT_AGENT_CAPABILITIES "$skills"
+    fi
+    if [ -n "$allowed_users" ]; then
+      write_env_assignment_line BOT_ALLOWED_USERS "$allowed_users"
+      write_env_assignment_line BOT_ALLOW_OPEN "0"
+    else
+      write_env_assignment_line BOT_ALLOW_OPEN "1"
+    fi
+    write_env_assignment_line BOT_TIMEOUT_SECONDS "$timeout_seconds"
+    write_env_assignment_line BOT_WORKING_DIR "$working_dir"
     write_env_assignment_line BOT_DATA_DIR "/home/bot/data"
+    if [ -n "$completion_webhook_url" ]; then
+      write_env_assignment_line BOT_COMPLETION_WEBHOOK_URL "$completion_webhook_url"
+    fi
   } > "$env_file"
   restrict_secret_file_permissions "$env_file"
 }
@@ -836,6 +960,192 @@ start_bot_until_running() {
   done
 }
 
+restart_bot_service() {
+  local slug="$1"
+  bot_compose "$slug" stop bot >/dev/null 2>&1 || true
+  start_bot_until_running "$slug"
+}
+
+current_allowed_users_value() {
+  local slug="$1"
+  read_bot_env_value BOT_ALLOWED_USERS "$(bot_env_file "$slug")"
+}
+
+current_allowed_users_display() {
+  local slug="$1" allowed_users=""
+  allowed_users="$(current_allowed_users_value "$slug")"
+  if [ -n "$allowed_users" ]; then
+    printf '%s\n' "$allowed_users"
+    return 0
+  fi
+  printf 'open\n'
+}
+
+offer_restart_if_running() {
+  local slug="$1" answer=""
+  if ! bot_is_running "$slug"; then
+    return 0
+  fi
+  read -r -p "Restart the bot now to apply this change? [Y/n] " answer || return 0
+  case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+    ""|y|yes)
+      restart_bot_service "$slug"
+      ;;
+  esac
+}
+
+open_bot_env_in_editor() {
+  local slug="$1" env_file=""
+  env_file="$(bot_env_file "$slug")"
+  if [ -n "${EDITOR:-}" ]; then
+    "$EDITOR" "$env_file"
+    return $?
+  fi
+  printf 'Config file: %s\n' "$env_file"
+}
+
+edit_bot_settings_menu() {
+  local slug="$1" choice="" env_file="" display_name="" provider="" mode="" role="" tags="" allowed_users="" timeout=""
+  env_file="$(bot_env_file "$slug")"
+  while true; do
+    display_name="$(bot_display_name "$slug")"
+    provider="$(get_bot_provider "$env_file")"
+    mode="$(bot_mode_label "$slug")"
+    role="$(read_bot_env_value BOT_ROLE "$env_file")"
+    tags="$(read_bot_env_value BOT_AGENT_TAGS "$env_file")"
+    allowed_users="$(current_allowed_users_display "$slug")"
+    timeout="$(read_bot_env_value BOT_TIMEOUT_SECONDS "$env_file")"
+    printf 'Current settings for %s:\n' "$(bot_identity_label "$slug")"
+    printf '  Display name:  %s\n' "${display_name:-$slug}"
+    printf '  Provider:      %s\n' "$provider"
+    printf '  Mode:          %s\n' "$mode"
+    printf '  Role:          %s\n' "${role:-"(not set)"}"
+    printf '  Timeout:       %ss\n\n' "${timeout:-3600}"
+    printf 'What would you like to change?\n'
+    printf '  1. Display name\n'
+    printf '  2. Role\n'
+    printf '  3. Tags\n'
+    printf '  4. Allowed users\n'
+    printf '  5. Timeout\n'
+    printf '  6. Open full config in editor\n'
+    printf '  7. Back\n'
+    read -r -p "Choose an option: " choice || return 1
+    case "$choice" in
+      1)
+        display_name="$(prompt_with_default "Display name" "${display_name:-$slug}")"
+        upsert_env_file_value BOT_DISPLAY_NAME "$display_name" "$env_file"
+        upsert_env_file_value BOT_AGENT_DISPLAY_NAME "$display_name" "$env_file"
+        offer_restart_if_running "$slug"
+        printf '\n'
+        ;;
+      2)
+        role="$(prompt_with_default "Role" "$role")"
+        upsert_env_file_value BOT_ROLE "$role" "$env_file"
+        upsert_env_file_value BOT_AGENT_ROLE "$role" "$env_file"
+        offer_restart_if_running "$slug"
+        printf '\n'
+        ;;
+      3)
+        tags="$(prompt_with_default "Tags (comma-separated)" "$tags")"
+        upsert_env_file_value BOT_AGENT_TAGS "$tags" "$env_file"
+        offer_restart_if_running "$slug"
+        printf '\n'
+        ;;
+      4)
+        allowed_users="$(prompt_allowed_users_value "$(current_allowed_users_value "$slug")")" || return 1
+        if [ -n "$allowed_users" ]; then
+          upsert_env_file_value BOT_ALLOWED_USERS "$allowed_users" "$env_file"
+          upsert_env_file_value BOT_ALLOW_OPEN "0" "$env_file"
+        else
+          remove_env_file_value BOT_ALLOWED_USERS "$env_file"
+          upsert_env_file_value BOT_ALLOW_OPEN "1" "$env_file"
+        fi
+        offer_restart_if_running "$slug"
+        printf '\n'
+        ;;
+      5)
+        timeout="$(prompt_timeout_seconds_value "${timeout:-3600}")"
+        upsert_env_file_value BOT_TIMEOUT_SECONDS "$timeout" "$env_file"
+        offer_restart_if_running "$slug"
+        printf '\n'
+        ;;
+      6)
+        open_bot_env_in_editor "$slug"
+        printf '\n'
+        ;;
+      7)
+        return 0
+        ;;
+      *)
+        octopus_error "Choose one of the listed options."
+        ;;
+    esac
+  done
+}
+
+prompt_webhook_url_value() {
+  local current="${1:-}" value=""
+  while true; do
+    value="$(prompt_with_default "Webhook URL" "$current")"
+    case "$value" in
+      https://*)
+        printf '%s\n' "$value"
+        return 0
+        ;;
+      "")
+        octopus_error "Webhook URL is required."
+        ;;
+      *)
+        octopus_error "Webhook URL must start with https://."
+        ;;
+    esac
+  done
+}
+
+configure_webhook_mode_flow() {
+  local slug="" env_file="" webhook_url="" webhook_port=""
+  slug="$(resolve_bot_slug "${1:-}")" || return 1
+  env_file="$(bot_env_file "$slug")"
+  webhook_url="$(prompt_webhook_url_value "$(read_bot_env_value BOT_WEBHOOK_URL "$env_file")")" || return 1
+  webhook_port="$(prompt_port_value "$(read_bot_env_value BOT_WEBHOOK_PORT "$env_file")")"
+  upsert_env_file_value BOT_MODE "webhook" "$env_file"
+  upsert_env_file_value BOT_RUNTIME_MODE "shared" "$env_file"
+  upsert_env_file_value BOT_PROCESS_ROLE "all" "$env_file"
+  upsert_env_file_value BOT_WEBHOOK_URL "$webhook_url" "$env_file"
+  upsert_env_file_value BOT_WEBHOOK_LISTEN "0.0.0.0" "$env_file"
+  upsert_env_file_value BOT_WEBHOOK_PORT "$webhook_port" "$env_file"
+  printf 'Webhook mode settings saved for %s.\n' "$slug"
+  printf 'Use the shared runtime deployment when you are ready to run webhook mode.\n'
+  offer_restart_if_running "$slug"
+}
+
+advanced_menu() {
+  local choice=""
+  while true; do
+    printf 'Advanced:\n'
+    printf '  1. Add a bot with full setup\n'
+    printf '  2. Configure webhook mode\n'
+    printf '  3. Back\n'
+    read -r -p "Choose an option: " choice || return 1
+    case "$choice" in
+      1)
+        add_bot_flow full
+        return $?
+        ;;
+      2)
+        configure_webhook_mode_flow
+        return $?
+        ;;
+      3)
+        return 0
+        ;;
+      *)
+        octopus_error "Choose one of the listed options."
+        ;;
+    esac
+  done
+}
+
 print_first_bot_success() {
   local username="$1"
   cat <<EOF
@@ -856,9 +1166,11 @@ EOF
 }
 
 add_bot_flow() {
-  local mode="quick"
+  local mode="${1:-quick}"
   prepare_new_bot_setup "$mode" || return 1
-  prompt_new_bot_registry_target || return 1
+  if [ "$mode" = "quick" ]; then
+    prompt_new_bot_registry_target || return 1
+  fi
   ensure_provider_image_ready "$NEW_BOT_PROVIDER"
   ensure_provider_auth_ready "$NEW_BOT_PROVIDER"
   ensure_network
@@ -884,15 +1196,32 @@ first_bot_flow() {
   ensure_provider_auth_ready "$NEW_BOT_PROVIDER"
   ensure_network
   write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER"
+  if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
+    configure_bot_for_registry "$NEW_BOT_SLUG" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN"
+  fi
   run_bot_doctor_until_ready "$NEW_BOT_SLUG"
   start_bot_until_running "$NEW_BOT_SLUG"
+  if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
+    verify_registry_enrollment "$NEW_BOT_SLUG" || return 1
+  fi
   print_first_bot_success "$NEW_BOT_TELEGRAM_USERNAME"
+  if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
+    print_registry_connection_success "$NEW_BOT_SLUG" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL"
+  fi
 }
 
 main() {
   ensure_deploy_dirs
 
   case "${1:-}" in
+    --full)
+      shift
+      if [ "$(count_bots)" -eq 0 ]; then
+        first_bot_flow full
+      else
+        add_bot_flow full
+      fi
+      ;;
     status)   shift; cmd_status "$@" ;;
     start)    shift; cmd_start "$@" ;;
     stop)     shift; cmd_stop "$@" ;;

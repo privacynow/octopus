@@ -74,6 +74,7 @@ Minimize subprocess environments.
   only.
 - Preserve intentional skill credential pass-through without ambient
   env leakage.
+- Status: complete
 
 ### Phase 2: Harden infrastructure and storage
 

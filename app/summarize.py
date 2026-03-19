@@ -3,12 +3,12 @@
 import asyncio
 import json
 import logging
-import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
 from app.identity import filesystem_component_for_key
+from app.subprocess_env import build_subprocess_env
 
 log = logging.getLogger(__name__)
 
@@ -171,7 +171,7 @@ async def summarize(text: str, model: str, timeout: int = 30) -> str:
             "--", prompt,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=_clean_env(),
+            env=_summary_env(),
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except (asyncio.TimeoutError, TimeoutError, OSError) as e:
@@ -218,7 +218,7 @@ async def format_provider_error(
             prompt,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=_clean_env(),
+            env=_summary_env(),
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         if proc.returncode == 0:
@@ -235,7 +235,8 @@ async def format_provider_error(
     return f"{head}\n\n[…truncated…]\n\n{tail}"
 
 
-def _clean_env() -> dict[str, str]:
-    env = os.environ.copy()
-    env.pop("CLAUDECODE", None)
-    return env
+def _summary_env() -> dict[str, str]:
+    return build_subprocess_env(
+        allowed_keys=("ANTHROPIC_API_KEY",),
+        blocked_keys=("CLAUDECODE",),
+    )

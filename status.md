@@ -36,8 +36,19 @@
   - Telegram discovery and degraded delegation flows render safe registry summaries instead of backend text
   - runtime-skill draft creation no longer falls back to raw `ValueError` strings
   Commit:
+  - `14235e7`
+- Complete: S3 minimize subprocess environments.
+  Tests:
+  - `python3 -m py_compile app/subprocess_env.py app/providers/claude.py app/providers/codex.py app/summarize.py tests/test_claude_provider.py tests/test_codex_provider.py tests/test_summarize.py tests/test_subprocess_env.py`
+  - `.venv/bin/python -m pytest -q -n 4 tests/test_claude_provider.py tests/test_codex_provider.py tests/test_summarize.py tests/test_subprocess_env.py`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Verified:
+  - provider and summarizer subprocesses now use a shared allowlisted env builder instead of ambient `os.environ.copy()`
+  - provider auth env and deliberate skill credential pass-through still reach subprocesses
+  - runtime secrets like `BOT_TELEGRAM_TOKEN` no longer flow into provider/summarizer child environments by default
+  - every Claude/Codex/summarizer subprocess launch passes an explicit env
+  Commit:
   - pending current slice commit
-- Pending: S3 minimize subprocess environments.
 - Pending: S4 tighten registry defaults and transport posture.
 - Pending: S5 expand redaction and doctor/log sanitization.
 - Pending: S6 add independent credential key management.

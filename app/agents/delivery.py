@@ -225,7 +225,7 @@ async def handle_registry_delivery(
             serialized,
         )
         if admit_status == "admitted":
-            surface = create_channel_egress(
+            channel_egress = create_channel_egress(
                 parent_conversation_id,
                 config=config,
                 bot=runtime.bot,
@@ -233,7 +233,7 @@ async def handle_registry_delivery(
                 source="registry",
             )
             try:
-                await send_delegation_completion_message(applied.pending, surface)
+                await send_delegation_completion_message(applied.pending, channel_egress)
             except Exception:
                 log.warning(
                     "Failed to send delegation completion summary for %s",

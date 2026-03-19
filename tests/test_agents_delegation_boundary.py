@@ -9,7 +9,7 @@ from app.storage import default_session, save_session
 from tests.support.handler_support import fresh_env, load_session_disk
 
 
-class _Surface:
+class _ChannelEgress:
     def __init__(self) -> None:
         self.messages: list[tuple[str, object | None]] = []
 
@@ -59,12 +59,12 @@ async def test_delegation_approve_boundary_uses_explicit_runtime(monkeypatch):
             ],
         }
         save_session(data_dir, f"tg:{chat_id}", session)
-        surface = _Surface()
+        channel_egress = _ChannelEgress()
 
         await handle_delegation_approve(
             chat_id,
             conversation_ref,
-            surface,
+            channel_egress,
             runtime=build_delegation_runtime(
                 config=cfg,
                 provider_name=prov.name,
@@ -78,7 +78,7 @@ async def test_delegation_approve_boundary_uses_explicit_runtime(monkeypatch):
         assert pending is not None
         assert pending["status"] == "submitted"
         assert pending["tasks"][0]["status"] == "submitted"
-        assert surface.messages == [
+        assert channel_egress.messages == [
             (
                 "Delegation approved. 1 request(s) sent to specialist bots."
                 " I'll continue when results arrive.",
@@ -112,12 +112,12 @@ async def test_delegation_cancel_boundary_uses_explicit_runtime():
             ],
         }
         save_session(data_dir, f"tg:{chat_id}", session)
-        surface = _Surface()
+        channel_egress = _ChannelEgress()
 
         await handle_delegation_cancel(
             chat_id,
             conversation_ref,
-            surface,
+            channel_egress,
             runtime=build_delegation_runtime(
                 config=cfg,
                 provider_name=prov.name,
@@ -127,4 +127,4 @@ async def test_delegation_cancel_boundary_uses_explicit_runtime():
 
         session_after = load_session_disk(data_dir, f"tg:{chat_id}", prov)
         assert session_after.get("pending_delegation") is None
-        assert surface.messages == [("Delegation cancelled. No requests were sent.", None)]
+        assert channel_egress.messages == [("Delegation cancelled. No requests were sent.", None)]

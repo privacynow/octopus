@@ -9,20 +9,20 @@ from tests.support.handler_support import MinimalFakeBot
 @pytest.mark.asyncio
 async def test_send_message_delegates_to_send_text():
     bot = MinimalFakeBot()
-    surface = TelegramChannelEgress(bot, chat_id=1)
+    channel_egress = TelegramChannelEgress(bot, chat_id=1)
 
-    handle = await surface.send_message("hello")
+    handle = await channel_egress.send_message("hello")
 
-    assert surface.replies == ["hello"]
+    assert channel_egress.replies == ["hello"]
     assert isinstance(handle, TelegramEditableHandle)
 
 
 @pytest.mark.asyncio
 async def test_send_recovery_notice_uses_presenter_markup_shape():
     bot = MinimalFakeBot()
-    surface = TelegramChannelEgress(bot, chat_id=1)
+    channel_egress = TelegramChannelEgress(bot, chat_id=1)
 
-    await surface.send_recovery_notice(
+    await channel_egress.send_recovery_notice(
         preview="preview",
         prompt="prompt",
         run_again_label="Run again",

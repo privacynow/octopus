@@ -74,7 +74,7 @@ class ConversationSimulator:
         *,
         skip_approval: bool = False,
     ) -> dict[str, Any]:
-        """Admit a registry-surface message through the same durable worker boundary."""
+        """Admit a registry-channel message through the same durable worker boundary."""
         chat_id, user_id, update_id, payload = build_registry_message_delivery(
             conversation_ref=conversation_ref,
             text=text,

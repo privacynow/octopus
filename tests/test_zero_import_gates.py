@@ -98,6 +98,32 @@ def test_deleted_legacy_module_references_are_gone_from_test_code() -> None:
             assert forbidden not in text, f"{forbidden} still referenced in {path}"
 
 
+def test_live_channel_contracts_do_not_reintroduce_surface_vocabulary() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    app_root = repo_root / "app"
+    allowed_paths = {
+        app_root / "registry_service" / "store.py",
+        app_root / "registry_service" / "store_postgres.py",
+    }
+    forbidden_tokens = (
+        "origin_surface",
+        "surface_input",
+        "surface_action",
+        "surface_capabilities",
+        "ExecutionSurfaceContext",
+        "SurfaceBinding",
+        "SurfaceEvent",
+        "RuntimeSurfaceContext",
+        "get_runtime_surface_context",
+    )
+    for path in sorted(app_root.rglob("*.py")):
+        if "__pycache__" in path.parts or path in allowed_paths:
+            continue
+        text = path.read_text()
+        for token in forbidden_tokens:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
 def test_access_module_has_no_channel_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     access_path = repo_root / "app" / "access.py"

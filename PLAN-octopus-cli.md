@@ -132,21 +132,21 @@ provider.
 #### Concrete auth paths per provider
 
 **Claude CLI** stores auth at:
-- `/home/bot/.config/Claude/` (primary)
-- `/home/bot/.config/claude/` (fallback)
-- `/home/bot/.local/share/Claude/`
+- `/home/bot/.claude/`
+- `/home/bot/.claude.json`
 
 **Codex CLI** stores auth at:
-- `/home/bot/.config/Codex/` (primary)
-- `/home/bot/.config/codex/` (fallback)
-- `/home/bot/.config/openai/`
+- `/home/bot/.codex/`
+
+These paths come from the slice-3 integration probe against the actual
+provider images, not from historical CLI assumptions.
 
 #### Shared auth directory layout
 
 ```
 .deploy/provider-auth/
-  claude/                  # Contains .config/Claude/, .config/claude/, .local/share/Claude/
-  codex/                   # Contains .config/Codex/, .config/codex/, .config/openai/
+  claude/                  # Contains .claude/ and .claude.json
+  codex/                   # Contains .codex/
 ```
 
 Each provider-auth directory mirrors the subset of the home directory
@@ -181,18 +181,13 @@ host-side provider-auth files if they are bind-mounted under
 
    **For Claude:**
    ```bash
-   mkdir -p /home/bot/.config /home/bot/.local/share
-   ln -sfn /home/bot/.provider-auth/.config/Claude /home/bot/.config/Claude
-   ln -sfn /home/bot/.provider-auth/.config/claude /home/bot/.config/claude
-   ln -sfn /home/bot/.provider-auth/.local/share/Claude /home/bot/.local/share/Claude
+   ln -sfn /home/bot/.provider-auth/.claude /home/bot/.claude
+   ln -sfn /home/bot/.provider-auth/.claude.json /home/bot/.claude.json
    ```
 
    **For Codex:**
    ```bash
-   mkdir -p /home/bot/.config
-   ln -sfn /home/bot/.provider-auth/.config/Codex /home/bot/.config/Codex
-   ln -sfn /home/bot/.provider-auth/.config/codex /home/bot/.config/codex
-   ln -sfn /home/bot/.provider-auth/.config/openai /home/bot/.config/openai
+   ln -sfn /home/bot/.provider-auth/.codex /home/bot/.codex
    ```
 
 2. **Only chown the writable bot data path**, not all of `/home/bot`:
@@ -209,6 +204,16 @@ This means:
 - Adding a second Claude bot does NOT require another login
 - Provider auth persists across bot creation/deletion
 - Host-side auth file ownership is not mutated by container starts
+
+#### BOT_DATA_DIR residual
+
+The Python config loader still falls back to
+`Path.home() / ".octopus-agent" / instance` when `BOT_DATA_DIR` is not
+set. The compose files explicitly set `BOT_DATA_DIR=/home/bot/data`, so
+the containerized `./octopus` path is correct. This remains a debugging
+residual for host-run paths: if `BOT_DATA_DIR` is missing, data can land
+outside the mounted volume. A future hardening pass could make
+`BOT_DATA_DIR` mandatory in Docker.
 
 #### Auth flows by context
 

@@ -6,10 +6,12 @@ __pycache__/
 
 # Instance config (contains tokens/secrets)
 *.env
-!.env.example
 .env.registry
 .env.registry.*
-.deploy/
+.deploy/*
+!.deploy/bots/
+.deploy/bots/*
+!.deploy/bots/.env.example
 
 # Runtime data
 *.log

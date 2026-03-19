@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import traceback
 from typing import Final
+from urllib.parse import ParseResult, urlparse, urlunparse
 
 import httpx
 from telegram.error import Conflict, InvalidToken, NetworkError, TimedOut
@@ -31,13 +34,92 @@ _TELEGRAM_URL_TOKEN_RE: Final[re.Pattern[str]] = re.compile(
 _TELEGRAM_TOKEN_RE: Final[re.Pattern[str]] = re.compile(
     r"\b\d+:[A-Za-z0-9_-]{20,}\b",
 )
+_POSTGRES_URL_PASSWORD_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?P<scheme>postgresql(?:\+\w+)?://)"
+    r"(?P<username>[^:/@\s]+)"
+    r":(?P<password>[^@/\s]+)"
+    r"@",
+)
+_BEARER_TOKEN_RE: Final[re.Pattern[str]] = re.compile(
+    r"\bBearer\s+[A-Za-z0-9._-]{16,}\b",
+    re.IGNORECASE,
+)
 _SANITIZED_TOKEN: Final[str] = "<redacted-telegram-token>"
+_SANITIZED_BEARER: Final[str] = "Bearer <redacted-bearer-token>"
+_SECRET_ENV_NAMES: Final[tuple[str, ...]] = (
+    "TELEGRAM_BOT_TOKEN",
+    "BOT_DATABASE_URL",
+    "REGISTRY_UI_TOKEN",
+    "REGISTRY_ENROLL_TOKEN",
+    "REGISTRY_SESSION_SECRET",
+    "BOT_CREDENTIAL_KEY",
+)
+
+
+def _redacted_env_placeholder(env_name: str) -> str:
+    label = env_name.lower().replace("_", "-")
+    return f"<redacted-{label}>"
+
+
+def _configured_secret_values() -> tuple[tuple[str, str], ...]:
+    values: list[tuple[str, str]] = []
+    for env_name in _SECRET_ENV_NAMES:
+        value = os.environ.get(env_name, "").strip()
+        if not value:
+            continue
+        values.append((value, _redacted_env_placeholder(env_name)))
+    values.sort(key=lambda item: len(item[0]), reverse=True)
+    return tuple(values)
+
+
+def sanitize_url_for_logging(raw: str) -> str:
+    """Strip query/fragment data and redact embedded credentials for log output."""
+    parsed = urlparse(raw)
+    if not parsed.scheme:
+        base = raw.split("#", 1)[0].split("?", 1)[0]
+        suffix = "?<redacted>" if "?" in raw else ""
+        return redact_sensitive_startup_text(f"{base}{suffix}")
+
+    hostname = parsed.hostname or ""
+    if parsed.port is not None:
+        hostname = f"{hostname}:{parsed.port}"
+
+    if parsed.username:
+        userinfo = parsed.username
+        if parsed.password is not None:
+            userinfo = f"{userinfo}:<redacted>@"
+        else:
+            userinfo = f"{userinfo}@"
+        netloc = f"{userinfo}{hostname}"
+    else:
+        netloc = hostname
+
+    sanitized = ParseResult(
+        scheme=parsed.scheme,
+        netloc=netloc,
+        path=parsed.path,
+        params=parsed.params,
+        query="<redacted>" if parsed.query else "",
+        fragment="",
+    )
+    return redact_sensitive_startup_text(urlunparse(sanitized))
 
 
 def redact_sensitive_startup_text(text: str) -> str:
-    """Redact Telegram bot tokens from operator-visible strings."""
+    """Redact secret-bearing values from operator-visible strings."""
     redacted = _TELEGRAM_URL_TOKEN_RE.sub(rf"\1{_SANITIZED_TOKEN}", text)
-    return _TELEGRAM_TOKEN_RE.sub(_SANITIZED_TOKEN, redacted)
+    redacted = _TELEGRAM_TOKEN_RE.sub(_SANITIZED_TOKEN, redacted)
+    redacted = _POSTGRES_URL_PASSWORD_RE.sub(
+        lambda match: (
+            f"{match.group('scheme')}"
+            f"{match.group('username')}:<redacted>@"
+        ),
+        redacted,
+    )
+    redacted = _BEARER_TOKEN_RE.sub(_SANITIZED_BEARER, redacted)
+    for value, replacement in _configured_secret_values():
+        redacted = redacted.replace(value, replacement)
+    return redacted
 
 
 def _sanitize_log_args(args):
@@ -68,6 +150,11 @@ class StartupLogRedactionFilter(logging.Filter):
             if isinstance(exc, InvalidToken):
                 record.msg = "Telegram startup failed: Telegram rejected TELEGRAM_BOT_TOKEN."
                 record.args = ()
+                record.exc_info = None
+            else:
+                record.exc_text = redact_sensitive_startup_text(
+                    "".join(traceback.format_exception(*record.exc_info))
+                ).rstrip()
                 record.exc_info = None
         return True
 

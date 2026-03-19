@@ -94,6 +94,7 @@ Expand redaction and doctor/log sanitization.
 - Redact DSNs, bearer tokens, and configured secret values.
 - Remove raw exception text from doctor diagnostics and unsafe log
   lines.
+- Status: complete
 
 #### Slice S6
 Decouple credential encryption from the Telegram token.

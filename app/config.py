@@ -14,6 +14,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 from app.identity import parse_actor_key, telegram_numeric_id
+from app.startup_diagnostics import sanitize_url_for_logging
 
 log = logging.getLogger(__name__)
 
@@ -640,7 +641,7 @@ def validate_config(config: BotConfig) -> list[str]:
     if config.completion_webhook_url and not _has_valid_http_url(config.completion_webhook_url):
         log.warning(
             "BOT_COMPLETION_WEBHOOK_URL is set but not a valid http:// or https:// URL: %s",
-            config.completion_webhook_url,
+            sanitize_url_for_logging(config.completion_webhook_url),
         )
 
     if config.database_url and not _has_valid_postgres_url(config.database_url):

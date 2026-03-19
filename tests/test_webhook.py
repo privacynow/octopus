@@ -202,3 +202,29 @@ async def test_circuit_recovers_after_timeout(monkeypatch):
     )
 
     assert len(calls) == wh._FAILURE_THRESHOLD * wh._MAX_ATTEMPTS + 1
+
+
+@pytest.mark.asyncio
+async def test_webhook_logging_redacts_query_tokens(caplog, monkeypatch):
+    import app.webhook as wh
+
+    calls: list[dict] = []
+    request = httpx.Request("POST", "https://hooks.example.com/completed?token=secret")
+    _install_async_client(
+        monkeypatch,
+        [httpx.HTTPStatusError("boom", request=request, response=httpx.Response(500, request=request))],
+        calls,
+    )
+
+    with caplog.at_level("WARNING"):
+        await wh.fire_completion_webhook(
+            "https://hooks.example.com/completed?token=secret",
+            chat_id=123,
+            conversation_ref="conv-1",
+            status="completed",
+            summary="done",
+            completed_at="2026-03-16T00:00:00Z",
+        )
+
+    assert any("Completion webhook failed" in record.message for record in caplog.records)
+    assert not any("token=secret" in record.message for record in caplog.records)

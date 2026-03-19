@@ -26,6 +26,7 @@ from app.startup_diagnostics import (
     configure_startup_logging,
     format_database_startup_exception,
     format_startup_exception,
+    sanitize_url_for_logging,
 )
 
 PROVIDERS: dict[str, type] = {
@@ -232,7 +233,12 @@ def main() -> None:
     log.info("Data dir: %s", config.data_dir)
     log.info("Agent mode: %s", config.agent_mode)
     if config.agent_mode == "registry":
-        log.info("Agent registry: %s", config.agent_registry_url or "(degraded: not configured)")
+        registry_url = (
+            sanitize_url_for_logging(config.agent_registry_url)
+            if config.agent_registry_url
+            else "(degraded: not configured)"
+        )
+        log.info("Agent registry: %s", registry_url)
 
     if config.allowed_actor_keys or config.allowed_usernames:
         log.info("Allowed actor keys: %s", sorted(config.allowed_actor_keys))
@@ -324,7 +330,7 @@ def main() -> None:
             _close_runtime_resources(config)
     elif config.bot_mode == "webhook":
         log.info("Bot starting (webhook)...")
-        log.info("Webhook URL: %s", config.webhook_url)
+        log.info("Webhook URL: %s", sanitize_url_for_logging(config.webhook_url))
         log.info("Listening on %s:%d", config.webhook_listen, config.webhook_port)
         try:
             app.run_webhook(

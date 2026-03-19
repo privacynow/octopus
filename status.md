@@ -61,8 +61,19 @@
   - compose no longer ships default registry tokens and now binds the published registry port to localhost by default
   - guided/shared startup flows still support local HTTP registry URLs but now push remote registry URLs toward HTTPS
   Commit:
+  - `8fa7ae6`
+- Complete: S5 expand redaction and doctor/log sanitization.
+  Tests:
+  - `python3 -m py_compile app/startup_diagnostics.py app/runtime_health.py app/config.py app/webhook.py app/main.py tests/test_startup_diagnostics.py tests/test_runtime_health.py tests/test_config.py tests/test_webhook.py`
+  - `.venv/bin/python -m pytest -q -n 4 tests/test_startup_diagnostics.py tests/test_runtime_health.py tests/test_doctor.py tests/test_config.py tests/test_webhook.py`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Verified:
+  - startup/log redaction now covers Telegram tokens, Postgres DSNs, bearer tokens, and configured secret values
+  - traceback text emitted through log handlers is sanitized before it reaches operator-visible output
+  - doctor/runtime health diagnostics no longer interpolate raw content-store or session-store exceptions into user/operator summaries
+  - completion-webhook and startup URL logging now strip query secrets and embedded credentials
+  Commit:
   - pending current slice commit
-- Pending: S5 expand redaction and doctor/log sanitization.
 - Pending: S6 add independent credential key management.
 - Pending: S7 harden secret-bearing files and token storage.
 - Pending: S8 add artifact extraction quotas.

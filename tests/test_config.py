@@ -250,6 +250,20 @@ def test_validate_config_completion_webhook_url_is_non_fatal_when_malformed():
     errors = validate_config(make_config(completion_webhook_url="http://"))
     assert not any("COMPLETION_WEBHOOK" in e for e in errors)
 
+
+def test_validate_config_redacts_completion_webhook_query_params(tmp_path: Path, caplog):
+    with caplog.at_level("WARNING"):
+        errors = validate_config(
+            make_config(
+                completion_webhook_url="not-a-url?token=secret",
+                working_dir=tmp_path,
+            )
+        )
+
+    assert errors == []
+    assert not any("token=secret" in record.message for record in caplog.records)
+    assert any("<redacted>" in record.message for record in caplog.records)
+
 def test_config_defaults_to_poll():
     cfg = make_config()
     assert cfg.bot_mode == "poll"

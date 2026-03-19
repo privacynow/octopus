@@ -55,8 +55,8 @@ def test_status_doc_records_live_phase8_state_and_owners_in_authoritative_sectio
     for fragment in required_fragments:
         assert fragment in authoritative
 
-    assert "Architecture remediation is complete." in authoritative
-    assert "Feature work may resume." in authoritative
+    assert "Architecture remediation is reopened for the remaining post-audit tail." in authoritative
+    assert "Feature work remains frozen until F10 lands" in authoritative
     assert re.search(r"Result: `\d+ passed, 23 skipped`", authoritative)
 
 
@@ -107,9 +107,9 @@ def test_status_doc_lede_points_to_live_phase8_closure_and_marks_phase7_as_histo
     required_fragments = (
         "The live accepted state is recorded in the final",
         "`## Historical Phase 7 Closure Status` (preserved Phase 7 baseline)",
-        "`## Current Authoritative Status` (live post-Phase-8 closure)",
+        "`## Current Authoritative Status` (live post-audit remediation state)",
         "The initial Phase 8 closure at",
-        "The post-audit follow-up is now closed:",
+        "the remediation remains open until `F10` lands",
         "final cap-restore complete:",
     )
 

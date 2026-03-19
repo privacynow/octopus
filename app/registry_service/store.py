@@ -1169,29 +1169,6 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             )
         return self.get_conversation(conversation_id)
 
-    def publish_ui_timeline(
-        self,
-        *,
-        conversation_id: str,
-        title: str,
-        body: str,
-        kind: str,
-        status: str = "",
-        progress: int | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        with self._connect() as conn:
-            self._publish_ui_timeline_conn(
-                conn,
-                conversation_id=conversation_id,
-                title=title,
-                body=body,
-                kind=kind,
-                status=status,
-                progress=progress,
-                metadata=metadata,
-            )
-
     def list_conversations(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(

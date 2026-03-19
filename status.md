@@ -20,26 +20,28 @@ the earlier closure attempt, and the preserved Phase 8 H4 entry is no longer
 the final closure state.
 
 - `## Historical Phase 7 Closure Status` (preserved Phase 7 baseline)
-- `## Current Authoritative Status` (live post-Phase-8 closure)
+- `## Current Authoritative Status` (live post-audit remediation state)
 
 ## Current State
 
-Architecture remediation is complete. The initial Phase 8 closure at
-`7804cf4` was followed by committed post-Phase-8 correction slices that
-removed the remaining ingress test coupling and purged live `surface`
-contract drift from active channel and agent seams.
+Architecture remediation is reopened for the live post-audit F9-F10 tail.
+The initial Phase 8 closure at `7804cf4` was followed by committed
+post-Phase-8 correction slices and post-audit F1-F8 follow-up. F9 is now
+landed and verified; F10 remains outstanding before the remediation can be
+called complete again.
 
 Latest committed correction slices:
 
 - `07af844` `Post-Phase 8 / slice 1: remove ingress test coupling`
 - `837b4ed` `Post-Phase 8 / slice 2: rename live surface contracts to channel`
 - `a686565` `Post-Phase 8 / slice 3: align live channel terminology`
+- current worktree slice: `Post-audit / F9: remove dead backend-only store methods`
 
 Latest verified full-suite baseline:
 
-- `1633 passed, 23 skipped`
+- `1663 passed, 23 skipped`
 
-Feature work may resume.
+Feature work remains frozen until F10 lands and the final post-audit gates pass.
 
 ### Historical In-Progress Snapshot
 
@@ -1162,12 +1164,12 @@ defined in
 [`store_plan.md`](/Users/tinker/output/bots/telegram-agent-bot/store_plan.md).
 
 The historical execution log and the preserved Phase 7 closure snapshot remain
-above as audit history. This section records the final accepted ownership model
-after Phase 8 and the latest verified remediation baseline.
+above as audit history. This section records the live accepted ownership model
+for the current remediation state and the latest verified remediation baseline.
 
 ### Current State
 
-Architecture remediation is complete.
+Architecture remediation is reopened for the remaining post-audit tail.
 
 Phase 8 closed the remaining Telegram ingress decomposition and test-boundary
 gaps left after Phase 7. The post-Phase-8 correction slices and the post-audit
@@ -1242,11 +1244,21 @@ The post-audit follow-up is now closed:
     finalization
   - this status closeout records the verified remediation baseline and the full
     committed correction chain through the F8 plan commit
+- `F9` complete:
+  - deleted the dead SQLite-only public methods
+    `RegistrySQLiteStore.publish_ui_timeline()` and
+    `SQLiteContentStore.close()`
+  - added automated backend parity gates proving registry-store and
+    content-store public method sets match their abstract contracts across
+    SQLite and Postgres
+  - the remediation remains open until `F10` lands the delivery-kind migration
+    closure
 - final cap-restore complete:
   - `99939f0` trims `app/channels/telegram/ingress.py` back to `1470` lines
   - the structural gate now enforces the strict `≤1500` ingress cap again
 
-Feature work may resume.
+Feature work remains frozen until F10 lands and the final post-audit
+verification passes.
 
 ### Phase 8 Slice Log
 
@@ -1435,6 +1447,19 @@ Feature work may resume.
    - tightened the structural line-count gate from `1600` back to the strict
      `1500` threshold required by the remediation plan
 
+10. current worktree slice: `Post-audit / F9: remove dead backend-only store methods`
+   - deleted the dead SQLite-only public methods
+     `RegistrySQLiteStore.publish_ui_timeline()` and
+     `SQLiteContentStore.close()`
+   - added structural parity gates proving registry-store and content-store
+     public method sets match their abstract contracts across SQLite and
+     Postgres
+   - focused F9 suite:
+     - `tests/test_store_backend_parity.py`
+     - `tests/contracts/test_registry_store_contract.py`
+     - `tests/contracts/test_content_store_contract.py`
+     - Result: `57 passed`
+
 ### Acceptance Gates
 
 These mirror the authoritative
@@ -1507,6 +1532,9 @@ These mirror the authoritative
 - [x] `surface_binding_id` is deleted and blocked by the live vocabulary gate.
 - [x] `store_plan.md` is committed; the repo no longer depends on a local-only
   plan diff for the accepted post-audit state.
+- [x] registry-store and content-store public method sets are identical across
+  SQLite/Postgres and match their abstract contracts.
+- [ ] delivery-kind migration/compatibility closure is landed and verified.
 
 ### Verification Baseline
 
@@ -1529,9 +1557,16 @@ Latest focused post-Phase-8 correction suite:
 - `tests/test_request_flow.py`
 - Result: `273 passed`
 
+Latest focused F9 parity suite:
+
+- `tests/test_store_backend_parity.py`
+- `tests/contracts/test_registry_store_contract.py`
+- `tests/contracts/test_content_store_contract.py`
+- Result: `57 passed`
+
 Latest full-suite remediation baseline:
 
-- Result: `1660 passed, 23 skipped`
+- Result: `1663 passed, 23 skipped`
 
 ### Notes
 

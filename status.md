@@ -16,23 +16,28 @@ including intermediate mistakes, reopened gates, and before-state inventories.
 The live accepted state is recorded in the final
 `## Current Authoritative Status` section below. The preserved
 `## Historical Phase 7 Closure Status` section remains historical context from
-the earlier closure attempt.
+the earlier closure attempt, and the preserved Phase 8 H4 entry is no longer
+the final closure state.
 
 - `## Historical Phase 7 Closure Status` (preserved Phase 7 baseline)
-- `## Current Authoritative Status` (live Phase 8 closure)
+- `## Current Authoritative Status` (live post-Phase-8 closure)
 
 ## Current State
 
-Architecture remediation is complete. Phase 8 closed the remaining ingress
-decomposition, presenter-ownership, and Telegram test-boundary gaps.
+Architecture remediation is complete. The initial Phase 8 closure at
+`7804cf4` was followed by committed post-Phase-8 correction slices that
+removed the remaining ingress test coupling and purged live `surface`
+contract drift from active channel and agent seams.
 
-Final committed Phase 8 closure:
+Latest committed correction slices:
 
-- `7804cf4` `Phase 8 / H4: tighten telegram docs and gates`
+- `07af844` `Post-Phase 8 / slice 1: remove ingress test coupling`
+- `837b4ed` `Post-Phase 8 / slice 2: rename live surface contracts to channel`
+- `a686565` `Post-Phase 8 / slice 3: align live channel terminology`
 
 Latest verified full-suite baseline:
 
-- `1631 passed, 23 skipped`
+- `1633 passed, 23 skipped`
 
 Feature work may resume.
 
@@ -57,8 +62,8 @@ acceptance gates in
    - test setup runs through the real Telegram application builder
    - test support no longer depends on deleted routing or singleton seams
    - structural gates now lock the final Telegram test boundary
-4. `status.md` and `docs/orchestration_inventory.md` still need their final
-   post-Phase-8 truth pass so they match the actual code ownership and test
+4. `status.md` and `docs/orchestration_inventory.md` still needed their final
+   post-Phase-8 truth pass so they matched the actual code ownership and test
    seam state.
 
 Phase 8 is now active.
@@ -165,6 +170,14 @@ Phase 8 is now active.
   - Telegram reply markup ownership is presenter-only
   - ingress line count is `1483`
   - test-boundary gates reject private-helper and module-stub coupling
+- Post-Phase-8 correction slices then closed the remaining escaped issues:
+  - `07af844` removed residual ingress test coupling and hardened the ingress
+    helper gates against private-helper and module-attribute stubbing patterns
+  - `837b4ed` renamed live channel/runtime contract vocabulary from `surface`
+    to `channel` outside raw storage-schema detail
+  - `a686565` aligned remaining active code/test terminology with the channel
+    boundary and added a gate preventing the old live `surface` contract terms
+    from re-entering app code
 
 Historical execution log follows below. Some older entries reference the
 pre-audit `ingress.py`/`routing.py` closure state and are preserved as history,
@@ -1157,7 +1170,9 @@ after Phase 8 and the latest verified remediation baseline.
 Architecture remediation is complete.
 
 Phase 8 closed the remaining Telegram ingress decomposition and test-boundary
-gaps left after Phase 7. The live Telegram channel boundary is now:
+gaps left after Phase 7, and the post-Phase-8 correction slices closed the
+remaining ingress-coupling and terminology drift. The live Telegram channel
+boundary is now:
 
 - `app/channels/telegram/bootstrap.py`
 - `app/channels/telegram/ingress.py`
@@ -1205,6 +1220,32 @@ Feature work may resume.
    - added test-side singleton-helper guards and extracted-module back-import
      guards
    - locked the ingress line-count cap into the test suite
+
+### Post-Phase-8 Correction Log
+
+1. `07af844` `Post-Phase 8 / slice 1: remove ingress test coupling`
+   - replaced the remaining ingress-module stubbing in tests with public owner
+     seams and runtime injection
+   - moved Telegram ingress to call public owner modules for normalization,
+     session I/O, and conversation handling instead of patch-friendly aliases
+   - added stronger structural gates against private ingress helper calls and
+     ingress-module monkeypatching
+
+2. `837b4ed` `Post-Phase 8 / slice 2: rename live surface contracts to channel`
+   - renamed live agent/registry/channel contract vocabulary from `surface` to
+     `channel`
+   - kept raw storage-schema names like `origin_surface` and
+     `surface_capabilities_json` as storage details only
+   - updated channel/registry delivery kinds to `channel_input` and
+     `channel_action`
+
+3. `a686565` `Post-Phase 8 / slice 3: align live channel terminology`
+   - removed the remaining live `surface` terminology from active Telegram and
+     agent code seams where it described channel egress/message handles
+   - cleaned the corresponding active test terminology and channel-boundary
+     comments
+   - added a structural gate preventing legacy live `surface` contract terms
+     from reappearing outside storage-detail owners
 
 ### Acceptance Gates
 
@@ -1263,9 +1304,20 @@ Latest focused Phase 8 structural suite:
 - `tests/test_architecture_skeleton.py`
 - Result: `62 passed`
 
+Latest focused post-Phase-8 correction suite:
+
+- `tests/test_zero_import_gates.py`
+- `tests/test_registry_adapter.py`
+- `tests/test_channel_egress_factory.py`
+- `tests/test_telegram_channel_egress.py`
+- `tests/test_agents_delegation_boundary.py`
+- `tests/test_handlers.py`
+- `tests/test_request_flow.py`
+- Result: `273 passed`
+
 Latest full-suite remediation baseline:
 
-- Result: `1631 passed, 23 skipped`
+- Result: `1633 passed, 23 skipped`
 
 ### Notes
 

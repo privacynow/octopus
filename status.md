@@ -170,3 +170,23 @@
   - registry attachment is now bot-scoped, not a global checkout switch
   - success messages stay context-aware and only print the localhost UI URL for local registry flows
   - registry switching now accounts for persisted runtime identity, preventing a subtle stale-token bug during re-enrollment
+- Complete: Slice 9 full mode, guided edit, and advanced options.
+  Scope:
+  - implemented `./octopus --full` and full-mode setup paths for both first-bot and add-bot creation
+  - extended bot env creation to persist full-mode settings such as role, tags, description, skills, allowed users, working directory, timeout, and completion webhook URL
+  - made display name editable in the guided settings menu while keeping the Telegram-derived slug immutable
+  - added guided edit flows for display name, role, tags, allowed users, timeout, and full-config editor handoff
+  - split generic restart behavior from registry-target restarts so ordinary config edits do not wipe persisted registry identity
+  - added the first advanced menu with full-setup entry and webhook-mode configuration
+  Tests:
+  - `bash -n octopus tests/test_octopus_full_mode.py`
+  - `.venv/bin/python -m pytest -q tests/test_octopus_full_mode.py tests/test_octopus_registry_management.py tests/test_octopus_management.py tests/test_octopus_first_bot_flow.py`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified full-mode env generation writes both bot-local settings and registry settings when full setup chooses registry mode
+  - verified display-name edits update both `BOT_DISPLAY_NAME` and `BOT_AGENT_DISPLAY_NAME`
+  - verified clearing allowed users through the guided menu restores `BOT_ALLOW_OPEN=1` instead of preserving stale restrictions
+  Verified:
+  - full mode now extends the same Telegram-identity-first bootstrap path instead of reintroducing a naming prompt
+  - guided edit behavior matches the product split: display name is editable, slug is not
+  - advanced config paths no longer depend on raw env editing as the primary user experience

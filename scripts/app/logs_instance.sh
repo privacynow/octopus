@@ -4,8 +4,10 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
-# shellcheck source=scripts/lib_env.sh
-. "$REPO_DIR/scripts/lib_env.sh"
+# shellcheck source=scripts/lib/bot.sh
+. "$REPO_DIR/scripts/lib/bot.sh"
+# shellcheck source=scripts/lib/docker.sh
+. "$REPO_DIR/scripts/lib/docker.sh"
 
 INSTANCE="${1:-default}"
 if [ "$INSTANCE" = "default" ]; then

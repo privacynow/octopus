@@ -51,6 +51,8 @@ def test_status_doc_records_live_phase8_state_and_owners_in_authoritative_sectio
         "99939f0",
         "dbf9176",
         "584d700",
+        "6e7595e",
+        "a03a7b8",
         "app/workflows/execution/finalization.py",
     )
 
@@ -78,7 +80,9 @@ def test_status_doc_includes_all_phase8_acceptance_gate_fragments() -> None:
         "`app/workflows/execution/finalization.py` exists and has no",
         "`surface_binding_id` is deleted and blocked by the live vocabulary gate.",
         "Postgres migration `0009_rename_delivery_kinds.sql` exists and renames",
-        "delivery-kind migration/compatibility closure is landed and verified.",
+        "Postgres migration `0010_rename_registry_channel_columns.sql` exists and",
+        "live app code retains no registry `surface_*` schema/runtime vocabulary",
+        "runtime registry delivery handling no longer carries legacy",
     )
 
     for fragment in required_fragments:
@@ -99,6 +103,7 @@ def test_status_doc_historical_and_live_closure_sections_are_both_present() -> N
         "273 passed",
         "64 passed",
         "80 passed",
+        "121 passed, 4 skipped",
     )
 
     for fragment in required_fragments:

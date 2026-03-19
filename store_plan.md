@@ -2762,7 +2762,7 @@ Feature expansion may resume only when all of the following are true:
   PTB callback contracts that have no public entry point)
 - no test file monkeypatches module-level ingress functions for stubbing
 - zero-import gates for singleton helpers cover both `app/` and `tests/`
-- ingress line-count gate prevents growth above 1600 lines
+- ingress line-count gate prevents growth above 1500 lines
 
 ## Phase 7. Closure Correction Stage
 
@@ -3063,7 +3063,7 @@ Estimated `ingress.py` after split: ~1300-1500 lines.
 - Negative: `ingress.py` does not define `TelegramProgress`, `worker_dispatch`,
   `_load`, `_save`, `_propose_delegation_plan`, or `execute_request` after
   the split (these belong to extracted modules).
-- Gate: `ingress.py` is below 1600 lines.
+- Gate: `ingress.py` is below 1500 lines.
 
 #### Exit criteria
 
@@ -3204,7 +3204,7 @@ points). No change required, but after H1, `worker_dispatch` may move to
 4. **Add extracted-module back-import gates**: For each module created in H1,
    add a gate asserting it does not import `app.channels.telegram.ingress`.
 
-5. **Add ingress line-count gate**: Assert `ingress.py` is below 1600 lines.
+5. **Add ingress line-count gate**: Assert `ingress.py` is below 1500 lines.
    This prevents future growth back toward the monolith threshold.
 
 6. **Update orchestration_inventory.md** if any worker dispatch or execution
@@ -3214,7 +3214,7 @@ points). No change required, but after H1, `worker_dispatch` may move to
 
 - Gate: singleton helpers absent from `tests/`.
 - Gate: no extracted Telegram module imports ingress.
-- Gate: `ingress.py` ≤ 1600 lines.
+- Gate: `ingress.py` ≤ 1500 lines.
 - Gate: `egress.py` has no `InlineKeyboardMarkup` or `InlineKeyboardButton`.
 
 #### Exit criteria
@@ -3244,7 +3244,7 @@ plus the following new gates:
 - No test file monkeypatches module-level ingress functions for stubbing
 - `status.md` lede reflects the actual current state
 - Zero-import gates for singleton helpers cover both `app/` and `tests/`
-- Ingress line-count gate prevents growth above 1600 lines
+- Ingress line-count gate prevents growth above 1500 lines
 
 ### Phase 8 Failure Patterns
 
@@ -3490,6 +3490,48 @@ Hard rules:
 - The migration and code change must be documented as a coordinated pair
 - No delivery kind value may be written by one version and unreadable by another
 
+### F11. Remove remaining registry surface vocabulary from live schema/runtime
+
+Post-audit review found that the registry store/runtime still carried live
+`surface` vocabulary after F10:
+
+- SQLite schema/runtime still used `surface_capabilities_json` and
+  `origin_surface`
+- Postgres store code still queried those old column names
+- runtime registry-delivery code still accepted `surface_input` and
+  `surface_action`
+- structural gates exempted entire files instead of limiting the legacy tokens
+  to explicit migration owners
+
+Required work:
+1. Rename the SQLite registry schema/runtime contract to
+   `channel_capabilities_json` and `origin_channel`, with an explicit SQLite
+   migration for existing databases
+2. Add Postgres migration `0010_rename_registry_channel_columns.sql` to rename
+   the remaining registry columns in-place
+3. Remove runtime legacy delivery-kind normalization from
+   `app/agents/bridge.py` and `app/agents/delivery.py`; old delivery kinds
+   must be rewritten by migrations, not carried as a live runtime contract
+4. Tighten structural gates so:
+   - legacy registry column tokens appear only in explicit migration owners and
+     migration tests
+   - legacy delivery kind tokens appear only in explicit migration owners and
+     migration tests
+
+Hard rules:
+- live app runtime/store code must not retain `origin_surface` or
+  `surface_capabilities_json` after this slice
+- live app runtime code must not accept `surface_input` or `surface_action`
+  after this slice
+- gates must use exact-owner exceptions, not whole-seam carve-outs
+
+Exit criteria:
+- SQLite and Postgres registry store code use only `channel_*` vocabulary
+- runtime registry delivery handling no longer carries legacy `surface_*` kind
+  compatibility
+- legacy `surface_*` tokens are limited to historical migrations and explicit
+  migration tests
+
 ### Post-Audit Acceptance Gates
 
 All prior Architecture Remediation and Phase 8 Acceptance Gates must hold,
@@ -3513,13 +3555,19 @@ plus:
 - `run_pending_request_event` and `run_transport_event` do not mutate inputs
 - `surface_binding_id` is renamed or deleted
 - `store_plan.md` is committed with no local-only edits
-- `status.md` correction log includes all commits through final HEAD
+- `status.md` correction log includes all remediation commits through the
+  latest code-bearing closure slice, and the closing status artifact names that
+  slice explicitly
 - Postgres migration 0009 exists and renames delivery kinds
-- delivery.py handles both old and new kind values, or migration is documented
-  as required pre-deploy step
+- Postgres migration 0010 exists and renames the remaining registry
+  `surface_*` columns to `channel_*`
+- runtime registry delivery handling no longer carries legacy
+  `surface_input`/`surface_action` compatibility; migrations own the rewrite
 - Registry store public method sets are identical between SQLite and Postgres
 - Content store public method sets are identical between SQLite and Postgres
 - No dead public store methods exist in one backend but not the other
+- live app code retains no registry `surface_*` schema/runtime vocabulary
+  outside explicit migration owners/tests
 - Full test suite is green with recorded pass/skip/fail count
 
 ## Post-Remediation Policy

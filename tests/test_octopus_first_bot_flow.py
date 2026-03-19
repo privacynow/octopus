@@ -47,7 +47,7 @@ ensure_provider_auth_ready() {{ :; }}
 ensure_network() {{ :; }}
 run_bot_doctor_until_ready() {{ return 0; }}
 start_bot_until_running() {{ return 0; }}
-printf '123456:real-token\\n' | first_bot_flow quick
+printf '123456:real-token\\n\\n' | first_bot_flow quick
 """
     result = _run_bash(script, cwd=tmp_path)
 
@@ -69,6 +69,32 @@ printf '123456:real-token\\n' | first_bot_flow quick
     assert "This token belongs to Example Bot (@example_bot)." in result.stdout
     assert "Bot is running!" in result.stdout
     assert "Bot name" not in result.stdout + result.stderr
+
+
+def test_prepare_new_bot_setup_quick_can_switch_to_full_mode(tmp_path: Path) -> None:
+    script = f"""
+set -euo pipefail
+cd "{tmp_path}"
+export OCTOPUS_SOURCE_ONLY=1
+source "{REPO}/octopus"
+cd "{tmp_path}"
+prompt_first_bot_identity() {{
+  FIRST_BOT_TELEGRAM_ID=123456789
+  FIRST_BOT_TELEGRAM_USERNAME=example_bot
+  FIRST_BOT_DISPLAY_NAME='Example Bot'
+  FIRST_BOT_TOKEN='123456:real-token'
+}}
+prompt_provider_choice() {{ printf 'claude\\n'; }}
+prompt_full_bot_setup_options() {{
+  BOT_SETUP_ROLE='Advanced Bot'
+  REGISTRY_TARGET_KIND='standalone'
+}}
+prepare_new_bot_setup quick <<< $'full\\n'
+printf 'mode=%s\\nrole=%s\\n' "$NEW_BOT_SETUP_MODE" "$BOT_SETUP_ROLE"
+"""
+    result = _run_bash(script, cwd=tmp_path)
+    assert "mode=full" in result.stdout
+    assert "role=Advanced Bot" in result.stdout
 
 
 def test_first_bot_flow_rejects_duplicate_telegram_identity(tmp_path: Path) -> None:

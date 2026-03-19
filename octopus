@@ -687,6 +687,26 @@ prompt_provider_choice() {
   done
 }
 
+prompt_setup_mode_hatch() {
+  local choice=""
+  while true; do
+    read -r -p "Press Enter for quick setup, or type 'full' for advanced options: " choice || return 1
+    case "$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')" in
+      "")
+        printf 'quick\n'
+        return 0
+        ;;
+      full)
+        printf 'full\n'
+        return 0
+        ;;
+      *)
+        octopus_error "Press Enter for quick setup, or type 'full' for advanced options."
+        ;;
+    esac
+  done
+}
+
 ensure_provider_image_ready() {
   local provider="$1" need_build=0 current_rev="" built_rev=""
   if ! docker image inspect "octopus-agent:$provider" >/dev/null 2>&1; then
@@ -726,6 +746,7 @@ reset_bot_setup_overrides() {
   BOT_SETUP_TIMEOUT_SECONDS="3600"
   BOT_SETUP_WORKING_DIR="/home/bot"
   BOT_SETUP_COMPLETION_WEBHOOK_URL=""
+  NEW_BOT_SETUP_MODE=""
   REGISTRY_TARGET_KIND="standalone"
   REGISTRY_TARGET_URL=""
   REGISTRY_TARGET_TOKEN=""
@@ -843,8 +864,13 @@ prepare_new_bot_setup() {
   NEW_BOT_DISPLAY_NAME="$display_name"
   NEW_BOT_TOKEN="$token"
   NEW_BOT_PROVIDER="$(prompt_provider_choice)"
+  NEW_BOT_SETUP_MODE="$mode"
 
-  if [ "$mode" = "full" ]; then
+  if [ "$mode" = "quick" ]; then
+    NEW_BOT_SETUP_MODE="$(prompt_setup_mode_hatch)" || return 1
+  fi
+
+  if [ "$NEW_BOT_SETUP_MODE" = "full" ]; then
     prompt_full_bot_setup_options || return 1
   fi
 }
@@ -1168,7 +1194,7 @@ EOF
 add_bot_flow() {
   local mode="${1:-quick}"
   prepare_new_bot_setup "$mode" || return 1
-  if [ "$mode" = "quick" ]; then
+  if [ "${NEW_BOT_SETUP_MODE:-$mode}" = "quick" ]; then
     prompt_new_bot_registry_target || return 1
   fi
   ensure_provider_image_ready "$NEW_BOT_PROVIDER"

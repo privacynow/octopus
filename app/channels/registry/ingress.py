@@ -344,7 +344,7 @@ def preview_provider_guidance(
             compact_mode=compact_mode,
         )
     except ValueError as exc:
-        raise RegistryIngressError(404, str(exc)) from exc
+        raise RegistryIngressError(404, "Unknown provider guidance preview target.") from exc
     return presenters.provider_guidance_preview(preview)
 
 

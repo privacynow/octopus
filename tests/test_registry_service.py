@@ -1,7 +1,9 @@
 """Tests for the FastAPI registry control-plane service."""
 
 from datetime import datetime, timezone
+import inspect
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 
@@ -40,6 +42,20 @@ def _configure_runtime_surface(monkeypatch, tmp_path: Path) -> Path:
     ensure_data_dirs(data_dir)
     ingress.reset_for_test()
     return data_dir
+
+
+def _login_ui(client: TestClient) -> None:
+    response = client.post("/ui/login", data={"password": "ui-secret"}, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/ui"
+
+
+def _ui_csrf_token(client: TestClient) -> str:
+    response = client.get("/ui")
+    assert response.status_code == 200
+    match = re.search(r'name="registry-csrf-token" content="([^"]+)"', response.text)
+    assert match is not None
+    return match.group(1)
 
 
 def _enroll_and_register(client: TestClient, name: str, slug: str) -> tuple[str, str]:
@@ -665,12 +681,7 @@ def test_ui_shell_includes_runtime_skills_panel(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
 
-    login = client.post(
-        "/ui/login",
-        data={"password": "ui-secret"},
-        follow_redirects=False,
-    )
-    assert login.status_code == 303
+    _login_ui(client)
 
     response = client.get("/ui")
     assert response.status_code == 200
@@ -683,12 +694,7 @@ def test_ui_shell_includes_rich_registry_editors(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
 
-    login = client.post(
-        "/ui/login",
-        data={"password": "ui-secret"},
-        follow_redirects=False,
-    )
-    assert login.status_code == 303
+    _login_ui(client)
 
     response = client.get("/ui")
     assert response.status_code == 200
@@ -712,7 +718,7 @@ def test_registry_ui_render_shell_helper_includes_editor_markers():
         title_text="Agent Registry",
         heading_text="Agent Registry",
         logout_link='<a href="/ui/logout" class="nav-link">Logout</a>',
-        token="ui-secret",
+        csrf_token="csrf-secret",
     )
 
     assert "registry-editor-ready" in html_text
@@ -720,7 +726,19 @@ def test_registry_ui_render_shell_helper_includes_editor_markers():
     assert "@codemirror/view" in html_text
     assert "runtime-skill-editor-textarea" in html_text
     assert "provider-guidance-editor-textarea" in html_text
-    assert "const token = 'ui-secret';" in html_text
+    assert 'name="registry-csrf-token" content="csrf-secret"' in html_text
+    assert "Authorization: `Bearer" not in html_text
+    assert "const token =" not in html_text
+
+
+def test_registry_ui_shell_source_no_longer_embeds_master_bearer_token():
+    signature = inspect.signature(ui.render_shell_html)
+    assert "csrf_token" in signature.parameters
+    assert "token" not in signature.parameters
+
+    ui_text = Path(ui.__file__).read_text()
+    assert "Authorization: `Bearer" not in ui_text
+    assert "const token =" not in ui_text
 
 
 def test_registry_http_module_has_no_inline_ui_shell_and_stays_under_guard_threshold():
@@ -769,6 +787,16 @@ def test_ui_bootstrap_still_accepts_bearer_token(monkeypatch, tmp_path: Path):
         "/v1/ui/bootstrap",
         headers={"Authorization": "Bearer ui-secret"},
     )
+    assert response.status_code == 200
+
+
+def test_ui_bootstrap_accepts_session_cookie_without_bearer(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _login_ui(client)
+
+    response = client.get("/v1/ui/bootstrap")
+
     assert response.status_code == 200
 
 
@@ -1189,7 +1217,46 @@ def test_create_conversation_api_unauthorized(monkeypatch, tmp_path: Path):
     )
 
     assert response.status_code == 401
-    assert response.json() == {"detail": "Invalid UI token"}
+    assert response.json() == {"detail": "Invalid UI session or token"}
+
+
+def test_create_conversation_api_requires_csrf_for_session_auth(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    agent_id, _ = _enroll_and_register(client, "Product Bot", "product-bot-csrf")
+    _login_ui(client)
+
+    response = client.post(
+        "/v1/ui/conversations",
+        json={
+            "target_agent_id": agent_id,
+            "message_text": "Run the nightly report",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Invalid or missing CSRF token"}
+
+
+def test_create_conversation_api_accepts_session_auth_with_csrf(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    agent_id, _ = _enroll_and_register(client, "Product Bot", "product-bot-csrf-ok")
+    _login_ui(client)
+    csrf_token = _ui_csrf_token(client)
+
+    response = client.post(
+        "/v1/ui/conversations",
+        headers={"X-CSRF-Token": csrf_token},
+        json={
+            "target_agent_id": agent_id,
+            "title": "Session-authored work",
+            "message_text": "Run the nightly report",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["title"] == "Session-authored work"
 
 
 def test_ui_create_conversation_creates_delivery(monkeypatch, tmp_path: Path):

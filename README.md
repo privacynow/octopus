@@ -122,7 +122,7 @@ http://localhost:8787/ui
 
 Log in with `REGISTRY_UI_TOKEN` from `.env.registry`.
 
-![Registry UI screenshot](docs/registry-ui-screenshot.png)
+![Registry UI screenshot](registry-ui-screenshot.png)
 
 Use the Registry UI when you want to:
 
@@ -325,5 +325,4 @@ models are available from the built-in FastAPI docs.
 
 ## More Documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): system architecture and boundaries
-- [CHANGELOG.md](CHANGELOG.md): notable product changes
+- [ARCHITECTURE.md](ARCHITECTURE.md): system architecture and boundaries

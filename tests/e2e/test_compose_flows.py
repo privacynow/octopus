@@ -1,7 +1,7 @@
 """Compose-based E2E tests for the Docker-first operator path.
 
 Run only when E2E_COMPOSE=1 and Docker is available. Skipped in normal pytest runs.
-See README.md for the operator path and docs/ARCHITECTURE.md for the runtime/testing contract.
+See README.md for the operator path and ARCHITECTURE.md for the runtime/testing contract.
 
 Primary gate: test_compose_sqlite_local_runtime_primary — Docker Local Runtime with SQLite,
 no BOT_DATABASE_URL, no Postgres. Bounded Postgres coverage: test_compose_bootstrap_doctor,

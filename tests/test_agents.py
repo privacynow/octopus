@@ -244,10 +244,10 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
             calls.append(("poll", cursor))
             return {
                 "deliveries": [
-                    {"delivery_id": "d1", "kind": "surface_input", "payload": {"conversation_id": "c1", "text": "hello"}},
+                    {"delivery_id": "d1", "kind": "channel_input", "payload": {"conversation_id": "c1", "text": "hello"}},
                     {
                         "delivery_id": "d2",
-                        "kind": "surface_action",
+                        "kind": "channel_action",
                         "payload": {"conversation_id": "c1", "action": "cancel_conversation"},
                     },
                 ],
@@ -263,7 +263,7 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
 
     async def handler(delivery):
         seen_deliveries.append(delivery["delivery_id"])
-        return "accepted" if delivery["kind"] == "surface_input" else "rejected"
+        return "accepted" if delivery["kind"] == "channel_input" else "rejected"
 
     config = make_config(
         data_dir=tmp_path,
@@ -314,8 +314,8 @@ async def test_agent_runtime_poll_isolates_bad_delivery_and_acks_rest(monkeypatc
             calls.append(("poll", cursor))
             return {
                 "deliveries": [
-                    {"delivery_id": "d1", "kind": "surface_input", "payload": {"conversation_id": "c1", "text": "hello"}},
-                    {"delivery_id": "d2", "kind": "surface_input", "payload": {"conversation_id": "c2", "text": "world"}},
+                    {"delivery_id": "d1", "kind": "channel_input", "payload": {"conversation_id": "c1", "text": "hello"}},
+                    {"delivery_id": "d2", "kind": "channel_input", "payload": {"conversation_id": "c2", "text": "world"}},
                 ],
                 "next_cursor": "2",
             }
@@ -404,7 +404,7 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
     outcome_message = await admit_registry_delivery(
         config,
         {
-            "kind": "surface_input",
+            "kind": "channel_input",
             "delivery_id": "delivery-1",
             "payload": {"conversation_id": "conv-1", "text": "hello"},
         },
@@ -501,7 +501,7 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
     ]
 
 
-async def test_handle_registry_surface_action_and_control_dispatch(tmp_path: Path):
+async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Path):
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
@@ -519,7 +519,7 @@ async def test_handle_registry_surface_action_and_control_dispatch(tmp_path: Pat
             cfg,
             {
                 "delivery_id": "d-approve",
-                "kind": "surface_action",
+                "kind": "channel_action",
                 "payload": {"conversation_id": "conv-approve", "action": "approve"},
             },
             runtime=runtime,
@@ -528,7 +528,7 @@ async def test_handle_registry_surface_action_and_control_dispatch(tmp_path: Pat
             cfg,
             {
                 "delivery_id": "d-cancel",
-                "kind": "surface_action",
+                "kind": "channel_action",
                 "payload": {"conversation_id": "conv-cancel", "action": "cancel_conversation"},
             },
             runtime=runtime,

@@ -20,7 +20,7 @@ def _register_agent(store: RegistrySQLiteStore, *, name: str, slug: str, capabil
             "provider": "codex",
             "mode": "registry",
             "connectivity_state": "connected",
-            "surface_capabilities": ["registry"],
+            "channel_capabilities": ["registry"],
             "version": "test",
         }
     )
@@ -36,7 +36,7 @@ def _register_agent(store: RegistrySQLiteStore, *, name: str, slug: str, capabil
                 "description": f"{name} description",
                 "provider": "codex",
                 "mode": "registry",
-                "surface_capabilities": ["registry"],
+                "channel_capabilities": ["registry"],
                 "version": "test",
             },
             "connectivity_state": "connected",

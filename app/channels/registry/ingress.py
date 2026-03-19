@@ -34,18 +34,18 @@ from app.session_state import SessionState
 
 ProviderStateFactory = Callable[[], dict[str, Any]]
 
-_context: "RuntimeSurfaceContext | None" = None
+_context: "RuntimeChannelContext | None" = None
 
 
 @dataclass(frozen=True)
-class RuntimeSurfaceContext:
+class RuntimeChannelContext:
     config: BotConfig
     provider_state_factory: ProviderStateFactory
 
 
 @dataclass(frozen=True)
 class RuntimeConversationContext:
-    context: RuntimeSurfaceContext
+    context: RuntimeChannelContext
     conversation_key: str
     session: SessionState
 
@@ -57,7 +57,7 @@ class RegistryIngressError(RuntimeError):
         self.detail = detail
 
 
-def get_runtime_surface_context() -> RuntimeSurfaceContext:
+def get_runtime_channel_context() -> RuntimeChannelContext:
     global _context
     if _context is None:
         config = load_config_provider_health()
@@ -68,7 +68,7 @@ def get_runtime_surface_context() -> RuntimeSurfaceContext:
             provider_state_factory = CodexProvider(config).new_provider_state
         else:
             provider_state_factory = ClaudeProvider(config).new_provider_state
-        _context = RuntimeSurfaceContext(
+        _context = RuntimeChannelContext(
             config=config,
             provider_state_factory=provider_state_factory,
         )
@@ -85,7 +85,7 @@ def _flows():
 
 def prompt_warning_context() -> PromptWarningContext | None:
     try:
-        context = get_runtime_surface_context()
+        context = get_runtime_channel_context()
     except Exception:
         return None
     return PromptWarningContext(
@@ -101,7 +101,7 @@ def load_runtime_conversation(store: AbstractRegistryStore, conversation_id: str
         store.get_conversation(conversation_id)
     except KeyError as exc:
         raise RegistryIngressError(404, f"Unknown conversation: {conversation_id}") from exc
-    context = get_runtime_surface_context()
+    context = get_runtime_channel_context()
     conversation_key = conversation_key_for_ref(conversation_id)
     return RuntimeConversationContext(
         context=context,
@@ -221,7 +221,7 @@ def install_catalog_skill(skill_name: str) -> dict[str, Any]:
 
 def uninstall_catalog_skill(skill_name: str) -> dict[str, Any]:
     try:
-        context = get_runtime_surface_context()
+        context = get_runtime_channel_context()
         default_skills = context.config.default_skills
     except Exception:
         default_skills = ()

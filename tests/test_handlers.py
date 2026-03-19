@@ -345,7 +345,7 @@ async def test_discover_degraded_reports_registry_connectivity():
         assert "registry unavailable" in reply
 
 
-async def test_registry_surface_input_respects_approval_mode():
+async def test_registry_channel_input_respects_approval_mode():
     with fresh_env(
         config_overrides={
             "approval_mode": "on",
@@ -422,7 +422,7 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
             cfg,
             {
                 "delivery_id": "registry-approve-delegation",
-                "kind": "surface_action",
+                "kind": "channel_action",
                 "payload": {
                     "conversation_ref": "registry:conv-approve",
                     "action": "approve_delegation",
@@ -475,7 +475,7 @@ async def test_cancel_delegation_from_registry_delivery():
             cfg,
             {
                 "delivery_id": "registry-cancel-delegation",
-                "kind": "surface_action",
+                "kind": "channel_action",
                 "payload": {
                     "conversation_ref": "registry:conv-cancel",
                     "action": "cancel_delegation",
@@ -1111,7 +1111,7 @@ async def test_registry_surface_parent_resumes_through_registry_surface(monkeypa
         )
 
 
-async def test_registry_surface_action_retry_skip_clears_pending_retry():
+async def test_registry_channel_action_retry_skip_clears_pending_retry():
     with fresh_env(
         config_overrides={
             "approval_mode": "on",
@@ -1137,7 +1137,7 @@ async def test_registry_surface_action_retry_skip_clears_pending_retry():
             cfg,
             {
                 "delivery_id": "registry-retry-skip",
-                "kind": "surface_action",
+                "kind": "channel_action",
                 "payload": {
                     "conversation_id": telegram_conversation_ref(cfg, chat_id),
                     "action": "retry_skip",
@@ -1153,7 +1153,7 @@ async def test_registry_surface_action_retry_skip_clears_pending_retry():
         assert session_after.get("pending_retry") is None
 
 
-async def test_registry_surface_action_retry_allow_executes_request():
+async def test_registry_channel_action_retry_allow_executes_request():
     with fresh_env(
         config_overrides={
             "approval_mode": "on",
@@ -1180,7 +1180,7 @@ async def test_registry_surface_action_retry_allow_executes_request():
             cfg,
             {
                 "delivery_id": "registry-retry-allow",
-                "kind": "surface_action",
+                "kind": "channel_action",
                 "payload": {
                     "conversation_id": telegram_conversation_ref(cfg, chat_id),
                     "action": "retry_allow",
@@ -1198,7 +1198,7 @@ async def test_registry_surface_action_retry_allow_executes_request():
         assert session_after.get("pending_retry") is None
 
 
-async def test_registry_surface_action_recovery_discard_discards_pending_recovery():
+async def test_registry_channel_action_recovery_discard_discards_pending_recovery():
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
@@ -1224,7 +1224,7 @@ async def test_registry_surface_action_recovery_discard_discards_pending_recover
             cfg,
             {
                 "delivery_id": "registry-recovery-discard",
-                "kind": "surface_action",
+                "kind": "channel_action",
                 "payload": {
                     "conversation_id": telegram_conversation_ref(cfg, chat_id),
                     "action": "recovery_discard",
@@ -1243,7 +1243,7 @@ async def test_registry_surface_action_recovery_discard_discards_pending_recover
         assert row["error"] == "discarded"
 
 
-async def test_registry_surface_action_recovery_replay_executes_request():
+async def test_registry_channel_action_recovery_replay_executes_request():
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
@@ -1270,7 +1270,7 @@ async def test_registry_surface_action_recovery_replay_executes_request():
             cfg,
             {
                 "delivery_id": "registry-recovery-replay",
-                "kind": "surface_action",
+                "kind": "channel_action",
                 "payload": {
                     "conversation_id": telegram_conversation_ref(cfg, chat_id),
                     "action": "recovery_replay",

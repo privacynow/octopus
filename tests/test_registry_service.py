@@ -57,7 +57,7 @@ def _enroll_and_register(client: TestClient, name: str, slug: str) -> tuple[str,
                 "provider": "codex",
                 "mode": "registry",
                 "connectivity_state": "degraded",
-                "surface_capabilities": ["telegram", "registry"],
+                "channel_capabilities": ["telegram", "registry"],
                 "version": "test",
             },
         },
@@ -78,7 +78,7 @@ def _enroll_and_register(client: TestClient, name: str, slug: str) -> tuple[str,
                 "description": "Writes and tests code",
                 "provider": "codex",
                 "mode": "registry",
-                "surface_capabilities": ["telegram", "registry"],
+                "channel_capabilities": ["telegram", "registry"],
                 "version": "test",
             },
             "connectivity_state": "connected",
@@ -429,7 +429,7 @@ def test_registry_conversation_skill_activation_surface(monkeypatch, tmp_path: P
         json={
             "conversation_id": conversation_id,
             "title": "Telegram chat 12345",
-            "origin_surface": "telegram",
+            "origin_channel": "telegram",
             "external_id": "12345",
         },
     )
@@ -477,7 +477,7 @@ def test_registry_conversation_skill_state_filters_unresolvable_raw_skills(monke
         json={
             "conversation_id": conversation_id,
             "title": "Telegram chat 12346",
-            "origin_surface": "telegram",
+            "origin_channel": "telegram",
             "external_id": "12346",
         },
     )
@@ -503,7 +503,7 @@ def test_registry_conversation_skill_surface_lazy_loads_default_session(monkeypa
         json={
             "conversation_id": "conv-runtime-1",
             "title": "Registry runtime conversation",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
             "external_id": "conv-runtime-1",
         },
     )
@@ -611,7 +611,7 @@ def test_registry_bind_conversation_is_visible_in_ui(monkeypatch, tmp_path: Path
         json={
             "conversation_id": "telegram:dev-bot:123",
             "title": "Telegram chat 123",
-            "origin_surface": "telegram",
+            "origin_channel": "telegram",
             "external_id": "123",
         },
     )
@@ -772,7 +772,7 @@ def test_ui_bootstrap_still_accepts_bearer_token(monkeypatch, tmp_path: Path):
     assert response.status_code == 200
 
 
-def test_registry_ui_conversation_routes_surface_input_to_polled_bot(monkeypatch, tmp_path: Path):
+def test_registry_ui_conversation_routes_channel_input_to_polled_bot(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
 
@@ -797,7 +797,7 @@ def test_registry_ui_conversation_routes_surface_input_to_polled_bot(monkeypatch
     assert poll.status_code == 200
     deliveries = poll.json()["deliveries"]
     assert len(deliveries) == 1
-    assert deliveries[0]["kind"] == "surface_input"
+    assert deliveries[0]["kind"] == "channel_input"
     assert deliveries[0]["payload"]["conversation_id"] == conversation_id
     assert deliveries[0]["payload"]["text"] == "Please refine this PRD."
 
@@ -827,7 +827,7 @@ def test_publish_timeline_stores_events(monkeypatch, tmp_path: Path):
         json={
             "conversation_id": "conv-timeline-1",
             "title": "Timeline conversation",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
             "external_id": "conv-timeline-1",
         },
     )
@@ -880,7 +880,7 @@ def test_ui_bootstrap_includes_timeline_event_count(monkeypatch, tmp_path: Path)
         json={
             "conversation_id": "conv-count-1",
             "title": "Counted timeline",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
             "external_id": "conv-count-1",
         },
     )
@@ -931,7 +931,7 @@ def test_ui_search_returns_matching_conversations(monkeypatch, tmp_path: Path):
         json={
             "conversation_id": "conv-search-1",
             "title": "Searchable conversation",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
             "external_id": "conv-search-1",
         },
     )
@@ -989,7 +989,7 @@ def test_ui_export_conversation_returns_markdown_and_missing_conversation_404(mo
         json={
             "conversation_id": "conv-export-1",
             "title": "Exportable conversation",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
             "external_id": "conv-export-1",
         },
     )
@@ -1056,7 +1056,7 @@ def test_ui_usage_endpoint_returns_daily_totals(monkeypatch, tmp_path: Path):
         json={
             "conversation_id": "conv-usage-1",
             "title": "Usage conversation",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
             "external_id": "conv-usage-1",
         },
     )
@@ -1217,7 +1217,7 @@ def test_ui_create_conversation_creates_delivery(monkeypatch, tmp_path: Path):
     assert poll.status_code == 200
     deliveries = poll.json()["deliveries"]
     assert len(deliveries) == 1
-    assert deliveries[0]["kind"] == "surface_input"
+    assert deliveries[0]["kind"] == "channel_input"
     assert deliveries[0]["payload"]["conversation_id"] == conversation_id
     assert deliveries[0]["payload"]["text"] == "Start from the registry UI."
 
@@ -1252,7 +1252,7 @@ def test_ui_action_delivery_includes_conversation_ref(monkeypatch, tmp_path: Pat
         params={"cursor": "0", "limit": 20, "wait_seconds": 0},
     )
     assert poll.status_code == 200
-    deliveries = [item for item in poll.json()["deliveries"] if item["kind"] == "surface_action"]
+    deliveries = [item for item in poll.json()["deliveries"] if item["kind"] == "channel_action"]
     assert len(deliveries) == 1
     assert deliveries[0]["payload"]["conversation_ref"] == conversation_id
     assert deliveries[0]["payload"]["action"] == "approve_delegation"
@@ -1321,7 +1321,7 @@ def test_publish_timeline_rejects_foreign_conversation(monkeypatch, tmp_path: Pa
         json={
             "conversation_id": "conv-owner-1",
             "title": "Owner conversation",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
             "external_id": "conv-owner-1",
         },
     )

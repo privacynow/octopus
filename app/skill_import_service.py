@@ -108,7 +108,7 @@ def _diff_tracks(
 
 
 class SkillImportService:
-    """Surface-neutral runtime skill import lifecycle service."""
+    """Channel-neutral runtime skill import lifecycle service."""
 
     def __init__(self) -> None:
         self._catalog = get_skill_catalog_service()

@@ -134,14 +134,14 @@ T = TypeVar("T")
 
 
 class RuntimeHealthProjector(Protocol, Generic[T]):
-    """Project canonical health into another surface's wire/storage shape."""
+    """Project canonical health into another channel's wire/storage shape."""
 
     def project(self, report: RuntimeHealthReport) -> T:
         ...
 
 
 class RuntimeHealthFormatter(Protocol):
-    """Format canonical health for human-readable surfaces."""
+    """Format canonical health for human-readable channels."""
 
     def format(self, report: RuntimeHealthReport) -> list[str] | str:
         ...

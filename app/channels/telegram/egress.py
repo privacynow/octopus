@@ -93,7 +93,7 @@ class TelegramChannelEgress(ChannelEgress):
             bound_config,
             conversation_ref=self.conversation_ref,
             title=title,
-            origin_surface="telegram",
+            origin_channel="telegram",
             external_id=str(self.chat_id),
         )
 
@@ -103,7 +103,7 @@ class TelegramChannelEgress(ChannelEgress):
         await publish_timeline_event(
             self._config,
             conversation_ref=self.conversation_ref,
-            kind="surface_input",
+            kind="channel_input",
             title="Telegram message",
             body=text,
         )

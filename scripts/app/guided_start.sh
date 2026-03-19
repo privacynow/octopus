@@ -23,21 +23,6 @@ echo "=== Guided setup and start ==="
 echo "Instance: $INSTANCE"
 echo "Config:   $BOT_ENV_FILE"
 
-prompt_with_default() {
-  local prompt="$1" default="${2:-}" value=""
-  if [ -n "$default" ]; then
-    read -r -p "$prompt [$default]: " value || true
-    echo "${value:-$default}"
-    return
-  fi
-  read -r -p "$prompt: " value || true
-  echo "$value"
-}
-
-escape_env() {
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
-}
-
 create_env_file_if_missing() {
   if [ -f "$BOT_ENV_FILE" ]; then
     return
@@ -91,7 +76,7 @@ create_env_file_if_missing() {
     echo "BOT_PROVIDER=$provider"
     echo "BOT_COMPACT_MODE=1"
     echo "BOT_AGENT_MODE=$mode"
-    echo "BOT_AGENT_DISPLAY_NAME=\"$(escape_env "$display_name")\""
+    echo "BOT_AGENT_DISPLAY_NAME=\"$(escape_env_value "$display_name")\""
     if [ "$mode" = "registry" ]; then
       echo "BOT_AGENT_REGISTRY_URL=$registry_url"
     fi
@@ -152,28 +137,28 @@ create_env_file_if_missing() {
       echo "BOT_ALLOW_OPEN=1"
     fi
     if [ -n "$role" ]; then
-      echo "BOT_ROLE=\"$(escape_env "$role")\""
+      echo "BOT_ROLE=\"$(escape_env_value "$role")\""
     fi
     if [ -n "$skills" ]; then
       echo "BOT_SKILLS=$skills"
     fi
     echo "BOT_AGENT_MODE=$mode"
-    echo "BOT_AGENT_DISPLAY_NAME=\"$(escape_env "$display_name")\""
+    echo "BOT_AGENT_DISPLAY_NAME=\"$(escape_env_value "$display_name")\""
     if [ -n "$role" ]; then
-      echo "BOT_AGENT_ROLE=\"$(escape_env "$role")\""
+      echo "BOT_AGENT_ROLE=\"$(escape_env_value "$role")\""
     fi
     if [ -n "$tags" ]; then
       echo "BOT_AGENT_TAGS=$tags"
     fi
     if [ -n "$description" ]; then
-      echo "BOT_AGENT_DESCRIPTION=\"$(escape_env "$description")\""
+      echo "BOT_AGENT_DESCRIPTION=\"$(escape_env_value "$description")\""
     fi
     if [ -n "$skills" ]; then
       echo "BOT_AGENT_SKILLS=$skills"
     fi
     echo "BOT_AGENT_POLL_INTERVAL_SECONDS=5"
     if [ -n "$completion_webhook_url" ]; then
-      echo "BOT_COMPLETION_WEBHOOK_URL=$(escape_env "$completion_webhook_url")"
+      echo "BOT_COMPLETION_WEBHOOK_URL=$(escape_env_value "$completion_webhook_url")"
     fi
     if [ "$mode" = "registry" ]; then
       echo "# Registry URL: use host.docker.internal on macOS/Windows, 172.17.0.1 on Linux."
@@ -234,24 +219,85 @@ build_registry_ui_display_url() {
 }
 
 print_startup_failure_help() {
+  local doctor_output=""
   echo "Bot failed to stay up after startup." >&2
-  echo "Running full app health check for a clearer diagnosis..." >&2
-  if ! bot_compose run --rm bot python -m app.main --doctor >&2; then
-    :
+  echo "Fresh diagnosis:" >&2
+  if doctor_output="$(bot_compose run --rm bot python -m app.main --doctor 2>&1)"; then
+    print_doctor_output_for_operator "$doctor_output"
+  else
+    print_doctor_output_for_operator "$doctor_output"
+    if doctor_output_has_token_rejection "$doctor_output"; then
+      if prompt_rejected_telegram_token_repair; then
+        echo "" >&2
+        echo "Updated TELEGRAM_BOT_TOKEN in $BOT_ENV_FILE. Run ./scripts/app/guided_start.sh $INSTANCE again." >&2
+      fi
+    fi
   fi
   echo "" >&2
-  echo "If you need raw container logs:" >&2
+  echo "Raw container logs, only if the diagnosis above is not enough:" >&2
   echo "  ./scripts/app/logs_instance.sh $INSTANCE" >&2
 }
 
+prompt_rejected_telegram_token_repair() {
+  local current_token new_token note
+  current_token="$(read_bot_env_value TELEGRAM_BOT_TOKEN "$BOT_ENV_FILE")"
+  note="The current TELEGRAM_BOT_TOKEN in $BOT_ENV_FILE was rejected by Telegram."
+  new_token="$(prompt_channel_token_with_help \
+    telegram \
+    "Paste a replacement Telegram bot token" \
+    "$current_token" \
+    "$note" \
+    0)" || return 1
+  upsert_env_file_value TELEGRAM_BOT_TOKEN "$new_token" "$BOT_ENV_FILE"
+  return 0
+}
+
+ensure_guided_telegram_token() {
+  local current_token note repaired=""
+  current_token="$(read_bot_env_value TELEGRAM_BOT_TOKEN "$BOT_ENV_FILE")"
+  if [ -n "$current_token" ] && ! telegram_token_is_placeholder "$current_token" && channel_token_looks_plausible telegram "$current_token"; then
+    return 0
+  fi
+  if telegram_token_is_placeholder "$current_token"; then
+    note="The current TELEGRAM_BOT_TOKEN in $BOT_ENV_FILE is still a placeholder."
+  elif [ -n "$current_token" ]; then
+    note="The current TELEGRAM_BOT_TOKEN in $BOT_ENV_FILE does not look like a real Telegram token."
+  else
+    note="TELEGRAM_BOT_TOKEN is missing from $BOT_ENV_FILE."
+  fi
+  repaired="$(prompt_channel_token_with_help \
+    telegram \
+    "Telegram bot token" \
+    "$current_token" \
+    "$note" \
+    0)" || {
+      echo "Could not read a replacement Telegram bot token. Update $BOT_ENV_FILE and run ./scripts/app/guided_start.sh again." >&2
+      exit 1
+    }
+  upsert_env_file_value TELEGRAM_BOT_TOKEN "$repaired" "$BOT_ENV_FILE"
+}
+
 run_full_health_check_or_exit() {
-  echo ""
-  echo "Step 3/4: Full app health check..."
-  if ! bot_compose run --rm bot python -m app.main --doctor; then
+  local doctor_output=""
+  while true; do
+    echo ""
+    echo "Step 3/4: Full app health check..."
+    if doctor_output="$(bot_compose run --rm bot python -m app.main --doctor 2>&1)"; then
+      print_doctor_output_for_operator "$doctor_output"
+      return 0
+    fi
+    print_doctor_output_for_operator "$doctor_output"
+    if doctor_output_has_token_rejection "$doctor_output"; then
+      if prompt_rejected_telegram_token_repair; then
+        echo "" >&2
+        echo "Re-running the health check with the updated Telegram token..." >&2
+        continue
+      fi
+    fi
     echo "" >&2
     echo "Full app health check failed. Fix the issue above, then run ./scripts/app/guided_start.sh again." >&2
     exit 1
-  fi
+  done
 }
 
 bot_is_running() {
@@ -275,6 +321,7 @@ print_box_wrapped_line() {
 create_env_file_if_missing
 restrict_secret_file_permissions "$BOT_ENV_FILE"
 check_env_bot_required "$BOT_ENV_FILE"
+ensure_guided_telegram_token
 telegram_token="$(read_bot_env_value TELEGRAM_BOT_TOKEN "$BOT_ENV_FILE")"
 require_real_telegram_token "$telegram_token" "$BOT_ENV_FILE"
 

@@ -162,6 +162,8 @@ def test_lib_env_exposes_channel_setup_help_for_telegram():
     text = script.read_text()
     assert "print_channel_setup_help" in text
     assert "prompt_channel_token_with_help" in text
+    assert "upsert_env_file_value" in text
+    assert "format_doctor_output_for_operator" in text
     assert "https://t.me/BotFather" in text
     assert "/newbot" in text
     assert "restrict_secret_file_permissions" in text
@@ -186,6 +188,8 @@ def test_guided_start_uses_channel_token_helper():
     script = repo / "scripts" / "app" / "guided_start.sh"
     text = script.read_text()
     assert "prompt_channel_token_with_help telegram" in text
+    assert "ensure_guided_telegram_token" in text
+    assert "prompt_rejected_telegram_token_repair" in text
 
 
 def test_shared_start_can_bootstrap_env_with_channel_help():
@@ -194,6 +198,8 @@ def test_shared_start_can_bootstrap_env_with_channel_help():
     text = script.read_text()
     assert "create_env_file_if_missing" in text
     assert "prompt_channel_token_with_help telegram" in text
+    assert "ensure_shared_telegram_token" in text
+    assert "prompt_rejected_shared_telegram_token_repair" in text
     assert "Public webhook URL (must end in /webhook)" in text
     assert "Remote registry URLs should use https://" in text
 
@@ -246,6 +252,8 @@ def test_guided_start_runs_doctor_on_post_start_failure():
     assert "run --rm bot python -m app.main --doctor" in text
     assert "logs_instance.sh" in text
     assert "Last logs:" not in text
+    assert "Fresh diagnosis:" in text
+    assert "print_doctor_output_for_operator" in text
 
 
 def test_shared_start_runs_doctor_on_post_start_failure():
@@ -255,6 +263,8 @@ def test_shared_start_runs_doctor_on_post_start_failure():
     text = script.read_text()
     assert "run --rm bot-webhook python -m app.main --doctor" in text
     assert "logs -f bot-webhook bot-worker" in text
+    assert "Fresh diagnosis:" in text
+    assert "print_doctor_output_for_operator" in text
 
 
 def test_shared_start_runs_health_check_before_webhook_registration():

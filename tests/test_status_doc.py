@@ -48,6 +48,7 @@ def test_status_doc_records_live_phase8_state_and_owners_in_authoritative_sectio
         "0a2a3ef",
         "6c58cae",
         "5a07330",
+        "99939f0",
         "app/workflows/execution/finalization.py",
     )
 
@@ -109,6 +110,7 @@ def test_status_doc_lede_points_to_live_phase8_closure_and_marks_phase7_as_histo
         "`## Current Authoritative Status` (live post-Phase-8 closure)",
         "The initial Phase 8 closure at",
         "The post-audit follow-up is now closed:",
+        "final cap-restore complete:",
     )
 
     for fragment in required_fragments:

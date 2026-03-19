@@ -14,11 +14,13 @@ from pydantic import BaseModel, Field
 from app.channels.registry.auth import (
     clear_ui_session,
     configure_session_middleware,
+    current_ui_csrf_token,
     load_settings,
     mark_ui_session_authenticated,
     require_agent_token,
     require_ui_session,
     require_ui_token,
+    require_ui_write_access,
     ui_password_matches,
     ui_session_is_valid,
 )
@@ -325,7 +327,7 @@ def api_catalog_skill_lifecycle_detail(
 def api_catalog_skill_edit_draft(
     skill_name: str,
     payload: RuntimeSkillDraftUpdateRequest,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return edit_catalog_skill_draft(
@@ -343,7 +345,7 @@ def api_catalog_skill_edit_draft(
 def api_catalog_skill_submit(
     skill_name: str,
     payload: LifecycleActionRequest,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return submit_catalog_skill(skill_name, actor_key=payload.actor_key, note=payload.note)
@@ -355,7 +357,7 @@ def api_catalog_skill_submit(
 def api_catalog_skill_approve(
     skill_name: str,
     payload: LifecycleActionRequest,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return approve_catalog_skill(skill_name, actor_key=payload.actor_key, note=payload.note)
@@ -367,7 +369,7 @@ def api_catalog_skill_approve(
 def api_catalog_skill_reject(
     skill_name: str,
     payload: LifecycleActionRequest,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return reject_catalog_skill(skill_name, actor_key=payload.actor_key, note=payload.note)
@@ -379,7 +381,7 @@ def api_catalog_skill_reject(
 def api_catalog_skill_publish(
     skill_name: str,
     payload: LifecycleActionRequest,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return publish_catalog_skill(skill_name, actor_key=payload.actor_key, note=payload.note)
@@ -391,7 +393,7 @@ def api_catalog_skill_publish(
 def api_catalog_skill_archive(
     skill_name: str,
     payload: LifecycleActionRequest,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return archive_catalog_skill(skill_name, actor_key=payload.actor_key, note=payload.note)
@@ -402,7 +404,7 @@ def api_catalog_skill_archive(
 @app.post("/v1/catalog/skills/{skill_name}/install")
 def api_catalog_skill_install(
     skill_name: str,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return install_catalog_skill(skill_name)
@@ -413,7 +415,7 @@ def api_catalog_skill_install(
 @app.post("/v1/catalog/skills/{skill_name}/uninstall")
 def api_catalog_skill_uninstall(
     skill_name: str,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return uninstall_catalog_skill(skill_name)
@@ -424,7 +426,7 @@ def api_catalog_skill_uninstall(
 @app.post("/v1/catalog/skills/{skill_name}/update")
 def api_catalog_skill_update(
     skill_name: str,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return update_catalog_skill(skill_name)
@@ -461,7 +463,7 @@ def api_conversation_activate_skill(
     skill_name: str,
     payload: ConversationSkillMutationRequest,
     store: AbstractRegistryStore = Depends(get_store),
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return activate_conversation_skill(
@@ -481,7 +483,7 @@ def api_conversation_deactivate_skill(
     skill_name: str,
     payload: ConversationSkillMutationRequest,
     store: AbstractRegistryStore = Depends(get_store),
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return deactivate_conversation_skill(
@@ -499,7 +501,7 @@ def api_conversation_clear_skills(
     conversation_id: str,
     payload: ConversationSkillMutationRequest,
     store: AbstractRegistryStore = Depends(get_store),
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return clear_conversation_skills(
@@ -515,7 +517,7 @@ def api_conversation_clear_skills(
 def api_provider_guidance_preview(
     provider_name: str,
     payload: ProviderGuidancePreviewRequest,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return preview_provider_guidance(
@@ -549,7 +551,7 @@ def api_provider_guidance_detail(
 def api_provider_guidance_edit_draft(
     provider_name: str,
     payload: ProviderGuidanceDraftUpdateRequest,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return edit_provider_guidance_draft(
@@ -567,7 +569,7 @@ def api_provider_guidance_edit_draft(
 def api_provider_guidance_submit(
     provider_name: str,
     payload: LifecycleActionRequest,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return submit_provider_guidance(provider_name, actor_key=payload.actor_key, note=payload.note)
@@ -579,7 +581,7 @@ def api_provider_guidance_submit(
 def api_provider_guidance_approve(
     provider_name: str,
     payload: LifecycleActionRequest,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return approve_provider_guidance(provider_name, actor_key=payload.actor_key, note=payload.note)
@@ -591,7 +593,7 @@ def api_provider_guidance_approve(
 def api_provider_guidance_reject(
     provider_name: str,
     payload: LifecycleActionRequest,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return reject_provider_guidance(provider_name, actor_key=payload.actor_key, note=payload.note)
@@ -603,7 +605,7 @@ def api_provider_guidance_reject(
 def api_provider_guidance_publish(
     provider_name: str,
     payload: LifecycleActionRequest,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return publish_provider_guidance(provider_name, actor_key=payload.actor_key, note=payload.note)
@@ -615,7 +617,7 @@ def api_provider_guidance_publish(
 def api_provider_guidance_archive(
     provider_name: str,
     payload: LifecycleActionRequest,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
 ) -> dict[str, Any]:
     try:
         return archive_provider_guidance(provider_name, actor_key=payload.actor_key, note=payload.note)
@@ -670,7 +672,7 @@ def ui_shell(request: Request) -> str:
         title_text=title_text,
         heading_text=heading_text,
         logout_link=logout_link,
-        token=settings.ui_token or "",
+        csrf_token=current_ui_csrf_token(request),
     )
 
 @app.get("/v1/ui/bootstrap")
@@ -775,7 +777,7 @@ def ui_usage(
 @app.post("/v1/ui/capabilities/{capability_name}/enable")
 def ui_enable_capability(
     capability_name: str,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     item = CapabilityService(store).set_enabled(capability_name, enabled=True)
@@ -785,7 +787,7 @@ def ui_enable_capability(
 @app.post("/v1/ui/capabilities/{capability_name}/disable")
 def ui_disable_capability(
     capability_name: str,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     item = CapabilityService(store).set_enabled(capability_name, enabled=False)
@@ -795,7 +797,7 @@ def ui_disable_capability(
 @app.post("/v1/ui/conversations", status_code=201)
 def ui_create_conversation(
     payload: CreateConversationRequest,
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     if not any(agent["agent_id"] == payload.target_agent_id for agent in store.list_agents()):
@@ -868,7 +870,7 @@ def ui_export_conversation(
 def ui_add_conversation_message(
     conversation_id: str,
     payload: dict[str, Any],
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     return store.add_conversation_message(conversation_id, payload.get("text", ""))
@@ -878,7 +880,7 @@ def ui_add_conversation_message(
 def ui_add_conversation_action(
     conversation_id: str,
     payload: dict[str, Any],
-    _: None = Depends(require_ui_token),
+    _: None = Depends(require_ui_write_access),
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     return store.add_conversation_action(

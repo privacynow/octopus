@@ -432,7 +432,7 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
     assert ("timeline", "task-1") in seen
 
 
-async def test_admit_registry_delivery_accepts_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
+async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
     seen: list[tuple[str, str]] = []
 
     async def fake_bind(*args, **kwargs):
@@ -465,9 +465,8 @@ async def test_admit_registry_delivery_accepts_legacy_surface_input_kind(monkeyp
         },
     )
 
-    assert outcome == "accepted"
-    assert ("bind", "conv-legacy") in seen
-    assert ("timeline", "conv-legacy") in seen
+    assert outcome == "rejected"
+    assert seen == []
 
 
 async def test_handle_registry_routed_result_publishes_parent_timeline_before_retry_on_startup_race(monkeypatch, tmp_path: Path):
@@ -593,7 +592,7 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
         ) == ("cancel_conversation", _reg_conv("conv-cancel"), "conv-cancel")
 
 
-async def test_handle_registry_delivery_accepts_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
+async def test_handle_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
     seen: list[tuple[str, str]] = []
 
     async def fake_bind(*args, **kwargs):
@@ -631,12 +630,11 @@ async def test_handle_registry_delivery_accepts_legacy_surface_input_kind(monkey
         ),
     )
 
-    assert outcome == "accepted"
-    assert ("bind", "conv-legacy-input") in seen
-    assert ("timeline", "conv-legacy-input") in seen
+    assert outcome == "rejected"
+    assert seen == []
 
 
-async def test_handle_registry_delivery_accepts_legacy_surface_action_kind(tmp_path: Path):
+async def test_handle_registry_delivery_rejects_legacy_surface_action_kind(tmp_path: Path):
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
@@ -660,12 +658,6 @@ async def test_handle_registry_delivery_accepts_legacy_surface_action_kind(tmp_p
             runtime=runtime,
         )
 
-        assert outcome == "accepted"
+        assert outcome == "rejected"
         approve_payload = work_queue.get_update_payload(data_dir, "reg:d-legacy-approve")
-        assert approve_payload is not None
-        approve_event = deserialize_inbound("action", approve_payload)
-        assert (
-            approve_event.action,
-            approve_event.conversation_key,
-            approve_event.conversation_ref,
-        ) == ("approve_pending", _reg_conv("conv-legacy-approve"), "conv-legacy-approve")
+        assert approve_payload is None

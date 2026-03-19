@@ -13,7 +13,6 @@ from app.agents.bridge import (
     build_registry_action_envelope,
     build_registry_message_delivery,
     conversation_key_for_ref,
-    normalize_registry_delivery_kind,
     publish_timeline_event,
 )
 from app.agents.types import RoutedTaskResult
@@ -118,7 +117,7 @@ async def handle_registry_delivery(
     *,
     runtime: RegistryDeliveryRuntime,
 ) -> str:
-    kind = normalize_registry_delivery_kind(str(delivery.get("kind", "")))
+    kind = str(delivery.get("kind", ""))
     delivery_id = str(delivery.get("delivery_id", ""))
     if kind in {"channel_input", "routed_task"}:
         return await admit_registry_delivery(config, delivery)

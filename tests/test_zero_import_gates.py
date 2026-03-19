@@ -103,9 +103,6 @@ def test_live_channel_contracts_do_not_reintroduce_surface_vocabulary() -> None:
     app_root = repo_root / "app"
     allowed_paths = {
         app_root / "registry_service" / "store.py",
-        app_root / "registry_service" / "store_postgres.py",
-        app_root / "agents" / "bridge.py",
-        app_root / "agents" / "delivery.py",
     }
     forbidden_tokens = (
         "origin_surface",
@@ -127,22 +124,54 @@ def test_live_channel_contracts_do_not_reintroduce_surface_vocabulary() -> None:
             assert token not in text, f"{token} still referenced in {path}"
 
 
-def test_legacy_delivery_kind_tokens_are_limited_to_registry_delivery_compatibility_owners() -> None:
+def test_legacy_registry_column_tokens_are_limited_to_migration_owners() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    app_root = repo_root / "app"
     allowed_paths = {
-        app_root / "registry_service" / "store.py",
-        app_root / "registry_service" / "store_postgres.py",
-        app_root / "agents" / "bridge.py",
-        app_root / "agents" / "delivery.py",
+        repo_root / "app" / "registry_service" / "store.py",
+        repo_root / "app" / "db" / "migrations" / "postgres" / "0004_registry.sql",
+        repo_root / "app" / "db" / "migrations" / "postgres" / "0010_rename_registry_channel_columns.sql",
+        repo_root / "tests" / "test_registry_service.py",
+        repo_root / "tests" / "test_db_postgres.py",
+        Path(__file__).resolve(),
     }
-    forbidden_tokens = ("surface_input", "surface_action")
-    for path in sorted(app_root.rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
-        text = path.read_text()
+    candidate_paths = sorted(
+        path
+        for path in repo_root.rglob("*")
+        if path.is_file()
+        and path.suffix in {".py", ".sql"}
+        and "__pycache__" not in path.parts
+    )
+    forbidden_tokens = ("origin_surface", "surface_capabilities_json")
+    for path in candidate_paths:
         if path in allowed_paths:
             continue
+        text = path.read_text()
+        for token in forbidden_tokens:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_legacy_delivery_kind_tokens_are_limited_to_migration_owners() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    allowed_paths = {
+        repo_root / "app" / "registry_service" / "store.py",
+        repo_root / "app" / "db" / "migrations" / "postgres" / "0009_rename_delivery_kinds.sql",
+        repo_root / "tests" / "test_agents.py",
+        repo_root / "tests" / "test_db_postgres.py",
+        repo_root / "tests" / "test_registry_service.py",
+        Path(__file__).resolve(),
+    }
+    candidate_paths = sorted(
+        path
+        for path in repo_root.rglob("*")
+        if path.is_file()
+        and path.suffix in {".py", ".sql"}
+        and "__pycache__" not in path.parts
+    )
+    forbidden_tokens = ("surface_input", "surface_action")
+    for path in candidate_paths:
+        if path in allowed_paths:
+            continue
+        text = path.read_text()
         for token in forbidden_tokens:
             assert token not in text, f"{token} still referenced in {path}"
 

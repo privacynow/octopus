@@ -30,7 +30,7 @@ from app.registry_service.store_base import (
     utcnow_iso,
 )
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 _BASE_SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS agents (
     connectivity_state TEXT NOT NULL DEFAULT 'standalone',
     current_capacity INTEGER NOT NULL DEFAULT 0,
     max_capacity INTEGER NOT NULL DEFAULT 1,
-    surface_capabilities_json TEXT NOT NULL DEFAULT '[]',
+    channel_capabilities_json TEXT NOT NULL DEFAULT '[]',
     version TEXT NOT NULL DEFAULT '',
     runtime_health_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     conversation_id TEXT PRIMARY KEY,
     target_agent_id TEXT NOT NULL,
     title TEXT NOT NULL DEFAULT '',
-    origin_surface TEXT NOT NULL DEFAULT 'registry',
+    origin_channel TEXT NOT NULL DEFAULT 'registry',
     status TEXT NOT NULL DEFAULT 'open',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -234,6 +234,41 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             """
         )
 
+    def _table_columns(self, conn: sqlite3.Connection, table_name: str) -> set[str]:
+        return {
+            row["name"]
+            for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+
+    def _migrate_v4_channel_vocabulary(self, conn: sqlite3.Connection) -> None:
+        agent_columns = self._table_columns(conn, "agents")
+        if (
+            "surface_capabilities_json" in agent_columns
+            and "channel_capabilities_json" not in agent_columns
+        ):
+            conn.execute(
+                """
+                ALTER TABLE agents
+                RENAME COLUMN surface_capabilities_json TO channel_capabilities_json
+                """
+            )
+
+        conversation_columns = self._table_columns(conn, "conversations")
+        if "origin_surface" in conversation_columns and "origin_channel" not in conversation_columns:
+            conn.execute(
+                """
+                ALTER TABLE conversations
+                RENAME COLUMN origin_surface TO origin_channel
+                """
+            )
+
+        conn.execute(
+            "UPDATE deliveries SET kind = 'channel_input' WHERE kind = 'surface_input'"
+        )
+        conn.execute(
+            "UPDATE deliveries SET kind = 'channel_action' WHERE kind = 'surface_action'"
+        )
+
     def _run_migrations(self, conn: sqlite3.Connection) -> None:
         current = self._current_schema_version(conn)
         if current > _SCHEMA_VERSION:
@@ -253,6 +288,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         if current < 3:
             self._migrate_v3_runtime_health(conn)
             self._set_schema_version(conn, 3)
+            conn.commit()
+            current = 3
+        if current < 4:
+            self._migrate_v4_channel_vocabulary(conn)
+            self._set_schema_version(conn, 4)
             conn.commit()
 
     def _ensure_unique_slug(self, conn: sqlite3.Connection, requested: str) -> str:
@@ -283,7 +323,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "connectivity_state": effective_state,
             "current_capacity": row["current_capacity"],
             "max_capacity": row["max_capacity"],
-            "channel_capabilities": decode_json_field(row["surface_capabilities_json"], []),
+            "channel_capabilities": decode_json_field(row["channel_capabilities_json"], []),
             "version": row["version"],
             "last_heartbeat_at": row["last_heartbeat_at"],
             "updated_at": row["updated_at"],
@@ -481,7 +521,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     agent_id, agent_token, display_name, slug, role,
                     skills_json, tags_json, description, provider, mode,
                     connectivity_state, current_capacity, max_capacity,
-                    surface_capabilities_json, version, created_at, updated_at, last_heartbeat_at
+                    channel_capabilities_json, version, created_at, updated_at, last_heartbeat_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
@@ -524,7 +564,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 UPDATE agents
                 SET display_name = ?, role = ?, skills_json = ?, tags_json = ?,
                     description = ?, provider = ?, mode = ?, connectivity_state = ?,
-                    current_capacity = ?, max_capacity = ?, surface_capabilities_json = ?,
+                    current_capacity = ?, max_capacity = ?, channel_capabilities_json = ?,
                     version = ?, updated_at = ?, last_heartbeat_at = ?
                 WHERE agent_token = ?
                 """,
@@ -649,12 +689,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             conn.execute(
                 """
                 INSERT INTO conversations (
-                    conversation_id, target_agent_id, title, origin_surface, status, created_at, updated_at
+                    conversation_id, target_agent_id, title, origin_channel, status, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, 'open', ?, ?)
                 ON CONFLICT(conversation_id) DO UPDATE SET
                     target_agent_id = excluded.target_agent_id,
                     title = excluded.title,
-                    origin_surface = excluded.origin_surface,
+                    origin_channel = excluded.origin_channel,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -1142,7 +1182,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             conn.execute(
                 """
                 INSERT INTO conversations (
-                    conversation_id, target_agent_id, title, origin_surface, status, created_at, updated_at
+                    conversation_id, target_agent_id, title, origin_channel, status, created_at, updated_at
                 ) VALUES (?, ?, ?, 'registry', 'open', ?, ?)
                 """,
                 (conversation_id, target_agent_id, title, now, now),
@@ -1180,7 +1220,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 FROM conversations c
                 LEFT JOIN agents a ON a.agent_id = c.target_agent_id
                 LEFT JOIN timeline_events t ON t.conversation_id = c.conversation_id
-                GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_surface, c.status, c.created_at, c.updated_at, a.display_name
+                GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.status, c.created_at, c.updated_at, a.display_name
                 ORDER BY c.updated_at DESC
                 """
             ).fetchall()
@@ -1210,7 +1250,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 LEFT JOIN agents a ON a.agent_id = c.target_agent_id
                 LEFT JOIN timeline_events t ON t.conversation_id = c.conversation_id
                 WHERE c.conversation_id = ?
-                GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_surface, c.status, c.created_at, c.updated_at, a.display_name
+                GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.status, c.created_at, c.updated_at, a.display_name
                 """,
                 (conversation_id,),
             ).fetchone()

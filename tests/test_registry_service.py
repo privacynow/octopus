@@ -1405,13 +1405,42 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
     assert any(item["kind"] == "routed_result" for item in origin_deliveries)
 
 
-def test_registry_store_migrations_are_idempotent_and_add_skills_override_and_timeline_fts(tmp_path: Path):
+def test_registry_store_migrations_are_idempotent_and_upgrade_legacy_channel_columns(tmp_path: Path):
     db_path = tmp_path / "registry.sqlite3"
     conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE agents ("
+        "agent_id TEXT PRIMARY KEY, agent_token TEXT NOT NULL UNIQUE, "
+        "display_name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, "
+        "role TEXT NOT NULL DEFAULT '', skills_json TEXT NOT NULL DEFAULT '[]', "
+        "tags_json TEXT NOT NULL DEFAULT '[]', description TEXT NOT NULL DEFAULT '', "
+        "provider TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL DEFAULT 'standalone', "
+        "connectivity_state TEXT NOT NULL DEFAULT 'standalone', "
+        "current_capacity INTEGER NOT NULL DEFAULT 0, max_capacity INTEGER NOT NULL DEFAULT 1, "
+        "surface_capabilities_json TEXT NOT NULL DEFAULT '[]', "
+        "version TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, last_heartbeat_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE deliveries ("
+        "seq INTEGER PRIMARY KEY AUTOINCREMENT, delivery_id TEXT NOT NULL UNIQUE, "
+        "target_agent_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, "
+        "state TEXT NOT NULL DEFAULT 'queued', created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, leased_at TEXT, acked_at TEXT)"
+    )
     conn.execute(
         "CREATE TABLE conversations (conversation_id TEXT PRIMARY KEY, target_agent_id TEXT NOT NULL, "
         "title TEXT NOT NULL DEFAULT '', origin_surface TEXT NOT NULL DEFAULT 'registry', "
         "status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        """
+        INSERT INTO deliveries (
+            delivery_id, target_agent_id, kind, payload_json, state, created_at, updated_at
+        ) VALUES
+            ('legacy-input', 'agent-1', 'surface_input', '{}', 'queued', '2026-03-18T00:00:00+00:00', '2026-03-18T00:00:00+00:00'),
+            ('legacy-action', 'agent-1', 'surface_action', '{}', 'queued', '2026-03-18T00:00:00+00:00', '2026-03-18T00:00:00+00:00')
+        """
     )
     conn.commit()
     conn.close()
@@ -1421,7 +1450,26 @@ def test_registry_store_migrations_are_idempotent_and_add_skills_override_and_ti
 
     conn = sqlite3.connect(db_path)
     version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-    assert version == "3"
+    assert version == "4"
+    agent_columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(agents)").fetchall()
+    }
+    assert "channel_capabilities_json" in agent_columns
+    assert "surface_capabilities_json" not in agent_columns
+    conversation_columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(conversations)").fetchall()
+    }
+    assert "origin_channel" in conversation_columns
+    assert "origin_surface" not in conversation_columns
+    delivery_kinds = conn.execute(
+        "SELECT delivery_id, kind FROM deliveries ORDER BY delivery_id"
+    ).fetchall()
+    assert delivery_kinds == [
+        ("legacy-action", "channel_action"),
+        ("legacy-input", "channel_input"),
+    ]
     tables = {
         row[0]
         for row in conn.execute(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
@@ -10,6 +11,11 @@ from typing import Any, Protocol
 from app.runtime_health import report_from_dict, report_to_dict
 
 _OFFLINE_AFTER_SECONDS = 60
+
+
+def hash_agent_token(token: str) -> str:
+    """Return the stable server-side digest used for agent bearer-token lookup."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 class CapabilityDisabledError(RuntimeError):

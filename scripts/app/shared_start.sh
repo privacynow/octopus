@@ -98,7 +98,9 @@ create_env_file_if_missing() {
     done
   fi
 
-  {
+  (
+    umask 077
+    {
     echo "BOT_INSTANCE=$INSTANCE"
     echo "TELEGRAM_BOT_TOKEN=$token"
     echo "BOT_PROVIDER=$provider"
@@ -116,7 +118,9 @@ create_env_file_if_missing() {
       echo "BOT_AGENT_REGISTRY_URL=$registry_url"
       echo "BOT_AGENT_REGISTRY_ENROLL_TOKEN=$registry_token"
     fi
-  } > "$BOT_ENV_FILE"
+    } > "$BOT_ENV_FILE"
+  )
+  restrict_secret_file_permissions "$BOT_ENV_FILE"
 
   echo "Created $BOT_ENV_FILE"
 }
@@ -188,6 +192,7 @@ print_shared_startup_failure_help() {
 }
 
 create_env_file_if_missing
+restrict_secret_file_permissions "$BOT_ENV_FILE"
 check_env_bot_required "$BOT_ENV_FILE"
 
 agent_mode="$(read_bot_env_value BOT_AGENT_MODE)"

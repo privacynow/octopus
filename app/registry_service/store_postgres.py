@@ -25,6 +25,7 @@ from app.registry_service.store_base import (
     conversation_status_for_event,
     decode_json_field,
     effective_connectivity_state,
+    hash_agent_token,
     runtime_health_detail,
     runtime_health_generated_at,
     runtime_health_summary,
@@ -84,7 +85,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         with _cur(conn) as cur:
             cur.execute(
                 f"SELECT * FROM {_SCHEMA}.agents WHERE agent_token = %s",
-                (token,),
+                (hash_agent_token(token),),
             )
             return cur.fetchone()
 
@@ -311,6 +312,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         now = utcnow_iso()
         agent_id = uuid.uuid4().hex
         agent_token = secrets.token_urlsafe(32)
+        agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn, _write_tx(conn):
             slug = self._ensure_unique_slug(conn, requested_card.get("slug") or "agent")
             with _cur(conn) as cur:
@@ -325,7 +327,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     """,
                     (
                         agent_id,
-                        agent_token,
+                        agent_token_hash,
                         requested_card.get("display_name") or slug,
                         slug,
                         requested_card.get("role", ""),
@@ -354,6 +356,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
     def register(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
         card = payload["agent_card"]
+        agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn, _write_tx(conn):
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -383,7 +386,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         card.get("version", row["version"]),
                         now,
                         now,
-                        agent_token,
+                        agent_token_hash,
                     ),
                 )
             row = self._token_row(conn, agent_token)
@@ -392,6 +395,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def heartbeat(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
+        agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn, _write_tx(conn):
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -416,7 +420,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                             if isinstance(runtime_health_payload, dict)
                             else _jsonb(decode_json_field(row.get("runtime_health_json"), {}))
                         ),
-                        agent_token,
+                        agent_token_hash,
                     ),
                 )
             if isinstance(runtime_health_payload, dict):
@@ -942,6 +946,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
 
     def deregister(self, agent_token: str) -> dict[str, Any]:
         now = utcnow_iso()
+        agent_token_hash = hash_agent_token(agent_token)
         with self._connect() as conn, _write_tx(conn):
             row = self._token_row(conn, agent_token)
             if row is None:
@@ -953,7 +958,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     SET connectivity_state = 'offline', updated_at = %s, last_heartbeat_at = %s
                     WHERE agent_token = %s
                     """,
-                    (now, now, agent_token),
+                    (now, now, agent_token_hash),
                 )
         return {"agent_id": row["agent_id"], "connectivity_state": "offline"}
 

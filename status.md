@@ -85,7 +85,19 @@
   - credential-store backends log a clear recovery hint when stored credentials can no longer be decrypted with the current key material
   - repo operator docs and `.env.example` now describe the independent credential key and the bot-token-rotation impact
   Commit:
+  - `b48baa9`
+- Complete: S7 harden secret-bearing files and token storage.
+  Tests:
+  - `python3 -m py_compile app/registry_service/store_base.py app/registry_service/store.py app/registry_service/store_postgres.py app/agents/state.py tests/contracts/test_registry_store_contract.py tests/test_registry_service.py tests/test_agents.py tests/test_operator_scripts.py`
+  - `bash -n scripts/lib_env.sh scripts/app/guided_start.sh scripts/app/shared_start.sh scripts/registry/start.sh`
+  - `.venv/bin/python -m pytest -q -n 4 tests/contracts/test_registry_store_contract.py tests/test_registry_service.py tests/test_agents.py tests/test_operator_scripts.py`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Verified:
+  - registry agent bearer tokens are now hashed at rest in both SQLite and Postgres-backed stores while still being returned once at enrollment time
+  - SQLite registry migrations upgrade legacy raw agent tokens in place and Postgres has a matching token-hash migration
+  - generated bot env files, `.env.registry`, and `registry_state.json` are permission-hardened to private file modes
+  - `scripts/registry/start.sh` no longer prints registry secrets to stdout and instead points operators to the private env file
+  Commit:
   - pending current slice commit
-- Pending: S7 harden secret-bearing files and token storage.
 - Pending: S8 add artifact extraction quotas.
 - Pending: S9 restrict credential validation outbound targets.

@@ -185,6 +185,7 @@ class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
                 ),
                 value,
                 validator=validator,
+                skill_name=setup.skill,
             )
             if not ok:
                 return RuntimeSkillSetupAdvanceOutcome(

@@ -127,6 +127,7 @@ Restrict credential validation outbound targets.
 - Add allowlist-driven validation-host policy.
 - Log validation target host and skill name without logging the secret.
 - Reject non-allowlisted validation URLs.
+- Status: complete
 
 ## Final Gates
 
@@ -139,4 +140,5 @@ Restrict credential validation outbound targets.
 - Secret-bearing generated files are permission-hardened.
 - Registry agent tokens are not stored plaintext server-side.
 - Artifact extraction enforces expanded-size quotas.
+- Credential validation rejects non-allowlisted hosts and logs only host/skill metadata.
 - Full suite passes.

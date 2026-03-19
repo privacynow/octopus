@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 import app.content_store as content_store_mod
+import httpx
 from app.content_store import init_content_store_for_config
 from app.credential_store import init_credential_store_for_config
 from app.identity import telegram_actor_key
@@ -164,6 +165,46 @@ async def test_setup_use_case_submits_credential_and_activates_skill(tmp_path: P
 
         creds = load_user_credentials(data_dir, actor_key, derive_encryption_key(cfg.telegram_token))
         assert creds["github-integration"]["GITHUB_TOKEN"] == "ghp_test_token"
+    finally:
+        close_db(data_dir)
+        content_store_mod.reset_for_test()
+
+
+async def test_setup_use_case_logs_validation_host_with_skill_name(monkeypatch, caplog, tmp_path: Path):
+    _, data_dir = _init_runtime_content(tmp_path)
+    try:
+        actor_key = telegram_actor_key(42)
+        activation = get_runtime_skill_activation_use_cases()
+        setup = get_runtime_skill_setup_use_cases()
+        session = session_from_dict(default_session("claude", {"session_id": "test", "started": False}, "on"))
+
+        decision = activation.begin_activate(
+            session,
+            user_id=actor_key,
+            skill_name="github-integration",
+        )
+        assert decision.status == "needs_setup"
+
+        async def fake_request(self, method, url, *, headers=None):
+            del self
+            return httpx.Response(
+                200,
+                request=httpx.Request(method, url, headers=headers),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
+        monkeypatch.delenv("BOT_CREDENTIAL_VALIDATION_ALLOWED_HOSTS", raising=False)
+
+        caplog.set_level("INFO")
+        outcome = await setup.submit_credential_value(
+            session,
+            user_id=actor_key,
+            raw_value="ghp_test_token",
+        )
+
+        assert outcome.status == "ready"
+        assert "api.github.com" in caplog.text
+        assert "github-integration" in caplog.text
     finally:
         close_db(data_dir)
         content_store_mod.reset_for_test()

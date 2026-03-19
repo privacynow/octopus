@@ -52,6 +52,11 @@ the Telegram bot token later will make existing stored credentials
 unreadable unless you set `BOT_CREDENTIAL_KEY` to the previous key material
 first.
 
+Credential validation for skill setup is host-restricted by default. Built-in
+validation currently allows `api.github.com`, `*.openai.com`,
+`*.anthropic.com`, and `*.googleapis.com`. If you trust an additional
+provider, add it with `BOT_CREDENTIAL_VALIDATION_ALLOWED_HOSTS`.
+
 ## Choose A Path
 
 | If you want... | Use... |

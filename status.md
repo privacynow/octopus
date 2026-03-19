@@ -1242,6 +1242,9 @@ The post-audit follow-up is now closed:
     finalization
   - this status closeout records the verified remediation baseline and the full
     committed correction chain through the F8 plan commit
+- final cap-restore complete:
+  - `99939f0` trims `app/channels/telegram/ingress.py` back to `1470` lines
+  - the structural gate now enforces the strict `≤1500` ingress cap again
 
 Feature work may resume.
 
@@ -1424,6 +1427,13 @@ Feature work may resume.
      F1-F8 follow-up
    - sealed the current acceptance gates and post-audit remediation sequence in
      committed history so the repo no longer depends on a local-only plan diff
+
+9. `99939f0` `Post-audit / final: restore strict ingress cap`
+   - trimmed comment/section-padding drift from
+     `app/channels/telegram/ingress.py` so the module is back under the
+     committed `≤1500` line cap at `1470` lines
+   - tightened the structural line-count gate from `1600` back to the strict
+     `1500` threshold required by the remediation plan
 
 ### Acceptance Gates
 

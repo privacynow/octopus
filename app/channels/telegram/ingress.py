@@ -109,11 +109,7 @@ log = logging.getLogger(__name__)
 
 
 class ClaimBlocked(Exception):
-    """Raised by _chat_lock when a worker already holds a claimed item for this chat.
-
-    The handler must not run — its work item stays queued and will be
-    picked up by the worker_loop after the current item completes.
-    """
+    """Raised when a worker already owns the claimed item for this chat."""
 
 
 def _context_runtime(context: ContextTypes.DEFAULT_TYPE | None) -> TelegramRuntime:
@@ -141,31 +137,7 @@ async def _chat_lock(
     worker_item: dict | None = None,
     supersede_recovery: bool = False,
 ):
-    """Acquire the per-chat lock with visible queued feedback.
-
-    If the lock is already held (another request is in-flight), send a
-    visible acknowledgment before blocking.  Only handlers that actually
-    serialize on the lock should use this — lightweight read-only commands
-    like /session should use the lock directly or not at all.
-
-    When ``update_id`` is provided, claim the specific work item for that
-    update rather than the oldest queued item.  This prevents a stale
-    recovered item from being silently marked done when a fresh update
-    acquires the lock first.
-
-    When ``worker_item`` is provided (worker_dispatch path), the item was
-    already claimed externally by ``claim_next_any``.  The lock is acquired
-    for in-memory serialization but no claiming or completion is done —
-    worker_loop owns the item lifecycle.
-
-    Raises ``ClaimBlocked`` if ``claim_for_update`` returns None because
-    another item for this chat is already claimed (worker/live-handler
-    race).  The caller must bail out without running the handler body.
-
-    Yields ``True`` if queued feedback was sent (callback answer slot
-    consumed), ``False`` otherwise.  Callback handlers should skip their
-    own ``query.answer()`` when the yielded value is ``True``.
-    """
+    """Serialize chat work, claim the matching durable item when needed, and yield whether busy feedback was sent."""
     data_dir = runtime.config.data_dir
     conversation_ref_key = telegram_session_io.conversation_key(chat_id)
     if runtime.config.runtime_mode == "shared" and worker_item is not None:
@@ -282,13 +254,7 @@ def _dedup_update(
     kind: str = "unknown",
     payload: str = "{}",
 ) -> bool:
-    """Return True if this update_id was already processed (duplicate).
-
-    Atomically records the update AND enqueues a work item in a single
-    SQLite transaction.  The item is created as ``claimed`` (owned by
-    the inline handler via the current boot id so the background worker cannot
-    steal it before the handler finishes.
-    """
+    """Return True when this update_id was already recorded and claimed."""
     uid = update.update_id
     chat_id = update.effective_chat.id if update.effective_chat else 0
     user_id = update.effective_user.id if update.effective_user else 0
@@ -329,8 +295,6 @@ def _complete_pending_work_item(
 
 def _approval_mode_source(session: SessionState) -> str:
     return "chat override" if session.approval_mode_explicit else "instance default"
-
-# -- Auth ------------------------------------------------------------------
 
 def is_allowed(runtime: TelegramRuntime, user) -> bool:
     cfg = runtime.config
@@ -414,11 +378,7 @@ def _command_handler(fn=None, *, show_not_allowed_message: bool = False):
 
 
 def _callback_handler(fn):
-    """Decorator: normalize → dedup (with payload) → is_allowed gate → call fn(event, query).
-
-    Does NOT call query.answer() — handlers control their own answer semantics
-    (some need alerts, some need silent acks, some answer conditionally).
-    """
+    """Decorator: normalize → dedup → gate → call fn(runtime, event, query)."""
     import functools
 
     @functools.wraps(fn)
@@ -475,9 +435,6 @@ def _settings_model_profile_state(
         effective_model,
     )
     return (list(state.available_profiles), state.current_profile)
-
-# -- Command handlers ------------------------------------------------------
-
 @_command_handler(show_not_allowed_message=True)
 async def cmd_start(runtime: TelegramRuntime, event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start — always show main help (ignores deep-link payloads)."""
@@ -828,8 +785,6 @@ async def cmd_discover(
     rendered = telegram_presenters.discover_results_message(agents)
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
-
-
 @_command_handler
 async def cmd_export(
     runtime: TelegramRuntime,
@@ -1108,13 +1063,7 @@ async def handle_message(
     *,
     runtime: TelegramRuntime | None = None,
 ) -> None:
-    """Normalize input, enqueue provider work for the worker, or handle credential setup inline.
-
-    Provider execution runs only in the worker; handlers return quickly so /cancel
-    can be delivered without PTB concurrency. At most one fresh (queued or claimed) item
-    per chat: admission is serialized at the store; when the chat already has one we
-    reply busy and do not enqueue a second run.
-    """
+    """Normalize input, handle setup inline, or enqueue worker-owned provider execution."""
     runtime = runtime or _context_runtime(context)
     uid = update.update_id
     user = telegram_normalization.normalize_user(update.effective_user)
@@ -1224,10 +1173,6 @@ async def handle_delegation_callback(runtime: TelegramRuntime, event, query) -> 
                 delegation_runtime=build_delegation_channel_runtime(runtime),
             )
 
-
-# -- Recovery replay/discard callback handler --------------------------------
-
-
 async def handle_recovery_callback(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -1269,10 +1214,6 @@ async def handle_recovery_action(
             execution_runtime=_bound_execution_runtime(runtime),
         ),
     )
-
-
-# -- Expand/collapse callback handler --------------------------------------
-
 
 def _parse_expand_collapse_data(data: str) -> tuple[int, int] | None:
     """Parse 'expand:{chat_id}:{slot}' or 'collapse:{chat_id}:{slot}' callback data."""
@@ -1349,10 +1290,6 @@ async def handle_collapse_callback(runtime: TelegramRuntime, event, query) -> No
     except BadRequest:
         await query.edit_message_reply_markup(reply_markup=None)
 
-
-# -- Settings callback handler ---------------------------------------------
-
-
 @_callback_handler
 async def handle_settings_callback(runtime: TelegramRuntime, event, query) -> None:
     await telegram_conversation.handle_settings_callback(
@@ -1360,10 +1297,6 @@ async def handle_settings_callback(runtime: TelegramRuntime, event, query) -> No
         query,
         runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
     )
-
-
-# -- Application builder ---------------------------------------------------
-
 
 @_callback_handler
 async def handle_skill_add_callback(runtime: TelegramRuntime, event, query) -> None:
@@ -1389,7 +1322,6 @@ async def handle_skill_update_callback(runtime: TelegramRuntime, event, query) -
             execution_runtime=_bound_execution_runtime(runtime),
         ),
     )
-
 @_command_handler
 async def cmd_project(
     runtime: TelegramRuntime,
@@ -1521,15 +1453,13 @@ async def _global_error_handler(update: object, context: ContextTypes.DEFAULT_TY
     """Catch unhandled exceptions so the user always gets feedback."""
     error = context.error
 
-    # Stale callback queries are harmless — Telegram's 30-second answer
-    # window expired while the bot was busy.  Suppress the noise.
+    # Stale callback queries are harmless: Telegram's answer window expired.
     if isinstance(error, BadRequest) and "query is too old" in str(error).lower():
         log.debug("Stale callback query (ignored): %s", error)
         return
 
     log.exception("Unhandled exception in handler", exc_info=error)
 
-    # Try to notify the user
     if update and isinstance(update, Update) and update.effective_chat:
         try:
             await context.bot.send_message(

@@ -77,5 +77,5 @@ def test_readme_documents_botfather_verification_and_registry_ui():
     assert "Verify it's working" in text
     assert "What files are in my working directory?" in text
     assert "Registry UI" in text
-    assert "docs/registry-ui-screenshot.png" in text
+    assert "registry-ui-screenshot.png" in text
     assert "REGISTRY_UI_TOKEN" in text

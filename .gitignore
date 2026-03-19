@@ -11,6 +11,7 @@ __pycache__/
 .env.bot.*
 .env.registry
 .env.registry.*
+.deploy/
 
 # Runtime data
 *.log

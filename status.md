@@ -24,24 +24,27 @@ the final closure state.
 
 ## Current State
 
-Architecture remediation is reopened for the live post-audit F9-F10 tail.
+Architecture remediation is reopened for the live post-audit F9-F10 tail and
+final verification pass.
 The initial Phase 8 closure at `7804cf4` was followed by committed
 post-Phase-8 correction slices and post-audit F1-F8 follow-up. F9 is now
-landed and verified; F10 remains outstanding before the remediation can be
-called complete again.
+landed and verified, and F10 is complete in the current worktree pending its
+commit and the final acceptance audit.
 
 Latest committed correction slices:
 
 - `07af844` `Post-Phase 8 / slice 1: remove ingress test coupling`
 - `837b4ed` `Post-Phase 8 / slice 2: rename live surface contracts to channel`
 - `a686565` `Post-Phase 8 / slice 3: align live channel terminology`
-- current worktree slice: `Post-audit / F9: remove dead backend-only store methods`
+- `dbf9176` `Post-audit / F9: remove dead backend-only store methods`
+- current worktree slice: `Post-audit / F10: close delivery-kind migration gap`
 
 Latest verified full-suite baseline:
 
-- `1663 passed, 23 skipped`
+- `1668 passed, 23 skipped`
 
-Feature work remains frozen until F10 lands and the final post-audit gates pass.
+Feature work remains frozen until the F10 commit lands and the final post-audit
+gates pass.
 
 ### Historical In-Progress Snapshot
 
@@ -1169,7 +1172,8 @@ for the current remediation state and the latest verified remediation baseline.
 
 ### Current State
 
-Architecture remediation is reopened for the remaining post-audit tail.
+Architecture remediation is reopened for the remaining post-audit tail and
+final acceptance audit.
 
 Phase 8 closed the remaining Telegram ingress decomposition and test-boundary
 gaps left after Phase 7. The post-Phase-8 correction slices and the post-audit
@@ -1251,14 +1255,21 @@ The post-audit follow-up is now closed:
   - added automated backend parity gates proving registry-store and
     content-store public method sets match their abstract contracts across
     SQLite and Postgres
-  - the remediation remains open until `F10` lands the delivery-kind migration
-    closure
+  - `dbf9176` is the committed F9 parity baseline
+- `F10` complete in current worktree:
+  - added Postgres migration `0009_rename_delivery_kinds.sql` to rewrite
+    persisted legacy delivery kinds
+  - added temporary backwards-compatibility readers in `app/agents/bridge.py`
+    and `app/agents/delivery.py` so pre-migration `surface_*` rows are treated
+    as `channel_*` with a deprecation warning
+  - added migration and compatibility tests proving old deliveries are not
+    stranded during update
 - final cap-restore complete:
   - `99939f0` trims `app/channels/telegram/ingress.py` back to `1470` lines
   - the structural gate now enforces the strict `≤1500` ingress cap again
 
-Feature work remains frozen until F10 lands and the final post-audit
-verification passes.
+Feature work remains frozen until the F10 commit lands and the final
+post-audit verification passes.
 
 ### Phase 8 Slice Log
 
@@ -1447,7 +1458,7 @@ verification passes.
    - tightened the structural line-count gate from `1600` back to the strict
      `1500` threshold required by the remediation plan
 
-10. current worktree slice: `Post-audit / F9: remove dead backend-only store methods`
+10. `dbf9176` `Post-audit / F9: remove dead backend-only store methods`
    - deleted the dead SQLite-only public methods
      `RegistrySQLiteStore.publish_ui_timeline()` and
      `SQLiteContentStore.close()`
@@ -1459,6 +1470,20 @@ verification passes.
      - `tests/contracts/test_registry_store_contract.py`
      - `tests/contracts/test_content_store_contract.py`
      - Result: `57 passed`
+
+11. current worktree slice: `Post-audit / F10: close delivery-kind migration gap`
+   - added Postgres migration
+     `app/db/migrations/postgres/0009_rename_delivery_kinds.sql` so persisted
+     `surface_input`/`surface_action` rows are rewritten in-place
+   - added temporary compatibility readers in `app/agents/bridge.py` and
+     `app/agents/delivery.py` so legacy rows remain readable during rollout
+   - added migration and compatibility tests proving both old and new delivery
+     kinds are accepted by the registry-delivery path
+   - focused F10 suite:
+     - `tests/test_agents.py`
+     - `tests/test_db_postgres.py`
+     - `tests/test_zero_import_gates.py`
+     - Result: `86 passed`
 
 ### Acceptance Gates
 
@@ -1534,7 +1559,8 @@ These mirror the authoritative
   plan diff for the accepted post-audit state.
 - [x] registry-store and content-store public method sets are identical across
   SQLite/Postgres and match their abstract contracts.
-- [ ] delivery-kind migration/compatibility closure is landed and verified.
+- [x] delivery-kind migration/compatibility closure is landed and verified in
+  the current worktree.
 
 ### Verification Baseline
 
@@ -1564,9 +1590,16 @@ Latest focused F9 parity suite:
 - `tests/contracts/test_content_store_contract.py`
 - Result: `57 passed`
 
+Latest focused F10 delivery-kind suite:
+
+- `tests/test_agents.py`
+- `tests/test_db_postgres.py`
+- `tests/test_zero_import_gates.py`
+- Result: `86 passed`
+
 Latest full-suite remediation baseline:
 
-- Result: `1663 passed, 23 skipped`
+- Result: `1668 passed, 23 skipped`
 
 ### Notes
 

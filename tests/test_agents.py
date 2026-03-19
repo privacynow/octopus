@@ -432,6 +432,44 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
     assert ("timeline", "task-1") in seen
 
 
+async def test_admit_registry_delivery_accepts_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
+    seen: list[tuple[str, str]] = []
+
+    async def fake_bind(*args, **kwargs):
+        del args
+        seen.append(("bind", str(kwargs.get("conversation_ref", ""))))
+
+    async def fake_timeline(*args, **kwargs):
+        del args
+        seen.append(("timeline", str(kwargs.get("conversation_ref", ""))))
+
+    monkeypatch.setattr("app.agents.bridge.bind_conversation", fake_bind)
+    monkeypatch.setattr("app.agents.bridge.publish_timeline_event", fake_timeline)
+    monkeypatch.setattr(
+        "app.agents.bridge.work_queue.record_and_admit_message",
+        lambda *args, **kwargs: ("queued", "queued-item"),
+    )
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registry_url="http://registry.test",
+        agent_registry_enroll_token="enroll-secret",
+    )
+
+    outcome = await admit_registry_delivery(
+        config,
+        {
+            "kind": "surface_input",
+            "delivery_id": "delivery-legacy",
+            "payload": {"conversation_id": "conv-legacy", "text": "hello"},
+        },
+    )
+
+    assert outcome == "accepted"
+    assert ("bind", "conv-legacy") in seen
+    assert ("timeline", "conv-legacy") in seen
+
+
 async def test_handle_registry_routed_result_publishes_parent_timeline_before_retry_on_startup_race(monkeypatch, tmp_path: Path):
     published: list[dict[str, object]] = []
 
@@ -553,3 +591,81 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
             cancel_event.conversation_key,
             cancel_event.conversation_ref,
         ) == ("cancel_conversation", _reg_conv("conv-cancel"), "conv-cancel")
+
+
+async def test_handle_registry_delivery_accepts_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
+    seen: list[tuple[str, str]] = []
+
+    async def fake_bind(*args, **kwargs):
+        del args
+        seen.append(("bind", str(kwargs.get("conversation_ref", ""))))
+
+    async def fake_timeline(*args, **kwargs):
+        del args
+        seen.append(("timeline", str(kwargs.get("conversation_ref", ""))))
+
+    monkeypatch.setattr("app.agents.bridge.bind_conversation", fake_bind)
+    monkeypatch.setattr("app.agents.bridge.publish_timeline_event", fake_timeline)
+    monkeypatch.setattr(
+        "app.agents.bridge.work_queue.record_and_admit_message",
+        lambda *args, **kwargs: ("queued", "queued-item"),
+    )
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registry_url="http://registry.test",
+        agent_registry_enroll_token="enroll-secret",
+    )
+
+    outcome = await handle_registry_delivery(
+        config,
+        {
+            "delivery_id": "d-legacy-input",
+            "kind": "surface_input",
+            "payload": {"conversation_id": "conv-legacy-input", "text": "hello"},
+        },
+        runtime=build_registry_delivery_runtime(
+            provider_name="claude",
+            provider_state_factory=dict,
+            bot=None,
+        ),
+    )
+
+    assert outcome == "accepted"
+    assert ("bind", "conv-legacy-input") in seen
+    assert ("timeline", "conv-legacy-input") in seen
+
+
+async def test_handle_registry_delivery_accepts_legacy_surface_action_kind(tmp_path: Path):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, cfg, _prov):
+        runtime = build_registry_delivery_runtime(
+            provider_name=_prov.name,
+            provider_state_factory=_prov.new_provider_state,
+            bot=None,
+        )
+
+        outcome = await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-legacy-approve",
+                "kind": "surface_action",
+                "payload": {"conversation_id": "conv-legacy-approve", "action": "approve"},
+            },
+            runtime=runtime,
+        )
+
+        assert outcome == "accepted"
+        approve_payload = work_queue.get_update_payload(data_dir, "reg:d-legacy-approve")
+        assert approve_payload is not None
+        approve_event = deserialize_inbound("action", approve_payload)
+        assert (
+            approve_event.action,
+            approve_event.conversation_key,
+            approve_event.conversation_ref,
+        ) == ("approve_pending", _reg_conv("conv-legacy-approve"), "conv-legacy-approve")

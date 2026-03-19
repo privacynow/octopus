@@ -104,6 +104,8 @@ def test_live_channel_contracts_do_not_reintroduce_surface_vocabulary() -> None:
     allowed_paths = {
         app_root / "registry_service" / "store.py",
         app_root / "registry_service" / "store_postgres.py",
+        app_root / "agents" / "bridge.py",
+        app_root / "agents" / "delivery.py",
     }
     forbidden_tokens = (
         "origin_surface",
@@ -121,6 +123,26 @@ def test_live_channel_contracts_do_not_reintroduce_surface_vocabulary() -> None:
         if "__pycache__" in path.parts or path in allowed_paths:
             continue
         text = path.read_text()
+        for token in forbidden_tokens:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_legacy_delivery_kind_tokens_are_limited_to_registry_delivery_compatibility_owners() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    app_root = repo_root / "app"
+    allowed_paths = {
+        app_root / "registry_service" / "store.py",
+        app_root / "registry_service" / "store_postgres.py",
+        app_root / "agents" / "bridge.py",
+        app_root / "agents" / "delivery.py",
+    }
+    forbidden_tokens = ("surface_input", "surface_action")
+    for path in sorted(app_root.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        text = path.read_text()
+        if path in allowed_paths:
+            continue
         for token in forbidden_tokens:
             assert token not in text, f"{token} still referenced in {path}"
 

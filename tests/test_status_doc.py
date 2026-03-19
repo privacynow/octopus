@@ -72,3 +72,16 @@ def test_status_doc_historical_and_authoritative_sections_are_both_present() -> 
 
     for fragment in required_fragments:
         assert fragment in text
+
+
+def test_status_doc_lede_marks_phase7_closure_section_as_historical_context() -> None:
+    text = _status_text()
+
+    required_fragments = (
+        "The live execution state for the reopened track is recorded in `## Current State`",
+        "`## Current Authoritative Status` (historical Phase 7 baseline)",
+        "The remediation track remains open. Phase 8 is in progress",
+    )
+
+    for fragment in required_fragments:
+        assert fragment in text

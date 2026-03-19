@@ -15,6 +15,8 @@ def test_orchestration_inventory_lists_required_concerns_and_files() -> None:
         "Channel Entry Boundaries",
         "app/channels/telegram/bootstrap.py",
         "app/channels/telegram/ingress.py",
+        "app/channels/telegram/worker.py",
+        "app/channels/telegram/shared_mode_dispatch.py",
         "Lifecycle",
         "Pending Approval / Retry",
         "Transport Recovery",

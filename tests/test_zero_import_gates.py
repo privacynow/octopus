@@ -71,6 +71,19 @@ def test_deleted_telegram_singleton_helpers_are_gone_from_app_code() -> None:
             assert forbidden not in text, f"{forbidden} still referenced in {path}"
 
 
+def test_deleted_telegram_singleton_helpers_are_gone_from_test_code() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    tests_root = repo_root / "tests"
+    gate_path = Path(__file__).resolve()
+    python_files = sorted(
+        path for path in tests_root.rglob("*.py") if "__pycache__" not in path.parts and path != gate_path
+    )
+    for path in python_files:
+        text = path.read_text()
+        for forbidden in FORBIDDEN_TELEGRAM_SINGLETON_HELPERS:
+            assert forbidden not in text, f"{forbidden} still referenced in {path}"
+
+
 def test_deleted_legacy_module_references_are_gone_from_test_code() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     tests_root = repo_root / "tests"
@@ -170,6 +183,25 @@ def test_telegram_shared_mode_dispatch_module_has_no_ingress_import() -> None:
     assert "app.channels.telegram.ingress" not in text, (
         f"telegram ingress import still referenced in {shared_mode_dispatch_path}"
     )
+
+
+def test_h1_extracted_telegram_modules_have_no_ingress_back_imports() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    telegram_root = repo_root / "app" / "channels" / "telegram"
+    extracted_modules = (
+        "session_io.py",
+        "progress.py",
+        "delegation_channel.py",
+        "execution.py",
+        "worker.py",
+        "shared_mode_dispatch.py",
+    )
+    for filename in extracted_modules:
+        path = telegram_root / filename
+        text = path.read_text()
+        assert "app.channels.telegram.ingress" not in text, (
+            f"telegram ingress import still referenced in {path}"
+        )
 
 
 def test_ingress_no_longer_defines_session_io_helpers() -> None:
@@ -461,6 +493,13 @@ def test_telegram_reply_markup_builders_live_only_in_presenters() -> None:
         text = path.read_text()
         for token in forbidden:
             assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_telegram_ingress_line_count_stays_below_hard_cap() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    line_count = sum(1 for _ in ingress_path.open())
+    assert line_count <= 1600, f"{ingress_path} regressed to {line_count} lines"
 
 
 def test_telegram_guidance_channel_has_no_inline_html_formatting() -> None:

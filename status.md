@@ -13,13 +13,16 @@ Feature work remains frozen until every acceptance gate in the plan passes.
 
 Historical pre-closure execution notes are preserved below as an audit log,
 including intermediate mistakes, reopened gates, and before-state inventories.
-The authoritative current closure summary is appended at the end under:
+The live execution state for the reopened track is recorded in `## Current State`
+below. The appended `## Current Authoritative Status` section is the preserved
+Phase 7 closure baseline and remains historical context until Phase 8 closes.
 
-- `## Current Authoritative Status`
+- `## Current Authoritative Status` (historical Phase 7 baseline)
 
 ## Current State
 
-The remediation track is reopened and not complete.
+The remediation track remains open. Phase 8 is in progress, and feature work
+remains frozen until H4 and the final acceptance verification are complete.
 
 Post-closure audit originally found four remaining gaps that blocked the
 acceptance gates in
@@ -38,8 +41,8 @@ acceptance gates in
    - test support no longer depends on deleted routing or singleton seams
    - structural gates now lock the final Telegram test boundary
 4. `status.md` and `docs/orchestration_inventory.md` still need their final
-   post-remediation truth pass so they match the actual code ownership and
-   test seam state.
+   post-Phase-8 truth pass so they match the actual code ownership and test
+   seam state.
 
 Phase 8 is now active.
 
@@ -107,7 +110,7 @@ Phase 8 is now active.
       `1483` lines
     - focused suites: `282 passed`
     - verified against the full suite: `1639 passed, 23 skipped`
--  - `936c502` `Phase 8 / H2: move recovery notice markup into presenters`
+  - `936c502` `Phase 8 / H2: move recovery notice markup into presenters`
     - recovery notice reply markup now lives in
       `app/channels/telegram/presenters.py`
     - `app/channels/telegram/egress.py` no longer imports or constructs
@@ -116,9 +119,7 @@ Phase 8 is now active.
       `app/channels/telegram/` except `presenters.py`
     - focused suites: `282 passed`
     - verified against the full suite: `1641 passed, 23 skipped`
-- Remaining verified-but-uncommitted Phase 8 work in this branch state:
-  - `Phase 8 / H3 test-boundary hardening` is complete in the current
-    branch state:
+  - `274c6e4` `Phase 8 / H3: harden telegram test boundaries`
     - private-helper test calls through Telegram ingress were removed or
       replaced with public boundary tests
     - credential-validation tests now exercise the HTTP validation seam or
@@ -129,8 +130,22 @@ Phase 8 is now active.
       `validate_credential` module stubbing from the test tree
     - focused suites: `443 passed`
     - verified against the full suite: `1627 passed, 23 skipped`
+- Remaining verified-but-uncommitted Phase 8 work in this branch state:
+  - `Phase 8 / H4 documentation and structural gate tightening` is complete
+    in the current branch state:
+    - `status.md` now marks the preserved Phase 7 closure section as
+      historical context while keeping the live Phase 8 state at the top
+    - `app/channels/telegram/ingress.py` docstring now matches the actual
+      ownership boundary
+    - structural gates now scan `tests/` for deleted singleton helpers,
+      assert the H1 extracted Telegram modules do not back-import ingress, and
+      enforce the ingress line-count cap
+    - `docs/orchestration_inventory.md` now reflects the current Telegram
+      boundary modules used after H1
+    - focused suites: `62 passed`
+    - verified against the full suite: `1631 passed, 23 skipped`
 - Remaining Phase 8 work is still pending:
-  - H4 documentation and structural gate tightening
+  - Final Phase 8 acceptance audit and closure update
 
 Feature work remains frozen.
 

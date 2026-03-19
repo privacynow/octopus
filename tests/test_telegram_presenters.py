@@ -19,6 +19,7 @@ from app.channels.telegram.presenters import (
     provider_guidance_history_message,
     provider_guidance_mutation_message,
     provider_guidance_preview_message,
+    recovery_notice_markup,
     conversation_role_current_message,
     pending_html_outcome_message,
     raw_missing_message,
@@ -110,6 +111,13 @@ def test_skill_add_confirmation_renders_expected_buttons():
     assert "helper" in rendered.text
     assert rendered.reply_markup.inline_keyboard[0][0].callback_data == "skill_add_confirm:helper"
     assert rendered.reply_markup.inline_keyboard[0][1].callback_data == "skill_add_cancel"
+
+
+def test_recovery_notice_markup_renders_expected_buttons():
+    markup = recovery_notice_markup(601, "Run again", "Skip")
+
+    assert markup.inline_keyboard[0][0].callback_data == "recovery_replay:601"
+    assert markup.inline_keyboard[0][1].callback_data == "recovery_discard:601"
 
 
 def test_provider_guidance_preview_message_renders_expected_html():

@@ -1,4 +1,4 @@
-"""Credential setup rendering helpers shared by runtime-skill surfaces."""
+"""Credential setup rendering helpers shared by runtime-skill channels."""
 
 from __future__ import annotations
 

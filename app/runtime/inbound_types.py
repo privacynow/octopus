@@ -117,7 +117,6 @@ class InboundEnvelope:
     received_at: datetime
     event: InboundMessage | InboundCommand | InboundCallback | InboundAction
     conversation_ref: str = ""
-    surface_binding_id: str = ""
 
     @property
     def kind(self) -> str:

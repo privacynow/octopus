@@ -1,0 +1,25 @@
+from datetime import datetime, timezone
+
+from app.runtime.inbound_types import InboundAction, InboundEnvelope, InboundUser
+
+
+def test_inbound_envelope_constructs_without_surface_binding_id() -> None:
+    event = InboundAction(
+        user=InboundUser(id="tg:42", username="alice"),
+        conversation_key="tg:123",
+        action="approve",
+        params={"item_id": "abc"},
+    )
+
+    envelope = InboundEnvelope(
+        transport="telegram",
+        event_id="evt-1",
+        conversation_key="tg:123",
+        actor_key="tg:42",
+        received_at=datetime.now(timezone.utc),
+        event=event,
+        conversation_ref="tg:123",
+    )
+
+    assert envelope.kind == "action"
+    assert not hasattr(envelope, "surface_binding_id")

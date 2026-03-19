@@ -61,7 +61,7 @@ class WorkerHeartbeat:
 
 @dataclass(frozen=True)
 class SharedRuntimeSnapshot:
-    """Combined queue and worker summary for operator surfaces."""
+    """Combined queue and worker summary for operator channels."""
 
     queue: QueueSnapshot = field(default_factory=QueueSnapshot)
     workers: tuple[WorkerHeartbeat, ...] = ()
@@ -96,7 +96,7 @@ class RuntimeHealthSummary:
 
 @dataclass(frozen=True)
 class RuntimeHealthReport:
-    """Canonical runtime-health report shared by all operator surfaces."""
+    """Canonical runtime-health report shared by all operator channels."""
 
     schema_version: int = _RUNTIME_HEALTH_SCHEMA_VERSION
     generated_at: str = field(
@@ -266,7 +266,7 @@ class RuntimeHealthJsonProjector(RuntimeHealthProjector[dict[str, Any]]):
 
 
 class DoctorTextFormatter(RuntimeHealthFormatter):
-    """Render canonical runtime health for Telegram/CLI doctor surfaces."""
+    """Render canonical runtime health for Telegram/CLI doctor channels."""
 
     def format(self, report: RuntimeHealthReport) -> list[str]:
         parts: list[str] = []

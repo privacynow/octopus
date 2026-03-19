@@ -110,6 +110,7 @@ def test_live_channel_contracts_do_not_reintroduce_surface_vocabulary() -> None:
         "surface_input",
         "surface_action",
         "surface_capabilities",
+        "surface_binding_id",
         "ExecutionSurfaceContext",
         "SurfaceBinding",
         "SurfaceEvent",

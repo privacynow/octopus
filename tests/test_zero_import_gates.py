@@ -788,6 +788,15 @@ def test_telegram_ingress_request_and_compact_rendering_is_presenter_owned() -> 
         assert token not in text, f"{token} still referenced in {ingress_path}"
 
 
+def test_telegram_ingress_does_not_duplicate_command_normalization_for_start_or_help() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    text = ingress_path.read_text()
+    assert "@_command_handler(show_not_allowed_message=True)\nasync def cmd_start(" in text
+    assert "@_command_handler(show_not_allowed_message=True)\nasync def cmd_help(" in text
+    assert text.count("event = telegram_normalization.normalize_command(update, context)") == 1
+
+
 def test_telegram_ingress_help_and_admin_rendering_is_presenter_owned() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"

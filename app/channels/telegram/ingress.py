@@ -367,42 +367,50 @@ async def _public_guard(runtime: TelegramRuntime, event, update: Update) -> bool
     return False
 
 
-def _command_handler(fn):
+def _command_handler(fn=None, *, show_not_allowed_message: bool = False):
     """Decorator: normalize → dedup → is_allowed gate → call fn(runtime, event, update, context)."""
     import functools
 
-    @functools.wraps(fn)
-    async def wrapper(
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE,
-        *,
-        runtime: TelegramRuntime | None = None,
-    ) -> None:
-        runtime = runtime or _context_runtime(context)
-        event = telegram_normalization.normalize_command(update, context)
-        payload = serialize_inbound(event) if event else "{}"
-        if _dedup_update(runtime, update, kind="command", payload=payload):
-            return
-        uid = update.update_id
-        if event is None or not is_allowed(runtime, event.user):
-            _complete_pending_work_item(runtime, uid)
-            return
-        token = runtime.current_update_id.set(uid)
-        try:
-            await fn(runtime, event, update, context)
-        except ClaimBlocked:
-            # Worker owns this chat — item stays queued for worker_loop.
-            runtime.pending_work_items.pop(uid, None)
-            return
-        except Exception:
-            _complete_pending_work_item(runtime, uid, state="failed")
-            raise
-        else:
-            _complete_pending_work_item(runtime, uid)
-        finally:
-            runtime.current_update_id.reset(token)
+    def decorate(command_fn):
+        @functools.wraps(command_fn)
+        async def wrapper(
+            update: Update,
+            context: ContextTypes.DEFAULT_TYPE,
+            *,
+            runtime: TelegramRuntime | None = None,
+        ) -> None:
+            runtime = runtime or _context_runtime(context)
+            event = telegram_normalization.normalize_command(update, context)
+            payload = serialize_inbound(event) if event else "{}"
+            if _dedup_update(runtime, update, kind="command", payload=payload):
+                return
+            uid = update.update_id
+            if event is None or not is_allowed(runtime, event.user):
+                if show_not_allowed_message and event is not None:
+                    rendered = telegram_presenters.trust_not_authorized_message()
+                    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+                _complete_pending_work_item(runtime, uid)
+                return
+            token = runtime.current_update_id.set(uid)
+            try:
+                await command_fn(runtime, event, update, context)
+            except ClaimBlocked:
+                # Worker owns this chat — item stays queued for worker_loop.
+                runtime.pending_work_items.pop(uid, None)
+                return
+            except Exception:
+                _complete_pending_work_item(runtime, uid, state="failed")
+                raise
+            else:
+                _complete_pending_work_item(runtime, uid)
+            finally:
+                runtime.current_update_id.reset(token)
 
-    return wrapper
+        return wrapper
+
+    if fn is not None:
+        return decorate(fn)
+    return decorate
 
 
 def _callback_handler(fn):
@@ -470,19 +478,10 @@ def _settings_model_profile_state(
 
 # -- Command handlers ------------------------------------------------------
 
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+@_command_handler(show_not_allowed_message=True)
+async def cmd_start(runtime: TelegramRuntime, event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start — always show main help (ignores deep-link payloads)."""
-    runtime = _context_runtime(context)
-    event = telegram_normalization.normalize_command(update, context)
-    payload = serialize_inbound(event) if event else "{}"
-    if _dedup_update(runtime, update, kind="command", payload=payload):
-        return
-    uid = update.update_id
-    if event is None or not is_allowed(runtime, event.user):
-        rendered = telegram_presenters.trust_not_authorized_message()
-        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-        _complete_pending_work_item(runtime, uid)
-        return
+    del context
     cfg = runtime.config
     rendered = telegram_presenters.main_help_message(
         instance=cfg.instance,
@@ -494,22 +493,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         is_admin=is_admin(runtime, event.user),
     )
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-    _complete_pending_work_item(runtime, uid)
 
 
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+@_command_handler(show_not_allowed_message=True)
+async def cmd_help(runtime: TelegramRuntime, event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help [topic] — main help or topic-specific detail."""
-    runtime = _context_runtime(context)
-    event = telegram_normalization.normalize_command(update, context)
-    payload = serialize_inbound(event) if event else "{}"
-    if _dedup_update(runtime, update, kind="command", payload=payload):
-        return
-    uid = update.update_id
-    if event is None or not is_allowed(runtime, event.user):
-        rendered = telegram_presenters.trust_not_authorized_message()
-        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-        _complete_pending_work_item(runtime, uid)
-        return
+    del context
     args = event.args
 
     if args:
@@ -517,11 +506,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         rendered = telegram_presenters.help_topic_message(topic)
         if rendered is not None:
             await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-            _complete_pending_work_item(runtime, uid)
             return
         rendered = telegram_presenters.unknown_help_topic_message()
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-        _complete_pending_work_item(runtime, uid)
         return
 
     cfg = runtime.config
@@ -535,7 +522,6 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         is_admin=is_admin(runtime, event.user),
     )
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-    _complete_pending_work_item(runtime, uid)
 
 
 @_command_handler

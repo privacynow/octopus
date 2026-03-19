@@ -9,20 +9,37 @@ Current branch: `feature/skills`
 This file tracks execution of the **Reopened Architecture Remediation Track**
 in [`store_plan.md`](/Users/tinker/output/bots/telegram-agent-bot/store_plan.md).
 
-Feature work remains frozen until every acceptance gate in the plan passes.
+Feature work remained frozen until every acceptance gate in the plan passed.
 
 Historical pre-closure execution notes are preserved below as an audit log,
 including intermediate mistakes, reopened gates, and before-state inventories.
-The live execution state for the reopened track is recorded in `## Current State`
-below. The appended `## Current Authoritative Status` section is the preserved
-Phase 7 closure baseline and remains historical context until Phase 8 closes.
+The live accepted state is recorded in the final
+`## Current Authoritative Status` section below. The preserved
+`## Historical Phase 7 Closure Status` section remains historical context from
+the earlier closure attempt.
 
-- `## Current Authoritative Status` (historical Phase 7 baseline)
+- `## Historical Phase 7 Closure Status` (preserved Phase 7 baseline)
+- `## Current Authoritative Status` (live Phase 8 closure)
 
 ## Current State
 
-The remediation track remains open. Phase 8 is in progress, and feature work
-remains frozen until H4 and the final acceptance verification are complete.
+Architecture remediation is complete. Phase 8 closed the remaining ingress
+decomposition, presenter-ownership, and Telegram test-boundary gaps.
+
+Final committed Phase 8 closure:
+
+- `7804cf4` `Phase 8 / H4: tighten telegram docs and gates`
+
+Latest verified full-suite baseline:
+
+- `1631 passed, 23 skipped`
+
+Feature work may resume.
+
+### Historical In-Progress Snapshot
+
+The following Phase 8 notes are preserved as the final in-progress execution
+snapshot before the closure audit was written up.
 
 Post-closure audit originally found four remaining gaps that blocked the
 acceptance gates in
@@ -130,9 +147,7 @@ Phase 8 is now active.
       `validate_credential` module stubbing from the test tree
     - focused suites: `443 passed`
     - verified against the full suite: `1627 passed, 23 skipped`
-- Remaining verified-but-uncommitted Phase 8 work in this branch state:
-  - `Phase 8 / H4 documentation and structural gate tightening` is complete
-    in the current branch state:
+  - `7804cf4` `Phase 8 / H4: tighten telegram docs and gates`
     - `status.md` now marks the preserved Phase 7 closure section as
       historical context while keeping the live Phase 8 state at the top
     - `app/channels/telegram/ingress.py` docstring now matches the actual
@@ -144,10 +159,12 @@ Phase 8 is now active.
       boundary modules used after H1
     - focused suites: `62 passed`
     - verified against the full suite: `1631 passed, 23 skipped`
-- Remaining Phase 8 work is still pending:
-  - Final Phase 8 acceptance audit and closure update
-
-Feature work remains frozen.
+- Final Phase 8 acceptance audit then verified the committed H4 state against
+  the plan gates:
+  - no app-side ingress imports outside bootstrap
+  - Telegram reply markup ownership is presenter-only
+  - ingress line count is `1483`
+  - test-boundary gates reject private-helper and module-stub coupling
 
 Historical execution log follows below. Some older entries reference the
 pre-audit `ingress.py`/`routing.py` closure state and are preserved as history,
@@ -885,17 +902,11 @@ Worktree now in progress for final acceptance closure:
 
 ## Remaining Work
 
-- Phase 7. Closure Correction Stage
-  - `G4` repair status/inventory docs and strengthen structural gates to catch
-    the regressions that escaped the previous closure
+None. Phase 8 and the final acceptance audit are complete. The before-state
+inventories below are preserved as historical audit context from earlier
+execution.
 
-Acceptance remains blocked until the reopened Phase 7 gates pass.
-     - negative structural guards proving inline rendering is gone from both
-       channel modules
-   - focused verification passed:
-     - `204 passed`
-   - full suite passed:
-     - `1579 passed, 23 skipped`
+## Historical Before-State Inventories
 
 Before-state for `Track B / B2c2`:
 
@@ -995,7 +1006,7 @@ No compatibility shims.
 No partial ownership moves.
 No feature work.
 
-## Current Authoritative Status
+## Historical Phase 7 Closure Status
 
 Last updated: 2026-03-18
 Repository: `/Users/tinker/output/bots/telegram-agent-bot`
@@ -1124,3 +1135,141 @@ Latest full-suite remediation baseline:
   not a runtime contract document.
 - The historical log above is preserved intentionally, even where it records
   intermediate false starts, reopened gates, and stale before-state notes.
+
+## Current Authoritative Status
+
+Last updated: 2026-03-18
+Repository: `/Users/tinker/output/bots/telegram-agent-bot`
+Current branch: `feature/skills`
+
+### Scope
+
+This section is the live closure artifact for the architecture remediation work
+defined in
+[`store_plan.md`](/Users/tinker/output/bots/telegram-agent-bot/store_plan.md).
+
+The historical execution log and the preserved Phase 7 closure snapshot remain
+above as audit history. This section records the final accepted ownership model
+after Phase 8 and the latest verified remediation baseline.
+
+### Current State
+
+Architecture remediation is complete.
+
+Phase 8 closed the remaining Telegram ingress decomposition and test-boundary
+gaps left after Phase 7. The live Telegram channel boundary is now:
+
+- `app/channels/telegram/bootstrap.py`
+- `app/channels/telegram/ingress.py`
+- `app/channels/telegram/session_io.py`
+- `app/channels/telegram/progress.py`
+- `app/channels/telegram/delegation_channel.py`
+- `app/channels/telegram/execution.py`
+- `app/channels/telegram/worker.py`
+- `app/channels/telegram/shared_mode_dispatch.py`
+- `app/channels/telegram/presenters.py`
+
+The current committed orchestration inventory lives in:
+
+- `docs/orchestration_inventory.md`
+
+The repo-standard explicit machine contract lives in:
+
+- `docs/machine_conventions.md`
+
+Feature work may resume.
+
+### Phase 8 Slice Log
+
+1. `9b8b611`, `8c12f44`, `62b7569`, `9594e84`, `ac9fa9e`, `c2b3f33`, `29e1636`
+   `Phase 8 / H1: decompose ingress below the line-count threshold`
+   - extracted session I/O, progress, delegation channel flow, execution,
+     worker dispatch, and shared-mode dispatch into explicit sibling modules
+   - reduced `app/channels/telegram/ingress.py` to `1483` lines
+   - wired `bootstrap.py` directly to `telegram_worker.worker_dispatch`
+
+2. `936c502` `Phase 8 / H2: move recovery notice markup into presenters`
+   - `app/channels/telegram/egress.py` no longer constructs Telegram reply
+     markup directly
+   - the reply-markup ownership gate now scans all Telegram channel modules
+
+3. `274c6e4` `Phase 8 / H3: harden telegram test boundaries`
+   - private ingress-helper calls were removed from tests except for the
+     documented PTB callback exception around `_global_error_handler`
+   - credential-validation tests now use contract seams instead of module-level
+     function monkeypatching
+
+4. `7804cf4` `Phase 8 / H4: tighten telegram docs and gates`
+   - repaired the Telegram ingress docstring, status artifact, and structural
+     gates
+   - added test-side singleton-helper guards and extracted-module back-import
+     guards
+   - locked the ingress line-count cap into the test suite
+
+### Acceptance Gates
+
+These mirror the authoritative
+`Architecture Remediation Acceptance Gates` in
+[`store_plan.md`](/Users/tinker/output/bots/telegram-agent-bot/store_plan.md).
+
+- [x] No app module outside Telegram ingress imports Telegram ingress.
+- [x] Telegram channel runtime state is explicit and instance-owned, not
+  singleton or global-module-owned.
+- [x] `runtime/*` has no channel imports.
+- [x] `agents/*` has no channel imports.
+- [x] `access.py` has no channel imports.
+- [x] Telegram presenters own Telegram rendering.
+- [x] Registry `http.py` is a thin HTTP boundary and `ui.py` owns UI rendering.
+- [x] Setup progression has one explicit machine owner.
+- [x] Delegation progression has one explicit workflow/machine owner.
+- [x] Pending and recovery machines live under concern-owned workflow packages.
+- [x] `runtime/dispatch.py` has explicit non-channel ownership and is not a
+  shadow workflow owner.
+- [x] The repo-standard explicit machine style is declared and used for
+  remediated durable workflows.
+- [x] Lifecycle snapshot and latest-approval ownership are cleaned up.
+- [x] `workflows/__init__.py` and `transport_contract.py` no longer carry dead
+  or misleading transitional ownership.
+- [x] Zero-import gates cover both `app/` and `tests/`.
+- [x] Test support no longer mutates Telegram ingress globals.
+- [x] Telegram bootstrap owns PTB application construction and route
+  registration; Telegram ingress owns normalized event translation and dispatch
+  only.
+- [x] Telegram-heavy tests exercise the Telegram boundary through explicit
+  runtime setup rather than routing-module internals or singleton mutable
+  state.
+- [x] `status.md` and `docs/orchestration_inventory.md` reflect the actual
+  current code ownership and are updated only after code/tests proved the
+  state.
+- [x] `ingress.py` is ≤ 1500 lines and contains only event translation,
+  handler dispatch, and thin coordination.
+- [x] No extracted Telegram channel module imports
+  `app.channels.telegram.ingress`.
+- [x] No Telegram channel file except `presenters.py` creates
+  `InlineKeyboardMarkup` or `InlineKeyboardButton`.
+- [x] No test file calls private ingress helpers, with the documented PTB
+  callback-contract exception for `_global_error_handler`.
+- [x] No test file monkeypatches module-level ingress functions for stubbing.
+- [x] Zero-import gates for singleton helpers cover both `app/` and `tests/`.
+- [x] Ingress line-count gate prevents growth above 1600 lines.
+
+### Verification Baseline
+
+Latest focused Phase 8 structural suite:
+
+- `tests/test_zero_import_gates.py`
+- `tests/test_status_doc.py`
+- `tests/test_orchestration_inventory.py`
+- `tests/test_architecture_skeleton.py`
+- Result: `62 passed`
+
+Latest full-suite remediation baseline:
+
+- Result: `1631 passed, 23 skipped`
+
+### Notes
+
+- `PROMPT-phase7-remediation.md` and `PROMPT-phase8-remediation.md` remain
+  execution prompt artifacts; they are not runtime contract documents.
+- The historical log above is preserved intentionally, including intermediate
+  mistakes, reopened gates, and before-state inventories.

@@ -18,69 +18,78 @@ def test_status_doc_preserves_historical_log_entries() -> None:
         "Track F / F6: enforce runtime dispatch ownership",
         "Track B / B2c2a: move ingress request rendering into presenters",
         "## Working Rules",
+        "## Historical Phase 7 Closure Status",
     )
 
     for fragment in required_fragments:
         assert fragment in text
 
 
-def test_status_doc_records_final_phase7_state_and_live_owners_in_authoritative_section() -> None:
+def test_status_doc_records_live_phase8_state_and_owners_in_authoritative_section() -> None:
     text = _status_text()
-    authoritative = text.split("## Current Authoritative Status", 1)[1]
+    authoritative = text.rsplit("## Current Authoritative Status", 1)[1]
 
     required_fragments = (
-        "Phase 7 closure correction is complete.",
+        "Architecture remediation is complete.",
         "app/channels/telegram/bootstrap.py",
         "app/channels/telegram/ingress.py",
+        "app/channels/telegram/session_io.py",
+        "app/channels/telegram/worker.py",
         "docs/orchestration_inventory.md",
         "docs/machine_conventions.md",
-        "bf86331",
-        "4166599",
-        "0c01b70",
-        "78051ae",
-        "1616 passed, 23 skipped",
+        "936c502",
+        "274c6e4",
+        "7804cf4",
+        "1631 passed, 23 skipped",
     )
 
     for fragment in required_fragments:
         assert fragment in authoritative
 
 
-def test_status_doc_includes_all_phase7_acceptance_gate_fragments() -> None:
+def test_status_doc_includes_all_phase8_acceptance_gate_fragments() -> None:
     text = _status_text()
-    authoritative = text.split("## Current Authoritative Status", 1)[1]
+    authoritative = text.rsplit("## Current Authoritative Status", 1)[1]
 
     required_fragments = (
         "Telegram channel runtime state is explicit and instance-owned",
         "Telegram bootstrap owns PTB application construction and route",
         "Telegram-heavy tests exercise the Telegram boundary through explicit",
         "`status.md` and `docs/orchestration_inventory.md` reflect the actual",
+        "`ingress.py` is ≤ 1500 lines",
+        "No Telegram channel file except `presenters.py` creates",
+        "No test file monkeypatches module-level ingress functions for stubbing.",
     )
 
     for fragment in required_fragments:
         assert fragment in authoritative
 
 
-def test_status_doc_historical_and_authoritative_sections_are_both_present() -> None:
+def test_status_doc_historical_and_live_closure_sections_are_both_present() -> None:
     text = _status_text()
 
     required_fragments = (
         "Historical pre-closure execution notes are preserved below as an audit log",
+        "## Historical Phase 7 Closure Status",
+        "Phase 7 closure correction is complete.",
         "## Current Authoritative Status",
-        "The historical log above is preserved intentionally",
+        "The historical log above is preserved intentionally, including intermediate",
         "42 passed",
+        "62 passed",
     )
 
     for fragment in required_fragments:
         assert fragment in text
 
 
-def test_status_doc_lede_marks_phase7_closure_section_as_historical_context() -> None:
+def test_status_doc_lede_points_to_live_phase8_closure_and_marks_phase7_as_historical() -> None:
     text = _status_text()
 
     required_fragments = (
-        "The live execution state for the reopened track is recorded in `## Current State`",
-        "`## Current Authoritative Status` (historical Phase 7 baseline)",
-        "The remediation track remains open. Phase 8 is in progress",
+        "The live accepted state is recorded in the final",
+        "`## Historical Phase 7 Closure Status` (preserved Phase 7 baseline)",
+        "`## Current Authoritative Status` (live Phase 8 closure)",
+        "Architecture remediation is complete. Phase 8 closed the remaining ingress",
     )
 
     for fragment in required_fragments:

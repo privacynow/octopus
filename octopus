@@ -1,0 +1,316 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+OCTOPUS_SCRIPT="${BASH_SOURCE[0]:-$0}"
+REPO_DIR="$(cd "$(dirname "$OCTOPUS_SCRIPT")" && pwd)"
+cd "$REPO_DIR"
+
+# shellcheck source=scripts/lib/state.sh
+source "$REPO_DIR/scripts/lib/state.sh"
+# shellcheck source=scripts/lib/bot.sh
+source "$REPO_DIR/scripts/lib/bot.sh"
+# shellcheck source=scripts/lib/docker.sh
+source "$REPO_DIR/scripts/lib/docker.sh"
+# shellcheck source=scripts/lib/provider.sh
+source "$REPO_DIR/scripts/lib/provider.sh"
+# shellcheck source=scripts/lib/registry.sh
+source "$REPO_DIR/scripts/lib/registry.sh"
+# shellcheck source=scripts/lib/ui.sh
+source "$REPO_DIR/scripts/lib/ui.sh"
+
+octopus_error() {
+  printf '%s\n' "$1" >&2
+}
+
+unsupported_slice_command() {
+  octopus_error "$1"
+  return 1
+}
+
+main_menu() {
+  unsupported_slice_command "Bot management lands in the next slice. Run ./octopus with no configured bots to bootstrap the first bot."
+}
+
+cmd_status() {
+  unsupported_slice_command "Status lands in the next slice."
+}
+
+cmd_start() {
+  unsupported_slice_command "Start lands in the next slice."
+}
+
+cmd_stop() {
+  unsupported_slice_command "Stop lands in the next slice."
+}
+
+cmd_logs() {
+  unsupported_slice_command "Logs lands in the next slice."
+}
+
+cmd_doctor() {
+  unsupported_slice_command "Doctor lands in the next slice."
+}
+
+cmd_registry() {
+  unsupported_slice_command "Registry management lands in the next slice."
+}
+
+prompt_first_bot_identity() {
+  local token result telegram_id username display_name
+  while true; do
+    read -r -p "Paste your Telegram bot token: " token || return 1
+    case "$token" in
+      help|\?)
+        print_channel_setup_help telegram
+        continue
+        ;;
+    esac
+    if [ -z "$token" ]; then
+      octopus_error "Telegram bot token is required."
+      continue
+    fi
+    if telegram_token_is_placeholder "$token"; then
+      octopus_error "That still looks like a placeholder token. Copy the full token from @BotFather."
+      continue
+    fi
+    if ! telegram_token_format_valid "$token"; then
+      octopus_error "Telegram bot tokens look like digits:letters from @BotFather."
+      continue
+    fi
+    if ! result="$(validate_telegram_token "$token")"; then
+      octopus_error "Token was rejected by Telegram. Check with @BotFather that the token is correct."
+      continue
+    fi
+    telegram_id="$(sed -n '1p' <<< "$result")"
+    username="$(sed -n '2p' <<< "$result")"
+    display_name="$(sed -n '3p' <<< "$result")"
+    if [ -z "$telegram_id" ] || [ -z "$username" ]; then
+      octopus_error "Telegram returned incomplete bot identity. Try again."
+      continue
+    fi
+    display_name="${display_name:-$username}"
+    printf 'This token belongs to %s (@%s).\n' "$display_name" "$username"
+    FIRST_BOT_TOKEN="$token"
+    FIRST_BOT_TELEGRAM_ID="$telegram_id"
+    FIRST_BOT_TELEGRAM_USERNAME="$username"
+    FIRST_BOT_DISPLAY_NAME="$display_name"
+    return 0
+  done
+}
+
+prompt_provider_choice() {
+  local provider=""
+  while true; do
+    provider="$(prompt_with_default "Provider (claude or codex)" "claude")"
+    case "$provider" in
+      claude|codex)
+        printf '%s\n' "$provider"
+        return 0
+        ;;
+      *)
+        octopus_error "Choose 'claude' or 'codex'."
+        ;;
+    esac
+  done
+}
+
+ensure_provider_image_ready() {
+  local provider="$1" need_build=0 current_rev="" built_rev=""
+  if ! docker image inspect "octopus-agent:$provider" >/dev/null 2>&1; then
+    need_build=1
+  elif [ -f .bot-image-build-rev ]; then
+    current_rev="$(git rev-parse HEAD 2>/dev/null || true)"
+    built_rev="$(cat .bot-image-build-rev 2>/dev/null || true)"
+    if [ -n "$current_rev" ] && [ -n "$built_rev" ] && [ "$current_rev" != "$built_rev" ]; then
+      need_build=1
+    fi
+  fi
+  if [ "$need_build" -eq 1 ]; then
+    printf 'Building bot image for %s...\n' "$provider"
+    "$REPO_DIR/scripts/provider/build_bot_image.sh" "$provider"
+  fi
+}
+
+ensure_provider_auth_ready() {
+  local provider="$1"
+  if provider_is_authed "$provider" >/dev/null 2>&1; then
+    return 0
+  fi
+  octopus_error "Provider authentication is required. Starting the login flow now."
+  provider_compose "$provider" run --rm bot-provider sh /app/scripts/provider/container_provider_login.sh
+  if ! provider_is_authed "$provider" >/dev/null 2>&1; then
+    octopus_error "Provider authentication is still incomplete. Finish login, then run ./octopus again."
+    return 1
+  fi
+}
+
+write_first_bot_env() {
+  local slug="$1" telegram_id="$2" username="$3" display_name="$4" token="$5" provider="$6"
+  local env_file bot_dir
+  bot_dir=".deploy/bots/$slug"
+  env_file="$bot_dir/.env"
+  mkdir -p "$bot_dir"
+  {
+    write_env_assignment_line BOT_INSTANCE "$slug"
+    write_env_assignment_line BOT_SLUG "$slug"
+    write_env_assignment_line BOT_AGENT_SLUG "$slug"
+    write_env_assignment_line BOT_TELEGRAM_ID "$telegram_id"
+    write_env_assignment_line BOT_TELEGRAM_USERNAME "$username"
+    write_env_assignment_line BOT_DISPLAY_NAME "$display_name"
+    write_env_assignment_line BOT_AGENT_DISPLAY_NAME "$display_name"
+    write_env_assignment_line TELEGRAM_BOT_TOKEN "$token"
+    write_env_assignment_line BOT_PROVIDER "$provider"
+    write_env_assignment_line BOT_AGENT_MODE "standalone"
+    write_env_assignment_line BOT_COMPACT_MODE "1"
+    write_env_assignment_line BOT_ALLOW_OPEN "1"
+    write_env_assignment_line BOT_TIMEOUT_SECONDS "3600"
+    write_env_assignment_line BOT_WORKING_DIR "/home/bot"
+    write_env_assignment_line BOT_DATA_DIR "/home/bot/data"
+  } > "$env_file"
+  restrict_secret_file_permissions "$env_file"
+}
+
+prompt_rejected_telegram_token_repair() {
+  local slug="$1" env_file current_token new_token
+  env_file="$(bot_env_file "$slug")"
+  current_token="$(read_bot_env_value TELEGRAM_BOT_TOKEN "$env_file")"
+  new_token="$(prompt_channel_token_with_help \
+    telegram \
+    "Paste a replacement Telegram bot token" \
+    "$current_token" \
+    "Telegram rejected the bot token. Check with @BotFather that it is correct." \
+    0)" || return 1
+  upsert_env_file_value TELEGRAM_BOT_TOKEN "$new_token" "$env_file"
+  return 0
+}
+
+run_bot_doctor() {
+  local slug="$1"
+  bot_compose "$slug" run --rm bot python -m app.main --doctor 2>&1
+}
+
+run_bot_doctor_until_ready() {
+  local slug="$1" doctor_output=""
+  while true; do
+    if doctor_output="$(run_bot_doctor "$slug")"; then
+      return 0
+    fi
+    print_doctor_output_for_operator "$doctor_output"
+    if doctor_output_has_token_rejection "$doctor_output"; then
+      if prompt_rejected_telegram_token_repair "$slug"; then
+        octopus_error "Re-running the health check with the updated Telegram token."
+        continue
+      fi
+    fi
+    octopus_error "Full app health check failed. Fix the issue above, then run ./octopus again."
+    return 1
+  done
+}
+
+start_bot_until_running() {
+  local slug="$1" doctor_output=""
+  while true; do
+    bot_compose "$slug" up -d bot >/dev/null
+    sleep 5
+    if bot_is_running "$slug"; then
+      return 0
+    fi
+    octopus_error "Bot failed to stay up after startup."
+    doctor_output="$(run_bot_doctor "$slug" || true)"
+    print_doctor_output_for_operator "$doctor_output"
+    if doctor_output_has_token_rejection "$doctor_output"; then
+      if prompt_rejected_telegram_token_repair "$slug"; then
+        octopus_error "Retrying startup with the updated Telegram token."
+        continue
+      fi
+    fi
+    octopus_error "Could not start the bot cleanly. Review the health output above, then run ./octopus again."
+    return 1
+  done
+}
+
+print_first_bot_success() {
+  local username="$1"
+  cat <<EOF
+╔═══════════════════════════════════════════╗
+║  Bot is running!                          ║
+║                                           ║
+║  Open Telegram and message @${username}   ║
+║                                           ║
+║  ./octopus status    — check bot health   ║
+║  ./octopus logs      — follow live logs   ║
+║  ./octopus stop      — stop the bot       ║
+║                                           ║
+║  Run ./octopus again to add more bots     ║
+║  or connect to a registry.                ║
+╚═══════════════════════════════════════════╝
+EOF
+  printf '%s\n' "Advanced settings (role, tags, skills, allowed users) can be configured by running ./octopus and choosing Manage bots."
+}
+
+first_bot_flow() {
+  local mode="${1:-quick}" provider="" slug="" existing_slug=""
+  local telegram_id="" username="" display_name="" token=""
+  ensure_deploy_dirs
+  prompt_first_bot_identity || return 1
+  telegram_id="$FIRST_BOT_TELEGRAM_ID"
+  username="$FIRST_BOT_TELEGRAM_USERNAME"
+  display_name="$FIRST_BOT_DISPLAY_NAME"
+  token="$FIRST_BOT_TOKEN"
+
+  existing_slug="$(find_bot_slug_by_telegram_id "$telegram_id" || true)"
+  if [ -n "$existing_slug" ]; then
+    octopus_error "This Telegram bot is already configured as '$existing_slug'. Run ./octopus to manage the existing bot."
+    return 1
+  fi
+
+  slug="$(normalize_slug "$username")"
+  slug="${slug:-bot}"
+  if [ -d ".deploy/bots/$slug" ]; then
+    octopus_error "A different bot already uses the local slug '$slug'. Remove that bot or choose a different Telegram bot token."
+    return 1
+  fi
+
+  provider="$(prompt_provider_choice)"
+  if [ "$mode" != "quick" ]; then
+    octopus_error "Full setup lands in a later slice. Continuing with quick setup."
+  fi
+
+  ensure_provider_image_ready "$provider"
+  ensure_provider_auth_ready "$provider"
+  ensure_network
+  write_first_bot_env "$slug" "$telegram_id" "$username" "$display_name" "$token" "$provider"
+  run_bot_doctor_until_ready "$slug"
+  start_bot_until_running "$slug"
+  print_first_bot_success "$username"
+}
+
+main() {
+  ensure_deploy_dirs
+
+  case "${1:-}" in
+    status)   shift; cmd_status "$@" ;;
+    start)    shift; cmd_start "$@" ;;
+    stop)     shift; cmd_stop "$@" ;;
+    logs)     shift; cmd_logs "$@" ;;
+    doctor)   shift; cmd_doctor "$@" ;;
+    registry) shift; cmd_registry "$@" ;;
+    "")
+      if [ "$(count_bots)" -eq 0 ]; then
+        first_bot_flow quick
+      else
+        main_menu
+      fi
+      ;;
+    *)
+      octopus_error "Unknown command: $1"
+      return 1
+      ;;
+  esac
+}
+
+if [ "${OCTOPUS_SOURCE_ONLY:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
+main "$@"

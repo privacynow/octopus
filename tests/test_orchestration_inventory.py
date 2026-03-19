@@ -31,6 +31,7 @@ def test_orchestration_inventory_lists_required_concerns_and_files() -> None:
         "app/agents/delegation.py",
         "app/runtime/dispatch.py",
         "app/workflows/execution/requests.py",
+        "app/workflows/execution/finalization.py",
     )
 
     for fragment in required_fragments:

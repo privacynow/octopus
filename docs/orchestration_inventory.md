@@ -147,11 +147,13 @@ inventory covers the concern-owned orchestration packages they call into.
   - `app/runtime/dispatch.py`
   - `app/workflows/execution/contracts.py`
   - `app/workflows/execution/requests.py`
+  - `app/workflows/execution/finalization.py`
   - `app/request_flow.py`
   - `app/approvals.py` as helper policy/approval logic
 - Current style:
   - `app/runtime/dispatch.py` is channel-agnostic provider-call plumbing
   - `app/workflows/execution/requests.py` is the concern-owned execution workflow
+  - `app/workflows/execution/finalization.py` owns post-execution result/reporting orchestration
   - `app/request_flow.py` remains a procedural helper module
 - Classification: `procedural workflow acceptable`
 - Authoritative destination:
@@ -160,6 +162,7 @@ inventory covers the concern-owned orchestration packages they call into.
 - Why:
   - runtime no longer owns business workflows
   - execution/preflight orchestration now lives under a concern-owned workflow package
+  - post-execution finalization no longer lives in Telegram worker code
   - the remaining request-flow helpers are acceptable procedural workflow code
 - Follow-on owner: Track F / F6 complete
 

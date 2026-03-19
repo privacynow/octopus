@@ -108,3 +108,25 @@
   - Telegram token validation now happens with a dedicated helper that is safe to call before any Docker or provider work
   - the identity fields needed by later `./octopus` flows are now available from a single `getMe` call
   - the token-leak constraint is covered by both positive and negative tests, not just by code inspection
+- Complete: Slice 6 first-bot `./octopus` flow.
+  Scope:
+  - added the root `./octopus` entrypoint and made it sourceable for shell-level contract tests
+  - implemented the first-bot quick setup flow with Telegram identity validation, provider choice, provider auth bootstrap, env-file creation, doctor checks, token-repair loop, and background startup verification
+  - persisted both Octopus-facing identity fields (`BOT_TELEGRAM_ID`, `BOT_TELEGRAM_USERNAME`, `BOT_DISPLAY_NAME`, `BOT_SLUG`) and current runtime-facing fields (`BOT_INSTANCE`, `BOT_AGENT_SLUG`, `BOT_AGENT_DISPLAY_NAME`)
+  - added duplicate-bot detection keyed by `BOT_TELEGRAM_ID` so the same Telegram bot is not silently re-added as a second local deployment
+  - added reusable state helpers for Telegram identity lookups ahead of the later management slices
+  Tests:
+  - `bash -n octopus scripts/lib/state.sh`
+  - `.venv/bin/python -m pytest -q tests/test_octopus_first_bot_flow.py tests/test_octopus_token_validation.py`
+  - `.venv/bin/python -m pytest -q tests/contracts/test_transport_store_contract.py -k 'test_get_usage_since_filters_by_time and postgres' -n 0`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - ran a stubbed first-bot bootstrap simulation under Bash and verified the flow prints `This token belongs to <name> (@<username>).` with no naming prompt
+  - verified the generated `.deploy/bots/example-bot/.env` contained the Telegram identity fields plus the current runtime fields needed by `app.config`
+  - verified the success box references the new `./octopus` command surface
+  Notes:
+  - one unrelated postgres contract test was timing-sensitive on the first parallel full-suite pass; the isolated rerun passed immediately and the subsequent full-suite rerun was green
+  Verified:
+  - the first-run contract is now token-driven instead of asking the user to name the bot a second time
+  - the first-bot flow preserves the token-repair and doctor-check behavior from the old guided path while moving state into `.deploy/bots/<slug>/.env`
+  - Telegram identity is now the authoritative source for first-bot local identity, while the duplicate guard prevents accidental double deployment of the same Telegram bot

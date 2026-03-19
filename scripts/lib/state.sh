@@ -17,6 +17,18 @@ bot_env_file() {
   echo ".deploy/bots/$1/.env"
 }
 
+bot_display_name() {
+  read_bot_env_value BOT_DISPLAY_NAME "$(bot_env_file "$1")"
+}
+
+bot_telegram_id() {
+  read_bot_env_value BOT_TELEGRAM_ID "$(bot_env_file "$1")"
+}
+
+bot_telegram_username() {
+  read_bot_env_value BOT_TELEGRAM_USERNAME "$(bot_env_file "$1")"
+}
+
 bot_registry_url() {
   read_bot_env_value BOT_AGENT_REGISTRY_URL "$(bot_env_file "$1")"
 }
@@ -58,4 +70,16 @@ network_exists() {
 
 ensure_deploy_dirs() {
   mkdir -p .deploy/bots .deploy/registry .deploy/provider-auth
+}
+
+find_bot_slug_by_telegram_id() {
+  local telegram_id="$1" slug=""
+  [ -n "$telegram_id" ] || return 1
+  for slug in $(list_bot_slugs); do
+    if [ "$(bot_telegram_id "$slug")" = "$telegram_id" ]; then
+      printf '%s\n' "$slug"
+      return 0
+    fi
+  done
+  return 1
 }

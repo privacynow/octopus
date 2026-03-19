@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -9,6 +10,8 @@ from psycopg.rows import dict_row
 
 from app.credential_store_base import AbstractCredentialStore
 from app.db.postgres import get_connection
+
+log = logging.getLogger(__name__)
 
 _SCHEMA = "bot_credentials"
 _INIT_SQL = f"""\
@@ -88,12 +91,21 @@ class PostgresCredentialStore(AbstractCredentialStore):
                 )
                 rows = cur.fetchall()
         result: dict[str, dict[str, str]] = {}
+        saw_decrypt_failure = False
         for row in rows:
             try:
                 value = self._fernet.decrypt(str(row["encrypted_value"]).encode("utf-8")).decode("utf-8")
             except (InvalidToken, ValueError, TypeError):
+                saw_decrypt_failure = True
                 continue
             result.setdefault(str(row["skill_name"]), {})[str(row["cred_key"])] = value
+        if saw_decrypt_failure:
+            log.error(
+                "Could not decrypt one or more stored credentials for %s. "
+                "If TELEGRAM_BOT_TOKEN recently changed, set BOT_CREDENTIAL_KEY "
+                "to the previous key material to recover.",
+                actor_key,
+            )
         return result
 
     def save(

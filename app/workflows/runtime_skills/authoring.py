@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.content_store import get_content_store
 from app.skill_catalog_service import get_skill_catalog_service
@@ -17,6 +19,8 @@ from app.workflows.runtime_skills.contracts import (
     RuntimeSkillLifecycleMutation,
     RuntimeSkillLifecycleRevision,
 )
+
+log = logging.getLogger(__name__)
 
 
 class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
@@ -140,10 +144,33 @@ class RuntimeSkillAuthoringUseCases(RuntimeSkillAuthoringPort):
         return self._detail_from_track(track)
 
     def create_draft(self, skill_name: str, *, owner_actor: str = "") -> RuntimeSkillLifecycleMutation:
+        if not skill_name or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-" for ch in skill_name):
+            return RuntimeSkillLifecycleMutation(
+                status="invalid",
+                ok=False,
+                message="Skill names must use lowercase letters, digits, and hyphens.",
+            )
+        if not skill_name[0].isalpha():
+            return RuntimeSkillLifecycleMutation(
+                status="invalid",
+                ok=False,
+                message="Skill names must start with a lowercase letter.",
+            )
+        if self._catalog().has_skill(skill_name):
+            return RuntimeSkillLifecycleMutation(
+                status="invalid",
+                ok=False,
+                message=f"Skill '{skill_name}' already exists.",
+            )
         try:
             self._catalog().create_custom_draft(skill_name, owner_actor=owner_actor)
-        except ValueError as exc:
-            return RuntimeSkillLifecycleMutation(status="invalid", ok=False, message=str(exc))
+        except ValueError:
+            log.warning("Runtime skill draft creation failed for %s", skill_name, exc_info=True)
+            return RuntimeSkillLifecycleMutation(
+                status="invalid",
+                ok=False,
+                message="Could not create that draft skill. Check the name and try again.",
+            )
         detail = self.detail(skill_name)
         return RuntimeSkillLifecycleMutation(
             status="created",

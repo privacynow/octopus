@@ -37,6 +37,8 @@ from urllib import request as urllib_request
 import pytest
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_E2E_REGISTRY_ENROLL_TOKEN = "e2e-enroll-token"
+_E2E_REGISTRY_UI_TOKEN = "e2e-ui-token"
 
 _DOCKER_PROBE_DETAIL_MAX = 200
 
@@ -188,8 +190,9 @@ def _registry_ui_ctx(ctx: dict[str, object]) -> dict[str, object]:
     derived["env"] = {
         **ctx["env"],
         "REGISTRY_PORT": str(registry_port),
-        "REGISTRY_ENROLL_TOKEN": "dev-enroll-token",
-        "REGISTRY_UI_TOKEN": "dev-ui-token",
+        "REGISTRY_ENROLL_TOKEN": _E2E_REGISTRY_ENROLL_TOKEN,
+        "REGISTRY_UI_TOKEN": _E2E_REGISTRY_UI_TOKEN,
+        "REGISTRY_ALLOW_HTTP": "1",
     }
     return derived
 
@@ -749,14 +752,14 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
             channel_capabilities=("registry",),
             version="e2e",
         )
-        enrolled = await enroll_client.enroll(requested, "dev-enroll-token")
+        enrolled = await enroll_client.enroll(requested, _E2E_REGISTRY_ENROLL_TOKEN)
         agent_id = str(enrolled["agent_id"])
         agent_token = str(enrolled["agent_token"])
         cfg = make_config(
             data_dir=Path(ctx["artifacts_dir"]) / "registry-e2e-agent",
             agent_mode="registry",
             agent_registry_url=base_url,
-            agent_registry_enroll_token="dev-enroll-token",
+            agent_registry_enroll_token=_E2E_REGISTRY_ENROLL_TOKEN,
             agent_display_name="Registry E2E Bot",
             agent_slug=str(enrolled["slug"]),
         )
@@ -791,7 +794,7 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
         conversation = _http_json(
             "POST",
             f"{base_url}/v1/ui/conversations",
-            token="dev-ui-token",
+            token=_E2E_REGISTRY_UI_TOKEN,
             payload={
                 "target_agent_id": agent_id,
                 "title": "Registry UI E2E",
@@ -815,7 +818,7 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
         timeline = _http_json(
             "GET",
             f"{base_url}/v1/ui/conversations/{conversation_id}/timeline",
-            token="dev-ui-token",
+            token=_E2E_REGISTRY_UI_TOKEN,
         )
         if any(event.get("kind") == "started" for event in timeline.get("events", [])):
             return
@@ -877,8 +880,8 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
             channel_capabilities=("registry",),
             version="e2e",
         )
-        enrolled_parent = await enroll_client.enroll(requested_parent, "dev-enroll-token")
-        enrolled_child = await enroll_client.enroll(requested_child, "dev-enroll-token")
+        enrolled_parent = await enroll_client.enroll(requested_parent, _E2E_REGISTRY_ENROLL_TOKEN)
+        enrolled_child = await enroll_client.enroll(requested_child, _E2E_REGISTRY_ENROLL_TOKEN)
 
         parent_id = str(enrolled_parent["agent_id"])
         parent_token = str(enrolled_parent["agent_token"])
@@ -889,7 +892,7 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
             data_dir=Path(ctx["artifacts_dir"]) / "registry-e2e-parent",
             agent_mode="registry",
             agent_registry_url=base_url,
-            agent_registry_enroll_token="dev-enroll-token",
+            agent_registry_enroll_token=_E2E_REGISTRY_ENROLL_TOKEN,
             agent_display_name="Registry Parent Bot",
             agent_slug=str(enrolled_parent["slug"]),
             approval_mode="off",
@@ -966,7 +969,7 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
         conversation = _http_json(
             "POST",
             f"{base_url}/v1/ui/conversations",
-            token="dev-ui-token",
+            token=_E2E_REGISTRY_UI_TOKEN,
             payload={
                 "target_agent_id": parent_id,
                 "title": "Registry UI delegation flow",
@@ -991,7 +994,7 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
             timeline = _http_json(
                 "GET",
                 f"{base_url}/v1/ui/conversations/{conversation_id}/timeline",
-                token="dev-ui-token",
+                token=_E2E_REGISTRY_UI_TOKEN,
             )
             if any(event.get("kind") == "delegation_proposed" for event in timeline.get("events", [])):
                 break
@@ -1002,7 +1005,7 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
         _http_json(
             "POST",
             f"{base_url}/v1/ui/conversations/{conversation_id}/actions",
-            token="dev-ui-token",
+            token=_E2E_REGISTRY_UI_TOKEN,
             payload={"action": "approve_delegation"},
         )
 
@@ -1046,7 +1049,7 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
         timeline = _http_json(
             "GET",
             f"{base_url}/v1/ui/conversations/{conversation_id}/timeline",
-            token="dev-ui-token",
+            token=_E2E_REGISTRY_UI_TOKEN,
         )
         bodies = [event.get("body", "") for event in timeline.get("events", [])]
         if any("All delegated tasks completed." in body for body in bodies) and any(

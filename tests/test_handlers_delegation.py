@@ -202,7 +202,8 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
                 agent_id="origin-agent",
                 agent_token="secret",
                 connectivity_state="degraded",
-                last_error="registry unavailable",
+                last_error="registry_unreachable",
+                last_error_detail="Registry poll failed with ConnectError.",
             ),
         )
 
@@ -232,6 +233,8 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
         assert pending is not None
         assert pending["tasks"][0]["status"] == "proposed"
         assert "Delegation is unavailable because registry connectivity is degraded." in last_reply(msg)
+        assert "could not be reached" in last_reply(msg).lower()
+        assert "connecterror" not in last_reply(msg).lower()
 
 
 async def test_delegation_approve_no_pending_is_a_no_op():

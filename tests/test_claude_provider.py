@@ -76,9 +76,13 @@ def test_preflight_command():
 
 def test_clean_env():
     os.environ["CLAUDECODE"] = "1"
+    os.environ["ANTHROPIC_API_KEY"] = "anthropic-secret"
+    os.environ["BOT_TELEGRAM_TOKEN"] = "telegram-secret"
     env = ClaudeProvider._clean_env()
     assert "CLAUDECODE" not in env
     assert "PATH" in env
+    assert env["ANTHROPIC_API_KEY"] == "anthropic-secret"
+    assert "BOT_TELEGRAM_TOKEN" not in env
 
 
 def test_effective_model_overrides_config_model():

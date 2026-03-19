@@ -14,6 +14,7 @@ from app import user_messages as _msg
 from app.approvals import format_denials_html
 from app.credential_flow import foreign_setup_message, format_credential_prompt
 from app.formatting import md_to_telegram_html, split_html
+from app.registry_errors import registry_error_summary
 from app.session_state import PendingDelegation
 from app.workflows.provider_guidance.contracts import (
     ProviderGuidanceLifecycleDetail,
@@ -1135,8 +1136,8 @@ def discover_unavailable_standalone_message() -> TelegramRenderedMessage:
     return TelegramRenderedMessage(text="Agent discovery is unavailable in standalone mode.")
 
 
-def discover_degraded_message(last_error: str) -> TelegramRenderedMessage:
-    detail = f" Last registry error: {last_error}" if last_error else ""
+def discover_degraded_message(last_error_code: str) -> TelegramRenderedMessage:
+    detail = f" {registry_error_summary(last_error_code)}" if last_error_code else ""
     return TelegramRenderedMessage(
         text="Agent discovery is unavailable because registry connectivity is degraded." + detail
     )
@@ -1148,8 +1149,8 @@ def discover_not_enrolled_message() -> TelegramRenderedMessage:
     )
 
 
-def discover_failed_message(error_text: str) -> TelegramRenderedMessage:
-    return _html_message(f"Agent discovery failed: {html.escape(error_text)}")
+def discover_failed_message(error_code: str) -> TelegramRenderedMessage:
+    return TelegramRenderedMessage(text=f"Agent discovery failed. {registry_error_summary(error_code)}")
 
 
 def discover_results_message(agents: list[dict[str, Any]]) -> TelegramRenderedMessage:

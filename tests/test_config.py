@@ -211,6 +211,22 @@ def test_validate_config_rejects_malformed_registry_url():
     assert any("BOT_AGENT_REGISTRY_URL" in e and "valid http" in e for e in errors)
 
 
+def test_validate_config_warns_on_remote_http_registry_url(tmp_path: Path, caplog):
+    with caplog.at_level("WARNING"):
+        errors = validate_config(
+            make_config(
+                agent_registry_url="http://registry.example.com",
+                working_dir=tmp_path,
+            )
+        )
+
+    assert errors == []
+    assert any(
+        "BOT_AGENT_REGISTRY_URL uses plain HTTP over a non-local address" in record.message
+        for record in caplog.records
+    )
+
+
 def test_validate_config_rejects_malformed_postgres_url():
     errors = validate_config(make_config(database_url="postgresql://"))
     assert any("BOT_DATABASE_URL" in e and "valid postgresql" in e for e in errors)
@@ -233,6 +249,20 @@ def test_validate_config_poll_mode_no_webhook_errors():
 def test_validate_config_completion_webhook_url_is_non_fatal_when_malformed():
     errors = validate_config(make_config(completion_webhook_url="http://"))
     assert not any("COMPLETION_WEBHOOK" in e for e in errors)
+
+
+def test_validate_config_redacts_completion_webhook_query_params(tmp_path: Path, caplog):
+    with caplog.at_level("WARNING"):
+        errors = validate_config(
+            make_config(
+                completion_webhook_url="not-a-url?token=secret",
+                working_dir=tmp_path,
+            )
+        )
+
+    assert errors == []
+    assert not any("token=secret" in record.message for record in caplog.records)
+    assert any("<redacted>" in record.message for record in caplog.records)
 
 def test_config_defaults_to_poll():
     cfg = make_config()
@@ -524,6 +554,21 @@ def test_load_config_reads_completion_webhook_url():
         assert cfg.completion_webhook_url == "https://hooks.example.com/completed"
     finally:
         os.unlink(env_path)
+
+
+def test_load_config_reads_bot_credential_key():
+    with tempfile.TemporaryDirectory() as tmp:
+        envdir = Path(tmp)
+        envfile = envdir / "test-credential-key.env"
+        envfile.write_text(
+            "TELEGRAM_BOT_TOKEN=tok\n"
+            "BOT_PROVIDER=claude\n"
+            "BOT_ALLOWED_USERS=1\n"
+            "BOT_CREDENTIAL_KEY=credential-key-123\n"
+        )
+        with patch("app.config.env_path_for_instance", return_value=envfile):
+            cfg = load_config("test-credential-key")
+        assert cfg.credential_key == "credential-key-123"
 
 
 def test_validate_config_shared_runtime_requires_webhook_mode():

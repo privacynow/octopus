@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -16,8 +15,11 @@ from app.progress import (
 )
 from app.progress import ProgressEvent
 from app.providers.base import PreflightContext, ProgressSink, RunContext, RunResult
+from app.subprocess_env import build_subprocess_env
 
 log = logging.getLogger(__name__)
+
+_CODEX_ENV_KEYS = ("OPENAI_API_KEY",)
 
 
 class CodexProvider:
@@ -47,6 +49,7 @@ class CodexProvider:
                 "codex", "--version",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=build_subprocess_env(allowed_keys=_CODEX_ENV_KEYS),
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
             if proc.returncode != 0:
@@ -75,6 +78,7 @@ class CodexProvider:
                     *ping_cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    env=build_subprocess_env(allowed_keys=_CODEX_ENV_KEYS),
                 )
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
                 if proc.returncode != 0:
@@ -380,9 +384,10 @@ class CodexProvider:
     ) -> RunResult:
         log.info("codex: %s", " ".join(cmd[:-1] + ["<prompt>"]))
 
-        env = os.environ.copy()
-        if extra_env:
-            env.update(extra_env)
+        env = build_subprocess_env(
+            allowed_keys=_CODEX_ENV_KEYS,
+            extra_env=extra_env,
+        )
 
         cwd = working_dir or str(self.config.working_dir)
         proc = await asyncio.create_subprocess_exec(

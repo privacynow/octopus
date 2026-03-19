@@ -23,21 +23,6 @@ echo "=== Guided setup and start ==="
 echo "Instance: $INSTANCE"
 echo "Config:   $BOT_ENV_FILE"
 
-prompt_with_default() {
-  local prompt="$1" default="${2:-}" value=""
-  if [ -n "$default" ]; then
-    read -r -p "$prompt [$default]: " value || true
-    echo "${value:-$default}"
-    return
-  fi
-  read -r -p "$prompt: " value || true
-  echo "$value"
-}
-
-escape_env() {
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
-}
-
 create_env_file_if_missing() {
   if [ -f "$BOT_ENV_FILE" ]; then
     return
@@ -49,21 +34,7 @@ create_env_file_if_missing() {
   local display_name token setup_mode provider mode default_registry_url registry_url registry_token
   local role tags description skills allowed_users working_dir timeout completion_webhook_url
   display_name="$(prompt_with_default "Bot name" "$default_name")"
-  while true; do
-    token="$(prompt_with_default "Telegram bot token" "")"
-    if [ -z "$token" ]; then
-      echo "Telegram bot token is required."
-      continue
-    fi
-    if telegram_token_is_placeholder "$token"; then
-      echo "Telegram bot token cannot be a placeholder."
-      echo "Get a real token from @BotFather."
-      continue
-    fi
-    if [ -n "$token" ]; then
-      break
-    fi
-  done
+  token="$(prompt_channel_token_with_help telegram "Paste your bot token here")"
   setup_mode="$(prompt_with_default "Setup mode (quick/full)" "quick")"
   case "$setup_mode" in
     quick|full) ;;
@@ -87,20 +58,31 @@ create_env_file_if_missing() {
     if [ "$(uname -s)" = "Linux" ]; then
       default_registry_url="http://172.17.0.1:8787"
     fi
-    registry_url="$(prompt_with_default "Registry URL" "$default_registry_url")"
+    while true; do
+      registry_url="$(prompt_with_default "Registry URL" "$default_registry_url")"
+      if [[ "$registry_url" == http://* ]] && ! registry_url_is_local "$registry_url"; then
+        echo "Remote registry URLs should use https:// to protect registry credentials." >&2
+        continue
+      fi
+      break
+    done
   fi
 
-  {
+  (
+    umask 077
+    {
     echo "BOT_INSTANCE=$INSTANCE"
     echo "TELEGRAM_BOT_TOKEN=$token"
     echo "BOT_PROVIDER=$provider"
     echo "BOT_COMPACT_MODE=1"
     echo "BOT_AGENT_MODE=$mode"
-    echo "BOT_AGENT_DISPLAY_NAME=\"$(escape_env "$display_name")\""
+    echo "BOT_AGENT_DISPLAY_NAME=\"$(escape_env_value "$display_name")\""
     if [ "$mode" = "registry" ]; then
       echo "BOT_AGENT_REGISTRY_URL=$registry_url"
     fi
-  } > "$BOT_ENV_FILE"
+    } > "$BOT_ENV_FILE"
+  )
+  restrict_secret_file_permissions "$BOT_ENV_FILE"
 
   auto_start_local_registry_if_needed
 
@@ -140,7 +122,9 @@ create_env_file_if_missing() {
     completion_webhook_url=""
   fi
 
-  {
+  (
+    umask 077
+    {
     echo "BOT_INSTANCE=$INSTANCE"
     echo "TELEGRAM_BOT_TOKEN=$token"
     echo "BOT_PROVIDER=$provider"
@@ -153,35 +137,37 @@ create_env_file_if_missing() {
       echo "BOT_ALLOW_OPEN=1"
     fi
     if [ -n "$role" ]; then
-      echo "BOT_ROLE=\"$(escape_env "$role")\""
+      echo "BOT_ROLE=\"$(escape_env_value "$role")\""
     fi
     if [ -n "$skills" ]; then
       echo "BOT_SKILLS=$skills"
     fi
     echo "BOT_AGENT_MODE=$mode"
-    echo "BOT_AGENT_DISPLAY_NAME=\"$(escape_env "$display_name")\""
+    echo "BOT_AGENT_DISPLAY_NAME=\"$(escape_env_value "$display_name")\""
     if [ -n "$role" ]; then
-      echo "BOT_AGENT_ROLE=\"$(escape_env "$role")\""
+      echo "BOT_AGENT_ROLE=\"$(escape_env_value "$role")\""
     fi
     if [ -n "$tags" ]; then
       echo "BOT_AGENT_TAGS=$tags"
     fi
     if [ -n "$description" ]; then
-      echo "BOT_AGENT_DESCRIPTION=\"$(escape_env "$description")\""
+      echo "BOT_AGENT_DESCRIPTION=\"$(escape_env_value "$description")\""
     fi
     if [ -n "$skills" ]; then
       echo "BOT_AGENT_SKILLS=$skills"
     fi
     echo "BOT_AGENT_POLL_INTERVAL_SECONDS=5"
     if [ -n "$completion_webhook_url" ]; then
-      echo "BOT_COMPLETION_WEBHOOK_URL=$(escape_env "$completion_webhook_url")"
+      echo "BOT_COMPLETION_WEBHOOK_URL=$(escape_env_value "$completion_webhook_url")"
     fi
     if [ "$mode" = "registry" ]; then
       echo "# Registry URL: use host.docker.internal on macOS/Windows, 172.17.0.1 on Linux."
       echo "BOT_AGENT_REGISTRY_URL=$registry_url"
       echo "BOT_AGENT_REGISTRY_ENROLL_TOKEN=$registry_token"
     fi
-  } > "$BOT_ENV_FILE"
+    } > "$BOT_ENV_FILE"
+  )
+  restrict_secret_file_permissions "$BOT_ENV_FILE"
 
   echo "Created $BOT_ENV_FILE"
 }
@@ -233,14 +219,96 @@ build_registry_ui_display_url() {
 }
 
 print_startup_failure_help() {
+  local doctor_output=""
   echo "Bot failed to stay up after startup." >&2
-  echo "Running full app health check for a clearer diagnosis..." >&2
-  if ! bot_compose run --rm bot python -m app.main --doctor >&2; then
-    :
+  echo "Fresh diagnosis:" >&2
+  if doctor_output="$(bot_compose run --rm bot python -m app.main --doctor 2>&1)"; then
+    print_doctor_output_for_operator "$doctor_output"
+  else
+    print_doctor_output_for_operator "$doctor_output"
+    if doctor_output_has_token_rejection "$doctor_output"; then
+      if prompt_rejected_telegram_token_repair; then
+        echo "" >&2
+        echo "Updated TELEGRAM_BOT_TOKEN in $BOT_ENV_FILE. Run ./scripts/app/guided_start.sh $INSTANCE again." >&2
+      fi
+    fi
   fi
   echo "" >&2
-  echo "If you need raw container logs:" >&2
+  echo "Raw container logs, only if the diagnosis above is not enough:" >&2
   echo "  ./scripts/app/logs_instance.sh $INSTANCE" >&2
+}
+
+prompt_rejected_telegram_token_repair() {
+  local current_token new_token note
+  current_token="$(read_bot_env_value TELEGRAM_BOT_TOKEN "$BOT_ENV_FILE")"
+  note="The current TELEGRAM_BOT_TOKEN in $BOT_ENV_FILE was rejected by Telegram."
+  new_token="$(prompt_channel_token_with_help \
+    telegram \
+    "Paste a replacement Telegram bot token" \
+    "$current_token" \
+    "$note" \
+    0)" || return 1
+  upsert_env_file_value TELEGRAM_BOT_TOKEN "$new_token" "$BOT_ENV_FILE"
+  return 0
+}
+
+ensure_guided_telegram_token() {
+  local current_token note repaired=""
+  current_token="$(read_bot_env_value TELEGRAM_BOT_TOKEN "$BOT_ENV_FILE")"
+  if [ -n "$current_token" ] && ! telegram_token_is_placeholder "$current_token" && channel_token_looks_plausible telegram "$current_token"; then
+    return 0
+  fi
+  if telegram_token_is_placeholder "$current_token"; then
+    note="The current TELEGRAM_BOT_TOKEN in $BOT_ENV_FILE is still a placeholder."
+  elif [ -n "$current_token" ]; then
+    note="The current TELEGRAM_BOT_TOKEN in $BOT_ENV_FILE does not look like a real Telegram token."
+  else
+    note="TELEGRAM_BOT_TOKEN is missing from $BOT_ENV_FILE."
+  fi
+  repaired="$(prompt_channel_token_with_help \
+    telegram \
+    "Telegram bot token" \
+    "$current_token" \
+    "$note" \
+    0)" || {
+      echo "Could not read a replacement Telegram bot token. Update $BOT_ENV_FILE and run ./scripts/app/guided_start.sh again." >&2
+      exit 1
+    }
+  upsert_env_file_value TELEGRAM_BOT_TOKEN "$repaired" "$BOT_ENV_FILE"
+}
+
+run_full_health_check_or_exit() {
+  local doctor_output=""
+  while true; do
+    echo ""
+    echo "Step 3/4: Full app health check..."
+    if doctor_output="$(bot_compose run --rm bot python -m app.main --doctor 2>&1)"; then
+      print_doctor_output_for_operator "$doctor_output"
+      return 0
+    fi
+    print_doctor_output_for_operator "$doctor_output"
+    if doctor_output_has_token_rejection "$doctor_output"; then
+      if prompt_rejected_telegram_token_repair; then
+        echo "" >&2
+        echo "Re-running the health check with the updated Telegram token..." >&2
+        continue
+      fi
+    fi
+    echo "" >&2
+    echo "Full app health check failed. Fix the issue above, then run ./scripts/app/guided_start.sh again." >&2
+    exit 1
+  done
+}
+
+bot_is_running() {
+  local status=""
+  status="$(bot_compose ps -a --format '{{.Status}}' bot 2>/dev/null | head -n 1 | tr -d '\r' || true)"
+  case "$status" in
+    Up*|running*|Running*)
+      return 0
+      ;;
+  esac
+  return 1
 }
 
 print_box_wrapped_line() {
@@ -251,7 +319,9 @@ print_box_wrapped_line() {
 }
 
 create_env_file_if_missing
+restrict_secret_file_permissions "$BOT_ENV_FILE"
 check_env_bot_required "$BOT_ENV_FILE"
+ensure_guided_telegram_token
 telegram_token="$(read_bot_env_value TELEGRAM_BOT_TOKEN "$BOT_ENV_FILE")"
 require_real_telegram_token "$telegram_token" "$BOT_ENV_FILE"
 
@@ -265,7 +335,7 @@ if grep -qE '^\s*BOT_DATABASE_URL=.*postgres' "$BOT_ENV_FILE" 2>/dev/null; then
 fi
 
 echo ""
-echo "Step 1/3: Bot image for $env_provider..."
+echo "Step 1/4: Bot image for $env_provider..."
 need_build=0
 if ! docker image inspect "octopus-agent:$env_provider" >/dev/null 2>&1; then
   need_build=1
@@ -284,7 +354,7 @@ else
 fi
 
 echo ""
-echo "Step 2/3: Provider auth..."
+echo "Step 2/4: Provider auth..."
 if ./scripts/provider/provider_status.sh >/dev/null 2>&1; then
   echo "Provider already authenticated."
 else
@@ -297,13 +367,15 @@ else
   fi
 fi
 
+run_full_health_check_or_exit
+
 echo ""
-echo "Step 3/3: Starting bot (background service)..."
+echo "Step 4/4: Starting bot (background service)..."
 ./scripts/app/start_instance.sh "$INSTANCE"
 
 echo "Waiting a few seconds to confirm the bot stayed up..."
 sleep 5
-if bot_compose ps -a --format '{{.Status}}' bot 2>/dev/null | grep -q Exited; then
+if ! bot_is_running; then
   print_startup_failure_help
   exit 1
 fi
@@ -311,7 +383,6 @@ fi
 mode_display="$(grep -E '^\s*BOT_AGENT_MODE=' "$BOT_ENV_FILE" 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)"
 registry_url_display="$(grep -E '^\s*BOT_AGENT_REGISTRY_URL=' "$BOT_ENV_FILE" 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)"
 registry_ui_display="$(build_registry_ui_display_url "$registry_url_display")"
-bot_version_display="$(tr -d '\r' < "$REPO_DIR/VERSION" 2>/dev/null || true)"
 
 echo ""
 if [ "$_USED_QUICK_SETUP" -eq 1 ]; then
@@ -322,9 +393,6 @@ fi
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  Bot is running!                                            ║"
 echo "║                                                              ║"
-if [ -n "$bot_version_display" ]; then
-  printf "║  • Bot version: %-45s║\n" "$bot_version_display"
-fi
 echo "║  • Open Telegram and message your bot to start.             ║"
 if [ "$mode_display" = "registry" ] && [ -n "$registry_ui_display" ]; then
   printf "║  • Registry UI:%-46s║\n" ""

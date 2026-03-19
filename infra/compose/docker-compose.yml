@@ -101,12 +101,13 @@ services:
       - registry
     environment:
       REGISTRY_DB_PATH: /data/registry.sqlite3
-      REGISTRY_ENROLL_TOKEN: ${REGISTRY_ENROLL_TOKEN:-dev-enroll-token}
-      REGISTRY_UI_TOKEN: ${REGISTRY_UI_TOKEN:-dev-ui-token}
+      REGISTRY_ENROLL_TOKEN: ${REGISTRY_ENROLL_TOKEN:?Set REGISTRY_ENROLL_TOKEN in .env.registry}
+      REGISTRY_UI_TOKEN: ${REGISTRY_UI_TOKEN-}
+      REGISTRY_ALLOW_HTTP: ${REGISTRY_ALLOW_HTTP-}
     volumes:
       - registry-data:/data
     ports:
-      - "${REGISTRY_PORT:-8787}:8787"
+      - "${REGISTRY_BIND_HOST:-127.0.0.1}:${REGISTRY_PORT:-8787}:8787"
     command: ["uvicorn", "app.channels.registry.http:app", "--host", "0.0.0.0", "--port", "8787"]
 
   # TEST/DEV ONLY: stub-provider image for E2E when real provider unavailable (E2E_USE_STUB_IMAGE=1).

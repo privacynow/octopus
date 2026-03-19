@@ -159,6 +159,74 @@ def test_download_artifact_no_skill_md():
             server.shutdown()
 
 
+def test_download_artifact_rejects_too_many_files(monkeypatch):
+    monkeypatch.setattr("app.registry._MAX_ARTIFACT_FILE_COUNT", 2)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "skill.md").write_text("---\nname: quota-test\n---\n", encoding="utf-8")
+        (src / "one.txt").write_text("one", encoding="utf-8")
+        (src / "two.txt").write_text("two", encoding="utf-8")
+
+        tarball = tmp_path / "too-many-files.tar.gz"
+        _make_skill_tarball(src, tarball)
+
+        server, base_url = _serve_dir(tmp)
+        try:
+            with pytest.raises(ValueError, match="exceeds 2 files"):
+                download_artifact(f"{base_url}/too-many-files.tar.gz", tmp_path / "extracted")
+        finally:
+            server.shutdown()
+
+
+def test_download_artifact_rejects_single_file_over_quota(monkeypatch):
+    monkeypatch.setattr("app.registry._MAX_SINGLE_ARTIFACT_FILE_SIZE", 16)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "skill.md").write_text("---\nname: quota-test\n---\n", encoding="utf-8")
+        (src / "large.txt").write_text("x" * 32, encoding="utf-8")
+
+        tarball = tmp_path / "large-file.tar.gz"
+        _make_skill_tarball(src, tarball)
+
+        server, base_url = _serve_dir(tmp)
+        try:
+            with pytest.raises(ValueError, match="file exceeds 16 bytes"):
+                download_artifact(f"{base_url}/large-file.tar.gz", tmp_path / "extracted")
+        finally:
+            server.shutdown()
+
+
+def test_download_artifact_rejects_expanded_size_over_quota(monkeypatch):
+    monkeypatch.setattr("app.registry._MAX_ARTIFACT_FILE_COUNT", 10)
+    monkeypatch.setattr("app.registry._MAX_SINGLE_ARTIFACT_FILE_SIZE", 1024)
+    monkeypatch.setattr("app.registry._MAX_EXPANDED_ARTIFACT_SIZE", 32)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "skill.md").write_text("---\nname: quota-test\n---\n", encoding="utf-8")
+        (src / "a.txt").write_text("a" * 8, encoding="utf-8")
+        (src / "b.txt").write_text("b" * 8, encoding="utf-8")
+        (src / "c.txt").write_text("c" * 8, encoding="utf-8")
+
+        tarball = tmp_path / "expanded-size.tar.gz"
+        _make_skill_tarball(src, tarball)
+
+        server, base_url = _serve_dir(tmp)
+        try:
+            with pytest.raises(ValueError, match="expands beyond 32 bytes"):
+                download_artifact(f"{base_url}/expanded-size.tar.gz", tmp_path / "extracted")
+        finally:
+            server.shutdown()
+
+
 def test_install_from_registry_success(tmp_path: Path):
     skill_src = tmp_path / "skill_src"
     skill_src.mkdir()

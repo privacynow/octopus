@@ -27,28 +27,222 @@ unsupported_slice_command() {
   return 1
 }
 
-main_menu() {
-  unsupported_slice_command "Bot management lands in the next slice. Run ./octopus with no configured bots to bootstrap the first bot."
+bot_identity_label() {
+  local slug="$1" display="" username="" label=""
+  display="$(bot_display_name "$slug")"
+  username="$(bot_telegram_username "$slug")"
+  label="${display:-$slug}"
+  [ -n "$username" ] && label="${label} (@${username})"
+  printf '%s\n' "$label"
+}
+
+print_bot_choices() {
+  local slugs=() slug="" index=1
+  while IFS= read -r slug; do
+    [ -n "$slug" ] && slugs+=("$slug")
+  done < <(list_bot_slugs)
+  for slug in "${slugs[@]}"; do
+    printf '  %d. %s\n' "$index" "$(bot_identity_label "$slug")"
+    index=$((index + 1))
+  done
+}
+
+resolve_bot_slug() {
+  local requested="${1:-}" choice="" slug=""
+  local slugs=()
+  if [ -n "$requested" ]; then
+    if [ -f "$(bot_env_file "$requested")" ]; then
+      printf '%s\n' "$requested"
+      return 0
+    fi
+    octopus_error "No bot named '$requested' is configured."
+    return 1
+  fi
+
+  while IFS= read -r slug; do
+    [ -n "$slug" ] && slugs+=("$slug")
+  done < <(list_bot_slugs)
+  case "${#slugs[@]}" in
+    0)
+      octopus_error "No bots configured. Run ./octopus to get started."
+      return 1
+      ;;
+    1)
+      printf '%s\n' "${slugs[0]}"
+      return 0
+      ;;
+  esac
+
+  printf 'Select a bot:\n'
+  print_bot_choices
+  while true; do
+    read -r -p "Bot slug or number: " choice || return 1
+    case "$choice" in
+      '' ) octopus_error "Choose a bot to continue." ;;
+      *[!0-9]*)
+        if [ -f "$(bot_env_file "$choice")" ]; then
+          printf '%s\n' "$choice"
+          return 0
+        fi
+        octopus_error "No bot named '$choice' is configured."
+        ;;
+      *)
+        if [ "$choice" -ge 1 ] 2>/dev/null && [ "$choice" -le "${#slugs[@]}" ]; then
+          slug="${slugs[$((choice - 1))]}"
+          printf '%s\n' "$slug"
+          return 0
+        fi
+        octopus_error "Choose one of the listed bots."
+        ;;
+    esac
+  done
+}
+
+docker_status_for_slug() {
+  local slug="$1"
+  docker ps -a \
+    --filter "label=com.docker.compose.project=octopus-$slug" \
+    --filter "label=com.docker.compose.service=bot" \
+    --format '{{.Status}}' 2>/dev/null | head -n 1
+}
+
+bot_mode_label() {
+  local slug="$1" mode=""
+  mode="$(read_bot_env_value BOT_AGENT_MODE "$(bot_env_file "$slug")")"
+  printf '%s\n' "${mode:-standalone}"
 }
 
 cmd_status() {
-  unsupported_slice_command "Status lands in the next slice."
+  local slug="" provider="" mode="" running="" detail="" raw_status="" label=""
+  if [ "$(count_bots)" -eq 0 ]; then
+    printf 'No bots configured. Run ./octopus to get started.\n'
+    return 0
+  fi
+
+  printf 'Bots:\n'
+  for slug in $(list_bot_slugs); do
+    provider="$(get_bot_provider "$(bot_env_file "$slug")")"
+    mode="$(bot_mode_label "$slug")"
+    running="stopped"
+    detail=""
+    label="$(bot_identity_label "$slug")"
+    if bot_is_running "$slug"; then
+      running="running"
+      raw_status="$(docker_status_for_slug "$slug")"
+      [ -n "$raw_status" ] && detail="(${raw_status})"
+    fi
+    printf '  %s    %s   %s   %s   %s\n' "$label" "$provider" "$mode" "$running" "$detail"
+  done
+
+  printf '\nRegistry:\n'
+  if has_local_registry; then
+    local registry_port=""
+    registry_port="$(read_bot_env_value REGISTRY_PORT .deploy/registry/.env)"
+    if registry_is_running; then
+      printf '  local      running    http://localhost:%s/ui\n' "${registry_port:-8787}"
+    else
+      printf '  local      stopped    http://localhost:%s/ui\n' "${registry_port:-8787}"
+    fi
+  else
+    printf '  local      not configured\n'
+  fi
+
+  printf '\nProvider auth:\n'
+  for provider in claude codex; do
+    if provider_auth_hint "$provider"; then
+      printf '  %-10s authenticated\n' "$provider"
+    else
+      printf '  %-10s not configured\n' "$provider"
+    fi
+  done
 }
 
 cmd_start() {
-  unsupported_slice_command "Start lands in the next slice."
+  local slug
+  slug="$(resolve_bot_slug "${1:-}")" || return 1
+  bot_compose "$slug" up -d bot
 }
 
 cmd_stop() {
-  unsupported_slice_command "Stop lands in the next slice."
+  local slug
+  slug="$(resolve_bot_slug "${1:-}")" || return 1
+  bot_compose "$slug" stop bot
 }
 
 cmd_logs() {
-  unsupported_slice_command "Logs lands in the next slice."
+  local slug
+  slug="$(resolve_bot_slug "${1:-}")" || return 1
+  bot_compose "$slug" logs -f bot
 }
 
 cmd_doctor() {
-  unsupported_slice_command "Doctor lands in the next slice."
+  local slug output rc=0
+  slug="$(resolve_bot_slug "${1:-}")" || return 1
+  output="$(run_bot_doctor "$slug")" || rc=$?
+  print_doctor_output_for_operator "$output"
+  return "$rc"
+}
+
+add_bot_flow() {
+  first_bot_flow quick
+}
+
+manage_bot_menu() {
+  local slug choice="" provider="" mode="" running="" label=""
+  slug="$(resolve_bot_slug "${1:-}")" || return 1
+  while true; do
+    label="$(bot_identity_label "$slug")"
+    provider="$(get_bot_provider "$(bot_env_file "$slug")")"
+    mode="$(bot_mode_label "$slug")"
+    running="stopped"
+    bot_is_running "$slug" && running="running"
+    printf 'Bot: %s — %s, %s, %s\n\n' "$label" "$provider" "$mode" "$running"
+    printf '  1. View logs\n'
+    printf '  2. Restart\n'
+    printf '  3. Stop\n'
+    printf '  4. Health check\n'
+    printf '  5. Edit settings\n'
+    printf '  6. Connect to registry\n'
+    printf '  7. Back\n'
+    read -r -p "Choose an option: " choice || return 1
+    case "$choice" in
+      1) cmd_logs "$slug"; return $? ;;
+      2)
+        bot_compose "$slug" stop bot >/dev/null 2>&1 || true
+        cmd_start "$slug" || return $?
+        printf '\n'
+        ;;
+      3)
+        cmd_stop "$slug" || return $?
+        printf '\n'
+        ;;
+      4)
+        cmd_doctor "$slug" || return $?
+        printf '\n'
+        ;;
+      5) unsupported_slice_command "Guided settings edits land in a later slice." ;;
+      6) unsupported_slice_command "Registry connection lands in the next slice." ;;
+      7) return 0 ;;
+      *) octopus_error "Choose one of the listed options." ;;
+    esac
+  done
+}
+
+main_menu() {
+  local choice=""
+  printf 'What would you like to do?\n'
+  printf '  1. Add a bot\n'
+  printf '  2. Manage bots\n'
+  printf '  3. Connect bot to registry\n'
+  printf '  4. Advanced\n'
+  read -r -p "Choose an option: " choice || return 1
+  case "$choice" in
+    1) add_bot_flow ;;
+    2) manage_bot_menu ;;
+    3) unsupported_slice_command "Registry connection lands in the next slice." ;;
+    4) unsupported_slice_command "Advanced deployment lands in a later slice." ;;
+    *) octopus_error "Choose one of the listed options."; return 1 ;;
+  esac
 }
 
 cmd_registry() {

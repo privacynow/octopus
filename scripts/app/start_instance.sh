@@ -16,7 +16,7 @@ if [ -n "${SLUG:-}" ] && [ -f "$(bot_env_file "$SLUG")" ]; then
   BOT_ENV_FILE="$(bot_env_file "$SLUG")"
   export BOT_ENV_FILE
   check_env_bot_required "$BOT_ENV_FILE"
-  telegram_token="$(grep -E '^\s*TELEGRAM_BOT_TOKEN=' "$BOT_ENV_FILE" 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)"
+  telegram_token="$(grep -E '^[[:space:]]*TELEGRAM_BOT_TOKEN=' "$BOT_ENV_FILE" 2>/dev/null | sed 's/^[^=]*=[[:space:]]*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)"
   require_real_telegram_token "$telegram_token" "$BOT_ENV_FILE"
   bot_compose "$SLUG" up -d bot
   exit 0
@@ -31,6 +31,6 @@ fi
 export BOT_ENV_FILE
 
 check_env_bot_required "$BOT_ENV_FILE"
-telegram_token="$(grep -E '^\s*TELEGRAM_BOT_TOKEN=' "$BOT_ENV_FILE" 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)"
+telegram_token="$(grep -E '^[[:space:]]*TELEGRAM_BOT_TOKEN=' "$BOT_ENV_FILE" 2>/dev/null | sed 's/^[^=]*=[[:space:]]*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)"
 require_real_telegram_token "$telegram_token" "$BOT_ENV_FILE"
 bot_compose up -d bot

@@ -29,32 +29,32 @@ def _setup_runtime(*, allow_open: bool = False, allowed_user_ids=frozenset({1}))
     return tmp, cfg
 
 
-def test_factory_telegram_ref_produces_telegram_surface():
+def test_factory_telegram_ref_produces_telegram_channel_egress():
     tmp, cfg = _setup_runtime()
     try:
-        surface = channel_factory.create_channel_egress(
+        channel_egress = channel_factory.create_channel_egress(
             "telegram:mybot:12345",
             bot=MinimalFakeBot(),
             chat_id=12345,
             source="telegram",
             config=cfg,
         )
-        assert isinstance(surface, TelegramChannelEgress)
+        assert isinstance(channel_egress, TelegramChannelEgress)
     finally:
         tmp.cleanup()
 
 
-def test_factory_registry_ref_produces_registry_surface():
+def test_factory_registry_ref_produces_registry_channel_egress():
     tmp, cfg = _setup_runtime()
     try:
-        surface = channel_factory.create_channel_egress(
+        channel_egress = channel_factory.create_channel_egress(
             "registry:abc123",
             bot=MinimalFakeBot(),
             chat_id=0,
             source="registry",
             config=cfg,
         )
-        assert isinstance(surface, RegistryChannelEgress)
+        assert isinstance(channel_egress, RegistryChannelEgress)
     finally:
         tmp.cleanup()
 

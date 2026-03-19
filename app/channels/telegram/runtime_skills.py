@@ -753,17 +753,17 @@ class _WorkerSkillEvent:
 
 
 class _WorkerSkillUpdate:
-    def __init__(self, surface):
-        self.effective_message = surface
+    def __init__(self, message_handle):
+        self.effective_message = message_handle
 
 
-async def handle_worker_skill_action(event, surface, *, runtime: TelegramRuntimeSkillsRuntime) -> bool:
+async def handle_worker_skill_action(event, channel_message, *, runtime: TelegramRuntimeSkillsRuntime) -> bool:
     if _is_public_user(runtime, event.user):
         rendered = telegram_presenters.public_command_not_available_message()
-        await surface.reply_text(rendered.text, **rendered.kwargs())
+        await channel_message.reply_text(rendered.text, **rendered.kwargs())
         return True
     proxy_event = _WorkerSkillEvent(chat_id=event.chat_id if hasattr(event, "chat_id") else event.conversation_key, user=event.user)
-    proxy_update = _WorkerSkillUpdate(surface)
+    proxy_update = _WorkerSkillUpdate(channel_message)
     action = event.action
     name = str(event.params.get("name", ""))
     if action == "skills_add":

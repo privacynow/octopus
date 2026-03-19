@@ -648,7 +648,7 @@ async def handle_settings_callback(
 async def handle_worker_conversation_action(
     event,
     item: dict[str, Any],
-    surface,
+    channel_message,
     *,
     runtime: TelegramConversationRuntime,
     runtime_chat: int | str,
@@ -674,7 +674,7 @@ async def handle_worker_conversation_action(
         )
         if outcome.status == "foreign_setup":
             rendered = telegram_presenters.conversation_foreign_setup_message(old_session.awaiting_skill_setup)
-            await surface.reply_text(rendered.text, **rendered.kwargs())
+            await channel_message.reply_text(rendered.text, **rendered.kwargs())
             return True
         if outcome.replacement_session is None:
             return True
@@ -685,7 +685,7 @@ async def handle_worker_conversation_action(
                 _conversation_key(runtime_chat),
             )
         rendered = telegram_presenters.conversation_plain_outcome_message(outcome.message)
-        await surface.reply_text(rendered.text, **rendered.kwargs())
+        await channel_message.reply_text(rendered.text, **rendered.kwargs())
         return True
 
     if action == "cancel_conversation":
@@ -698,7 +698,7 @@ async def handle_worker_conversation_action(
         )
         if live_outcome is not None:
             rendered = telegram_presenters.conversation_plain_outcome_message(live_outcome.message)
-            await surface.reply_text(rendered.text, **rendered.kwargs())
+            await channel_message.reply_text(rendered.text, **rendered.kwargs())
             return True
         session = _load(runtime, runtime_chat)
         outcome = _flows().conversation.control.cancel_conversation(
@@ -712,7 +712,7 @@ async def handle_worker_conversation_action(
         if outcome.mutated:
             _save(runtime, runtime_chat, session)
         rendered = telegram_presenters.conversation_plain_outcome_message(outcome.message)
-        await surface.reply_text(rendered.text, **rendered.kwargs())
+        await channel_message.reply_text(rendered.text, **rendered.kwargs())
         return True
 
     if action == "set_approval_mode":
@@ -723,9 +723,9 @@ async def handle_worker_conversation_action(
             return True
         if outcome.mutated:
             _save(runtime, runtime_chat, session)
-        await surface.edit_reply_markup(reply_markup=None)
+        await channel_message.edit_reply_markup(reply_markup=None)
         rendered = telegram_presenters.conversation_plain_outcome_message(outcome.message)
-        await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
+        await runtime.edit_or_reply_text(channel_message, rendered.text, **rendered.kwargs())
         return True
 
     if action == "set_compact_mode":
@@ -733,15 +733,15 @@ async def handle_worker_conversation_action(
         outcome = settings.set_compact_mode(session, bool(params.get("value", False)))
         if outcome.mutated:
             _save(runtime, runtime_chat, session)
-        await surface.edit_reply_markup(reply_markup=None)
+        await channel_message.edit_reply_markup(reply_markup=None)
         rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
-        await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
+        await runtime.edit_or_reply_text(channel_message, rendered.text, **rendered.kwargs())
         return True
 
     if action == "set_role":
         if _is_public_user(runtime, event.user):
             rendered = telegram_presenters.public_command_not_available_message()
-            await surface.reply_text(rendered.text, **rendered.kwargs())
+            await channel_message.reply_text(rendered.text, **rendered.kwargs())
             return True
         session = _load(runtime, runtime_chat)
         outcome = settings.set_role(
@@ -752,7 +752,7 @@ async def handle_worker_conversation_action(
         if outcome.mutated:
             _save(runtime, runtime_chat, session)
         rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
-        await surface.reply_text(rendered.text, **rendered.kwargs())
+        await channel_message.reply_text(rendered.text, **rendered.kwargs())
         return True
 
     if action == "set_model_profile":
@@ -766,19 +766,19 @@ async def handle_worker_conversation_action(
         )
         if outcome.mutated:
             _save(runtime, runtime_chat, session)
-        await surface.edit_reply_markup(reply_markup=None)
+        await channel_message.edit_reply_markup(reply_markup=None)
         rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
-        await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
+        await runtime.edit_or_reply_text(channel_message, rendered.text, **rendered.kwargs())
         return True
 
     if action == "set_project":
         if _is_public_user(runtime, event.user):
             rendered = telegram_presenters.trust_project_public_message()
-            await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
+            await runtime.edit_or_reply_text(channel_message, rendered.text, **rendered.kwargs())
             return True
         if not runtime.state.config.projects:
             rendered = telegram_presenters.no_projects_configured_message()
-            await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
+            await runtime.edit_or_reply_text(channel_message, rendered.text, **rendered.kwargs())
             return True
         session = _load(runtime, runtime_chat)
         outcome = settings.set_project(
@@ -789,15 +789,15 @@ async def handle_worker_conversation_action(
         )
         if outcome.mutated:
             _save(runtime, runtime_chat, session)
-        await surface.edit_reply_markup(reply_markup=None)
+        await channel_message.edit_reply_markup(reply_markup=None)
         rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
-        await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
+        await runtime.edit_or_reply_text(channel_message, rendered.text, **rendered.kwargs())
         return True
 
     if action == "set_file_policy":
         if _is_public_user(runtime, event.user):
             rendered = telegram_presenters.trust_file_policy_public_message()
-            await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
+            await runtime.edit_or_reply_text(channel_message, rendered.text, **rendered.kwargs())
             return True
         session = _load(runtime, runtime_chat)
         outcome = settings.set_file_policy(
@@ -812,9 +812,9 @@ async def handle_worker_conversation_action(
             return True
         if outcome.mutated:
             _save(runtime, runtime_chat, session)
-        await surface.edit_reply_markup(reply_markup=None)
+        await channel_message.edit_reply_markup(reply_markup=None)
         rendered = telegram_presenters.conversation_html_outcome_message(outcome.message)
-        await runtime.edit_or_reply_text(surface, rendered.text, **rendered.kwargs())
+        await runtime.edit_or_reply_text(channel_message, rendered.text, **rendered.kwargs())
         return True
 
     return False

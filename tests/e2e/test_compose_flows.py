@@ -719,7 +719,7 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
 
     Uses the real Compose-hosted registry service plus the production registry
     client and RegistryChannelEgress on the host. This keeps the E2E focused on
-    M7's contract: UI-created work, polled delivery, and surface-owned timeline
+    M7's contract: UI-created work, polled delivery, and channel-owned timeline
     publication, without depending on Telegram startup or provider auth.
     """
     import asyncio
@@ -804,8 +804,8 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
         assert deliveries["deliveries"], deliveries
         delivery = deliveries["deliveries"][0]
         assert delivery["kind"] == "channel_input"
-        surface = RegistryChannelEgress(cfg, conversation_ref=conversation_id)
-        await surface.bind(title="Registry UI E2E", config=cfg)
+        channel_egress = RegistryChannelEgress(cfg, conversation_ref=conversation_id)
+        await channel_egress.bind(title="Registry UI E2E", config=cfg)
         await client.ack([delivery["delivery_id"]], classification="accepted")
         return conversation_id
 

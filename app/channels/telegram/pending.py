@@ -301,42 +301,42 @@ async def handle_worker_pending_action(
     event,
     item: dict[str, object],
     params: dict[str, object],
-    surface,
+    channel_message,
     *,
     runtime_chat: int | str,
     cancel_event: asyncio.Event | None = None,
     runtime: TelegramPendingRuntime,
 ) -> bool:
     if event.action == "approve_pending":
-        await surface.edit_reply_markup(reply_markup=None)
-        await approve_pending(runtime_chat, surface, cancel_event=cancel_event, runtime=runtime)
+        await channel_message.edit_reply_markup(reply_markup=None)
+        await approve_pending(runtime_chat, channel_message, cancel_event=cancel_event, runtime=runtime)
         return True
     if event.action == "reject_pending":
-        await surface.edit_reply_markup(reply_markup=None)
-        await reject_pending(runtime_chat, surface, runtime=runtime)
+        await channel_message.edit_reply_markup(reply_markup=None)
+        await reject_pending(runtime_chat, channel_message, runtime=runtime)
         return True
     if event.action == "retry_skip":
-        await surface.edit_reply_markup(reply_markup=None)
-        await retry_skip_pending(runtime_chat, surface, runtime=runtime)
+        await channel_message.edit_reply_markup(reply_markup=None)
+        await retry_skip_pending(runtime_chat, channel_message, runtime=runtime)
         return True
     if event.action == "retry_allow":
-        await surface.edit_reply_markup(reply_markup=None)
-        await retry_allow_pending(runtime_chat, surface, cancel_event=cancel_event, runtime=runtime)
+        await channel_message.edit_reply_markup(reply_markup=None)
+        await retry_allow_pending(runtime_chat, channel_message, cancel_event=cancel_event, runtime=runtime)
         return True
     if event.action in {"recovery_replay", "recovery_discard"}:
         update_id = int(params.get("update_id") or 0)
         if update_id <= 0:
             rendered = telegram_presenters.recovery_invalid_action_message()
-            await surface.reply_text(rendered.text, **rendered.kwargs())
+            await channel_message.reply_text(rendered.text, **rendered.kwargs())
             return True
         if event.action == "recovery_replay":
             work_queue.complete_work_item(runtime.state.config.data_dir, str(item.get("id", "")))
-        await surface.edit_reply_markup(reply_markup=None)
+        await channel_message.edit_reply_markup(reply_markup=None)
         await handle_recovery_action(
             runtime_chat,
             event.action,
             update_id,
-            surface,
+            channel_message,
             cancel_event=cancel_event,
             runtime=runtime,
         )

@@ -15,7 +15,7 @@ Owner suite for (distinct contract from test_handlers):
 - Cross-feature: compact + long reply + public user
 - Export resolved skills (not raw session)
 
-Re-homed to test_handlers (Milestone E): handler-surface tests for /session, /settings, /model,
+Re-homed to test_handlers (Milestone E): handler-channel tests for /session, /settings, /model,
 setting_model:*, setting_project:* (test_session_command_shows_public_context,
 test_settings_command_public_user_no_trusted_leak, test_settings_command_public_user_keyboard_*,
 test_model_command_public_user_*, test_model_callback_public_user_*, test_project_callback_public_user_denied).

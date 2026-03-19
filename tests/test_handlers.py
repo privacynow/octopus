@@ -1033,7 +1033,7 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
         assert final_session.get("pending_delegation") is None
 
 
-async def test_registry_surface_parent_resumes_through_registry_surface(monkeypatch):
+async def test_registry_channel_parent_resumes_through_registry_channel(monkeypatch):
     with fresh_env(
         config_overrides={
             "approval_mode": "on",
@@ -3126,7 +3126,7 @@ async def test_session_control_surface_hint_public_no_project():
         )
 
 
-# -- Re-homed from test_request_flow: handler-surface /session, /settings, /model, callbacks ---
+# -- Re-homed from test_request_flow: handler-channel /session, /settings, /model, callbacks ---
 
 async def test_session_command_shows_public_context():
     """/session display reflects public-user restrictions (resolved context)."""

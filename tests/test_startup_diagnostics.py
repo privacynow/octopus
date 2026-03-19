@@ -1,13 +1,16 @@
-from types import SimpleNamespace
+import logging
 
 import pytest
 from telegram.error import Conflict, InvalidToken, NetworkError
 
 from app.startup_diagnostics import (
     collect_telegram_doctor_diagnostics,
+    configure_startup_logging,
     env_file_hint,
     format_database_startup_exception,
     format_startup_exception,
+    redact_sensitive_startup_text,
+    StartupLogRedactionFilter,
 )
 
 
@@ -54,6 +57,50 @@ def test_format_database_startup_exception_hides_connection_string():
     joined = "\n".join(lines)
     assert "could not connect to the configured database" in joined
     assert "secret@example.com" not in joined
+
+
+def test_redact_sensitive_startup_text_masks_telegram_token_and_url():
+    token = "8493136018:AAET-xjK_v8TviI7et1N8pCvI3O0bbmVLFl"
+    text = (
+        f"HTTP Request: POST https://api.telegram.org/bot{token}/getMe "
+        f"and token {token} was rejected"
+    )
+    redacted = redact_sensitive_startup_text(text)
+    assert token not in redacted
+    assert "<redacted-telegram-token>" in redacted
+
+
+def test_startup_log_redaction_filter_sanitizes_invalid_token_exception():
+    token = "8493136018:AAET-xjK_v8TviI7et1N8pCvI3O0bbmVLFl"
+    record = logging.LogRecord(
+        name="telegram.ext._utils.networkloop",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg="Network Retry Loop (Bootstrap Initialize Application): Invalid token. Aborting retry loop.",
+        args=(),
+        exc_info=None,
+    )
+    record.exc_info = (
+        InvalidToken,
+        InvalidToken(f"The token `{token}` was rejected by the server."),
+        None,
+    )
+    assert StartupLogRedactionFilter().filter(record) is True
+    assert record.exc_info is None
+    assert token not in str(record.msg)
+    assert "TELEGRAM_BOT_TOKEN" in str(record.msg)
+
+
+def test_configure_startup_logging_raises_httpx_log_level():
+    logger = logging.getLogger("httpx")
+    original_level = logger.level
+    try:
+        logger.setLevel(logging.INFO)
+        configure_startup_logging()
+        assert logger.level == logging.WARNING
+    finally:
+        logger.setLevel(original_level)
 
 
 @pytest.mark.asyncio

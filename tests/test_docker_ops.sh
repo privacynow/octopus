@@ -15,6 +15,7 @@ TEST_DIR=""
 RECORD_DOCKER_ARGS=""
 RECORD_CODEX_ARGS=""
 RECORD_CLAUDE_ARGS=""
+RECORD_DOCKER_DOCTOR_CALLS=""
 
 check_contains() {
   local desc="$1" haystack="$2" needle="$3"
@@ -77,6 +78,7 @@ RECORD_DOCKER_ARGS="$TEST_DIR/docker_args"
 RECORD_DOCKER_ENV="$TEST_DIR/docker_env"
 RECORD_CODEX_ARGS="$TEST_DIR/codex_args"
 RECORD_CLAUDE_ARGS="$TEST_DIR/claude_args"
+RECORD_DOCKER_DOCTOR_CALLS="$TEST_DIR/docker_doctor_calls"
 
 # --- Mock binaries (prepend to PATH) ---
 MOCK_BIN="$TEST_DIR/bin"
@@ -104,12 +106,56 @@ case "$1" in
         exit 0
         ;;
       *" run --rm bot python -m app.main --doctor"*)
-        printf '%s\n' "${MOCK_DOCKER_RUN_DOCTOR_STDOUT:-}"
-        exit "${MOCK_DOCKER_RUN_DOCTOR_EXIT:-0}"
+        count=0
+        if [ -n "${RECORD_DOCKER_DOCTOR_CALLS:-}" ] && [ -f "${RECORD_DOCKER_DOCTOR_CALLS}" ]; then
+          count=$(cat "${RECORD_DOCKER_DOCTOR_CALLS}" 2>/dev/null || echo 0)
+        fi
+        count=$((count + 1))
+        if [ -n "${RECORD_DOCKER_DOCTOR_CALLS:-}" ]; then
+          printf '%s' "$count" > "${RECORD_DOCKER_DOCTOR_CALLS}"
+        fi
+        stdout="${MOCK_DOCKER_RUN_DOCTOR_STDOUT:-}"
+        exit_code="${MOCK_DOCKER_RUN_DOCTOR_EXIT:-0}"
+        if [ "$count" = "1" ] && [ -n "${MOCK_DOCKER_RUN_DOCTOR_STDOUT1:-}" ]; then
+          stdout="${MOCK_DOCKER_RUN_DOCTOR_STDOUT1}"
+        fi
+        if [ "$count" = "1" ] && [ -n "${MOCK_DOCKER_RUN_DOCTOR_EXIT1:-}" ]; then
+          exit_code="${MOCK_DOCKER_RUN_DOCTOR_EXIT1}"
+        fi
+        if [ "$count" = "2" ] && [ -n "${MOCK_DOCKER_RUN_DOCTOR_STDOUT2:-}" ]; then
+          stdout="${MOCK_DOCKER_RUN_DOCTOR_STDOUT2}"
+        fi
+        if [ "$count" = "2" ] && [ -n "${MOCK_DOCKER_RUN_DOCTOR_EXIT2:-}" ]; then
+          exit_code="${MOCK_DOCKER_RUN_DOCTOR_EXIT2}"
+        fi
+        printf '%s\n' "$stdout"
+        exit "$exit_code"
         ;;
       *" run --rm bot-webhook python -m app.main --doctor"*)
-        printf '%s\n' "${MOCK_DOCKER_RUN_DOCTOR_STDOUT:-}"
-        exit "${MOCK_DOCKER_RUN_DOCTOR_EXIT:-0}"
+        count=0
+        if [ -n "${RECORD_DOCKER_DOCTOR_CALLS:-}" ] && [ -f "${RECORD_DOCKER_DOCTOR_CALLS}" ]; then
+          count=$(cat "${RECORD_DOCKER_DOCTOR_CALLS}" 2>/dev/null || echo 0)
+        fi
+        count=$((count + 1))
+        if [ -n "${RECORD_DOCKER_DOCTOR_CALLS:-}" ]; then
+          printf '%s' "$count" > "${RECORD_DOCKER_DOCTOR_CALLS}"
+        fi
+        stdout="${MOCK_DOCKER_RUN_DOCTOR_STDOUT:-}"
+        exit_code="${MOCK_DOCKER_RUN_DOCTOR_EXIT:-0}"
+        if [ "$count" = "1" ] && [ -n "${MOCK_DOCKER_RUN_DOCTOR_STDOUT1:-}" ]; then
+          stdout="${MOCK_DOCKER_RUN_DOCTOR_STDOUT1}"
+        fi
+        if [ "$count" = "1" ] && [ -n "${MOCK_DOCKER_RUN_DOCTOR_EXIT1:-}" ]; then
+          exit_code="${MOCK_DOCKER_RUN_DOCTOR_EXIT1}"
+        fi
+        if [ "$count" = "2" ] && [ -n "${MOCK_DOCKER_RUN_DOCTOR_STDOUT2:-}" ]; then
+          stdout="${MOCK_DOCKER_RUN_DOCTOR_STDOUT2}"
+        fi
+        if [ "$count" = "2" ] && [ -n "${MOCK_DOCKER_RUN_DOCTOR_EXIT2:-}" ]; then
+          exit_code="${MOCK_DOCKER_RUN_DOCTOR_EXIT2}"
+        fi
+        printf '%s\n' "$stdout"
+        exit "$exit_code"
         ;;
       *" logs "*)
         printf '%s\n' "${MOCK_DOCKER_LOGS_STDERR:-}" >&2
@@ -159,9 +205,10 @@ MOCK_PYTHON
 
 # Ensure RECORD_* and MOCK_* are exported for the mock scripts (they run in subshells)
 export RECORD_DOCKER_ARGS RECORD_DOCKER_ENV RECORD_CODEX_ARGS RECORD_CLAUDE_ARGS
+export RECORD_DOCKER_DOCTOR_CALLS
 export MOCK_PYTHON_STDERR MOCK_PYTHON_EXIT
 export DOCKER_IMAGE_INSPECT_EXIT
-export MOCK_DOCKER_PS_STATUS MOCK_DOCKER_SHARED_PS_STATUS MOCK_DOCKER_RUN_DOCTOR_STDOUT MOCK_DOCKER_RUN_DOCTOR_EXIT MOCK_DOCKER_LOGS_STDERR
+export MOCK_DOCKER_PS_STATUS MOCK_DOCKER_SHARED_PS_STATUS MOCK_DOCKER_RUN_DOCTOR_STDOUT MOCK_DOCKER_RUN_DOCTOR_EXIT MOCK_DOCKER_RUN_DOCTOR_STDOUT1 MOCK_DOCKER_RUN_DOCTOR_EXIT1 MOCK_DOCKER_RUN_DOCTOR_STDOUT2 MOCK_DOCKER_RUN_DOCTOR_EXIT2 MOCK_DOCKER_LOGS_STDERR
 
 # --- Tests that run host scripts (provider_login, provider_status, provider_logout) ---
 # These need .env.bot in REPO_DIR and docker in PATH.
@@ -220,11 +267,13 @@ echo
 echo "=== guided_start.sh: startup failure runs doctor instead of dumping logs ==="
 setup_env_bot "codex" "123456:real-looking-token"
 MOCK_DOCKER_PS_STATUS="Exited (1) 2 seconds ago"
-MOCK_DOCKER_RUN_DOCTOR_STDOUT="  FAIL: Telegram rejected TELEGRAM_BOT_TOKEN in .env.bot. Update it with a valid token from @BotFather and restart."
-MOCK_DOCKER_RUN_DOCTOR_EXIT="1"
+MOCK_DOCKER_RUN_DOCTOR_STDOUT1="All checks passed."
+MOCK_DOCKER_RUN_DOCTOR_EXIT1="0"
+MOCK_DOCKER_RUN_DOCTOR_STDOUT2="  FAIL: Telegram rejected TELEGRAM_BOT_TOKEN in .env.bot. Update it with a valid token from @BotFather and restart."
+MOCK_DOCKER_RUN_DOCTOR_EXIT2="1"
 MOCK_DOCKER_LOGS_STDERR='RAW TRACEBACK SHOULD NOT BE PRINTED'
-export MOCK_DOCKER_PS_STATUS MOCK_DOCKER_RUN_DOCTOR_STDOUT MOCK_DOCKER_RUN_DOCTOR_EXIT MOCK_DOCKER_LOGS_STDERR
-rm -f "$RECORD_DOCKER_ARGS"
+export MOCK_DOCKER_PS_STATUS MOCK_DOCKER_RUN_DOCTOR_STDOUT1 MOCK_DOCKER_RUN_DOCTOR_EXIT1 MOCK_DOCKER_RUN_DOCTOR_STDOUT2 MOCK_DOCKER_RUN_DOCTOR_EXIT2 MOCK_DOCKER_LOGS_STDERR
+rm -f "$RECORD_DOCKER_ARGS" "$RECORD_DOCKER_DOCTOR_CALLS"
 set +e
 guided_out="$(PATH="$MOCK_BIN:$PATH" "$REPO_DIR/scripts/app/guided_start.sh" 2>&1)"
 guided_exit=$?
@@ -237,11 +286,37 @@ check_not_contains "guided_start does not dump raw last logs banner" "$guided_ou
 check_not_contains "guided_start does not print raw docker logs by default" "$guided_out" "RAW TRACEBACK SHOULD NOT BE PRINTED"
 docker_args="$(cat "$RECORD_DOCKER_ARGS" 2>/dev/null || true)"
 check_contains "guided_start runs full doctor after startup failure" "$docker_args" "run --rm bot python -m app.main --doctor"
+check_contains "guided_start ran preflight doctor and post-start doctor" "$(cat "$RECORD_DOCKER_DOCTOR_CALLS" 2>/dev/null || true)" "2"
 MOCK_DOCKER_PS_STATUS=""
-MOCK_DOCKER_RUN_DOCTOR_STDOUT=""
-MOCK_DOCKER_RUN_DOCTOR_EXIT="0"
+MOCK_DOCKER_RUN_DOCTOR_STDOUT1=""
+MOCK_DOCKER_RUN_DOCTOR_EXIT1=""
+MOCK_DOCKER_RUN_DOCTOR_STDOUT2=""
+MOCK_DOCKER_RUN_DOCTOR_EXIT2=""
 MOCK_DOCKER_LOGS_STDERR=""
-export MOCK_DOCKER_PS_STATUS MOCK_DOCKER_RUN_DOCTOR_STDOUT MOCK_DOCKER_RUN_DOCTOR_EXIT MOCK_DOCKER_LOGS_STDERR
+export MOCK_DOCKER_PS_STATUS MOCK_DOCKER_RUN_DOCTOR_STDOUT1 MOCK_DOCKER_RUN_DOCTOR_EXIT1 MOCK_DOCKER_RUN_DOCTOR_STDOUT2 MOCK_DOCKER_RUN_DOCTOR_EXIT2 MOCK_DOCKER_LOGS_STDERR
+
+echo
+echo "=== guided_start.sh: plausible but invalid token fails preflight before startup ==="
+setup_env_bot "codex" "123456:real-looking-token"
+MOCK_DOCKER_RUN_DOCTOR_STDOUT1="  FAIL: Telegram rejected TELEGRAM_BOT_TOKEN in .env.bot. Update it with a valid token from @BotFather and restart."
+MOCK_DOCKER_RUN_DOCTOR_EXIT1="1"
+export MOCK_DOCKER_RUN_DOCTOR_STDOUT1 MOCK_DOCKER_RUN_DOCTOR_EXIT1
+rm -f "$RECORD_DOCKER_ARGS" "$RECORD_DOCKER_DOCTOR_CALLS"
+set +e
+guided_out="$(PATH="$MOCK_BIN:$PATH" "$REPO_DIR/scripts/app/guided_start.sh" 2>&1)"
+guided_exit=$?
+set -e
+check_exit "guided_start exits non-zero when doctor rejects plausible token" "$guided_exit" "1"
+check_contains "guided_start shows Telegram rejection during preflight" "$guided_out" "Telegram rejected TELEGRAM_BOT_TOKEN"
+check_not_contains "guided_start does not claim the bot is running" "$guided_out" "Bot is running!"
+check_not_contains "guided_start does not continue to background start" "$guided_out" "Step 4/4: Starting bot"
+docker_args="$(cat "$RECORD_DOCKER_ARGS" 2>/dev/null || true)"
+check_contains "guided_start runs doctor preflight" "$docker_args" "run --rm bot python -m app.main --doctor"
+check_not_contains "guided_start does not start bot when preflight fails" "$docker_args" "up -d bot"
+check_contains "guided_start only ran doctor once for preflight failure" "$(cat "$RECORD_DOCKER_DOCTOR_CALLS" 2>/dev/null || true)" "1"
+MOCK_DOCKER_RUN_DOCTOR_STDOUT1=""
+MOCK_DOCKER_RUN_DOCTOR_EXIT1=""
+export MOCK_DOCKER_RUN_DOCTOR_STDOUT1 MOCK_DOCKER_RUN_DOCTOR_EXIT1
 
 echo
 echo "=== shared_start.sh: rejects placeholder token before webhook or Docker ==="
@@ -258,6 +333,31 @@ set -e
 check_exit "shared_start exits non-zero on placeholder token" "$shared_exit" "1"
 check_contains "shared_start reports placeholder token" "$shared_out" "still a placeholder"
 check_file_missing "shared_start does not invoke docker on placeholder token" "$RECORD_DOCKER_ARGS"
+
+echo
+echo "=== shared_start.sh: plausible but invalid token fails preflight before webhook registration ==="
+setup_env_bot "codex" "123456:real-looking-token"
+{
+  echo "BOT_WEBHOOK_URL=https://example.invalid/webhook"
+  echo "BOT_AGENT_MODE=standalone"
+} >> "$REPO_DIR/.env.bot"
+MOCK_DOCKER_RUN_DOCTOR_STDOUT1="  FAIL: Telegram rejected TELEGRAM_BOT_TOKEN in .env.bot. Update it with a valid token from @BotFather and restart."
+MOCK_DOCKER_RUN_DOCTOR_EXIT1="1"
+export MOCK_DOCKER_RUN_DOCTOR_STDOUT1 MOCK_DOCKER_RUN_DOCTOR_EXIT1
+rm -f "$RECORD_DOCKER_ARGS" "$RECORD_DOCKER_DOCTOR_CALLS"
+set +e
+shared_out="$(PATH="$MOCK_BIN:$PATH" "$REPO_DIR/scripts/app/shared_start.sh" 2>&1)"
+shared_exit=$?
+set -e
+check_exit "shared_start exits non-zero when doctor rejects plausible token" "$shared_exit" "1"
+check_contains "shared_start shows Telegram rejection during preflight" "$shared_out" "Telegram rejected TELEGRAM_BOT_TOKEN"
+check_not_contains "shared_start does not attempt webhook registration on preflight failure" "$shared_out" "Registering Telegram webhook"
+docker_args="$(cat "$RECORD_DOCKER_ARGS" 2>/dev/null || true)"
+check_contains "shared_start runs doctor preflight" "$docker_args" "run --rm bot-webhook python -m app.main --doctor"
+check_not_contains "shared_start does not start shared services when preflight fails" "$docker_args" "up -d --remove-orphans"
+MOCK_DOCKER_RUN_DOCTOR_STDOUT1=""
+MOCK_DOCKER_RUN_DOCTOR_EXIT1=""
+export MOCK_DOCKER_RUN_DOCTOR_STDOUT1 MOCK_DOCKER_RUN_DOCTOR_EXIT1
 
 echo "=== provider_login.sh: override arg is passed to Docker (image exists) ==="
 setup_env_bot "claude"

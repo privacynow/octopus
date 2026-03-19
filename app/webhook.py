@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 import httpx
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_exponential, wait_random
 
+from app.startup_diagnostics import sanitize_url_for_logging
+
 log = logging.getLogger(__name__)
 
 _TIMEOUT = 10.0
@@ -66,6 +68,13 @@ class _CircuitBreaker:
 _breaker = _CircuitBreaker()
 
 
+def _webhook_failure_label(url: str, exc: BaseException) -> str:
+    sanitized_url = sanitize_url_for_logging(url)
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code} via {sanitized_url}"
+    return f"{exc.__class__.__name__} via {sanitized_url}"
+
+
 async def _attempt_post(url: str, payload: dict) -> None:
     """Single POST attempt. Raises on non-2xx or transport error."""
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
@@ -118,5 +127,5 @@ async def fire_completion_webhook(
             "Completion webhook failed after %d attempt(s) for %s: %s",
             attempts or 1,
             conversation_ref,
-            exc,
+            _webhook_failure_label(url, exc),
         )

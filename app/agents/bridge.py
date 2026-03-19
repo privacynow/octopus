@@ -6,7 +6,6 @@ import html
 import logging
 import uuid
 from datetime import datetime, timezone
-from functools import lru_cache
 from typing import Any
 
 from app import work_queue
@@ -25,28 +24,6 @@ from app.runtime.inbound_types import (
 from app.runtime.composition import conversation_channel_name
 
 log = logging.getLogger(__name__)
-
-_LEGACY_DELIVERY_KIND_MAP = {
-    "surface_input": "channel_input",
-    "surface_action": "channel_action",
-}
-
-
-@lru_cache(maxsize=4)
-def _warn_legacy_delivery_kind(kind: str, normalized: str) -> None:
-    log.warning(
-        "Received legacy registry delivery kind %s; treating it as %s. "
-        "Apply Postgres migration 0009_rename_delivery_kinds.sql before mixed-version deploys.",
-        kind,
-        normalized,
-    )
-
-
-def normalize_registry_delivery_kind(kind: str) -> str:
-    normalized = _LEGACY_DELIVERY_KIND_MAP.get(kind, kind)
-    if normalized != kind:
-        _warn_legacy_delivery_kind(kind, normalized)
-    return normalized
 
 
 def conversation_key_for_ref(conversation_ref: str) -> str:
@@ -188,7 +165,7 @@ def build_registry_action_envelope(
 
 async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -> str:
     """Convert a registry delivery into a normal local work item or control action."""
-    kind = normalize_registry_delivery_kind(str(delivery.get("kind", "")))
+    kind = str(delivery.get("kind", ""))
     payload = delivery.get("payload", {})
     delivery_id = delivery.get("delivery_id", "")
     data_dir = config.data_dir

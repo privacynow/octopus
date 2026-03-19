@@ -119,7 +119,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "connectivity_state": effective_state,
             "current_capacity": row["current_capacity"],
             "max_capacity": row["max_capacity"],
-            "channel_capabilities": decode_json_field(row["surface_capabilities_json"], []),
+            "channel_capabilities": decode_json_field(row["channel_capabilities_json"], []),
             "version": row["version"],
             "last_heartbeat_at": row["last_heartbeat_at"],
             "updated_at": row["updated_at"],
@@ -320,7 +320,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         agent_id, agent_token, display_name, slug, role,
                         skills_json, tags_json, description, provider, mode,
                         connectivity_state, current_capacity, max_capacity,
-                        surface_capabilities_json, version, created_at, updated_at, last_heartbeat_at
+                        channel_capabilities_json, version, created_at, updated_at, last_heartbeat_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
@@ -364,7 +364,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     UPDATE {_SCHEMA}.agents
                     SET display_name = %s, role = %s, skills_json = %s, tags_json = %s,
                         description = %s, provider = %s, mode = %s, connectivity_state = %s,
-                        current_capacity = %s, max_capacity = %s, surface_capabilities_json = %s,
+                        current_capacity = %s, max_capacity = %s, channel_capabilities_json = %s,
                         version = %s, updated_at = %s, last_heartbeat_at = %s
                     WHERE agent_token = %s
                     """,
@@ -491,12 +491,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 cur.execute(
                     f"""
                     INSERT INTO {_SCHEMA}.conversations (
-                        conversation_id, target_agent_id, title, origin_surface, status, created_at, updated_at
+                        conversation_id, target_agent_id, title, origin_channel, status, created_at, updated_at
                     ) VALUES (%s, %s, %s, %s, 'open', %s, %s)
                     ON CONFLICT(conversation_id) DO UPDATE SET
                         target_agent_id = EXCLUDED.target_agent_id,
                         title = EXCLUDED.title,
-                        origin_surface = EXCLUDED.origin_surface,
+                        origin_channel = EXCLUDED.origin_channel,
                         updated_at = EXCLUDED.updated_at
                     """,
                     (
@@ -994,7 +994,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 cur.execute(
                     f"""
                     INSERT INTO {_SCHEMA}.conversations (
-                        conversation_id, target_agent_id, title, origin_surface, status, created_at, updated_at
+                        conversation_id, target_agent_id, title, origin_channel, status, created_at, updated_at
                     ) VALUES (%s, %s, %s, 'registry', 'open', %s, %s)
                     """,
                     (conversation_id, target_agent_id, title, now, now),
@@ -1033,7 +1033,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     FROM {_SCHEMA}.conversations c
                     LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
                     LEFT JOIN {_SCHEMA}.timeline_events t ON t.conversation_id = c.conversation_id
-                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_surface, c.status, c.created_at, c.updated_at, a.display_name
+                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.status, c.created_at, c.updated_at, a.display_name
                     ORDER BY c.updated_at DESC
                     """
                 )
@@ -1065,7 +1065,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     LEFT JOIN {_SCHEMA}.agents a ON a.agent_id = c.target_agent_id
                     LEFT JOIN {_SCHEMA}.timeline_events t ON t.conversation_id = c.conversation_id
                     WHERE c.conversation_id = %s
-                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_surface, c.status, c.created_at, c.updated_at, a.display_name
+                    GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.status, c.created_at, c.updated_at, a.display_name
                     """,
                     (conversation_id,),
                 )

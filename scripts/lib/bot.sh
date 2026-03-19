@@ -72,6 +72,27 @@ upsert_env_file_value() {
   restrict_secret_file_permissions "$env_file"
 }
 
+remove_env_file_value() {
+  local key="$1" env_file="${2:-$(current_bot_env_file)}"
+  local tmp_file line=""
+  tmp_file="$(mktemp "${TMPDIR:-/tmp}/octopus-env.XXXXXX")"
+  if [ -f "$env_file" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        "$key="*|[[:space:]]"$key="*)
+          ;;
+        *)
+          printf '%s\n' "$line" >> "$tmp_file"
+          ;;
+      esac
+    done < "$env_file"
+    mv "$tmp_file" "$env_file"
+  else
+    rm -f "$tmp_file"
+  fi
+  restrict_secret_file_permissions "$env_file"
+}
+
 redact_value_for_prompt() {
   local channel="${1:-telegram}" value="${2:-}" visible=""
   case "$channel" in

@@ -109,5 +109,15 @@
   - registry artifact import now rejects artifacts with too many files or any single file above the per-file quota
   - existing registry import and digest verification flows still pass with the new pre-extraction quota checks in place
   Commit:
+  - `0e8441d`
+- Complete: S9 restrict credential validation outbound targets.
+  Tests:
+  - `python3 -m py_compile app/credential_validation.py app/credential_service.py app/workflows/runtime_skills/setup.py app/credential_flow.py tests/test_handlers_credentials.py tests/test_runtime_skill_use_cases.py`
+  - `.venv/bin/python -m pytest -q -n 4 tests/test_handlers_credentials.py tests/test_runtime_skill_use_cases.py tests/test_telegram_runtime_skills.py`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Verified:
+  - outbound credential validation now rejects unapproved hosts before any network request is sent and uses an allowlist with operator-configurable host extensions
+  - credential-validation logging now records the target host and owning skill name without logging the credential value or full validation URL
+  - the setup prompt now shows the validation host to the user before they submit a credential, while built-in GitHub validation continues to work under the default host policy
+  Commit:
   - pending current slice commit
-- Pending: S9 restrict credential validation outbound targets.

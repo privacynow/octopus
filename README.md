@@ -146,3 +146,4 @@ If you use optional Postgres instead of the default SQLite runtime:
 ## More Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): system architecture and boundaries
+- [docs/registry-guide.md](docs/registry-guide.md): step-by-step local registry guide with screenshots

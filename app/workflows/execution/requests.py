@@ -30,6 +30,7 @@ from app.storage import chat_upload_dir
 from app.summarize import save_raw
 from app.skill_activation_service import get_skill_activation_service
 from app import work_queue
+from app.runtime.inbound_types import InboundAttachment
 from app.workflows.execution.contracts import (
     ExecutionRuntime,
     RequestExecutionOutcome,
@@ -97,6 +98,14 @@ def check_prompt_size_cross_chat(
         runtime.dispatch.provider.new_provider_state,
         cfg.approval_mode,
     )
+
+
+def load_approval_mode(
+    chat_id: int | str,
+    *,
+    runtime: ExecutionRuntime,
+) -> str:
+    return _load(runtime, chat_id).approval_mode
 
 
 def prompt_weight(role: str, active_skills: list[str]) -> int:
@@ -315,6 +324,46 @@ async def execute_request(
         prompt_tokens=result.prompt_tokens,
         completion_tokens=result.completion_tokens,
         cost_usd=result.cost_usd,
+    )
+
+
+async def dispatch_message_request(
+    chat_id: int | str,
+    prompt: str,
+    image_paths: list[str],
+    attachments: list[InboundAttachment],
+    message,
+    *,
+    approval_mode: str,
+    routed_task_id: str = "",
+    skip_approval: bool = False,
+    request_user_id: int | str = "",
+    trust_tier: str = "trusted",
+    cancel_event: asyncio.Event | None = None,
+    runtime: ExecutionRuntime,
+) -> RequestExecutionOutcome | None:
+    if not routed_task_id and not skip_approval and approval_mode == "on":
+        await request_approval(
+            chat_id,
+            prompt,
+            image_paths,
+            attachments,
+            message,
+            request_user_id=request_user_id,
+            trust_tier=trust_tier,
+            cancel_event=cancel_event,
+            runtime=runtime,
+        )
+        return None
+    return await execute_request(
+        chat_id,
+        prompt,
+        image_paths,
+        message,
+        request_user_id=request_user_id,
+        trust_tier=trust_tier,
+        cancel_event=cancel_event,
+        runtime=runtime,
     )
 
 

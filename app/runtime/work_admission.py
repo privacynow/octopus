@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.access import trust_tier
+from app.access import is_allowed_user_with_override, trust_tier
 from app import work_queue
 from app.runtime.inbound_types import InboundEnvelope, serialize_inbound
 
@@ -15,6 +16,44 @@ def trust_tier_for_source(source: str, user: Any, *, config) -> str:
     if source == "registry":
         return "trusted"
     return trust_tier(config, user)
+
+
+@dataclass(frozen=True)
+class WorkerMessageAdmission:
+    status: str
+    allowed: bool
+    trust_tier: str
+
+
+def admit_worker_message(
+    *,
+    data_dir: Path,
+    item_id: str,
+    source: str,
+    user: Any,
+    config,
+) -> WorkerMessageAdmission:
+    resolved_trust = trust_tier_for_source(source, user, config=config)
+    if source != "telegram":
+        return WorkerMessageAdmission(
+            status="allowed",
+            allowed=True,
+            trust_tier=resolved_trust,
+        )
+
+    override = work_queue.get_user_access(data_dir, getattr(user, "id", ""))
+    if not is_allowed_user_with_override(config, user, override):
+        work_queue.fail_work_item(data_dir, item_id, error="not_allowed")
+        return WorkerMessageAdmission(
+            status="not_allowed",
+            allowed=False,
+            trust_tier=resolved_trust,
+        )
+    return WorkerMessageAdmission(
+        status="allowed",
+        allowed=True,
+        trust_tier=resolved_trust,
+    )
 
 
 def admit_fresh_message(data_dir: Path, envelope: InboundEnvelope) -> tuple[str, str | None]:

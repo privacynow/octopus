@@ -1,10 +1,10 @@
-"""Workflow-local contracts for recovery replay and discard flows."""
+"""Workflow-local contracts for recovery replay, discard, and recovery notice flows."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Awaitable, Callable, Protocol
 
 from app.runtime.inbound_types import InboundMessage
 
@@ -25,6 +25,21 @@ class RecoveryActionOutcome:
     replay_plan: RecoveryReplayPlan | None = None
 
 
+@dataclass(frozen=True)
+class WorkerRecoveryNotice:
+    update_id: int
+    preview: str
+    prompt: str
+    run_again_label: str
+    skip_label: str
+
+
+@dataclass(frozen=True)
+class WorkerRecoveryOutcome:
+    status: str
+    notice: WorkerRecoveryNotice | None = None
+
+
 class RecoveryPort(Protocol):
     def prepare_action(
         self,
@@ -41,3 +56,14 @@ class RecoveryPort(Protocol):
     def complete_replay(self, *, data_dir: Path, item_id: str) -> None: ...
 
     def fail_replay(self, *, data_dir: Path, item_id: str, error: str = "replay_failed") -> None: ...
+
+    async def dispatch_worker_recovery(
+        self,
+        *,
+        data_dir: Path,
+        item_id: str,
+        original_text: str,
+        update_id: int,
+        bind_egress: Callable[[], Awaitable[None]],
+        send_notice: Callable[[WorkerRecoveryNotice], Awaitable[None]],
+    ) -> WorkerRecoveryOutcome: ...

@@ -56,20 +56,14 @@ from app.channels.telegram.session_io import (
 from app.channels.telegram.state import TelegramRuntime
 from app.channels.telegram.runtime_skills import (
     cmd_clear_credentials as runtime_skill_cmd_clear_credentials,
+    handle_skills_command as runtime_skill_handle_skills_command,
     handle_clear_cred_callback as runtime_skill_handle_clear_cred_callback,
     handle_skill_add_callback as runtime_skill_handle_skill_add_callback,
     handle_skill_update_callback as runtime_skill_handle_skill_update_callback,
     maybe_handle_setup_message as runtime_skill_maybe_handle_setup_message,
 )
 from app.channels.telegram.guidance import (
-    guidance_approve as channel_guidance_approve,
-    guidance_archive as channel_guidance_archive,
-    guidance_edit as channel_guidance_edit,
-    guidance_history as channel_guidance_history,
-    guidance_preview as channel_guidance_preview,
-    guidance_publish as channel_guidance_publish,
-    guidance_reject as channel_guidance_reject,
-    guidance_submit as channel_guidance_submit,
+    handle_guidance_command as channel_handle_guidance_command,
 )
 from app.channels.telegram.conversation import (
     cmd_approval as conversation_cmd_approval,
@@ -939,52 +933,11 @@ async def cmd_skills(
 ) -> None:
     if await _public_guard(runtime, event, update):
         return
-    from app.channels.telegram.runtime_skills import (
-        skills_show, skills_list, skills_add, skills_remove,
-        skills_setup, skills_clear, skills_create, skills_search,
-        skills_info, skills_install, skills_uninstall, skills_updates,
-        skills_diff, skills_update, skills_edit, skills_history,
-        skills_submit, skills_approve, skills_reject, skills_publish,
-        skills_archive,
+    await runtime_skill_handle_skills_command(
+        event,
+        update,
+        runtime=build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
     )
-    args = event.args
-    skills_runtime = build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime))
-    if not args:
-        await skills_show(event, update, runtime=skills_runtime)
-        return
-
-    sub = args[0].lower()
-    _SUBS_WITH_ARG = {
-        "add": skills_add, "remove": skills_remove, "setup": skills_setup,
-        "create": skills_create, "info": skills_info, "install": skills_install,
-        "uninstall": skills_uninstall, "diff": skills_diff,
-        "history": skills_history, "submit": skills_submit, "approve": skills_approve,
-        "reject": skills_reject, "publish": skills_publish, "archive": skills_archive,
-    }
-    if sub in _SUBS_WITH_ARG and len(args) >= 2:
-        await _SUBS_WITH_ARG[sub](event, update, args[1], runtime=skills_runtime)
-        return
-    if sub == "list":
-        await skills_list(event, update, runtime=skills_runtime)
-        return
-    if sub == "clear":
-        await skills_clear(event, update, runtime=skills_runtime)
-        return
-    if sub == "search" and len(args) >= 2:
-        await skills_search(event, update, " ".join(args[1:]), runtime=skills_runtime)
-        return
-    if sub == "updates":
-        await skills_updates(event, update, runtime=skills_runtime)
-        return
-    if sub == "update" and len(args) >= 2:
-        await skills_update(event, update, args[1], runtime=skills_runtime)
-        return
-    if sub == "edit" and len(args) >= 3:
-        await skills_edit(event, update, args[1], " ".join(args[2:]), runtime=skills_runtime)
-        return
-
-    rendered = telegram_presenters.skills_usage_message()
-    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 @_command_handler
@@ -996,55 +949,11 @@ async def cmd_guidance(
 ) -> None:
     if await _public_guard(runtime, event, update):
         return
-    args = event.args
-    if len(args) < 2:
-        rendered = telegram_presenters.guidance_usage_message()
-        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-        return
-    sub = args[0].lower()
-    provider_name = args[1]
-    if sub == "preview":
-        await channel_guidance_preview(event, update, provider_name)
-        return
-    if sub == "history":
-        await channel_guidance_history(event, update, provider_name)
-        return
-    if sub == "edit" and len(args) >= 3:
-        await channel_guidance_edit(event, update, provider_name, " ".join(args[2:]))
-        return
-    if sub == "submit":
-        await channel_guidance_submit(event, update, provider_name)
-        return
-    if sub == "approve":
-        if not is_admin(runtime, event.user):
-            rendered = telegram_presenters.guidance_admin_only_message("approve")
-            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-            return
-        await channel_guidance_approve(event, update, provider_name)
-        return
-    if sub == "reject":
-        if not is_admin(runtime, event.user):
-            rendered = telegram_presenters.guidance_admin_only_message("reject")
-            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-            return
-        await channel_guidance_reject(event, update, provider_name)
-        return
-    if sub == "publish":
-        if not is_admin(runtime, event.user):
-            rendered = telegram_presenters.guidance_admin_only_message("publish")
-            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-            return
-        await channel_guidance_publish(event, update, provider_name)
-        return
-    if sub == "archive":
-        if not is_admin(runtime, event.user):
-            rendered = telegram_presenters.guidance_admin_only_message("archive")
-            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-            return
-        await channel_guidance_archive(event, update, provider_name)
-        return
-    rendered = telegram_presenters.guidance_usage_message()
-    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+    await channel_handle_guidance_command(
+        event,
+        update,
+        is_admin=is_admin(runtime, event.user),
+    )
 
 
 @_command_handler

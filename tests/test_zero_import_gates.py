@@ -288,6 +288,47 @@ def test_ingress_no_longer_defines_shared_mode_dispatch_helpers() -> None:
         assert token not in text, f"{token} still defined in {ingress_path}"
 
 
+def test_ingress_no_longer_contains_inline_skills_or_guidance_command_routing() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
+    text = ingress_path.read_text()
+    forbidden_tokens = (
+        "skills_show(",
+        "skills_list(",
+        "skills_add(",
+        "skills_remove(",
+        "skills_setup(",
+        "skills_clear(",
+        "skills_create(",
+        "skills_search(",
+        "skills_info(",
+        "skills_install(",
+        "skills_uninstall(",
+        "skills_updates(",
+        "skills_diff(",
+        "skills_update(",
+        "skills_edit(",
+        "skills_history(",
+        "skills_submit(",
+        "skills_approve(",
+        "skills_reject(",
+        "skills_publish(",
+        "skills_archive(",
+        "guidance_preview(",
+        "guidance_history(",
+        "guidance_edit(",
+        "guidance_submit(",
+        "guidance_approve(",
+        "guidance_reject(",
+        "guidance_publish(",
+        "guidance_archive(",
+        "guidance_usage_message(",
+        "guidance_admin_only_message(",
+    )
+    for token in forbidden_tokens:
+        assert token not in text, f"{token} still referenced in {ingress_path}"
+
+
 def test_telegram_runtime_owner_modules_do_not_define_singletons() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     state_path = repo_root / "app" / "channels" / "telegram" / "state.py"

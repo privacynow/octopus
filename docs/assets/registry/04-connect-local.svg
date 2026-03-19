@@ -7,16 +7,16 @@
     .rule { stroke: #274227; stroke-width: 1; opacity: 0.65; }
     .dot { fill: #5a665a; }
     .label { fill: #cfd8c9; font: 600 16px "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace; letter-spacing: 0.2px; }
-    .line { fill: #8cff58; font: 19px "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace; letter-spacing: 0.05px; filter: url(#crt-glow); }
+    .line { fill: #98ff64; font: 19px "IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace; letter-spacing: 0.05px; }
+    .glow-copy { opacity: 0.42; filter: url(#crt-glow); }
     .prompt { fill: #f1ffe6; }
   </style>
   <defs>
     <filter id="crt-glow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="0.85" result="blur"/>
-      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.55 0 0 0 0 1 0 0 0 0 0.35 0 0 0 0.5 0" result="glow"/>
+      <feGaussianBlur stdDeviation="0.6" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.55 0 0 0 0 1 0 0 0 0 0.35 0 0 0 0.45 0" result="glow"/>
       <feMerge>
         <feMergeNode in="glow"/>
-        <feMergeNode in="SourceGraphic"/>
       </feMerge>
     </filter>
   </defs>
@@ -26,38 +26,46 @@
     <circle class="dot" cx="26" cy="28" r="6.5"/><circle class="dot" cx="48" cy="28" r="6.5"/><circle class="dot" cx="70" cy="28" r="6.5"/>
     <text class="label" x="102" y="34">connect existing bot to local registry</text>
     <line class="rule" x1="0" y1="58" x2="1144" y2="58"/>
-    <text class="line" xml:space="preserve">
-      <tspan class="prompt" x="34" y="94">$ ./octopus</tspan>
-      <tspan x="34" dy="29">What would you like to do?</tspan>
-      <tspan x="34" dy="29">  1. Add a bot</tspan>
-      <tspan x="34" dy="29">  2. Manage bots</tspan>
-      <tspan x="34" dy="29">  3. Connect bot to registry</tspan>
-      <tspan x="34" dy="29">  4. Advanced</tspan>
-      <tspan x="34" dy="29">Choose an option: 3</tspan>
-      <tspan x="34" dy="29"></tspan>
-      <tspan x="34" dy="29">Select a bot:</tspan>
-      <tspan x="34" dy="29">  1. Example Bot (@example_bot)</tspan>
-      <tspan x="34" dy="29">Bot slug or number: 1</tspan>
-      <tspan x="34" dy="29">Press Enter to use the local registry, or type 'remote' to use a remote registry:</tspan>
-      <tspan x="34" dy="29">Bot example-bot is now connected to the local registry.</tspan>
-      <tspan x="34" dy="29">Registry UI: http://localhost:8787/ui</tspan>
-    </text>
+    <g id="copy-connect-local">
+      <text class="line" xml:space="preserve">
+        <tspan class="prompt" x="34" y="94">$ ./octopus</tspan>
+        <tspan x="34" dy="29">What would you like to do?</tspan>
+        <tspan x="34" dy="29">  1. Add a bot</tspan>
+        <tspan x="34" dy="29">  2. Manage bots</tspan>
+        <tspan x="34" dy="29">  3. Connect bot to registry</tspan>
+        <tspan x="34" dy="29">  4. Advanced</tspan>
+        <tspan x="34" dy="29">Choose an option: 3</tspan>
+        <tspan x="34" dy="29"></tspan>
+        <tspan x="34" dy="29">Select a bot:</tspan>
+        <tspan x="34" dy="29">  1. Example Bot (@example_bot)</tspan>
+        <tspan x="34" dy="29">Bot slug or number: 1</tspan>
+        <tspan x="34" dy="29">Press Enter to use the local registry, or type 'remote' to use a remote registry:</tspan>
+        <tspan x="34" dy="29">Bot example-bot is now connected to the local registry.</tspan>
+        <tspan x="34" dy="29">Registry UI: http://localhost:8787/ui</tspan>
+      </text>
+    </g>
+    <use href="#copy-connect-local" class="glow-copy"/>
+    <use href="#copy-connect-local"/>
 
     <rect class="panel" x="0" y="517" width="1144" height="379" rx="18"/>
     <circle class="dot" cx="26" cy="545" r="6.5"/><circle class="dot" cx="48" cy="545" r="6.5"/><circle class="dot" cx="70" cy="545" r="6.5"/>
     <text class="label" x="102" y="551">verify with octopus status</text>
     <line class="rule" x1="0" y1="575" x2="1144" y2="575"/>
-    <text class="line" xml:space="preserve">
-      <tspan class="prompt" x="34" y="611">$ ./octopus status</tspan>
-      <tspan x="34" dy="29">Bots:</tspan>
-      <tspan x="34" dy="29">  Example Bot (@example_bot)    claude   registry     running</tspan>
-      <tspan x="34" dy="29"></tspan>
-      <tspan x="34" dy="29">Registry:</tspan>
-      <tspan x="34" dy="29">  local      running    http://localhost:8787/ui</tspan>
-      <tspan x="34" dy="29"></tspan>
-      <tspan x="34" dy="29">Provider auth:</tspan>
-      <tspan x="34" dy="29">  claude     authenticated</tspan>
-      <tspan x="34" dy="29">  codex      not configured</tspan>
-    </text>
+    <g id="copy-connect-local-status">
+      <text class="line" xml:space="preserve">
+        <tspan class="prompt" x="34" y="611">$ ./octopus status</tspan>
+        <tspan x="34" dy="29">Bots:</tspan>
+        <tspan x="34" dy="29">  Example Bot (@example_bot)    claude   registry     running</tspan>
+        <tspan x="34" dy="29"></tspan>
+        <tspan x="34" dy="29">Registry:</tspan>
+        <tspan x="34" dy="29">  local      running    http://localhost:8787/ui</tspan>
+        <tspan x="34" dy="29"></tspan>
+        <tspan x="34" dy="29">Provider auth:</tspan>
+        <tspan x="34" dy="29">  claude     authenticated</tspan>
+        <tspan x="34" dy="29">  codex      not configured</tspan>
+      </text>
+    </g>
+    <use href="#copy-connect-local-status" class="glow-copy"/>
+    <use href="#copy-connect-local-status"/>
   </g>
 </svg>

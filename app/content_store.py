@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from app.content_store_base import AbstractContentStore
 
 _store: AbstractContentStore | None = None
 _store_key: tuple[str, str, int, int, int] | None = None
+log = logging.getLogger(__name__)
 
 
 def build_content_store(
@@ -96,5 +98,8 @@ def reset_for_test() -> None:
         from app.db.postgres import close_pools
 
         close_pools()
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug(
+            "Postgres pool cleanup failed during content-store test reset: %s",
+            exc.__class__.__name__,
+        )

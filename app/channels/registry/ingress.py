@@ -7,6 +7,7 @@ catalog/guidance/session-backed lifecycle work.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -35,6 +36,7 @@ from app.session_state import SessionState
 ProviderStateFactory = Callable[[], dict[str, Any]]
 
 _context: "RuntimeChannelContext | None" = None
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -86,7 +88,11 @@ def _flows():
 def prompt_warning_context() -> PromptWarningContext | None:
     try:
         context = get_runtime_channel_context()
-    except Exception:
+    except Exception as exc:
+        log.warning(
+            "Registry runtime context unavailable for prompt warnings: %s",
+            exc.__class__.__name__,
+        )
         return None
     return PromptWarningContext(
         data_dir=context.config.data_dir,
@@ -223,7 +229,11 @@ def uninstall_catalog_skill(skill_name: str) -> dict[str, Any]:
     try:
         context = get_runtime_channel_context()
         default_skills = context.config.default_skills
-    except Exception:
+    except Exception as exc:
+        log.warning(
+            "Registry runtime context unavailable for uninstall default-skill check: %s",
+            exc.__class__.__name__,
+        )
         default_skills = ()
     result = _flows().runtime_skills.imports.uninstall(skill_name, default_skills=default_skills)
     if not result.ok:

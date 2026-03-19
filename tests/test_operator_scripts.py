@@ -5,6 +5,7 @@ don't remove or weaken provider vs full-doctor distinction.
 """
 
 from pathlib import Path
+import subprocess
 
 
 def test_provider_status_reminds_full_doctor():
@@ -165,3 +166,58 @@ def test_guided_start_reads_repo_version_for_success_summary():
     text = script.read_text()
     assert 'bot_version_display="$(tr -d' in text
     assert 'printf "║  • Bot version:' in text
+
+
+def test_guided_start_runs_doctor_on_post_start_failure():
+    """guided_start.sh should rerun full doctor, not dump raw logs, when the bot exits immediately."""
+    repo = Path(__file__).resolve().parent.parent
+    script = repo / "scripts" / "app" / "guided_start.sh"
+    text = script.read_text()
+    assert "run --rm bot python -m app.main --doctor" in text
+    assert "logs_instance.sh" in text
+    assert "Last logs:" not in text
+
+
+def test_shared_start_runs_doctor_on_post_start_failure():
+    """shared_start.sh should rerun full doctor if webhook/worker services exit after startup."""
+    repo = Path(__file__).resolve().parent.parent
+    script = repo / "scripts" / "app" / "shared_start.sh"
+    text = script.read_text()
+    assert "run --rm bot-webhook python -m app.main --doctor" in text
+    assert "logs -f bot-webhook bot-worker" in text
+
+
+def test_repo_does_not_ship_env_bot():
+    """The repo must not ship a live .env.bot with placeholder secrets."""
+    repo = Path(__file__).resolve().parent.parent
+    tracked = subprocess.run(
+        ["git", "ls-files", ".env.bot"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    if not tracked:
+        return
+    status = subprocess.run(
+        ["git", "status", "--short", "--", ".env.bot"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert status.startswith("D"), "Do not commit .env.bot; ship only .env.example"
+
+
+def test_start_scripts_require_real_telegram_token():
+    """Startup paths must reject placeholder Telegram tokens before Docker/provider work."""
+    repo = Path(__file__).resolve().parent.parent
+    guided_start = (repo / "scripts" / "app" / "guided_start.sh").read_text()
+    start_instance = (repo / "scripts" / "app" / "start_instance.sh").read_text()
+    shared_start = (repo / "scripts" / "app" / "shared_start.sh").read_text()
+    lib_env = (repo / "scripts" / "lib_env.sh").read_text()
+
+    assert "require_real_telegram_token" in lib_env
+    assert "require_real_telegram_token" in guided_start
+    assert "require_real_telegram_token" in start_instance
+    assert "require_real_telegram_token" in shared_start

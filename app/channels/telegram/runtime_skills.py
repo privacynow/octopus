@@ -469,7 +469,15 @@ async def skills_install(event, update: Update, name: str, *, runtime: TelegramR
         rendered = telegram_presenters.runtime_skill_mutation_message(msg)
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
     except Exception as exc:
-        rendered = telegram_presenters.runtime_skill_install_error_message(str(exc))
+        log.warning(
+            "Telegram runtime-skill install failed for %s: %s",
+            name,
+            exc.__class__.__name__,
+            exc_info=True,
+        )
+        rendered = telegram_presenters.runtime_skill_install_error_message(
+            "Could not install this skill. Check your network connection and try again, or contact the bot operator."
+        )
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
@@ -724,7 +732,7 @@ async def maybe_handle_setup_message(
             try:
                 await message.delete()
             except Exception:
-                log.warning("Could not delete credential message for user %d", user_id)
+                log.warning("Could not delete credential message for user %d", user_id, exc_info=True)
             rendered = telegram_presenters.runtime_skill_validation_failed_message(
                 outcome.validation_key,
                 outcome.validation_error,
@@ -734,7 +742,7 @@ async def maybe_handle_setup_message(
         try:
             await message.delete()
         except Exception:
-            log.warning("Could not delete credential message for user %d", user_id)
+            log.warning("Could not delete credential message for user %d", user_id, exc_info=True)
         skill_name = outcome.skill_name or setup.skill
         _save(runtime, chat_id, session)
         if outcome.status == "next_requirement" and outcome.next_requirement:

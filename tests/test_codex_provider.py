@@ -492,6 +492,15 @@ def _modern_resume_script() -> str:
     """)
 
 
+def _failing_codex_script(stderr_text: str, returncode: int) -> str:
+    return textwrap.dedent(f"""\
+        import sys
+        sys.stderr.write({stderr_text!r})
+        sys.stderr.flush()
+        raise SystemExit({returncode})
+    """)
+
+
 # -- _run_cmd timeout behaviour --
 
 async def test_timeout_non_resume():
@@ -555,6 +564,22 @@ async def test_timeout_fast_non_resume():
     result4 = await provider._run_cmd(slow_cmd(0.1), progress4, is_resume=False)
     assert result4.timed_out is False
     assert "done" in result4.text
+
+
+async def test_run_cmd_nonzero_exit_hides_raw_stderr():
+    cfg = make_config(timeout_seconds=1, working_dir=Path(tempfile.gettempdir()))
+    provider = CodexProvider(cfg)
+
+    progress = FakeProgress()
+    result = await provider._run_cmd(
+        [sys.executable, "-c", _failing_codex_script("Usage: <MODEL>\nsecret=/tmp/token", 2)],
+        progress,
+    )
+
+    assert result.returncode == 2
+    assert "exited with code 2" in result.text
+    assert "Usage: <MODEL>" not in result.text
+    assert "/tmp/token" not in result.text
 
 
 # -- _run_cmd modern schema --

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,9 @@ from app.ports.egress import (
     ChannelEgress,
     EditableHandle,
 )
+
+
+log = logging.getLogger(__name__)
 
 
 class TelegramEditableHandle(EditableHandle):
@@ -77,7 +81,11 @@ class TelegramChannelEgress(ChannelEgress):
         try:
             await self._bot.send_chat_action(self.chat_id, action)
         except Exception:
-            pass
+            log.debug(
+                "send_chat_action failed for chat %s",
+                self.chat_id,
+                exc_info=True,
+            )
 
     async def answer_action(self, text: str | None = None, show_alert: bool = False) -> None:
         del text, show_alert

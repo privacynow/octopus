@@ -23,6 +23,7 @@ from app.channels.telegram.bootstrap import build_bootstrap
 from app.runtime_health import CanonicalRuntimeHealthProvider
 from app.startup_diagnostics import (
     collect_telegram_doctor_diagnostics,
+    configure_startup_logging,
     format_database_startup_exception,
     format_startup_exception,
 )
@@ -36,6 +37,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     level=logging.INFO,
 )
+configure_startup_logging()
 log = logging.getLogger(__name__)
 
 

@@ -49,21 +49,7 @@ create_env_file_if_missing() {
   local display_name token setup_mode provider mode default_registry_url registry_url registry_token
   local role tags description skills allowed_users working_dir timeout completion_webhook_url
   display_name="$(prompt_with_default "Bot name" "$default_name")"
-  while true; do
-    token="$(prompt_with_default "Telegram bot token" "")"
-    if [ -z "$token" ]; then
-      echo "Telegram bot token is required."
-      continue
-    fi
-    if telegram_token_is_placeholder "$token"; then
-      echo "Telegram bot token cannot be a placeholder."
-      echo "Get a real token from @BotFather."
-      continue
-    fi
-    if [ -n "$token" ]; then
-      break
-    fi
-  done
+  token="$(prompt_channel_token_with_help telegram "Paste your bot token here")"
   setup_mode="$(prompt_with_default "Setup mode (quick/full)" "quick")"
   case "$setup_mode" in
     quick|full) ;;
@@ -243,6 +229,27 @@ print_startup_failure_help() {
   echo "  ./scripts/app/logs_instance.sh $INSTANCE" >&2
 }
 
+run_full_health_check_or_exit() {
+  echo ""
+  echo "Step 3/4: Full app health check..."
+  if ! bot_compose run --rm bot python -m app.main --doctor; then
+    echo "" >&2
+    echo "Full app health check failed. Fix the issue above, then run ./scripts/app/guided_start.sh again." >&2
+    exit 1
+  fi
+}
+
+bot_is_running() {
+  local status=""
+  status="$(bot_compose ps -a --format '{{.Status}}' bot 2>/dev/null | head -n 1 | tr -d '\r' || true)"
+  case "$status" in
+    Up*|running*|Running*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 print_box_wrapped_line() {
   local text="$1"
   while IFS= read -r line; do
@@ -265,7 +272,7 @@ if grep -qE '^\s*BOT_DATABASE_URL=.*postgres' "$BOT_ENV_FILE" 2>/dev/null; then
 fi
 
 echo ""
-echo "Step 1/3: Bot image for $env_provider..."
+echo "Step 1/4: Bot image for $env_provider..."
 need_build=0
 if ! docker image inspect "octopus-agent:$env_provider" >/dev/null 2>&1; then
   need_build=1
@@ -284,7 +291,7 @@ else
 fi
 
 echo ""
-echo "Step 2/3: Provider auth..."
+echo "Step 2/4: Provider auth..."
 if ./scripts/provider/provider_status.sh >/dev/null 2>&1; then
   echo "Provider already authenticated."
 else
@@ -297,13 +304,15 @@ else
   fi
 fi
 
+run_full_health_check_or_exit
+
 echo ""
-echo "Step 3/3: Starting bot (background service)..."
+echo "Step 4/4: Starting bot (background service)..."
 ./scripts/app/start_instance.sh "$INSTANCE"
 
 echo "Waiting a few seconds to confirm the bot stayed up..."
 sleep 5
-if bot_compose ps -a --format '{{.Status}}' bot 2>/dev/null | grep -q Exited; then
+if ! bot_is_running; then
   print_startup_failure_help
   exit 1
 fi
@@ -311,7 +320,6 @@ fi
 mode_display="$(grep -E '^\s*BOT_AGENT_MODE=' "$BOT_ENV_FILE" 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)"
 registry_url_display="$(grep -E '^\s*BOT_AGENT_REGISTRY_URL=' "$BOT_ENV_FILE" 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)"
 registry_ui_display="$(build_registry_ui_display_url "$registry_url_display")"
-bot_version_display="$(tr -d '\r' < "$REPO_DIR/VERSION" 2>/dev/null || true)"
 
 echo ""
 if [ "$_USED_QUICK_SETUP" -eq 1 ]; then
@@ -322,9 +330,6 @@ fi
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  Bot is running!                                            ║"
 echo "║                                                              ║"
-if [ -n "$bot_version_display" ]; then
-  printf "║  • Bot version: %-45s║\n" "$bot_version_display"
-fi
 echo "║  • Open Telegram and message your bot to start.             ║"
 if [ "$mode_display" = "registry" ] && [ -n "$registry_ui_display" ]; then
   printf "║  • Registry UI:%-46s║\n" ""

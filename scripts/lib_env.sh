@@ -22,6 +22,67 @@ current_bot_instance() {
   esac
 }
 
+print_channel_setup_help() {
+  local channel="${1:-telegram}"
+  case "$channel" in
+    telegram)
+      cat >&2 <<'EOF'
+You need a Telegram bot token before the bot can start.
+
+  Step 1: Open BotFather in Telegram:
+          https://t.me/BotFather
+
+  Step 2: Send:    /newbot
+  Step 3: Pick a display name, e.g.  My Product Bot
+  Step 4: Pick a username ending in 'bot', e.g.  my_product_bot
+  Step 5: BotFather replies with your token. Copy the full token here.
+
+If you already created the bot, paste the token now.
+EOF
+      ;;
+    *)
+      echo "Unsupported channel '$channel' in print_channel_setup_help" >&2
+      return 1
+      ;;
+  esac
+}
+
+channel_token_looks_plausible() {
+  local channel="${1:-telegram}" value="${2:-}"
+  case "$channel" in
+    telegram)
+      [[ "$value" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+prompt_channel_token_with_help() {
+  local channel="${1:-telegram}" prompt_label="${2:-Paste your bot token here}" token=""
+  print_channel_setup_help "$channel"
+  while true; do
+    read -r -p "$prompt_label: " token || true
+    if [ -z "$token" ]; then
+      echo "Token is required. Try again." >&2
+      continue
+    fi
+    if telegram_token_is_placeholder "$token"; then
+      echo "That still looks like a placeholder token." >&2
+      echo "Copy the full token from BotFather and try again." >&2
+      continue
+    fi
+    if ! channel_token_looks_plausible "$channel" "$token"; then
+      echo "Token format looks wrong." >&2
+      echo "Telegram tokens look like digits:letters from BotFather." >&2
+      continue
+    fi
+    printf '%s' "$token"
+    return 0
+  done
+}
+
 check_env_bot_required() {
   local env_file="${1:-$(current_bot_env_file)}"
   if [ ! -f "$env_file" ]; then

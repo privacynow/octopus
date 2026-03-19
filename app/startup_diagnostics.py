@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import re
 from typing import Final
 
 import httpx
@@ -23,6 +25,61 @@ _PLACEHOLDER_TOKENS: Final[frozenset[str]] = frozenset(
         "0:test_token_not_real",
     }
 )
+_TELEGRAM_URL_TOKEN_RE: Final[re.Pattern[str]] = re.compile(
+    r"(https://api\.telegram\.org/bot)(\d+:[A-Za-z0-9_-]{20,})",
+)
+_TELEGRAM_TOKEN_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b\d+:[A-Za-z0-9_-]{20,}\b",
+)
+_SANITIZED_TOKEN: Final[str] = "<redacted-telegram-token>"
+
+
+def redact_sensitive_startup_text(text: str) -> str:
+    """Redact Telegram bot tokens from operator-visible strings."""
+    redacted = _TELEGRAM_URL_TOKEN_RE.sub(rf"\1{_SANITIZED_TOKEN}", text)
+    return _TELEGRAM_TOKEN_RE.sub(_SANITIZED_TOKEN, redacted)
+
+
+def _sanitize_log_args(args):
+    if isinstance(args, tuple):
+        return tuple(
+            redact_sensitive_startup_text(arg) if isinstance(arg, str) else arg
+            for arg in args
+        )
+    if isinstance(args, dict):
+        return {
+            key: redact_sensitive_startup_text(value) if isinstance(value, str) else value
+            for key, value in args.items()
+        }
+    if isinstance(args, str):
+        return redact_sensitive_startup_text(args)
+    return args
+
+
+class StartupLogRedactionFilter(logging.Filter):
+    """Remove token-bearing details from startup/runtime logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = redact_sensitive_startup_text(record.msg)
+        record.args = _sanitize_log_args(record.args)
+        if record.exc_info:
+            _exc_type, exc, _tb = record.exc_info
+            if isinstance(exc, InvalidToken):
+                record.msg = "Telegram startup failed: Telegram rejected TELEGRAM_BOT_TOKEN."
+                record.args = ()
+                record.exc_info = None
+        return True
+
+
+def configure_startup_logging() -> None:
+    """Sanitize startup logging before third-party libraries emit secrets."""
+    root = logging.getLogger()
+    for handler in root.handlers:
+        if not any(isinstance(f, StartupLogRedactionFilter) for f in handler.filters):
+            handler.addFilter(StartupLogRedactionFilter())
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def env_file_hint(instance: str) -> str:

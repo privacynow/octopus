@@ -91,3 +91,20 @@
   - the local registry network path is now real end-to-end, not just file-declared
   - the registry lifecycle uses `.deploy/registry/.env` as the only local registry config source
   - the singleton registry naming is cleaner and no longer repeats `registry` in generated container or volume names
+- Complete: Slice 5 early Telegram token validation.
+  Scope:
+  - added `telegram_token_format_valid()` to `scripts/lib/bot.sh` for a fast format gate before any network work
+  - added `validate_telegram_token()` to `scripts/lib/bot.sh` using a Python `urllib` helper fed by stdin instead of putting the token in command args
+  - updated the helper contract to return the Telegram identity triple: `id`, `username`, and `first_name`
+  Tests:
+  - `bash -n scripts/lib/bot.sh`
+  - `.venv/bin/python -m pytest -q tests/test_octopus_token_validation.py`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified the helper can be faked in tests to return a valid identity triple without exposing the token in the child `python3` argv
+  - verified rejected-token paths return nonzero and produce no helper output
+  - verified a live `ps` scan during validation did not show the test token string in process args
+  Verified:
+  - Telegram token validation now happens with a dedicated helper that is safe to call before any Docker or provider work
+  - the identity fields needed by later `./octopus` flows are now available from a single `getMe` call
+  - the token-leak constraint is covered by both positive and negative tests, not just by code inspection

@@ -6,6 +6,9 @@ from app.providers.base import PreflightContext, RunResult
 from app.storage import default_session, save_session
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
+    current_bot_instance,
+    current_execution_runtime,
+    current_runtime,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -41,7 +44,7 @@ async def test_approval_flow():
         user = FakeUser(42)
         update = FakeUpdate(message=msg, user=user, chat=chat)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_message(update, FakeContext())
         await drain_one_worker_item(data_dir)
@@ -55,13 +58,13 @@ async def test_approval_flow():
         assert len(prov.preflight_calls[0]["prompt"]) > 0
 
         # Worker sends approval UI via bot
-        bot_texts = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
+        bot_texts = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "Approval plan" in bot_texts or "Plan:" in bot_texts
         assert "Approve this plan?" in bot_texts or "Approve" in bot_texts
 
         # Verify approval buttons (worker sends via bot)
         cb_values = []
-        for m in th._bot_instance.sent_messages:
+        for m in current_bot_instance().sent_messages:
             cb_values = get_callback_data_values(m)
             if "approval_approve" in cb_values:
                 break
@@ -94,7 +97,7 @@ async def test_approval_wording():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -141,20 +144,20 @@ async def test_denial_retry_flow():
         user = FakeUser(42)
         update = FakeUpdate(message=msg, user=user, chat=chat)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_message(update, FakeContext())
         await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
         # Worker sends via bot
-        reply_texts = " ".join(m.get("text", "") for m in th._bot_instance.sent_messages)
+        reply_texts = " ".join(m.get("text", "") for m in current_bot_instance().sent_messages)
         assert "partial" in reply_texts
         assert "Permission needed" in reply_texts or "Grant access" in reply_texts or "retry" in reply_texts.lower()
 
         # Verify retry buttons (worker sends via bot)
         retry_cbs = []
-        for m in th._bot_instance.sent_messages:
+        for m in current_bot_instance().sent_messages:
             retry_cbs = get_callback_data_values(m)
             if retry_cbs:
                 break
@@ -208,7 +211,7 @@ async def test_retry_skip():
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_callback(cb_update, FakeContext())
 
@@ -240,7 +243,7 @@ async def test_retry_allow_no_pending():
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_callback(cb_update, FakeContext())
 
@@ -272,7 +275,7 @@ async def test_stale_context_hash():
         cb_update = FakeUpdate(user=user, chat=chat, callback_query=query)
         cb_update.effective_message = cb_msg
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_callback(cb_update, FakeContext())
 
@@ -295,7 +298,7 @@ async def test_cross_user_approval():
         prov.run_results = [RunResult(text="Done")]
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         alice = FakeUser(uid=100, username="alice")
@@ -337,7 +340,7 @@ async def test_approval_preflight_timeout():
         user = FakeUser(42)
         update = FakeUpdate(message=msg, user=user, chat=chat)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_message(update, FakeContext())
         await drain_one_worker_item(data_dir)
@@ -364,7 +367,7 @@ async def test_approval_preflight_error():
         user = FakeUser(42)
         update = FakeUpdate(message=msg, user=user, chat=chat)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_message(update, FakeContext())
         await drain_one_worker_item(data_dir)
@@ -383,7 +386,7 @@ async def test_duplicate_pending_blocked():
         prov.preflight_results = [RunResult(text="Plan 1"), RunResult(text="Plan 2")]
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -415,7 +418,7 @@ async def test_denial_preserves_request_user_id():
         ]
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         alice = FakeUser(uid=100, username="alice")
@@ -438,7 +441,7 @@ async def test_cancel_pending():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -473,7 +476,7 @@ async def test_cancel_nothing_to_cancel():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         from app.user_messages import nothing_to_cancel
 
         chat = FakeChat(12345)
@@ -496,7 +499,7 @@ async def test_approve_no_pending_shows_canonical_message():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         from app.user_messages import approval_no_pending_approve
 
         chat = FakeChat(12345)
@@ -517,7 +520,7 @@ async def test_reject_no_pending_shows_canonical_message():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         from app.user_messages import approval_no_pending_reject
 
         chat = FakeChat(12345)
@@ -538,7 +541,7 @@ async def test_approve_callback_no_pending_shows_canonical_message():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         from app.user_messages import approval_no_pending_approve
 
         chat = FakeChat(12345)
@@ -560,7 +563,7 @@ async def test_reject_callback_no_pending_shows_canonical_message():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         from app.user_messages import approval_no_pending_reject
 
         chat = FakeChat(12345)
@@ -581,7 +584,8 @@ async def test_stale_pending_ttl():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.execution as telegram_execution
+        from app.channels.telegram.pending import approve_pending
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -598,7 +602,14 @@ async def test_stale_pending_ttl():
         save_session(data_dir, telegram_conversation_key(12345), session)
 
         msg = FakeMessage(chat=chat, text="")
-        await th.approve_pending(12345, msg)
+        await approve_pending(
+            12345,
+            msg,
+            runtime=telegram_execution.build_pending_runtime(
+                current_runtime(),
+                execution_runtime=current_execution_runtime(),
+            ),
+        )
 
         reply = " ".join(r.get("text", "") for r in msg.replies)
         assert "expired" in reply.lower()
@@ -624,7 +635,7 @@ async def test_approval_with_project_active():
         prov.run_results = [RunResult(text="Done")]
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -689,7 +700,7 @@ async def test_retry_with_project_active():
         ]
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -730,7 +741,7 @@ async def test_retry_with_project_active():
 
 async def test_approval_after_session_reset():
     """Approve callback after /new should not execute stale request."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)
@@ -756,7 +767,7 @@ async def test_retry_callback_without_pending():
         chat = FakeChat(chat_id=1001)
         user = FakeUser(uid=42, username="testuser")
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         query, _ = await send_callback(th.handle_callback, chat, user, "retry_approve:/tmp/dir")
         assert query.answered
         assert len(prov.run_calls) == 0
@@ -764,7 +775,7 @@ async def test_retry_callback_without_pending():
 
 async def test_role_change_invalidates_pending_approval():
     """Changing role while approval is pending must invalidate it."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=1001)

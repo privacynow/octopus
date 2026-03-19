@@ -8,7 +8,7 @@ from typing import Any
 
 from app import work_queue_postgres_impl
 from app.runtime_health import QueueSnapshot, WorkerHeartbeat
-from app.transport_contract import CancelRequestResult, DiscardResult
+from app.workflows.recovery.transport_contract import CancelRequestResult, DiscardResult
 
 
 class PostgresTransportStore:

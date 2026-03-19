@@ -23,6 +23,10 @@ from pathlib import Path
 
 import pytest
 
+from app.channels.telegram.session_io import (
+    load as telegram_load_session,
+    save as telegram_save_session,
+)
 from app.execution_context import (
     ResolvedExecutionContext,
     _compute_execution_config_digest,
@@ -40,7 +44,7 @@ from app.session_state import (
     session_from_dict,
     session_to_dict,
 )
-from app.skills import get_provider_config_digest, get_skill_digests
+from tests.support.skill_test_helpers import get_provider_config_digest, get_skill_digests
 from app.storage import default_session, save_session
 from tests.support.config_support import make_config as _make_config
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
@@ -56,6 +60,7 @@ from tests.support.handler_support import (
     drain_one_worker_item,
     fresh_data_dir,
     fresh_env,
+    current_runtime,
     last_reply,
     load_session_disk,
     make_config,
@@ -100,7 +105,7 @@ async def test_approval_hash_round_trip(combo):
         prov.run_results = [RunResult(text="Done")]
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -164,7 +169,7 @@ async def test_retry_hash_round_trip(combo):
         ]
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -238,7 +243,7 @@ async def test_approval_detects_stale_context(change):
         prov.run_results = [RunResult(text="Done")]
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -353,7 +358,7 @@ async def test_inspect_mode_always_readonly(provider_config):
 # =====================================================================
 # ResolvedContext is the single source of truth
 #
-# _resolve_context(session).context_hash must always equal what
+# telegram.execution.resolve_context(session).context_hash must always equal what
 # execute_request and request_approval would compute.
 # =====================================================================
 
@@ -368,7 +373,8 @@ async def test_resolve_context_matches_all_paths():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.execution as telegram_execution
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -390,8 +396,8 @@ async def test_resolve_context_matches_all_paths():
         session_dict = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         session = session_from_dict(session_dict)
 
-        # Path 1: handler adapter (_resolve_context)
-        handler_hash = th._resolve_context(session).context_hash
+        # Path 1: telegram execution adapter
+        handler_hash = telegram_execution.resolve_context(current_runtime(), session).context_hash
 
         # Path 2: authoritative builder directly
         direct_hash = resolve_execution_context(session, cfg, prov.name).context_hash
@@ -539,11 +545,11 @@ def test_session_round_trip_no_pending():
 
 
 # =====================================================================
-# resolve_execution_context produces same hash as _resolve_context
+# resolve_execution_context produces the same hash as telegram.execution.resolve_context
 # =====================================================================
 
 async def test_resolve_execution_context_matches_handler_adapter():
-    """resolve_execution_context must produce same hash as handler _resolve_context."""
+    """resolve_execution_context must produce same hash as telegram execution resolve_context."""
     with fresh_data_dir() as data_dir:
         project_dir = tempfile.mkdtemp()
         cfg = make_config(
@@ -553,7 +559,7 @@ async def test_resolve_execution_context_matches_handler_adapter():
         prov = FakeProvider("codex")
         setup_globals(cfg, prov)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -575,7 +581,9 @@ async def test_resolve_execution_context_matches_handler_adapter():
         # Get hash via handler adapter
         session_dict = load_session_disk(data_dir, telegram_conversation_key(12345), prov)
         typed = session_from_dict(session_dict)
-        handler_hash = th._resolve_context(typed).context_hash
+        import app.channels.telegram.execution as telegram_execution
+
+        handler_hash = telegram_execution.resolve_context(current_runtime(), typed).context_hash
 
         # Get hash via authoritative builder
         direct_hash = resolve_execution_context(typed, cfg, prov.name).context_hash
@@ -627,7 +635,7 @@ async def test_configured_extra_dirs_forwarded_to_provider():
         chat = FakeChat(12345)
         user = FakeUser(42)
 
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         await th.handle_message(
             FakeUpdate(message=FakeMessage(chat=chat, text="hello"), user=user, chat=chat),
@@ -792,10 +800,10 @@ def test_project_extra_dirs_folded_into_resolved_context():
     with fresh_env(config_overrides={
         "projects": (("myproj", "/tmp/myproj", ("/tmp/proj-extra",)),),
     }) as (data_dir, cfg, prov):
-        import app.telegram_handlers as th
-        session = th._load(8006)
+        import app.channels.telegram.ingress as th
+        session = telegram_load_session(current_runtime(), 8006)
         session.project_id = "myproj"
-        th._save(8006, session)
+        telegram_save_session(current_runtime(), 8006, session)
 
         resolved = resolve_execution_context(session, cfg, "claude")
         assert "/tmp/proj-extra" in resolved.base_extra_dirs, (
@@ -986,8 +994,15 @@ def test_phantom_profile_not_displayed_when_no_profiles_configured():
         project_id="fe",
     )
 
-    # Import the display helper
-    import app.telegram_handlers as th
-    available, current = th._settings_model_profile_state(session, cfg, "trusted", cfg.model)
+    from app.runtime import composition
+
+    state = composition.workflows().conversation.settings.model_profile_state(
+        session,
+        cfg,
+        "trusted",
+        cfg.model,
+    )
+    available = list(state.available_profiles)
+    current = state.current_profile
     assert available == []
     assert current == "(default)", f"Expected '(default)' but got '{current}'"

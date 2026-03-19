@@ -25,14 +25,20 @@ from pathlib import Path
 
 import pytest
 
+import app.channels.telegram.worker as telegram_worker
+from app.channels.telegram.session_io import (
+    load as telegram_load_session,
+    save as telegram_save_session,
+)
 from app.providers.base import (
     RunResult,
 )
 from app.progress import render as render_progress
 from app.providers.codex import CodexProvider
-from app.storage import default_session, save_session
+from app.storage import close_db, default_session, ensure_data_dirs, save_session
 from app.work_queue import debug_transport_connection
 from tests.support.config_support import make_config as _make_config
+from tests.support.handler_support import current_bot_instance, current_execution_runtime, current_runtime
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeCallbackQuery,
@@ -82,75 +88,39 @@ def _event(value):
 # =====================================================================
 
 def test_registry_digest_mismatch_leaves_no_residue():
-    """Digest mismatch must not leave refs, objects, or staging dirs."""
-    import http.server
-    import json
-    import shutil
-    import tarfile
-    import threading
-
-    from app.registry import RegistrySkill
-    from app.store import (
-        OBJECTS_DIR, REFS_DIR, TMP_DIR,
-        ensure_managed_dirs, install_from_registry, read_ref,
-    )
+    """Digest mismatch must not create any runtime skill track or summary."""
+    import app.content_store as content_store_mod
+    from app.content_store import get_content_store, init_content_store_for_config
+    from app.skill_catalog_service import get_skill_catalog_service
+    from app.skill_import_service import get_skill_import_service
+    from tests.support.runtime_skill_registry import FakeRuntimeSkillRegistry
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
+        data_dir = tmp_path / "data"
+        ensure_data_dirs(data_dir)
+        content_store_mod.reset_for_test()
+        cfg = make_config(data_dir=data_dir, registry_url="https://registry.example.test/index.json")
+        init_content_store_for_config(cfg)
+        registry = FakeRuntimeSkillRegistry(tmp_path / "registry", registry_url=cfg.registry_url)
+        registry.add_skill("tampered-skill", body="Tampered", digest="0" * 64)
 
-        # Create skill and tarball
-        skill_src = tmp_path / "skill_src"
-        skill_src.mkdir()
-        (skill_src / "skill.md").write_text("---\ndisplay_name: Bad\n---\nTampered")
-
-        tarball = tmp_path / "skill.tar.gz"
-        with tarfile.open(tarball, "w:gz") as tf:
-            for item in skill_src.iterdir():
-                tf.add(item, arcname=item.name)
-
-        handler = http.server.SimpleHTTPRequestHandler
-        try:
-            server = http.server.HTTPServer(
-                ("127.0.0.1", 0),
-                lambda *args, directory=tmp, **kwargs: handler(*args, directory=directory, **kwargs),
-            )
-        except PermissionError as exc:
-            pytest.skip(f"Local HTTPServer bind not permitted in this environment: {exc}")
-        port = server.server_address[1]
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        from unittest.mock import patch
 
         try:
-            ensure_managed_dirs()
-            objects_before = set(OBJECTS_DIR.iterdir()) if OBJECTS_DIR.is_dir() else set()
+            before = {item.slug for item in get_content_store().list_skill_summaries()}
+            with patch("app.skill_import_service.registry_client.fetch_index", registry.fetch_index):
+                with patch("app.skill_import_service.registry_client.download_artifact", registry.download_artifact):
+                    result = get_skill_import_service().install_from_registry("tampered-skill", cfg.registry_url)
 
-            reg_skill = RegistrySkill(
-                name="tampered-skill",
-                display_name="Tampered",
-                description="Bad digest",
-                version="1.0",
-                publisher="attacker",
-                digest="0" * 64,
-                artifact_url=f"http://127.0.0.1:{port}/skill.tar.gz",
-            )
-            ok, msg = install_from_registry("tampered-skill", reg_skill)
-            assert not ok
-            assert "mismatch" in msg.lower()
-
-            # Contract: no ref
-            assert read_ref("tampered-skill") is None
-
-            # Contract: no new objects
-            objects_after = set(OBJECTS_DIR.iterdir()) if OBJECTS_DIR.is_dir() else set()
-            assert objects_after - objects_before == set()
-
-            # Contract: no staging dirs left
-            staging_dirs = [
-                d for d in TMP_DIR.iterdir()
-                if d.is_dir() and "tampered" in d.name
-            ] if TMP_DIR.is_dir() else []
-            assert staging_dirs == []
+            assert result.ok is False
+            assert "digest mismatch" in result.message.lower()
+            assert get_skill_catalog_service().resolve_track("tampered-skill") is None
+            assert get_content_store().list_skill_tracks("tampered-skill") == []
+            assert {item.slug for item in get_content_store().list_skill_summaries()} == before
         finally:
-            server.shutdown()
+            close_db(data_dir)
+            content_store_mod.reset_for_test()
 
 
 # =====================================================================
@@ -162,6 +132,7 @@ def test_registry_digest_mismatch_leaves_no_residue():
 
 async def test_registry_search_does_not_block_event_loop():
     """Slow registry fetch must not prevent another command from running."""
+    import contextlib
     import unittest.mock
 
     with fresh_data_dir() as data_dir:
@@ -169,7 +140,9 @@ async def test_registry_search_does_not_block_event_loop():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        import app.skill_commands as sc
+        import app.channels.telegram.runtime_skills as sc
+        from app.credential_validation import validate_credential
+        from app.runtime.inbound_types import InboundCommand, InboundUser
 
         # Track whether another coroutine can run during the registry fetch
         other_ran = False
@@ -195,12 +168,33 @@ async def test_registry_search_does_not_block_event_loop():
 
         from unittest.mock import patch
 
-        fake_event = type("FakeEvent", (), {"chat_id": 12345, "user": user, "args": []})()
+        fake_event = InboundCommand(
+            user=InboundUser(id=telegram_actor_key(42), username=user.username),
+            conversation_key=telegram_conversation_key(12345),
+            command="skills",
+        )
 
-        with patch("app.skill_commands.asyncio.to_thread", side_effect=slow_to_thread):
+        @contextlib.asynccontextmanager
+        async def noop_chat_lock(*args, **kwargs):
+            del args, kwargs
+            yield False
+
+        runtime = sc.TelegramRuntimeSkillsRuntime(
+            state=current_runtime(),
+            chat_lock=noop_chat_lock,
+            validate_credential=validate_credential,
+            check_prompt_size_cross_chat=lambda data_dir, skill_name: [],
+        )
+
+        with patch("app.channels.telegram.runtime_skills.asyncio.to_thread", side_effect=slow_to_thread):
             with patch("app.registry.fetch_index", side_effect=slow_fetch_index):
                 search_task = asyncio.create_task(
-                    sc.skills_search(fake_event, FakeUpdate(message=msg, user=user, chat=chat), "test")
+                    sc.skills_search(
+                        fake_event,
+                        FakeUpdate(message=msg, user=user, chat=chat),
+                        "test",
+                        runtime=runtime,
+                    )
                 )
                 other_task = asyncio.create_task(other_command())
 
@@ -279,7 +273,7 @@ async def test_doctor_no_public_warnings_when_closed():
 
 async def test_duplicate_update_id_skipped():
     """Same update_id should be processed only once."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         prov.run_results = [RunResult(text="first"), RunResult(text="second")]
@@ -305,7 +299,7 @@ async def test_duplicate_update_id_skipped():
 
 async def test_duplicate_update_id_skipped_for_commands():
     """Same update_id on a decorated command should be processed only once."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=8002)
@@ -330,7 +324,7 @@ async def test_duplicate_update_id_skipped_for_commands():
 
 async def test_duplicate_update_id_skipped_for_help():
     """Same update_id on /help (non-decorated handler) should be processed only once."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=8004)
@@ -354,7 +348,7 @@ async def test_duplicate_update_id_skipped_for_help():
 
 async def test_duplicate_update_id_skipped_for_callbacks():
     """Same update_id on a callback should be processed only once."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
     from tests.support.handler_support import send_callback
 
     with fresh_env() as (data_dir, cfg, prov):
@@ -498,7 +492,7 @@ async def test_doctor_conflict_check_survives_network_error():
 @pytest.mark.asyncio
 async def test_doctor_reports_prompt_weight():
     """/doctor shows prompt weight when session has a role (non-empty system prompt)."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         session = default_session(prov.name, prov.new_provider_state(), "off")
@@ -516,7 +510,7 @@ async def test_doctor_reports_prompt_weight():
 @pytest.mark.asyncio
 async def test_doctor_prompt_weight_uses_resolved_context():
     """Public user's /doctor prompt weight reflects resolved (stripped) context, not raw session."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -549,27 +543,21 @@ async def test_doctor_prompt_weight_uses_resolved_context():
 
 
 @pytest.mark.asyncio
-async def test_chat_lock_sends_message_feedback_when_locked():
-    """_chat_lock sends visible queued feedback via message when lock is held."""
-    import app.telegram_handlers as th
+async def test_cmd_new_sends_message_feedback_when_chat_locked():
+    """Contended command handlers show visible queued feedback through the public handler boundary."""
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(1)
-        msg = FakeMessage(chat=chat)
+        user = FakeUser(next(iter(cfg.allowed_user_ids)))
 
-        lock = th.CHAT_LOCKS[1]
+        lock = current_runtime().chat_locks[1]
         await lock.acquire()
         try:
-            # _chat_lock should send feedback then block; run in a task
-            # so we can release the lock
-            async def use_lock():
-                async with th._chat_lock(1, message=msg):
-                    pass
-
-            task = asyncio.create_task(use_lock())
-            await asyncio.sleep(0)  # let the task start and hit the lock
+            task = asyncio.create_task(send_command(th.cmd_new, chat, user, "/new"))
+            await asyncio.sleep(0)
             lock.release()
-            await task
+            msg = await task
 
             all_text = " ".join(str(r.get("text", "")) for r in msg.replies)
             assert "already running" in all_text.lower() or "cancel" in all_text.lower(), (
@@ -580,48 +568,17 @@ async def test_chat_lock_sends_message_feedback_when_locked():
 
 
 @pytest.mark.asyncio
-async def test_chat_lock_sends_callback_feedback_when_locked():
-    """_chat_lock sends visible queued feedback via callback answer when lock is held."""
-    import app.telegram_handlers as th
+async def test_cmd_new_has_no_busy_feedback_when_lock_free():
+    """Uncontended command handlers do not emit queued feedback."""
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
-        query = FakeCallbackQuery("test", message=FakeMessage(chat=FakeChat(1)))
-
-        lock = th.CHAT_LOCKS[1]
-        await lock.acquire()
-        try:
-            yielded = None
-            async def use_lock():
-                nonlocal yielded
-                async with th._chat_lock(1, query=query) as sent:
-                    yielded = sent
-
-            task = asyncio.create_task(use_lock())
-            await asyncio.sleep(0)
-            lock.release()
-            await task
-
-            assert yielded is True, "Expected _chat_lock to yield True when lock was held"
-            assert query.answers, "Expected callback answer for queued feedback"
-            assert any("already running" in str(a.get("text", "")).lower() or "cancel" in str(a.get("text", "")).lower() for a in query.answers), (
-                f"Expected busy feedback in callback answer, got: {query.answers}")
-        finally:
-            if lock.locked():
-                lock.release()
-
-
-@pytest.mark.asyncio
-async def test_chat_lock_no_feedback_when_free():
-    """_chat_lock does NOT send feedback when lock is free."""
-    import app.telegram_handlers as th
-
-    with fresh_env() as (data_dir, cfg, prov):
-        msg = FakeMessage(chat=FakeChat(1))
-
-        async with th._chat_lock(1, message=msg) as sent:
-            assert sent is False, "Expected _chat_lock to yield False when lock was free"
+        chat = FakeChat(1)
+        user = FakeUser(next(iter(cfg.allowed_user_ids)))
+        msg = await send_command(th.cmd_new, chat, user, "/new")
 
         all_text = " ".join(str(r.get("text", "")) for r in msg.replies)
+        assert "already running" not in all_text.lower()
         assert "queued" not in all_text.lower()
 
 
@@ -637,26 +594,27 @@ async def test_chat_lock_no_feedback_when_free():
 @pytest.mark.asyncio
 async def test_contended_approval_callback_single_answer():
     """Approval callback under contention produces exactly one callback answer."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.execution as telegram_execution
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 1
         chat = FakeChat(chat_id)
         user = FakeUser(next(iter(cfg.allowed_user_ids)))
-        session = th._load(chat_id)
+        session = telegram_load_session(current_runtime(), chat_id)
         from app.session_state import PendingApproval
-        ctx_hash = th._resolve_context(session).context_hash
+        ctx_hash = telegram_execution.resolve_context(current_runtime(), session).context_hash
         session.pending_approval = PendingApproval(
             request_user_id=_actor(user.id), prompt="test", image_paths=[],
             attachment_dicts=[], context_hash=ctx_hash,
             created_at=0, trust_tier="trusted",
         )
-        th._save(chat_id, session)
+        telegram_save_session(current_runtime(), chat_id, session)
 
         from app.providers.base import RunResult
         prov.run_results.append(RunResult(text="done"))
 
-        lock = th.CHAT_LOCKS[chat_id]
+        lock = current_runtime().chat_locks[chat_id]
         await lock.acquire()
         try:
             async def contended_approve():
@@ -680,16 +638,16 @@ async def test_contended_approval_callback_single_answer():
 @pytest.mark.asyncio
 async def test_contended_settings_callback_single_answer():
     """Settings callback under contention produces exactly one callback answer."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 1
         chat = FakeChat(chat_id)
         user = FakeUser(next(iter(cfg.allowed_user_ids)))
-        session = th._load(chat_id)
-        th._save(chat_id, session)
+        session = telegram_load_session(current_runtime(), chat_id)
+        telegram_save_session(current_runtime(), chat_id, session)
 
-        lock = th.CHAT_LOCKS[chat_id]
+        lock = current_runtime().chat_locks[chat_id]
         await lock.acquire()
         try:
             async def contended_settings():
@@ -713,16 +671,16 @@ async def test_contended_settings_callback_single_answer():
 @pytest.mark.asyncio
 async def test_contended_clear_cred_callback_single_answer():
     """Clear-credentials callback under contention produces exactly one callback answer."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat_id = 1
         chat = FakeChat(chat_id)
         user = FakeUser(next(iter(cfg.allowed_user_ids)))
-        session = th._load(chat_id)
-        th._save(chat_id, session)
+        session = telegram_load_session(current_runtime(), chat_id)
+        telegram_save_session(current_runtime(), chat_id, session)
 
-        lock = th.CHAT_LOCKS[chat_id]
+        lock = current_runtime().chat_locks[chat_id]
         await lock.acquire()
         try:
             async def contended_clear():
@@ -755,7 +713,7 @@ async def test_same_chat_overlapping_updates_complete_correctly():
     so the second update overwrote the first's entry and the first item was
     left queued forever.
     """
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         prov.run_results = [RunResult(text="reply1"), RunResult(text="reply2")]
@@ -821,8 +779,8 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
     with Replay/Discard buttons instead of auto-replaying through the
     provider.  The item transitions to pending_recovery and PendingRecovery
     is raised so worker_loop skips completion."""
-    import app.telegram_handlers as th
-    from app.transport import InboundMessage, InboundUser
+    import app.channels.telegram.ingress as th
+    from app.runtime.inbound_types import InboundMessage, InboundUser
     from app.work_queue import PendingRecovery, record_and_enqueue
 
     with fresh_env(config_overrides={
@@ -854,7 +812,13 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
             }
 
             with pytest.raises(PendingRecovery):
-                await th.worker_dispatch("message", event, item)
+                await telegram_worker.worker_dispatch(
+                    "message",
+                    event,
+                    item,
+                    runtime=current_runtime(),
+                    execution_runtime=current_execution_runtime(),
+                )
 
             # Provider must NOT have been called — no auto-replay.
             assert len(prov.run_calls) == 0, (
@@ -893,7 +857,7 @@ class _StickyReplyMessage(FakeMessage):
 
 @pytest.mark.asyncio
 async def test_interrupted_message_run_stays_claimed_for_recovery():
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
     from app.work_queue import recover_stale_claims
 
     with fresh_env() as (data_dir, cfg, prov):
@@ -907,7 +871,7 @@ async def test_interrupted_message_run_stays_claimed_for_recovery():
         await drain_one_worker_item(data_dir)
 
         assert len(prov.run_calls) == 1
-        bot = th._bot_instance
+        bot = current_bot_instance()
         joined = " ".join(
             entry.get("text", entry.get("edit_text", "")) for entry in bot.sent_messages
         )
@@ -955,7 +919,7 @@ async def test_interrupted_message_run_stays_claimed_for_recovery():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rc", [-2, -6, -9, -15])
 async def test_any_signal_treated_as_interrupted(rc):
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         prov.run_results = [RunResult(text="killed", returncode=rc)]
@@ -968,7 +932,7 @@ async def test_any_signal_treated_as_interrupted(rc):
         await drain_one_worker_item(data_dir)
 
         # No error surfaced to user (worker sends via bot)
-        bot = th._bot_instance
+        bot = current_bot_instance()
         joined = " ".join(
             entry.get("text", entry.get("edit_text", "")) for entry in bot.sent_messages
         )
@@ -992,7 +956,7 @@ async def test_any_signal_treated_as_interrupted(rc):
 
 @pytest.mark.asyncio
 async def test_provider_error_empty_output_still_shows_message():
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         prov.run_results = [RunResult(text="", returncode=1)]
@@ -1004,7 +968,7 @@ async def test_provider_error_empty_output_still_shows_message():
         await th.handle_message(upd, FakeContext())
         await drain_one_worker_item(data_dir)
 
-        bot = th._bot_instance
+        bot = current_bot_instance()
         joined = " ".join(
             entry.get("text", entry.get("edit_text", "")) for entry in bot.sent_messages
         )
@@ -1014,7 +978,7 @@ async def test_provider_error_empty_output_still_shows_message():
 
 @pytest.mark.asyncio
 async def test_provider_error_long_output_truncated():
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         long_error = "E" * 5000
@@ -1028,7 +992,7 @@ async def test_provider_error_long_output_truncated():
         await drain_one_worker_item(data_dir)
 
         # Verify user got feedback (not silent); worker sends via bot
-        bot = th._bot_instance
+        bot = current_bot_instance()
         joined = " ".join(
             entry.get("text", entry.get("edit_text", "")) for entry in bot.sent_messages
         )
@@ -1046,7 +1010,7 @@ async def test_provider_error_long_output_truncated():
 
 @pytest.mark.asyncio
 async def test_global_error_handler_suppresses_stale_callback():
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
     from telegram.error import BadRequest
 
     handler = th._global_error_handler
@@ -1063,7 +1027,7 @@ async def test_global_error_handler_suppresses_stale_callback():
 async def test_global_error_handler_notifies_user_on_unknown_error():
     """The handler tries to notify via context.bot — if the update isn't a
     real telegram.Update it gracefully skips notification without raising."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     class FakeErrorContext:
         error = RuntimeError("unexpected boom")
@@ -1076,7 +1040,7 @@ async def test_global_error_handler_notifies_user_on_unknown_error():
 @pytest.mark.asyncio
 async def test_global_error_handler_sends_message_on_real_update():
     """When given a real Update with effective_chat, the handler sends feedback."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
     from telegram import Update, Chat, Message, User as TgUser
 
     sent_messages = []
@@ -1110,9 +1074,10 @@ async def test_global_error_handler_sends_message_on_real_update():
 # =====================================================================
 
 @pytest.mark.asyncio
-async def test_command_exception_marks_work_item_failed():
+async def test_command_exception_marks_work_item_failed(monkeypatch):
     """A command handler that raises must leave the work item as failed."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
+    from app.channels.telegram import session_io as telegram_session_io
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=9500)
@@ -1120,17 +1085,12 @@ async def test_command_exception_marks_work_item_failed():
         msg = FakeMessage(chat=chat, text="/session")
         upd = FakeUpdate(message=msg, user=user, chat=chat)
 
-        # Patch _load to raise inside cmd_session
-        original_load = th._load
-        def exploding_load(chat_id):
+        def exploding_load(_runtime, chat_id):
             raise RuntimeError("session DB corrupt")
 
-        th._load = exploding_load
-        try:
-            with pytest.raises(RuntimeError, match="session DB corrupt"):
-                await th.cmd_session(upd, FakeContext())
-        finally:
-            th._load = original_load
+        monkeypatch.setattr(telegram_session_io, "load", exploding_load)
+        with pytest.raises(RuntimeError, match="session DB corrupt"):
+            await th.cmd_session(upd, FakeContext())
 
         conn = debug_transport_connection(data_dir)
         row = conn.execute(
@@ -1141,9 +1101,10 @@ async def test_command_exception_marks_work_item_failed():
 
 
 @pytest.mark.asyncio
-async def test_callback_exception_marks_work_item_failed():
+async def test_callback_exception_marks_work_item_failed(monkeypatch):
     """A callback handler that raises must leave the work item as failed."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
+    from app.channels.telegram import conversation as telegram_conversation
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=9501)
@@ -1153,16 +1114,12 @@ async def test_callback_exception_marks_work_item_failed():
                                   user=user)
         upd = FakeUpdate(callback_query=query, user=user, chat=chat)
 
-        original_load = th._load
-        def exploding_load(chat_id):
+        async def exploding_handler(event, query, *, runtime):
             raise RuntimeError("session DB corrupt")
 
-        th._load = exploding_load
-        try:
-            with pytest.raises(RuntimeError, match="session DB corrupt"):
-                await th.handle_settings_callback(upd, FakeContext())
-        finally:
-            th._load = original_load
+        monkeypatch.setattr(telegram_conversation, "handle_settings_callback", exploding_handler)
+        with pytest.raises(RuntimeError, match="session DB corrupt"):
+            await th.handle_settings_callback(upd, FakeContext())
 
         conn = debug_transport_connection(data_dir)
         row = conn.execute(
@@ -1175,13 +1132,13 @@ async def test_callback_exception_marks_work_item_failed():
 # =====================================================================
 # INVARIANT 36: Error summarizer subprocess is cleaned up on timeout
 #
-# _format_provider_error spawns a subprocess for summarization.
+# summarize.format_provider_error spawns a subprocess for summarization.
 # If it times out, the child must be killed and reaped, not leaked.
 # =====================================================================
 
 @pytest.mark.asyncio
 async def test_format_provider_error_kills_subprocess_on_timeout():
-    import app.telegram_handlers as th
+    import app.summarize as summarize_mod
 
     killed = []
 
@@ -1203,7 +1160,7 @@ async def test_format_provider_error_kills_subprocess_on_timeout():
     asyncio.create_subprocess_exec = mock_exec
     try:
         # Long text triggers summarization attempt
-        result = await th._format_provider_error("E" * 5000, 1)
+        result = await summarize_mod.format_provider_error("E" * 5000, 1)
     finally:
         asyncio.create_subprocess_exec = mock_exec
         asyncio.create_subprocess_exec = original
@@ -1223,9 +1180,10 @@ async def test_format_provider_error_kills_subprocess_on_timeout():
 # =====================================================================
 
 @pytest.mark.asyncio
-async def test_callback_none_event_completes_work_item():
+async def test_callback_none_event_completes_work_item(monkeypatch):
     """When normalize_callback returns None, the work item must be completed (not leaked)."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
+    from app.channels.telegram import normalization as telegram_normalization
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(chat_id=9600)
@@ -1235,13 +1193,8 @@ async def test_callback_none_event_completes_work_item():
             user=FakeUser(uid=42, username="testuser"), chat=chat,
         )
 
-        # Patch the symbol the handler actually imports
-        original = th.normalize_callback
-        th.normalize_callback = lambda update: None
-        try:
-            await th.handle_settings_callback(upd, FakeContext())
-        finally:
-            th.normalize_callback = original
+        monkeypatch.setattr(telegram_normalization, "normalize_callback", lambda update: None)
+        await th.handle_settings_callback(upd, FakeContext())
 
         conn = debug_transport_connection(data_dir)
         row = conn.execute(
@@ -1261,13 +1214,13 @@ async def test_callback_none_event_completes_work_item():
 async def test_initial_status_no_provider_name_claude():
     """Worker path: Claude shows 'Working...' not 'Starting claude...'."""
     with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
         await send_text(chat, user, "hello")
         await drain_one_worker_item(data_dir)
 
-        bot = th._bot_instance
+        bot = current_bot_instance()
         texts = [m.get("text", "") for m in bot.sent_messages if m.get("text")]
         working = next((t for t in texts if "Working" in t), "")
         assert working.replace("\u2026", "...") == "Working..."
@@ -1277,13 +1230,13 @@ async def test_initial_status_no_provider_name_claude():
 async def test_initial_status_no_provider_name_codex():
     """Worker path: Codex shows 'Working...' not 'Starting codex...'."""
     with fresh_env(provider_name="codex") as (data_dir, cfg, prov):
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
         await send_text(chat, user, "hello")
         await drain_one_worker_item(data_dir)
 
-        bot = th._bot_instance
+        bot = current_bot_instance()
         texts = [m.get("text", "") for m in bot.sent_messages if m.get("text")]
         working = next((t for t in texts if "Working" in t), "")
         assert working.replace("\u2026", "...") == "Working..."
@@ -1293,7 +1246,7 @@ async def test_initial_status_no_provider_name_codex():
 async def test_resume_status_no_provider_name():
     """Resuming a session shows 'Resuming...' not 'Resuming claude...' (worker path)."""
     with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
 
@@ -1307,7 +1260,7 @@ async def test_resume_status_no_provider_name():
         await send_text(chat, user, "second")
         await drain_one_worker_item(data_dir)
 
-        bot = th._bot_instance
+        bot = current_bot_instance()
         texts = [m.get("text", "") for m in bot.sent_messages if m.get("text")]
         resuming = next((t for t in texts if "Resuming" in t), "")
         assert resuming.replace("\u2026", "...") == "Resuming..."
@@ -1316,7 +1269,7 @@ async def test_resume_status_no_provider_name():
 
 async def test_timeout_message_no_provider_name():
     """Timeout shows 'Request timed out' not 'claude timed out' (worker path)."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
     from tests.support.handler_support import bot_texts
 
     with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
@@ -1327,7 +1280,7 @@ async def test_timeout_message_no_provider_name():
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
 
-        timeout_text = " ".join(bot_texts(th._bot_instance))
+        timeout_text = " ".join(bot_texts(current_bot_instance()))
         assert "Request timed out" in timeout_text
         assert "claude" not in timeout_text.lower()
         assert "codex" not in timeout_text.lower()
@@ -1335,7 +1288,7 @@ async def test_timeout_message_no_provider_name():
 
 async def test_terminal_status_says_completed():
     """Successful run shows 'Completed.' not 'Done.' (worker path)."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
     from tests.support.handler_support import bot_texts
 
     with fresh_env() as (data_dir, cfg, prov):
@@ -1345,7 +1298,7 @@ async def test_terminal_status_says_completed():
         await th.handle_message(FakeUpdate(message=msg, user=user, chat=chat), FakeContext())
         await drain_one_worker_item(data_dir)
 
-        all_text = " ".join(bot_texts(th._bot_instance))
+        all_text = " ".join(bot_texts(current_bot_instance()))
         assert "Completed." in all_text, f"Expected 'Completed.' in bot output: {all_text}"
         assert "Done." not in all_text, f"'Done.' should not appear: {all_text}"
 
@@ -1434,15 +1387,15 @@ async def test_codex_compaction_wording():
 
 async def test_heartbeat_fires_on_idle():
     """Heartbeat updates progress after the initial delay when no content arrives."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.progress as telegram_progress
     from unittest.mock import patch
 
     progress = FakeProgress()
     content_started = progress.content_started
 
-    with patch.object(th, "_HEARTBEAT_FIRST", 0.05), \
-         patch.object(th, "_HEARTBEAT_SUBSEQUENT", 0.05):
-        task = asyncio.create_task(th._heartbeat(progress, content_started))
+    with patch.object(telegram_progress, "_HEARTBEAT_FIRST", 0.05), \
+         patch.object(telegram_progress, "_HEARTBEAT_SUBSEQUENT", 0.05):
+        task = asyncio.create_task(telegram_progress.heartbeat(progress, content_started))
         await asyncio.sleep(0.2)  # Let a few beats fire
         task.cancel()
         await task
@@ -1455,15 +1408,15 @@ async def test_heartbeat_fires_on_idle():
 
 async def test_heartbeat_stops_when_content_starts():
     """Heartbeat stops firing once content_started event is set."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.progress as telegram_progress
     from unittest.mock import patch
 
     progress = FakeProgress()
     content_started = progress.content_started
 
-    with patch.object(th, "_HEARTBEAT_FIRST", 0.05), \
-         patch.object(th, "_HEARTBEAT_SUBSEQUENT", 0.05):
-        task = asyncio.create_task(th._heartbeat(progress, content_started))
+    with patch.object(telegram_progress, "_HEARTBEAT_FIRST", 0.05), \
+         patch.object(telegram_progress, "_HEARTBEAT_SUBSEQUENT", 0.05):
+        task = asyncio.create_task(telegram_progress.heartbeat(progress, content_started))
         await asyncio.sleep(0.1)  # Let at least one beat fire
         count_before = len(progress.updates)
         assert count_before >= 1
@@ -1482,14 +1435,14 @@ async def test_heartbeat_stops_when_content_starts():
 
 async def test_heartbeat_cancelled_on_completion():
     """Heartbeat task is cancelled cleanly without raising."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.progress as telegram_progress
     from unittest.mock import patch
 
     progress = FakeProgress()
     content_started = progress.content_started
 
-    with patch.object(th, "_HEARTBEAT_FIRST", 10.0):
-        task = asyncio.create_task(th._heartbeat(progress, content_started))
+    with patch.object(telegram_progress, "_HEARTBEAT_FIRST", 10.0):
+        task = asyncio.create_task(telegram_progress.heartbeat(progress, content_started))
         await asyncio.sleep(0.01)
         task.cancel()
         # Should not raise — CancelledError is caught internally
@@ -1595,15 +1548,15 @@ async def test_codex_sets_content_started_on_draft():
 
 async def test_heartbeat_respects_recent_progress():
     """Heartbeat does not overwrite a recent non-content progress update."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.progress as telegram_progress
     from unittest.mock import patch
 
     progress = FakeProgress()
     content_started = progress.content_started
 
-    with patch.object(th, "_HEARTBEAT_FIRST", 0.05), \
-         patch.object(th, "_HEARTBEAT_SUBSEQUENT", 0.10):
-        task = asyncio.create_task(th._heartbeat(progress, content_started))
+    with patch.object(telegram_progress, "_HEARTBEAT_FIRST", 0.05), \
+         patch.object(telegram_progress, "_HEARTBEAT_SUBSEQUENT", 0.10):
+        task = asyncio.create_task(telegram_progress.heartbeat(progress, content_started))
 
         # Wait for first heartbeat to potentially fire
         await asyncio.sleep(0.07)
@@ -1628,17 +1581,17 @@ async def test_heartbeat_respects_recent_progress():
 
 async def test_approval_initial_status_neutral():
     """request_approval sends neutral 'Preparing approval...' not internal terminology."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         chat = FakeChat(12345)
         user = FakeUser(uid=42)
         await send_text(chat, user, "do work with approval")
         await drain_one_worker_item(data_dir)
 
         # In approval mode, worker sends approval status via bot
-        bot = th._bot_instance
+        bot = current_bot_instance()
         texts = [m.get("text", m.get("edit_text", "")) for m in bot.sent_messages if m.get("text") or m.get("edit_text")]
         initial_text = " ".join(texts[:2])  # first send + maybe first edit
         assert "preflight" not in initial_text.lower(), (
@@ -1656,7 +1609,7 @@ async def test_approval_no_preflight_in_any_user_text():
     are visible in the reply chain, not just the initial reply_text calls.
     Positive assertion proves the test actually observes the status edit path.
     """
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
         chat = FakeChat(12345)
@@ -1666,7 +1619,7 @@ async def test_approval_no_preflight_in_any_user_text():
         await th.handle_message(upd, FakeContext())
         await drain_one_worker_item(data_dir)
 
-        bot = th._bot_instance
+        bot = current_bot_instance()
         all_texts = []
         edit_texts = []
         for m in bot.sent_messages:
@@ -1696,7 +1649,7 @@ async def test_approval_error_no_preflight():
     are visible in the reply chain. Positive assertion proves the test
     observes the error edit path.
     """
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(config_overrides={"approval_mode": "on"}) as (data_dir, cfg, prov):
         prov.preflight_results = [RunResult(text="", returncode=1)]
@@ -1707,7 +1660,7 @@ async def test_approval_error_no_preflight():
         await th.handle_message(upd, FakeContext())
         await drain_one_worker_item(data_dir)
 
-        bot = th._bot_instance
+        bot = current_bot_instance()
         all_texts = []
         edit_texts = []
         for m in bot.sent_messages:
@@ -1736,12 +1689,12 @@ async def test_content_first_update_bypasses_rate_limit():
     content_started fires and the first text update arrives within the
     rate-limit window.  Without the fix, the text is silently dropped.
     """
-    import app.telegram_handlers as th
+    import app.channels.telegram.progress as telegram_progress
 
     msg = FakeMessage()
     cfg_overrides = {"stream_update_interval_seconds": 1.0}
     with fresh_env(config_overrides=cfg_overrides) as (data_dir, cfg, prov):
-        progress = th.TelegramProgress(msg, cfg)
+        progress = telegram_progress.TelegramProgress(msg, cfg)
         progress.content_started = asyncio.Event()
 
         # Forced tool update — sets last_update to now
@@ -1779,8 +1732,8 @@ async def test_content_first_update_bypasses_rate_limit():
 async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
     """worker_dispatch for a disallowed user returns normally without
     sending a recovery notice — the item completes silently."""
-    import app.telegram_handlers as th
-    from app.transport import InboundMessage, InboundUser
+    import app.channels.telegram.ingress as th
+    from app.runtime.inbound_types import InboundMessage, InboundUser
 
     with fresh_env(config_overrides={
         "allowed_user_ids": frozenset({99}),  # user 42 is not allowed
@@ -1802,7 +1755,13 @@ async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
             }
 
             # Should return normally (not raise PendingRecovery)
-            await th.worker_dispatch("message", event, item)
+            await telegram_worker.worker_dispatch(
+                "message",
+                event,
+                item,
+                runtime=current_runtime(),
+                execution_runtime=current_execution_runtime(),
+            )
 
             # No notice sent, no provider call
             assert len(bot.sent) == 0
@@ -1815,8 +1774,8 @@ async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
 async def test_worker_dispatch_command_still_notifies():
     """worker_dispatch for InboundCommand still sends a notification
     that the command was lost (commands are not replay-safe)."""
-    import app.telegram_handlers as th
-    from app.transport import InboundCommand, InboundUser
+    import app.channels.telegram.ingress as th
+    from app.runtime.inbound_types import InboundCommand, InboundUser
 
     with fresh_env(config_overrides={
         "allowed_user_ids": frozenset({42}),
@@ -1836,7 +1795,13 @@ async def test_worker_dispatch_command_still_notifies():
                 "id": "cmd-item",
             }
 
-            await th.worker_dispatch("command", event, item)
+            await telegram_worker.worker_dispatch(
+                "command",
+                event,
+                item,
+                runtime=current_runtime(),
+                execution_runtime=current_execution_runtime(),
+            )
 
             # Notification about interrupted command
             cmd_msgs = [s for s in bot.sent if "interrupted" in s.get("text", "")]
@@ -1859,7 +1824,7 @@ async def test_worker_dispatch_command_still_notifies():
 @pytest.mark.asyncio
 async def test_claude_resume_error_resets_provider_state():
     """Claude resume failure resets started/session_id so next request is fresh."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
         # First request succeeds — sets started=True
@@ -1876,7 +1841,7 @@ async def test_claude_resume_error_resets_provider_state():
         assert len(prov.run_calls) == 1
 
         # Verify session now has started=True
-        session = th._load(5001)
+        session = telegram_load_session(current_runtime(), 5001)
         assert session.provider_state["started"] is True
 
         # Second request: provider signals resume target is dead
@@ -1887,7 +1852,7 @@ async def test_claude_resume_error_resets_provider_state():
         await drain_one_worker_item(data_dir)
 
         # Session must be reset to fresh state
-        session = th._load(5001)
+        session = telegram_load_session(current_runtime(), 5001)
         assert session.provider_state["started"] is False, (
             "started should be reset after resume error"
         )
@@ -1896,7 +1861,7 @@ async def test_claude_resume_error_resets_provider_state():
         assert "session_id" in session.provider_state
 
         # Verify user got the "start fresh" / "starts fresh" message (worker sends via bot)
-        bot = th._bot_instance
+        bot = current_bot_instance()
         all_text = " ".join(
             r.get("text", r.get("edit_text", "")) for r in bot.sent_messages
         )
@@ -1922,15 +1887,15 @@ async def test_claude_resume_error_resets_provider_state():
 @pytest.mark.asyncio
 async def test_codex_resume_error_still_clears_thread():
     """Codex resume error still clears thread_id (existing behavior preserved)."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(provider_name="codex") as (data_dir, cfg, prov):
         # Simulate a session with an existing thread_id
-        session = th._load(6001)
+        session = telegram_load_session(current_runtime(), 6001)
         session.provider_state["thread_id"] = "t-existing"
         session.provider_state["context_hash"] = "hash1"
         session.provider_state["boot_id"] = "test-boot"
-        th._save(6001, session)
+        telegram_save_session(current_runtime(), 6001, session)
 
         # Provider fails with non-zero rc
         prov.run_results = [RunResult(text="codex error", returncode=1)]
@@ -1941,7 +1906,7 @@ async def test_codex_resume_error_still_clears_thread():
         await th.handle_message(upd, FakeContext())
         await drain_one_worker_item(data_dir)
 
-        session = th._load(6001)
+        session = telegram_load_session(current_runtime(), 6001)
         assert session.provider_state["thread_id"] is None, (
             "Codex thread_id should be cleared on resume error"
         )
@@ -1954,7 +1919,7 @@ async def test_claude_generic_error_during_resume_does_not_reset():
     This is the false-positive test: resume_failed is False, so the session
     should keep its started=True and session_id intact for the next retry.
     """
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_env(provider_name="claude") as (data_dir, cfg, prov):
         # First request succeeds — sets started=True
@@ -1969,7 +1934,7 @@ async def test_claude_generic_error_during_resume_does_not_reset():
         await th.handle_message(upd1, FakeContext())
         await drain_one_worker_item(data_dir)
 
-        session = th._load(7001)
+        session = telegram_load_session(current_runtime(), 7001)
         assert session.provider_state["started"] is True
         old_session_id = session.provider_state["session_id"]
 
@@ -1981,7 +1946,7 @@ async def test_claude_generic_error_during_resume_does_not_reset():
         await drain_one_worker_item(data_dir)
 
         # Session must NOT be reset — still started=True with same session_id
-        session = th._load(7001)
+        session = telegram_load_session(current_runtime(), 7001)
         assert session.provider_state["started"] is True, (
             "Generic error should not reset started flag"
         )
@@ -1990,7 +1955,7 @@ async def test_claude_generic_error_during_resume_does_not_reset():
         )
 
         # "starts fresh" message should NOT appear (worker sends via bot)
-        bot = th._bot_instance
+        bot = current_bot_instance()
         all_text = " ".join(
             r.get("text", r.get("edit_text", "")) for r in bot.sent_messages
         )

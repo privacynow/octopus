@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 from app import work_queue
-from app.agents.orchestration import (
-    apply_routed_result,
-    build_resume_prompt,
-    delegation_ready_to_resume,
-    send_delegation_completion_message,
-)
 from app.agents.bridge import (
     admit_registry_delivery,
     build_registry_action_envelope,
@@ -20,10 +17,61 @@ from app.agents.bridge import (
 )
 from app.agents.types import RoutedTaskResult
 from app.config import BotConfig
-from app.transports import factory
-from app.transports.admission import enqueue_inbound_envelope, record_inbound_envelope
+from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
+from app.channel_egress_factory import create_channel_egress
+from app.runtime import composition
+from app.runtime.session_runtime import load_runtime_session, save_runtime_session
+from app.skill_activation_service import get_skill_activation_service
+from app.workflows.delegation.coordination import apply_routed_result, send_delegation_completion_message
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RegistryDeliveryRuntime:
+    provider_name: str
+    provider_state_factory: Callable[[], dict[str, Any]]
+    bot: Any | None = None
+
+
+def build_registry_delivery_runtime(
+    *,
+    provider_name: str,
+    provider_state_factory: Callable[[], dict[str, Any]],
+    bot: Any | None = None,
+) -> RegistryDeliveryRuntime:
+    return RegistryDeliveryRuntime(
+        provider_name=provider_name,
+        provider_state_factory=provider_state_factory,
+        bot=bot,
+    )
+
+
+def _load_session(
+    config: BotConfig,
+    runtime: RegistryDeliveryRuntime,
+    conversation_key: str,
+):
+    session = load_runtime_session(
+        config.data_dir,
+        conversation_key,
+        provider_name=runtime.provider_name,
+        provider_state_factory=runtime.provider_state_factory,
+        approval_mode=config.approval_mode,
+        default_role=config.role,
+        default_skills=config.default_skills,
+    )
+    if get_skill_activation_service().normalize(session):
+        _save_session(config, conversation_key, session)
+    return session
+
+
+def _save_session(
+    config: BotConfig,
+    conversation_key: str,
+    session,
+) -> None:
+    save_runtime_session(config.data_dir, conversation_key, session)
 
 
 def _registry_semantic_action(
@@ -36,7 +84,7 @@ def _registry_semantic_action(
     semantic = {
         "approve": "approve_pending",
         "reject": "reject_pending",
-        "cancel": "cancel_conversation",
+        "cancel_conversation": "cancel_conversation",
         "retry_skip": "retry_skip",
         "retry_allow": "retry_allow",
         "approve_delegation": "delegation_approve",
@@ -63,18 +111,21 @@ def _registry_semantic_action(
     )
 
 
-async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object]) -> str:
+async def handle_registry_delivery(
+    config: BotConfig,
+    delivery: dict[str, object],
+    *,
+    runtime: RegistryDeliveryRuntime,
+) -> str:
     kind = str(delivery.get("kind", ""))
     delivery_id = str(delivery.get("delivery_id", ""))
-    if kind in {"surface_input", "routed_task"}:
+    if kind in {"channel_input", "routed_task"}:
         return await admit_registry_delivery(config, delivery)
 
     payload = delivery.get("payload", {})
     if not isinstance(payload, dict):
         return "rejected"
-    from app import telegram_handlers as th
-
-    if kind == "surface_action":
+    if kind == "channel_action":
         conversation_ref = str(payload.get("conversation_ref", "") or payload.get("conversation_id", ""))
         if not conversation_ref:
             return "rejected"
@@ -93,7 +144,7 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
         )
         if envelope is None:
             return "rejected"
-        if action == "cancel":
+        if action == "cancel_conversation":
             is_new = record_inbound_envelope(config.data_dir, envelope)
             if not is_new:
                 return "accepted"
@@ -111,36 +162,6 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
                 )
             return "accepted"
         enqueue_inbound_envelope(config.data_dir, envelope)
-        return "accepted"
-
-    if kind == "control":
-        conversation_ref = str(payload.get("conversation_ref", "") or payload.get("conversation_id", ""))
-        if not conversation_ref:
-            return "rejected"
-        action = str(payload.get("action", "")).lower()
-        envelope = _registry_semantic_action(
-            conversation_ref=conversation_ref,
-            action=action,
-            payload={},
-            delivery_id=delivery_id,
-        )
-        if envelope is None:
-            return "rejected"
-        is_new = record_inbound_envelope(config.data_dir, envelope)
-        if not is_new:
-            return "accepted"
-        result = work_queue.request_cancel(
-            config.data_dir,
-            envelope.conversation_key,
-            envelope.actor_key,
-            cancel_request_event_id=envelope.event_id,
-        )
-        if result == work_queue.CancelRequestResult.nothing_to_cancel:
-            work_queue.enqueue_work_item(
-                config.data_dir,
-                envelope.conversation_key,
-                envelope.event_id,
-            )
         return "accepted"
 
     if kind == "routed_result":
@@ -168,23 +189,26 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
             metadata={"routed_task_id": routed_task_id},
             event_id=f"delegated-result:{routed_task_id}",
         )
-        if getattr(th, "_config", None) is None or getattr(th, "_provider", None) is None:
+        channel_name = composition.conversation_channel_name(parent_conversation_id)
+        if channel_name == "telegram" and runtime.bot is None:
             return "retry_later"
         conversation_key = conversation_key_for_ref(parent_conversation_id)
-        session = th._load(conversation_key)
-        pending, matched = apply_routed_result(
+        session = _load_session(config, runtime, conversation_key)
+        applied = apply_routed_result(
             session.pending_delegation,
             routed_task_id=routed_task_id,
             result=routed_result,
         )
-        if not matched:
+        if not applied.matched:
             return "accepted"
-        session.pending_delegation = pending
-        th._save(conversation_key, session)
-        if not delegation_ready_to_resume(pending):
+        session.pending_delegation = applied.pending
+        _save_session(config, conversation_key, session)
+        if not applied.ready_to_resume or applied.pending is None:
             return "accepted"
-        continuation_text = build_resume_prompt(pending)
-        resume_delivery_id = f"delegation-resume:{parent_conversation_id}:{int(pending.created_at * 1000)}"
+        continuation_text = applied.resume_prompt
+        resume_delivery_id = (
+            f"delegation-resume:{parent_conversation_id}:{int(applied.pending.created_at * 1000)}"
+        )
         conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
             conversation_ref=parent_conversation_id,
             text=continuation_text,
@@ -201,15 +225,15 @@ async def handle_registry_delivery(config: BotConfig, delivery: dict[str, object
             serialized,
         )
         if admit_status == "admitted":
-            surface = factory.create_outbound_surface(
+            channel_egress = create_channel_egress(
                 parent_conversation_id,
                 config=config,
-                bot=th._bot_instance,
+                bot=runtime.bot,
                 conversation_key=conversation_key,
                 source="registry",
             )
             try:
-                await send_delegation_completion_message(pending, surface)
+                await send_delegation_completion_message(applied.pending, channel_egress)
             except Exception:
                 log.warning(
                     "Failed to send delegation completion summary for %s",

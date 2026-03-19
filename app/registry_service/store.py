@@ -12,9 +12,14 @@ from pathlib import Path
 from typing import Any
 
 from app.agents.types import TimelineEvent
+from app.capability_service import (
+    declared_capabilities,
+    query_capabilities,
+    requested_routed_capabilities,
+)
 from app.registry_service.store_base import (
     AbstractRegistryStore,
-    SkillDisabledError,
+    CapabilityDisabledError,
     conversation_status_for_event,
     decode_json_field,
     effective_connectivity_state,
@@ -25,7 +30,7 @@ from app.registry_service.store_base import (
     utcnow_iso,
 )
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 _BASE_SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -49,7 +54,7 @@ CREATE TABLE IF NOT EXISTS agents (
     connectivity_state TEXT NOT NULL DEFAULT 'standalone',
     current_capacity INTEGER NOT NULL DEFAULT 0,
     max_capacity INTEGER NOT NULL DEFAULT 1,
-    surface_capabilities_json TEXT NOT NULL DEFAULT '[]',
+    channel_capabilities_json TEXT NOT NULL DEFAULT '[]',
     version TEXT NOT NULL DEFAULT '',
     runtime_health_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
@@ -92,7 +97,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     conversation_id TEXT PRIMARY KEY,
     target_agent_id TEXT NOT NULL,
     title TEXT NOT NULL DEFAULT '',
-    origin_surface TEXT NOT NULL DEFAULT 'registry',
+    origin_channel TEXT NOT NULL DEFAULT 'registry',
     status TEXT NOT NULL DEFAULT 'open',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -229,6 +234,41 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             """
         )
 
+    def _table_columns(self, conn: sqlite3.Connection, table_name: str) -> set[str]:
+        return {
+            row["name"]
+            for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+
+    def _migrate_v4_channel_vocabulary(self, conn: sqlite3.Connection) -> None:
+        agent_columns = self._table_columns(conn, "agents")
+        if (
+            "surface_capabilities_json" in agent_columns
+            and "channel_capabilities_json" not in agent_columns
+        ):
+            conn.execute(
+                """
+                ALTER TABLE agents
+                RENAME COLUMN surface_capabilities_json TO channel_capabilities_json
+                """
+            )
+
+        conversation_columns = self._table_columns(conn, "conversations")
+        if "origin_surface" in conversation_columns and "origin_channel" not in conversation_columns:
+            conn.execute(
+                """
+                ALTER TABLE conversations
+                RENAME COLUMN origin_surface TO origin_channel
+                """
+            )
+
+        conn.execute(
+            "UPDATE deliveries SET kind = 'channel_input' WHERE kind = 'surface_input'"
+        )
+        conn.execute(
+            "UPDATE deliveries SET kind = 'channel_action' WHERE kind = 'surface_action'"
+        )
+
     def _run_migrations(self, conn: sqlite3.Connection) -> None:
         current = self._current_schema_version(conn)
         if current > _SCHEMA_VERSION:
@@ -248,6 +288,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
         if current < 3:
             self._migrate_v3_runtime_health(conn)
             self._set_schema_version(conn, 3)
+            conn.commit()
+            current = 3
+        if current < 4:
+            self._migrate_v4_channel_vocabulary(conn)
+            self._set_schema_version(conn, 4)
             conn.commit()
 
     def _ensure_unique_slug(self, conn: sqlite3.Connection, requested: str) -> str:
@@ -270,7 +315,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "display_name": row["display_name"],
             "slug": row["slug"],
             "role": row["role"],
-            "skills": decode_json_field(row["skills_json"], []),
+            "capabilities": decode_json_field(row["skills_json"], []),
             "tags": decode_json_field(row["tags_json"], []),
             "description": row["description"],
             "provider": row["provider"],
@@ -278,7 +323,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "connectivity_state": effective_state,
             "current_capacity": row["current_capacity"],
             "max_capacity": row["max_capacity"],
-            "surface_capabilities": decode_json_field(row["surface_capabilities_json"], []),
+            "channel_capabilities": decode_json_field(row["channel_capabilities_json"], []),
             "version": row["version"],
             "last_heartbeat_at": row["last_heartbeat_at"],
             "updated_at": row["updated_at"],
@@ -476,7 +521,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     agent_id, agent_token, display_name, slug, role,
                     skills_json, tags_json, description, provider, mode,
                     connectivity_state, current_capacity, max_capacity,
-                    surface_capabilities_json, version, created_at, updated_at, last_heartbeat_at
+                    channel_capabilities_json, version, created_at, updated_at, last_heartbeat_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
@@ -485,7 +530,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     requested_card.get("display_name") or slug,
                     slug,
                     requested_card.get("role", ""),
-                    ensure_json(requested_card.get("skills", [])),
+                    ensure_json(declared_capabilities(requested_card)),
                     ensure_json(requested_card.get("tags", [])),
                     requested_card.get("description", ""),
                     requested_card.get("provider", ""),
@@ -493,7 +538,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     requested_card.get("connectivity_state", "degraded"),
                     int(requested_card.get("current_capacity", 0)),
                     max(1, int(requested_card.get("max_capacity", 1))),
-                    ensure_json(requested_card.get("surface_capabilities", [])),
+                    ensure_json(requested_card.get("channel_capabilities", [])),
                     requested_card.get("version", ""),
                     now,
                     now,
@@ -519,14 +564,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 UPDATE agents
                 SET display_name = ?, role = ?, skills_json = ?, tags_json = ?,
                     description = ?, provider = ?, mode = ?, connectivity_state = ?,
-                    current_capacity = ?, max_capacity = ?, surface_capabilities_json = ?,
+                    current_capacity = ?, max_capacity = ?, channel_capabilities_json = ?,
                     version = ?, updated_at = ?, last_heartbeat_at = ?
                 WHERE agent_token = ?
                 """,
                 (
                     card.get("display_name", row["display_name"]),
                     card.get("role", row["role"]),
-                    ensure_json(card.get("skills", [])),
+                    ensure_json(declared_capabilities(card)),
                     ensure_json(card.get("tags", [])),
                     card.get("description", row["description"]),
                     card.get("provider", row["provider"]),
@@ -534,7 +579,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     payload.get("connectivity_state", row["connectivity_state"]),
                     int(payload.get("current_capacity", 0)),
                     max(1, int(payload.get("max_capacity", 1))),
-                    ensure_json(card.get("surface_capabilities", [])),
+                    ensure_json(card.get("channel_capabilities", [])),
                     card.get("version", row["version"]),
                     now,
                     now,
@@ -644,27 +689,27 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             conn.execute(
                 """
                 INSERT INTO conversations (
-                    conversation_id, target_agent_id, title, origin_surface, status, created_at, updated_at
+                    conversation_id, target_agent_id, title, origin_channel, status, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, 'open', ?, ?)
                 ON CONFLICT(conversation_id) DO UPDATE SET
                     target_agent_id = excluded.target_agent_id,
                     title = excluded.title,
-                    origin_surface = excluded.origin_surface,
+                    origin_channel = excluded.origin_channel,
                     updated_at = excluded.updated_at
                 """,
                 (
                     payload["conversation_id"],
                     row["agent_id"],
                     payload.get("title", ""),
-                    payload.get("origin_surface", "telegram"),
+                    payload.get("origin_channel", "telegram"),
                     now,
                     now,
                 ),
             )
         return self.get_conversation(payload["conversation_id"])
 
-    def get_skill_override(self, skill_name: str) -> bool | None:
-        normalized = skill_name.strip().lower()
+    def get_capability_override(self, capability_name: str) -> bool | None:
+        normalized = capability_name.strip().lower()
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT enabled FROM skills_override WHERE lower(skill_name) = ?",
@@ -674,8 +719,8 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             return None
         return bool(row["enabled"])
 
-    def set_skill_override(self, skill_name: str, enabled: bool, set_by: str = "ui") -> None:
-        normalized = skill_name.strip().lower()
+    def set_capability_override(self, capability_name: str, enabled: bool, set_by: str = "ui") -> None:
+        normalized = capability_name.strip().lower()
         with self._connect() as conn:
             conn.execute(
                 """
@@ -690,7 +735,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             )
             conn.commit()
 
-    def list_skills(self) -> list[dict[str, Any]]:
+    def list_capabilities(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             offline_before = self._offline_before()
             declared_rows = conn.execute(
@@ -704,14 +749,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     END != 'offline'
                 ),
                 declared AS (
-                    SELECT lower(je.value) AS skill_key, je.value AS skill_name, live_agents.slug
+                    SELECT lower(je.value) AS capability_key, je.value AS capability_name, live_agents.slug
                     FROM live_agents
                     JOIN json_each(live_agents.skills_json) AS je
                 )
-                SELECT skill_key, MIN(skill_name) AS skill_name, GROUP_CONCAT(DISTINCT slug) AS declared_by_agents
+                SELECT capability_key, MIN(capability_name) AS capability_name, GROUP_CONCAT(DISTINCT slug) AS declared_by_agents
                 FROM declared
-                GROUP BY skill_key
-                ORDER BY skill_key
+                GROUP BY capability_key
+                ORDER BY capability_key
                 """
                 ,
                 (offline_before,),
@@ -726,11 +771,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
 
         merged: dict[str, dict[str, Any]] = {}
         for row in declared_rows:
-            skill_name = row["skill_name"]
+            capability_name = row["capability_name"]
             item = merged.setdefault(
-                row["skill_key"],
+                row["capability_key"],
                 {
-                    "skill_name": skill_name,
+                    "capability_name": capability_name,
                     "declared_by_agents": sorted(
                         str(row["declared_by_agents"]).split(",")
                         if row["declared_by_agents"]
@@ -740,20 +785,20 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 },
             )
         for row in override_rows:
-            skill_name = row["skill_name"]
-            key = skill_name.lower()
+            capability_name = row["skill_name"]
+            key = capability_name.lower()
             item = merged.setdefault(
                 key,
                 {
-                    "skill_name": skill_name,
+                    "capability_name": capability_name,
                     "declared_by_agents": [],
                     "enabled": None,
                 },
             )
             item["enabled"] = bool(row["enabled"])
-        return sorted(merged.values(), key=lambda item: item["skill_name"].lower())
+        return sorted(merged.values(), key=lambda item: item["capability_name"].lower())
 
-    def _disabled_skills(self, conn: sqlite3.Connection) -> set[str]:
+    def _disabled_capabilities(self, conn: sqlite3.Connection) -> set[str]:
         rows = conn.execute(
             "SELECT skill_name FROM skills_override WHERE enabled = 0"
         ).fetchall()
@@ -762,14 +807,14 @@ class RegistrySQLiteStore(AbstractRegistryStore):
     def search_agents(self, query: dict[str, Any]) -> list[dict[str, Any]]:
         role = query.get("role", "").strip().lower()
         required_state = query.get("required_state", "connected")
-        skills = {s.lower() for s in query.get("skills", []) if s}
+        capabilities = query_capabilities(query)
         tags = {s.lower() for s in query.get("tags", []) if s}
         free_text = query.get("free_text", "").strip().lower()
         exclude = sorted(set(query.get("exclude_agent_ids", [])))
         with self._connect() as conn:
-            disabled_skills = self._disabled_skills(conn)
-            skills = skills - disabled_skills
-            if query.get("skills") and not skills:
+            disabled_capabilities = self._disabled_capabilities(conn)
+            capabilities = capabilities - disabled_capabilities
+            if (query.get("capabilities") or query.get("skills")) and not capabilities:
                 return []
             sql = [
                 """
@@ -797,7 +842,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             if role:
                 sql.append(" AND lower(role) LIKE ?")
                 params.append(f"%{role}%")
-            for skill in sorted(skills):
+            for capability in sorted(capabilities):
                 sql.append(
                     """
                     AND EXISTS (
@@ -807,7 +852,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     )
                     """
                 )
-                params.append(skill)
+                params.append(capability)
             for tag in sorted(tags):
                 sql.append(
                     """
@@ -902,9 +947,10 @@ class RegistrySQLiteStore(AbstractRegistryStore):
     def create_routed_task(self, request: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
         with self._connect() as conn:
-            requested_skill = str(request.get("skill") or "").strip()
-            if requested_skill and requested_skill.lower() in self._disabled_skills(conn):
-                raise SkillDisabledError(requested_skill)
+            disabled_capabilities = self._disabled_capabilities(conn)
+            for capability in requested_routed_capabilities(request):
+                if capability.lower() in disabled_capabilities:
+                    raise CapabilityDisabledError(capability)
             conn.execute(
                 """
                 INSERT INTO routed_tasks (
@@ -1136,7 +1182,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             conn.execute(
                 """
                 INSERT INTO conversations (
-                    conversation_id, target_agent_id, title, origin_surface, status, created_at, updated_at
+                    conversation_id, target_agent_id, title, origin_channel, status, created_at, updated_at
                 ) VALUES (?, ?, ?, 'registry', 'open', ?, ?)
                 """,
                 (conversation_id, target_agent_id, title, now, now),
@@ -1144,12 +1190,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             self._create_delivery(
                 conn,
                 target_agent_id=target_agent_id,
-                kind="surface_input",
+                kind="channel_input",
                 payload={
                     "conversation_id": conversation_id,
                     "title": title,
                     "text": message_text,
-                    "surface": "registry",
+                    "channel": "registry",
                 },
                 now=now,
                 delivery_id=uuid.uuid4().hex,
@@ -1159,32 +1205,9 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 conversation_id=conversation_id,
                 title="Conversation started",
                 body=message_text,
-                kind="surface_input",
+                kind="channel_input",
             )
         return self.get_conversation(conversation_id)
-
-    def publish_ui_timeline(
-        self,
-        *,
-        conversation_id: str,
-        title: str,
-        body: str,
-        kind: str,
-        status: str = "",
-        progress: int | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        with self._connect() as conn:
-            self._publish_ui_timeline_conn(
-                conn,
-                conversation_id=conversation_id,
-                title=title,
-                body=body,
-                kind=kind,
-                status=status,
-                progress=progress,
-                metadata=metadata,
-            )
 
     def list_conversations(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
@@ -1197,7 +1220,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 FROM conversations c
                 LEFT JOIN agents a ON a.agent_id = c.target_agent_id
                 LEFT JOIN timeline_events t ON t.conversation_id = c.conversation_id
-                GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_surface, c.status, c.created_at, c.updated_at, a.display_name
+                GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.status, c.created_at, c.updated_at, a.display_name
                 ORDER BY c.updated_at DESC
                 """
             ).fetchall()
@@ -1227,7 +1250,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 LEFT JOIN agents a ON a.agent_id = c.target_agent_id
                 LEFT JOIN timeline_events t ON t.conversation_id = c.conversation_id
                 WHERE c.conversation_id = ?
-                GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_surface, c.status, c.created_at, c.updated_at, a.display_name
+                GROUP BY c.conversation_id, c.target_agent_id, c.title, c.origin_channel, c.status, c.created_at, c.updated_at, a.display_name
                 """,
                 (conversation_id,),
             ).fetchone()
@@ -1361,12 +1384,12 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             self._create_delivery(
                 conn,
                 target_agent_id=conversation["target_agent_id"],
-                kind="surface_input",
+                kind="channel_input",
                 payload={
                     "conversation_id": conversation_id,
                     "title": conversation["title"],
                     "text": text,
-                    "surface": "registry",
+                    "channel": "registry",
                 },
                 now=now,
                 delivery_id=uuid.uuid4().hex,
@@ -1376,7 +1399,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 conversation_id=conversation_id,
                 title="User message",
                 body=text,
-                kind="surface_input",
+                kind="channel_input",
             )
         return {"conversation_id": conversation_id, "accepted": True}
 
@@ -1393,53 +1416,24 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             self._create_delivery(
                 conn,
                 target_agent_id=conversation["target_agent_id"],
-                kind="surface_action",
+                kind="channel_action",
                 payload={
                     "conversation_id": conversation_id,
                     "conversation_ref": conversation_id,
                     "action": action,
                     "payload": action_payload,
-                    "surface": "registry",
+                    "channel": "registry",
                 },
                 now=now,
                 delivery_id=uuid.uuid4().hex,
             )
+            is_cancel = action == "cancel_conversation"
             self._publish_ui_timeline_conn(
                 conn,
                 conversation_id=conversation_id,
-                title=f"Action: {action}",
-                body=json.dumps(action_payload) if action_payload else "",
-                kind="surface_action",
-            )
-        return {"conversation_id": conversation_id, "accepted": True}
-
-    def cancel_conversation(self, conversation_id: str) -> dict[str, Any]:
-        with self._connect() as conn:
-            conversation = conn.execute(
-                "SELECT target_agent_id FROM conversations WHERE conversation_id = ?",
-                (conversation_id,),
-            ).fetchone()
-            if conversation is None:
-                raise KeyError(conversation_id)
-            now = utcnow_iso()
-            self._create_delivery(
-                conn,
-                target_agent_id=conversation["target_agent_id"],
-                kind="control",
-                payload={
-                    "conversation_id": conversation_id,
-                    "action": "cancel",
-                    "surface": "registry",
-                },
-                now=now,
-                delivery_id=uuid.uuid4().hex,
-            )
-            self._publish_ui_timeline_conn(
-                conn,
-                conversation_id=conversation_id,
-                title="Cancel requested",
-                body="",
-                kind="control",
+                title="Cancel requested" if is_cancel else f"Action: {action}",
+                body="" if is_cancel else json.dumps(action_payload) if action_payload else "",
+                kind="control" if is_cancel else "channel_action",
             )
         return {"conversation_id": conversation_id, "accepted": True}
 

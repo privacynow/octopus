@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from unittest.mock import patch
 
 from app import work_queue
+from app.channels.telegram.bootstrap import build_bootstrap
+from app.channels.telegram import shared_mode_dispatch as telegram_shared_mode_dispatch
+from app.channels.telegram.session_io import event_key
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
-from app.transport import deserialize_inbound
+from app.runtime.inbound_types import deserialize_inbound
 from tests.support.handler_support import (
+    current_boot_id,
+    current_shared_runtime_builders,
+    current_runtime,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -34,12 +41,16 @@ def _conv(chat_id: int) -> str:
     return f"tg:{chat_id}"
 
 
+@contextlib.asynccontextmanager
+async def _permissive_chat_lock(_runtime, _chat_id, **_kwargs):
+    yield False
+
+
 async def test_shared_build_application_registers_shared_dispatch_handlers():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, cfg, prov):
-        import app.telegram_handlers as th
         from telegram.ext import CallbackQueryHandler, CommandHandler
 
-        app = th.build_application(cfg, prov)
+        app = build_bootstrap(cfg, prov).application
         command_callbacks: dict[str, str] = {}
         callback_patterns: list[tuple[str, str]] = []
         for group_handlers in app.handlers.values():
@@ -50,11 +61,11 @@ async def test_shared_build_application_registers_shared_dispatch_handlers():
                 if isinstance(handler, CallbackQueryHandler):
                     callback_patterns.append((str(handler.pattern), getattr(handler.callback, "__name__", "")))
 
-        assert command_callbacks["approve"] == "_shared_command_dispatch"
-        assert command_callbacks["cancel"] == "_shared_command_dispatch"
+        assert command_callbacks["approve"] == "shared_command_dispatch"
+        assert command_callbacks["cancel"] == "shared_command_dispatch"
         assert command_callbacks["help"] == "cmd_help"
         assert any(
-            pattern.endswith("^(retry_|approval_)')") and callback == "_shared_callback_dispatch"
+            pattern.endswith("^(retry_|approval_)')") and callback == "shared_callback_dispatch"
             for pattern, callback in callback_patterns
         )
         assert any(
@@ -65,7 +76,7 @@ async def test_shared_build_application_registers_shared_dispatch_handlers():
 
 async def test_shared_message_path_remains_persist_first():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -83,16 +94,22 @@ async def test_shared_message_path_remains_persist_first():
 
 async def test_shared_command_dispatch_persists_action_without_inline_execution():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
-        import app.telegram_handlers as th
-
         chat = FakeChat(12345)
         user = FakeUser(42)
         update = FakeUpdate(message=FakeMessage(chat=chat, text="/approve"), user=user, chat=chat)
+        build_conversation_runtime, build_runtime_skill_runtime = current_shared_runtime_builders()
 
-        await th._shared_command_dispatch(update, FakeContext(args=[]))
+        await telegram_shared_mode_dispatch.shared_command_dispatch(
+            update,
+            FakeContext(args=[]),
+            runtime=current_runtime(),
+            chat_lock=_permissive_chat_lock,
+            build_conversation_runtime=build_conversation_runtime,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
+        )
 
         assert prov.run_calls == []
-        payload = work_queue.get_update_payload(data_dir, th._event_key(update.update_id))
+        payload = work_queue.get_update_payload(data_dir, event_key(update.update_id))
         assert payload is not None
         event = deserialize_inbound("action", payload)
         assert event.action == "approve_pending"
@@ -102,19 +119,24 @@ async def test_shared_command_dispatch_persists_action_without_inline_execution(
 
 async def test_shared_callback_dispatch_persists_action_without_inline_execution():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
-        import app.telegram_handlers as th
-
         chat = FakeChat(12345)
         user = FakeUser(42)
         callback_message = FakeMessage(chat=chat, text="approve?")
         query = FakeCallbackQuery("approval_approve", message=callback_message, user=user)
         update = FakeUpdate(user=user, chat=chat, callback_query=query)
+        _build_conversation_runtime, build_runtime_skill_runtime = current_shared_runtime_builders()
 
-        await th._shared_callback_dispatch(update, FakeContext())
+        await telegram_shared_mode_dispatch.shared_callback_dispatch(
+            update,
+            FakeContext(),
+            runtime=current_runtime(),
+            chat_lock=_permissive_chat_lock,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
+        )
 
         assert prov.run_calls == []
         assert query.answered is True
-        payload = work_queue.get_update_payload(data_dir, th._event_key(update.update_id))
+        payload = work_queue.get_update_payload(data_dir, event_key(update.update_id))
         assert payload is not None
         event = deserialize_inbound("action", payload)
         assert event.action == "approve_pending"
@@ -122,10 +144,38 @@ async def test_shared_callback_dispatch_persists_action_without_inline_execution
         assert any(item["kind"] == "action" and item["state"] == "queued" for item in items)
 
 
+async def test_shared_skills_command_routes_through_runtime_skill_owner(monkeypatch):
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    async def fake_handle_skills_command(event, update, *, runtime):
+        del update, runtime
+        calls.append((event.command, tuple(event.args or ())))
+
+    with fresh_env(config_overrides=_SHARED_OVERRIDES):
+        build_conversation_runtime, build_runtime_skill_runtime = current_shared_runtime_builders()
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        update = FakeUpdate(message=FakeMessage(chat=chat, text="/skills list"), user=user, chat=chat)
+        monkeypatch.setattr(
+            telegram_shared_mode_dispatch,
+            "runtime_skill_handle_skills_command",
+            fake_handle_skills_command,
+        )
+
+        await telegram_shared_mode_dispatch.shared_command_dispatch(
+            update,
+            FakeContext(args=["list"]),
+            runtime=current_runtime(),
+            chat_lock=_permissive_chat_lock,
+            build_conversation_runtime=build_conversation_runtime,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
+        )
+
+    assert calls == [("skills", ("list",))]
+
+
 async def test_shared_worker_executes_persisted_approve_action():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
-        import app.telegram_handlers as th
-
         chat_id = 12345
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["pending_approval"] = {
@@ -143,8 +193,16 @@ async def test_shared_worker_executes_persisted_approve_action():
         chat = FakeChat(chat_id)
         user = FakeUser(42)
         update = FakeUpdate(message=FakeMessage(chat=chat, text="/approve"), user=user, chat=chat)
+        build_conversation_runtime, build_runtime_skill_runtime = current_shared_runtime_builders()
 
-        await th._shared_command_dispatch(update, FakeContext(args=[]))
+        await telegram_shared_mode_dispatch.shared_command_dispatch(
+            update,
+            FakeContext(args=[]),
+            runtime=current_runtime(),
+            chat_lock=_permissive_chat_lock,
+            build_conversation_runtime=build_conversation_runtime,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
+        )
 
         assert len(prov.run_calls) == 0
         assert await drain_one_worker_item(data_dir) is True
@@ -155,8 +213,6 @@ async def test_shared_worker_executes_persisted_approve_action():
 
 async def test_shared_cancel_records_action_and_sets_durable_flag():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
-        import app.telegram_handlers as th
-
         chat_id = 12345
         payload = (
             '{"actor_key":"tg:42","username":"alice","conversation_key":"tg:12345",'
@@ -171,18 +227,26 @@ async def test_shared_cancel_records_action_and_sets_durable_flag():
             payload,
         )
         assert status == "admitted"
-        claimed = work_queue.claim_next_any(data_dir, th._boot_id)
+        claimed = work_queue.claim_next_any(data_dir, current_boot_id())
         assert claimed is not None
 
         chat = FakeChat(chat_id)
         user = FakeUser(42)
         message = FakeMessage(chat=chat, text="/cancel")
         update = FakeUpdate(message=message, user=user, chat=chat)
+        build_conversation_runtime, build_runtime_skill_runtime = current_shared_runtime_builders()
 
-        await th._shared_command_dispatch(update, FakeContext(args=[]))
+        await telegram_shared_mode_dispatch.shared_command_dispatch(
+            update,
+            FakeContext(args=[]),
+            runtime=current_runtime(),
+            chat_lock=_permissive_chat_lock,
+            build_conversation_runtime=build_conversation_runtime,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
+        )
 
         assert work_queue.is_cancel_requested(data_dir, claimed["id"]) is True
-        payload = work_queue.get_update_payload(data_dir, th._event_key(update.update_id))
+        payload = work_queue.get_update_payload(data_dir, event_key(update.update_id))
         assert payload is not None
         event = deserialize_inbound("action", payload)
         assert event.action == "cancel_conversation"
@@ -191,52 +255,10 @@ async def test_shared_cancel_records_action_and_sets_durable_flag():
         assert any("cancel" in reply.get("text", "").lower() for reply in message.replies)
 
 
-async def test_shared_chat_lock_skips_asyncio_lock_for_worker_path():
-    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, _cfg, _prov):
-        import app.telegram_handlers as th
-
-        lock = th.CHAT_LOCKS[12345]
-        await lock.acquire()
-        try:
-            async def run_lock():
-                async with th._chat_lock(12345, worker_item={"id": "claimed-item"}):
-                    return "ok"
-
-            result = await asyncio.wait_for(run_lock(), timeout=0.1)
-            assert result == "ok"
-            assert lock.locked() is True
-        finally:
-            lock.release()
-
-
-async def test_shared_chat_lock_still_locks_for_inline_commands():
-    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, _cfg, _prov):
-        import app.telegram_handlers as th
-
-        lock = th.CHAT_LOCKS[12345]
-        await lock.acquire()
-        entered = asyncio.Event()
-
-        async def waiter():
-            async with th._chat_lock(12345):
-                entered.set()
-
-        task = asyncio.create_task(waiter())
-        try:
-            await asyncio.sleep(0.05)
-            assert entered.is_set() is False
-        finally:
-            lock.release()
-        await asyncio.wait_for(task, timeout=0.2)
-        assert entered.is_set() is True
-
-
 async def test_worker_id_is_traceable():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, cfg, prov):
-        import app.telegram_handlers as th
-
-        th.build_application(cfg, prov)
-        parts = th._boot_id.split(":")
+        telegram_bootstrap = build_bootstrap(cfg, prov)
+        parts = telegram_bootstrap.runtime.boot_id.split(":")
         assert len(parts) == 3
         assert parts[1].isdigit()
         assert len(parts[2]) == 12

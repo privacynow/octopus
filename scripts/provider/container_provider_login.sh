@@ -8,16 +8,19 @@ case "$provider" in
   codex)
     cat <<'BANNER'
 ╔══════════════════════════════════════════════════════════════╗
-║  ACTION REQUIRED — INSIDE THE CODEX CLI                     ║
+║  ACTION REQUIRED — CODex LOGIN                              ║
 ║                                                              ║
-║  Complete the browser sign-in when prompted.                 ║
-║  When done — press  q  or  Ctrl-C  to return to setup.       ║
+║  The script runs:  codex login --device-auth                 ║
+║  Follow the printed URL and enter the device code            ║
+║  in any browser to complete sign-in.                         ║
+║  The command should return to setup when login completes.    ║
+║  If it does not, press Ctrl-C after sign-in finishes.        ║
 ║                                                              ║
-║  You MUST exit the CLI to return to setup.                   ║
+║  Do not run the removed flag:  codex --login                 ║
 ╚══════════════════════════════════════════════════════════════╝
 BANNER
     set +e
-    codex --login
+    codex login --device-auth
     exit_code=$?
     set -e
     if [ "$exit_code" -eq 0 ]; then

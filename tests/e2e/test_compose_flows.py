@@ -1,7 +1,7 @@
 """Compose-based E2E tests for the Docker-first operator path.
 
 Run only when E2E_COMPOSE=1 and Docker is available. Skipped in normal pytest runs.
-See README.md for the operator path and docs/ARCHITECTURE.md for the runtime/testing contract.
+See README.md for the operator path and ARCHITECTURE.md for the runtime/testing contract.
 
 Primary gate: test_compose_sqlite_local_runtime_primary — Docker Local Runtime with SQLite,
 no BOT_DATABASE_URL, no Postgres. Bounded Postgres coverage: test_compose_bootstrap_doctor,
@@ -718,8 +718,8 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
     """Registry UI can create a conversation and receive a bot-published started event.
 
     Uses the real Compose-hosted registry service plus the production registry
-    client and RegistryConversationIO on the host. This keeps the E2E focused on
-    M7's contract: UI-created work, polled delivery, and surface-owned timeline
+    client and RegistryChannelEgress on the host. This keeps the E2E focused on
+    M7's contract: UI-created work, polled delivery, and channel-owned timeline
     publication, without depending on Telegram startup or provider auth.
     """
     import asyncio
@@ -727,7 +727,7 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
     from app.agents.client import AgentRegistryClient
     from app.agents.state import AgentRuntimeState, save_agent_runtime_state
     from app.agents.types import AgentCard
-    from app.transports.registry_adapter import RegistryConversationIO
+    from app.channels.registry.egress import RegistryChannelEgress
     from tests.support.config_support import make_config
 
     ctx = _registry_ui_ctx(postgres_up)
@@ -742,11 +742,11 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
             display_name="Registry E2E Bot",
             slug="registry-e2e-bot",
             role="product",
-            skills=("planning",),
+            capabilities=("planning",),
             provider="claude",
             mode="registry",
             connectivity_state="connected",
-            surface_capabilities=("registry",),
+            channel_capabilities=("registry",),
             version="e2e",
         )
         enrolled = await enroll_client.enroll(requested, "dev-enroll-token")
@@ -774,11 +774,11 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
             display_name="Registry E2E Bot",
             slug=str(enrolled["slug"]),
             role="product",
-            skills=("planning",),
+            capabilities=("planning",),
             provider="claude",
             mode="registry",
             connectivity_state="connected",
-            surface_capabilities=("registry",),
+            channel_capabilities=("registry",),
             version="e2e",
         )
         await client.register(
@@ -803,9 +803,9 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
         deliveries = await client.poll(cursor="0", limit=20, wait_seconds=0)
         assert deliveries["deliveries"], deliveries
         delivery = deliveries["deliveries"][0]
-        assert delivery["kind"] == "surface_input"
-        surface = RegistryConversationIO(cfg, conversation_ref=conversation_id)
-        await surface.bind(title="Registry UI E2E", config=cfg)
+        assert delivery["kind"] == "channel_input"
+        channel_egress = RegistryChannelEgress(cfg, conversation_ref=conversation_id)
+        await channel_egress.bind(title="Registry UI E2E", config=cfg)
         await client.ack([delivery["delivery_id"]], classification="accepted")
         return conversation_id
 
@@ -839,7 +839,13 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
     from app.agents.types import AgentCard, RoutedTaskResult
     from app.providers.base import RunResult
     from tests.support.config_support import make_config
-    from tests.support.handler_support import FakeProvider, drain_one_worker_item, setup_globals
+    from tests.support.handler_support import (
+        FakeProvider,
+        current_bot_instance,
+        drain_one_worker_item,
+        make_registry_delivery_runtime,
+        setup_globals,
+    )
 
     ctx = _registry_ui_ctx(postgres_up)
     registry_up = _compose(ctx, "--profile", "registry", "up", "-d", "registry")
@@ -853,22 +859,22 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
             display_name="Registry Parent Bot",
             slug="registry-parent-bot",
             role="product",
-            skills=("planning", "delegation"),
+            capabilities=("planning", "delegation"),
             provider="claude",
             mode="registry",
             connectivity_state="connected",
-            surface_capabilities=("registry",),
+            channel_capabilities=("registry",),
             version="e2e",
         )
         requested_child = AgentCard(
             display_name="Registry Child Bot",
             slug="registry-child-bot",
             role="developer",
-            skills=("implementation",),
+            capabilities=("implementation",),
             provider="claude",
             mode="registry",
             connectivity_state="connected",
-            surface_capabilities=("registry",),
+            channel_capabilities=("registry",),
             version="e2e",
         )
         enrolled_parent = await enroll_client.enroll(requested_parent, "dev-enroll-token")
@@ -904,11 +910,11 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
                 display_name="Registry Parent Bot",
                 slug=str(enrolled_parent["slug"]),
                 role="product",
-                skills=("planning", "delegation"),
+                capabilities=("planning", "delegation"),
                 provider="claude",
                 mode="registry",
                 connectivity_state="connected",
-                surface_capabilities=("registry",),
+                channel_capabilities=("registry",),
                 version="e2e",
             ),
             connectivity_state="connected",
@@ -921,11 +927,11 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
                 display_name="Registry Child Bot",
                 slug=str(enrolled_child["slug"]),
                 role="developer",
-                skills=("implementation",),
+                capabilities=("implementation",),
                 provider="claude",
                 mode="registry",
                 connectivity_state="connected",
-                surface_capabilities=("registry",),
+                channel_capabilities=("registry",),
                 version="e2e",
             ),
             connectivity_state="connected",
@@ -951,6 +957,11 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
             RunResult(text="Final parent answer from delegation."),
         ]
         setup_globals(cfg, provider)
+        delivery_runtime = make_registry_delivery_runtime(
+            cfg,
+            provider,
+            bot_instance=current_bot_instance(),
+        )
 
         conversation = _http_json(
             "POST",
@@ -966,8 +977,12 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
 
         initial_poll = await parent_client.poll(cursor="0", limit=20, wait_seconds=0)
         initial_delivery = initial_poll["deliveries"][0]
-        assert initial_delivery["kind"] == "surface_input"
-        assert await handle_registry_delivery(cfg, initial_delivery) == "accepted"
+        assert initial_delivery["kind"] == "channel_input"
+        assert await handle_registry_delivery(
+            cfg,
+            initial_delivery,
+            runtime=delivery_runtime,
+        ) == "accepted"
         await parent_client.ack([initial_delivery["delivery_id"]], classification="accepted")
         assert await drain_one_worker_item(cfg.data_dir) is True
 
@@ -992,8 +1007,12 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
         )
 
         approve_poll = await parent_client.poll(cursor=initial_poll["next_cursor"], limit=20, wait_seconds=0)
-        approve_delivery = next(item for item in approve_poll["deliveries"] if item["kind"] == "surface_action")
-        assert await handle_registry_delivery(cfg, approve_delivery) == "accepted"
+        approve_delivery = next(item for item in approve_poll["deliveries"] if item["kind"] == "channel_action")
+        assert await handle_registry_delivery(
+            cfg,
+            approve_delivery,
+            runtime=delivery_runtime,
+        ) == "accepted"
         await parent_client.ack([approve_delivery["delivery_id"]], classification="accepted")
         assert await drain_one_worker_item(cfg.data_dir) is True
 
@@ -1012,7 +1031,11 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
 
         routed_result_poll = await parent_client.poll(cursor=approve_poll["next_cursor"], limit=20, wait_seconds=0)
         routed_result_delivery = next(item for item in routed_result_poll["deliveries"] if item["kind"] == "routed_result")
-        assert await handle_registry_delivery(cfg, routed_result_delivery) == "accepted"
+        assert await handle_registry_delivery(
+            cfg,
+            routed_result_delivery,
+            runtime=delivery_runtime,
+        ) == "accepted"
         await parent_client.ack([routed_result_delivery["delivery_id"]], classification="accepted")
         assert await drain_one_worker_item(cfg.data_dir) is True
         return conversation_id

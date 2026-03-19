@@ -49,7 +49,7 @@ class AgentRuntime:
             display_name=self.config.agent_display_name or self.config.instance,
             slug=self._state.registered_slug or self.config.agent_slug,
             role=self.config.agent_role or self.config.role,
-            skills=self.config.agent_skills or self.config.default_skills,
+            capabilities=self.config.agent_capabilities,
             tags=self.config.agent_tags,
             description=self.config.agent_description,
             provider=self.config.provider_name,
@@ -57,7 +57,7 @@ class AgentRuntime:
             connectivity_state=self._state.connectivity_state,
             current_capacity=0,
             max_capacity=1,
-            surface_capabilities=("telegram", "registry") if self.config.agent_mode == "registry" else ("telegram",),
+            channel_capabilities=("telegram", "registry") if self.config.agent_mode == "registry" else ("telegram",),
             version="phase-19-foundation",
         )
 

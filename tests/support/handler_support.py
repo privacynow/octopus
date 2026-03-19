@@ -2,7 +2,7 @@
 
 Worker-owned test model (authoritative):
 - Handler-only: handle_message() / send_text() only; assert no provider run, dedup/busy/rejection.
-- Single execution: handle_message() then await drain_one_worker_item(data_dir); assert prov.run_calls, session, _bot_instance.sent_messages.
+- Single execution: handle_message() then await drain_one_worker_item(data_dir); assert prov.run_calls, session, current_bot_instance().sent_messages.
 - Real concurrency: async with running_worker(data_dir): admit via handle_message(), use provider gates, /cancel; assert on bot-side log.
 """
 
@@ -10,13 +10,57 @@ import asyncio
 import contextlib
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
-import app.telegram_handlers as _th
+from app.agents.delivery import build_registry_delivery_runtime
+import app.channels.telegram.execution as _telegram_execution
+import app.channels.telegram.ingress as _th
+import app.channels.telegram.progress as _telegram_progress
+import app.channels.telegram.worker as _telegram_worker
+from app.channels.telegram.bootstrap import build_application
+from app.channels.telegram.delegation_channel import propose_delegation_plan as _propose_delegation_plan
+from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
+from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.providers.base import RunResult
-from app.ratelimit import RateLimiter
 from app.storage import close_db, ensure_data_dirs, load_session
 from app import work_queue as _work_queue
 from tests.support.config_support import make_config as _make_config
+
+
+_TEST_RUNTIME: TelegramRuntime | None = None
+_TEST_APPLICATION = None
+
+
+def current_runtime() -> TelegramRuntime:
+    if _TEST_RUNTIME is None:
+        raise RuntimeError("Telegram test runtime is not configured")
+    return _TEST_RUNTIME
+
+
+def current_execution_runtime():
+    runtime = current_runtime()
+    collaborators = _telegram_execution.bind_execution_collaborators(
+        runtime,
+        progress_factory=_telegram_progress.TelegramProgress,
+        keep_typing_fn=_telegram_progress.keep_typing,
+        heartbeat_fn=_telegram_progress.heartbeat,
+        progress_timeline_callback_fn=_telegram_progress.progress_timeline_callback,
+        propose_delegation_plan_fn=_propose_delegation_plan,
+    )
+    return _telegram_execution.build_execution_runtime(runtime, collaborators=collaborators)
+
+
+def current_shared_runtime_builders():
+    runtime = current_runtime()
+    execution_runtime = current_execution_runtime()
+    return (
+        lambda chat_lock: _telegram_execution.build_conversation_runtime(runtime, chat_lock=chat_lock),
+        lambda chat_lock: _telegram_execution.build_runtime_skill_runtime(
+            runtime,
+            chat_lock=chat_lock,
+            execution_runtime=execution_runtime,
+        ),
+    )
 
 
 def reset_handler_test_runtime() -> None:
@@ -28,19 +72,23 @@ def reset_handler_test_runtime() -> None:
     """
     import app.runtime_backend as _rb
     _rb.reset_for_test()
+    import app.content_store as _cs
+    _cs.reset_for_test()
+    import app.credential_store as _creds
+    _creds.reset_for_test()
 
-    _th._config = None
-    _th._provider = None
-    _th._boot_id = ""
-    _th._rate_limiter = None
-    _th._bot_instance = None
-    _th._pending_work_items.clear()
-    _th.CHAT_LOCKS.clear()
-    _th._LIVE_CANCEL.clear()
-    try:
-        _th._current_update_id.set(None)
-    except LookupError:
-        pass
+    global _TEST_RUNTIME, _TEST_APPLICATION
+    if _TEST_RUNTIME is not None:
+        _TEST_RUNTIME.pending_work_items.clear()
+        _TEST_RUNTIME.chat_locks.clear()
+        _TEST_RUNTIME.cancellation_registry.clear()
+        _TEST_RUNTIME.bot_instance = None
+        try:
+            _TEST_RUNTIME.current_update_id.set(None)
+        except LookupError:
+            pass
+    _TEST_RUNTIME = None
+    _TEST_APPLICATION = None
     global _next_update_id
     _next_update_id = 0
     # Backend lifecycle is owned by runtime_backend.reset_for_test() above; no duplicate close.
@@ -235,8 +283,25 @@ class FakeCallbackQuery:
 
 
 class FakeContext:
-    def __init__(self, args=None):
+    def __init__(self, args=None, runtime: TelegramRuntime | None = None):
         self.args = args or []
+        telegram_runtime = runtime
+        try:
+            if telegram_runtime is None:
+                telegram_runtime = current_runtime()
+        except RuntimeError:
+            telegram_runtime = None
+        self.telegram_runtime = telegram_runtime
+        if telegram_runtime is not None:
+            self.application = SimpleNamespace(
+                bot=telegram_runtime.bot_instance,
+                bot_data={
+                    "telegram_runtime": telegram_runtime,
+                    "telegram_boot_id": telegram_runtime.boot_id,
+                },
+            )
+        else:
+            self.application = SimpleNamespace(bot=None, bot_data={})
 
 
 class FakeProvider:
@@ -299,13 +364,45 @@ def make_config(data_dir, **overrides):
 
 
 def set_bot_instance(bot_instance) -> None:
-    """Set the handler's bot instance (for worker_dispatch etc.). Prefer over direct _th._bot_instance write."""
-    _th._bot_instance = bot_instance
+    """Set the handler's bot instance (for worker_dispatch etc.)."""
+    current_runtime().bot_instance = bot_instance
+
+
+def set_provider(provider) -> None:
+    """Set the current provider on the installed Telegram channel state."""
+    current_runtime().provider = provider
+
+
+def current_bot_instance():
+    try:
+        return current_runtime().bot_instance
+    except RuntimeError:
+        return None
+
+
+def current_boot_id() -> str:
+    return current_runtime().boot_id
+
+
+def make_registry_delivery_runtime(config, provider, *, bot_instance=None):
+    bot = current_bot_instance() if bot_instance is None else bot_instance
+    return build_registry_delivery_runtime(
+        provider_name=provider.name,
+        provider_state_factory=provider.new_provider_state,
+        bot=bot,
+    )
+
+
+def live_cancel_registry():
+    return current_runtime().cancellation_registry
 
 
 def _append_simulator_output_log(kind: str, text: str) -> None:
     """When the bot has _output_log (simulator), append one user-visible output for a single ordered stream."""
-    bot = getattr(_th, "_bot_instance", None)
+    try:
+        bot = current_runtime().bot_instance
+    except RuntimeError:
+        bot = None
     if bot is not None and getattr(bot, "_output_log", None) is not None:
         bot._output_log.append({"type": kind, "text": text})
 
@@ -376,16 +473,42 @@ class MinimalFakeBot:
 
 
 def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
-    """Set handler runtime globals for tests. Call reset_handler_test_runtime() first if reusing."""
+    """Install explicit Telegram channel state for tests via bootstrap wiring."""
     reset_handler_test_runtime()
-    _th._config = config
-    _th._provider = provider
-    _th._boot_id = boot_id
-    _th._rate_limiter = RateLimiter(
-        per_minute=config.rate_limit_per_minute,
-        per_hour=config.rate_limit_per_hour,
+    global _TEST_RUNTIME, _TEST_APPLICATION
+    import app.content_store as _cs
+    import app.credential_store as _creds
+    from app.content_seed import track_from_skill_dir
+    from tests.support import skill_test_helpers as _skills_mod
+
+    _cs.init_content_store_for_config(config)
+    _creds.init_credential_store_for_config(config)
+    custom_dir = getattr(_skills_mod, "CUSTOM_DIR", None)
+    if isinstance(custom_dir, Path) and custom_dir.is_dir():
+        store = _cs.get_content_store()
+        for skill_dir in sorted(custom_dir.iterdir()):
+            if skill_dir.is_dir() and (skill_dir / "skill.md").is_file():
+                store.replace_skill_track(
+                    track_from_skill_dir(
+                        skill_dir,
+                        source_kind="custom",
+                        source_uri=f"test-custom/{skill_dir.name}",
+                        owner_actor="test",
+                        visibility="private",
+                        is_mutable=True,
+                        version_label="draft",
+                        created_by="test",
+                    )
+                )
+    test_bot = bot_instance if bot_instance is not None else MinimalFakeBot()
+    _TEST_RUNTIME = build_telegram_runtime(
+        config,
+        provider,
+        boot_id=boot_id,
+        bot_instance=test_bot,
     )
-    _th._bot_instance = bot_instance if bot_instance is not None else MinimalFakeBot()
+    _TEST_APPLICATION = build_application(_TEST_RUNTIME)
+    _TEST_RUNTIME.bot_instance = test_bot
 
 
 def load_session_disk(data_dir, chat_id, provider):
@@ -421,10 +544,11 @@ async def drain_one_worker_item(data_dir: Path) -> bool:
     Use after send_text when the test needs the provider to run. Returns True if
     an item was drained, False if queue was empty.
     """
-    from app.transport import deserialize_inbound
-    from app.workflows.results import TransportStateCorruption
+    from app.runtime.inbound_types import deserialize_inbound
+    from app.workflows.recovery.results import TransportStateCorruption
 
-    boot_id = _th._boot_id
+    runtime = current_runtime()
+    boot_id = runtime.boot_id
     item = _work_queue.claim_next_any(data_dir, boot_id)
     if item is None:
         return False
@@ -437,7 +561,13 @@ async def drain_one_worker_item(data_dir: Path) -> bool:
         _work_queue.fail_work_item(data_dir, item_id, error="deserialize_error")
         return True
     try:
-        await _th.worker_dispatch(kind, event, item)
+        await _telegram_worker.worker_dispatch(
+            kind,
+            event,
+            item,
+            runtime=runtime,
+            execution_runtime=current_execution_runtime(),
+        )
         _work_queue.complete_work_item(data_dir, item_id)
     except _work_queue.PendingRecovery:
         pass
@@ -455,12 +585,26 @@ async def running_worker(data_dir: Path, *, poll_interval: float = 0.01):
     """Start the real worker loop in the background; stop cleanly on exit.
 
     Use for tests that need real concurrency (cancel while run active, busy while run active).
-    Yields (task, stop_event). Worker uses _th.worker_dispatch.
+    Yields (task, stop_event). Worker uses explicit runtime-bound dispatch.
     """
     from app.worker import start_worker_task
 
+    runtime = current_runtime()
+
+    async def _dispatch(kind: str, event, item: dict) -> None:
+        await _telegram_worker.worker_dispatch(
+            kind,
+            event,
+            item,
+            runtime=runtime,
+            execution_runtime=current_execution_runtime(),
+        )
+
     task, stop_event = start_worker_task(
-        data_dir, _th._boot_id, _th.worker_dispatch, poll_interval=poll_interval
+        data_dir,
+        runtime.boot_id,
+        _dispatch,
+        poll_interval=poll_interval,
     )
     try:
         yield task, stop_event
@@ -550,11 +694,42 @@ def make_skill(custom_dir, name, *, body, requires=None):
     return d
 
 
-def make_store_skill(store_dir, name, *, body):
-    d = store_dir / name
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "skill.md").write_text(
-        f"---\nname: {name}\ndisplay_name: {name}\n"
-        f"description: test fixture\n---\n\n{body}\n"
+def seed_runtime_skill(
+    name,
+    *,
+    body,
+    requires=None,
+    source_kind="custom",
+    description="test fixture",
+    owner_actor="test",
+):
+    import app.content_store as _cs
+
+    requirement_rows = []
+    for requirement in requires or []:
+        requirement_rows.append(
+            {
+                "key": requirement["key"],
+                "prompt": requirement.get("prompt", f'enter {requirement["key"]}'),
+                "help_url": requirement.get("help_url"),
+                "validate": requirement.get("validate"),
+            }
+        )
+    track = RuntimeSkillTrackRecord(
+        slug=name,
+        display_name=name,
+        description=description,
+        source_kind=source_kind,
+        source_uri=f"test-{source_kind}/{name}",
+        owner_actor=owner_actor if source_kind == "custom" else "",
+        visibility="private" if source_kind == "custom" else "shared",
+        is_mutable=(source_kind == "custom"),
+        revision=SkillRevisionRecord(
+            instruction_body=body,
+            requirements=requirement_rows,
+            version_label="draft" if source_kind == "custom" else source_kind,
+            created_by=owner_actor,
+        ),
     )
-    return d
+    _cs.get_content_store().replace_skill_track(track)
+    return track

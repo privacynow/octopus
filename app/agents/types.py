@@ -26,21 +26,21 @@ def to_wire(value: Any) -> Any:
 class ConversationRef:
     conversation_id: str
     owner_agent_id: str
-    origin_surface: str
+    origin_channel: str
     created_at: str = field(default_factory=utcnow_iso)
 
 
 @dataclass(frozen=True)
-class SurfaceBinding:
-    surface: str
+class ChannelBinding:
+    channel: str
     external_id: str
     conversation_id: str
 
 
 @dataclass(frozen=True)
-class SurfaceEvent:
+class ChannelEvent:
     event_id: str
-    surface: str
+    channel: str
     conversation_id: str
     actor_id: str
     kind: str
@@ -68,7 +68,7 @@ class AgentCard:
     display_name: str = ""
     slug: str = ""
     role: str = ""
-    skills: tuple[str, ...] = ()
+    capabilities: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
     description: str = ""
     provider: str = ""
@@ -76,14 +76,14 @@ class AgentCard:
     connectivity_state: str = "standalone"
     current_capacity: int = 0
     max_capacity: int = 1
-    surface_capabilities: tuple[str, ...] = ("telegram",)
+    channel_capabilities: tuple[str, ...] = ("telegram",)
     version: str = "dev"
 
 
 @dataclass(frozen=True)
 class AgentDiscoveryQuery:
     role: str = ""
-    skills: tuple[str, ...] = ()
+    capabilities: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
     free_text: str = ""
     exclude_agent_ids: tuple[str, ...] = ()

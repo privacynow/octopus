@@ -1,54 +1,69 @@
-"""Isolation regression tests for handler runtime (Priority 4).
-
-Proves reset_handler_test_runtime() clears all handler globals and DB caches,
-and that no state leaks between tests when the conftest autouse fixture runs.
-"""
+"""Isolation regression tests for explicit Telegram handler runtime."""
 
 import tempfile
 from pathlib import Path
 
-import pytest
-
 import app.storage as storage_mod
-import app.telegram_handlers as th
+import app.channels.telegram.ingress as th
 import app.work_queue as work_queue_mod
-from tests.support.handler_support import reset_handler_test_runtime, setup_globals
 from tests.support.config_support import make_config as make_bot_config
+from tests.support.handler_support import (
+    FakeContext,
+    FakeProvider,
+    current_runtime,
+    reset_handler_test_runtime,
+    setup_globals,
+)
 
 
-def test_reset_clears_all_handler_globals():
-    """Mutate runtime state then reset; assert everything is cleared."""
+def test_reset_clears_explicit_test_runtime_state():
     cfg = make_bot_config(data_dir=Path("/tmp/iso-test"))
-    from tests.support.handler_support import FakeProvider
     prov = FakeProvider("claude")
     setup_globals(cfg, prov, boot_id="mutated-boot", bot_instance=object())
-    th._pending_work_items[999] = "fake-item-id"
-    th.CHAT_LOCKS[12345]  # ensure key exists (defaultdict)
+    runtime = current_runtime()
+    runtime.pending_work_items[999] = "fake-item-id"
+    runtime.chat_locks[12345]
+    runtime.cancellation_registry.set(12345, __import__("asyncio").Event())
 
     reset_handler_test_runtime()
 
-    assert th._config is None
-    assert th._provider is None
-    assert th._boot_id == ""
-    assert th._rate_limiter is None
-    assert th._bot_instance is None
-    assert len(th._pending_work_items) == 0
-    assert len(th.CHAT_LOCKS) == 0
+    try:
+        current_runtime()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("test runtime should be cleared after reset")
 
 
-def test_clean_runtime_has_no_leaked_state():
-    """Start with clean runtime; assert no leaked globals."""
-    reset_handler_test_runtime()
+def test_setup_globals_builds_explicit_runtime_shape():
+    cfg = make_bot_config(data_dir=Path("/tmp/iso-test-explicit-runtime"))
+    prov = FakeProvider("claude")
+    bot = object()
+    setup_globals(cfg, prov, boot_id="explicit-boot", bot_instance=bot)
 
-    assert th._config is None
-    assert th._provider is None
-    assert th._bot_instance is None
-    assert len(th._pending_work_items) == 0
-    assert len(th.CHAT_LOCKS) == 0
+    runtime = current_runtime()
+    assert runtime.config is cfg
+    assert runtime.provider is prov
+    assert runtime.boot_id == "explicit-boot"
+    assert runtime.bot_instance is bot
+    assert runtime.cancellation_registry.get(12345) is None
+    assert runtime.pending_work_items == {}
+    fake_context = FakeContext()
+    assert fake_context.application.bot_data["telegram_runtime"] is runtime
+    assert fake_context.application.bot_data["telegram_boot_id"] == "explicit-boot"
+
+
+def test_setup_globals_does_not_restore_deleted_routing_globals():
+    cfg = make_bot_config(data_dir=Path("/tmp/iso-test-no-routing-globals"))
+    prov = FakeProvider("claude")
+    setup_globals(cfg, prov, boot_id="boot-no-routing", bot_instance=object())
+
+    assert not hasattr(th, "CHAT_LOCKS")
+    assert not hasattr(th, "_pending_work_items")
+    assert not hasattr(th, "_current_update_id")
 
 
 def test_reset_closes_session_and_transport_db_caches():
-    """Open session and transport DBs, then reset; assert new backend has empty caches."""
     from app import runtime_backend
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -63,5 +78,5 @@ def test_reset_closes_session_and_transport_db_caches():
         reset_handler_test_runtime()
         session_store2 = runtime_backend.session_store()
         transport_store2 = runtime_backend.transport_store()
-        assert len(session_store2._connections) == 0, "Session DB cache should be empty after reset"
-        assert len(transport_store2._connections) == 0, "Transport DB cache should be empty after reset"
+        assert len(session_store2._connections) == 0
+        assert len(transport_store2._connections) == 0

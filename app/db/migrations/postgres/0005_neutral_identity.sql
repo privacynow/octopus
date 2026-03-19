@@ -1,4 +1,4 @@
--- Surface-neutral durable identity across runtime stores.
+-- Channel-neutral durable identity across runtime stores.
 -- Version: 5
 
 ALTER TABLE bot_runtime.work_items

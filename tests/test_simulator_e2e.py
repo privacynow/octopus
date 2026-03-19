@@ -12,6 +12,7 @@ from app.providers.base import RunResult
 from app.storage import default_session, save_session
 from app import user_messages as _msg
 from tests.support.handler_support import (
+    live_cancel_registry,
     FakeCallbackQuery,
     FakeChat,
     FakeContext,
@@ -82,7 +83,7 @@ async def test_canonical_message_long_run_cancel():
     _command_handler → _complete_pending_work_item). No extra runnable items.
     """
     with fresh_data_dir() as data_dir:
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         cfg = make_config(data_dir)
         prov = _GatedProvider("claude")
@@ -112,7 +113,7 @@ async def test_canonical_message_long_run_cancel():
         assert idx_ack < idx_done, "cancel ack must appear before cancelled status in ordered log"
 
         assert len(prov.run_calls) == 1
-        assert 12345 not in th._LIVE_CANCEL
+        assert 12345 not in live_cancel_registry()
 
         # Exact durable-work shape: one terminal item for the message, one for the /cancel command
         items = work_queue.get_work_items_for_chat(data_dir, _conv(12345))
@@ -133,7 +134,7 @@ async def test_canonical_message_long_run_cancel():
 async def test_simulator_cancel_before_worker_claim():
     """Message admitted, /cancel before worker claims → terminal failed/cancelled, provider 0."""
     with fresh_data_dir() as data_dir:
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
@@ -158,7 +159,7 @@ async def test_simulator_cancel_before_worker_claim():
 async def test_simulator_second_message_queues_fifo():
     """Second message while first is active is accepted into the durable queue and runs next."""
     with fresh_data_dir() as data_dir:
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         cfg = make_config(data_dir)
         prov = _GatedProvider("claude")
@@ -189,7 +190,7 @@ async def test_simulator_second_message_queues_fifo():
 async def test_simulator_credential_reply_while_worker_alive():
     """Credential reply while worker running: stays off queue, provider 0 for that message."""
     with fresh_data_dir() as data_dir:
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
 
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
@@ -203,16 +204,8 @@ async def test_simulator_credential_reply_while_worker_alive():
         }
         save_session(data_dir, _conv(12345), session)
 
-        async def fake_validate(req, value):
-            return (True, "")
-
-        original = th.validate_credential
-        th.validate_credential = fake_validate
-        try:
-            async with sim.running_worker():
-                await sim.inject_message_async(12345, 42, "my-secret-token")
-        finally:
-            th.validate_credential = original
+        async with sim.running_worker():
+            await sim.inject_message_async(12345, 42, "my-secret-token")
 
         assert len(prov.run_calls) == 0
         session_after = load_session_disk(data_dir, _conv(12345), prov)
@@ -223,7 +216,7 @@ async def test_simulator_credential_reply_while_worker_alive():
 async def test_simulator_recovery_notice_no_provider_call():
     """Recovered item (dispatch_mode=recovery): recovery notice shown, item to pending_recovery, provider not called."""
     with fresh_data_dir() as data_dir:
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         from app import work_queue as wq
 
         cfg = make_config(data_dir)
@@ -257,7 +250,7 @@ async def test_simulator_recovery_notice_no_provider_call():
 async def test_simulator_callback_edit_message_text_in_output_log():
     """Callback that calls query.edit_message_text appears in the simulator ordered output log."""
     with fresh_data_dir() as data_dir:
-        import app.telegram_handlers as th
+        import app.channels.telegram.ingress as th
         from tests.support.handler_support import (
             FakeChat,
             FakeContext,

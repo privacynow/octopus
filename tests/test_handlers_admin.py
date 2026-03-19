@@ -1,6 +1,6 @@
 """Tests for /admin sessions handler."""
 
-import app.telegram_handlers as th
+import app.channels.telegram.ingress as th
 from app.storage import default_session, save_session
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
@@ -12,7 +12,7 @@ from tests.support.handler_support import (
     FakeUser,
     last_reply,
     make_config,
-    make_skill,
+    seed_runtime_skill,
     send_command,
     setup_globals,
     fresh_data_dir,
@@ -38,7 +38,6 @@ async def test_admin_requires_admin():
 
 async def test_admin_sessions_summary():
     """Admin gets session summary."""
-    import app.skills as skills_mod
     with fresh_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
@@ -49,37 +48,27 @@ async def test_admin_sessions_summary():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        # Create a resolvable custom skill
-        tmp_custom = data_dir / "custom"
-        tmp_custom.mkdir()
-        orig_custom = skills_mod.CUSTOM_DIR
-        skills_mod.CUSTOM_DIR = tmp_custom
-        try:
-            make_skill(tmp_custom, "code-review", body="Review code.")
+        seed_runtime_skill("peer-review", body="Review code.")
 
-            # Create sessions
-            s1 = default_session("claude", {"session_id": "a", "started": False}, "on")
-            s1["active_skills"] = ["code-review"]
-            save_session(data_dir, telegram_conversation_key(111), s1)
+        s1 = default_session("claude", {"session_id": "a", "started": False}, "on")
+        s1["active_skills"] = ["peer-review"]
+        save_session(data_dir, telegram_conversation_key(111), s1)
 
-            s2 = default_session("claude", {"session_id": "b", "started": False}, "off")
-            s2["pending_approval"] = {"prompt": "test", "created_at": 0}
-            save_session(data_dir, telegram_conversation_key(222), s2)
+        s2 = default_session("claude", {"session_id": "b", "started": False}, "off")
+        s2["pending_approval"] = {"prompt": "test", "created_at": 0}
+        save_session(data_dir, telegram_conversation_key(222), s2)
 
-            chat = FakeChat()
-            user = FakeUser(42, "admin")
-            msg = await send_command(th.cmd_admin, chat, user, "/admin sessions", args=["sessions"])
-            reply = last_reply(msg)
-            assert "Sessions: 2" in reply
-            assert "Pending approval: 1" in reply
-            assert "code-review" in reply
-        finally:
-            skills_mod.CUSTOM_DIR = orig_custom
+        chat = FakeChat()
+        user = FakeUser(42, "admin")
+        msg = await send_command(th.cmd_admin, chat, user, "/admin sessions", args=["sessions"])
+        reply = last_reply(msg)
+        assert "Sessions: 2" in reply
+        assert "Pending approval: 1" in reply
+        assert "peer-review" in reply
 
 
 async def test_admin_sessions_detail():
     """Admin gets detail view for a specific chat."""
-    import app.skills as skills_mod
     with fresh_data_dir() as data_dir:
         cfg = make_config(
             data_dir,
@@ -90,30 +79,22 @@ async def test_admin_sessions_detail():
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        # Create resolvable custom skills
-        tmp_custom = data_dir / "custom"
-        tmp_custom.mkdir()
-        orig_custom = skills_mod.CUSTOM_DIR
-        skills_mod.CUSTOM_DIR = tmp_custom
-        try:
-            make_skill(tmp_custom, "code-review", body="Review code.")
-            make_skill(tmp_custom, "deploy", body="Deploy code.")
+        seed_runtime_skill("peer-review", body="Review code.")
+        seed_runtime_skill("deploy", body="Deploy code.")
 
-            s = default_session("claude", {"session_id": "a", "started": False}, "on")
-            s["active_skills"] = ["code-review", "deploy"]
-            save_session(data_dir, telegram_conversation_key(555), s)
+        s = default_session("claude", {"session_id": "a", "started": False}, "on")
+        s["active_skills"] = ["peer-review", "deploy"]
+        save_session(data_dir, telegram_conversation_key(555), s)
 
-            chat = FakeChat()
-            user = FakeUser(42, "admin")
-            msg = await send_command(
-                th.cmd_admin, chat, user, "/admin sessions 555", args=["sessions", "555"])
-            reply = last_reply(msg)
-            assert f"Session {telegram_conversation_key(555)}" in reply
-            assert "claude" in reply
-            assert "Skills (2)" in reply
-            assert "Approval: on" in reply
-        finally:
-            skills_mod.CUSTOM_DIR = orig_custom
+        chat = FakeChat()
+        user = FakeUser(42, "admin")
+        msg = await send_command(
+            th.cmd_admin, chat, user, "/admin sessions 555", args=["sessions", "555"])
+        reply = last_reply(msg)
+        assert f"Session {telegram_conversation_key(555)}" in reply
+        assert "claude" in reply
+        assert "Skills (2)" in reply
+        assert "Approval: on" in reply
 
 
 async def test_admin_sessions_detail_not_found():

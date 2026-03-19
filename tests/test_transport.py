@@ -4,17 +4,19 @@ import tempfile
 from pathlib import Path
 
 from app.identity import telegram_actor_key, telegram_conversation_key
-from app.transport import (
+from app.channels.telegram.normalization import (
+    normalize_callback,
+    normalize_command,
+    normalize_message,
+    normalize_user,
+)
+from app.runtime.inbound_types import (
     InboundAttachment,
     InboundCallback,
     InboundCommand,
     InboundMessage,
     InboundUser,
     deserialize_inbound,
-    normalize_callback,
-    normalize_command,
-    normalize_message,
-    normalize_user,
     serialize_inbound,
 )
 from tests.support.handler_support import (
@@ -377,21 +379,23 @@ def test_message_default_attachments_are_tuple():
 
 async def test_handlers_receive_normalized_user():
     """Verify that handlers receive InboundUser through normalization, not raw Telegram objects."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
+    from app import access
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
 
-        original_is_allowed = th.is_allowed
         received_users = []
 
-        def tracking_is_allowed(user):
-            received_users.append(user)
-            return original_is_allowed(user)
+        original_is_allowed_user_with_override = access.is_allowed_user_with_override
 
-        th.is_allowed = tracking_is_allowed
+        def tracking_is_allowed_user_with_override(config, inbound_user, override):
+            received_users.append(inbound_user)
+            return original_is_allowed_user_with_override(config, inbound_user, override)
+
+        access.is_allowed_user_with_override = tracking_is_allowed_user_with_override
         try:
             chat = FakeChat(12345)
             user = FakeUser(42)
@@ -402,13 +406,13 @@ async def test_handlers_receive_normalized_user():
             assert isinstance(received_users[0], InboundUser)
             assert received_users[0].id == telegram_actor_key(42)
         finally:
-            th.is_allowed = original_is_allowed
+            access.is_allowed_user_with_override = original_is_allowed_user_with_override
 
 
 async def test_callback_handler_uses_normalized_data():
     """Verify callback handlers use event.data not query.data for routing."""
     from app.storage import save_session, default_session
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
     import time
 
     with fresh_data_dir() as data_dir:
@@ -442,7 +446,7 @@ async def test_callback_handler_uses_normalized_data():
 
 async def test_command_normalization_strips_bot_mention():
     """Verify /command@botname still works through normalization."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -466,7 +470,7 @@ async def test_command_normalization_strips_bot_mention():
 
 async def test_command_handler_no_user_no_crash():
     """A command handler receiving an update with no user returns silently."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -484,7 +488,7 @@ async def test_command_handler_no_user_no_crash():
 
 async def test_message_handler_no_user_no_crash():
     """The message handler receiving an update with no user returns silently."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -502,7 +506,7 @@ async def test_message_handler_no_user_no_crash():
 
 async def test_callback_handler_no_user_no_crash():
     """A callback handler receiving an update with no user returns silently."""
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -529,7 +533,7 @@ async def test_handle_message_empty_content_skipped():
     This proves the empty-content decision from normalize_message() is the one
     that governs the runtime path (normalize_message returns None, handler exits).
     """
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -553,7 +557,7 @@ async def test_handle_message_caption_reaches_provider():
     This proves the caption fallback in normalize_message() governs the runtime path.
     """
     from app.providers.base import RunResult
-    import app.telegram_handlers as th
+    import app.channels.telegram.ingress as th
 
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)

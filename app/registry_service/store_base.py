@@ -12,8 +12,8 @@ from app.runtime_health import report_from_dict, report_to_dict
 _OFFLINE_AFTER_SECONDS = 60
 
 
-class SkillDisabledError(RuntimeError):
-    """Raised when routing requests a skill that has been globally disabled."""
+class CapabilityDisabledError(RuntimeError):
+    """Raised when routing requests a capability that has been globally disabled."""
 
 
 def utcnow_iso() -> str:
@@ -145,14 +145,14 @@ class AbstractRegistryStore(Protocol):
     def deregister(self, agent_token: str) -> dict[str, Any]:
         """Mark an agent offline while preserving its durable registry identity."""
 
-    def get_skill_override(self, skill_name: str) -> bool | None:
+    def get_capability_override(self, capability_name: str) -> bool | None:
         """Return True/False for an override row, or None when no override exists."""
 
-    def set_skill_override(self, skill_name: str, enabled: bool, set_by: str = "ui") -> None:
-        """Persist or update a global skill override."""
+    def set_capability_override(self, capability_name: str, enabled: bool, set_by: str = "ui") -> None:
+        """Persist or update a global capability override."""
 
-    def list_skills(self) -> list[dict[str, Any]]:
-        """Return the declared skill universe merged with override state."""
+    def list_capabilities(self) -> list[dict[str, Any]]:
+        """Return the declared capability universe merged with override state."""
 
     def list_agents(self) -> list[dict[str, Any]]:
         """Return all registered agents in UI-ready form."""
@@ -164,7 +164,7 @@ class AbstractRegistryStore(Protocol):
         """Return mirrored runtime-health detail for a registered agent."""
 
     def create_conversation(self, *, target_agent_id: str, title: str, message_text: str) -> dict[str, Any]:
-        """Create a new registry-originated conversation and queue the first surface_input."""
+        """Create a new registry-originated conversation and queue the first channel_input."""
 
     def list_conversations(self) -> list[dict[str, Any]]:
         """Return the registry conversation index."""
@@ -182,15 +182,12 @@ class AbstractRegistryStore(Protocol):
         """Return reported usage timeline rows since the provided UTC ISO timestamp."""
 
     def add_conversation_message(self, conversation_id: str, text: str) -> dict[str, Any]:
-        """Queue a follow-up surface_input for an existing conversation."""
+        """Queue a follow-up channel_input for an existing conversation."""
 
     def add_conversation_action(
         self, conversation_id: str, action: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Queue a surface_action for an existing conversation."""
-
-    def cancel_conversation(self, conversation_id: str) -> dict[str, Any]:
-        """Queue a cancel control delivery and mirror it to the registry timeline."""
+        """Queue a channel_action for an existing conversation."""
 
     def list_tasks(self) -> list[dict[str, Any]]:
         """Return routed tasks in UI-ready form."""

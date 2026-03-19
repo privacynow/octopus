@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import app.telegram_handlers as _th
+import app.channels.telegram.ingress as _th
 from app import work_queue
 from app.agents.bridge import build_registry_message_delivery
 from tests.support.handler_support import (
@@ -74,7 +74,7 @@ class ConversationSimulator:
         *,
         skip_approval: bool = False,
     ) -> dict[str, Any]:
-        """Admit a registry-surface message through the same durable worker boundary."""
+        """Admit a registry-channel message through the same durable worker boundary."""
         chat_id, user_id, update_id, payload = build_registry_message_delivery(
             conversation_ref=conversation_ref,
             text=text,

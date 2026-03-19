@@ -176,14 +176,15 @@ check_contains "stderr contains follow-up message" "$stderr" "Provider health ch
 check_exit "script exits non-zero on doctor failure" "$exit_code" "1"
 
 echo
-echo "=== container_provider_login.sh: codex path runs codex --login ==="
+echo "=== container_provider_login.sh: codex path runs codex login --device-auth ==="
 # Python that succeeds so script reaches success
 printf '#!/bin/sh\nexit 0\n' > "$MOCK_BIN/python"
 chmod +x "$MOCK_BIN/python"
 rm -f "$RECORD_CODEX_ARGS" "$RECORD_CLAUDE_ARGS"
 PATH="$MOCK_BIN:$PATH" BOT_PROVIDER=codex bash "$REPO_DIR/scripts/provider/container_provider_login.sh" >/dev/null 2>&1
 codex_args="$(cat "$RECORD_CODEX_ARGS" 2>/dev/null || true)"
-check_contains "codex invoked with --login" "$codex_args" "--login"
+check_contains "codex invoked with login" "$codex_args" "login"
+check_contains "codex invoked with device auth" "$codex_args" "--device-auth"
 
 echo
 echo "=== container_provider_login.sh: non-zero provider exit still reaches health check ==="

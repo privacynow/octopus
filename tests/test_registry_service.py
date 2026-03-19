@@ -2,11 +2,15 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
+import shutil
 import sqlite3
 
 from fastapi.testclient import TestClient
 
-from app.registry_service.app import app
+import app.content_store as content_store_mod
+from app.channels.registry import auth as registry_auth
+from app.channels.registry.http import app
+from app.channels.registry import ingress, ui
 from app.registry_service.store import RegistrySQLiteStore
 from app.runtime_health import (
     QueueSnapshot,
@@ -17,12 +21,25 @@ from app.runtime_health import (
     WorkerHeartbeat,
     report_to_dict,
 )
+from app.storage import default_session, ensure_data_dirs, save_session
+from app.identity import telegram_actor_key, telegram_conversation_key
 
 
 def _configure_registry(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
+
+
+def _configure_runtime_surface(monkeypatch, tmp_path: Path) -> Path:
+    data_dir = tmp_path / "bot-data"
+    monkeypatch.setenv("BOT_PROVIDER", "claude")
+    monkeypatch.setenv("BOT_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("BOT_WORKING_DIR", str(tmp_path))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "telegram-test-token")
+    ensure_data_dirs(data_dir)
+    ingress.reset_for_test()
+    return data_dir
 
 
 def _enroll_and_register(client: TestClient, name: str, slug: str) -> tuple[str, str]:
@@ -34,13 +51,13 @@ def _enroll_and_register(client: TestClient, name: str, slug: str) -> tuple[str,
                 "display_name": name,
                 "slug": slug,
                 "role": "developer",
-                "skills": ["python", "tests"],
+                "capabilities": ["python", "tests"],
                 "tags": ["backend"],
                 "description": "Writes and tests code",
                 "provider": "codex",
                 "mode": "registry",
                 "connectivity_state": "degraded",
-                "surface_capabilities": ["telegram", "registry"],
+                "channel_capabilities": ["telegram", "registry"],
                 "version": "test",
             },
         },
@@ -56,12 +73,12 @@ def _enroll_and_register(client: TestClient, name: str, slug: str) -> tuple[str,
                 "display_name": name,
                 "slug": slug,
                 "role": "developer",
-                "skills": ["python", "tests"],
+                "capabilities": ["python", "tests"],
                 "tags": ["backend"],
                 "description": "Writes and tests code",
                 "provider": "codex",
                 "mode": "registry",
-                "surface_capabilities": ["telegram", "registry"],
+                "channel_capabilities": ["telegram", "registry"],
                 "version": "test",
             },
             "connectivity_state": "connected",
@@ -150,7 +167,7 @@ def test_registry_enroll_register_heartbeat_and_search(monkeypatch, tmp_path: Pa
     search = client.post(
         "/v1/agents/discovery/search",
         headers={"Authorization": f"Bearer {token}"},
-        json={"role": "developer", "skills": ["python"], "required_state": "connected"},
+        json={"role": "developer", "capabilities": ["python"], "required_state": "connected"},
     )
     assert search.status_code == 200
     agents = search.json()["agents"]
@@ -196,6 +213,393 @@ def test_registry_ui_exposes_runtime_health_summary_and_detail(monkeypatch, tmp_
     assert [row["worker_id"] for row in payload["workers"]] == ["worker-a", "worker-b"]
 
 
+def test_registry_catalog_and_provider_preview(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    _configure_runtime_surface(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    listed = client.get(
+        "/v1/catalog/skills?q=github",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert listed.status_code == 200
+    listed_payload = listed.json()["skills"]
+    names = {item["name"] for item in listed_payload}
+    assert "github-integration" in names
+    github_summary = next(item for item in listed_payload if item["name"] == "github-integration")
+    assert github_summary["source_kind"] == "builtin"
+    assert github_summary["can_activate"] is True
+    assert github_summary["can_update"] is False
+    assert github_summary["can_uninstall"] is False
+
+    detail = client.get(
+        "/v1/catalog/skills/github-integration",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["name"] == "github-integration"
+    assert payload["source_kind"] == "builtin"
+    assert "GITHUB_TOKEN" in payload["requirement_keys"]
+
+    preview = client.post(
+        "/v1/provider-guidance/claude/preview",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={
+            "role": "Senior engineer",
+            "active_skills": ["github-integration"],
+            "compact_mode": True,
+        },
+    )
+    assert preview.status_code == 200
+    preview_payload = preview.json()
+    assert preview_payload["provider"] == "claude"
+    assert preview_payload["prompt_weight"] > 0
+    assert "summary first" in preview_payload["system_prompt"].lower()
+
+
+def test_registry_lifecycle_endpoints_cover_skill_and_guidance(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    _configure_runtime_surface(monkeypatch, tmp_path)
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer ui-secret"}
+
+    created = client.put(
+        "/v1/catalog/skills/release-notes/draft",
+        headers=headers,
+        json={
+            "actor_key": "reg:ui",
+            "body": "Summarize release notes carefully.",
+            "description": "Release notes helper",
+            "changelog": "initial draft",
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["status"] == "draft_saved"
+
+    before_publish = client.get("/v1/catalog/skills/release-notes", headers=headers)
+    assert before_publish.status_code == 200
+    assert before_publish.json()["can_activate"] is False
+
+    detail = client.get("/v1/catalog/skills/release-notes/lifecycle", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["lifecycle_status"] == "draft"
+
+    for path in ("submit", "approve", "publish"):
+        response = client.post(
+            f"/v1/catalog/skills/release-notes/{path}",
+            headers=headers,
+            json={"actor_key": "reg:ui", "note": path},
+        )
+        assert response.status_code == 200
+
+    after_publish = client.get("/v1/catalog/skills/release-notes", headers=headers)
+    assert after_publish.status_code == 200
+    assert after_publish.json()["can_activate"] is True
+
+    guidance_edit = client.put(
+        "/v1/provider-guidance/claude/draft",
+        headers=headers,
+        json={
+            "actor_key": "reg:ui",
+            "body": "# Registry Guidance\n\nUse the registry lifecycle path.",
+            "scope_kind": "system",
+            "scope_key": "",
+        },
+    )
+    assert guidance_edit.status_code == 200
+    assert guidance_edit.json()["status"] == "draft_saved"
+
+    preview_before = client.post(
+        "/v1/provider-guidance/claude/preview",
+        headers=headers,
+        json={"role": "", "active_skills": [], "compact_mode": False},
+    )
+    assert preview_before.status_code == 200
+    assert "Registry Guidance" not in preview_before.json()["effective_guidance"]
+
+    for path in ("submit", "approve", "publish"):
+        response = client.post(
+            f"/v1/provider-guidance/claude/{path}",
+            headers=headers,
+            json={"actor_key": "reg:ui", "note": path},
+        )
+        assert response.status_code == 200
+
+    guidance_detail = client.get("/v1/provider-guidance/claude", headers=headers)
+    assert guidance_detail.status_code == 200
+    assert guidance_detail.json()["lifecycle_status"] == "published"
+
+    preview_after = client.post(
+        "/v1/provider-guidance/claude/preview",
+        headers=headers,
+        json={"role": "", "active_skills": [], "compact_mode": False},
+    )
+    assert preview_after.status_code == 200
+    assert "Registry Guidance" in preview_after.json()["effective_guidance"]
+
+
+def test_registry_lifecycle_endpoints_are_replay_safe(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    _configure_runtime_surface(monkeypatch, tmp_path)
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer ui-secret"}
+
+    created = client.put(
+        "/v1/catalog/skills/replay-skill/draft",
+        headers=headers,
+        json={
+            "actor_key": "reg:ui",
+            "body": "Replay-safe skill body.",
+            "description": "Replay test",
+            "changelog": "initial draft",
+        },
+    )
+    assert created.status_code == 200
+
+    first_submit = client.post(
+        "/v1/catalog/skills/replay-skill/submit",
+        headers=headers,
+        json={"actor_key": "reg:ui", "note": "submit"},
+    )
+    assert first_submit.status_code == 200
+    assert first_submit.json()["status"] == "submitted"
+
+    second_submit = client.post(
+        "/v1/catalog/skills/replay-skill/submit",
+        headers=headers,
+        json={"actor_key": "reg:ui", "note": "submit-again"},
+    )
+    assert second_submit.status_code == 200
+    assert second_submit.json()["status"] == "already_submitted"
+
+    first_approve = client.post(
+        "/v1/catalog/skills/replay-skill/approve",
+        headers=headers,
+        json={"actor_key": "reg:ui", "note": "approve"},
+    )
+    assert first_approve.status_code == 200
+    assert first_approve.json()["status"] == "approved"
+
+    second_approve = client.post(
+        "/v1/catalog/skills/replay-skill/approve",
+        headers=headers,
+        json={"actor_key": "reg:ui", "note": "approve-again"},
+    )
+    assert second_approve.status_code == 200
+    assert second_approve.json()["status"] == "already_approved"
+
+    lifecycle_before_publish = client.get("/v1/catalog/skills/replay-skill/lifecycle", headers=headers)
+    assert lifecycle_before_publish.status_code == 200
+    active_revision_id = lifecycle_before_publish.json()["active_revision_id"]
+
+    store = content_store_mod.get_content_store()
+    store.set_skill_revision_status("replay-skill", active_revision_id, "published")
+
+    repaired_publish = client.post(
+        "/v1/catalog/skills/replay-skill/publish",
+        headers=headers,
+        json={"actor_key": "reg:ui", "note": "publish"},
+    )
+    assert repaired_publish.status_code == 200
+    assert repaired_publish.json()["status"] == "published"
+
+    lifecycle_after_publish = client.get("/v1/catalog/skills/replay-skill/lifecycle", headers=headers)
+    assert lifecycle_after_publish.status_code == 200
+    detail = lifecycle_after_publish.json()
+    assert detail["published_revision_id"] == active_revision_id
+    assert sum(1 for item in detail["approvals"] if item["action"] == "submitted") == 1
+    assert sum(1 for item in detail["approvals"] if item["action"] == "approved") == 1
+    assert sum(1 for item in detail["approvals"] if item["action"] == "published") == 1
+
+
+def test_registry_conversation_skill_activation_surface(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    data_dir = _configure_runtime_surface(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _, token = _enroll_and_register(client, "Dev Bot", "dev-bot")
+
+    conversation_key = telegram_conversation_key(12345)
+    conversation_id = "telegram:dev-bot:12345"
+    session = default_session("claude", {"session_id": "test", "started": False}, "on")
+    save_session(data_dir, conversation_key, session)
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": conversation_id,
+            "title": "Telegram chat 12345",
+            "origin_channel": "telegram",
+            "external_id": "12345",
+        },
+    )
+    assert bind.status_code == 200
+
+    activate = client.post(
+        f"/v1/conversations/{conversation_id}/skills/code-review/activate",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={"actor_key": telegram_actor_key(42)},
+    )
+    assert activate.status_code == 200
+    assert activate.json()["status"] == "activated"
+
+    listed = client.get(
+        f"/v1/conversations/{conversation_id}/skills",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert listed.status_code == 200
+    assert listed.json()["conversation_key"] == conversation_key
+    assert listed.json()["active_skills"] == ["code-review"]
+
+    deactivate = client.post(
+        f"/v1/conversations/{conversation_id}/skills/code-review/deactivate",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={"actor_key": telegram_actor_key(42)},
+    )
+    assert deactivate.status_code == 200
+    assert deactivate.json()["status"] == "removed"
+
+
+def test_registry_conversation_skill_state_filters_unresolvable_raw_skills(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    data_dir = _configure_runtime_surface(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _, token = _enroll_and_register(client, "Dev Bot", "dev-bot")
+
+    conversation_key = telegram_conversation_key(12346)
+    conversation_id = "telegram:dev-bot:12346"
+    session = default_session("claude", {"session_id": "test", "started": False}, "on")
+    session["active_skills"] = ["code-review", "missing-skill"]
+    save_session(data_dir, conversation_key, session)
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": conversation_id,
+            "title": "Telegram chat 12346",
+            "origin_channel": "telegram",
+            "external_id": "12346",
+        },
+    )
+    assert bind.status_code == 200
+
+    listed = client.get(
+        f"/v1/conversations/{conversation_id}/skills",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert listed.status_code == 200
+    assert listed.json()["active_skills"] == ["code-review"]
+
+
+def test_registry_conversation_skill_surface_lazy_loads_default_session(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    _configure_runtime_surface(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _, token = _enroll_and_register(client, "Registry Bot", "registry-bot")
+
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": "conv-runtime-1",
+            "title": "Registry runtime conversation",
+            "origin_channel": "registry",
+            "external_id": "conv-runtime-1",
+        },
+    )
+    assert bind.status_code == 200
+
+    listed = client.get(
+        "/v1/conversations/conv-runtime-1/skills",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert listed.status_code == 200
+    assert listed.json()["conversation_key"] == "conv-runtime-1"
+    assert listed.json()["active_skills"] == []
+
+    activate = client.post(
+        "/v1/conversations/conv-runtime-1/skills/code-review/activate",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={"actor_key": "reg:ui"},
+    )
+    assert activate.status_code == 200
+    assert activate.json()["status"] == "activated"
+
+    listed = client.get(
+        "/v1/conversations/conv-runtime-1/skills",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert listed.status_code == 200
+    assert listed.json()["active_skills"] == ["code-review"]
+
+
+def test_registry_catalog_install_and_uninstall(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    _configure_runtime_surface(monkeypatch, tmp_path)
+    monkeypatch.setenv("BOT_REGISTRY_URL", "https://registry.example.test/index.json")
+    client = TestClient(app)
+    helper_dir = tmp_path / "registry-helper"
+    helper_dir.mkdir()
+    (helper_dir / "skill.md").write_text(
+        "---\nname: helper\ndisplay_name: Helper\ndescription: registry test\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+
+    from app.registry import RegistrySkill, skill_artifact_digest
+    import app.skill_import_service as import_service
+
+    monkeypatch.setattr(
+        import_service.registry_client,
+        "fetch_index",
+        lambda registry_url: {
+            "helper": RegistrySkill(
+                name="helper",
+                display_name="Helper",
+                description="registry test",
+                version="1.0.0",
+                publisher="tests",
+                digest=skill_artifact_digest(helper_dir),
+                artifact_url="https://registry.example.test/artifacts/helper.tar.gz",
+            )
+        },
+    )
+    monkeypatch.setattr(
+        import_service.registry_client,
+        "download_artifact",
+        lambda artifact_url, dest_dir: shutil.copytree(helper_dir, dest_dir, dirs_exist_ok=True),
+    )
+
+    install = client.post(
+        "/v1/catalog/skills/helper/install",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert install.status_code == 200
+    assert install.json()["ok"] is True
+
+    detail = client.get(
+        "/v1/catalog/skills/helper",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert detail.status_code == 200
+    assert detail.json()["source_kind"] == "imported"
+    assert detail.json()["can_update"] is True
+    assert detail.json()["can_uninstall"] is True
+
+    diff = client.get(
+        "/v1/catalog/skills/helper/diff",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert diff.status_code == 200
+    assert "no differences" in diff.json()["diff"].lower()
+
+    uninstall = client.post(
+        "/v1/catalog/skills/helper/uninstall",
+        headers={"Authorization": "Bearer ui-secret"},
+    )
+    assert uninstall.status_code == 200
+    assert uninstall.json()["ok"] is True
+
+
 def test_registry_bind_conversation_is_visible_in_ui(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -207,7 +611,7 @@ def test_registry_bind_conversation_is_visible_in_ui(monkeypatch, tmp_path: Path
         json={
             "conversation_id": "telegram:dev-bot:123",
             "title": "Telegram chat 123",
-            "origin_surface": "telegram",
+            "origin_channel": "telegram",
             "external_id": "123",
         },
     )
@@ -257,6 +661,106 @@ def test_ui_login_with_wrong_password_returns_form_with_error(monkeypatch, tmp_p
     assert "Incorrect password." in response.text
 
 
+def test_ui_shell_includes_runtime_skills_panel(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    login = client.post(
+        "/ui/login",
+        data={"password": "ui-secret"},
+        follow_redirects=False,
+    )
+    assert login.status_code == 303
+
+    response = client.get("/ui")
+    assert response.status_code == 200
+    assert "Runtime Skills" in response.text
+    assert "runtime-skill-search" in response.text
+    assert "Catalog, prompt preview, and conversation activation" in response.text
+
+
+def test_ui_shell_includes_rich_registry_editors(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    login = client.post(
+        "/ui/login",
+        data={"password": "ui-secret"},
+        follow_redirects=False,
+    )
+    assert login.status_code == 303
+
+    response = client.get("/ui")
+    assert response.status_code == 200
+    assert "registry-editor-ready" in response.text
+    assert "@codemirror/state" in response.text
+    assert "@codemirror/view" in response.text
+    assert "runtime-skill-create-button" in response.text
+    assert "runtime-skill-editor-textarea" in response.text
+    assert "provider-guidance-select" in response.text
+    assert "provider-guidance-editor-textarea" in response.text
+    assert "/v1/catalog/skills/${encodeURIComponent(skillName)}/draft" in response.text
+    assert "/v1/catalog/skills/${encodeURIComponent(skillName)}/${action}" in response.text
+    assert 'data-runtime-skill-lifecycle-action="publish"' in response.text
+    assert "/v1/provider-guidance/${encodeURIComponent(providerName)}/draft" in response.text
+    assert "/v1/provider-guidance/${encodeURIComponent(providerName)}/${action}" in response.text
+    assert 'data-provider-guidance-action="publish"' in response.text
+
+
+def test_registry_ui_render_shell_helper_includes_editor_markers():
+    html_text = ui.render_shell_html(
+        title_text="Agent Registry",
+        heading_text="Agent Registry",
+        logout_link='<a href="/ui/logout" class="nav-link">Logout</a>',
+        token="ui-secret",
+    )
+
+    assert "registry-editor-ready" in html_text
+    assert "@codemirror/state" in html_text
+    assert "@codemirror/view" in html_text
+    assert "runtime-skill-editor-textarea" in html_text
+    assert "provider-guidance-editor-textarea" in html_text
+    assert "const token = 'ui-secret';" in html_text
+
+
+def test_registry_http_module_has_no_inline_ui_shell_and_stays_under_guard_threshold():
+    repo_root = Path(__file__).resolve().parents[1]
+    http_path = repo_root / "app" / "channels" / "registry" / "http.py"
+    text = http_path.read_text()
+    lowered = text.lower()
+
+    assert len(text.splitlines()) <= 1800
+    assert "<!doctype html>" not in lowered
+    assert "<html" not in lowered
+    assert "<script" not in lowered
+    assert "<style" not in lowered
+
+
+def test_registry_auth_load_settings_reads_registry_env(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    monkeypatch.setenv("REGISTRY_DISPLAY_NAME", "QA Registry")
+
+    settings = registry_auth.load_settings()
+
+    assert settings.db_path == tmp_path / "registry.sqlite3"
+    assert settings.enroll_token == "enroll-secret"
+    assert settings.ui_token == "ui-secret"
+    assert settings.display_name == "QA Registry"
+
+
+def test_registry_http_module_delegates_auth_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    http_path = repo_root / "app" / "channels" / "registry" / "http.py"
+    text = http_path.read_text()
+
+    assert "class RegistrySettings" not in text
+    assert "SessionMiddleware" not in text
+    assert "def require_agent_token" not in text
+    assert "def require_ui_token" not in text
+    assert "def _session_is_valid" not in text
+    assert "def _require_session" not in text
+
+
 def test_ui_bootstrap_still_accepts_bearer_token(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
@@ -268,7 +772,7 @@ def test_ui_bootstrap_still_accepts_bearer_token(monkeypatch, tmp_path: Path):
     assert response.status_code == 200
 
 
-def test_registry_ui_conversation_routes_surface_input_to_polled_bot(monkeypatch, tmp_path: Path):
+def test_registry_ui_conversation_routes_channel_input_to_polled_bot(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
 
@@ -293,7 +797,7 @@ def test_registry_ui_conversation_routes_surface_input_to_polled_bot(monkeypatch
     assert poll.status_code == 200
     deliveries = poll.json()["deliveries"]
     assert len(deliveries) == 1
-    assert deliveries[0]["kind"] == "surface_input"
+    assert deliveries[0]["kind"] == "channel_input"
     assert deliveries[0]["payload"]["conversation_id"] == conversation_id
     assert deliveries[0]["payload"]["text"] == "Please refine this PRD."
 
@@ -323,7 +827,7 @@ def test_publish_timeline_stores_events(monkeypatch, tmp_path: Path):
         json={
             "conversation_id": "conv-timeline-1",
             "title": "Timeline conversation",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
             "external_id": "conv-timeline-1",
         },
     )
@@ -376,7 +880,7 @@ def test_ui_bootstrap_includes_timeline_event_count(monkeypatch, tmp_path: Path)
         json={
             "conversation_id": "conv-count-1",
             "title": "Counted timeline",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
             "external_id": "conv-count-1",
         },
     )
@@ -427,7 +931,7 @@ def test_ui_search_returns_matching_conversations(monkeypatch, tmp_path: Path):
         json={
             "conversation_id": "conv-search-1",
             "title": "Searchable conversation",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
             "external_id": "conv-search-1",
         },
     )
@@ -485,7 +989,7 @@ def test_ui_export_conversation_returns_markdown_and_missing_conversation_404(mo
         json={
             "conversation_id": "conv-export-1",
             "title": "Exportable conversation",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
             "external_id": "conv-export-1",
         },
     )
@@ -552,7 +1056,7 @@ def test_ui_usage_endpoint_returns_daily_totals(monkeypatch, tmp_path: Path):
         json={
             "conversation_id": "conv-usage-1",
             "title": "Usage conversation",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
             "external_id": "conv-usage-1",
         },
     )
@@ -713,7 +1217,7 @@ def test_ui_create_conversation_creates_delivery(monkeypatch, tmp_path: Path):
     assert poll.status_code == 200
     deliveries = poll.json()["deliveries"]
     assert len(deliveries) == 1
-    assert deliveries[0]["kind"] == "surface_input"
+    assert deliveries[0]["kind"] == "channel_input"
     assert deliveries[0]["payload"]["conversation_id"] == conversation_id
     assert deliveries[0]["payload"]["text"] == "Start from the registry UI."
 
@@ -748,7 +1252,7 @@ def test_ui_action_delivery_includes_conversation_ref(monkeypatch, tmp_path: Pat
         params={"cursor": "0", "limit": 20, "wait_seconds": 0},
     )
     assert poll.status_code == 200
-    deliveries = [item for item in poll.json()["deliveries"] if item["kind"] == "surface_action"]
+    deliveries = [item for item in poll.json()["deliveries"] if item["kind"] == "channel_action"]
     assert len(deliveries) == 1
     assert deliveries[0]["payload"]["conversation_ref"] == conversation_id
     assert deliveries[0]["payload"]["action"] == "approve_delegation"
@@ -772,8 +1276,9 @@ def test_cancel_conversation_marks_status_cancelling_and_late_progress_does_not_
     conversation_id = create.json()["conversation_id"]
 
     cancel = client.post(
-        f"/v1/ui/conversations/{conversation_id}/cancel",
+        f"/v1/ui/conversations/{conversation_id}/actions",
         headers={"Authorization": "Bearer ui-secret"},
+        json={"action": "cancel_conversation"},
     )
     assert cancel.status_code == 200
 
@@ -816,7 +1321,7 @@ def test_publish_timeline_rejects_foreign_conversation(monkeypatch, tmp_path: Pa
         json={
             "conversation_id": "conv-owner-1",
             "title": "Owner conversation",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
             "external_id": "conv-owner-1",
         },
     )
@@ -900,13 +1405,42 @@ def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: P
     assert any(item["kind"] == "routed_result" for item in origin_deliveries)
 
 
-def test_registry_store_migrations_are_idempotent_and_add_skills_override_and_timeline_fts(tmp_path: Path):
+def test_registry_store_migrations_are_idempotent_and_upgrade_legacy_channel_columns(tmp_path: Path):
     db_path = tmp_path / "registry.sqlite3"
     conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE agents ("
+        "agent_id TEXT PRIMARY KEY, agent_token TEXT NOT NULL UNIQUE, "
+        "display_name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, "
+        "role TEXT NOT NULL DEFAULT '', skills_json TEXT NOT NULL DEFAULT '[]', "
+        "tags_json TEXT NOT NULL DEFAULT '[]', description TEXT NOT NULL DEFAULT '', "
+        "provider TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL DEFAULT 'standalone', "
+        "connectivity_state TEXT NOT NULL DEFAULT 'standalone', "
+        "current_capacity INTEGER NOT NULL DEFAULT 0, max_capacity INTEGER NOT NULL DEFAULT 1, "
+        "surface_capabilities_json TEXT NOT NULL DEFAULT '[]', "
+        "version TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, last_heartbeat_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE deliveries ("
+        "seq INTEGER PRIMARY KEY AUTOINCREMENT, delivery_id TEXT NOT NULL UNIQUE, "
+        "target_agent_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, "
+        "state TEXT NOT NULL DEFAULT 'queued', created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, leased_at TEXT, acked_at TEXT)"
+    )
     conn.execute(
         "CREATE TABLE conversations (conversation_id TEXT PRIMARY KEY, target_agent_id TEXT NOT NULL, "
         "title TEXT NOT NULL DEFAULT '', origin_surface TEXT NOT NULL DEFAULT 'registry', "
         "status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        """
+        INSERT INTO deliveries (
+            delivery_id, target_agent_id, kind, payload_json, state, created_at, updated_at
+        ) VALUES
+            ('legacy-input', 'agent-1', 'surface_input', '{}', 'queued', '2026-03-18T00:00:00+00:00', '2026-03-18T00:00:00+00:00'),
+            ('legacy-action', 'agent-1', 'surface_action', '{}', 'queued', '2026-03-18T00:00:00+00:00', '2026-03-18T00:00:00+00:00')
+        """
     )
     conn.commit()
     conn.close()
@@ -916,7 +1450,26 @@ def test_registry_store_migrations_are_idempotent_and_add_skills_override_and_ti
 
     conn = sqlite3.connect(db_path)
     version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-    assert version == "3"
+    assert version == "4"
+    agent_columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(agents)").fetchall()
+    }
+    assert "channel_capabilities_json" in agent_columns
+    assert "surface_capabilities_json" not in agent_columns
+    conversation_columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(conversations)").fetchall()
+    }
+    assert "origin_channel" in conversation_columns
+    assert "origin_surface" not in conversation_columns
+    delivery_kinds = conn.execute(
+        "SELECT delivery_id, kind FROM deliveries ORDER BY delivery_id"
+    ).fetchall()
+    assert delivery_kinds == [
+        ("legacy-action", "channel_action"),
+        ("legacy-input", "channel_input"),
+    ]
     tables = {
         row[0]
         for row in conn.execute(

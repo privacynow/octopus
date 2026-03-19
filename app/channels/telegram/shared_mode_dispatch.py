@@ -24,6 +24,7 @@ from app.channels.telegram.conversation import (
 from app.channels.telegram.delegation_channel import parse_delegation_callback
 from app.channels.telegram.normalization import normalize_callback, normalize_command
 from app.channels.telegram.runtime_skills import (
+    handle_skills_command as runtime_skill_handle_skills_command,
     TelegramRuntimeSkillsRuntime,
     handle_skill_add_callback as runtime_skill_handle_skill_add_callback,
 )
@@ -45,14 +46,7 @@ def build_shared_command_handler(
     build_runtime_skill_runtime: Callable[[ChatLock], TelegramRuntimeSkillsRuntime],
 ) -> Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]:
     async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await shared_command_dispatch(
-            update,
-            context,
-            runtime=runtime,
-            chat_lock=chat_lock,
-            build_conversation_runtime=build_conversation_runtime,
-            build_runtime_skill_runtime=build_runtime_skill_runtime,
-        )
+        await shared_command_dispatch(update, context, runtime=runtime, chat_lock=chat_lock, build_conversation_runtime=build_conversation_runtime, build_runtime_skill_runtime=build_runtime_skill_runtime)
 
     handler.__name__ = "shared_command_dispatch"
     return handler
@@ -65,13 +59,7 @@ def build_shared_callback_handler(
     build_runtime_skill_runtime: Callable[[ChatLock], TelegramRuntimeSkillsRuntime],
 ) -> Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]:
     async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await shared_callback_dispatch(
-            update,
-            context,
-            runtime=runtime,
-            chat_lock=chat_lock,
-            build_runtime_skill_runtime=build_runtime_skill_runtime,
-        )
+        await shared_callback_dispatch(update, context, runtime=runtime, chat_lock=chat_lock, build_runtime_skill_runtime=build_runtime_skill_runtime)
 
     handler.__name__ = "shared_callback_dispatch"
     return handler
@@ -286,16 +274,8 @@ def _is_allowed(runtime: TelegramRuntime, user) -> bool:
     return access.is_allowed_user_with_override(runtime.config, user, override)
 
 
-def _is_admin(runtime: TelegramRuntime, user) -> bool:
-    return access.is_admin_user(runtime.config, user)
-
-
-def _is_public_user(runtime: TelegramRuntime, user) -> bool:
-    return access.is_public_user(runtime.config, user)
-
-
 async def _public_guard(runtime: TelegramRuntime, event, update: Update) -> bool:
-    if _is_public_user(runtime, event.user):
+    if access.is_public_user(runtime.config, event.user):
         rendered = telegram_presenters.public_command_not_available_message()
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return True
@@ -319,36 +299,6 @@ def _action_requires_public_guard(action: str) -> bool:
     }
 
 
-async def _enqueue_shared_action(
-    runtime: TelegramRuntime,
-    update: Update,
-    action: InboundAction,
-) -> tuple[bool, str | None]:
-    envelope = _build_action_envelope(
-        transport="telegram",
-        event_id=event_key(update.update_id),
-        action=action,
-    )
-    return enqueue_inbound_envelope(runtime.config.data_dir, envelope)
-
-
-def _shared_action_envelope(update: Update, action: InboundAction) -> InboundEnvelope:
-    return _build_action_envelope(
-        transport="telegram",
-        event_id=event_key(update.update_id),
-        action=action,
-    )
-
-
-def _record_shared_action(
-    runtime: TelegramRuntime,
-    update: Update,
-    action: InboundAction,
-) -> tuple[bool, InboundEnvelope]:
-    envelope = _shared_action_envelope(update, action)
-    return record_inbound_envelope(runtime.config.data_dir, envelope), envelope
-
-
 async def _shared_cancel_command(
     runtime: TelegramRuntime,
     update: Update,
@@ -358,141 +308,23 @@ async def _shared_cancel_command(
     chat_lock: ChatLock,
     build_conversation_runtime: Callable[[ChatLock], TelegramConversationRuntime],
 ) -> None:
-    is_new, envelope = _record_shared_action(runtime, update, action)
-    if not is_new:
+    if not record_inbound_envelope(
+        runtime.config.data_dir,
+        _build_action_envelope(
+            transport="telegram",
+            event_id=event_key(update.update_id),
+            action=action,
+        ),
+    ):
         return
-    del envelope
     await conversation_cancel_chat_operation(
         event.chat_id,
         update.effective_message,
         runtime=build_conversation_runtime(_chat_lock_adapter(runtime, chat_lock)),
         actor_user_id=event.user.id,
-        allow_admin_override=_is_admin(runtime, event.user),
+        allow_admin_override=access.is_admin_user(runtime.config, event.user),
         update_id=update.update_id,
     )
-
-
-async def _shared_skills_inline_handler(
-    runtime: TelegramRuntime,
-    event,
-    update: Update,
-    *,
-    chat_lock: ChatLock,
-    build_runtime_skill_runtime: Callable[[ChatLock], TelegramRuntimeSkillsRuntime],
-) -> None:
-    from app.channels.telegram.runtime_skills import (
-        skills_add,
-        skills_approve,
-        skills_archive,
-        skills_clear,
-        skills_create,
-        skills_diff,
-        skills_edit,
-        skills_history,
-        skills_info,
-        skills_install,
-        skills_list,
-        skills_publish,
-        skills_reject,
-        skills_remove,
-        skills_search,
-        skills_setup,
-        skills_show,
-        skills_submit,
-        skills_uninstall,
-        skills_update,
-        skills_updates,
-    )
-
-    args = event.args
-    skills_runtime = build_runtime_skill_runtime(_chat_lock_adapter(runtime, chat_lock))
-    if not args:
-        await skills_show(event, update, runtime=skills_runtime)
-        return
-
-    subs_with_arg = {
-        "add": skills_add,
-        "remove": skills_remove,
-        "setup": skills_setup,
-        "create": skills_create,
-        "info": skills_info,
-        "install": skills_install,
-        "uninstall": skills_uninstall,
-        "diff": skills_diff,
-        "history": skills_history,
-        "submit": skills_submit,
-        "approve": skills_approve,
-        "reject": skills_reject,
-        "publish": skills_publish,
-        "archive": skills_archive,
-    }
-    sub = args[0].lower()
-    if sub in subs_with_arg and len(args) >= 2:
-        await subs_with_arg[sub](event, update, args[1], runtime=skills_runtime)
-        return
-    if sub == "list":
-        await skills_list(event, update, runtime=skills_runtime)
-        return
-    if sub == "clear":
-        await skills_clear(event, update, runtime=skills_runtime)
-        return
-    if sub == "search" and len(args) >= 2:
-        await skills_search(event, update, " ".join(args[1:]), runtime=skills_runtime)
-        return
-    if sub == "updates":
-        await skills_updates(event, update, runtime=skills_runtime)
-        return
-    if sub == "update" and len(args) >= 2:
-        await skills_update(event, update, args[1], runtime=skills_runtime)
-        return
-    if sub == "edit" and len(args) >= 3:
-        await skills_edit(event, update, args[1], " ".join(args[2:]), runtime=skills_runtime)
-        return
-
-    rendered = telegram_presenters.skills_usage_message()
-    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-
-
-async def _shared_inline_command_handler(
-    runtime: TelegramRuntime,
-    event,
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    *,
-    chat_lock: ChatLock,
-    build_conversation_runtime: Callable[[ChatLock], TelegramConversationRuntime],
-    build_runtime_skill_runtime: Callable[[ChatLock], TelegramRuntimeSkillsRuntime],
-) -> bool:
-    command = (event.command or "").lower()
-    conversation_runtime = build_conversation_runtime(_chat_lock_adapter(runtime, chat_lock))
-    if command == "approval":
-        await conversation_cmd_approval(event, update, context, runtime=conversation_runtime)
-        return True
-    if command == "skills":
-        await _shared_skills_inline_handler(
-            runtime,
-            event,
-            update,
-            chat_lock=chat_lock,
-            build_runtime_skill_runtime=build_runtime_skill_runtime,
-        )
-        return True
-    if command == "compact":
-        await conversation_cmd_compact(event, update, context, runtime=conversation_runtime)
-        return True
-    if command == "role":
-        await conversation_cmd_role(event, update, context, runtime=conversation_runtime)
-        return True
-    if command == "model":
-        await conversation_cmd_model(event, update, context, runtime=conversation_runtime)
-        return True
-    if command == "project":
-        await conversation_cmd_project(event, update, context, runtime=conversation_runtime)
-        return True
-    if command == "policy":
-        await conversation_cmd_policy(event, update, context, runtime=conversation_runtime)
-        return True
-    return False
 
 
 async def shared_command_dispatch(
@@ -514,16 +346,23 @@ async def shared_command_dispatch(
 
     action = _worker_owned_command_action(event)
     if action is None:
-        handled = await _shared_inline_command_handler(
-            runtime,
-            event,
-            update,
-            context,
-            chat_lock=chat_lock,
-            build_conversation_runtime=build_conversation_runtime,
-            build_runtime_skill_runtime=build_runtime_skill_runtime,
-        )
-        if handled:
+        command = (event.command or "").lower()
+        if command == "skills":
+            await runtime_skill_handle_skills_command(
+                event,
+                update,
+                runtime=build_runtime_skill_runtime(_chat_lock_adapter(runtime, chat_lock)),
+            )
+            return
+        inline_handlers = {"approval": conversation_cmd_approval, "compact": conversation_cmd_compact, "role": conversation_cmd_role, "model": conversation_cmd_model, "project": conversation_cmd_project, "policy": conversation_cmd_policy}
+        handler = inline_handlers.get(command)
+        if handler is not None:
+            await handler(
+                event,
+                update,
+                context,
+                runtime=build_conversation_runtime(_chat_lock_adapter(runtime, chat_lock)),
+            )
             return
         return
 
@@ -541,7 +380,14 @@ async def shared_command_dispatch(
         )
         return
 
-    await _enqueue_shared_action(runtime, update, action)
+    enqueue_inbound_envelope(
+        runtime.config.data_dir,
+        _build_action_envelope(
+            transport="telegram",
+            event_id=event_key(update.update_id),
+            action=action,
+        ),
+    )
 
 
 async def shared_callback_dispatch(
@@ -573,9 +419,16 @@ async def shared_callback_dispatch(
         await query.answer()
         return
 
-    if _action_requires_public_guard(action.action) and _is_public_user(runtime, event.user):
+    if _action_requires_public_guard(action.action) and access.is_public_user(runtime.config, event.user):
         await query.answer(telegram_presenters.public_command_not_available_message().text, show_alert=True)
         return
 
     await query.answer()
-    await _enqueue_shared_action(runtime, update, action)
+    enqueue_inbound_envelope(
+        runtime.config.data_dir,
+        _build_action_envelope(
+            transport="telegram",
+            event_id=event_key(update.update_id),
+            action=action,
+        ),
+    )

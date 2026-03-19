@@ -120,4 +120,18 @@
   - credential-validation logging now records the target host and owning skill name without logging the credential value or full validation URL
   - the setup prompt now shows the validation host to the user before they submit a credential, while built-in GitHub validation continues to work under the default host policy
   Commit:
-  - pending current slice commit
+  - `b1709f8`
+
+## Final Verification
+
+- Verified security gates against the repo-local plan in `security_plan.md`.
+- Confirmed no rendered registry UI source carries `REGISTRY_UI_TOKEN` or a
+  browser-side `Authorization: Bearer` flow in app code.
+- Confirmed `app/` contains no `os.environ.copy()` subprocess inheritance.
+- Confirmed registry startup still rejects known default tokens and secret files
+  remain permission-hardened in scripts and agent state storage.
+- Confirmed registry artifact extraction enforces compressed and expanded
+  quotas, and credential validation rejects non-allowlisted hosts before any
+  outbound request is sent.
+- Final full suite before closeout: `1742 passed, 23 skipped`.
+- Security remediation code-complete commit: `b1709f8`.

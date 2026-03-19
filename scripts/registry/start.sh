@@ -18,7 +18,9 @@ print(secrets.token_urlsafe(24))
 PY
 )"
   cat > "$ENV_FILE" <<EOF
+REGISTRY_BIND_HOST=127.0.0.1
 REGISTRY_PORT=8787
+REGISTRY_ALLOW_HTTP=1
 REGISTRY_ENROLL_TOKEN=$enroll_token
 REGISTRY_UI_TOKEN=$ui_token
 EOF

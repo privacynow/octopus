@@ -48,8 +48,20 @@
   - runtime secrets like `BOT_TELEGRAM_TOKEN` no longer flow into provider/summarizer child environments by default
   - every Claude/Codex/summarizer subprocess launch passes an explicit env
   Commit:
+  - `b3e774b`
+- Complete: S4 tighten registry defaults and transport posture.
+  Tests:
+  - `python3 -m py_compile app/channels/registry/auth.py app/channels/registry/http.py app/config.py tests/test_registry_service.py tests/test_registry_skills.py tests/test_config.py tests/test_operator_scripts.py tests/e2e/test_compose_flows.py`
+  - `bash -n scripts/lib_env.sh scripts/app/guided_start.sh scripts/app/shared_start.sh scripts/registry/start.sh`
+  - `.venv/bin/python -m pytest -q -n 4 tests/test_registry_service.py tests/test_registry_skills.py tests/test_config.py tests/test_operator_scripts.py tests/e2e/test_compose_flows.py`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Verified:
+  - registry startup now rejects missing/default enrollment tokens and rejects known-default UI tokens
+  - session cookies are secure by default and only allow HTTP when `REGISTRY_ALLOW_HTTP=1` is explicitly set
+  - compose no longer ships default registry tokens and now binds the published registry port to localhost by default
+  - guided/shared startup flows still support local HTTP registry URLs but now push remote registry URLs toward HTTPS
+  Commit:
   - pending current slice commit
-- Pending: S4 tighten registry defaults and transport posture.
 - Pending: S5 expand redaction and doctor/log sanitization.
 - Pending: S6 add independent credential key management.
 - Pending: S7 harden secret-bearing files and token storage.

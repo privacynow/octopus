@@ -98,6 +98,12 @@ def _has_valid_http_url(raw: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+def _is_local_http_url(raw: str) -> bool:
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower()
+    return host in {"localhost", "127.0.0.1", "::1", "host.docker.internal", "172.17.0.1"}
+
+
 def _has_valid_postgres_url(raw: str) -> bool:
     parsed = urlparse(raw)
     return (parsed.scheme == "postgresql" or parsed.scheme.startswith("postgresql+")) and bool(parsed.netloc)
@@ -575,6 +581,11 @@ def validate_config(config: BotConfig) -> list[str]:
     if config.agent_registry_url and not _has_valid_http_url(config.agent_registry_url):
         errors.append(
             "BOT_AGENT_REGISTRY_URL must be a valid http:// or https:// URL when set"
+        )
+    elif config.agent_registry_url.startswith("http://") and not _is_local_http_url(config.agent_registry_url):
+        log.warning(
+            "BOT_AGENT_REGISTRY_URL uses plain HTTP over a non-local address. "
+            "Agent tokens will be transmitted in cleartext."
         )
 
     if config.agent_poll_interval_seconds <= 0:

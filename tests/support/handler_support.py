@@ -13,9 +13,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.agents.delivery import build_registry_delivery_runtime
+import app.channels.telegram.execution as _telegram_execution
 import app.channels.telegram.ingress as _th
+import app.channels.telegram.progress as _telegram_progress
 import app.channels.telegram.worker as _telegram_worker
 from app.channels.telegram.bootstrap import build_application
+from app.channels.telegram.delegation_channel import propose_delegation_plan as _propose_delegation_plan
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
 from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.providers.base import RunResult
@@ -32,6 +35,32 @@ def current_runtime() -> TelegramRuntime:
     if _TEST_RUNTIME is None:
         raise RuntimeError("Telegram test runtime is not configured")
     return _TEST_RUNTIME
+
+
+def current_execution_runtime():
+    runtime = current_runtime()
+    collaborators = _telegram_execution.bind_execution_collaborators(
+        runtime,
+        progress_factory=_telegram_progress.TelegramProgress,
+        keep_typing_fn=_telegram_progress.keep_typing,
+        heartbeat_fn=_telegram_progress.heartbeat,
+        progress_timeline_callback_fn=_telegram_progress.progress_timeline_callback,
+        propose_delegation_plan_fn=_propose_delegation_plan,
+    )
+    return _telegram_execution.build_execution_runtime(runtime, collaborators=collaborators)
+
+
+def current_shared_runtime_builders():
+    runtime = current_runtime()
+    execution_runtime = current_execution_runtime()
+    return (
+        lambda chat_lock: _telegram_execution.build_conversation_runtime(runtime, chat_lock=chat_lock),
+        lambda chat_lock: _telegram_execution.build_runtime_skill_runtime(
+            runtime,
+            chat_lock=chat_lock,
+            execution_runtime=execution_runtime,
+        ),
+    )
 
 
 def reset_handler_test_runtime() -> None:
@@ -532,7 +561,13 @@ async def drain_one_worker_item(data_dir: Path) -> bool:
         _work_queue.fail_work_item(data_dir, item_id, error="deserialize_error")
         return True
     try:
-        await _telegram_worker.worker_dispatch(kind, event, item, runtime=runtime)
+        await _telegram_worker.worker_dispatch(
+            kind,
+            event,
+            item,
+            runtime=runtime,
+            execution_runtime=current_execution_runtime(),
+        )
         _work_queue.complete_work_item(data_dir, item_id)
     except _work_queue.PendingRecovery:
         pass
@@ -557,7 +592,13 @@ async def running_worker(data_dir: Path, *, poll_interval: float = 0.01):
     runtime = current_runtime()
 
     async def _dispatch(kind: str, event, item: dict) -> None:
-        await _telegram_worker.worker_dispatch(kind, event, item, runtime=runtime)
+        await _telegram_worker.worker_dispatch(
+            kind,
+            event,
+            item,
+            runtime=runtime,
+            execution_runtime=current_execution_runtime(),
+        )
 
     task, stop_event = start_worker_task(
         data_dir,

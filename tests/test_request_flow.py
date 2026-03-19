@@ -58,6 +58,7 @@ from app.storage import default_session, save_session
 from tests.support.config_support import make_config as _make_config
 from tests.support.handler_support import (
     current_bot_instance,
+    current_execution_runtime,
     current_runtime,
     FakeCallbackQuery,
     FakeChat,
@@ -466,7 +467,7 @@ async def test_execute_request_public_user_gets_inspect_policy():
         await execute_request(
             chat.id, "test prompt", [], msg,
             request_user_id=telegram_actor_key(999), trust_tier="public",
-            runtime=telegram_execution.build_execution_runtime(current_runtime()),
+            runtime=current_execution_runtime(),
         )
 
         # Provider should have been called with public restrictions
@@ -504,7 +505,7 @@ async def test_execute_request_trusted_user_gets_edit_policy():
         await execute_request(
             chat.id, "test prompt", [], msg,
             request_user_id=telegram_actor_key(42), trust_tier="trusted",
-            runtime=telegram_execution.build_execution_runtime(current_runtime()),
+            runtime=current_execution_runtime(),
         )
 
         assert len(prov.run_calls) == 1

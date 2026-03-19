@@ -29,17 +29,26 @@ from app.channels.telegram.delegation_channel import (
     handle_delegation_approve,
     handle_delegation_cancel,
     parse_delegation_callback,
+    propose_delegation_plan,
 )
 from app.channels.telegram.execution import (
     allowed_roots,
+    bind_execution_collaborators,
     build_conversation_runtime,
     build_delegation_channel_runtime,
+    build_execution_runtime,
     build_runtime_skill_runtime,
     build_pending_runtime,
     build_user_prompt,
     resolve_context,
     send_formatted_reply,
     send_path_to_chat,
+)
+from app.channels.telegram.progress import (
+    TelegramProgress,
+    heartbeat,
+    keep_typing,
+    progress_timeline_callback,
 )
 from app.channels.telegram import conversation as telegram_conversation
 from app.channels.telegram import normalization as telegram_normalization
@@ -253,6 +262,19 @@ async def _chat_lock(
 
 def _chat_lock_adapter(runtime: TelegramRuntime):
     return lambda chat_id, **kwargs: _chat_lock(runtime, chat_id, **kwargs)
+
+
+def _bound_execution_runtime(runtime: TelegramRuntime):
+    collaborators = bind_execution_collaborators(
+        runtime,
+        progress_factory=TelegramProgress,
+        keep_typing_fn=keep_typing,
+        heartbeat_fn=heartbeat,
+        progress_timeline_callback_fn=progress_timeline_callback,
+        propose_delegation_plan_fn=propose_delegation_plan,
+    )
+    return build_execution_runtime(runtime, collaborators=collaborators)
+
 
 def _dedup_update(
     runtime: TelegramRuntime,
@@ -625,7 +647,10 @@ async def cmd_approve(runtime: TelegramRuntime, event, update: Update, context: 
         await pending_approve_pending(
             event.chat_id,
             update.effective_message,
-            runtime=build_pending_runtime(runtime),
+            runtime=build_pending_runtime(
+                runtime,
+                execution_runtime=_bound_execution_runtime(runtime),
+            ),
         )
 
 
@@ -640,7 +665,10 @@ async def cmd_reject(runtime: TelegramRuntime, event, update: Update, context: C
         await pending_reject_pending(
             event.chat_id,
             update.effective_message,
-            runtime=build_pending_runtime(runtime),
+            runtime=build_pending_runtime(
+                runtime,
+                execution_runtime=_bound_execution_runtime(runtime),
+            ),
         )
 
 
@@ -943,7 +971,11 @@ async def cmd_skills(
     await runtime_skill_handle_skills_command(
         event,
         update,
-        runtime=build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+        runtime=build_runtime_skill_runtime(
+            runtime,
+            chat_lock=_chat_lock_adapter(runtime),
+            execution_runtime=_bound_execution_runtime(runtime),
+        ),
     )
 
 
@@ -989,7 +1021,11 @@ async def cmd_clear_credentials(
         event,
         update,
         context,
-        runtime=build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+        runtime=build_runtime_skill_runtime(
+            runtime,
+            chat_lock=_chat_lock_adapter(runtime),
+            execution_runtime=_bound_execution_runtime(runtime),
+        ),
     )
 
 
@@ -998,7 +1034,11 @@ async def handle_clear_cred_callback(runtime: TelegramRuntime, event, query) -> 
     await runtime_skill_handle_clear_cred_callback(
         event,
         query,
-        runtime=build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+        runtime=build_runtime_skill_runtime(
+            runtime,
+            chat_lock=_chat_lock_adapter(runtime),
+            execution_runtime=_bound_execution_runtime(runtime),
+        ),
     )
 
 
@@ -1123,7 +1163,11 @@ async def handle_message(
         update,
         msg,
         payload,
-        runtime=build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+        runtime=build_runtime_skill_runtime(
+            runtime,
+            chat_lock=_chat_lock_adapter(runtime),
+            execution_runtime=_bound_execution_runtime(runtime),
+        ),
     ):
         return
 
@@ -1160,7 +1204,11 @@ async def handle_callback(runtime: TelegramRuntime, event, query) -> None:
     await pending_handle_callback(
         event,
         query,
-        runtime=build_pending_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+        runtime=build_pending_runtime(
+            runtime,
+            chat_lock=_chat_lock_adapter(runtime),
+            execution_runtime=_bound_execution_runtime(runtime),
+        ),
     )
 
 
@@ -1204,7 +1252,11 @@ async def handle_recovery_callback(
     await pending_handle_recovery_callback(
         update,
         context,
-        runtime=build_pending_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+        runtime=build_pending_runtime(
+            runtime,
+            chat_lock=_chat_lock_adapter(runtime),
+            execution_runtime=_bound_execution_runtime(runtime),
+        ),
     )
 
 
@@ -1225,7 +1277,11 @@ async def handle_recovery_action(
         message,
         answer_action=answer_action,
         cancel_event=cancel_event,
-        runtime=build_pending_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+        runtime=build_pending_runtime(
+            runtime,
+            chat_lock=_chat_lock_adapter(runtime),
+            execution_runtime=_bound_execution_runtime(runtime),
+        ),
     )
 
 
@@ -1328,7 +1384,11 @@ async def handle_skill_add_callback(runtime: TelegramRuntime, event, query) -> N
     await runtime_skill_handle_skill_add_callback(
         event,
         query,
-        runtime=build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+        runtime=build_runtime_skill_runtime(
+            runtime,
+            chat_lock=_chat_lock_adapter(runtime),
+            execution_runtime=_bound_execution_runtime(runtime),
+        ),
     )
 
 
@@ -1337,7 +1397,11 @@ async def handle_skill_update_callback(runtime: TelegramRuntime, event, query) -
     await runtime_skill_handle_skill_update_callback(
         event,
         query,
-        runtime=build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
+        runtime=build_runtime_skill_runtime(
+            runtime,
+            chat_lock=_chat_lock_adapter(runtime),
+            execution_runtime=_bound_execution_runtime(runtime),
+        ),
     )
 
 @_command_handler

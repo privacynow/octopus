@@ -12,6 +12,7 @@ from telegram.ext import ContextTypes
 from app import access
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.conversation import (
+    TelegramConversationRuntime,
     cancel_chat_operation as conversation_cancel_chat_operation,
     cmd_approval as conversation_cmd_approval,
     cmd_compact as conversation_cmd_compact,
@@ -21,12 +22,9 @@ from app.channels.telegram.conversation import (
     cmd_role as conversation_cmd_role,
 )
 from app.channels.telegram.delegation_channel import parse_delegation_callback
-from app.channels.telegram.execution import (
-    build_conversation_runtime,
-    build_runtime_skill_runtime,
-)
 from app.channels.telegram.normalization import normalize_callback, normalize_command
 from app.channels.telegram.runtime_skills import (
+    TelegramRuntimeSkillsRuntime,
     handle_skill_add_callback as runtime_skill_handle_skill_add_callback,
 )
 from app.channels.telegram.session_io import conversation_key, event_key
@@ -43,9 +41,18 @@ def build_shared_command_handler(
     *,
     runtime: TelegramRuntime,
     chat_lock: ChatLock,
+    build_conversation_runtime: Callable[[ChatLock], TelegramConversationRuntime],
+    build_runtime_skill_runtime: Callable[[ChatLock], TelegramRuntimeSkillsRuntime],
 ) -> Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]:
     async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await shared_command_dispatch(update, context, runtime=runtime, chat_lock=chat_lock)
+        await shared_command_dispatch(
+            update,
+            context,
+            runtime=runtime,
+            chat_lock=chat_lock,
+            build_conversation_runtime=build_conversation_runtime,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
+        )
 
     handler.__name__ = "shared_command_dispatch"
     return handler
@@ -55,9 +62,16 @@ def build_shared_callback_handler(
     *,
     runtime: TelegramRuntime,
     chat_lock: ChatLock,
+    build_runtime_skill_runtime: Callable[[ChatLock], TelegramRuntimeSkillsRuntime],
 ) -> Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]:
     async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await shared_callback_dispatch(update, context, runtime=runtime, chat_lock=chat_lock)
+        await shared_callback_dispatch(
+            update,
+            context,
+            runtime=runtime,
+            chat_lock=chat_lock,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
+        )
 
     handler.__name__ = "shared_callback_dispatch"
     return handler
@@ -342,6 +356,7 @@ async def _shared_cancel_command(
     action: InboundAction,
     *,
     chat_lock: ChatLock,
+    build_conversation_runtime: Callable[[ChatLock], TelegramConversationRuntime],
 ) -> None:
     is_new, envelope = _record_shared_action(runtime, update, action)
     if not is_new:
@@ -350,7 +365,7 @@ async def _shared_cancel_command(
     await conversation_cancel_chat_operation(
         event.chat_id,
         update.effective_message,
-        runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime, chat_lock)),
+        runtime=build_conversation_runtime(_chat_lock_adapter(runtime, chat_lock)),
         actor_user_id=event.user.id,
         allow_admin_override=_is_admin(runtime, event.user),
         update_id=update.update_id,
@@ -363,6 +378,7 @@ async def _shared_skills_inline_handler(
     update: Update,
     *,
     chat_lock: ChatLock,
+    build_runtime_skill_runtime: Callable[[ChatLock], TelegramRuntimeSkillsRuntime],
 ) -> None:
     from app.channels.telegram.runtime_skills import (
         skills_add,
@@ -389,7 +405,7 @@ async def _shared_skills_inline_handler(
     )
 
     args = event.args
-    skills_runtime = build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime, chat_lock))
+    skills_runtime = build_runtime_skill_runtime(_chat_lock_adapter(runtime, chat_lock))
     if not args:
         await skills_show(event, update, runtime=skills_runtime)
         return
@@ -444,14 +460,22 @@ async def _shared_inline_command_handler(
     context: ContextTypes.DEFAULT_TYPE,
     *,
     chat_lock: ChatLock,
+    build_conversation_runtime: Callable[[ChatLock], TelegramConversationRuntime],
+    build_runtime_skill_runtime: Callable[[ChatLock], TelegramRuntimeSkillsRuntime],
 ) -> bool:
     command = (event.command or "").lower()
-    conversation_runtime = build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime, chat_lock))
+    conversation_runtime = build_conversation_runtime(_chat_lock_adapter(runtime, chat_lock))
     if command == "approval":
         await conversation_cmd_approval(event, update, context, runtime=conversation_runtime)
         return True
     if command == "skills":
-        await _shared_skills_inline_handler(runtime, event, update, chat_lock=chat_lock)
+        await _shared_skills_inline_handler(
+            runtime,
+            event,
+            update,
+            chat_lock=chat_lock,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
+        )
         return True
     if command == "compact":
         await conversation_cmd_compact(event, update, context, runtime=conversation_runtime)
@@ -477,6 +501,8 @@ async def shared_command_dispatch(
     *,
     runtime: TelegramRuntime,
     chat_lock: ChatLock,
+    build_conversation_runtime: Callable[[ChatLock], TelegramConversationRuntime],
+    build_runtime_skill_runtime: Callable[[ChatLock], TelegramRuntimeSkillsRuntime],
 ) -> None:
     event = normalize_command(update, context)
     if event is None:
@@ -494,6 +520,8 @@ async def shared_command_dispatch(
             update,
             context,
             chat_lock=chat_lock,
+            build_conversation_runtime=build_conversation_runtime,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
         )
         if handled:
             return
@@ -503,7 +531,14 @@ async def shared_command_dispatch(
         return
 
     if action.action == "cancel_conversation":
-        await _shared_cancel_command(runtime, update, event, action, chat_lock=chat_lock)
+        await _shared_cancel_command(
+            runtime,
+            update,
+            event,
+            action,
+            chat_lock=chat_lock,
+            build_conversation_runtime=build_conversation_runtime,
+        )
         return
 
     await _enqueue_shared_action(runtime, update, action)
@@ -515,6 +550,7 @@ async def shared_callback_dispatch(
     *,
     runtime: TelegramRuntime,
     chat_lock: ChatLock,
+    build_runtime_skill_runtime: Callable[[ChatLock], TelegramRuntimeSkillsRuntime],
 ) -> None:
     del context
     event = normalize_callback(update)
@@ -531,7 +567,7 @@ async def shared_callback_dispatch(
             await runtime_skill_handle_skill_add_callback(
                 event,
                 query,
-                runtime=build_runtime_skill_runtime(runtime, chat_lock=_chat_lock_adapter(runtime, chat_lock)),
+                runtime=build_runtime_skill_runtime(_chat_lock_adapter(runtime, chat_lock)),
             )
             return
         await query.answer()

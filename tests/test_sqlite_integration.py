@@ -34,6 +34,7 @@ from tests.support.handler_support import (
     FakeChat,
     FakeProvider,
     FakeUser,
+    current_execution_runtime,
     current_runtime,
     last_reply,
     load_session_disk,
@@ -330,7 +331,7 @@ async def test_prompt_size_cross_chat_reads_sqlite():
         warnings = check_prompt_size_cross_chat(
             data_dir,
             "big-skill",
-            runtime=telegram_execution.build_execution_runtime(current_runtime()),
+            runtime=current_execution_runtime(),
         )
         # The skill doesn't actually exist so it gets filtered out — no warnings expected.
         # The point is that it doesn't crash and successfully iterates SQLite rows.

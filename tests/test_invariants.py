@@ -38,7 +38,7 @@ from app.providers.codex import CodexProvider
 from app.storage import close_db, default_session, ensure_data_dirs, save_session
 from app.work_queue import debug_transport_connection
 from tests.support.config_support import make_config as _make_config
-from tests.support.handler_support import current_bot_instance, current_runtime
+from tests.support.handler_support import current_bot_instance, current_execution_runtime, current_runtime
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from tests.support.handler_support import (
     FakeCallbackQuery,
@@ -812,7 +812,13 @@ async def test_worker_dispatch_sends_recovery_notice_not_auto_replay():
             }
 
             with pytest.raises(PendingRecovery):
-                await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
+                await telegram_worker.worker_dispatch(
+                    "message",
+                    event,
+                    item,
+                    runtime=current_runtime(),
+                    execution_runtime=current_execution_runtime(),
+                )
 
             # Provider must NOT have been called — no auto-replay.
             assert len(prov.run_calls) == 0, (
@@ -1749,7 +1755,13 @@ async def test_worker_dispatch_recovery_not_auto_replay_disallowed_user():
             }
 
             # Should return normally (not raise PendingRecovery)
-            await telegram_worker.worker_dispatch("message", event, item, runtime=current_runtime())
+            await telegram_worker.worker_dispatch(
+                "message",
+                event,
+                item,
+                runtime=current_runtime(),
+                execution_runtime=current_execution_runtime(),
+            )
 
             # No notice sent, no provider call
             assert len(bot.sent) == 0
@@ -1783,7 +1795,13 @@ async def test_worker_dispatch_command_still_notifies():
                 "id": "cmd-item",
             }
 
-            await telegram_worker.worker_dispatch("command", event, item, runtime=current_runtime())
+            await telegram_worker.worker_dispatch(
+                "command",
+                event,
+                item,
+                runtime=current_runtime(),
+                execution_runtime=current_execution_runtime(),
+            )
 
             # Notification about interrupted command
             cmd_msgs = [s for s in bot.sent if "interrupted" in s.get("text", "")]

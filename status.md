@@ -1214,7 +1214,14 @@ gaps. The follow-up remediation is now in progress:
     instead of importing execution builders directly
   - stronger structural gates now enforce sibling import discipline for the
     extracted Telegram modules
-- `F4` through `F8` remain open
+- `F4` complete in the current slice:
+  - shared-mode `/skills` now routes through `handle_skills_command` as the
+    single owner instead of a duplicated inline dispatch table
+  - shared-mode inline command handling now calls the existing conversation
+    command owners directly and no longer defines duplicate inline helpers
+  - `app/channels/telegram/shared_mode_dispatch.py` is back under the hard cap
+    at `434` lines, with a structural gate enforcing the limit
+- `F5` through `F8` remain open
 
 Feature work remains frozen until the post-audit follow-up track closes.
 
@@ -1312,8 +1319,8 @@ Feature work remains frozen until the post-audit follow-up track closes.
      - `tests/test_zero_import_gates.py`
      - Result: `213 passed`
 
-3. `Post-audit / F3: enforce extracted Telegram sibling import discipline`
-   `(current slice)`
+3. `b65be42` `Post-audit / F3: enforce extracted Telegram sibling import`
+   `discipline`
    - removed direct sibling behavioral imports from
      `app/channels/telegram/execution.py` by binding Telegram execution
      collaborators explicitly at the caller boundary
@@ -1333,6 +1340,20 @@ Feature work remains frozen until the post-audit follow-up track closes.
      - `tests/test_handlers_approval.py`
      - `tests/test_zero_import_gates.py`
      - Result: `417 passed`
+
+4. `Post-audit / F4: remove shared-mode dispatch duplication` (current slice)
+   - replaced the duplicated shared-mode skills command dispatcher with a call
+     to `app/channels/telegram/runtime_skills.py:handle_skills_command`
+   - removed the duplicate inline command helper path and routed shared-mode
+     approval/compact/role/model/project/policy commands to the existing
+     conversation command owners
+   - added structural gates proving the deleted shared inline helpers stay gone
+     and `app/channels/telegram/shared_mode_dispatch.py` remains ≤ `450` lines
+   - focused F4 suite:
+     - `tests/test_shared_runtime.py`
+     - `tests/test_handlers.py`
+     - `tests/test_zero_import_gates.py`
+     - Result: `233 passed`
 
 ### Acceptance Gates
 
@@ -1404,7 +1425,7 @@ Latest focused post-Phase-8 correction suite:
 
 Latest full-suite remediation baseline:
 
-- Result: `1651 passed, 23 skipped`
+- Result: `1654 passed, 23 skipped`
 
 ### Notes
 

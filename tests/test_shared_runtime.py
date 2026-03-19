@@ -144,6 +144,36 @@ async def test_shared_callback_dispatch_persists_action_without_inline_execution
         assert any(item["kind"] == "action" and item["state"] == "queued" for item in items)
 
 
+async def test_shared_skills_command_routes_through_runtime_skill_owner(monkeypatch):
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    async def fake_handle_skills_command(event, update, *, runtime):
+        del update, runtime
+        calls.append((event.command, tuple(event.args or ())))
+
+    with fresh_env(config_overrides=_SHARED_OVERRIDES):
+        build_conversation_runtime, build_runtime_skill_runtime = current_shared_runtime_builders()
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        update = FakeUpdate(message=FakeMessage(chat=chat, text="/skills list"), user=user, chat=chat)
+        monkeypatch.setattr(
+            telegram_shared_mode_dispatch,
+            "runtime_skill_handle_skills_command",
+            fake_handle_skills_command,
+        )
+
+        await telegram_shared_mode_dispatch.shared_command_dispatch(
+            update,
+            FakeContext(args=["list"]),
+            runtime=current_runtime(),
+            chat_lock=_permissive_chat_lock,
+            build_conversation_runtime=build_conversation_runtime,
+            build_runtime_skill_runtime=build_runtime_skill_runtime,
+        )
+
+    assert calls == [("skills", ("list",))]
+
+
 async def test_shared_worker_executes_persisted_approve_action():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
         chat_id = 12345

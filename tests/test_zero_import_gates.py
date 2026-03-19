@@ -231,6 +231,18 @@ def test_telegram_shared_mode_dispatch_module_has_no_ingress_import() -> None:
     )
 
 
+def test_telegram_shared_mode_dispatch_does_not_define_duplicated_inline_dispatch_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    shared_mode_dispatch_path = repo_root / "app" / "channels" / "telegram" / "shared_mode_dispatch.py"
+    text = shared_mode_dispatch_path.read_text()
+    forbidden = (
+        "def _shared_skills_inline_handler(",
+        "def _shared_inline_command_handler(",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in {shared_mode_dispatch_path}"
+
+
 def test_h1_extracted_telegram_modules_have_no_ingress_back_imports() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     telegram_root = repo_root / "app" / "channels" / "telegram"
@@ -627,6 +639,13 @@ def test_telegram_ingress_line_count_stays_below_hard_cap() -> None:
     ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
     line_count = sum(1 for _ in ingress_path.open())
     assert line_count <= 1600, f"{ingress_path} regressed to {line_count} lines"
+
+
+def test_telegram_shared_mode_dispatch_line_count_stays_below_hard_cap() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    shared_mode_dispatch_path = repo_root / "app" / "channels" / "telegram" / "shared_mode_dispatch.py"
+    line_count = sum(1 for _ in shared_mode_dispatch_path.open())
+    assert line_count <= 450, f"{shared_mode_dispatch_path} regressed to {line_count} lines"
 
 
 def test_telegram_guidance_channel_has_no_inline_html_formatting() -> None:

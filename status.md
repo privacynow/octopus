@@ -27,20 +27,23 @@ the final closure state.
 Architecture remediation is complete.
 The initial Phase 8 closure at `7804cf4` was followed by committed
 post-Phase-8 correction slices, post-audit F1-F8 follow-up, and the final F9
-and F10 tail slices. The remaining store-parity and delivery-kind migration
-gaps are now closed.
+and F10 tail slices. A final post-audit F11 follow-up removed the remaining
+live registry `surface_*` schema/runtime vocabulary and the last runtime
+legacy-kind shim.
 
 Latest committed correction slices:
 
 - `07af844` `Post-Phase 8 / slice 1: remove ingress test coupling`
 - `837b4ed` `Post-Phase 8 / slice 2: rename live surface contracts to channel`
 - `a686565` `Post-Phase 8 / slice 3: align live channel terminology`
+- `6e7595e` `Post-audit / final: close F9-F10 remediation tail`
 - `dbf9176` `Post-audit / F9: remove dead backend-only store methods`
 - `584d700` `Post-audit / F10: close delivery-kind migration gap`
+- `a03a7b8` `Post-audit / F11: rename registry schema vocabulary to channel`
 
 Latest verified full-suite baseline:
 
-- `1668 passed, 23 skipped`
+- `1561 passed, 131 skipped`
 
 Feature work may resume.
 
@@ -1256,18 +1259,28 @@ The post-audit follow-up is now closed:
 - `F10` complete:
   - added Postgres migration `0009_rename_delivery_kinds.sql` to rewrite
     persisted legacy delivery kinds
-  - added temporary backwards-compatibility readers in `app/agents/bridge.py`
-    and `app/agents/delivery.py` so pre-migration `surface_*` rows are treated
-    as `channel_*` with a deprecation warning
-  - added migration and compatibility tests proving old deliveries are not
-    stranded during update
-  - `584d700` is the committed F10 migration/compatibility baseline
+  - established the coordinated delivery-kind rewrite path that F11 later
+    finishes by removing the runtime compatibility shim
+  - `584d700` is the committed F10 migration baseline
+- `F11` complete:
+  - renamed the remaining live registry store/schema vocabulary from
+    `surface_capabilities_json` / `origin_surface` to
+    `channel_capabilities_json` / `origin_channel`
+  - added SQLite and Postgres migration coverage so old registry databases are
+    rewritten in place instead of carrying `surface_*` vocabulary forward
+  - removed runtime legacy delivery-kind normalization from
+    `app/agents/bridge.py` and `app/agents/delivery.py`; legacy delivery kinds
+    are now migration-only
+  - tightened the structural gates so registry `surface_*` tokens are limited
+    to explicit migration owners/tests rather than broad runtime exemptions
+  - `a03a7b8` is the committed F11 registry-vocabulary baseline
 - final cap-restore complete:
   - `99939f0` trims `app/channels/telegram/ingress.py` back to `1470` lines
   - the structural gate now enforces the strict `≤1500` ingress cap again
 
 The final acceptance audit verified all Architecture Remediation, Phase 8, and
-post-audit gates against the committed tree and the full test suite baseline.
+post-audit gates against the committed tree and the latest full test suite
+baseline.
 
 Feature work may resume.
 
@@ -1455,8 +1468,8 @@ Feature work may resume.
    - trimmed comment/section-padding drift from
      `app/channels/telegram/ingress.py` so the module is back under the
      committed `≤1500` line cap at `1470` lines
-   - tightened the structural line-count gate from `1600` back to the strict
-     `1500` threshold required by the remediation plan
+   - reaffirmed the structural line-count gate at the strict `1500`
+     threshold required by the remediation plan
 
 10. `dbf9176` `Post-audit / F9: remove dead backend-only store methods`
    - deleted the dead SQLite-only public methods
@@ -1475,15 +1488,38 @@ Feature work may resume.
    - added Postgres migration
      `app/db/migrations/postgres/0009_rename_delivery_kinds.sql` so persisted
      `surface_input`/`surface_action` rows are rewritten in-place
-   - added temporary compatibility readers in `app/agents/bridge.py` and
-     `app/agents/delivery.py` so legacy rows remain readable during rollout
-   - added migration and compatibility tests proving both old and new delivery
-     kinds are accepted by the registry-delivery path
+   - added the coordinated migration baseline that F11 later completes by
+     removing the runtime compatibility readers entirely
    - focused F10 suite:
      - `tests/test_agents.py`
      - `tests/test_db_postgres.py`
      - `tests/test_zero_import_gates.py`
      - Result: `86 passed`
+
+12. `6e7595e` `Post-audit / final: close F9-F10 remediation tail`
+   - recorded the first post-audit closure after the F9/F10 tail landed
+   - this closeout was later reopened when the follow-up audit found the
+     remaining live registry `surface_*` schema/runtime vocabulary
+
+13. `a03a7b8` `Post-audit / F11: rename registry schema vocabulary to channel`
+   - renamed the remaining live registry store/schema vocabulary from
+     `surface_capabilities_json` / `origin_surface` to
+     `channel_capabilities_json` / `origin_channel`
+   - added SQLite v4 migration coverage and Postgres migration
+     `0010_rename_registry_channel_columns.sql` so existing databases are
+     rewritten in place
+   - removed runtime legacy delivery-kind normalization from
+     `app/agents/bridge.py` and `app/agents/delivery.py`; legacy
+     `surface_input` / `surface_action` are now migration-only
+   - replaced the broad vocabulary gate carve-outs with exact migration-owner
+     gates covering SQLite migration code, Postgres migration SQL, and the
+     explicit migration tests only
+   - focused F11 suite:
+     - `tests/test_agents.py`
+     - `tests/test_registry_service.py`
+     - `tests/test_db_postgres.py`
+     - `tests/test_zero_import_gates.py`
+     - Result: `121 passed, 4 skipped`
 
 ### Acceptance Gates
 
@@ -1530,7 +1566,7 @@ These mirror the authoritative
   callback-contract exception for `_global_error_handler`.
 - [x] No test file monkeypatches module-level ingress functions for stubbing.
 - [x] Zero-import gates for singleton helpers cover both `app/` and `tests/`.
-- [x] Ingress line-count gate prevents growth above 1600 lines.
+- [x] Ingress line-count gate prevents growth above 1500 lines.
 
 ### Post-Audit Acceptance Gates
 
@@ -1561,7 +1597,12 @@ These mirror the authoritative
   SQLite/Postgres and match their abstract contracts.
 - [x] Postgres migration `0009_rename_delivery_kinds.sql` exists and renames
   delivery kinds.
-- [x] delivery-kind migration/compatibility closure is landed and verified.
+- [x] Postgres migration `0010_rename_registry_channel_columns.sql` exists and
+  renames the remaining registry `surface_*` columns to `channel_*`.
+- [x] live app code retains no registry `surface_*` schema/runtime vocabulary
+  outside explicit migration owners/tests.
+- [x] runtime registry delivery handling no longer carries legacy
+  `surface_input` / `surface_action` compatibility.
 
 ### Verification Baseline
 

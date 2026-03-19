@@ -66,6 +66,8 @@ def validate_settings(settings: RegistrySettings | None = None) -> RegistrySetti
 
 def configure_session_middleware(app) -> None:
     settings = load_settings()
+    # Dev fallback only: without REGISTRY_SESSION_SECRET, sessions reset on every
+    # registry restart and are not portable across multiple registry instances.
     app.add_middleware(
         SessionMiddleware,
         secret_key=os.environ.get("REGISTRY_SESSION_SECRET", secrets.token_hex(32)),

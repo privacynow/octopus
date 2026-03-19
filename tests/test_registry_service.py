@@ -362,6 +362,21 @@ def test_registry_lifecycle_endpoints_cover_skill_and_guidance(monkeypatch, tmp_
     assert "Registry Guidance" in preview_after.json()["effective_guidance"]
 
 
+def test_provider_guidance_preview_404_hides_raw_validation_text(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    _configure_runtime_surface(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/provider-guidance/not-a-provider/preview",
+        headers={"Authorization": "Bearer ui-secret"},
+        json={"role": "", "active_skills": [], "compact_mode": False},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Unknown provider guidance preview target."
+
+
 def test_registry_lifecycle_endpoints_are_replay_safe(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     _configure_runtime_surface(monkeypatch, tmp_path)

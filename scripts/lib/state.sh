@@ -49,7 +49,7 @@ bot_is_running() {
 }
 
 registry_is_running() {
-  docker compose -p octopus-registry ps --status running 2>/dev/null | grep -q registry
+  docker compose -p octopus-registry ps --status running service 2>/dev/null | grep -q service
 }
 
 network_exists() {

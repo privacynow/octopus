@@ -68,3 +68,26 @@
   - provider auth is now shared per provider, not per bot
   - the authoritative auth decision path is container-backed, while `.authed` remains only a cache for fast status UX
   - the new entrypoint behavior avoids chowning host-mounted auth state while preserving writable bot data under `/home/bot/data`
+- Complete: Slice 4 shared Docker network with registry alias.
+  Scope:
+  - added an external `octopus-net` default network to the main compose file
+  - introduced the local registry network alias `registry` so bot containers can use `http://registry:8787`
+  - populated `scripts/lib/registry.sh` with port selection and local-registry bootstrap helpers
+  - moved registry secrets and port state to `.deploy/registry/.env`
+  - rewired `scripts/registry/start.sh` and `scripts/registry/stop.sh` around the new wrappers
+  - cleaned up generated Docker names so the local registry now comes up as `octopus-registry-service-1` instead of `octopus-registry-registry-1`
+  - renamed the shared provider helper project to `octopus-auth-<provider>` to avoid another duplicated generated container name
+  Tests:
+  - `bash -n scripts/lib/state.sh scripts/lib/registry.sh scripts/lib/docker.sh scripts/registry/start.sh scripts/registry/stop.sh`
+  - `.venv/bin/python -m pytest -q tests/test_octopus_registry_network.py tests/test_operator_scripts.py`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - started the local registry via `./scripts/registry/start.sh` and verified a bot container could reach `http://registry:8787/healthz` over the shared network alias
+  - verified the cleaned-up generated registry container name was `octopus-registry-service-1`
+  - confirmed start/stop now remove renamed-service orphans instead of leaving stale registry containers behind
+  Cleanup:
+  - pruned unused Docker builder cache, dangling images, and stopped containers after the slice to keep local disk usage under control
+  Verified:
+  - the local registry network path is now real end-to-end, not just file-declared
+  - the registry lifecycle uses `.deploy/registry/.env` as the only local registry config source
+  - the singleton registry naming is cleaner and no longer repeats `registry` in generated container or volume names

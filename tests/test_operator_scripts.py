@@ -115,12 +115,13 @@ def test_container_provider_login_banners_explain_exit_steps():
 
 
 def test_registry_start_prints_enrollment_token():
-    """registry/start.sh should keep generated secrets in .env.registry, not stdout."""
+    """registry/start.sh should keep generated secrets in .deploy/registry/.env, not stdout."""
     repo = Path(__file__).resolve().parent.parent
     script = repo / "scripts" / "registry" / "start.sh"
     text = script.read_text()
     assert "Enrollment token:" not in text
     assert "Registry UI password:" not in text
+    assert 'ENV_FILE=".deploy/registry/.env"' in text
     assert "Registry secrets are stored in $ENV_FILE" in text
     assert "keep this file private" in text
 
@@ -128,9 +129,11 @@ def test_registry_start_prints_enrollment_token():
 def test_registry_start_bootstraps_local_http_acknowledgement():
     repo = Path(__file__).resolve().parent.parent
     script = repo / "scripts" / "registry" / "start.sh"
+    lib = repo / "scripts" / "lib" / "registry.sh"
     text = script.read_text()
-    assert "REGISTRY_ALLOW_HTTP=1" in text
-    assert "REGISTRY_BIND_HOST=127.0.0.1" in text
+    lib_text = lib.read_text()
+    assert "ensure_local_registry" in text
+    assert "REGISTRY_ALLOW_HTTP=1" in lib_text
 
 
 def test_guided_start_offers_quick_setup_and_local_registry_token_reuse():
@@ -161,14 +164,13 @@ def test_secret_writing_scripts_harden_file_permissions():
     repo = Path(__file__).resolve().parent.parent
     guided = (repo / "scripts" / "app" / "guided_start.sh").read_text()
     shared = (repo / "scripts" / "app" / "shared_start.sh").read_text()
-    registry = (repo / "scripts" / "registry" / "start.sh").read_text()
+    registry = (repo / "scripts" / "lib" / "registry.sh").read_text()
 
     assert "umask 077" in guided
     assert 'restrict_secret_file_permissions "$BOT_ENV_FILE"' in guided
     assert "umask 077" in shared
     assert 'restrict_secret_file_permissions "$BOT_ENV_FILE"' in shared
-    assert "umask 077" in registry
-    assert 'chmod 600 "$ENV_FILE"' in registry
+    assert 'chmod 600 .deploy/registry/.env' in registry
 
 
 def test_guided_start_uses_channel_token_helper():
@@ -196,8 +198,8 @@ def test_registry_compose_requires_enroll_token_and_binds_localhost():
     repo = Path(__file__).resolve().parent.parent
     compose = repo / "infra" / "compose" / "docker-compose.yml"
     text = compose.read_text()
-    assert "REGISTRY_ENROLL_TOKEN: ${REGISTRY_ENROLL_TOKEN:?Set REGISTRY_ENROLL_TOKEN in .env.registry}" in text
-    assert "REGISTRY_UI_TOKEN: ${REGISTRY_UI_TOKEN:?Set REGISTRY_UI_TOKEN in .env.registry}" in text
+    assert "REGISTRY_ENROLL_TOKEN: ${REGISTRY_ENROLL_TOKEN:?Set REGISTRY_ENROLL_TOKEN in .deploy/registry/.env}" in text
+    assert "REGISTRY_UI_TOKEN: ${REGISTRY_UI_TOKEN:?Set REGISTRY_UI_TOKEN in .deploy/registry/.env}" in text
     assert 'REGISTRY_BIND_HOST:-127.0.0.1' in text
 
 

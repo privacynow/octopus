@@ -243,7 +243,7 @@ def compose_ctx(e2e_skip, tmp_path_factory):
     run_id = uuid.uuid4().hex[:10]
     project = f"octopus-agent-e2e-{worker}-{run_id}"
     artifacts_dir = tmp_path_factory.mktemp(f"compose-e2e-{worker}")
-    env_file = Path(artifacts_dir) / ".env.bot"
+    env_file = Path(artifacts_dir) / "bot.env"
     env_file.write_text(
         "\n".join(
             [
@@ -467,10 +467,10 @@ def compose_ctx_postgres_bot(bot_image_built, postgres_up):
     return ctx
 
 
-def test_compose_postgres_up_without_env_bot(e2e_skip, tmp_path):
-    """Clean-repo tooling path: postgres comes up without .env.bot.
+def test_compose_postgres_up_without_bot_env(e2e_skip, tmp_path):
+    """Clean-repo tooling path: postgres comes up without a bot env file.
 
-    This uses a temp copied Compose stack with no .env.bot at all, proving that
+    This uses a temp copied Compose stack with no bot env file at all, proving that
     postgres-only tooling does not depend on bot runtime config.
     """
     compose_dir = tmp_path / "infra" / "compose"

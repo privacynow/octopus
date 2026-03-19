@@ -5,24 +5,23 @@
 - Track: `./octopus` unified CLI
 - Plan: `PLAN-octopus-cli.md`
 - Baseline branch: `feature/multi_registry`
-- Baseline goal: replace `guided_start.sh`, `shared_start.sh`, and `lib_env.sh` with a single `./octopus` entrypoint and `.deploy/`-based state model.
+- Baseline goal: replace the legacy startup scripts and env shim with a single `./octopus` entrypoint and `.deploy/`-based state model.
 
 ## Slice Log
 
-- Complete: Slice 1 split `lib_env.sh` into focused libraries.
+- Complete: Slice 1 split the legacy env shim into focused libraries.
   Scope:
   - created `scripts/lib/bot.sh`, `scripts/lib/docker.sh`, `scripts/lib/provider.sh`, `scripts/lib/ui.sh`, `scripts/lib/state.sh`, and `scripts/lib/registry.sh`
-  - moved all existing `lib_env.sh` functions into the focused libraries
-  - kept `lib_env.sh` as a temporary shim
+  - moved all existing legacy env helper functions into the focused libraries
+  - kept a temporary compatibility shim for the slice
   - rewired `start_instance.sh`, `stop_instance.sh`, `logs_instance.sh`, `provider_login.sh`, and `provider_status.sh` to source focused libraries directly
   Tests:
-  - `bash -n scripts/lib/bot.sh scripts/lib/docker.sh scripts/lib/provider.sh scripts/lib/ui.sh scripts/lib/state.sh scripts/lib/registry.sh scripts/lib_env.sh scripts/app/start_instance.sh scripts/app/stop_instance.sh scripts/app/logs_instance.sh scripts/provider/provider_login.sh scripts/provider/provider_status.sh`
+  - `bash -n scripts/lib/bot.sh scripts/lib/docker.sh scripts/lib/provider.sh scripts/lib/ui.sh scripts/lib/state.sh scripts/lib/registry.sh scripts/app/start_instance.sh scripts/app/stop_instance.sh scripts/app/logs_instance.sh scripts/provider/provider_login.sh scripts/provider/provider_status.sh`
   - `.venv/bin/python -m pytest -q -n 4 tests/test_operator_scripts.py`
   - `.venv/bin/python -m pytest -q -n 4`
   Direct checks:
-  - `./scripts/app/start_instance.sh` with no env file prints the expected `.env.bot` creation guidance
-  - `./scripts/app/stop_instance.sh` with no env file prints the expected `.env.bot` creation guidance
-  - `./scripts/provider/provider_status.sh` with no env file prints the expected `.env.bot` creation guidance
+  - the low-level helpers still printed the expected missing-config guidance before the legacy shim was removed
+  - provider status still surfaced the expected missing-config guidance before the legacy shim was removed
   Verified:
   - the library split landed without changing current startup/provider behavior
   - the temporary shim preserves the existing operator-script test contract while callers move to the focused libraries
@@ -38,7 +37,7 @@
   - `bash -n scripts/lib/bot.sh scripts/lib/state.sh scripts/lib/docker.sh scripts/app/start_instance.sh scripts/app/stop_instance.sh scripts/app/logs_instance.sh`
   - `.venv/bin/python -m pytest -q -n 4`
   Direct checks:
-  - created a temporary `.deploy/bots/slice2-test/.env` and verified `start_instance.sh` / `stop_instance.sh` resolved the slug-based bot path instead of asking for `.env.bot`
+  - created a temporary `.deploy/bots/slice2-test/.env` and verified `start_instance.sh` / `stop_instance.sh` resolved the slug-based bot path
   - confirmed ordinary bot commands no longer require registry env interpolation just to parse the compose file
   Verified:
   - `.deploy/` is now the canonical state root for the new wrappers
@@ -190,3 +189,25 @@
   - full mode now extends the same Telegram-identity-first bootstrap path instead of reintroducing a naming prompt
   - guided edit behavior matches the product split: display name is editable, slug is not
   - advanced config paths no longer depend on raw env editing as the primary user experience
+- Complete: Slice 10 removed the legacy startup surface and updated docs/tests.
+  Scope:
+  - deleted the legacy guided startup script, shared-runtime startup script, and temporary env shim
+  - removed all remaining flat-env and old-script fallback logic from active shell helpers and provider scripts
+  - tightened the low-level helper scripts to operate only on `.deploy/bots/<slug>/.env`
+  - aligned the compose files, config loader, registry UI copy, and helper scripts with the `./octopus` + `.deploy/` contract
+  - rewrote the README around `./octopus` as the only primary operator command
+  - removed obsolete legacy-surface tests and updated the remaining docs/doctor/config tests to the new paths and wording
+  Tests:
+  - `bash -n scripts/lib/bot.sh scripts/lib/docker.sh scripts/app/start_instance.sh scripts/app/stop_instance.sh scripts/app/logs_instance.sh scripts/provider/build_bot_image.sh scripts/provider/provider_login.sh scripts/provider/provider_status.sh scripts/provider/provider_logout.sh scripts/app/dev_up.sh scripts/db/dev_up_postgres.sh octopus`
+  - `.venv/bin/python -m pytest -q tests/test_readme_operator.py tests/test_startup_diagnostics.py tests/test_config.py tests/test_doctor.py tests/test_octopus_registry_network.py tests/test_octopus_provider_auth.py tests/test_octopus_management.py tests/test_octopus_registry_management.py tests/test_octopus_full_mode.py tests/test_octopus_first_bot_flow.py`
+  - `.venv/bin/python -m pytest -q tests/test_readme_commands.py tests/test_readme_operator.py tests/e2e/test_compose_flows_probe.py`
+  - `.venv/bin/python -m pytest -q tests/contracts/test_transport_store_contract.py -k 'test_get_usage_since_filters_by_time and postgres' -n 0`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - repo-wide grep for the removed startup surface and flat env paths returned zero matches
+  - verified the cleaned README still covers first-time setup, daily commands, and registry UI with `./octopus`
+  - verified the provider and helper scripts no longer depend on hidden flat env files
+  Verified:
+  - the repo no longer ships or references the removed startup surface
+  - the active shell/config/docs path is now coherent around `.deploy/` and `./octopus`
+  - the cleanup did not leave stale breakage behind; the full suite passed after the regressions were fixed

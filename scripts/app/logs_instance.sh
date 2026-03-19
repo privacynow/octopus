@@ -11,22 +11,13 @@ cd "$REPO_DIR"
 # shellcheck source=scripts/lib/docker.sh
 . "$REPO_DIR/scripts/lib/docker.sh"
 
-SLUG="${1:-default}"
-if [ -n "${SLUG:-}" ] && [ -f "$(bot_env_file "$SLUG")" ]; then
-  BOT_ENV_FILE="$(bot_env_file "$SLUG")"
-  export BOT_ENV_FILE
-  check_env_bot_required "$BOT_ENV_FILE"
-  bot_compose "$SLUG" logs -f bot
-  exit 0
-fi
-
-INSTANCE="$SLUG"
-if [ "$INSTANCE" = "default" ]; then
-  BOT_ENV_FILE=".env.bot"
-else
-  BOT_ENV_FILE=".env.bot.$INSTANCE"
-fi
+SLUG="${1:-}"
+[ -n "$SLUG" ] || {
+  echo "Usage: ./scripts/app/logs_instance.sh <slug>" >&2
+  echo "Run ./octopus status to list bots." >&2
+  exit 1
+}
+BOT_ENV_FILE="$(bot_env_file "$SLUG")"
 export BOT_ENV_FILE
-
 check_env_bot_required "$BOT_ENV_FILE"
-bot_compose logs -f bot
+bot_compose "$SLUG" logs -f bot

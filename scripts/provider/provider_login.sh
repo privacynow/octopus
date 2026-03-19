@@ -12,21 +12,14 @@ cd "$REPO_DIR"
 # shellcheck source=scripts/lib/provider.sh
 . "$REPO_DIR/scripts/lib/provider.sh"
 
-if [ -n "${1:-}" ]; then
-  case "$1" in
-    claude|codex) provider="$1" ;;
-    *)
-      echo "BOT_PROVIDER must be 'claude' or 'codex', got: $1" >&2
-      exit 1
-      ;;
-  esac
-else
-  env_file="$(current_bot_env_file)"
-  BOT_ENV_FILE="$env_file"
-  export BOT_ENV_FILE
-  check_env_bot_required "$env_file"
-  provider=$(get_bot_provider "$env_file")
-fi
+provider="${1:-${BOT_PROVIDER:-}}"
+case "$provider" in
+  claude|codex) ;;
+  *)
+    echo "Usage: ./scripts/provider/provider_login.sh <claude|codex>" >&2
+    exit 1
+    ;;
+esac
 check_provider_image "$provider" >/dev/null
 ensure_provider_auth_dir "$provider"
 

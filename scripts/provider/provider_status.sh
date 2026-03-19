@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Report provider auth and runtime health only (not DB or Telegram).
 # Uses shared per-provider auth under .deploy/provider-auth/<provider>.
-# For full app health use: docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot --env-file .env.bot run --rm bot python -m app.main --doctor
+# For full bot health use: ./octopus doctor [slug]
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -13,22 +13,14 @@ cd "$REPO_DIR"
 # shellcheck source=scripts/lib/provider.sh
 . "$REPO_DIR/scripts/lib/provider.sh"
 
-if [ -n "${1:-}" ]; then
-  case "$1" in
-    claude|codex) provider="$1" ;;
-    *)
-      echo "BOT_PROVIDER must be 'claude' or 'codex', got: $1" >&2
-      exit 1
-      ;;
-  esac
-  env_file=".env.bot"
-else
-  env_file="$(current_bot_env_file)"
-  BOT_ENV_FILE="$env_file"
-  export BOT_ENV_FILE
-  check_env_bot_required "$env_file"
-  provider=$(get_bot_provider "$env_file")
-fi
+provider="${1:-${BOT_PROVIDER:-}}"
+case "$provider" in
+  claude|codex) ;;
+  *)
+    echo "Usage: ./scripts/provider/provider_status.sh <claude|codex>" >&2
+    exit 1
+    ;;
+esac
 check_provider_image "$provider" >/dev/null
 ensure_provider_auth_dir "$provider"
 
@@ -38,4 +30,5 @@ if ! provider_compose "$provider" run --rm bot-provider; then
   exit 1
 fi
 update_provider_auth_hint "$provider" "true"
-echo "Success here does NOT prove the bot can start. For full app health (DB, config, Telegram) run: docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot --env-file $env_file run --rm bot python -m app.main --doctor"
+echo "Success here does NOT prove a bot can start."
+echo "For full bot health run: ./octopus doctor"

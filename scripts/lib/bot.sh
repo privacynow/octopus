@@ -1,24 +1,15 @@
 #!/usr/bin/env bash
 # Bot env I/O and token helpers.
 
-current_bot_env_file() {
-  if [ -n "${BOT_ENV_FILE:-}" ]; then
-    echo "$BOT_ENV_FILE"
-    return
+resolve_bot_env_file() {
+  local env_file="${1:-${BOT_ENV_FILE:-}}"
+  if [ -n "$env_file" ]; then
+    printf '%s\n' "$env_file"
+    return 0
   fi
-  if [ -n "${1:-}" ] && [ -f ".env.bot.$1" ]; then
-    echo ".env.bot.$1"
-    return
-  fi
-  echo ".env.bot"
-}
-
-current_bot_instance() {
-  local env_file="${1:-$(current_bot_env_file)}"
-  case "$env_file" in
-    .env.bot.*) echo "${env_file#.env.bot.}" ;;
-    *) echo "default" ;;
-  esac
+  echo "No bot configuration is selected." >&2
+  echo "Run ./octopus to create or choose a bot first." >&2
+  return 1
 }
 
 prompt_with_default() {
@@ -49,7 +40,8 @@ write_env_assignment_line() {
 }
 
 upsert_env_file_value() {
-  local key="$1" value="${2:-}" env_file="${3:-$(current_bot_env_file)}"
+  local key="$1" value="${2:-}" env_file=""
+  env_file="$(resolve_bot_env_file "${3:-}")" || return 1
   local tmp_file found=0 line=""
   tmp_file="$(mktemp "${TMPDIR:-/tmp}/octopus-env.XXXXXX")"
   if [ -f "$env_file" ]; then
@@ -73,7 +65,8 @@ upsert_env_file_value() {
 }
 
 remove_env_file_value() {
-  local key="$1" env_file="${2:-$(current_bot_env_file)}"
+  local key="$1" env_file=""
+  env_file="$(resolve_bot_env_file "${2:-}")" || return 1
   local tmp_file line=""
   tmp_file="$(mktemp "${TMPDIR:-/tmp}/octopus-env.XXXXXX")"
   if [ -f "$env_file" ]; then
@@ -207,7 +200,7 @@ prompt_channel_token_with_help() {
 registry_url_is_local() {
   local value="${1:-}"
   case "$value" in
-    http://localhost:*|http://127.0.0.1:*|http://[::1]:*|http://host.docker.internal:*|http://172.17.0.1:*)
+    http://registry:*|http://localhost:*|http://127.0.0.1:*|http://[::1]:*)
       return 0
       ;;
   esac
@@ -221,19 +214,23 @@ restrict_secret_file_permissions() {
 }
 
 check_env_bot_required() {
-  local env_file="${1:-$(current_bot_env_file)}"
+  local env_file="${1:-}" slug=""
+  env_file="$(resolve_bot_env_file "$env_file")" || exit 1
   if [ ! -f "$env_file" ]; then
-    if [ "$env_file" = ".env.bot" ]; then
-      echo "Create .env.bot first (TELEGRAM_BOT_TOKEN, BOT_PROVIDER, BOT_ALLOWED_USERS or BOT_ALLOW_OPEN=1)." >&2
+    slug="$(basename "$(dirname "$env_file")" 2>/dev/null || true)"
+    if [ -n "$slug" ] && [ "$slug" != "." ] && [ "$slug" != ".." ]; then
+      echo "Bot '$slug' is not configured." >&2
     else
-      echo "Create .env.bot first for the default bot, or create $env_file for this instance (TELEGRAM_BOT_TOKEN, BOT_PROVIDER, BOT_ALLOWED_USERS or BOT_ALLOW_OPEN=1)." >&2
+      echo "Bot configuration is missing." >&2
     fi
+    echo "Run ./octopus to create or repair the bot." >&2
     exit 1
   fi
 }
 
 read_bot_env_value() {
-  local key="$1" env_file="${2:-$(current_bot_env_file)}"
+  local key="$1" env_file="${2:-${BOT_ENV_FILE:-}}"
+  [ -n "$env_file" ] || return 0
   grep -E "^[[:space:]]*${key}=" "$env_file" 2>/dev/null | sed 's/^[^=]*=[[:space:]]*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true
 }
 
@@ -249,7 +246,7 @@ telegram_token_is_placeholder() {
 }
 
 require_real_telegram_token() {
-  local value="${1:-}" env_file="${2:-$(current_bot_env_file)}"
+  local value="${1:-}" env_file="${2:-${BOT_ENV_FILE:-bot env file}}"
   if [ -z "$value" ]; then
     echo "TELEGRAM_BOT_TOKEN must be set in $env_file" >&2
     exit 1
@@ -262,8 +259,12 @@ require_real_telegram_token() {
 }
 
 get_bot_provider() {
-  local env_file="${1:-$(current_bot_env_file)}"
+  local env_file="${1:-${BOT_ENV_FILE:-}}"
   local p
+  [ -n "$env_file" ] || {
+    echo "claude"
+    return 0
+  }
   p=$(grep -E '^[[:space:]]*BOT_PROVIDER=' "$env_file" 2>/dev/null | sed 's/^[^=]*=[[:space:]]*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)
   echo "${p:-claude}"
 }

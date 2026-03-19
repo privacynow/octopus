@@ -145,6 +145,8 @@ class StartupLogRedactionFilter(logging.Filter):
         if isinstance(record.msg, str):
             record.msg = redact_sensitive_startup_text(record.msg)
         record.args = _sanitize_log_args(record.args)
+        if isinstance(record.msg, str) and record.msg.startswith("HTTP Request:"):
+            return False
         if record.exc_info:
             _exc_type, exc, _tb = record.exc_info
             if isinstance(exc, InvalidToken):

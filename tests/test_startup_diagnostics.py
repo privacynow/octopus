@@ -123,6 +123,20 @@ def test_startup_log_redaction_filter_sanitizes_invalid_token_exception():
     assert "TELEGRAM_BOT_TOKEN" in str(record.msg)
 
 
+def test_startup_log_redaction_filter_drops_noisy_http_request_lines():
+    token = "8493136018:AAET-xjK_v8TviI7et1N8pCvI3O0bbmVLFl"
+    record = logging.LogRecord(
+        name="httpx",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg=f"HTTP Request: GET https://api.telegram.org/bot{token}/getMe \"HTTP/1.1 401 Unauthorized\"",
+        args=(),
+        exc_info=None,
+    )
+    assert StartupLogRedactionFilter().filter(record) is False
+
+
 def test_startup_log_redaction_filter_sanitizes_traceback_text(monkeypatch):
     monkeypatch.setenv("BOT_DATABASE_URL", "postgresql://bot:secret@example.com/bot")
     record = logging.LogRecord(

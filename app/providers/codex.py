@@ -29,6 +29,10 @@ class CodexProvider:
     def new_provider_state(self) -> dict[str, Any]:
         return {"thread_id": None}
 
+    @staticmethod
+    def _safe_failure_text(returncode: int) -> str:
+        return f"Codex exited with code {returncode} before completing the request."
+
     def check_health(self) -> list[str]:
         errors: list[str] = []
         if not shutil.which("codex"):
@@ -509,8 +513,9 @@ class CodexProvider:
         reply = final_text or "\n\n".join(messages).strip() or draft_text or "[empty response]"
 
         if proc.returncode and proc.returncode != 0:
+            log.warning("codex run failed with rc=%d", proc.returncode)
             return RunResult(
-                text=f"[Codex error: {trim_text(stderr or 'unknown', 2000)}]",
+                text=self._safe_failure_text(proc.returncode),
                 returncode=proc.returncode,
                 provider_state_updates=state_updates,
             )

@@ -7,12 +7,14 @@ not the storage backend choice.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app.config import BotConfig
 
 # Single backend instance. Set by init(); cleared or replaced by reset_for_test().
 _backend: _Backend | None = None
+log = logging.getLogger(__name__)
 
 
 class _Backend:
@@ -72,11 +74,11 @@ def reset_for_test() -> None:
         try:
             _backend.session_store.close_all_db()
         except Exception:
-            pass
+            log.debug("Session store close failed during reset", exc_info=True)
         try:
             _backend.transport_store.close_all_transport_db()
         except Exception:
-            pass
+            log.debug("Transport store close failed during reset", exc_info=True)
     from app.storage_sqlite import SQLiteSessionStore
     from app.work_queue_sqlite import SQLiteTransportStore
     _backend = _Backend(SQLiteSessionStore(), SQLiteTransportStore())

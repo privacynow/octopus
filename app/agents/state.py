@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -29,6 +33,7 @@ def load_agent_runtime_state(data_dir: Path) -> AgentRuntimeState:
     try:
         raw = json.loads(path.read_text())
     except Exception:
+        log.warning("Agent runtime state load failed, using defaults", exc_info=True)
         return AgentRuntimeState()
     return AgentRuntimeState(
         agent_id=raw.get("agent_id", ""),

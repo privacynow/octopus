@@ -1,13 +1,14 @@
 """Tests for agent-mode config/runtime foundation."""
 
 import asyncio
+import logging
 from pathlib import Path
 
 from app import work_queue
 from app.agents.bridge import admit_registry_delivery, conversation_key_for_ref
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.runtime import AgentRuntime
-from app.agents.state import load_agent_runtime_state
+from app.agents.state import AgentRuntimeState, load_agent_runtime_state
 from app.config import derive_agent_slug
 from app.runtime.inbound_types import deserialize_inbound
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
@@ -35,6 +36,18 @@ def test_requested_card_uses_agent_capabilities_without_default_skill_fallback(t
     card = AgentRuntime(config).requested_card()
 
     assert card.capabilities == ()
+
+
+def test_load_agent_runtime_state_logs_when_file_is_corrupt(tmp_path: Path, caplog):
+    state_path = tmp_path / "agent" / "registry_state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text("{not-json", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        state = load_agent_runtime_state(tmp_path)
+
+    assert state == AgentRuntimeState()
+    assert any("Agent runtime state load failed" in record.message for record in caplog.records)
 
 
 async def test_agent_runtime_standalone_marks_state(tmp_path: Path):

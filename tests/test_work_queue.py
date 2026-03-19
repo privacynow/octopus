@@ -741,7 +741,7 @@ async def test_worker_loop_handles_dispatch_failure(data_dir):
         (_event(1500),),
     ).fetchone()
     assert row["state"] == "failed"
-    assert "provider crash" in row["error"]
+    assert row["error"] == "dispatch_exception"
 
 
 async def test_worker_loop_handles_bad_payload(data_dir):
@@ -776,6 +776,42 @@ async def test_worker_loop_handles_bad_payload(data_dir):
     ).fetchone()
     assert row["state"] == "failed"
     assert row["error"] == "deserialize_error"
+
+
+async def test_worker_loop_notifies_on_deserialize_failure(data_dir):
+    from app.worker import worker_loop
+
+    record_update(data_dir, _event(1601), conversation_key=_conv(1), actor_key=_actor(42), kind="message",
+                  payload="not-valid-json")
+    enqueue_work_item(data_dir, conversation_key=_conv(1), event_id=_event(1601))
+
+    notified: list[str] = []
+
+    async def dispatch(kind, event, item):
+        raise AssertionError("dispatch should not run when deserialization fails")
+
+    async def notify(item):
+        notified.append(str(item["id"]))
+
+    stop = asyncio.Event()
+
+    async def run_then_stop():
+        await asyncio.sleep(0.2)
+        stop.set()
+
+    await asyncio.gather(
+        worker_loop(
+            data_dir,
+            "w1",
+            dispatch,
+            deserialize_failure_notifier=notify,
+            poll_interval=0.05,
+            stop_event=stop,
+        ),
+        run_then_stop(),
+    )
+
+    assert len(notified) == 1
 
 
 async def test_worker_loop_respects_per_chat_serialization(data_dir):

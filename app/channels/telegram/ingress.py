@@ -219,7 +219,8 @@ async def _chat_lock(
                 return
             raise
         except Exception:
-            # Mark as failed on unhandled exception
+            # Mark the queued item failed locally, then re-raise so the
+            # global Telegram error handler logs and notifies the user.
             if item_id:
                 work_queue.fail_work_item(data_dir, item_id, error="handler_exception")
                 if claimed_update_id:
@@ -363,6 +364,9 @@ def _command_handler(fn=None, *, show_not_allowed_message: bool = False):
                 runtime.pending_work_items.pop(uid, None)
                 return
             except Exception:
+                # The decorator marks transport state failed here; the
+                # exception still bubbles to the global error handler for the
+                # generic user-facing Telegram error message.
                 _complete_pending_work_item(runtime, uid, state="failed")
                 raise
             else:
@@ -410,7 +414,7 @@ def _callback_handler(fn):
             try:
                 await query.answer(_msg.queue_busy())
             except Exception:
-                pass
+                log.debug("Could not send queue-busy callback answer", exc_info=True)
             return
         except Exception:
             _complete_pending_work_item(runtime, uid, state="failed")
@@ -1466,5 +1470,9 @@ async def _global_error_handler(update: object, context: ContextTypes.DEFAULT_TY
                 update.effective_chat.id,
                 _msg.generic_error_try_again(),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning(
+                "Could not send generic error message to chat %s: %s",
+                update.effective_chat.id,
+                exc.__class__.__name__,
+            )

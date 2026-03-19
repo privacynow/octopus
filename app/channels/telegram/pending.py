@@ -246,7 +246,11 @@ async def handle_recovery_action(
             rendered = telegram_presenters.pending_html_outcome_message(outcome.edit_message)
             await runtime.edit_or_reply_text(message, rendered.text, **rendered.kwargs())
         except Exception:
-            pass
+            log.debug(
+                "Could not remove approval keyboard for chat %s",
+                chat_id,
+                exc_info=True,
+            )
     if outcome.replay_plan is None:
         return
 
@@ -294,7 +298,11 @@ async def handle_recovery_action(
             rendered = telegram_presenters.recovery_failed_edit_message()
             await runtime.edit_or_reply_text(message, rendered.text, **rendered.kwargs())
         except Exception:
-            pass
+            log.warning(
+                "Could not send replay error notification to chat %s",
+                chat_id,
+                exc_info=True,
+            )
 
 
 async def handle_worker_pending_action(

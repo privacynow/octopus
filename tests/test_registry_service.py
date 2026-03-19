@@ -1342,8 +1342,38 @@ def test_publish_timeline_rejects_foreign_conversation(monkeypatch, tmp_path: Pa
             ]
         },
     )
-    assert publish.status_code == 401
-    assert "does not belong to agent" in publish.json()["detail"]
+    assert publish.status_code == 403
+    assert publish.json()["detail"] == "Not authorized for this agent resource."
+
+
+def test_agent_api_invalid_token_uses_generic_401_detail(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/agents/register",
+        headers={"Authorization": "Bearer bad-token"},
+        json={
+            "agent_card": {
+                "display_name": "Bot",
+                "slug": "bot",
+                "role": "developer",
+                "capabilities": ["python"],
+                "tags": [],
+                "description": "Writes code",
+                "provider": "codex",
+                "mode": "registry",
+                "channel_capabilities": ["telegram", "registry"],
+                "version": "test",
+            },
+            "connectivity_state": "connected",
+            "current_capacity": 0,
+            "max_capacity": 1,
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid or expired agent token."}
 
 
 def test_registry_routed_result_returns_to_origin_agent(monkeypatch, tmp_path: Path):

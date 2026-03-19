@@ -243,7 +243,7 @@ def test_install_from_registry_digest_mismatch(tmp_path: Path):
             before = {item.slug for item in get_content_store().list_skill_summaries()}
             result = get_skill_import_service().install_from_registry("bad-digest", cfg.registry_url)
             assert result.ok is False
-            assert "digest mismatch" in result.message.lower()
+            assert result.message == "Could not fetch skill from registry. Try again later."
             assert get_skill_catalog_service().resolve_track("bad-digest") is None
             assert get_content_store().list_skill_tracks("bad-digest") == []
             assert {item.slug for item in get_content_store().list_skill_summaries()} == before

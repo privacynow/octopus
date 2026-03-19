@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
 from app.registry_service.store_base import AbstractRegistryStore
 
 _store: AbstractRegistryStore | None = None
+log = logging.getLogger(__name__)
 
 
 def get_registry_store() -> AbstractRegistryStore:
@@ -38,4 +40,4 @@ def reset_for_test() -> None:
 
         close_pools()
     except Exception:
-        pass
+        log.debug("Registry store backend reset failed to close Postgres pools", exc_info=True)

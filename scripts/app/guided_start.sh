@@ -51,10 +51,18 @@ create_env_file_if_missing() {
   display_name="$(prompt_with_default "Bot name" "$default_name")"
   while true; do
     token="$(prompt_with_default "Telegram bot token" "")"
+    if [ -z "$token" ]; then
+      echo "Telegram bot token is required."
+      continue
+    fi
+    if telegram_token_is_placeholder "$token"; then
+      echo "Telegram bot token cannot be a placeholder."
+      echo "Get a real token from @BotFather."
+      continue
+    fi
     if [ -n "$token" ]; then
       break
     fi
-    echo "Telegram bot token is required."
   done
   setup_mode="$(prompt_with_default "Setup mode (quick/full)" "quick")"
   case "$setup_mode" in
@@ -224,6 +232,17 @@ build_registry_ui_display_url() {
   printf '%s' "$browser_base"
 }
 
+print_startup_failure_help() {
+  echo "Bot failed to stay up after startup." >&2
+  echo "Running full app health check for a clearer diagnosis..." >&2
+  if ! bot_compose run --rm bot python -m app.main --doctor >&2; then
+    :
+  fi
+  echo "" >&2
+  echo "If you need raw container logs:" >&2
+  echo "  ./scripts/app/logs_instance.sh $INSTANCE" >&2
+}
+
 print_box_wrapped_line() {
   local text="$1"
   while IFS= read -r line; do
@@ -233,6 +252,8 @@ print_box_wrapped_line() {
 
 create_env_file_if_missing
 check_env_bot_required "$BOT_ENV_FILE"
+telegram_token="$(read_bot_env_value TELEGRAM_BOT_TOKEN "$BOT_ENV_FILE")"
+require_real_telegram_token "$telegram_token" "$BOT_ENV_FILE"
 
 env_provider="$(get_bot_provider "$BOT_ENV_FILE")"
 
@@ -283,8 +304,7 @@ echo "Step 3/3: Starting bot (background service)..."
 echo "Waiting a few seconds to confirm the bot stayed up..."
 sleep 5
 if bot_compose ps -a --format '{{.Status}}' bot 2>/dev/null | grep -q Exited; then
-  echo "Bot failed to start (container exited). Last logs:" >&2
-  bot_compose logs --tail=40 bot >&2
+  print_startup_failure_help
   exit 1
 fi
 

@@ -145,6 +145,55 @@ async def skills_show(event, update: Update, *, runtime: TelegramRuntimeSkillsRu
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
+async def handle_skills_command(event, update: Update, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
+    args = event.args
+    if not args:
+        await skills_show(event, update, runtime=runtime)
+        return
+
+    sub = args[0].lower()
+    subs_with_arg = {
+        "add": skills_add,
+        "remove": skills_remove,
+        "setup": skills_setup,
+        "create": skills_create,
+        "info": skills_info,
+        "install": skills_install,
+        "uninstall": skills_uninstall,
+        "diff": skills_diff,
+        "history": skills_history,
+        "submit": skills_submit,
+        "approve": skills_approve,
+        "reject": skills_reject,
+        "publish": skills_publish,
+        "archive": skills_archive,
+    }
+    if sub in subs_with_arg and len(args) >= 2:
+        await subs_with_arg[sub](event, update, args[1], runtime=runtime)
+        return
+    if sub == "list":
+        await skills_list(event, update, runtime=runtime)
+        return
+    if sub == "clear":
+        await skills_clear(event, update, runtime=runtime)
+        return
+    if sub == "search" and len(args) >= 2:
+        await skills_search(event, update, " ".join(args[1:]), runtime=runtime)
+        return
+    if sub == "updates":
+        await skills_updates(event, update, runtime=runtime)
+        return
+    if sub == "update" and len(args) >= 2:
+        await skills_update(event, update, args[1], runtime=runtime)
+        return
+    if sub == "edit" and len(args) >= 3:
+        await skills_edit(event, update, args[1], " ".join(args[2:]), runtime=runtime)
+        return
+
+    rendered = telegram_presenters.skills_usage_message()
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+
+
 async def skills_list(event, update: Update, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
     catalog = _flows().runtime_skills.catalog.list_skills()
     session = _load(runtime, event.chat_id)

@@ -88,8 +88,7 @@ Phase 8 is now active.
     - worker-focused suites: `376 passed`
     - verified against the full suite: `1634 passed, 23 skipped`
 - Remaining verified-but-uncommitted Phase 8 work in this branch state:
-  - `Phase 8 / H1 shared-mode dispatch slice` is complete in the current
-    branch state:
+  - `c2b3f33` `Phase 8 / H1: extract shared-mode dispatch from ingress`
     - Telegram shared-runtime command/callback persistence now lives in
       `app/channels/telegram/shared_mode_dispatch.py`
     - this owner is channel-specific, not a repo-wide shared layer
@@ -100,8 +99,16 @@ Phase 8 is now active.
     - ingress line count after the slice: `1574`
     - shared-runtime and structural suites: `222 passed`
     - verified against the full suite: `1636 passed, 23 skipped`
+  - `Phase 8 / H1 final ingress cleanup` is complete in the current branch
+    state:
+    - concern-owned command routing for `/skills` and `/guidance` now lives in
+      `app/channels/telegram/runtime_skills.py` and
+      `app/channels/telegram/guidance.py`
+    - `app/channels/telegram/ingress.py` is now below the Phase 8 threshold at
+      `1483` lines
+    - focused suites: `282 passed`
+    - verified against the full suite: `1639 passed, 23 skipped`
 - Remaining Phase 8 work is still pending:
-  - H1 final ingress cleanup to get `ingress.py` below the Phase 8 target
   - H2 presenter rendering blind-spot closure
   - H3 Telegram test-boundary hardening
   - H4 documentation and structural gate tightening

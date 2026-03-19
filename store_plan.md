@@ -2753,6 +2753,16 @@ Feature expansion may resume only when all of the following are true:
   setup rather than routing-module internals or singleton mutable state
 - `status.md` and `docs/orchestration_inventory.md` reflect the actual current
   code ownership and are updated only after code/tests prove the state
+- `ingress.py` is ≤ 1500 lines and contains only event translation, handler
+  dispatch, and thin coordination
+- no extracted Telegram channel module imports `app.channels.telegram.ingress`
+- no Telegram channel file except `presenters.py` creates
+  `InlineKeyboardMarkup` or `InlineKeyboardButton`
+- no test file calls private ingress helpers (with documented exceptions for
+  PTB callback contracts that have no public entry point)
+- no test file monkeypatches module-level ingress functions for stubbing
+- zero-import gates for singleton helpers cover both `app/` and `tests/`
+- ingress line-count gate prevents growth above 1600 lines
 
 ## Phase 7. Closure Correction Stage
 
@@ -2920,6 +2930,597 @@ not only deleted historical paths.
 
 - status and inventory docs match the actual code
 - structural gates fail on the regressions that escaped the previous closure
+
+## Phase 8. Ingress Decomposition and Test-Boundary Hardening
+
+Phase 7 closed the singleton/routing regressions, but a post-Phase-7 audit found
+that the Telegram ingress owner is still oversized, the test suite still reaches
+into ingress private helpers, and the presenter gate has a gap in egress.py.
+Feature work remains frozen until Phase 8 gates pass.
+
+### Findings That Motivated Phase 8
+
+1. **Ingress is still a shadow mega-owner.** `app/channels/telegram/ingress.py`
+   is 3,009 lines with 127 definitions. The G2 exit criterion said "ingress owns
+   normalized event translation and dispatch only" and the G2 guidance said
+   "if ingress.py exceeds ~1500 lines after the split, further decompose." It is
+   double that threshold. Specifically, ingress still owns:
+   - `TelegramProgress` class (lines 815-870): progress display lifecycle
+   - `keep_typing` / `_heartbeat` (lines 1276-1314): typing animation and
+     heartbeat orchestration
+   - `_load` / `_save` session wrappers (lines 1317-1335): session I/O helpers
+   - `execute_request` / `request_approval` / `approve_pending` / `reject_pending`
+     / `retry_skip_pending` / `retry_allow_pending` (lines 1340-1428): full
+     execution and approval orchestration
+   - `_propose_delegation_plan` / `_publish_delegation_proposed_event` /
+     `_handle_delegation_approve` / `_handle_delegation_cancel` (lines 1209-1461):
+     delegation proposal publishing and channel callback flow
+   - `worker_dispatch` (lines 2635-2858): 224-line worker dispatch with inline
+     recovery, usage recording, timeline publication, and routed-task result
+     reporting
+   - `_execute_worker_action` (lines 2554-2632): worker action execution with
+     inline runtime-skill dispatch
+   - `_shared_command_dispatch` / `_shared_callback_dispatch` (lines 2937-3008):
+     shared-mode dispatch routing
+   - `_global_error_handler` (lines 2989-3009): PTB error handler
+
+2. **Tests certify implementation details instead of the public boundary.**
+   Multiple test files reach into ingress private helpers:
+   - `test_agents.py:509` monkeypatches `ingress._execute_worker_action`
+   - `test_telegram_presenters.py:474,488,514,548` calls private ingress helpers
+     `_send_approval_prompt`, `_show_setup_prompt`, `_send_compact_reply`,
+     `_propose_delegation_plan`
+   - `test_execution_context.py:796` calls private `ingress._load` / `_save`
+   - `test_invariants.py:1041,1113` exercises private `_global_error_handler`
+     and monkeypatches `_load`
+   - `test_handlers_credentials.py` monkeypatches `ingress.validate_credential`
+     at runtime (lines 61, 99, 132, 153, 178, 197)
+   - `handler_support.py:16` imports live ingress directly (legitimate for
+     `handle_message` / `worker_dispatch`, but still a coupling surface)
+
+3. **Egress.py creates Telegram markup outside presenters.**
+   `app/channels/telegram/egress.py:150-153` constructs `InlineKeyboardMarkup` /
+   `InlineKeyboardButton` in `send_recovery_notice()`. The gate test
+   `test_telegram_reply_markup_builders_live_only_in_presenters` checks only
+   5 files and does not include `egress.py`.
+
+4. **status.md has contradictory lede.** Line 22 says "The remediation track is
+   reopened and not complete" while the authoritative section at line 910 says
+   "Phase 7 closure correction is complete" and line 935 says "Feature work may
+   resume."
+
+5. **Stale module docstring.** `ingress.py:1` says it owns "progress display, and
+   PTB wiring" — PTB wiring is now in bootstrap.py, and progress display should
+   move out in this phase.
+
+6. **Zero-import gates have an asymmetry.** Singleton helper checks cover `app/`
+   but not `tests/`.
+
+### H1. Decompose ingress.py below the ~1500-line threshold
+
+#### Problem
+
+`ingress.py` at 3,009 lines is double the G2 guidance threshold. It owns
+normalized event translation (its legitimate job) plus execution orchestration,
+delegation proposal publishing and channel callback flow, progress display,
+session I/O, and worker dispatch post-processing (not its job).
+
+#### Required work
+
+Split `ingress.py` into concern-owned modules within `app/channels/telegram/`.
+The split must produce modules that do not import back into `ingress.py` for
+state — they receive explicit collaborators.
+
+Decomposition target:
+
+| Responsibility group | Target file | Approx lines |
+|---|---|---|
+| `TelegramProgress`, `keep_typing`, `_heartbeat`, `_progress_timeline_callback` | `progress.py` | ~120 |
+| `execute_request`, `request_approval`, `approve_pending`, `reject_pending`, `retry_skip_pending`, `retry_allow_pending`, `_resolve_context`, `_resolve_project`, `_allowed_roots`, `_check_prompt_size_cross_chat`, `_execution_surface_context`, plus all `_*_runtime()` adapter builders | `execution.py` | ~400 |
+| `_propose_delegation_plan`, `_publish_delegation_proposed_event`, `_handle_delegation_approve`, `_handle_delegation_cancel`, `_delegation_keyboard`, `_DelegationCallbackEditableHandle`, `_DelegationCallbackSurface`, `_parse_delegation_callback` | `delegation_channel.py` | ~130 |
+| `worker_dispatch`, `_execute_worker_action`, `_run_with_cancel_watch`, `_poll_cancel_requested`, `_build_action_surface`, `_action_target_message_id`, `_maybe_fire_webhook` | `worker.py` | ~350 |
+| `_load`, `_save`, `_conversation_key`, `_actor_key`, `_event_key`, `_telegram_chat_id` | `session_io.py` | ~40 |
+| `_shared_command_dispatch`, `_shared_callback_dispatch`, `_shared_inline_command_handler`, `_enqueue_shared_action`, `_shared_action_envelope`, `_record_shared_action`, `_shared_cancel_command`, `_action_requires_public_guard` | `shared_mode_dispatch.py` | ~120 |
+| `_global_error_handler` | stays in `ingress.py` (registered by bootstrap) or moves to bootstrap | ~25 |
+
+After the split, `ingress.py` retains:
+- Command handlers (`cmd_*`)
+- Callback handlers (`handle_*`)
+- `handle_message`
+- Decorators (`_command_handler`, `_callback_handler`)
+- Dedup/locking helpers (`_dedup_update`, `_complete_pending_work_item`)
+- Access checks (`is_allowed`, `is_admin`, `is_public_user`, `_trust_tier`,
+  `_public_guard`)
+- `build_user_prompt`, `send_formatted_reply`, `send_path_to_chat`,
+  `send_directed_artifacts`, `_edit_or_reply_text`
+
+Estimated `ingress.py` after split: ~1300-1500 lines.
+
+#### Hard rules
+
+- No extracted module may import `app.channels.telegram.ingress`. Each receives
+  its collaborators explicitly (runtime, session, message, config) as function
+  parameters.
+- `ingress.py` may import from the new modules. The new modules may not import
+  from each other except through shared types (e.g., `TelegramRuntime` from
+  `state.py`, presenter functions from `presenters.py`).
+- No re-export shims. If `worker_dispatch` moves to `worker.py`, bootstrap must
+  import it from `worker.py` (or ingress re-exports it as a public name — but
+  ingress calls it, it does not just pass it through).
+- `worker_dispatch` must remain callable from `bootstrap.py` via the
+  `TelegramBootstrap.worker_dispatch` partial. Update the partial target if the
+  function moves.
+- Do not create empty package directories. These are sibling modules under
+  `app/channels/telegram/`, not sub-packages.
+
+#### Required tests
+
+- Positive: each extracted module's public functions work when called with
+  explicit runtime/session/config inputs.
+- Negative: no extracted module imports `app.channels.telegram.ingress`.
+  Add a zero-import gate for each new module (pattern: read file text, assert
+  `"app.channels.telegram.ingress"` not in text).
+- Negative: `ingress.py` does not define `TelegramProgress`, `worker_dispatch`,
+  `_load`, `_save`, `_propose_delegation_plan`, or `execute_request` after
+  the split (these belong to extracted modules).
+- Gate: `ingress.py` is below 1600 lines.
+
+#### Exit criteria
+
+- `ingress.py` is ≤1500 lines and contains only normalized event translation,
+  handler dispatch, and thin coordination calls to extracted modules.
+- Each extracted module runs from explicit inputs and does not import ingress.
+- `bootstrap.py` wires `worker_dispatch` from its new location.
+
+### H2. Move recovery notice markup from egress into presenters
+
+#### Problem
+
+`egress.py:150-153` constructs `InlineKeyboardMarkup` / `InlineKeyboardButton`
+for recovery notices. The plan gate says "Telegram presenters own Telegram
+rendering." The gate test checks 5 files but not `egress.py`.
+
+#### Required work
+
+1. Add a presenter function to `presenters.py`:
+   `recovery_notice_markup(update_id, run_again_label, skip_label) -> InlineKeyboardMarkup`
+2. `egress.py` calls `presenters.recovery_notice_markup(...)` instead of
+   constructing keyboard objects directly.
+3. Remove `InlineKeyboardButton` and `InlineKeyboardMarkup` imports from
+   `egress.py`.
+4. Add `egress.py` to the scoped paths in
+   `test_telegram_reply_markup_builders_live_only_in_presenters`.
+
+#### Required tests
+
+- Positive: presenter produces expected keyboard shape.
+- Negative: `egress.py` no longer imports `InlineKeyboardButton` or
+  `InlineKeyboardMarkup`.
+- Gate: update existing gate to include `egress.py`.
+
+#### Exit criteria
+
+- Zero `InlineKeyboardMarkup` / `InlineKeyboardButton` construction in any
+  Telegram channel file except `presenters.py`.
+
+### H3. Harden test-boundary discipline
+
+#### Problem
+
+Multiple test files reach into ingress private helpers directly. This certifies
+implementation details and creates coupling that masks architecture regressions.
+
+#### Required work
+
+For each test file that calls a private ingress helper, fix the coupling:
+
+**`test_telegram_presenters.py`** (lines 474, 488, 514, 548):
+These tests call `_send_approval_prompt`, `_show_setup_prompt`,
+`_send_compact_reply`, `_propose_delegation_plan` to verify that ingress
+delegates to presenters. After H1 moves these functions to extracted modules
+(`execution.py`, `delegation_channel.py`), the tests should:
+- Either call the extracted module's public function directly (if the function
+  becomes public in the new module), OR
+- Test the presenter function itself (verify the presenter produces the expected
+  markup) rather than testing that ingress calls the presenter.
+The second approach is better: test the contract at the boundary (presenter input
+→ markup output), not the wiring (ingress calls presenter).
+
+**`test_agents.py:509`**:
+Monkeypatches `ingress._execute_worker_action`. After H1 moves this to
+`worker.py`, the test should monkeypatch the new module's function. But better:
+test the agent delivery path through the public `worker_dispatch` entry point
+with a fake provider, rather than stubbing out internals.
+
+**`test_execution_context.py:796`**:
+Calls `ingress._load` / `_save` directly. After H1 moves these to
+`session_io.py`, the test should call the new module. But better: test execution
+context resolution through the public execution entry point.
+
+**`test_invariants.py:1041,1113`**:
+Calls `_global_error_handler` directly and monkeypatches `_load`. The error
+handler test is acceptable — it tests a PTB callback contract that has no
+higher-level public entry point. The `_load` monkeypatch (line 1113) should
+be replaced with a store-level fake that makes `_load` fail naturally, rather
+than patching the function.
+
+**`test_handlers_credentials.py`**:
+Monkeypatches `ingress.validate_credential` 6 times. This should be replaced
+with a dependency-injected validator or a store-level credential stub that makes
+the real validator produce the desired result.
+
+**`handler_support.py:16`**:
+Imports `ingress as _th` and calls `_th.handle_message` and
+`_th.worker_dispatch`. This is legitimate (these are the public ingress entry
+points). No change required, but after H1, `worker_dispatch` may move to
+`worker.py`, so the import should track the final owner.
+
+#### Hard rules
+
+- No test may call a function that starts with `_` from another module unless
+  that function is the PTB callback contract being tested (like
+  `_global_error_handler`) and there is no public entry point.
+- Monkeypatching a module attribute to stub out a private function is not
+  acceptable when the function can be replaced by injecting a collaborator or
+  using a store-level fake.
+- "The test was working" is not a reason to preserve implementation coupling.
+
+#### Required tests
+
+- Gate: add a zero-import gate that scans all test files for calls to known
+  private ingress helpers (`_load`, `_save`, `_execute_worker_action`,
+  `_propose_delegation_plan`, `_send_approval_prompt`, `_show_setup_prompt`,
+  `_send_compact_reply`). These must not appear in test code after H3.
+  Exception: `_global_error_handler` is allowed in `test_invariants.py` only.
+- Gate: add a zero-import gate asserting that no test file monkeypatches
+  `ingress.validate_credential` — the real validator must be tested through
+  store-level fakes.
+
+#### Exit criteria
+
+- No test file calls a private ingress helper (with the documented exception).
+- No test file monkeypatches module-level ingress functions for stubbing.
+- All Telegram-heavy tests exercise the channel through public entry points
+  or through the extracted module's public functions.
+
+### H4. Repair documentation and tighten gates
+
+#### Required work
+
+1. **Fix status.md lede**: Replace line 22 ("The remediation track is reopened
+   and not complete") with a truthful current-state summary that points the
+   reader to the authoritative section. Lines 40-48 that say "Feature work
+   remains frozen" should also be updated to reflect the actual current state
+   after Phase 8.
+
+2. **Fix ingress.py docstring**: Line 1 says ingress owns "progress display, and
+   PTB wiring." After H1 moves progress to `progress.py` and PTB wiring is in
+   `bootstrap.py`, update the docstring to match the actual ownership.
+
+3. **Add singleton-helper gate for tests/**: Create
+   `test_deleted_telegram_singleton_helpers_are_gone_from_test_code` that scans
+   `tests/` the same way the existing app-side gate scans `app/`.
+
+4. **Add extracted-module back-import gates**: For each module created in H1,
+   add a gate asserting it does not import `app.channels.telegram.ingress`.
+
+5. **Add ingress line-count gate**: Assert `ingress.py` is below 1600 lines.
+   This prevents future growth back toward the monolith threshold.
+
+6. **Update orchestration_inventory.md** if any worker dispatch or execution
+   ownership entries changed due to H1.
+
+#### Required tests
+
+- Gate: singleton helpers absent from `tests/`.
+- Gate: no extracted Telegram module imports ingress.
+- Gate: `ingress.py` ≤ 1600 lines.
+- Gate: `egress.py` has no `InlineKeyboardMarkup` or `InlineKeyboardButton`.
+
+#### Exit criteria
+
+- Documentation matches the code.
+- Structural gates enforce the final Telegram decomposition.
+- The ingress line-count gate prevents regression.
+
+### Phase 8 Sequencing
+
+1. **H1** first — the decomposition creates the new module targets.
+2. **H2** can proceed in parallel with H1.
+3. **H3** after H1 — test rewrites depend on knowing the final module locations.
+4. **H4** last — documentation and gates codify the final state.
+
+### Phase 8 Acceptance Gates
+
+All existing Architecture Remediation Acceptance Gates must continue to hold,
+plus the following new gates:
+
+- `ingress.py` is ≤ 1500 lines and contains only event translation, handler
+  dispatch, and thin coordination
+- No extracted Telegram channel module imports `app.channels.telegram.ingress`
+- No Telegram channel file except `presenters.py` creates
+  `InlineKeyboardMarkup` or `InlineKeyboardButton`
+- No test file calls private ingress helpers (with documented exceptions)
+- No test file monkeypatches module-level ingress functions for stubbing
+- `status.md` lede reflects the actual current state
+- Zero-import gates for singleton helpers cover both `app/` and `tests/`
+- Ingress line-count gate prevents growth above 1600 lines
+
+### Phase 8 Failure Patterns
+
+These are the specific patterns that caused Phase 8 to be necessary. Check for
+them on every change.
+
+1. **Renaming a monolith instead of decomposing it.** Phase 7 replaced
+   `routing.py` with `ingress.py` but left the same 3,000-line scope. If you
+   split `ingress.py` and create a 1,500-line `worker.py` that does the same
+   mixed-concern work, you have moved lines, not decomposed.
+
+2. **Extracted modules importing back into the parent.** If `execution.py`
+   imports from `ingress.py`, the extraction did not create independence. Each
+   extracted module must accept its inputs as explicit function parameters.
+
+3. **Tests that validate wiring instead of contracts.** "Ingress calls the
+   presenter" is a wiring test. "The presenter produces correct markup given
+   this input" is a contract test. Write the second kind. The wiring is
+   implicitly tested by any integration test that exercises the full path.
+
+4. **Preserving test coupling because it was already there.** If a test only
+   works by monkeypatching `ingress._load`, and you move `_load` to
+   `session_io.py` and update the monkeypatch target, you have preserved the
+   coupling at the new location. Replace the monkeypatch with a store-level
+   fake or dependency injection.
+
+5. **Gate tests that check a specific list of files instead of a pattern.** The
+   existing presenter gate checks 5 hardcoded files and missed `egress.py`.
+   Prefer gates that scan a directory glob and assert a property (e.g., "no .py
+   file in `app/channels/telegram/` except `presenters.py` imports
+   `InlineKeyboardButton`").
+
+## Post-Audit Findings (F1–F10)
+
+Post-Phase-8 deep audit found 10 remaining issues. These must be resolved
+before the architecture remediation track is accepted as complete.
+
+### F1. Extract post-execution finalization from worker.py
+
+`worker_dispatch()` at `worker.py:260-439` handles 7 workflow concerns inline
+in channel ingress code: recovery path handling (300-316), duplicated access
+control (301-303, 318-320), approval mode branching (328-361), delegation
+finalization (366-374), routed task result reporting (375-401), usage recording
+(402-418), timeline publishing (419-437). The Hard Do Not List says "do not put
+workflow logic in channel ingress."
+
+Required work:
+
+1. Create `app/workflows/execution/finalization.py` owning post-execution
+   orchestration: delegation finalization, routed task result reporting, usage
+   recording, timeline publishing, webhook firing. It must not import from
+   `app/channels/`. It receives channel-specific callbacks as typed Callable
+   parameters on a `FinalizationContext` dataclass.
+
+2. Move approval mode branching into `app/workflows/execution/requests.py`.
+   The workflow function accepts `approval_mode: str` and decides internally.
+   Channel code must not read `session.approval_mode`.
+
+3. Move access control to `app/runtime/work_admission.py`. Create or extend a
+   function that performs the admission check and returns a typed result.
+   `worker_dispatch` calls it once.
+
+4. Move recovery dispatch to `app/workflows/recovery/`. The recovery path at
+   lines 300-316 transitions durable state — that belongs in the recovery
+   workflow.
+
+5. Extract shared channel egress construction. Lines 283-298 and 160-175
+   duplicate the `telegram_conversation_ref` → `create_channel_egress` pattern.
+
+6. Document completion ownership explicitly at the top of `worker_dispatch`:
+   who marks done (caller on normal return), who marks failed (lines X,Y), who
+   marks pending_recovery (line Z), what happens on exception after execution.
+
+7. Make usage recording failure handling explicit. Either document that failure
+   is non-blocking, or transition the work item to a specific state on failure.
+
+Hard rules:
+- `app/workflows/execution/finalization.py` must not import from `app/channels/`
+- `worker.py` must not read `session.approval_mode` or call
+  `finalize_resumed_delegation`
+- `worker.py` must not call `work_queue.record_usage` or
+  `publish_timeline_event` directly
+- `worker.py` must not gate on `source == "registry"` for workflow decisions
+
+Exit criteria:
+- `worker_dispatch` becomes: normalize → admit → build egress → delegate to
+  execution workflow → delegate to finalization workflow → return
+- No inline business logic, source-gated branches, or raw session reads
+
+### F2. Move execution_channel_context and format_provider_error out of channel layer
+
+`execution.py:302-335` `execution_channel_context()` constructs
+`ExecutionChannelContext` (a workflow contract) by inspecting message
+capabilities — workflow-layer state resolution in the channel layer.
+`execution.py:73-113` `format_provider_error()` spawns a subprocess with a
+hardcoded model and is injected into the non-Telegram `RuntimeDispatchRuntime`.
+
+Required work:
+
+1. Move `execution_channel_context` logic into
+   `app/workflows/execution/requests.py` or a new
+   `app/workflows/execution/context.py`. The channel extracts raw metadata and
+   passes it to the workflow.
+
+2. Move `format_provider_error` to `app/formatting.py` or `app/summarize.py`.
+   Make the model name configurable. Remove HTML escaping — let the channel
+   escape for its own format.
+
+3. Remove the 7 pure passthroughs from execution.py (`execute_request`,
+   `request_approval`, `approve_pending`, `reject_pending`,
+   `retry_skip_pending`, `retry_allow_pending`,
+   `check_prompt_size_cross_chat`). Callers should build the typed runtime
+   directly and call the workflow function.
+
+Hard rules:
+- No workflow contract type may be constructed in channel code based on
+  business logic
+- `format_provider_error` must not HTML-escape — that is the channel's job
+- `RuntimeDispatchRuntime.format_provider_error` receives a plain-text formatter
+
+### F3. Reduce sibling coupling between extracted Telegram modules
+
+The plan at line 3044 says extracted modules may import from each other "only
+through shared types." But `execution.py` imports behavioral functions from 6
+siblings, `worker.py` from 5, `shared_mode_dispatch.py` from 5.
+
+Required work:
+
+1. After F1/F2, re-examine the import graph.
+2. Runtime builders should receive behavioral collaborators as Callable
+   parameters, not as direct imports from siblings.
+3. Routing imports (worker.py dispatching to conversation/pending/runtime_skills
+   handler functions) are acceptable.
+4. Add a gate test enforcing sibling import discipline.
+
+Hard rules:
+- No extracted module calls a function defined in another extracted sibling
+  unless it is a routing dispatch target or a shared type/helper
+- Runtime builders receive behavioral collaborators as parameters
+
+### F4. Eliminate duplicated dispatch logic between ingress.py and shared_mode_dispatch.py
+
+`shared_mode_dispatch.py:360-437` `_shared_skills_inline_handler` (80 lines)
+duplicates skills dispatch from ingress → `runtime_skills.handle_skills_command`.
+`shared_mode_dispatch.py:440-471` duplicates command routing for 7 commands.
+
+Required work:
+
+1. Both ingress.py and shared_mode_dispatch.py should call
+   `runtime_skills.handle_skills_command` as the single owner.
+2. Both modules should call the same conversation command handlers.
+3. Delete `_shared_skills_inline_handler` and `_shared_inline_command_handler`.
+
+Exit criteria:
+- `shared_mode_dispatch.py` ≤ 450 lines
+- No duplicated dispatch tables
+
+### F5. Fix cmd_start and cmd_help decorator bypass
+
+`ingress.py:451` `cmd_start` and `ingress.py:478` `cmd_help` manually inline
+the normalization/dedup/gate logic that `@_command_handler` provides. Two code
+paths for the same operation — CLAUDE.md bug class #1.
+
+Required work:
+- Apply `@_command_handler` to both functions
+- Remove manual normalization/dedup/gate logic
+
+### F6. Freeze mutable adapter models in pending and recovery machines
+
+`PendingRequestWorkflowModel` at `pending/machine.py:25` and
+`TransportWorkflowModel` at `recovery/machine.py:20` are mutable dataclasses.
+`run_pending_request_event()` and `run_transport_event()` mutate them in place.
+The machine conventions doc says machines use frozen dataclasses and pure
+functions.
+
+Required work:
+1. Make both model dataclasses frozen
+2. Change adapter functions to return new result objects instead of mutating
+3. Update all consumers
+4. Add equivalence tests
+
+### F7. Clean up remaining vocabulary and dead code
+
+`inbound_types.py:120` has dead `surface_binding_id` field. Several docstrings
+use "surfaces" inconsistently with "channels" vocabulary.
+
+Required work:
+1. Rename or delete `surface_binding_id`
+2. Update docstrings to use "channels"
+3. Add `surface_binding_id` to the vocabulary gate's forbidden list
+
+### F8. Commit the plan and repair status traceability
+
+`store_plan.md` has uncommitted local edits. `status.md` correction log stops
+at `a686565` and does not include its own reconciliation commit.
+
+Required work:
+1. Commit `store_plan.md` with all current edits
+2. Update `status.md` correction log through current HEAD
+3. Update `docs/orchestration_inventory.md` if F1 changed ownership
+4. Commit status and inventory
+
+### F9. Clean up store parity gaps
+
+Two store seams have public methods in SQLite that do not exist in Postgres:
+
+- `publish_ui_timeline()` at `app/registry_service/store.py:1172` — public
+  method in SQLite, no Postgres counterpart. Not in abstract base. No external
+  callers — both stores use the internal `_publish_ui_timeline_conn()`.
+- `close()` at `app/content_store_sqlite.py:1137` — public method in SQLite,
+  no Postgres counterpart. Not in abstract base. No external callers.
+
+Required work:
+1. Delete `publish_ui_timeline` public method from SQLite (dead code)
+2. Delete content store `close()` from SQLite or add to both + abstract base
+3. Add structural gate tests asserting registry and content store public method
+   sets are identical across both backends
+
+Hard rules:
+- No public method may exist in one backend but not the other unless the
+  abstract base explicitly marks it as optional
+- The parity gate must be automated
+
+### F10. Fix the surface→channel delivery kind migration gap
+
+Slice 2 (`837b4ed`) renamed delivery `kind` values from `surface_input` →
+`channel_input` and `surface_action` → `channel_action` in both store
+implementations. But no Postgres migration updates existing rows, and the
+delivery routing at `delivery.py:122` only checks for `channel_input` — it
+will silently drop any in-flight deliveries with the old `surface_input` kind.
+This violates CLAUDE.md's transport contract change rule.
+
+Required work:
+1. Add Postgres migration `0009_rename_delivery_kinds.sql` to update existing
+   rows
+2. Update SQLite registry store `_CREATE_SQL` if it references old kind values
+3. Add a backwards-compatibility guard in `delivery.py` accepting both old and
+   new values with a deprecation log, OR document that migration must run
+   before deploying the new code
+4. Add the same guard in `bridge.py:173` if using option (a)
+
+Hard rules:
+- The migration and code change must be documented as a coordinated pair
+- No delivery kind value may be written by one version and unreadable by another
+
+### Post-Audit Acceptance Gates
+
+All prior Architecture Remediation and Phase 8 Acceptance Gates must hold,
+plus:
+
+- worker.py contains no inline workflow logic
+- `app/workflows/execution/finalization.py` exists with no `app.channels` imports
+- Completion ownership is documented in worker_dispatch
+- Usage recording failure handling is explicitly documented
+- `execution_channel_context` is not defined in any `app/channels/` file
+- `format_provider_error` is not defined in any `app/channels/` file
+- `execution.py` does not define passthrough wrappers for workflow functions
+- No extracted Telegram module imports behavioral functions from siblings
+  (except routing targets)
+- Gate test enforces sibling import discipline
+- `shared_mode_dispatch.py` does not define `_shared_skills_inline_handler` or
+  `_shared_inline_command_handler`
+- `shared_mode_dispatch.py` ≤ 450 lines
+- `cmd_start` and `cmd_help` use `@_command_handler`
+- `PendingRequestWorkflowModel` and `TransportWorkflowModel` are frozen
+- `run_pending_request_event` and `run_transport_event` do not mutate inputs
+- `surface_binding_id` is renamed or deleted
+- `store_plan.md` is committed with no local-only edits
+- `status.md` correction log includes all commits through final HEAD
+- Postgres migration 0009 exists and renames delivery kinds
+- delivery.py handles both old and new kind values, or migration is documented
+  as required pre-deploy step
+- Registry store public method sets are identical between SQLite and Postgres
+- Content store public method sets are identical between SQLite and Postgres
+- No dead public store methods exist in one backend but not the other
+- Full test suite is green with recorded pass/skip/fail count
 
 ## Post-Remediation Policy
 

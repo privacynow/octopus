@@ -1,8 +1,11 @@
 """Tests for registry-managed capability overrides and discovery enforcement."""
 
+import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+
+os.environ.setdefault("REGISTRY_ALLOW_HTTP", "1")
 
 from app.channels.registry.http import app
 from app.registry_service.store import RegistrySQLiteStore
@@ -55,6 +58,7 @@ def _configure_registry(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("REGISTRY_DB_PATH", str(tmp_path / "registry.sqlite3"))
     monkeypatch.setenv("REGISTRY_ENROLL_TOKEN", "enroll-secret")
     monkeypatch.setenv("REGISTRY_UI_TOKEN", "ui-secret")
+    monkeypatch.setenv("REGISTRY_ALLOW_HTTP", "1")
 
 
 def test_list_capabilities_empty_when_no_agents(tmp_path: Path):

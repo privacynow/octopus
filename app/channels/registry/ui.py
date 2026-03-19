@@ -96,12 +96,13 @@ def render_login_html(heading: str, *, error: str = "") -> str:
 </html>"""
 
 
-def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, token: str) -> str:
+def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, csrf_token: str) -> str:
     return f"""<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="registry-csrf-token" content="{html.escape(csrf_token)}" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230f766e'/><text x='16' y='22' font-size='18' font-family='sans-serif' fill='white' text-anchor='middle'>A</text></svg>">
     <title>{html.escape(title_text)}</title>
     <style>
@@ -601,7 +602,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
       window.dispatchEvent(new Event("registry-editor-ready"));
     </script>
     <script>
-      const token = {token!r};
+      const csrfToken = document.querySelector('meta[name="registry-csrf-token"]')?.content || "";
       const EMPTY_STATES = {{
         bots: "No bots connected yet. Start a bot in registry mode and it will appear here.<br><code>./scripts/app/guided_start.sh</code>",
         conversations: "No conversations yet. Send a message to your bot in Telegram to start.",
@@ -632,8 +633,21 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
       const registryEditors = Object.create(null);
       var _convSearchTimer = null;
 
-      function authHeaders(extra = {{}}) {{
-        return {{ Authorization: `Bearer ${{token}}`, ...extra }};
+      async function uiFetch(url, options = {{}}) {{
+        const method = String(options.method || "GET").toUpperCase();
+        const headers = new Headers(options.headers || {{}});
+        if (!["GET", "HEAD", "OPTIONS"].includes(method) && csrfToken) {{
+          headers.set("X-CSRF-Token", csrfToken);
+        }}
+        return fetch(url, {{
+          ...options,
+          headers,
+          credentials: "same-origin",
+        }});
+      }}
+
+      function requestHeaders(extra = {{}}) {{
+        return extra;
       }}
 
       function escapeHtml(value) {{
@@ -1031,8 +1045,8 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
         var q = searchEl ? searchEl.value.trim() : "";
         if (q.length >= 3) {{
           try {{
-            const response = await fetch('/v1/ui/search?q=' + encodeURIComponent(q), {{
-              headers: authHeaders(),
+            const response = await uiFetch('/v1/ui/search?q=' + encodeURIComponent(q), {{
+              headers: requestHeaders(),
             }});
             if (!response.ok) {{
               throw new Error("Search failed.");
@@ -1293,8 +1307,8 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
 
       async function loadRuntimeSkills(query = "") {{
         const suffix = query ? `?q=${{encodeURIComponent(query)}}` : "";
-        const response = await fetch(`/v1/catalog/skills${{suffix}}`, {{
-          headers: authHeaders(),
+          const response = await uiFetch(`/v1/catalog/skills${{suffix}}`, {{
+          headers: requestHeaders(),
         }});
         if (!response.ok) {{
           throw new Error(await response.text() || "Failed to load runtime skills.");
@@ -1314,11 +1328,11 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
 
       async function loadRuntimeSkillDetail(skillName) {{
         const [detailResponse, lifecycleResponse] = await Promise.all([
-          fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}`, {{
-            headers: authHeaders(),
+          uiFetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}`, {{
+            headers: requestHeaders(),
           }}),
-          fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/lifecycle`, {{
-            headers: authHeaders(),
+          uiFetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/lifecycle`, {{
+            headers: requestHeaders(),
           }}),
         ]);
         if (!detailResponse.ok) {{
@@ -1332,9 +1346,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
       }}
 
       async function previewRuntimeSkill(providerName, skillName) {{
-        const response = await fetch(`/v1/provider-guidance/${{encodeURIComponent(providerName)}}/preview`, {{
+        const response = await uiFetch(`/v1/provider-guidance/${{encodeURIComponent(providerName)}}/preview`, {{
           method: "POST",
-          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          headers: requestHeaders({{ "Content-Type": "application/json" }}),
           body: JSON.stringify({{
             role: "",
             active_skills: [skillName],
@@ -1352,9 +1366,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
       }}
 
       async function installRuntimeSkill(skillName) {{
-        const response = await fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/install`, {{
+        const response = await uiFetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/install`, {{
           method: "POST",
-          headers: authHeaders(),
+          headers: requestHeaders(),
         }});
         const payload = await response.json();
         if (!response.ok) {{
@@ -1370,9 +1384,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
       }}
 
       async function updateRuntimeSkill(skillName) {{
-        const response = await fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/update`, {{
+        const response = await uiFetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/update`, {{
           method: "POST",
-          headers: authHeaders(),
+          headers: requestHeaders(),
         }});
         const payload = await response.json();
         if (!response.ok) {{
@@ -1388,9 +1402,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
       }}
 
       async function uninstallRuntimeSkill(skillName) {{
-        const response = await fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/uninstall`, {{
+        const response = await uiFetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/uninstall`, {{
           method: "POST",
-          headers: authHeaders(),
+          headers: requestHeaders(),
         }});
         const payload = await response.json();
         if (!response.ok) {{
@@ -1423,9 +1437,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
         if (input) {{
           input.value = skillName;
         }}
-        const response = await fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/draft`, {{
+        const response = await uiFetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/draft`, {{
           method: "PUT",
-          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          headers: requestHeaders({{ "Content-Type": "application/json" }}),
           body: JSON.stringify({{
             actor_key: REGISTRY_UI_ACTOR_KEY,
             body: "Add your instructions here.",
@@ -1446,9 +1460,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
       async function saveRuntimeSkillDraft(skillName) {{
         const body = editorValue("runtime-skill-editor-textarea").trim();
         const description = document.getElementById("runtime-skill-description")?.value.trim() || "";
-        const response = await fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/draft`, {{
+        const response = await uiFetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/draft`, {{
           method: "PUT",
-          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          headers: requestHeaders({{ "Content-Type": "application/json" }}),
           body: JSON.stringify({{
             actor_key: REGISTRY_UI_ACTOR_KEY,
             body,
@@ -1467,9 +1481,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
       }}
 
       async function runRuntimeSkillLifecycle(skillName, action) {{
-        const response = await fetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/${{action}}`, {{
+        const response = await uiFetch(`/v1/catalog/skills/${{encodeURIComponent(skillName)}}/${{action}}`, {{
           method: "POST",
-          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          headers: requestHeaders({{ "Content-Type": "application/json" }}),
           body: JSON.stringify({{
             actor_key: REGISTRY_UI_ACTOR_KEY,
             note: `registry-ui:${{action}}`,
@@ -1544,12 +1558,12 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
 
       async function loadProviderGuidanceDetail(providerName) {{
         const [detailResponse, previewResponse] = await Promise.all([
-          fetch(`/v1/provider-guidance/${{encodeURIComponent(providerName)}}`, {{
-            headers: authHeaders(),
+          uiFetch(`/v1/provider-guidance/${{encodeURIComponent(providerName)}}`, {{
+            headers: requestHeaders(),
           }}),
-          fetch(`/v1/provider-guidance/${{encodeURIComponent(providerName)}}/preview`, {{
+          uiFetch(`/v1/provider-guidance/${{encodeURIComponent(providerName)}}/preview`, {{
             method: "POST",
-            headers: authHeaders({{ "Content-Type": "application/json" }}),
+            headers: requestHeaders({{ "Content-Type": "application/json" }}),
             body: JSON.stringify({{
               role: "",
               active_skills: [],
@@ -1574,9 +1588,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
           setStatus("Load provider guidance first.");
           return;
         }}
-        const response = await fetch(`/v1/provider-guidance/${{encodeURIComponent(providerName)}}/draft`, {{
+        const response = await uiFetch(`/v1/provider-guidance/${{encodeURIComponent(providerName)}}/draft`, {{
           method: "PUT",
-          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          headers: requestHeaders({{ "Content-Type": "application/json" }}),
           body: JSON.stringify({{
             actor_key: REGISTRY_UI_ACTOR_KEY,
             body,
@@ -1595,9 +1609,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
 
       async function runProviderGuidanceLifecycle(providerName, action) {{
         const detail = currentProviderGuidanceDetail;
-        const response = await fetch(`/v1/provider-guidance/${{encodeURIComponent(providerName)}}/${{action}}`, {{
+        const response = await uiFetch(`/v1/provider-guidance/${{encodeURIComponent(providerName)}}/${{action}}`, {{
           method: "POST",
-          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          headers: requestHeaders({{ "Content-Type": "application/json" }}),
           body: JSON.stringify({{
             actor_key: REGISTRY_UI_ACTOR_KEY,
             note: `registry-ui:${{action}}`,
@@ -1678,8 +1692,8 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
         if (!bot) return;
         renderBotDetail(bot);
         try {{
-          const response = await fetch(`/v1/ui/bots/${{agentId}}/health`, {{
-            headers: authHeaders(),
+          const response = await uiFetch(`/v1/ui/bots/${{agentId}}/health`, {{
+            headers: requestHeaders(),
           }});
           if (!response.ok) {{
             return;
@@ -1918,9 +1932,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
         currentConversationId = conversationId;
         try {{
           const [conversationResponse, timelineResponse, skillsResponse] = await Promise.all([
-            fetch(`/v1/ui/conversations/${{conversationId}}`, {{ headers: authHeaders() }}),
-            fetch(`/v1/ui/conversations/${{conversationId}}/timeline`, {{ headers: authHeaders() }}),
-            fetch(`/v1/conversations/${{conversationId}}/skills`, {{ headers: authHeaders() }}),
+            uiFetch(`/v1/ui/conversations/${{conversationId}}`),
+            uiFetch(`/v1/ui/conversations/${{conversationId}}/timeline`),
+            uiFetch(`/v1/conversations/${{conversationId}}/skills`),
           ]);
           if (!conversationResponse.ok || !timelineResponse.ok || !skillsResponse.ok) {{
             throw new Error("Failed to load conversation detail.");
@@ -1969,8 +1983,8 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
           setRefreshing(true);
         }}
         try {{
-          const response = await fetch('/v1/ui/bootstrap', {{
-            headers: authHeaders(),
+          const response = await uiFetch('/v1/ui/bootstrap', {{
+            headers: requestHeaders(),
           }});
           if (!response.ok) {{
             throw new Error(await response.text() || "Registry unavailable.");
@@ -2014,9 +2028,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
           return;
         }}
         const title = messageText.split(/\\n+/)[0].slice(0, 80) || "Registry UI conversation";
-        const response = await fetch("/v1/ui/conversations", {{
+        const response = await uiFetch("/v1/ui/conversations", {{
           method: "POST",
-          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          headers: requestHeaders({{ "Content-Type": "application/json" }}),
           body: JSON.stringify({{
             target_agent_id: targetAgentId,
             title,
@@ -2041,9 +2055,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
           setStatus("Enter a follow-up message first.");
           return;
         }}
-        const response = await fetch(`/v1/ui/conversations/${{currentConversationId}}/messages`, {{
+        const response = await uiFetch(`/v1/ui/conversations/${{currentConversationId}}/messages`, {{
           method: "POST",
-          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          headers: requestHeaders({{ "Content-Type": "application/json" }}),
           body: JSON.stringify({{ text }}),
         }});
         if (!response.ok) {{
@@ -2066,9 +2080,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
           setStatus("Unknown runtime skill action.");
           return;
         }}
-        const response = await fetch(endpoint, {{
+        const response = await uiFetch(endpoint, {{
           method: "POST",
-          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          headers: requestHeaders({{ "Content-Type": "application/json" }}),
           body: JSON.stringify({{
             actor_key: REGISTRY_UI_ACTOR_KEY,
             confirm,
@@ -2106,8 +2120,8 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
       }}
 
       async function loadCapabilities() {{
-        const response = await fetch('/v1/ui/capabilities', {{
-          headers: authHeaders(),
+        const response = await uiFetch('/v1/ui/capabilities', {{
+          headers: requestHeaders(),
         }});
         if (!response.ok) {{
           throw new Error(await response.text() || "Failed to load capabilities.");
@@ -2118,8 +2132,8 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
       }}
 
       async function loadUsage() {{
-        const response = await fetch('/v1/ui/usage', {{
-          headers: authHeaders(),
+        const response = await uiFetch('/v1/ui/usage', {{
+          headers: requestHeaders(),
         }});
         if (!response.ok) {{
           throw new Error(await response.text() || "Failed to load reported usage.");
@@ -2141,9 +2155,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
 
       async function toggleCapabilityOverride(capabilityName, enable) {{
         const action = enable ? "enable" : "disable";
-        const response = await fetch(`/v1/ui/capabilities/${{encodeURIComponent(capabilityName)}}/${{action}}`, {{
+        const response = await uiFetch(`/v1/ui/capabilities/${{encodeURIComponent(capabilityName)}}/${{action}}`, {{
           method: "POST",
-          headers: authHeaders(),
+          headers: requestHeaders(),
         }});
         if (!response.ok) {{
           setStatus(await response.text() || "Capability update failed.");
@@ -2153,9 +2167,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
 
       async function cancelConversation() {{
         if (!currentConversationId) return;
-        const response = await fetch(`/v1/ui/conversations/${{currentConversationId}}/actions`, {{
+        const response = await uiFetch(`/v1/ui/conversations/${{currentConversationId}}/actions`, {{
           method: "POST",
-          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          headers: requestHeaders({{ "Content-Type": "application/json" }}),
           body: JSON.stringify({{ action: "cancel_conversation" }}),
         }});
         if (!response.ok) {{
@@ -2169,8 +2183,8 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
         if (!currentConversationId) return;
         const url = '/v1/ui/conversations/' + encodeURIComponent(currentConversationId) + '/export';
         try {{
-          const response = await fetch(url, {{
-            headers: authHeaders(),
+          const response = await uiFetch(url, {{
+            headers: requestHeaders(),
           }});
           if (!response.ok) {{
             console.error('Export failed', response.status);
@@ -2202,9 +2216,9 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, t
             currentConversationDetail.skillState || null,
           );
         }}
-        const response = await fetch(`/v1/ui/conversations/${{conversationId}}/actions`, {{
+        const response = await uiFetch(`/v1/ui/conversations/${{conversationId}}/actions`, {{
           method: "POST",
-          headers: authHeaders({{ "Content-Type": "application/json" }}),
+          headers: requestHeaders({{ "Content-Type": "application/json" }}),
           body: JSON.stringify({{ action }}),
         }});
         if (!response.ok) {{

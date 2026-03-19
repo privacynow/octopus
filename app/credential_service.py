@@ -53,9 +53,15 @@ class CredentialService:
         value: str,
         *,
         validator: CredentialValidator | None = None,
+        skill_name: str | None = None,
     ) -> tuple[bool, str]:
-        chosen = validator or default_validate_credential
-        return await chosen(requirement, value)
+        if validator is None or validator is default_validate_credential:
+            return await default_validate_credential(
+                requirement,
+                value,
+                skill_name=skill_name,
+            )
+        return await validator(requirement, value)
 
 
 _SERVICE = CredentialService()

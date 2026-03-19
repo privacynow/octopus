@@ -22,6 +22,207 @@ current_bot_instance() {
   esac
 }
 
+prompt_with_default() {
+  local prompt="$1" default="${2:-}" value=""
+  if [ -n "$default" ]; then
+    read -r -p "$prompt [$default]: " value || true
+    echo "${value:-$default}"
+    return
+  fi
+  read -r -p "$prompt: " value || true
+  echo "$value"
+}
+
+escape_env_value() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+write_env_assignment_line() {
+  local key="$1" value="${2:-}"
+  case "$value" in
+    *[[:space:]]*|*\#*|"")
+      printf '%s="%s"\n' "$key" "$(escape_env_value "$value")"
+      ;;
+    *)
+      printf '%s=%s\n' "$key" "$value"
+      ;;
+  esac
+}
+
+upsert_env_file_value() {
+  local key="$1" value="${2:-}" env_file="${3:-$(current_bot_env_file)}"
+  local tmp_file found=0 line=""
+  tmp_file="$(mktemp "${TMPDIR:-/tmp}/octopus-env.XXXXXX")"
+  if [ -f "$env_file" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        "$key="*|[[:space:]]"$key="*)
+          write_env_assignment_line "$key" "$value" >> "$tmp_file"
+          found=1
+          ;;
+        *)
+          printf '%s\n' "$line" >> "$tmp_file"
+          ;;
+      esac
+    done < "$env_file"
+  fi
+  if [ "$found" -eq 0 ]; then
+    write_env_assignment_line "$key" "$value" >> "$tmp_file"
+  fi
+  mv "$tmp_file" "$env_file"
+  restrict_secret_file_permissions "$env_file"
+}
+
+redact_value_for_prompt() {
+  local channel="${1:-telegram}" value="${2:-}" visible=""
+  case "$channel" in
+    telegram)
+      if [ -z "$value" ]; then
+        echo ""
+        return
+      fi
+      if telegram_token_is_placeholder "$value"; then
+        echo "$value"
+        return
+      fi
+      if [ "${#value}" -le 16 ]; then
+        echo "<set>"
+        return
+      fi
+      visible="$(printf '%s' "$value" | cut -c1-10)"
+      printf '%s…%s' "$visible" "${value: -4}"
+      ;;
+    *)
+      if [ -n "$value" ]; then
+        echo "<set>"
+      fi
+      ;;
+  esac
+}
+
+print_channel_setup_help() {
+  local channel="${1:-telegram}"
+  case "$channel" in
+    telegram)
+      cat >&2 <<'EOF'
+You need a Telegram bot token before the bot can start.
+
+  Step 1: Open BotFather in Telegram:
+          https://t.me/BotFather
+
+  Step 2: Send:    /newbot
+  Step 3: Pick a display name, e.g.  My Product Bot
+  Step 4: Pick a username ending in 'bot', e.g.  my_product_bot
+  Step 5: BotFather replies with your token. Copy the full token here.
+
+If you already created the bot, paste the token now.
+EOF
+      ;;
+    *)
+      echo "Unsupported channel '$channel' in print_channel_setup_help" >&2
+      return 1
+      ;;
+  esac
+}
+
+channel_token_looks_plausible() {
+  local channel="${1:-telegram}" value="${2:-}"
+  case "$channel" in
+    telegram)
+      [[ "$value" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+prompt_channel_token_with_help() {
+  local channel="${1:-telegram}" prompt_label="${2:-Paste your bot token here}"
+  local current_value="${3:-}" current_note="${4:-}" allow_current_default="${5:-1}"
+  local token="" prompt_suffix="" current_display=""
+  print_channel_setup_help "$channel"
+  if [ -n "$current_note" ]; then
+    echo "$current_note" >&2
+  fi
+  current_display="$(redact_value_for_prompt "$channel" "$current_value")"
+  if [ -n "$current_display" ]; then
+    prompt_suffix=" [default: $current_display]"
+    echo "Current value [default: $current_display]" >&2
+  fi
+  while true; do
+    read -r -p "${prompt_label}${prompt_suffix}: " token || {
+      if [ "$allow_current_default" = "1" ] && [ -n "$current_value" ]; then
+        printf '%s' "$current_value"
+        return 0
+      fi
+      return 1
+    }
+    if [ -z "$token" ] && [ "$allow_current_default" = "1" ] && [ -n "$current_value" ]; then
+      token="$current_value"
+    fi
+    if [ -z "$token" ]; then
+      echo "Token is required. Try again." >&2
+      continue
+    fi
+    if telegram_token_is_placeholder "$token"; then
+      echo "That still looks like a placeholder token." >&2
+      echo "Copy the full token from BotFather and try again." >&2
+      continue
+    fi
+    if ! channel_token_looks_plausible "$channel" "$token"; then
+      echo "Token format looks wrong." >&2
+      echo "Telegram tokens look like digits:letters from BotFather." >&2
+      continue
+    fi
+    printf '%s' "$token"
+    return 0
+  done
+}
+
+registry_url_is_local() {
+  local value="${1:-}"
+  case "$value" in
+    http://localhost:*|http://127.0.0.1:*|http://[::1]:*|http://host.docker.internal:*|http://172.17.0.1:*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+doctor_output_has_token_rejection() {
+  printf '%s\n' "${1:-}" | grep -q "Telegram rejected TELEGRAM_BOT_TOKEN"
+}
+
+format_doctor_output_for_operator() {
+  printf '%s\n' "${1:-}" | while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "" )
+        ;;
+      [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*)
+        ;;
+      *"HTTP Request:"*)
+        ;;
+      *)
+        printf '%s\n' "$line"
+        ;;
+    esac
+  done
+}
+
+print_doctor_output_for_operator() {
+  local output="${1:-}" line=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    printf '%s\n' "$line" >&2
+  done < <(format_doctor_output_for_operator "$output")
+}
+
+restrict_secret_file_permissions() {
+  local path="${1:-}"
+  [ -n "$path" ] || return 1
+  chmod 600 "$path"
+}
+
 check_env_bot_required() {
   local env_file="${1:-$(current_bot_env_file)}"
   if [ ! -f "$env_file" ]; then

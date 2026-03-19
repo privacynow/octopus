@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
 
+from app.registry_errors import RegistryErrorCode
 from app.agents.types import (
     AgentCard,
     AgentDiscoveryQuery,
@@ -16,9 +18,34 @@ from app.agents.types import (
     to_wire,
 )
 
+log = logging.getLogger(__name__)
+
 
 class RegistryClientError(RuntimeError):
     """Registry request failed or returned an unexpected response."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: RegistryErrorCode = "registry_request_failed",
+        operator_detail: str = "",
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.operator_detail = operator_detail or message
+        self.status_code = status_code
+
+
+def _registry_http_error_code(status_code: int) -> RegistryErrorCode:
+    if status_code in {401, 403}:
+        return "registry_auth_failed"
+    if status_code in {408, 504}:
+        return "registry_timeout"
+    if status_code >= 500:
+        return "registry_server_error"
+    return "registry_request_failed"
 
 
 class AgentRegistryClient:
@@ -47,20 +74,49 @@ class AgentRegistryClient:
         headers: dict[str, str] = {}
         if require_auth:
             if not self.agent_token:
-                raise RegistryClientError("Missing agent token for authenticated registry call")
+                raise RegistryClientError(
+                    "Missing agent token for authenticated registry call",
+                    error_code="registry_auth_failed",
+                    operator_detail="Authenticated registry call attempted without an agent token.",
+                )
             headers["Authorization"] = f"Bearer {self.agent_token}"
 
         async def _do(client: httpx.AsyncClient) -> Any:
-            response = await client.request(
-                method,
-                f"{self.base_url}{path}",
-                json=json_data,
-                params=params,
-                headers=headers,
-            )
-            if response.status_code >= 400:
+            try:
+                response = await client.request(
+                    method,
+                    f"{self.base_url}{path}",
+                    json=json_data,
+                    params=params,
+                    headers=headers,
+                )
+            except httpx.TimeoutException as exc:
                 raise RegistryClientError(
-                    f"Registry {method} {path} failed: {response.status_code} {response.text}"
+                    f"Registry {method} {path} timed out",
+                    error_code="registry_timeout",
+                    operator_detail=f"Registry {method} {path} timed out ({exc.__class__.__name__}).",
+                ) from exc
+            except httpx.RequestError as exc:
+                raise RegistryClientError(
+                    f"Registry {method} {path} failed",
+                    error_code="registry_unreachable",
+                    operator_detail=(
+                        f"Registry {method} {path} failed with {exc.__class__.__name__}."
+                    ),
+                ) from exc
+            if response.status_code >= 400:
+                error_code = _registry_http_error_code(response.status_code)
+                log.debug(
+                    "Registry %s %s failed with HTTP %s (body omitted from exception path)",
+                    method,
+                    path,
+                    response.status_code,
+                )
+                raise RegistryClientError(
+                    f"Registry {method} {path} failed: HTTP {response.status_code}",
+                    error_code=error_code,
+                    operator_detail=f"Registry {method} {path} failed with HTTP {response.status_code}.",
+                    status_code=response.status_code,
                 )
             if response.headers.get("content-type", "").startswith("application/json"):
                 return response.json()

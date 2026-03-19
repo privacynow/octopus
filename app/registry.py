@@ -37,6 +37,9 @@ _INDEX_TIMEOUT = 15  # seconds
 _ARTIFACT_TIMEOUT = 60  # seconds
 _MAX_INDEX_SIZE = 2 * 1024 * 1024  # 2 MB
 _MAX_ARTIFACT_SIZE = 10 * 1024 * 1024  # 10 MB
+_MAX_EXPANDED_ARTIFACT_SIZE = 50 * 1024 * 1024  # 50 MB
+_MAX_ARTIFACT_FILE_COUNT = 500
+_MAX_SINGLE_ARTIFACT_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 
 _HEADERS = {"User-Agent": "octopus-agent/1.0"}
 
@@ -149,11 +152,29 @@ def download_artifact(artifact_url: str, dest_dir: Path) -> Path:
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
         with tarfile.open(tmp_path, "r:gz") as tf:
-            # Security: check for path traversal
+            # Security: reject traversal and resource-exhaustion artifacts before extraction.
+            total_expanded = 0
+            file_count = 0
             for member in tf.getmembers():
                 resolved = (dest_dir / member.name).resolve()
                 if not str(resolved).startswith(str(dest_dir.resolve())):
                     raise ValueError(f"Artifact contains path traversal: {member.name}")
+                if not member.isfile():
+                    continue
+                file_count += 1
+                if file_count > _MAX_ARTIFACT_FILE_COUNT:
+                    raise ValueError(
+                        f"Artifact exceeds {_MAX_ARTIFACT_FILE_COUNT} files"
+                    )
+                if member.size > _MAX_SINGLE_ARTIFACT_FILE_SIZE:
+                    raise ValueError(
+                        f"Artifact file exceeds {_MAX_SINGLE_ARTIFACT_FILE_SIZE} bytes: {member.name}"
+                    )
+                total_expanded += member.size
+                if total_expanded > _MAX_EXPANDED_ARTIFACT_SIZE:
+                    raise ValueError(
+                        f"Artifact expands beyond {_MAX_EXPANDED_ARTIFACT_SIZE} bytes"
+                    )
             tf.extractall(dest_dir, filter="data")
     finally:
         tmp_path.unlink(missing_ok=True)

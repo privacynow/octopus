@@ -408,6 +408,21 @@ async def test_handler_skill_lifecycle_commands(monkeypatch, tmp_path: Path):
         _cleanup_runtime(data_dir)
 
 
+async def test_handler_skill_create_invalid_name_uses_safe_message(monkeypatch, tmp_path: Path):
+    import app.channels.telegram.ingress as th
+
+    data_dir, registry, prov = _setup_handler_env(tmp_path, monkeypatch)
+    try:
+        regular = FakeUser(uid=200, username="regular")
+        chat = FakeChat(1001)
+
+        invalid = await send_command(th.cmd_skills, chat, regular, "/skills create Bad Name", ["create", "Bad Name"])
+
+        assert last_reply(invalid) == "Skill names must use lowercase letters, digits, and hyphens."
+    finally:
+        _cleanup_runtime(data_dir)
+
+
 async def test_handler_provider_guidance_lifecycle_commands(monkeypatch, tmp_path: Path):
     import app.channels.telegram.ingress as th
 

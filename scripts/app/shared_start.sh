@@ -15,17 +15,94 @@ else
 fi
 export BOT_ENV_FILE
 
-read_bot_env_value() {
-  local key="$1" env_file="${2:-$BOT_ENV_FILE}"
-  grep -E "^\s*${key}=" "$env_file" 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true
-}
-
 require_bot_env_value() {
   local key="$1" value="${2:-}"
   if [ -z "$value" ]; then
     echo "$key must be set in $BOT_ENV_FILE" >&2
     exit 1
   fi
+}
+
+create_env_file_if_missing() {
+  if [ -f "$BOT_ENV_FILE" ]; then
+    return
+  fi
+
+  local default_name="$INSTANCE"
+  [ "$default_name" = "default" ] && default_name="product-shared"
+
+  local display_name token provider mode webhook_url webhook_secret default_registry_url registry_url registry_token
+  echo "No $BOT_ENV_FILE found. Running Shared Runtime first-time setup."
+  display_name="$(prompt_with_default "Bot name" "$default_name")"
+  token="$(prompt_channel_token_with_help telegram "Paste your bot token here")"
+  provider="$(prompt_with_default "Provider (claude or codex)" "claude")"
+  case "$provider" in
+    claude|codex) ;;
+    *) echo "Invalid provider '$provider'. Use claude or codex." >&2; exit 1 ;;
+  esac
+  mode="$(prompt_with_default "Mode (registry or standalone)" "standalone")"
+  case "$mode" in
+    registry|standalone) ;;
+    *) echo "Invalid mode '$mode'. Use registry or standalone." >&2; exit 1 ;;
+  esac
+  while true; do
+    webhook_url="$(prompt_with_default "Public webhook URL (must end in /webhook)" "")"
+    if [ -n "$webhook_url" ]; then
+      break
+    fi
+    echo "Webhook URL is required for Shared Runtime." >&2
+  done
+  webhook_secret="$(prompt_with_default "Webhook secret (optional)" "")"
+
+  registry_url=""
+  registry_token=""
+  if [ "$mode" = "registry" ]; then
+    default_registry_url="http://host.docker.internal:8787"
+    if [ "$(uname -s)" = "Linux" ]; then
+      default_registry_url="http://172.17.0.1:8787"
+    fi
+    while true; do
+      registry_url="$(prompt_with_default "Registry URL" "$default_registry_url")"
+      if [[ "$registry_url" == http://* ]] && ! registry_url_is_local "$registry_url"; then
+        echo "Remote registry URLs should use https:// to protect registry credentials." >&2
+        continue
+      fi
+      break
+    done
+    while true; do
+      registry_token="$(prompt_with_default "Registry enrollment token" "")"
+      if [ -n "$registry_token" ]; then
+        break
+      fi
+      echo "Registry enrollment token is required for registry mode." >&2
+    done
+  fi
+
+  (
+    umask 077
+    {
+    echo "BOT_INSTANCE=$INSTANCE"
+    echo "TELEGRAM_BOT_TOKEN=$token"
+    echo "BOT_PROVIDER=$provider"
+    echo "BOT_COMPACT_MODE=1"
+    echo "BOT_ALLOW_OPEN=1"
+    echo "BOT_TIMEOUT_SECONDS=3600"
+    echo "BOT_WORKING_DIR=/home/bot"
+    echo "BOT_AGENT_MODE=$mode"
+    echo "BOT_AGENT_DISPLAY_NAME=\"$(escape_env_value "$display_name")\""
+    echo "BOT_WEBHOOK_URL=$webhook_url"
+    if [ -n "$webhook_secret" ]; then
+      echo "BOT_WEBHOOK_SECRET=$(escape_env_value "$webhook_secret")"
+    fi
+    if [ "$mode" = "registry" ]; then
+      echo "BOT_AGENT_REGISTRY_URL=$registry_url"
+      echo "BOT_AGENT_REGISTRY_ENROLL_TOKEN=$registry_token"
+    fi
+    } > "$BOT_ENV_FILE"
+  )
+  restrict_secret_file_permissions "$BOT_ENV_FILE"
+
+  echo "Created $BOT_ENV_FILE"
 }
 
 telegram_set_webhook() {
@@ -43,23 +120,120 @@ telegram_set_webhook() {
     "https://api.telegram.org/bot${token}/setWebhook")"
 
   if ! python3 -c 'import json,sys; data=json.loads(sys.argv[1]); raise SystemExit(0 if data.get("ok") else 1)' "$response"; then
-    echo "Telegram webhook registration failed:" >&2
+    if python3 -c 'import json,sys; data=json.loads(sys.argv[1]); desc=str(data.get("description","")).lower(); raise SystemExit(0 if "unauthorized" in desc else 1)' "$response"; then
+      echo "Telegram webhook registration failed: Telegram rejected TELEGRAM_BOT_TOKEN." >&2
+      echo "Update TELEGRAM_BOT_TOKEN in $BOT_ENV_FILE with a valid token from @BotFather, then start again." >&2
+      exit 1
+    fi
+    echo "Telegram webhook registration failed." >&2
     echo "$response" >&2
     exit 1
   fi
 }
 
+run_full_health_check_or_exit() {
+  local doctor_output=""
+  while true; do
+    echo "Running full app health check before Shared Runtime startup..."
+    if doctor_output="$(bot_shared_compose --profile bot run --rm bot-webhook python -m app.main --doctor 2>&1)"; then
+      print_doctor_output_for_operator "$doctor_output"
+      return 0
+    fi
+    print_doctor_output_for_operator "$doctor_output"
+    if doctor_output_has_token_rejection "$doctor_output"; then
+      if prompt_rejected_shared_telegram_token_repair; then
+        echo "" >&2
+        echo "Re-running the health check with the updated Telegram token..." >&2
+        continue
+      fi
+    fi
+    echo "" >&2
+    echo "Full app health check failed. Fix the issue above, then run ./scripts/app/shared_start.sh again." >&2
+    exit 1
+  done
+}
+
+shared_services_are_running() {
+  local statuses="" line="" status=""
+  statuses="$(bot_shared_compose ps -a --format '{{.Service}} {{.Status}}' bot-webhook bot-worker 2>/dev/null | tr -d '\r' || true)"
+  [ -n "$statuses" ] || return 1
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    status="${line#* }"
+    case "$status" in
+      Up*|running*|Running*)
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  done <<EOF
+$statuses
+EOF
+  return 0
+}
+
 print_shared_startup_failure_help() {
+  local doctor_output=""
   echo "Shared Runtime failed to stay up after startup." >&2
-  echo "Running full app health check for a clearer diagnosis..." >&2
-  if ! bot_shared_compose --profile bot run --rm bot-webhook python -m app.main --doctor >&2; then
-    :
+  echo "Fresh diagnosis:" >&2
+  if doctor_output="$(bot_shared_compose --profile bot run --rm bot-webhook python -m app.main --doctor 2>&1)"; then
+    print_doctor_output_for_operator "$doctor_output"
+  else
+    print_doctor_output_for_operator "$doctor_output"
+    if doctor_output_has_token_rejection "$doctor_output"; then
+      if prompt_rejected_shared_telegram_token_repair; then
+        echo "" >&2
+        echo "Updated TELEGRAM_BOT_TOKEN in $BOT_ENV_FILE. Run ./scripts/app/shared_start.sh $INSTANCE again." >&2
+      fi
+    fi
   fi
   echo "" >&2
-  echo "If you need raw container logs:" >&2
+  echo "Raw container logs, only if the diagnosis above is not enough:" >&2
   echo "  $(printf 'BOT_ENV_FILE=%s docker compose --project-directory . -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.shared.yml --profile bot logs -f bot-webhook bot-worker' "$BOT_ENV_FILE")" >&2
 }
 
+prompt_rejected_shared_telegram_token_repair() {
+  local current_token new_token note
+  current_token="$(read_bot_env_value TELEGRAM_BOT_TOKEN "$BOT_ENV_FILE")"
+  note="The current TELEGRAM_BOT_TOKEN in $BOT_ENV_FILE was rejected by Telegram."
+  new_token="$(prompt_channel_token_with_help \
+    telegram \
+    "Paste a replacement Telegram bot token" \
+    "$current_token" \
+    "$note" \
+    0)" || return 1
+  upsert_env_file_value TELEGRAM_BOT_TOKEN "$new_token" "$BOT_ENV_FILE"
+  return 0
+}
+
+ensure_shared_telegram_token() {
+  local current_token note repaired=""
+  current_token="$(read_bot_env_value TELEGRAM_BOT_TOKEN "$BOT_ENV_FILE")"
+  if [ -n "$current_token" ] && ! telegram_token_is_placeholder "$current_token" && channel_token_looks_plausible telegram "$current_token"; then
+    return 0
+  fi
+  if telegram_token_is_placeholder "$current_token"; then
+    note="The current TELEGRAM_BOT_TOKEN in $BOT_ENV_FILE is still a placeholder."
+  elif [ -n "$current_token" ]; then
+    note="The current TELEGRAM_BOT_TOKEN in $BOT_ENV_FILE does not look like a real Telegram token."
+  else
+    note="TELEGRAM_BOT_TOKEN is missing from $BOT_ENV_FILE."
+  fi
+  repaired="$(prompt_channel_token_with_help \
+    telegram \
+    "Telegram bot token" \
+    "$current_token" \
+    "$note" \
+    0)" || {
+      echo "Could not read a replacement Telegram bot token. Update $BOT_ENV_FILE and run ./scripts/app/shared_start.sh again." >&2
+      exit 1
+    }
+  upsert_env_file_value TELEGRAM_BOT_TOKEN "$repaired" "$BOT_ENV_FILE"
+}
+
+create_env_file_if_missing
+restrict_secret_file_permissions "$BOT_ENV_FILE"
 check_env_bot_required "$BOT_ENV_FILE"
 
 agent_mode="$(read_bot_env_value BOT_AGENT_MODE)"
@@ -74,6 +248,8 @@ agent_registry_enroll_token="$(read_bot_env_value BOT_AGENT_REGISTRY_ENROLL_TOKE
 worker_replicas="${BOT_WORKER_REPLICAS:-2}"
 provider="$(get_bot_provider "$BOT_ENV_FILE")"
 
+ensure_shared_telegram_token
+telegram_token="$(read_bot_env_value TELEGRAM_BOT_TOKEN)"
 require_bot_env_value "TELEGRAM_BOT_TOKEN" "$telegram_token"
 require_real_telegram_token "$telegram_token" "$BOT_ENV_FILE"
 require_bot_env_value "BOT_WEBHOOK_URL" "$webhook_url"
@@ -110,6 +286,8 @@ else
   echo "Backend:       SQLite (same host shared volume)"
 fi
 
+run_full_health_check_or_exit
+
 echo "Registering Telegram webhook..."
 telegram_set_webhook "$telegram_token" "$webhook_url" "$webhook_secret"
 
@@ -118,7 +296,7 @@ bot_shared_compose --profile bot up -d --remove-orphans --scale "bot-worker=${wo
 
 echo "Waiting a few seconds to confirm shared services stayed up..."
 sleep 5
-if bot_shared_compose ps -a --format '{{.Service}} {{.Status}}' bot-webhook bot-worker 2>/dev/null | grep -q "Exited"; then
+if ! shared_services_are_running; then
   print_shared_startup_failure_help
   exit 1
 fi

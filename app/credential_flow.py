@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+from urllib.parse import urlparse
 
 from app.session_state import AwaitingSkillSetup
 from app.time_utils import age_seconds, utc_now
@@ -10,6 +11,12 @@ from app.time_utils import age_seconds, utc_now
 
 def format_credential_prompt(req: dict) -> str:
     text = html.escape(req["prompt"])
+    validate = req.get("validate")
+    if isinstance(validate, dict):
+        url = str(validate.get("url", "")).strip()
+        host = (urlparse(url).hostname or "").strip()
+        if host:
+            text += f"\nValidation host: <code>{html.escape(host)}</code>"
     if req.get("help_url"):
         url = html.escape(req["help_url"])
         text += f'\n(<a href="{url}">setup guide</a>)'

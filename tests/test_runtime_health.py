@@ -1,5 +1,6 @@
 import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from app import runtime_backend, work_queue
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
@@ -187,3 +188,57 @@ def test_runtime_health_formatter_renders_summary_and_diagnostics():
     assert any("Queue: 2 fresh queued, 1 claimed, 0 pending recovery, 1 recovery queued" in line for line in lines)
     assert any("Oldest claim age:" in line for line in lines)
     assert any("WARN: Shared Runtime has 1 stale worker heartbeat." == line for line in lines)
+
+
+async def test_runtime_health_sanitizes_content_store_failure_details(tmp_path: Path):
+    config = make_config(data_dir=tmp_path, working_dir=tmp_path)
+    provider = FakeProvider()
+
+    with patch(
+        "app.content_store.get_content_store",
+        side_effect=RuntimeError("postgresql://bot:secret@example.com/bot refused connection"),
+    ):
+        report = await collect_runtime_health_report(config, provider)
+
+    diagnostics = [
+        item.message for item in report.diagnostics if item.code == "content_store.health_failed"
+    ]
+    assert diagnostics
+    assert "secret@example.com" not in diagnostics[0]
+    assert "RuntimeError" in diagnostics[0]
+
+
+async def test_runtime_health_sanitizes_session_database_failure_details(tmp_path: Path, monkeypatch):
+    config = make_config(data_dir=tmp_path, working_dir=tmp_path)
+    provider = FakeProvider()
+    tmp_path.mkdir(exist_ok=True)
+
+    def _raise_db_error(*_args, **_kwargs):
+        raise RuntimeError("postgresql://bot:secret@example.com/bot refused connection")
+
+    monkeypatch.setattr("app.runtime_health.scan_stale_sessions", _raise_db_error)
+
+    report = await collect_runtime_health_report(config, provider)
+
+    diagnostics = [item.message for item in report.diagnostics if item.code == "session.db_error"]
+    assert diagnostics
+    assert "secret@example.com" not in diagnostics[0]
+    assert "RuntimeError" in diagnostics[0]
+
+
+async def test_runtime_health_classifies_session_schema_mismatch_without_raw_text(tmp_path: Path, monkeypatch):
+    config = make_config(data_dir=tmp_path, working_dir=tmp_path)
+    provider = FakeProvider()
+    tmp_path.mkdir(exist_ok=True)
+
+    def _raise_schema_error(*_args, **_kwargs):
+        raise RuntimeError("schema_version=99 is newer than supported")
+
+    monkeypatch.setattr("app.runtime_health.scan_stale_sessions", _raise_schema_error)
+
+    report = await collect_runtime_health_report(config, provider)
+
+    diagnostics = [item.message for item in report.diagnostics if item.code == "session.db_error"]
+    assert diagnostics
+    assert "schema is newer" in diagnostics[0].lower()
+    assert "schema_version=99" not in diagnostics[0]

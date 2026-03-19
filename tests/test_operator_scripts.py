@@ -127,13 +127,22 @@ def test_container_provider_login_banners_explain_exit_steps():
 
 
 def test_registry_start_prints_enrollment_token():
-    """registry/start.sh should print the generated enrollment token for local setup."""
+    """registry/start.sh should keep generated secrets in .env.registry, not stdout."""
     repo = Path(__file__).resolve().parent.parent
     script = repo / "scripts" / "registry" / "start.sh"
     text = script.read_text()
-    assert "Enrollment token:" in text
-    assert "Registry UI password:" in text
+    assert "Enrollment token:" not in text
+    assert "Registry UI password:" not in text
+    assert "Registry secrets are stored in $ENV_FILE" in text
     assert "keep this file private" in text
+
+
+def test_registry_start_bootstraps_local_http_acknowledgement():
+    repo = Path(__file__).resolve().parent.parent
+    script = repo / "scripts" / "registry" / "start.sh"
+    text = script.read_text()
+    assert "REGISTRY_ALLOW_HTTP=1" in text
+    assert "REGISTRY_BIND_HOST=127.0.0.1" in text
 
 
 def test_guided_start_offers_quick_setup_and_local_registry_token_reuse():
@@ -144,6 +153,63 @@ def test_guided_start_offers_quick_setup_and_local_registry_token_reuse():
     assert "Setup mode (quick/full)" in text
     assert "_LOCAL_REGISTRY_ENROLL_TOKEN" in text
     assert "Using local registry enrollment token" in text
+    assert "Remote registry URLs should use https://" in text
+
+
+def test_lib_env_exposes_channel_setup_help_for_telegram():
+    repo = Path(__file__).resolve().parent.parent
+    script = repo / "scripts" / "lib_env.sh"
+    text = script.read_text()
+    assert "print_channel_setup_help" in text
+    assert "prompt_channel_token_with_help" in text
+    assert "upsert_env_file_value" in text
+    assert "format_doctor_output_for_operator" in text
+    assert "https://t.me/BotFather" in text
+    assert "/newbot" in text
+    assert "restrict_secret_file_permissions" in text
+
+
+def test_secret_writing_scripts_harden_file_permissions():
+    repo = Path(__file__).resolve().parent.parent
+    guided = (repo / "scripts" / "app" / "guided_start.sh").read_text()
+    shared = (repo / "scripts" / "app" / "shared_start.sh").read_text()
+    registry = (repo / "scripts" / "registry" / "start.sh").read_text()
+
+    assert "umask 077" in guided
+    assert 'restrict_secret_file_permissions "$BOT_ENV_FILE"' in guided
+    assert "umask 077" in shared
+    assert 'restrict_secret_file_permissions "$BOT_ENV_FILE"' in shared
+    assert "umask 077" in registry
+    assert 'chmod 600 "$ENV_FILE"' in registry
+
+
+def test_guided_start_uses_channel_token_helper():
+    repo = Path(__file__).resolve().parent.parent
+    script = repo / "scripts" / "app" / "guided_start.sh"
+    text = script.read_text()
+    assert "prompt_channel_token_with_help telegram" in text
+    assert "ensure_guided_telegram_token" in text
+    assert "prompt_rejected_telegram_token_repair" in text
+
+
+def test_shared_start_can_bootstrap_env_with_channel_help():
+    repo = Path(__file__).resolve().parent.parent
+    script = repo / "scripts" / "app" / "shared_start.sh"
+    text = script.read_text()
+    assert "create_env_file_if_missing" in text
+    assert "prompt_channel_token_with_help telegram" in text
+    assert "ensure_shared_telegram_token" in text
+    assert "prompt_rejected_shared_telegram_token_repair" in text
+    assert "Public webhook URL (must end in /webhook)" in text
+    assert "Remote registry URLs should use https://" in text
+
+
+def test_registry_compose_requires_enroll_token_and_binds_localhost():
+    repo = Path(__file__).resolve().parent.parent
+    compose = repo / "infra" / "compose" / "docker-compose.yml"
+    text = compose.read_text()
+    assert "REGISTRY_ENROLL_TOKEN: ${REGISTRY_ENROLL_TOKEN:?Set REGISTRY_ENROLL_TOKEN in .env.registry}" in text
+    assert 'REGISTRY_BIND_HOST:-127.0.0.1' in text
 
 
 def test_guided_start_success_summary_uses_browser_registry_ui_url():
@@ -159,13 +225,23 @@ def test_guided_start_success_summary_uses_browser_registry_ui_url():
     assert "print_box_wrapped_line" in text
 
 
-def test_guided_start_reads_repo_version_for_success_summary():
-    """guided_start.sh should read VERSION and show it in the final startup summary."""
+def test_guided_start_runs_full_health_check_before_background_start():
+    """guided_start.sh should run full doctor before it claims the bot is starting."""
     repo = Path(__file__).resolve().parent.parent
     script = repo / "scripts" / "app" / "guided_start.sh"
     text = script.read_text()
-    assert 'bot_version_display="$(tr -d' in text
-    assert 'printf "║  • Bot version:' in text
+    assert "Step 3/4: Full app health check" in text
+    assert "Step 4/4: Starting bot (background service)" in text
+    assert "run --rm bot python -m app.main --doctor" in text
+    assert text.index("run --rm bot python -m app.main --doctor") < text.index("./scripts/app/start_instance.sh")
+
+
+def test_guided_start_no_longer_depends_on_repo_version_file():
+    """guided_start.sh should not try to read a missing VERSION file for the success summary."""
+    repo = Path(__file__).resolve().parent.parent
+    script = repo / "scripts" / "app" / "guided_start.sh"
+    text = script.read_text()
+    assert "VERSION" not in text
 
 
 def test_guided_start_runs_doctor_on_post_start_failure():
@@ -176,6 +252,8 @@ def test_guided_start_runs_doctor_on_post_start_failure():
     assert "run --rm bot python -m app.main --doctor" in text
     assert "logs_instance.sh" in text
     assert "Last logs:" not in text
+    assert "Fresh diagnosis:" in text
+    assert "print_doctor_output_for_operator" in text
 
 
 def test_shared_start_runs_doctor_on_post_start_failure():
@@ -185,6 +263,17 @@ def test_shared_start_runs_doctor_on_post_start_failure():
     text = script.read_text()
     assert "run --rm bot-webhook python -m app.main --doctor" in text
     assert "logs -f bot-webhook bot-worker" in text
+    assert "Fresh diagnosis:" in text
+    assert "print_doctor_output_for_operator" in text
+
+
+def test_shared_start_runs_health_check_before_webhook_registration():
+    """shared_start.sh should verify full app health before webhook registration and service startup."""
+    repo = Path(__file__).resolve().parent.parent
+    script = repo / "scripts" / "app" / "shared_start.sh"
+    text = script.read_text()
+    assert "Running full app health check before Shared Runtime startup" in text
+    assert text.index("run --rm bot-webhook python -m app.main --doctor") < text.index('telegram_set_webhook "$telegram_token"')
 
 
 def test_repo_does_not_ship_env_bot():

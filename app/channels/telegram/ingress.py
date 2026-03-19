@@ -783,7 +783,7 @@ async def cmd_discover(
     try:
         agents = await client.search(query)
     except RegistryClientError as exc:
-        rendered = telegram_presenters.discover_failed_message(str(exc))
+        rendered = telegram_presenters.discover_failed_message(exc.error_code)
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     rendered = telegram_presenters.discover_results_message(agents)

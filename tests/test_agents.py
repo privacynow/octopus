@@ -4,14 +4,20 @@ import asyncio
 import logging
 from pathlib import Path
 
+import httpx
+import pytest
+
 from app import work_queue
 from app.agents.bridge import admit_registry_delivery, conversation_key_for_ref
+from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.runtime import AgentRuntime
 from app.agents.state import AgentRuntimeState, load_agent_runtime_state
+from app.agents.types import AgentDiscoveryQuery
 from app.config import derive_agent_slug
 from app.runtime.inbound_types import deserialize_inbound
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
+from app.agents.state import save_agent_runtime_state
 from tests.support.config_support import make_config
 from tests.support.handler_support import fresh_env
 
@@ -50,6 +56,32 @@ def test_load_agent_runtime_state_logs_when_file_is_corrupt(tmp_path: Path, capl
     assert any("Agent runtime state load failed" in record.message for record in caplog.records)
 
 
+def test_load_agent_runtime_state_migrates_legacy_raw_last_error(tmp_path: Path):
+    state_path = tmp_path / "agent" / "registry_state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        '{"connectivity_state":"degraded","last_error":"registry unavailable"}',
+        encoding="utf-8",
+    )
+
+    state = load_agent_runtime_state(tmp_path)
+
+    assert state.last_error == "registry_request_failed"
+    assert state.last_error_detail == "registry unavailable"
+
+
+def test_save_agent_runtime_state_uses_private_file_permissions(tmp_path: Path):
+    save_agent_runtime_state(
+        tmp_path,
+        AgentRuntimeState(agent_id="agent-1", agent_token="secret-token"),
+    )
+
+    state_path = tmp_path / "agent" / "registry_state.json"
+    mode = state_path.stat().st_mode & 0o777
+
+    assert mode == 0o600
+
+
 async def test_agent_runtime_standalone_marks_state(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,
@@ -82,7 +114,78 @@ async def test_agent_runtime_registry_without_url_degrades(tmp_path: Path):
 
     assert result == "degraded"
     assert state.connectivity_state == "degraded"
-    assert "Registry URL not configured" in state.last_error
+    assert state.last_error == "registry_url_missing"
+    assert state.last_error_detail == "Registry URL not configured."
+
+
+async def test_registry_client_error_omits_response_body():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer secret-token"
+        return httpx.Response(
+            500,
+            text="<html>stack trace secret-token should not escape</html>",
+            headers={"content-type": "text/html"},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="http://registry.test",
+    ) as client:
+        registry = AgentRegistryClient(
+            "http://registry.test",
+            agent_token="secret-token",
+            client=client,
+        )
+        with pytest.raises(RegistryClientError) as excinfo:
+            await registry.search(AgentDiscoveryQuery(free_text="python"))
+
+    exc = excinfo.value
+    assert exc.error_code == "registry_server_error"
+    assert exc.status_code == 500
+    assert str(exc) == "Registry POST /v1/agents/discovery/search failed: HTTP 500"
+    assert "stack trace" not in str(exc)
+    assert "secret-token" not in str(exc)
+    assert "HTTP 500" in exc.operator_detail
+
+
+async def test_agent_runtime_persists_safe_registry_error_code_and_detail(monkeypatch, tmp_path: Path):
+    class FakeRegistryClient:
+        def __init__(self, base_url: str, *, agent_token: str = "", timeout_seconds: float = 10.0, client=None):
+            self.base_url = base_url
+            self.agent_token = agent_token
+
+        async def enroll(self, card, enrollment_token: str):
+            return {
+                "agent_id": "agent-123",
+                "slug": "product-bot",
+                "agent_token": "secret-token",
+                "poll_cursor": "0",
+            }
+
+        async def register(self, card, *, connectivity_state: str, current_capacity: int, max_capacity: int):
+            raise RegistryClientError(
+                "Registry POST /v1/agents/register failed: HTTP 500",
+                error_code="registry_server_error",
+                operator_detail="Registry POST /v1/agents/register failed with HTTP 500.",
+                status_code=500,
+            )
+
+    monkeypatch.setattr("app.agents.runtime.AgentRegistryClient", FakeRegistryClient)
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registry_url="http://registry.test",
+        agent_registry_enroll_token="enroll-secret",
+    )
+    runtime = AgentRuntime(config)
+
+    result = await runtime.sync_once()
+    state = load_agent_runtime_state(tmp_path)
+
+    assert result == "degraded"
+    assert state.connectivity_state == "degraded"
+    assert state.last_error == "registry_server_error"
+    assert state.last_error_detail == "Registry POST /v1/agents/register failed with HTTP 500."
 
 
 async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_path: Path):

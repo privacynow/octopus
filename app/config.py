@@ -14,6 +14,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 from app.identity import parse_actor_key, telegram_numeric_id
+from app.startup_diagnostics import sanitize_url_for_logging
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +99,12 @@ def _has_valid_http_url(raw: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+def _is_local_http_url(raw: str) -> bool:
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower()
+    return host in {"localhost", "127.0.0.1", "::1", "host.docker.internal", "172.17.0.1"}
+
+
 def _has_valid_postgres_url(raw: str) -> bool:
     parsed = urlparse(raw)
     return (parsed.scheme == "postgresql" or parsed.scheme.startswith("postgresql+")) and bool(parsed.netloc)
@@ -147,6 +154,7 @@ class BotConfig:
     telegram_api_base_url: str
     telegram_file_api_base_url: str
     completion_webhook_url: str
+    credential_key: str
     # Projects — optional named working directories
     projects: tuple[ProjectBinding, ...]  # parsed from BOT_PROJECTS
     # Model profiles — stable user-facing tier names mapped to provider model IDs
@@ -392,6 +400,7 @@ def load_config(instance: str | None = None) -> BotConfig:
         telegram_api_base_url=get("BOT_TELEGRAM_API_BASE_URL").strip(),
         telegram_file_api_base_url=get("BOT_TELEGRAM_FILE_API_BASE_URL").strip(),
         completion_webhook_url=get("BOT_COMPLETION_WEBHOOK_URL").strip(),
+        credential_key=get("BOT_CREDENTIAL_KEY").strip(),
         projects=_parse_projects(get("BOT_PROJECTS")),
         model_profiles=_parse_model_profiles(get("BOT_MODEL_PROFILES")),
         default_model_profile=get("BOT_DEFAULT_PROFILE"),
@@ -456,7 +465,7 @@ def load_config_provider_health() -> BotConfig:
     )
     return BotConfig(
         instance=instance,
-        telegram_token="",
+        telegram_token=get("TELEGRAM_BOT_TOKEN").strip(),
         allow_open=False,
         allowed_actor_keys=frozenset(),
         allowed_usernames=frozenset(),
@@ -492,6 +501,7 @@ def load_config_provider_health() -> BotConfig:
         telegram_api_base_url="",
         telegram_file_api_base_url="",
         completion_webhook_url="",
+        credential_key=get("BOT_CREDENTIAL_KEY").strip(),
         projects=(),
         model_profiles={},
         default_model_profile="",
@@ -576,6 +586,11 @@ def validate_config(config: BotConfig) -> list[str]:
         errors.append(
             "BOT_AGENT_REGISTRY_URL must be a valid http:// or https:// URL when set"
         )
+    elif config.agent_registry_url.startswith("http://") and not _is_local_http_url(config.agent_registry_url):
+        log.warning(
+            "BOT_AGENT_REGISTRY_URL uses plain HTTP over a non-local address. "
+            "Agent tokens will be transmitted in cleartext."
+        )
 
     if config.agent_poll_interval_seconds <= 0:
         errors.append("BOT_AGENT_POLL_INTERVAL_SECONDS must be greater than 0")
@@ -629,7 +644,7 @@ def validate_config(config: BotConfig) -> list[str]:
     if config.completion_webhook_url and not _has_valid_http_url(config.completion_webhook_url):
         log.warning(
             "BOT_COMPLETION_WEBHOOK_URL is set but not a valid http:// or https:// URL: %s",
-            config.completion_webhook_url,
+            sanitize_url_for_logging(config.completion_webhook_url),
         )
 
     if config.database_url and not _has_valid_postgres_url(config.database_url):

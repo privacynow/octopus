@@ -11,6 +11,7 @@ from typing import Any, Generic, Protocol, TYPE_CHECKING, TypeVar
 import httpx
 
 from app.config import ProcessRole, RuntimeMode, validate_config
+from app.registry_errors import registry_error_detail
 from app.session_state import session_from_dict
 from app.storage import list_sessions, load_session
 from app.time_utils import age_seconds, utc_now
@@ -149,6 +150,38 @@ class RuntimeHealthFormatter(Protocol):
 
 def _diag(level: str, code: str, message: str) -> RuntimeDiagnostic:
     return RuntimeDiagnostic(level=level, code=code, message=message)
+
+
+def _content_store_failure_message(exc: BaseException) -> str:
+    return (
+        "Content store check failed: "
+        f"{exc.__class__.__name__}. "
+        "Check BOT_DATABASE_URL and content-store connectivity."
+    )
+
+
+def _session_store_failure_message(exc: BaseException) -> str:
+    text = str(exc).lower()
+    if "not a database" in text or "corrupt" in text:
+        return "Session database appears corrupt or unreadable."
+    if "schema" in text or "newer" in text:
+        return (
+            "Session database schema is newer than this bot build. "
+            "Upgrade the bot or rebuild the session store with a compatible version."
+        )
+    return (
+        "Session database error: "
+        f"{exc.__class__.__name__}. "
+        "Check session-store integrity and database connectivity."
+    )
+
+
+def _shared_runtime_failure_message(exc: BaseException) -> str:
+    return (
+        "Shared Runtime health check failed: "
+        f"{exc.__class__.__name__}. "
+        "Check the work queue and runtime storage backend."
+    )
 
 
 def _summary_status(diagnostics: tuple[RuntimeDiagnostic, ...]) -> str:
@@ -325,10 +358,18 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
             from app.content_store import get_content_store
 
             get_content_store()
-        except RuntimeError as exc:
-            diagnostics.append(_diag("error", "content_store.health_failed", str(exc)))
         except Exception as exc:
-            diagnostics.append(_diag("error", "content_store.health_failed", f"Content store check failed: {exc}"))
+            log.exception(
+                "Content store health check failed: %s",
+                exc.__class__.__name__,
+            )
+            diagnostics.append(
+                _diag(
+                    "error",
+                    "content_store.health_failed",
+                    _content_store_failure_message(exc),
+                )
+            )
 
         if not any(item.level == "error" for item in diagnostics) and config.process_role != ProcessRole.WEBHOOK.value:
             diagnostics.extend(
@@ -441,7 +482,17 @@ class CanonicalRuntimeHealthProvider(RuntimeHealthProvider):
                         )
                     )
             except Exception as exc:
-                diagnostics.append(_diag("error", "session.db_error", f"Session database error: {exc}"))
+                log.exception(
+                    "Session database health check failed: %s",
+                    exc.__class__.__name__,
+                )
+                diagnostics.append(
+                    _diag(
+                        "error",
+                        "session.db_error",
+                        _session_store_failure_message(exc),
+                    )
+                )
 
         snapshot, shared_diagnostics = _collect_shared_runtime_snapshot(config)
         diagnostics.extend(shared_diagnostics)
@@ -482,7 +533,8 @@ def _collect_registry_diagnostics(config: BotConfig) -> list[RuntimeDiagnostic]:
 
     agent_state = load_agent_runtime_state(config.data_dir)
     if agent_state.connectivity_state == "degraded":
-        detail = f": {agent_state.last_error}" if agent_state.last_error else ""
+        detail_text = registry_error_detail(agent_state.last_error, agent_state.last_error_detail)
+        detail = f": {detail_text}" if detail_text else ""
         diagnostics.append(
             _diag(
                 "warning",
@@ -551,8 +603,16 @@ def _collect_shared_runtime_snapshot(
         queue = work_queue.get_queue_snapshot(config.data_dir)
         workers = work_queue.list_worker_heartbeats(config.data_dir)
     except Exception as exc:
+        log.exception(
+            "Shared Runtime health check failed: %s",
+            exc.__class__.__name__,
+        )
         diagnostics.append(
-            _diag("error", "shared.health_check_failed", f"Shared Runtime health check failed: {exc}")
+            _diag(
+                "error",
+                "shared.health_check_failed",
+                _shared_runtime_failure_message(exc),
+            )
         )
         return None, diagnostics
 

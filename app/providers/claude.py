@@ -16,8 +16,11 @@ from app.progress import (
     Thinking, render as render_progress,
 )
 from app.providers.base import PreflightContext, ProgressSink, RunContext, RunResult
+from app.subprocess_env import build_subprocess_env
 
 log = logging.getLogger(__name__)
+
+_CLAUDE_ENV_KEYS = ("ANTHROPIC_API_KEY",)
 
 
 class ClaudeProvider:
@@ -43,6 +46,7 @@ class ClaudeProvider:
                 "claude", "--version",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=self._clean_env(),
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
             if proc.returncode != 0:
@@ -64,6 +68,7 @@ class ClaudeProvider:
                     "--output-format", "text", "reply with ok",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    env=self._clean_env(),
                 )
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
                 if proc.returncode != 0:
@@ -82,9 +87,10 @@ class ClaudeProvider:
 
     @staticmethod
     def _clean_env() -> dict[str, str]:
-        env = os.environ.copy()
-        env.pop("CLAUDECODE", None)
-        return env
+        return build_subprocess_env(
+            allowed_keys=_CLAUDE_ENV_KEYS,
+            blocked_keys=("CLAUDECODE",),
+        )
 
     # -- command building --------------------------------------------------
 

@@ -1,7 +1,7 @@
 """Session-backed activation service for runtime skills.
 
 This keeps activation ownership in session state while giving handlers and UI
-surfaces a shared seam instead of mutating ``session.active_skills`` directly.
+channels a shared seam instead of mutating ``session.active_skills`` directly.
 """
 
 from __future__ import annotations

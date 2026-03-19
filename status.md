@@ -1362,7 +1362,7 @@ Feature work remains frozen until the post-audit follow-up track closes.
      - `tests/test_zero_import_gates.py`
      - Result: `233 passed`
 
-5. `Post-audit / F5: align start/help with command decorator` (current slice)
+5. `a3142f5` `Post-audit / F5: align start/help with command decorator`
    - moved `cmd_start` and `cmd_help` onto the shared command decorator path
    - preserved their user-visible unauthorized response through a decorator
      flag instead of bespoke command wiring
@@ -1372,6 +1372,20 @@ Feature work remains frozen until the post-audit follow-up track closes.
      - `tests/test_handlers.py -k 'help or start'`
      - `tests/test_zero_import_gates.py`
      - Result: `24 passed`
+
+6. `0a2a3ef` `Post-audit / F6: freeze pending and recovery machine adapters`
+   - made `PendingRequestWorkflowModel` and `TransportWorkflowModel` frozen
+     dataclasses so machine adapters no longer mutate inputs in place
+   - extended the transition results to carry the next immutable model and
+     rewrote both adapter paths to return replacement models instead of
+     mutating state/disposition fields
+   - added focused invariants proving successful transitions leave the input
+     model unchanged and frozen-model mutation attempts fail with
+     `FrozenInstanceError`
+   - focused F6 suite:
+     - `tests/test_pending_request_workflow_machine.py`
+     - `tests/test_transport_workflow_machine.py`
+     - Result: `80 passed`
 
 ### Acceptance Gates
 
@@ -1443,7 +1457,7 @@ Latest focused post-Phase-8 correction suite:
 
 Latest full-suite remediation baseline:
 
-- Result: `1655 passed, 23 skipped`
+- Result: `1659 passed, 23 skipped`
 
 ### Notes
 

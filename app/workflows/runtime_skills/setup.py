@@ -30,7 +30,7 @@ from app.workflows.runtime_skills.setup_machine import (
 
 
 class RuntimeSkillSetupUseCases(RuntimeSkillSetupPort):
-    """Canonical setup workflows shared by Telegram and other surfaces."""
+    """Canonical setup workflows shared by Telegram and other channels."""
 
     def _activation(self):
         return get_skill_activation_service()

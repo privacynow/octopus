@@ -556,6 +556,21 @@ def test_load_config_reads_completion_webhook_url():
         os.unlink(env_path)
 
 
+def test_load_config_reads_bot_credential_key():
+    with tempfile.TemporaryDirectory() as tmp:
+        envdir = Path(tmp)
+        envfile = envdir / "test-credential-key.env"
+        envfile.write_text(
+            "TELEGRAM_BOT_TOKEN=tok\n"
+            "BOT_PROVIDER=claude\n"
+            "BOT_ALLOWED_USERS=1\n"
+            "BOT_CREDENTIAL_KEY=credential-key-123\n"
+        )
+        with patch("app.config.env_path_for_instance", return_value=envfile):
+            cfg = load_config("test-credential-key")
+        assert cfg.credential_key == "credential-key-123"
+
+
 def test_validate_config_shared_runtime_requires_webhook_mode():
     errors = validate_config(make_config(runtime_mode="shared", bot_mode="poll"))
     assert any("shared" in e.lower() and "requires bot_mode=webhook" in e.lower() for e in errors)

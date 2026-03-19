@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 from pathlib import Path
 
@@ -11,8 +12,11 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from app.credential_store_base import AbstractCredentialStore
 
+log = logging.getLogger(__name__)
+
 _store: AbstractCredentialStore | None = None
 _store_key: tuple[str, str, str, int, int, int] | None = None
+_fallback_warning_emitted = False
 
 _HKDF_SALT = b"telegram-agent-bot.credentials.v1"
 _HKDF_INFO = b"telegram-agent-bot.fernet-key"
@@ -80,10 +84,39 @@ def init_credential_store(
     return _store
 
 
+def resolve_credential_secret_material(
+    *,
+    credential_key: str,
+    telegram_token: str,
+) -> str:
+    """Return the credential-store key material with backwards-compatible fallback."""
+    global _fallback_warning_emitted
+    explicit_key = credential_key.strip()
+    if explicit_key:
+        return explicit_key
+
+    fallback = telegram_token.strip()
+    if not fallback:
+        raise RuntimeError(
+            "BOT_CREDENTIAL_KEY or TELEGRAM_BOT_TOKEN is required before using the credential store"
+        )
+
+    if not _fallback_warning_emitted:
+        log.warning(
+            "Credential encryption is using TELEGRAM_BOT_TOKEN as the key material. "
+            "Set BOT_CREDENTIAL_KEY for independent key management before rotating the bot token."
+        )
+        _fallback_warning_emitted = True
+    return fallback
+
+
 def init_credential_store_for_config(config) -> AbstractCredentialStore:
     return init_credential_store(
         data_dir=config.data_dir,
-        secret_material=config.telegram_token,
+        secret_material=resolve_credential_secret_material(
+            credential_key=getattr(config, "credential_key", ""),
+            telegram_token=config.telegram_token,
+        ),
         database_url=config.database_url,
         pool_min=config.db_pool_min_size,
         pool_max=config.db_pool_max_size,
@@ -95,9 +128,10 @@ def get_credential_store() -> AbstractCredentialStore:
     if _store is not None:
         return _store
     data_dir = Path(os.environ.get("BOT_DATA_DIR", "/tmp/telegram-agent-credentials")).expanduser()
-    secret_material = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    if not secret_material:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is required before using the credential store")
+    secret_material = resolve_credential_secret_material(
+        credential_key=os.environ.get("BOT_CREDENTIAL_KEY", ""),
+        telegram_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+    )
     database_url = os.environ.get("BOT_DATABASE_URL", "").strip()
     pool_min = int(os.environ.get("BOT_DB_POOL_MIN_SIZE", "1") or "1")
     pool_max = int(os.environ.get("BOT_DB_POOL_MAX_SIZE", "10") or "10")
@@ -113,6 +147,7 @@ def get_credential_store() -> AbstractCredentialStore:
 
 
 def reset_for_test() -> None:
-    global _store, _store_key
+    global _store, _store_key, _fallback_warning_emitted
     _store = None
     _store_key = None
+    _fallback_warning_emitted = False

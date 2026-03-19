@@ -40,6 +40,18 @@ the internal runtime architecture to get started.
 
 For a single private bot, that is enough. The guided setup handles the rest.
 
+## Credential Key Management
+
+Stored skill credentials are encrypted at rest. For stable key management,
+set `BOT_CREDENTIAL_KEY` in your bot env file before you start using
+credentials.
+
+If `BOT_CREDENTIAL_KEY` is unset, the bot falls back to
+`TELEGRAM_BOT_TOKEN` for backwards compatibility. That works, but rotating
+the Telegram bot token later will make existing stored credentials
+unreadable unless you set `BOT_CREDENTIAL_KEY` to the previous key material
+first.
+
 ## Choose A Path
 
 | If you want... | Use... |

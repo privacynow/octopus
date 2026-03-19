@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from app.credential_store_base import AbstractCredentialStore
+
+log = logging.getLogger(__name__)
 
 _INIT_SQL = """
 CREATE TABLE IF NOT EXISTS credentials (
@@ -59,12 +62,21 @@ class SQLiteCredentialStore(AbstractCredentialStore):
                 (actor_key,),
             ).fetchall()
         result: dict[str, dict[str, str]] = {}
+        saw_decrypt_failure = False
         for row in rows:
             try:
                 value = self._fernet.decrypt(str(row["encrypted_value"]).encode("utf-8")).decode("utf-8")
             except (InvalidToken, ValueError, TypeError):
+                saw_decrypt_failure = True
                 continue
             result.setdefault(str(row["skill_name"]), {})[str(row["cred_key"])] = value
+        if saw_decrypt_failure:
+            log.error(
+                "Could not decrypt one or more stored credentials for %s. "
+                "If TELEGRAM_BOT_TOKEN recently changed, set BOT_CREDENTIAL_KEY "
+                "to the previous key material to recover.",
+                actor_key,
+            )
         return result
 
     def save(

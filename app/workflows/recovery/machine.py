@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.workflows.recovery.results import TransportDisposition, TransitionResult, TransportStateCorruption
 
@@ -17,7 +17,7 @@ TRANSPORT_STATES = frozenset(
 )
 
 
-@dataclass
+@dataclass(frozen=True)
 class TransportWorkflowModel:
     state: str
     worker_id: str | None = None
@@ -375,6 +375,7 @@ def run_transport_event(
             new_state=None,
             disposition=TransportDisposition.invalid_transition,
             reason=f"unknown event {event_name!r}",
+            model=model,
         )
 
     requesting_worker_id = str(kwargs.get("requesting_worker_id", model.requesting_worker_id) or "")
@@ -385,6 +386,7 @@ def run_transport_event(
             new_state=None,
             disposition=TransportDisposition.invalid_transition,
             reason=f"unknown event {event_name!r}",
+            model=model,
         )
 
     decision = decide_transport_action(
@@ -409,19 +411,20 @@ def run_transport_event(
             new_state=None,
             disposition=disposition,
             reason=decision.reason,
+            model=model,
         )
 
-    if decision.effects.new_state is not None:
-        model.state = decision.effects.new_state
-    model.requesting_worker_id = requesting_worker_id
-    if decision.effects.disposition is not None:
-        model.disposition = decision.effects.disposition
-    else:
-        model.disposition = TransportDisposition.ok
+    next_model = replace(
+        model,
+        state=decision.effects.new_state or model.state,
+        requesting_worker_id=requesting_worker_id,
+        disposition=decision.effects.disposition or TransportDisposition.ok,
+    )
 
     return TransitionResult(
         allowed=True,
-        new_state=model.state,
-        disposition=model.disposition,
+        new_state=next_model.state,
+        disposition=next_model.disposition or TransportDisposition.ok,
         reason="",
+        model=next_model,
     )

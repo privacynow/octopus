@@ -265,8 +265,9 @@ async def execute_request(
 
     if result.returncode != 0:
         error_text = await runtime.dispatch.format_provider_error(result.text, result.returncode)
+        error_text = runtime.render_provider_error(error_text)
         if result.resume_failed:
-            error_text += _msg.progress_session_not_resumed()
+            error_text += runtime.render_provider_error(_msg.progress_session_not_resumed())
         await progress.update(error_text, force=True)
         return RequestExecutionOutcome(status="failed", error_text=error_text)
 
@@ -442,7 +443,10 @@ async def request_approval(
 
     if plan_result.returncode != 0:
         error_text = await runtime.dispatch.format_provider_error(plan_result.text, plan_result.returncode)
-        await progress.update(f"{_msg.approval_check_failed_prefix()}\n{error_text}", force=True)
+        rendered_error = runtime.render_provider_error(
+            f"{_msg.approval_check_failed_prefix()}\n{error_text}"
+        )
+        await progress.update(rendered_error, force=True)
         return
 
     attachment_dicts = [

@@ -1,3 +1,5 @@
+import pytest
+
 from app.identity import telegram_actor_key, telegram_conversation_key
 from app.channels.telegram.delegation_channel import propose_delegation_plan
 from app.channels.telegram.execution import (
@@ -6,6 +8,7 @@ from app.channels.telegram.execution import (
     send_compact_reply,
     send_directed_artifacts,
 )
+from app.summarize import format_provider_error
 from app.runtime.dispatch import (
     run_provider_preflight,
     run_provider_request,
@@ -13,7 +16,9 @@ from app.runtime.dispatch import (
 from app.workflows.execution.contracts import (
     ExecutionRuntime,
     ExecutionChannelContext,
+    ExecutionChannelMetadata,
 )
+from app.workflows.execution.context import build_execution_channel_context
 from app.workflows.execution.requests import execute_request, request_approval
 from tests.support.handler_support import (
     FakeChat,
@@ -82,6 +87,7 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
         runtime = ExecutionRuntime(
             dispatch=build_dispatch_runtime(current_runtime()),
             build_channel_context=lambda _message, _chat_id: ExecutionChannelContext(),
+            render_provider_error=lambda text: text,
             show_foreign_setup=_no_op,
             show_setup_prompt=_no_op,
             send_retry_prompt=_no_op,
@@ -119,3 +125,35 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
         assert session.get("pending_approval") is not None
         assert len(prov.preflight_calls) == 1
         assert approval_prompts == ["approval"]
+
+
+def test_workflow_context_builder_resolves_registry_conversation_metadata() -> None:
+    context = build_execution_channel_context(
+        ExecutionChannelMetadata(
+            channel_name="telegram",
+            message_conversation_ref="",
+            routed_task_id="task-9",
+            chat_id=12345,
+            agent_mode="registry",
+        ),
+        build_conversation_ref=lambda chat_id: f"registry:{chat_id}",
+        timeline_callback_factory=lambda conversation_ref, routed_task_id: (
+            lambda html_text, force=False: _no_op(
+                conversation_ref,
+                routed_task_id,
+                html_text,
+                force=force,
+            )
+        ),
+    )
+
+    assert context.conversation_ref == "registry:12345"
+    assert context.routed_task_id == "task-9"
+    assert context.timeline_callback is not None
+
+
+@pytest.mark.asyncio
+async def test_format_provider_error_returns_plain_text() -> None:
+    text = await format_provider_error("<boom>", 1)
+
+    assert text == "<boom>"

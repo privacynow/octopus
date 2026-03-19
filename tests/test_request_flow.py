@@ -438,6 +438,7 @@ async def test_is_allowed_closed_mode_rejects_stranger():
 async def test_execute_request_public_user_gets_inspect_policy():
     """execute_request with trust_tier='public' resolves inspect file_policy."""
     import app.channels.telegram.execution as telegram_execution
+    from app.workflows.execution.requests import execute_request
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -462,10 +463,10 @@ async def test_execute_request_public_user_gets_inspect_policy():
 
         # Execute as public
         msg = FakeMessage(chat=chat, text="hello")
-        await telegram_execution.execute_request(
+        await execute_request(
             chat.id, "test prompt", [], msg,
             request_user_id=telegram_actor_key(999), trust_tier="public",
-            runtime=current_runtime(),
+            runtime=telegram_execution.build_execution_runtime(current_runtime()),
         )
 
         # Provider should have been called with public restrictions
@@ -479,6 +480,7 @@ async def test_execute_request_public_user_gets_inspect_policy():
 async def test_execute_request_trusted_user_gets_edit_policy():
     """execute_request with trust_tier='trusted' preserves session file_policy."""
     import app.channels.telegram.execution as telegram_execution
+    from app.workflows.execution.requests import execute_request
 
     with fresh_env(config_overrides={
         "allow_open": True,
@@ -499,10 +501,10 @@ async def test_execute_request_trusted_user_gets_edit_policy():
         save_session(data_dir, telegram_conversation_key(chat.id), session)
 
         msg = FakeMessage(chat=chat, text="hello")
-        await telegram_execution.execute_request(
+        await execute_request(
             chat.id, "test prompt", [], msg,
             request_user_id=telegram_actor_key(42), trust_tier="trusted",
-            runtime=current_runtime(),
+            runtime=telegram_execution.build_execution_runtime(current_runtime()),
         )
 
         assert len(prov.run_calls) == 1

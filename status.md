@@ -1167,7 +1167,7 @@ after Phase 8 and the latest verified remediation baseline.
 
 ### Current State
 
-Architecture remediation is complete.
+Architecture remediation is reopened for the post-Phase-8 audit follow-up.
 
 Phase 8 closed the remaining Telegram ingress decomposition and test-boundary
 gaps left after Phase 7, and the post-Phase-8 correction slices closed the
@@ -1192,7 +1192,24 @@ The repo-standard explicit machine contract lives in:
 
 - `docs/machine_conventions.md`
 
-Feature work may resume.
+The post-Phase-8 audit found additional workflow-ownership and traceability
+gaps. The follow-up remediation is now in progress:
+
+- `F1` complete:
+  - post-execution finalization moved out of Telegram worker code into
+    `app/workflows/execution/finalization.py`
+  - worker admission and recovery notice transitions now delegate to
+    runtime/workflow owners instead of owning the durable decisions inline
+- `F2` complete in the current slice:
+  - workflow-owned execution channel context construction now lives under
+    `app/workflows/execution/context.py`
+  - provider-error summarization moved to `app/summarize.py` as a plain-text
+    utility, with Telegram-specific HTML escaping kept at the channel boundary
+  - `app/channels/telegram/execution.py` no longer owns workflow passthrough
+    wrappers for execute/request/approval transitions
+- `F3` through `F8` remain open
+
+Feature work remains frozen until the post-audit follow-up track closes.
 
 ### Phase 8 Slice Log
 
@@ -1246,6 +1263,47 @@ Feature work may resume.
      comments
    - added a structural gate preventing legacy live `surface` contract terms
      from reappearing outside storage-detail owners
+
+### Post-Audit Remediation Log
+
+1. `b56473d` `Post-audit / F1: extract post-execution finalization from worker.py`
+   - moved post-execution delegation finalization, routed-task reporting,
+     usage accounting, timeline publication, and webhook scheduling into
+     `app/workflows/execution/finalization.py`
+   - moved worker admission to `app/runtime/work_admission.py` and recovery
+     notice state transitions to `app/workflows/recovery/replay.py`
+   - removed inline approval branching from `app/channels/telegram/worker.py`
+     and delegated it to `app/workflows/execution/requests.py`
+   - documented completion ownership at the worker boundary and added
+     structural gates proving the channel worker no longer owns those workflow
+     decisions
+   - focused F1 suite:
+     - `tests/test_execution_finalization.py`
+     - `tests/test_worker_workflows.py`
+     - `tests/test_workitem_integration.py`
+     - `tests/test_handlers.py`
+     - `tests/test_invariants.py`
+     - `tests/test_zero_import_gates.py`
+     - Result: `325 passed`
+
+2. `Post-audit / F2: move execution context and provider-error formatting`
+   `out of the Telegram channel layer` (current slice)
+   - moved execution-channel context construction to
+     `app/workflows/execution/context.py`
+   - moved provider-error summarization to `app/summarize.py` as a shared
+     plain-text utility and kept HTML escaping at the Telegram boundary
+   - removed channel-layer passthrough wrappers from
+     `app/channels/telegram/execution.py`; callers now build runtimes and call
+     workflow owners directly
+   - focused F2 suite:
+     - `tests/test_runtime_dispatch_boundary.py`
+     - `tests/test_request_flow.py`
+     - `tests/test_sqlite_integration.py`
+     - `tests/test_handlers_approval.py`
+     - `tests/test_invariants.py`
+     - `tests/test_telegram_execution_module.py`
+     - `tests/test_zero_import_gates.py`
+     - Result: `213 passed`
 
 ### Acceptance Gates
 
@@ -1317,7 +1375,7 @@ Latest focused post-Phase-8 correction suite:
 
 Latest full-suite remediation baseline:
 
-- Result: `1633 passed, 23 skipped`
+- Result: `1648 passed, 23 skipped`
 
 ### Notes
 

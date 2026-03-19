@@ -3,14 +3,16 @@
 import asyncio
 from pathlib import Path
 
+from app import work_queue
 from app.agents.bridge import admit_registry_delivery, conversation_key_for_ref
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.runtime import AgentRuntime
 from app.agents.state import load_agent_runtime_state
 from app.config import derive_agent_slug
+from app.runtime.inbound_types import deserialize_inbound
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
 from tests.support.config_support import make_config
-from tests.support.handler_support import drain_one_worker_item, fresh_env
+from tests.support.handler_support import fresh_env
 
 
 def _reg_conv(conversation_ref: str) -> str:
@@ -499,15 +501,7 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
     ]
 
 
-async def test_handle_registry_surface_action_and_control_dispatch(monkeypatch, tmp_path: Path):
-    seen: list[tuple[str, str, str]] = []
-
-    async def fake_execute_worker_action(_runtime, event, item, *, cancel_event=None) -> None:
-        del _runtime, item, cancel_event
-        seen.append((event.action, event.conversation_key, event.conversation_ref))
-
-    monkeypatch.setattr("app.channels.telegram.worker._execute_worker_action", fake_execute_worker_action)
-
+async def test_handle_registry_surface_action_and_control_dispatch(tmp_path: Path):
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
@@ -542,9 +536,20 @@ async def test_handle_registry_surface_action_and_control_dispatch(monkeypatch, 
 
         assert approve_outcome == "accepted"
         assert control_outcome == "accepted"
-        assert await drain_one_worker_item(data_dir) is True
-        assert await drain_one_worker_item(data_dir) is True
-        assert seen == [
-            ("approve_pending", _reg_conv("conv-approve"), "conv-approve"),
-            ("cancel_conversation", _reg_conv("conv-cancel"), "conv-cancel"),
-        ]
+        approve_payload = work_queue.get_update_payload(data_dir, "reg:d-approve")
+        cancel_payload = work_queue.get_update_payload(data_dir, "reg:d-cancel")
+        assert approve_payload is not None
+        assert cancel_payload is not None
+
+        approve_event = deserialize_inbound("action", approve_payload)
+        cancel_event = deserialize_inbound("action", cancel_payload)
+        assert (
+            approve_event.action,
+            approve_event.conversation_key,
+            approve_event.conversation_ref,
+        ) == ("approve_pending", _reg_conv("conv-approve"), "conv-approve")
+        assert (
+            cancel_event.action,
+            cancel_event.conversation_key,
+            cancel_event.conversation_ref,
+        ) == ("cancel_conversation", _reg_conv("conv-cancel"), "conv-cancel")

@@ -543,27 +543,21 @@ async def test_doctor_prompt_weight_uses_resolved_context():
 
 
 @pytest.mark.asyncio
-async def test_chat_lock_sends_message_feedback_when_locked():
-    """_chat_lock sends visible queued feedback via message when lock is held."""
+async def test_cmd_new_sends_message_feedback_when_chat_locked():
+    """Contended command handlers show visible queued feedback through the public handler boundary."""
     import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
         chat = FakeChat(1)
-        msg = FakeMessage(chat=chat)
+        user = FakeUser(next(iter(cfg.allowed_user_ids)))
 
         lock = current_runtime().chat_locks[1]
         await lock.acquire()
         try:
-            # _chat_lock should send feedback then block; run in a task
-            # so we can release the lock
-            async def use_lock():
-                async with th._chat_lock(current_runtime(), 1, message=msg):
-                    pass
-
-            task = asyncio.create_task(use_lock())
-            await asyncio.sleep(0)  # let the task start and hit the lock
+            task = asyncio.create_task(send_command(th.cmd_new, chat, user, "/new"))
+            await asyncio.sleep(0)
             lock.release()
-            await task
+            msg = await task
 
             all_text = " ".join(str(r.get("text", "")) for r in msg.replies)
             assert "already running" in all_text.lower() or "cancel" in all_text.lower(), (
@@ -574,48 +568,17 @@ async def test_chat_lock_sends_message_feedback_when_locked():
 
 
 @pytest.mark.asyncio
-async def test_chat_lock_sends_callback_feedback_when_locked():
-    """_chat_lock sends visible queued feedback via callback answer when lock is held."""
+async def test_cmd_new_has_no_busy_feedback_when_lock_free():
+    """Uncontended command handlers do not emit queued feedback."""
     import app.channels.telegram.ingress as th
 
     with fresh_env() as (data_dir, cfg, prov):
-        query = FakeCallbackQuery("test", message=FakeMessage(chat=FakeChat(1)))
-
-        lock = current_runtime().chat_locks[1]
-        await lock.acquire()
-        try:
-            yielded = None
-            async def use_lock():
-                nonlocal yielded
-                async with th._chat_lock(current_runtime(), 1, query=query) as sent:
-                    yielded = sent
-
-            task = asyncio.create_task(use_lock())
-            await asyncio.sleep(0)
-            lock.release()
-            await task
-
-            assert yielded is True, "Expected _chat_lock to yield True when lock was held"
-            assert query.answers, "Expected callback answer for queued feedback"
-            assert any("already running" in str(a.get("text", "")).lower() or "cancel" in str(a.get("text", "")).lower() for a in query.answers), (
-                f"Expected busy feedback in callback answer, got: {query.answers}")
-        finally:
-            if lock.locked():
-                lock.release()
-
-
-@pytest.mark.asyncio
-async def test_chat_lock_no_feedback_when_free():
-    """_chat_lock does NOT send feedback when lock is free."""
-    import app.channels.telegram.ingress as th
-
-    with fresh_env() as (data_dir, cfg, prov):
-        msg = FakeMessage(chat=FakeChat(1))
-
-        async with th._chat_lock(current_runtime(), 1, message=msg) as sent:
-            assert sent is False, "Expected _chat_lock to yield False when lock was free"
+        chat = FakeChat(1)
+        user = FakeUser(next(iter(cfg.allowed_user_ids)))
+        msg = await send_command(th.cmd_new, chat, user, "/new")
 
         all_text = " ".join(str(r.get("text", "")) for r in msg.replies)
+        assert "already running" not in all_text.lower()
         assert "queued" not in all_text.lower()
 
 

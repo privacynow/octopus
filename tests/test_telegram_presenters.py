@@ -1,31 +1,32 @@
-from pathlib import Path
-from types import SimpleNamespace
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 
 from app.channels.telegram.presenters import (
-    TelegramRenderedMessage,
     access_overrides_message,
     admin_sessions_summary_message,
     approval_prompt,
+    compact_mode_status,
+    compact_reply_blockquote_message,
+    compact_reply_button_message,
     collapsed_response_message,
+    conversation_role_current_message,
     delegation_plan_message,
     discover_results_message,
     extract_summary,
     formatted_reply_messages,
+    guidance_admin_only_message,
     ingress_setup_prompt_message,
     main_help_message,
+    pending_plain_outcome_message,
     provider_guidance_history_message,
     provider_guidance_mutation_message,
     provider_guidance_preview_message,
     recovery_notice_markup,
-    conversation_role_current_message,
     pending_html_outcome_message,
     raw_missing_message,
     raw_usage_message,
     runtime_skill_active_summary_message,
     runtime_skill_history_message,
+    runtime_skill_setup_started_message,
     session_overview_message,
     settings_overview,
     skill_add_confirmation,
@@ -37,26 +38,11 @@ from app.workflows.provider_guidance.contracts import (
     ProviderGuidanceLifecycleRevision,
     ProviderGuidancePreview,
 )
-from app.runtime.inbound_types import InboundUser
-from app.session_state import DelegatedTask, PendingDelegation, SessionState
-from app.storage import default_session, save_session
+from app.session_state import DelegatedTask, PendingDelegation
 from app.workflows.runtime_skills.contracts import (
     RuntimeSkillLifecycleApproval,
     RuntimeSkillLifecycleDetail,
     RuntimeSkillLifecycleRevision,
-)
-from tests.support.handler_support import (
-    FakeChat,
-    FakeContext,
-    FakeMessage,
-    FakeUpdate,
-    FakeUser,
-    current_runtime,
-    fresh_data_dir,
-    send_command,
-    setup_globals,
-    make_config,
-    FakeProvider,
 )
 
 
@@ -215,6 +201,25 @@ def test_formatted_reply_messages_render_html_chunks():
     assert any("hello" in item.text for item in rendered)
 
 
+def test_compact_reply_blockquote_message_renders_expandable_detail_when_short_enough():
+    rendered = compact_reply_blockquote_message(
+        "Summary line one\nSummary line two\nSummary line three\nSummary line four\nDetail line one\nDetail line two"
+    )
+
+    assert rendered is not None
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "<blockquote expandable>" in rendered.text
+    assert "Detail line one" in rendered.text
+
+
+def test_compact_reply_button_message_renders_expand_callback():
+    rendered = compact_reply_button_message("Summary line\n\nDetail line", 42, 7)
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert rendered.reply_markup is not None
+    assert rendered.reply_markup.inline_keyboard[0][0].callback_data == "expand:42:7"
+
+
 def test_extract_summary_splits_at_line_boundary():
     summary, rest = extract_summary(
         "Line one\nLine two\nLine three\nLine four\nLine five\nLine six",
@@ -355,6 +360,15 @@ def test_admin_sessions_summary_message_renders_expected_html():
     assert "telegram:123" in rendered.text
 
 
+def test_compact_mode_status_renders_toggle_buttons():
+    rendered = compact_mode_status(True)
+
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "Compact mode is <b>on</b>." in rendered.text
+    assert rendered.reply_markup.inline_keyboard[0][0].callback_data == "setting_compact:on"
+    assert rendered.reply_markup.inline_keyboard[0][1].callback_data == "setting_compact:off"
+
+
 def test_runtime_skill_active_summary_message_renders_expected_html():
     rendered = runtime_skill_active_summary_message(["Planner", "Reviewer"], 7)
 
@@ -405,550 +419,25 @@ def test_runtime_skill_history_message_renders_revisions_and_approvals():
     assert "[published]" in rendered.text
 
 
-async def test_cmd_compact_status_uses_presenter(monkeypatch):
-    import app.channels.telegram.ingress as th
-    import app.channels.telegram.conversation as conversation
+def test_guidance_admin_only_message_renders_action_name():
+    rendered = guidance_admin_only_message("approve")
 
-    rendered = TelegramRenderedMessage(
-        text="patched compact presenter",
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("patched", callback_data="patched:compact")]]),
-    )
-    monkeypatch.setattr(conversation.telegram_presenters, "compact_mode_status", lambda current: rendered)
-
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir)
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
-        chat = FakeChat(12345)
-        user = FakeUser(42)
-
-        msg = await send_command(th.cmd_compact, chat, user, "/compact")
-
-        assert msg.replies[-1]["text"] == "patched compact presenter"
-        assert msg.replies[-1]["reply_markup"].inline_keyboard[0][0].callback_data == "patched:compact"
+    assert rendered.text == "Only admins can approve provider guidance."
 
 
-async def test_skills_add_confirmation_uses_presenter(monkeypatch):
-    import app.channels.telegram.ingress as th
-    import app.channels.telegram.runtime_skills as runtime_skills
-    from tests.support import skill_test_helpers as skills_mod
-
-    rendered = TelegramRenderedMessage(
-        text="patched skill confirmation",
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("patched", callback_data="patched:skill")]]),
-    )
-    monkeypatch.setattr(runtime_skills.telegram_presenters, "skill_add_confirmation", lambda *args, **kwargs: rendered)
-
-    with fresh_data_dir() as data_dir:
-        orig_custom_dir = skills_mod.CUSTOM_DIR
-        try:
-            custom_dir = data_dir / "custom-skills"
-            skills_mod.CUSTOM_DIR = custom_dir
-            skill_dir = custom_dir / "big-skill"
-            skill_dir.mkdir(parents=True)
-            (skill_dir / "skill.md").write_text(
-                "---\nname: big-skill\ndisplay_name: Big\n"
-                "description: test\n---\n\n" + "x" * 9000 + "\n"
-            )
-
-            cfg = make_config(data_dir)
-            prov = FakeProvider("claude")
-            setup_globals(cfg, prov)
-            chat = FakeChat(1)
-            user = FakeUser(42)
-
-            msg = await send_command(th.cmd_skills, chat, user, "/skills add big-skill", args=["add", "big-skill"])
-
-            assert msg.replies[-1]["text"] == "patched skill confirmation"
-            assert msg.replies[-1]["reply_markup"].inline_keyboard[0][0].callback_data == "patched:skill"
-        finally:
-            skills_mod.CUSTOM_DIR = orig_custom_dir
-
-
-async def test_send_approval_prompt_uses_presenter(monkeypatch):
-    import app.channels.telegram.execution as telegram_execution
-
-    rendered = TelegramRenderedMessage(
-        text="patched approval presenter",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("patched", callback_data="patched:approval")]]),
-    )
-    monkeypatch.setattr(telegram_execution.telegram_presenters, "approval_prompt", lambda: rendered)
-
-    chat = FakeChat(12345)
-    message = FakeMessage(chat=chat, text="hello")
-
-    await telegram_execution.send_approval_prompt(message)
-
-    assert chat.sent_messages[-1]["text"] == "patched approval presenter"
-    assert chat.sent_messages[-1]["reply_markup"].inline_keyboard[0][0].callback_data == "patched:approval"
-
-
-async def test_show_setup_prompt_uses_presenter(monkeypatch):
-    import app.channels.telegram.execution as telegram_execution
-
-    rendered = TelegramRenderedMessage(text="patched setup prompt", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(
-        telegram_execution.telegram_presenters,
-        "ingress_setup_prompt_message",
-        lambda *args, **kwargs: rendered,
+def test_runtime_skill_setup_started_message_renders_requirement_prompt():
+    rendered = runtime_skill_setup_started_message(
+        "helper",
+        {"kind": "token", "key": "API_TOKEN", "prompt": "Enter API token"},
     )
 
-    message = FakeMessage(chat=FakeChat(12345), text="setup")
+    assert rendered.parse_mode == ParseMode.HTML
+    assert "helper" in rendered.text
+    assert "Enter API token" in rendered.text
 
-    await telegram_execution.show_setup_prompt(
-        message,
-        "planner",
-        {"kind": "token", "key": "API_TOKEN"},
-    )
 
-    assert message.replies[-1]["text"] == "patched setup prompt"
+def test_pending_plain_outcome_message_renders_plain_text():
+    rendered = pending_plain_outcome_message("rejected")
 
-
-async def test_send_formatted_reply_uses_presenter(monkeypatch):
-    import app.channels.telegram.execution as telegram_execution
-
-    rendered = TelegramRenderedMessage(text="patched formatted chunk", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(telegram_execution.telegram_presenters, "formatted_reply_messages", lambda text: [rendered])
-
-    message = FakeMessage(chat=FakeChat(12345), text="reply")
-
-    await telegram_execution.send_formatted_reply(message, "ignored")
-
-    assert message.replies[-1]["text"] == "patched formatted chunk"
-
-
-async def test_send_compact_reply_uses_presenter(monkeypatch):
-    import app.channels.telegram.execution as telegram_execution
-
-    rendered = TelegramRenderedMessage(text="patched compact reply", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(
-        telegram_execution.telegram_presenters,
-        "compact_reply_blockquote_message",
-        lambda text: rendered,
-    )
-
-    message = FakeMessage(chat=FakeChat(12345), text="reply")
-
-    await telegram_execution.send_compact_reply(message, "ignored", 12345, 7)
-
-    assert message.replies[-1]["text"] == "patched compact reply"
-
-
-async def test_cmd_raw_usage_uses_presenter(monkeypatch):
-    import app.channels.telegram.ingress as th
-
-    rendered = TelegramRenderedMessage(text="patched raw usage")
-    monkeypatch.setattr(th.telegram_presenters, "raw_usage_message", lambda: rendered)
-
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir)
-        prov = FakeProvider("codex")
-        setup_globals(cfg, prov)
-        chat = FakeChat(12345)
-        user = FakeUser(42)
-
-        msg = await send_command(th.cmd_raw, chat, user, "/raw nope", args=["nope"])
-
-        assert msg.replies[-1]["text"] == "patched raw usage"
-
-
-async def test_handle_message_welcome_uses_presenter(monkeypatch):
-    import app.channels.telegram.ingress as th
-
-    rendered = TelegramRenderedMessage(text="patched welcome")
-    monkeypatch.setattr(th.telegram_presenters, "welcome_message", lambda **kwargs: rendered)
-
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir)
-        prov = FakeProvider("codex")
-        setup_globals(cfg, prov)
-        chat = FakeChat(12345)
-        update = FakeUpdate(message=FakeMessage(chat=chat, text="hello"), user=FakeUser(42), chat=chat)
-
-        await th.handle_message(update, FakeContext())
-
-        assert chat.sent_messages[-1]["text"] == "patched welcome"
-
-
-async def test_cmd_help_uses_presenter(monkeypatch):
-    import app.channels.telegram.ingress as th
-
-    rendered = TelegramRenderedMessage(text="patched help presenter", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(th.telegram_presenters, "main_help_message", lambda **kwargs: rendered)
-
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir)
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
-        chat = FakeChat(12345)
-        user = FakeUser(42)
-
-        msg = await send_command(th.cmd_help, chat, user, "/help")
-
-        assert msg.replies[-1]["text"] == "patched help presenter"
-
-
-async def test_cmd_session_uses_presenter(monkeypatch):
-    import app.channels.telegram.ingress as th
-
-    rendered = TelegramRenderedMessage(text="patched session presenter", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(th.telegram_presenters, "session_overview_message", lambda **kwargs: rendered)
-
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir)
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
-        chat = FakeChat(12345)
-        user = FakeUser(42)
-
-        msg = await send_command(th.cmd_session, chat, user, "/session")
-
-        assert msg.replies[-1]["text"] == "patched session presenter"
-
-
-async def test_cmd_discover_uses_presenter(monkeypatch):
-    import app.channels.telegram.ingress as th
-
-    class _FakeClient:
-        async def search(self, query):
-            del query
-            return [{"display_name": "Reviewer"}]
-
-    rendered = TelegramRenderedMessage(text="patched discover presenter", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(th.telegram_presenters, "discover_results_message", lambda agents: rendered)
-    monkeypatch.setattr(
-        th,
-        "load_agent_runtime_state",
-        lambda data_dir: SimpleNamespace(
-            connectivity_state="connected",
-            last_error="",
-            agent_id="agent-1",
-        ),
-    )
-    monkeypatch.setattr(th, "registry_client", lambda cfg: _FakeClient())
-
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir, agent_mode="registry")
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
-        chat = FakeChat(12345)
-        user = FakeUser(42)
-
-        msg = await send_command(th.cmd_discover, chat, user, "/discover role:developer", ["role:developer"])
-
-        assert msg.replies[-1]["text"] == "patched discover presenter"
-
-
-async def test_cmd_admin_uses_presenter(monkeypatch):
-    import app.channels.telegram.ingress as th
-
-    rendered = TelegramRenderedMessage(text="patched admin presenter", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(th.telegram_presenters, "admin_sessions_summary_message", lambda **kwargs: rendered)
-
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(
-            data_dir,
-            admin_user_ids=frozenset({42}),
-            admin_usernames=frozenset(),
-            admin_users_explicit=True,
-        )
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
-        session = default_session("claude", prov.new_provider_state(), "off")
-        save_session(data_dir, "telegram:12345", session)
-        chat = FakeChat(12345)
-        user = FakeUser(42)
-
-        msg = await send_command(th.cmd_admin, chat, user, "/admin sessions", ["sessions"])
-
-        assert msg.replies[-1]["text"] == "patched admin presenter"
-
-
-async def test_cmd_guidance_admin_only_uses_presenter(monkeypatch):
-    import app.channels.telegram.ingress as th
-
-    rendered = TelegramRenderedMessage(text="patched guidance admin presenter")
-    monkeypatch.setattr(th.telegram_presenters, "guidance_admin_only_message", lambda action: rendered)
-
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir, admin_user_ids=frozenset(), admin_usernames=frozenset())
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
-        chat = FakeChat(12345)
-        user = FakeUser(42)
-
-        msg = await send_command(th.cmd_guidance, chat, user, "/guidance approve claude", ["approve", "claude"])
-
-        assert msg.replies[-1]["text"] == "patched guidance admin presenter"
-
-
-async def test_guidance_preview_uses_presenter(monkeypatch):
-    import app.channels.telegram.guidance as guidance
-
-    rendered = TelegramRenderedMessage(text="patched guidance preview", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(guidance.telegram_presenters, "provider_guidance_preview_message", lambda *args, **kwargs: rendered)
-
-    preview = ProviderGuidancePreview(
-        provider="claude",
-        effective_guidance="Use careful guidance",
-        system_prompt="",
-        capability_summary="",
-        provider_config={},
-        prompt_weight=1,
-    )
-    monkeypatch.setattr(
-        guidance,
-        "_flows",
-        lambda: type(
-            "Flows",
-            (),
-            {
-                "provider_guidance": type(
-                    "ProviderGuidanceFlows",
-                    (),
-                    {"preview": type("PreviewFlows", (), {"preview": lambda *args, **kwargs: preview})()},
-                )(),
-            },
-        )(),
-    )
-
-    update = FakeUpdate(message=FakeMessage(chat=FakeChat(), user=FakeUser(42)), user=FakeUser(42))
-
-    await guidance.guidance_preview(SimpleNamespace(user=FakeUser(42)), update, "claude")
-
-    assert update.effective_message.replies[-1]["text"] == "patched guidance preview"
-
-
-async def test_runtime_skills_show_uses_presenter(monkeypatch):
-    import contextlib
-
-    import app.channels.telegram.runtime_skills as runtime_skills
-    from app.credential_validation import validate_credential
-
-    @contextlib.asynccontextmanager
-    async def _noop_chat_lock(*args, **kwargs):
-        del args, kwargs
-        yield False
-
-    rendered = TelegramRenderedMessage(text="patched skill summary", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(runtime_skills.telegram_presenters, "runtime_skill_active_summary_message", lambda *args, **kwargs: rendered)
-
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir)
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
-        chat = FakeChat(12345)
-        message = FakeMessage(chat=chat, text="/skills")
-        update = FakeUpdate(message=message, chat=chat)
-        event = SimpleNamespace(chat_id=chat.id, user=InboundUser(id="telegram:42", username="testuser"))
-        runtime = runtime_skills.TelegramRuntimeSkillsRuntime(
-            state=current_runtime(),
-            chat_lock=_noop_chat_lock,
-            validate_credential=validate_credential,
-            check_prompt_size_cross_chat=lambda data_dir, skill_name: [],
-        )
-
-        await runtime_skills.skills_show(event, update, runtime=runtime)
-
-        assert message.replies[-1]["text"] == "patched skill summary"
-
-
-async def test_runtime_skills_history_uses_presenter(monkeypatch):
-    import app.channels.telegram.runtime_skills as runtime_skills
-
-    rendered = TelegramRenderedMessage(text="patched history presenter", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(runtime_skills.telegram_presenters, "runtime_skill_history_message", lambda detail: rendered)
-
-    detail = RuntimeSkillLifecycleDetail(
-        name="release-notes",
-        display_name="Release Notes",
-        description="Summarize releases",
-        visibility="private",
-        body="body",
-        lifecycle_status="draft",
-        active_revision_id="rev-current",
-        published_revision_id="",
-        runtime_available=False,
-        revisions=(),
-        approvals=(),
-    )
-    monkeypatch.setattr(
-        runtime_skills,
-        "_flows",
-        lambda: type(
-            "Flows",
-            (),
-            {
-                "runtime_skills": type(
-                    "RuntimeSkillFlows",
-                    (),
-                    {"authoring": type("AuthoringFlows", (), {"detail": lambda *args, **kwargs: detail})()},
-                )(),
-            },
-        )(),
-    )
-
-    message = FakeMessage(chat=FakeChat(), text="/skills history release-notes")
-    update = FakeUpdate(message=message, user=FakeUser(42))
-
-    await runtime_skills.skills_history(SimpleNamespace(user=FakeUser(42)), update, "release-notes", runtime=None)
-
-    assert message.replies[-1]["text"] == "patched history presenter"
-
-
-async def test_runtime_skills_setup_uses_presenter(monkeypatch):
-    import contextlib
-
-    import app.channels.telegram.runtime_skills as runtime_skills
-    from app.credential_validation import validate_credential
-
-    @contextlib.asynccontextmanager
-    async def _noop_chat_lock(*args, **kwargs):
-        del args, kwargs
-        yield False
-
-    rendered = TelegramRenderedMessage(text="patched setup presenter", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(runtime_skills.telegram_presenters, "runtime_skill_setup_started_message", lambda *args, **kwargs: rendered)
-    monkeypatch.setattr(
-        runtime_skills,
-        "_flows",
-        lambda: type(
-            "Flows",
-            (),
-            {
-                "runtime_skills": type(
-                    "RuntimeSkillFlows",
-                    (),
-                    {
-                        "catalog": type("CatalogFlows", (), {"has_skill": lambda *args, **kwargs: True})(),
-                        "activation": type(
-                            "ActivationFlows",
-                            (),
-                            {
-                                "begin_setup": lambda *args, **kwargs: SimpleNamespace(
-                                    status="needs_setup",
-                                    first_requirement={"kind": "token", "key": "API_TOKEN"},
-                                    mutated=False,
-                                )
-                            },
-                        )(),
-                    },
-                )(),
-            },
-        )(),
-    )
-
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir)
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
-        chat = FakeChat(12345)
-        message = FakeMessage(chat=chat, text="/skills setup helper")
-        update = FakeUpdate(message=message, chat=chat, user=FakeUser(42))
-        event = SimpleNamespace(chat_id=chat.id, user=FakeUser(42))
-        runtime = runtime_skills.TelegramRuntimeSkillsRuntime(
-            state=current_runtime(),
-            chat_lock=_noop_chat_lock,
-            validate_credential=validate_credential,
-            check_prompt_size_cross_chat=lambda data_dir, skill_name: [],
-        )
-
-        await runtime_skills.skills_setup(event, update, "helper", runtime=runtime)
-
-        assert message.replies[-1]["text"] == "patched setup presenter"
-
-
-async def test_conversation_cmd_role_uses_presenter(monkeypatch):
-    import contextlib
-
-    import app.channels.telegram.conversation as conversation
-
-    @contextlib.asynccontextmanager
-    async def _noop_chat_lock(*args, **kwargs):
-        del args, kwargs
-        yield False
-
-    rendered = TelegramRenderedMessage(text="patched role presenter", parse_mode=ParseMode.HTML)
-    monkeypatch.setattr(conversation.telegram_presenters, "conversation_role_current_message", lambda role: rendered)
-
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir, allow_open=False)
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
-        chat = FakeChat(12345)
-        message = FakeMessage(chat=chat, text="/role")
-        update = FakeUpdate(message=message, chat=chat, user=FakeUser(42))
-        event = SimpleNamespace(chat_id=chat.id, user=InboundUser(id="telegram:42", username="testuser"), args=[])
-        runtime = conversation.TelegramConversationRuntime(
-            state=current_runtime(),
-            cancellations=current_runtime().cancellation_registry,
-            chat_lock=_noop_chat_lock,
-            edit_or_reply_text=lambda *args, **kwargs: None,
-        )
-
-        session = conversation._load(runtime, chat.id)
-        session.role = "Python expert"
-        conversation._save(runtime, chat.id, session)
-
-        await conversation.cmd_role(event, update, None, runtime=runtime)
-
-        assert message.replies[-1]["text"] == "patched role presenter"
-
-
-async def test_pending_reject_uses_presenter(monkeypatch):
-    import contextlib
-
-    import app.channels.telegram.pending as pending
-
-    @contextlib.asynccontextmanager
-    async def _noop_chat_lock(*args, **kwargs):
-        del args, kwargs
-        yield False
-
-    async def _noop_edit_or_reply_text(message, text: str, **kwargs):
-        await message.reply_text(text, **kwargs)
-
-    rendered = TelegramRenderedMessage(text="patched pending presenter")
-    monkeypatch.setattr(pending.telegram_presenters, "pending_plain_outcome_message", lambda message: rendered)
-    monkeypatch.setattr(
-        pending,
-        "_flows",
-        lambda: type(
-            "Flows",
-            (),
-            {
-                "pending": type(
-                    "PendingFlows",
-                    (),
-                    {
-                        "requests": type(
-                            "RequestFlows",
-                            (),
-                            {"reject": lambda *args, **kwargs: SimpleNamespace(mutated=False, message="rejected")},
-                        )(),
-                    },
-                )(),
-            },
-        )(),
-    )
-
-    with fresh_data_dir() as data_dir:
-        cfg = make_config(data_dir)
-        prov = FakeProvider("claude")
-        setup_globals(cfg, prov)
-        chat = FakeChat(12345)
-        message = FakeMessage(chat=chat, text="pending")
-        runtime = pending.TelegramPendingRuntime(
-            state=current_runtime(),
-            chat_lock=_noop_chat_lock,
-            edit_or_reply_text=_noop_edit_or_reply_text,
-            execute_request=lambda *args, **kwargs: None,
-            request_approval=lambda *args, **kwargs: None,
-            build_user_prompt=lambda *args, **kwargs: ("", []),
-        )
-
-        await pending.reject_pending(chat.id, message, runtime=runtime)
-
-        assert message.replies[-1]["text"] == "patched pending presenter"
+    assert rendered.parse_mode is None
+    assert rendered.text == "rejected"

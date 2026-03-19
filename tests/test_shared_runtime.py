@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from unittest.mock import patch
 
@@ -37,6 +38,11 @@ _SHARED_OVERRIDES = {
 
 def _conv(chat_id: int) -> str:
     return f"tg:{chat_id}"
+
+
+@contextlib.asynccontextmanager
+async def _permissive_chat_lock(_runtime, _chat_id, **_kwargs):
+    yield False
 
 
 async def test_shared_build_application_registers_shared_dispatch_handlers():
@@ -87,8 +93,6 @@ async def test_shared_message_path_remains_persist_first():
 
 async def test_shared_command_dispatch_persists_action_without_inline_execution():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
-        import app.channels.telegram.ingress as th
-
         chat = FakeChat(12345)
         user = FakeUser(42)
         update = FakeUpdate(message=FakeMessage(chat=chat, text="/approve"), user=user, chat=chat)
@@ -97,7 +101,7 @@ async def test_shared_command_dispatch_persists_action_without_inline_execution(
             update,
             FakeContext(args=[]),
             runtime=current_runtime(),
-            chat_lock=th._chat_lock,
+            chat_lock=_permissive_chat_lock,
         )
 
         assert prov.run_calls == []
@@ -111,8 +115,6 @@ async def test_shared_command_dispatch_persists_action_without_inline_execution(
 
 async def test_shared_callback_dispatch_persists_action_without_inline_execution():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
-        import app.channels.telegram.ingress as th
-
         chat = FakeChat(12345)
         user = FakeUser(42)
         callback_message = FakeMessage(chat=chat, text="approve?")
@@ -123,7 +125,7 @@ async def test_shared_callback_dispatch_persists_action_without_inline_execution
             update,
             FakeContext(),
             runtime=current_runtime(),
-            chat_lock=th._chat_lock,
+            chat_lock=_permissive_chat_lock,
         )
 
         assert prov.run_calls == []
@@ -138,8 +140,6 @@ async def test_shared_callback_dispatch_persists_action_without_inline_execution
 
 async def test_shared_worker_executes_persisted_approve_action():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
-        import app.channels.telegram.ingress as th
-
         chat_id = 12345
         session = default_session(prov.name, prov.new_provider_state(), "off")
         session["pending_approval"] = {
@@ -162,7 +162,7 @@ async def test_shared_worker_executes_persisted_approve_action():
             update,
             FakeContext(args=[]),
             runtime=current_runtime(),
-            chat_lock=th._chat_lock,
+            chat_lock=_permissive_chat_lock,
         )
 
         assert len(prov.run_calls) == 0
@@ -174,8 +174,6 @@ async def test_shared_worker_executes_persisted_approve_action():
 
 async def test_shared_cancel_records_action_and_sets_durable_flag():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (data_dir, _cfg, prov):
-        import app.channels.telegram.ingress as th
-
         chat_id = 12345
         payload = (
             '{"actor_key":"tg:42","username":"alice","conversation_key":"tg:12345",'
@@ -202,7 +200,7 @@ async def test_shared_cancel_records_action_and_sets_durable_flag():
             update,
             FakeContext(args=[]),
             runtime=current_runtime(),
-            chat_lock=th._chat_lock,
+            chat_lock=_permissive_chat_lock,
         )
 
         assert work_queue.is_cancel_requested(data_dir, claimed["id"]) is True
@@ -215,50 +213,8 @@ async def test_shared_cancel_records_action_and_sets_durable_flag():
         assert any("cancel" in reply.get("text", "").lower() for reply in message.replies)
 
 
-async def test_shared_chat_lock_skips_asyncio_lock_for_worker_path():
-    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, _cfg, _prov):
-        import app.channels.telegram.ingress as th
-
-        lock = current_runtime().chat_locks[12345]
-        await lock.acquire()
-        try:
-            async def run_lock():
-                async with th._chat_lock(current_runtime(), 12345, worker_item={"id": "claimed-item"}):
-                    return "ok"
-
-            result = await asyncio.wait_for(run_lock(), timeout=0.1)
-            assert result == "ok"
-            assert lock.locked() is True
-        finally:
-            lock.release()
-
-
-async def test_shared_chat_lock_still_locks_for_inline_commands():
-    with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, _cfg, _prov):
-        import app.channels.telegram.ingress as th
-
-        lock = current_runtime().chat_locks[12345]
-        await lock.acquire()
-        entered = asyncio.Event()
-
-        async def waiter():
-            async with th._chat_lock(current_runtime(), 12345):
-                entered.set()
-
-        task = asyncio.create_task(waiter())
-        try:
-            await asyncio.sleep(0.05)
-            assert entered.is_set() is False
-        finally:
-            lock.release()
-        await asyncio.wait_for(task, timeout=0.2)
-        assert entered.is_set() is True
-
-
 async def test_worker_id_is_traceable():
     with fresh_env(config_overrides=_SHARED_OVERRIDES) as (_data_dir, cfg, prov):
-        import app.channels.telegram.ingress as th
-
         telegram_bootstrap = build_bootstrap(cfg, prov)
         parts = telegram_bootstrap.runtime.boot_id.split(":")
         assert len(parts) == 3

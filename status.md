@@ -107,9 +107,7 @@ Phase 8 is now active.
       `1483` lines
     - focused suites: `282 passed`
     - verified against the full suite: `1639 passed, 23 skipped`
-- Remaining verified-but-uncommitted Phase 8 work in this branch state:
-  - `Phase 8 / H2 presenter ownership cleanup` is complete in the current
-    branch state:
+-  - `936c502` `Phase 8 / H2: move recovery notice markup into presenters`
     - recovery notice reply markup now lives in
       `app/channels/telegram/presenters.py`
     - `app/channels/telegram/egress.py` no longer imports or constructs
@@ -118,8 +116,20 @@ Phase 8 is now active.
       `app/channels/telegram/` except `presenters.py`
     - focused suites: `282 passed`
     - verified against the full suite: `1641 passed, 23 skipped`
+- Remaining verified-but-uncommitted Phase 8 work in this branch state:
+  - `Phase 8 / H3 test-boundary hardening` is complete in the current
+    branch state:
+    - private-helper test calls through Telegram ingress were removed or
+      replaced with public boundary tests
+    - credential-validation tests now exercise the HTTP validation seam or
+      no-validation path instead of patching module-level handler helpers
+    - `tests/test_telegram_presenters.py` now holds presenter contract tests
+      rather than handler-to-presenter wiring tests
+    - new structural gates block private-helper calls and
+      `validate_credential` module stubbing from the test tree
+    - focused suites: `443 passed`
+    - verified against the full suite: `1627 passed, 23 skipped`
 - Remaining Phase 8 work is still pending:
-  - H3 Telegram test-boundary hardening
   - H4 documentation and structural gate tightening
 
 Feature work remains frozen.

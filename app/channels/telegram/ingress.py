@@ -1,4 +1,4 @@
-"""Telegram channel ingress, progress display, and PTB wiring."""
+"""Telegram channel normalized event translation and handler dispatch."""
 
 import asyncio
 import contextlib

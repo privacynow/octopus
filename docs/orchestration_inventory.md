@@ -31,8 +31,11 @@ Current Telegram boundary:
 
 - `app/channels/telegram/bootstrap.py` owns PTB application construction and
   route registration
-- `app/channels/telegram/ingress.py` owns normalized event translation,
-  ingress dispatch, and worker dispatch handoff
+- `app/channels/telegram/ingress.py` owns normalized event translation and
+  handler dispatch
+- `app/channels/telegram/worker.py` and
+  `app/channels/telegram/shared_mode_dispatch.py` are channel-local support
+  modules, not durable workflow owners
 
 Those modules are channel entrypoint owners, not durable workflow owners. This
 inventory covers the concern-owned orchestration packages they call into.

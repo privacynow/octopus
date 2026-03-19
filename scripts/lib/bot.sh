@@ -128,12 +128,16 @@ channel_token_looks_plausible() {
   local channel="${1:-telegram}" value="${2:-}"
   case "$channel" in
     telegram)
-      [[ "$value" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]
+      telegram_token_format_valid "$value"
       ;;
     *)
       return 1
       ;;
   esac
+}
+
+telegram_token_format_valid() {
+  [[ "${1:-}" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]
 }
 
 prompt_channel_token_with_help() {
@@ -245,4 +249,28 @@ get_bot_provider() {
 
 normalize_slug() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9-' '-' | sed 's/^-//;s/-$//' | cut -c1-32
+}
+
+validate_telegram_token() {
+  local token="$1"
+  printf '%s' "$token" | python3 -c "
+import json
+import sys
+import urllib.request
+
+token = sys.stdin.read().strip()
+url = f'https://api.telegram.org/bot{token}/getMe'
+try:
+    with urllib.request.urlopen(url, timeout=10) as resp:
+        data = json.loads(resp.read())
+    if data.get('ok'):
+        result = data['result']
+        print(result.get('id', ''))
+        print(result.get('username', ''))
+        print(result.get('first_name', ''))
+        sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+"
 }

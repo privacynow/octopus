@@ -150,3 +150,23 @@
   - the public `./octopus` surface now supports day-2 bot operations instead of only first-run bootstrap
   - multi-bot selection works without regressing the single-bot “don’t ask unnecessary questions” rule
   - the shared env-reader fix closed a real bug in active scripts, not just in the new CLI path
+- Complete: Slice 8 registry connect and switch flows.
+  Scope:
+  - implemented local and remote registry connection flows for standalone bots
+  - implemented local→remote, remote→local, and disconnect flows for already-registered bots
+  - upgraded “Add a bot” to support creating a new bot directly in registry mode while keeping Telegram identity as the only naming source
+  - added `./octopus registry` local-registry status/start/stop/logs management
+  - added state-based enrollment verification using the bot’s persisted `registry_state.json`, with doctor output and filtered logs only as fallback diagnostics
+  - cleared persisted registry runtime state before registry target changes so stale `agent_id` / `agent_token` values are not reused against the wrong registry
+  Tests:
+  - `bash -n octopus scripts/lib/bot.sh`
+  - `.venv/bin/python -m pytest -q tests/test_octopus_registry_management.py tests/test_octopus_management.py tests/test_octopus_first_bot_flow.py tests/test_octopus_registry_network.py`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified a standalone bot env can be rewritten into local-registry mode with the expected `BOT_AGENT_REGISTRY_URL` / `BOT_AGENT_REGISTRY_ENROLL_TOKEN` values
+  - verified disconnect removes registry keys instead of leaving empty stubs behind
+  - verified non-HTTPS remote registry URLs are rejected before any config change is written
+  Verified:
+  - registry attachment is now bot-scoped, not a global checkout switch
+  - success messages stay context-aware and only print the localhost UI URL for local registry flows
+  - registry switching now accounts for persisted runtime identity, preventing a subtle stale-token bug during re-enrollment

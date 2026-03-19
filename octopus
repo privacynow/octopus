@@ -183,8 +183,350 @@ cmd_doctor() {
   return "$rc"
 }
 
-add_bot_flow() {
-  first_bot_flow quick
+registry_ui_url() {
+  local registry_port=""
+  registry_port="$(read_bot_env_value REGISTRY_PORT .deploy/registry/.env)"
+  printf 'http://localhost:%s/ui\n' "${registry_port:-8787}"
+}
+
+read_local_registry_enroll_token() {
+  read_bot_env_value REGISTRY_ENROLL_TOKEN .deploy/registry/.env
+}
+
+configure_bot_for_registry() {
+  local slug="$1" registry_url="$2" enroll_token="$3" env_file=""
+  env_file="$(bot_env_file "$slug")"
+  upsert_env_file_value BOT_AGENT_MODE "registry" "$env_file"
+  upsert_env_file_value BOT_AGENT_REGISTRY_URL "$registry_url" "$env_file"
+  upsert_env_file_value BOT_AGENT_REGISTRY_ENROLL_TOKEN "$enroll_token" "$env_file"
+}
+
+configure_bot_for_standalone() {
+  local slug="$1" env_file=""
+  env_file="$(bot_env_file "$slug")"
+  upsert_env_file_value BOT_AGENT_MODE "standalone" "$env_file"
+  remove_env_file_value BOT_AGENT_REGISTRY_URL "$env_file"
+  remove_env_file_value BOT_AGENT_REGISTRY_ENROLL_TOKEN "$env_file"
+}
+
+clear_bot_registry_state() {
+  local slug="$1"
+  bot_compose "$slug" run --rm bot-provider sh -lc 'rm -f "$BOT_DATA_DIR/agent/registry_state.json"' >/dev/null 2>&1 || true
+}
+
+restart_bot_after_config_change() {
+  local slug="$1"
+  clear_bot_registry_state "$slug"
+  bot_compose "$slug" stop bot >/dev/null 2>&1 || true
+  start_bot_until_running "$slug"
+}
+
+bot_registry_state_json() {
+  local slug="$1"
+  bot_compose "$slug" run --rm bot-provider python -c '
+from pathlib import Path
+import os
+
+path = Path(os.environ.get("BOT_DATA_DIR", "/home/bot/data")) / "agent" / "registry_state.json"
+if path.exists():
+    print(path.read_text())
+'
+}
+
+bot_registry_has_identity() {
+  local slug="$1" state_json=""
+  state_json="$(bot_registry_state_json "$slug" 2>/dev/null || true)"
+  [ -n "$state_json" ] || return 1
+  printf '%s' "$state_json" | python3 -c '
+import json
+import sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+
+raise SystemExit(0 if data.get("agent_id") and data.get("agent_token") else 1)
+'
+}
+
+registry_logs_excerpt() {
+  local slug="$1" logs=""
+  logs="$(bot_compose "$slug" logs --tail 40 bot 2>/dev/null || true)"
+  logs="$(printf '%s\n' "$logs" | grep -Ei 'registry|enroll|connect|degraded|agent_id' | tail -n 20 || true)"
+  [ -n "$logs" ] && printf '%s\n' "$logs"
+}
+
+verify_registry_enrollment() {
+  local slug="$1" doctor_output="" log_excerpt="" attempt=0
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    if bot_registry_has_identity "$slug"; then
+      return 0
+    fi
+    sleep 2
+  done
+  octopus_error "Registry enrollment has not completed yet."
+  doctor_output="$(run_bot_doctor "$slug" || true)"
+  [ -n "$doctor_output" ] && print_doctor_output_for_operator "$doctor_output"
+  log_excerpt="$(registry_logs_excerpt "$slug" || true)"
+  if [ -n "$log_excerpt" ]; then
+    printf 'Recent registry log lines:\n' >&2
+    printf '%s\n' "$log_excerpt" >&2
+  fi
+  return 1
+}
+
+bots_using_local_registry_count() {
+  local slug="" count=0
+  for slug in $(list_bot_slugs); do
+    if bot_uses_local_reg "$slug"; then
+      count=$((count + 1))
+    fi
+  done
+  printf '%s\n' "$count"
+}
+
+offer_stop_unused_local_registry() {
+  local answer=""
+  if ! has_local_registry; then
+    return 0
+  fi
+  if [ "$(bots_using_local_registry_count)" -ne 0 ]; then
+    return 0
+  fi
+  read -r -p "No bots use the local registry. Stop it? [y/N] " answer || return 0
+  case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+    y|yes)
+      registry_compose down --remove-orphans >/dev/null
+      printf 'Local registry stopped.\n'
+      ;;
+  esac
+}
+
+prompt_remote_registry_url() {
+  local registry_url=""
+  while true; do
+    read -r -p "Remote registry URL (https://...): " registry_url || return 1
+    case "$registry_url" in
+      https://*)
+        printf '%s\n' "$registry_url"
+        return 0
+        ;;
+      "")
+        octopus_error "Remote registry URL is required."
+        ;;
+      *)
+        octopus_error "Remote registry URLs must start with https://."
+        ;;
+    esac
+  done
+}
+
+prompt_remote_registry_token() {
+  local enroll_token=""
+  while true; do
+    read -r -p "Remote enrollment token: " enroll_token || return 1
+    if [ -n "$enroll_token" ]; then
+      printf '%s\n' "$enroll_token"
+      return 0
+    fi
+    octopus_error "Enrollment token is required."
+  done
+}
+
+prompt_registry_target() {
+  local default_mode="${1:-local}" choice="" lowered="" registry_url="" enroll_token=""
+  REGISTRY_TARGET_KIND=""
+  REGISTRY_TARGET_URL=""
+  REGISTRY_TARGET_TOKEN=""
+  while true; do
+    case "$default_mode" in
+      local_existing)
+        read -r -p "Press Enter to use the local registry, or type 'remote' to use a remote registry: " choice || return 1
+        ;;
+      local_new)
+        read -r -p "Press Enter to start a local registry, or type 'remote' to use a remote registry: " choice || return 1
+        ;;
+      *)
+        read -r -p "Use the local registry or a remote registry? [local/remote] " choice || return 1
+        ;;
+    esac
+    lowered="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')"
+    case "$lowered" in
+      ""|local)
+        ensure_local_registry || {
+          octopus_error "Could not start the local registry. Run ./octopus registry and try again."
+          return 1
+        }
+        enroll_token="$(read_local_registry_enroll_token)"
+        if [ -z "$enroll_token" ]; then
+          octopus_error "Local registry setup is incomplete. Run ./octopus registry and try again."
+          return 1
+        fi
+        REGISTRY_TARGET_KIND="local"
+        REGISTRY_TARGET_URL="http://registry:8787"
+        REGISTRY_TARGET_TOKEN="$enroll_token"
+        return 0
+        ;;
+      remote)
+        registry_url="$(prompt_remote_registry_url)" || return 1
+        enroll_token="$(prompt_remote_registry_token)" || return 1
+        REGISTRY_TARGET_KIND="remote"
+        REGISTRY_TARGET_URL="$registry_url"
+        REGISTRY_TARGET_TOKEN="$enroll_token"
+        return 0
+        ;;
+      *)
+        octopus_error "Choose the local registry or type 'remote'."
+        ;;
+    esac
+  done
+}
+
+prompt_new_bot_registry_target() {
+  local answer="" lowered=""
+  REGISTRY_TARGET_KIND="standalone"
+  REGISTRY_TARGET_URL=""
+  REGISTRY_TARGET_TOKEN=""
+  read -r -p "Connect to registry? [y/N] " answer || return 1
+  lowered="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')"
+  case "$lowered" in
+    y|yes)
+      if has_local_registry; then
+        prompt_registry_target local_existing
+      else
+        prompt_registry_target local_new
+      fi
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+print_registry_connection_success() {
+  local slug="$1" registry_kind="$2" registry_url="$3"
+  if [ "$registry_kind" = "local" ]; then
+    printf 'Bot %s is now connected to the local registry.\n' "$slug"
+    printf 'Registry UI: %s\n' "$(registry_ui_url)"
+  else
+    printf 'Bot %s is now connected to the registry at %s.\n' "$slug" "$registry_url"
+  fi
+}
+
+connect_bot_to_registry_flow() {
+  local slug="${1:-}"
+  slug="$(resolve_bot_slug "$slug")" || return 1
+  if bot_is_registry "$slug"; then
+    octopus_error "This bot is already connected to a registry. Choose switch or disconnect instead."
+    return 1
+  fi
+  if has_local_registry; then
+    prompt_registry_target local_existing || return 1
+  else
+    prompt_registry_target local_new || return 1
+  fi
+  configure_bot_for_registry "$slug" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN"
+  restart_bot_after_config_change "$slug" || return 1
+  verify_registry_enrollment "$slug" || return 1
+  print_registry_connection_success "$slug" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL"
+}
+
+disconnect_bot_from_registry_flow() {
+  local slug="${1:-}" answer=""
+  slug="$(resolve_bot_slug "$slug")" || return 1
+  if ! bot_is_registry "$slug"; then
+    octopus_error "This bot is already running standalone."
+    return 1
+  fi
+  read -r -p "Disconnect ${slug} from registry? Bot data is preserved. [y/N] " answer || return 1
+  case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+    y|yes)
+      configure_bot_for_standalone "$slug"
+      restart_bot_after_config_change "$slug" || return 1
+      printf 'Bot %s is now running standalone.\n' "$slug"
+      offer_stop_unused_local_registry
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+switch_local_bot_to_remote_registry_flow() {
+  local slug="${1:-}" remote_url="" enroll_token=""
+  slug="$(resolve_bot_slug "$slug")" || return 1
+  if ! bot_uses_local_reg "$slug"; then
+    octopus_error "This bot is not using the local registry."
+    return 1
+  fi
+  remote_url="$(prompt_remote_registry_url)" || return 1
+  enroll_token="$(prompt_remote_registry_token)" || return 1
+  configure_bot_for_registry "$slug" "$remote_url" "$enroll_token"
+  restart_bot_after_config_change "$slug" || return 1
+  verify_registry_enrollment "$slug" || return 1
+  printf 'Bot %s is now connected to the registry at %s.\n' "$slug" "$remote_url"
+  offer_stop_unused_local_registry
+}
+
+switch_remote_bot_to_local_registry_flow() {
+  local slug="${1:-}" enroll_token=""
+  slug="$(resolve_bot_slug "$slug")" || return 1
+  if ! bot_uses_remote_reg "$slug"; then
+    octopus_error "This bot is not using a remote registry."
+    return 1
+  fi
+  ensure_local_registry || {
+    octopus_error "Could not start the local registry. Run ./octopus registry and try again."
+    return 1
+  }
+  enroll_token="$(read_local_registry_enroll_token)"
+  if [ -z "$enroll_token" ]; then
+    octopus_error "Local registry setup is incomplete. Run ./octopus registry and try again."
+    return 1
+  fi
+  configure_bot_for_registry "$slug" "http://registry:8787" "$enroll_token"
+  restart_bot_after_config_change "$slug" || return 1
+  verify_registry_enrollment "$slug" || return 1
+  printf 'Bot %s is now connected to the local registry.\n' "$slug"
+  printf 'Registry UI: %s\n' "$(registry_ui_url)"
+}
+
+manage_bot_registry_flow() {
+  local slug="${1:-}" choice=""
+  slug="$(resolve_bot_slug "$slug")" || return 1
+  if bot_is_standalone "$slug"; then
+    connect_bot_to_registry_flow "$slug"
+    return $?
+  fi
+
+  while true; do
+    if bot_uses_local_reg "$slug"; then
+      printf 'Bot: %s\n\n' "$(bot_identity_label "$slug")"
+      printf '  1. Switch to remote registry\n'
+      printf '  2. Disconnect from registry\n'
+      printf '  3. Back\n'
+      read -r -p "Choose an option: " choice || return 1
+      case "$choice" in
+        1) switch_local_bot_to_remote_registry_flow "$slug"; return $? ;;
+        2) disconnect_bot_from_registry_flow "$slug"; return $? ;;
+        3) return 0 ;;
+        *) octopus_error "Choose one of the listed options." ;;
+      esac
+    else
+      printf 'Bot: %s\n\n' "$(bot_identity_label "$slug")"
+      printf '  1. Switch to local registry\n'
+      printf '  2. Disconnect from registry\n'
+      printf '  3. Back\n'
+      read -r -p "Choose an option: " choice || return 1
+      case "$choice" in
+        1) switch_remote_bot_to_local_registry_flow "$slug"; return $? ;;
+        2) disconnect_bot_from_registry_flow "$slug"; return $? ;;
+        3) return 0 ;;
+        *) octopus_error "Choose one of the listed options." ;;
+      esac
+    fi
+  done
 }
 
 manage_bot_menu() {
@@ -221,7 +563,7 @@ manage_bot_menu() {
         printf '\n'
         ;;
       5) unsupported_slice_command "Guided settings edits land in a later slice." ;;
-      6) unsupported_slice_command "Registry connection lands in the next slice." ;;
+      6) manage_bot_registry_flow "$slug"; return $? ;;
       7) return 0 ;;
       *) octopus_error "Choose one of the listed options." ;;
     esac
@@ -239,14 +581,51 @@ main_menu() {
   case "$choice" in
     1) add_bot_flow ;;
     2) manage_bot_menu ;;
-    3) unsupported_slice_command "Registry connection lands in the next slice." ;;
+    3) manage_bot_registry_flow ;;
     4) unsupported_slice_command "Advanced deployment lands in a later slice." ;;
     *) octopus_error "Choose one of the listed options."; return 1 ;;
   esac
 }
 
 cmd_registry() {
-  unsupported_slice_command "Registry management lands in the next slice."
+  local choice="" url=""
+  printf 'Registry:\n'
+  if has_local_registry; then
+    url="$(registry_ui_url)"
+    if registry_is_running; then
+      printf '  local      running    %s\n\n' "$url"
+      printf '  1. Follow local registry logs\n'
+      printf '  2. Stop local registry\n'
+      printf '  3. Back\n'
+      read -r -p "Choose an option: " choice || return 1
+      case "$choice" in
+        1) registry_compose logs -f service ;;
+        2) registry_compose down --remove-orphans >/dev/null; printf 'Local registry stopped.\n' ;;
+        3) return 0 ;;
+        *) octopus_error "Choose one of the listed options."; return 1 ;;
+      esac
+    else
+      printf '  local      stopped    %s\n\n' "$url"
+      printf '  1. Start local registry\n'
+      printf '  2. Back\n'
+      read -r -p "Choose an option: " choice || return 1
+      case "$choice" in
+        1) ensure_local_registry; printf 'Registry UI: %s\n' "$(registry_ui_url)" ;;
+        2) return 0 ;;
+        *) octopus_error "Choose one of the listed options."; return 1 ;;
+      esac
+    fi
+  else
+    printf '  local      not configured\n\n'
+    printf '  1. Start local registry\n'
+    printf '  2. Back\n'
+    read -r -p "Choose an option: " choice || return 1
+    case "$choice" in
+      1) ensure_local_registry; printf 'Registry UI: %s\n' "$(registry_ui_url)" ;;
+      2) return 0 ;;
+      *) octopus_error "Choose one of the listed options."; return 1 ;;
+    esac
+  fi
 }
 
 prompt_first_bot_identity() {
@@ -335,6 +714,40 @@ ensure_provider_auth_ready() {
   if ! provider_is_authed "$provider" >/dev/null 2>&1; then
     octopus_error "Provider authentication is still incomplete. Finish login, then run ./octopus again."
     return 1
+  fi
+}
+
+prepare_new_bot_setup() {
+  local mode="${1:-quick}" existing_slug=""
+  local telegram_id="" username="" display_name="" token=""
+  ensure_deploy_dirs
+  prompt_first_bot_identity || return 1
+  telegram_id="$FIRST_BOT_TELEGRAM_ID"
+  username="$FIRST_BOT_TELEGRAM_USERNAME"
+  display_name="$FIRST_BOT_DISPLAY_NAME"
+  token="$FIRST_BOT_TOKEN"
+
+  existing_slug="$(find_bot_slug_by_telegram_id "$telegram_id" || true)"
+  if [ -n "$existing_slug" ]; then
+    octopus_error "This Telegram bot is already configured as '$existing_slug'. Run ./octopus to manage the existing bot."
+    return 1
+  fi
+
+  NEW_BOT_SLUG="$(normalize_slug "$username")"
+  NEW_BOT_SLUG="${NEW_BOT_SLUG:-bot}"
+  if [ -d ".deploy/bots/$NEW_BOT_SLUG" ]; then
+    octopus_error "A different bot already uses the local slug '$NEW_BOT_SLUG'. Remove that bot or choose a different Telegram bot token."
+    return 1
+  fi
+
+  NEW_BOT_TELEGRAM_ID="$telegram_id"
+  NEW_BOT_TELEGRAM_USERNAME="$username"
+  NEW_BOT_DISPLAY_NAME="$display_name"
+  NEW_BOT_TOKEN="$token"
+  NEW_BOT_PROVIDER="$(prompt_provider_choice)"
+
+  if [ "$mode" != "quick" ]; then
+    octopus_error "Full setup lands in a later slice. Continuing with quick setup."
   fi
 }
 
@@ -442,41 +855,38 @@ EOF
   printf '%s\n' "Advanced settings (role, tags, skills, allowed users) can be configured by running ./octopus and choosing Manage bots."
 }
 
-first_bot_flow() {
-  local mode="${1:-quick}" provider="" slug="" existing_slug=""
-  local telegram_id="" username="" display_name="" token=""
-  ensure_deploy_dirs
-  prompt_first_bot_identity || return 1
-  telegram_id="$FIRST_BOT_TELEGRAM_ID"
-  username="$FIRST_BOT_TELEGRAM_USERNAME"
-  display_name="$FIRST_BOT_DISPLAY_NAME"
-  token="$FIRST_BOT_TOKEN"
-
-  existing_slug="$(find_bot_slug_by_telegram_id "$telegram_id" || true)"
-  if [ -n "$existing_slug" ]; then
-    octopus_error "This Telegram bot is already configured as '$existing_slug'. Run ./octopus to manage the existing bot."
-    return 1
-  fi
-
-  slug="$(normalize_slug "$username")"
-  slug="${slug:-bot}"
-  if [ -d ".deploy/bots/$slug" ]; then
-    octopus_error "A different bot already uses the local slug '$slug'. Remove that bot or choose a different Telegram bot token."
-    return 1
-  fi
-
-  provider="$(prompt_provider_choice)"
-  if [ "$mode" != "quick" ]; then
-    octopus_error "Full setup lands in a later slice. Continuing with quick setup."
-  fi
-
-  ensure_provider_image_ready "$provider"
-  ensure_provider_auth_ready "$provider"
+add_bot_flow() {
+  local mode="quick"
+  prepare_new_bot_setup "$mode" || return 1
+  prompt_new_bot_registry_target || return 1
+  ensure_provider_image_ready "$NEW_BOT_PROVIDER"
+  ensure_provider_auth_ready "$NEW_BOT_PROVIDER"
   ensure_network
-  write_first_bot_env "$slug" "$telegram_id" "$username" "$display_name" "$token" "$provider"
-  run_bot_doctor_until_ready "$slug"
-  start_bot_until_running "$slug"
-  print_first_bot_success "$username"
+  write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER"
+  if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
+    configure_bot_for_registry "$NEW_BOT_SLUG" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN"
+  fi
+  run_bot_doctor_until_ready "$NEW_BOT_SLUG"
+  start_bot_until_running "$NEW_BOT_SLUG"
+  if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
+    verify_registry_enrollment "$NEW_BOT_SLUG" || return 1
+  fi
+  print_first_bot_success "$NEW_BOT_TELEGRAM_USERNAME"
+  if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
+    print_registry_connection_success "$NEW_BOT_SLUG" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL"
+  fi
+}
+
+first_bot_flow() {
+  local mode="${1:-quick}"
+  prepare_new_bot_setup "$mode" || return 1
+  ensure_provider_image_ready "$NEW_BOT_PROVIDER"
+  ensure_provider_auth_ready "$NEW_BOT_PROVIDER"
+  ensure_network
+  write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER"
+  run_bot_doctor_until_ready "$NEW_BOT_SLUG"
+  start_bot_until_running "$NEW_BOT_SLUG"
+  print_first_bot_success "$NEW_BOT_TELEGRAM_USERNAME"
 }
 
 main() {

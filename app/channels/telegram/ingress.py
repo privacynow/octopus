@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import logging
 from datetime import datetime, timezone
-from typing import Any
 
 from telegram import Update
 from telegram.error import BadRequest
@@ -53,7 +52,6 @@ from app.channels.telegram.session_io import (
     conversation_key,
     event_key,
     load as load_session,
-    save as save_session,
 )
 from app.channels.telegram.state import TelegramRuntime
 from app.channels.telegram.runtime_skills import (
@@ -61,7 +59,6 @@ from app.channels.telegram.runtime_skills import (
     handle_clear_cred_callback as runtime_skill_handle_clear_cred_callback,
     handle_skill_add_callback as runtime_skill_handle_skill_add_callback,
     handle_skill_update_callback as runtime_skill_handle_skill_update_callback,
-    handle_worker_skill_action as runtime_skill_handle_worker_skill_action,
     maybe_handle_setup_message as runtime_skill_maybe_handle_setup_message,
 )
 from app.channels.telegram.guidance import (
@@ -75,7 +72,6 @@ from app.channels.telegram.guidance import (
     guidance_submit as channel_guidance_submit,
 )
 from app.channels.telegram.conversation import (
-    cancel_chat_operation as conversation_cancel_chat_operation,
     cmd_approval as conversation_cmd_approval,
     cmd_cancel as conversation_cmd_cancel,
     cmd_compact as conversation_cmd_compact,
@@ -86,7 +82,6 @@ from app.channels.telegram.conversation import (
     cmd_role as conversation_cmd_role,
     cmd_settings as conversation_cmd_settings,
     handle_settings_callback as conversation_handle_settings_callback,
-    handle_worker_conversation_action as conversation_handle_worker_action,
 )
 from app.channels.telegram.pending import (
     handle_pending_callback as pending_handle_callback,
@@ -99,15 +94,11 @@ from app.workflows.execution.requests import (
     prompt_weight as execution_prompt_weight,
 )
 from app.runtime.inbound_types import (
-    InboundAction,
     InboundEnvelope,
     serialize_inbound,
 )
 from app.runtime.work_admission import (
     admit_fresh_message,
-    enqueue_inbound_envelope,
-    record_inbound_envelope,
-    trust_tier_for_source,
 )
 from app.storage import (
     resolve_allowed_path,
@@ -329,209 +320,6 @@ def _complete_pending_work_item(
 
 def _approval_mode_source(session: SessionState) -> str:
     return "chat override" if session.approval_mode_explicit else "instance default"
-
-
-def _callback_message_id(update: Update) -> int | None:
-    query = update.callback_query
-    if query is None or query.message is None:
-        return None
-    return getattr(query.message, "message_id", None)
-
-
-def _build_action_envelope(
-    *,
-    transport: str,
-    event_id: str,
-    action: InboundAction,
-    conversation_ref: str = "",
-) -> InboundEnvelope:
-    return InboundEnvelope(
-        transport=transport,
-        event_id=event_id,
-        conversation_key=action.conversation_key,
-        actor_key=action.user.id,
-        received_at=datetime.now(timezone.utc),
-        event=action,
-        conversation_ref=conversation_ref or action.conversation_ref,
-    )
-
-
-def _worker_owned_command_action(event) -> InboundAction | None:
-    args = tuple(event.args or ())
-    command = (event.command or "").lower()
-
-    if command == "new":
-        return InboundAction(event.user, event.conversation_key, "session_new")
-    if command == "approval":
-        mode = args[0].lower() if args else "status"
-        if mode in {"on", "off"}:
-            return InboundAction(
-                event.user,
-                event.conversation_key,
-                "set_approval_mode",
-                params={"value": mode},
-            )
-        return None
-    if command == "approve":
-        return InboundAction(event.user, event.conversation_key, "approve_pending")
-    if command == "reject":
-        return InboundAction(event.user, event.conversation_key, "reject_pending")
-    if command == "cancel":
-        return InboundAction(event.user, event.conversation_key, "cancel_conversation")
-    if command == "role":
-        if not args:
-            return None
-        value = "" if args[0].lower() == "clear" else " ".join(args)
-        return InboundAction(
-            event.user,
-            event.conversation_key,
-            "set_role",
-            params={"value": value},
-        )
-    if command == "compact":
-        if not args:
-            return None
-        mode = args[0].lower()
-        if mode not in {"on", "off"}:
-            return None
-        return InboundAction(
-            event.user,
-            event.conversation_key,
-            "set_compact_mode",
-            params={"value": mode == "on"},
-        )
-    if command == "model":
-        if not args:
-            return None
-        profile = args[0].lower()
-        if profile == "status":
-            return None
-        if profile == "inherit":
-            profile = ""
-        return InboundAction(
-            event.user,
-            event.conversation_key,
-            "set_model_profile",
-            params={"profile": profile},
-        )
-    if command == "project":
-        if not args:
-            return None
-        sub = args[0].lower()
-        if sub == "use" and len(args) >= 2:
-            return InboundAction(
-                event.user,
-                event.conversation_key,
-                "set_project",
-                params={"value": args[1]},
-            )
-        if sub == "clear":
-            return InboundAction(
-                event.user,
-                event.conversation_key,
-                "set_project",
-                params={"value": "clear"},
-            )
-        return None
-    if command == "policy":
-        mode = args[0].lower() if args else ""
-        if mode in {"inspect", "edit"}:
-            value = mode
-        elif mode == "inherit":
-            value = ""
-        else:
-            return None
-        return InboundAction(
-            event.user,
-            event.conversation_key,
-            "set_file_policy",
-            params={"value": value},
-        )
-    if command == "skills":
-        sub = args[0].lower() if args else ""
-        if sub == "add" and len(args) >= 2:
-            return InboundAction(
-                event.user,
-                event.conversation_key,
-                "skills_add",
-                params={"name": args[1]},
-            )
-        if sub == "remove" and len(args) >= 2:
-            return InboundAction(
-                event.user,
-                event.conversation_key,
-                "skills_remove",
-                params={"name": args[1]},
-            )
-        if sub == "setup" and len(args) >= 2:
-            return InboundAction(
-                event.user,
-                event.conversation_key,
-                "skills_setup",
-                params={"name": args[1]},
-            )
-        if sub == "clear":
-            return InboundAction(event.user, event.conversation_key, "skills_clear")
-        return None
-    return None
-
-
-def _worker_owned_callback_action(update: Update, event) -> InboundAction | None:
-    params: dict[str, Any] = {}
-    message_id = _callback_message_id(update)
-    if message_id is not None:
-        params["message_id"] = message_id
-
-    data = event.data or ""
-    if data == "approval_approve":
-        return InboundAction(event.user, event.conversation_key, "approve_pending", params=params)
-    if data == "approval_reject":
-        return InboundAction(event.user, event.conversation_key, "reject_pending", params=params)
-    if data == "retry_allow":
-        return InboundAction(event.user, event.conversation_key, "retry_allow", params=params)
-    if data == "retry_skip":
-        return InboundAction(event.user, event.conversation_key, "retry_skip", params=params)
-    if data.startswith("recovery_"):
-        parts = data.split(":", 1)
-        if len(parts) != 2:
-            return None
-        try:
-            params["update_id"] = int(parts[1])
-        except (TypeError, ValueError):
-            return None
-        return InboundAction(event.user, event.conversation_key, parts[0], params=params)
-    if data.startswith("delegation_"):
-        parsed = parse_delegation_callback(data)
-        if parsed is None:
-            return None
-        action, chat_id = parsed
-        params["target_conversation_key"] = conversation_key(chat_id)
-        return InboundAction(event.user, event.conversation_key, action, params=params)
-    if data.startswith("setting_"):
-        _, rest = data.split("_", 1)
-        if ":" not in rest:
-            return None
-        setting, value = rest.split(":", 1)
-        if setting == "model":
-            params["profile"] = "" if value == "inherit" else value
-            return InboundAction(event.user, event.conversation_key, "set_model_profile", params=params)
-        if setting == "approval":
-            params["value"] = value
-            return InboundAction(event.user, event.conversation_key, "set_approval_mode", params=params)
-        if setting == "compact":
-            params["value"] = value == "on"
-            return InboundAction(event.user, event.conversation_key, "set_compact_mode", params=params)
-        if setting == "policy":
-            params["value"] = "" if value == "inherit" else value
-            return InboundAction(event.user, event.conversation_key, "set_file_policy", params=params)
-        if setting == "project":
-            params["value"] = value
-            return InboundAction(event.user, event.conversation_key, "set_project", params=params)
-        return None
-    if data.startswith("skill_add_confirm:"):
-        params["name"] = data.split(":", 1)[1]
-        return InboundAction(event.user, event.conversation_key, "skills_add", params=params)
-    return None
 
 # -- Auth ------------------------------------------------------------------
 
@@ -1762,134 +1550,6 @@ async def cmd_listaccess(
         return
     rendered = telegram_presenters.access_overrides_message(rows)
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-
-def _shared_inline_command_handler(command: str):
-    return {
-        "approval": cmd_approval,
-        "skills": cmd_skills,
-        "guidance": cmd_guidance,
-        "compact": cmd_compact,
-        "role": cmd_role,
-        "model": cmd_model,
-        "project": cmd_project,
-        "policy": cmd_policy,
-    }.get(command)
-
-
-def _action_requires_public_guard(action: str) -> bool:
-    return action in {
-        "cancel_conversation",
-        "set_role",
-        "set_project",
-        "set_file_policy",
-        "skills_add",
-        "skills_remove",
-        "skills_setup",
-        "skills_clear",
-    }
-
-
-async def _enqueue_shared_action(
-    runtime: TelegramRuntime,
-    update: Update,
-    action: InboundAction,
-) -> tuple[bool, str | None]:
-    envelope = _build_action_envelope(
-        transport="telegram",
-        event_id=event_key(update.update_id),
-        action=action,
-    )
-    return enqueue_inbound_envelope(runtime.config.data_dir, envelope)
-
-
-def _shared_action_envelope(update: Update, action: InboundAction) -> InboundEnvelope:
-    return _build_action_envelope(
-        transport="telegram",
-        event_id=event_key(update.update_id),
-        action=action,
-    )
-
-
-def _record_shared_action(
-    runtime: TelegramRuntime,
-    update: Update,
-    action: InboundAction,
-) -> tuple[bool, InboundEnvelope]:
-    envelope = _shared_action_envelope(update, action)
-    return record_inbound_envelope(runtime.config.data_dir, envelope), envelope
-
-
-async def _shared_cancel_command(
-    runtime: TelegramRuntime,
-    update: Update,
-    event,
-    action: InboundAction,
-) -> None:
-    is_new, envelope = _record_shared_action(runtime, update, action)
-    if not is_new:
-        return
-    del envelope
-    await conversation_cancel_chat_operation(
-        event.chat_id,
-        update.effective_message,
-        runtime=build_conversation_runtime(runtime, chat_lock=_chat_lock_adapter(runtime)),
-        actor_user_id=event.user.id,
-        allow_admin_override=is_admin(runtime, event.user),
-        update_id=update.update_id,
-    )
-
-
-async def _shared_command_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    runtime = _context_runtime(context)
-    event = normalize_command(update, context)
-    if event is None:
-        return
-    if not is_allowed(runtime, event.user):
-        rendered = telegram_presenters.trust_not_authorized_message()
-        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-        return
-
-    action = _worker_owned_command_action(event)
-    if action is None:
-        handler = _shared_inline_command_handler(event.command)
-        if handler is not None:
-            await handler(update, context)
-        return
-
-    if _action_requires_public_guard(action.action) and await _public_guard(runtime, event, update):
-        return
-
-    if action.action == "cancel_conversation":
-        await _shared_cancel_command(runtime, update, event, action)
-        return
-
-    await _enqueue_shared_action(runtime, update, action)
-
-
-async def _shared_callback_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    runtime = _context_runtime(context)
-    event = normalize_callback(update)
-    query = update.callback_query
-    if event is None or query is None:
-        return
-    if not is_allowed(runtime, event.user):
-        await query.answer(telegram_presenters.trust_not_authorized_message().text, show_alert=True)
-        return
-
-    action = _worker_owned_callback_action(update, event)
-    if action is None:
-        if (event.data or "").startswith("skill_add_"):
-            await handle_skill_add_callback(update, None)  # type: ignore[arg-type]
-            return
-        await query.answer()
-        return
-
-    if _action_requires_public_guard(action.action) and is_public_user(runtime, event.user):
-        await query.answer(telegram_presenters.public_command_not_available_message().text, show_alert=True)
-        return
-
-    await query.answer()
-    await _enqueue_shared_action(runtime, update, action)
 
 async def _global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Catch unhandled exceptions so the user always gets feedback."""

@@ -4,7 +4,7 @@
 
 - Track: `./octopus` unified CLI
 - Plan: `PLAN-octopus-cli.md`
-- Baseline branch: `feature/skills`
+- Baseline branch: `feature/multi_registry`
 - Baseline goal: replace `guided_start.sh`, `shared_start.sh`, and `lib_env.sh` with a single `./octopus` entrypoint and `.deploy/`-based state model.
 
 ## Slice Log
@@ -27,7 +27,7 @@
   - the library split landed without changing current startup/provider behavior
   - the temporary shim preserves the existing operator-script test contract while callers move to the focused libraries
   - full suite remained green after the refactor
-- In progress: Slice 2 introduce `.deploy/` state layout and slug-based wrappers.
+- Complete: Slice 2 introduce `.deploy/` state layout and slug-based wrappers.
   Scope:
   - add `scripts/lib/state.sh` queries and `.deploy/` directory helpers
   - add `normalize_slug()` to `scripts/lib/bot.sh`
@@ -44,3 +44,27 @@
   - `.deploy/` is now the canonical state root for the new wrappers
   - slug-based low-level bot scripts work while the old instance fallback remains available for this transitional slice
   - the compose wrappers now inject temporary registry placeholders for non-registry bot/profile commands, avoiding unrelated compose parse failures
+- Complete: Slice 3 shared provider auth volume.
+  Scope:
+  - populated `scripts/lib/provider.sh` with shared auth directory helpers, authoritative auth checks, and `.authed` hint updates
+  - rewired provider login/status scripts to use `provider_compose()` and shared `.deploy/provider-auth/<provider>/` bind mounts
+  - changed the bot and provider compose services to mount provider auth at `/home/bot/.provider-auth` and persist bot data only at `/home/bot/data`
+  - updated `docker-entrypoint.sh` to create provider-auth symlinks before privilege drop and to chown only `/home/bot/data`
+  - aligned provider logout cleanup with the auth paths actually used by the current images
+  Probe:
+  - built both provider images and verified live auth paths before finalizing the mount model
+  - Claude currently writes auth/state under `/home/bot/.claude` and `/home/bot/.claude.json`
+  - Codex currently writes auth/state under `/home/bot/.codex`
+  - `.config/...` paths were not observed in this build, so they were not carried into the new shared-auth layout
+  Tests:
+  - `bash -n scripts/lib/provider.sh scripts/lib/docker.sh scripts/docker/docker-entrypoint.sh scripts/provider/provider_login.sh scripts/provider/provider_status.sh scripts/provider/provider_logout.sh`
+  - `.venv/bin/python -m pytest -q tests/test_octopus_provider_auth.py tests/test_operator_scripts.py`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - rebuilt both provider images and verified the runtime entrypoint now exposes `/home/bot/.claude`, `/home/bot/.claude.json`, and `/home/bot/.codex` as symlinks into `/home/bot/.provider-auth`
+  - verified two separate bot slugs can mount the same Claude auth directory without forcing a second login flow
+  - confirmed host-side files under `.deploy/provider-auth/claude/` remained owned by the host user instead of being mutated by container startup
+  Verified:
+  - provider auth is now shared per provider, not per bot
+  - the authoritative auth decision path is container-backed, while `.authed` remains only a cache for fast status UX
+  - the new entrypoint behavior avoids chowning host-mounted auth state while preserving writable bot data under `/home/bot/data`

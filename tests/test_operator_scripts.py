@@ -52,35 +52,25 @@ def test_provider_status_points_to_full_health_command():
     )
 
 
-# Canonical Compose ordering: --env-file must come before run (Phase 14 follow-up).
-_VALID_COMPOSE_RUN = (
-    "docker compose --project-directory . -f infra/compose/docker-compose.yml "
-    "--profile bot --env-file .env.bot run --rm"
-)
-_INVALID_ORDERING = "run --rm --env-file .env.bot"
-
-
 def test_provider_status_uses_valid_compose_ordering():
-    """provider_status.sh must use valid Compose flag order: --env-file before run."""
+    """provider_status.sh should use the shared provider wrapper instead of inline compose."""
     repo = Path(__file__).resolve().parent.parent
     script = repo / "scripts" / "provider" / "provider_status.sh"
     text = script.read_text()
-    assert _INVALID_ORDERING not in text, (
-        "provider_status.sh must not use invalid 'run --rm --env-file .env.bot' ordering"
+    assert "provider_compose" in text, (
+        "provider_status.sh must use the shared provider compose wrapper after the auth-volume split"
     )
-    assert _VALID_COMPOSE_RUN in text, (
-        "provider_status.sh must use the compose file under infra/compose with --project-directory"
-    )
+    assert "run --rm bot-provider" in text
 
 
 def test_provider_status_invokes_bot_provider():
-    """provider_status.sh must invoke bot-provider service with valid ordering."""
+    """provider_status.sh must invoke bot-provider through the provider wrapper."""
     repo = Path(__file__).resolve().parent.parent
     script = repo / "scripts" / "provider" / "provider_status.sh"
     text = script.read_text()
     assert "bot-provider" in text, "provider_status.sh must run bot-provider service"
-    assert _VALID_COMPOSE_RUN in text and "bot-provider" in text, (
-        "provider_status.sh must use valid compose run and bot-provider"
+    assert 'provider_compose "$provider" run --rm bot-provider' in text, (
+        "provider_status.sh must invoke bot-provider through provider_compose"
     )
 
 
@@ -89,9 +79,7 @@ def test_provider_status_full_doctor_command_shape():
     repo = Path(__file__).resolve().parent.parent
     script = repo / "scripts" / "provider" / "provider_status.sh"
     text = script.read_text()
-    assert _INVALID_ORDERING not in text
     assert "bot python -m app.main --doctor" in text
-    assert _VALID_COMPOSE_RUN in text
     assert "app.main --doctor" in text
 
 

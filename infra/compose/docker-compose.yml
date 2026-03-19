@@ -1,5 +1,5 @@
 # Phase 13: Local Runtime default — bot uses SQLite (no Postgres). Optional: postgres + db-* for BOT_DATABASE_URL.
-# bot-home volume: provider auth (Claude/Codex) and BOT_DATA_DIR (sessions + transport SQLite).
+# bot-home volume: BOT_DATA_DIR (sessions + transport SQLite). Provider auth is a shared bind mount.
 
 volumes:
   bot-home:
@@ -68,9 +68,11 @@ services:
     env_file:
       - ${BOT_ENV_FILE:-.env.bot}
     environment:
+      BOT_PROVIDER: ${BOT_PROVIDER:-claude}
       BOT_DATA_DIR: /home/bot/data
     volumes:
-      - bot-home:/home/bot
+      - ${PROVIDER_AUTH_DIR:-.deploy/provider-auth/claude}:/home/bot/.provider-auth:rw
+      - bot-home:/home/bot/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: ["python", "-m", "app.main", "--provider-health"]
@@ -86,9 +88,11 @@ services:
     env_file:
       - ${BOT_ENV_FILE:-.env.bot}
     environment:
+      BOT_PROVIDER: ${BOT_PROVIDER:-claude}
       BOT_DATA_DIR: /home/bot/data
     volumes:
-      - bot-home:/home/bot
+      - ${PROVIDER_AUTH_DIR:-.deploy/provider-auth/claude}:/home/bot/.provider-auth:rw
+      - bot-home:/home/bot/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: ["python", "-m", "app.main"]

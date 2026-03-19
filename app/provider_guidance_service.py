@@ -35,7 +35,7 @@ def _resolve_placeholders(obj, env: dict[str, str]):
 
 
 class ProviderGuidanceService:
-    """Surface-neutral provider guidance and prompt assembly service."""
+    """Channel-neutral provider guidance and prompt assembly service."""
 
     def __init__(self) -> None:
         self._catalog = get_skill_catalog_service()

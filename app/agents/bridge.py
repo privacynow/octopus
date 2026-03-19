@@ -58,7 +58,7 @@ async def bind_conversation(
     *,
     conversation_ref: str,
     title: str,
-    origin_surface: str,
+    origin_channel: str,
     external_id: str,
 ) -> None:
     client = registry_client(config)
@@ -68,7 +68,7 @@ async def bind_conversation(
         await client.sync_binding(
             conversation_id=conversation_ref,
             title=title,
-            origin_surface=origin_surface,
+            origin_channel=origin_channel,
             external_id=external_id,
         )
     except RegistryClientError as exc:
@@ -170,7 +170,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
     delivery_id = delivery.get("delivery_id", "")
     data_dir = config.data_dir
 
-    if kind == "surface_input":
+    if kind == "channel_input":
         conversation_ref = payload["conversation_id"]
         conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
             conversation_ref=conversation_ref,
@@ -191,13 +191,13 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
                 config,
                 conversation_ref=conversation_ref,
                 title=payload.get("title", "Registry conversation"),
-                origin_surface="registry",
+                origin_channel="registry",
                 external_id=conversation_ref,
             )
             await publish_timeline_event(
                 config,
                 conversation_ref=conversation_ref,
-                kind="surface_input",
+                kind="channel_input",
                 title="Registry message",
                 body=payload.get("text", ""),
             )
@@ -240,7 +240,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
                 config,
                 conversation_ref=conversation_ref,
                 title=request.get("title", "Delegated task"),
-                origin_surface="registry",
+                origin_channel="registry",
                 external_id=request["routed_task_id"],
             )
             await publish_timeline_event(

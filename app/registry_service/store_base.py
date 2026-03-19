@@ -164,7 +164,7 @@ class AbstractRegistryStore(Protocol):
         """Return mirrored runtime-health detail for a registered agent."""
 
     def create_conversation(self, *, target_agent_id: str, title: str, message_text: str) -> dict[str, Any]:
-        """Create a new registry-originated conversation and queue the first surface_input."""
+        """Create a new registry-originated conversation and queue the first channel_input."""
 
     def list_conversations(self) -> list[dict[str, Any]]:
         """Return the registry conversation index."""
@@ -182,12 +182,12 @@ class AbstractRegistryStore(Protocol):
         """Return reported usage timeline rows since the provided UTC ISO timestamp."""
 
     def add_conversation_message(self, conversation_id: str, text: str) -> dict[str, Any]:
-        """Queue a follow-up surface_input for an existing conversation."""
+        """Queue a follow-up channel_input for an existing conversation."""
 
     def add_conversation_action(
         self, conversation_id: str, action: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Queue a surface_action for an existing conversation."""
+        """Queue a channel_action for an existing conversation."""
 
     def list_tasks(self) -> list[dict[str, Any]]:
         """Return routed tasks in UI-ready form."""

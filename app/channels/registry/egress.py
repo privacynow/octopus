@@ -184,7 +184,7 @@ class RegistryChannelEgress(ChannelEgress):
         )
 
     async def send_action(self, action: str) -> None:
-        await self._publish_event(kind="surface_action", title="Bot action", body=action)
+        await self._publish_event(kind="channel_action", title="Bot action", body=action)
 
     async def answer_action(self, text: str | None = None, show_alert: bool = False) -> None:
         detail = text or ("alert" if show_alert else "ack")
@@ -213,7 +213,7 @@ class RegistryChannelEgress(ChannelEgress):
             self.config,
             conversation_ref=self.conversation_ref,
             title=self.title,
-            origin_surface="registry",
+            origin_channel="registry",
             external_id=self.conversation_ref,
         )
         await self._publish_event(kind="started", title="Conversation started")

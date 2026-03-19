@@ -119,13 +119,13 @@ async def handle_registry_delivery(
 ) -> str:
     kind = str(delivery.get("kind", ""))
     delivery_id = str(delivery.get("delivery_id", ""))
-    if kind in {"surface_input", "routed_task"}:
+    if kind in {"channel_input", "routed_task"}:
         return await admit_registry_delivery(config, delivery)
 
     payload = delivery.get("payload", {})
     if not isinstance(payload, dict):
         return "rejected"
-    if kind == "surface_action":
+    if kind == "channel_action":
         conversation_ref = str(payload.get("conversation_ref", "") or payload.get("conversation_id", ""))
         if not conversation_ref:
             return "rejected"

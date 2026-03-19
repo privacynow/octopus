@@ -57,7 +57,7 @@ class AgentRuntime:
             connectivity_state=self._state.connectivity_state,
             current_capacity=0,
             max_capacity=1,
-            surface_capabilities=("telegram", "registry") if self.config.agent_mode == "registry" else ("telegram",),
+            channel_capabilities=("telegram", "registry") if self.config.agent_mode == "registry" else ("telegram",),
             version="phase-19-foundation",
         )
 

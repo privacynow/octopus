@@ -119,7 +119,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "connectivity_state": effective_state,
             "current_capacity": row["current_capacity"],
             "max_capacity": row["max_capacity"],
-            "surface_capabilities": decode_json_field(row["surface_capabilities_json"], []),
+            "channel_capabilities": decode_json_field(row["surface_capabilities_json"], []),
             "version": row["version"],
             "last_heartbeat_at": row["last_heartbeat_at"],
             "updated_at": row["updated_at"],
@@ -337,7 +337,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         requested_card.get("connectivity_state", "degraded"),
                         int(requested_card.get("current_capacity", 0)),
                         max(1, int(requested_card.get("max_capacity", 1))),
-                        _jsonb(requested_card.get("surface_capabilities", [])),
+                        _jsonb(requested_card.get("channel_capabilities", [])),
                         requested_card.get("version", ""),
                         now,
                         now,
@@ -379,7 +379,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         payload.get("connectivity_state", row["connectivity_state"]),
                         int(payload.get("current_capacity", 0)),
                         max(1, int(payload.get("max_capacity", 1))),
-                        _jsonb(card.get("surface_capabilities", [])),
+                        _jsonb(card.get("channel_capabilities", [])),
                         card.get("version", row["version"]),
                         now,
                         now,
@@ -503,7 +503,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         payload["conversation_id"],
                         row["agent_id"],
                         payload.get("title", ""),
-                        payload.get("origin_surface", "telegram"),
+                        payload.get("origin_channel", "telegram"),
                         now,
                         now,
                     ),
@@ -1002,12 +1002,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
             self._create_delivery(
                 conn,
                 target_agent_id=target_agent_id,
-                kind="surface_input",
+                kind="channel_input",
                 payload={
                     "conversation_id": conversation_id,
                     "title": title,
                     "text": message_text,
-                    "surface": "registry",
+                    "channel": "registry",
                 },
                 now=now,
                 delivery_id=uuid.uuid4().hex,
@@ -1017,7 +1017,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conversation_id=conversation_id,
                 title="Conversation started",
                 body=message_text,
-                kind="surface_input",
+                kind="channel_input",
             )
         return self.get_conversation(conversation_id)
 
@@ -1209,12 +1209,12 @@ class RegistryPostgresStore(AbstractRegistryStore):
             self._create_delivery(
                 conn,
                 target_agent_id=conversation["target_agent_id"],
-                kind="surface_input",
+                kind="channel_input",
                 payload={
                     "conversation_id": conversation_id,
                     "title": conversation["title"],
                     "text": text,
-                    "surface": "registry",
+                    "channel": "registry",
                 },
                 now=now,
                 delivery_id=uuid.uuid4().hex,
@@ -1224,7 +1224,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conversation_id=conversation_id,
                 title="User message",
                 body=text,
-                kind="surface_input",
+                kind="channel_input",
             )
         return {"conversation_id": conversation_id, "accepted": True}
 
@@ -1245,13 +1245,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
             self._create_delivery(
                 conn,
                 target_agent_id=conversation["target_agent_id"],
-                kind="surface_action",
+                kind="channel_action",
                 payload={
                     "conversation_id": conversation_id,
                     "conversation_ref": conversation_id,
                     "action": action,
                     "payload": action_payload,
-                    "surface": "registry",
+                    "channel": "registry",
                 },
                 now=now,
                 delivery_id=uuid.uuid4().hex,
@@ -1262,7 +1262,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 conversation_id=conversation_id,
                 title="Cancel requested" if is_cancel else f"Action: {action}",
                 body="" if is_cancel else json.dumps(action_payload) if action_payload else "",
-                kind="control" if is_cancel else "surface_action",
+                kind="control" if is_cancel else "channel_action",
             )
         return {"conversation_id": conversation_id, "accepted": True}
 

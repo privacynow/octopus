@@ -746,7 +746,7 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
             provider="claude",
             mode="registry",
             connectivity_state="connected",
-            surface_capabilities=("registry",),
+            channel_capabilities=("registry",),
             version="e2e",
         )
         enrolled = await enroll_client.enroll(requested, "dev-enroll-token")
@@ -778,7 +778,7 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
             provider="claude",
             mode="registry",
             connectivity_state="connected",
-            surface_capabilities=("registry",),
+            channel_capabilities=("registry",),
             version="e2e",
         )
         await client.register(
@@ -803,7 +803,7 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
         deliveries = await client.poll(cursor="0", limit=20, wait_seconds=0)
         assert deliveries["deliveries"], deliveries
         delivery = deliveries["deliveries"][0]
-        assert delivery["kind"] == "surface_input"
+        assert delivery["kind"] == "channel_input"
         surface = RegistryChannelEgress(cfg, conversation_ref=conversation_id)
         await surface.bind(title="Registry UI E2E", config=cfg)
         await client.ack([delivery["delivery_id"]], classification="accepted")
@@ -863,7 +863,7 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
             provider="claude",
             mode="registry",
             connectivity_state="connected",
-            surface_capabilities=("registry",),
+            channel_capabilities=("registry",),
             version="e2e",
         )
         requested_child = AgentCard(
@@ -874,7 +874,7 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
             provider="claude",
             mode="registry",
             connectivity_state="connected",
-            surface_capabilities=("registry",),
+            channel_capabilities=("registry",),
             version="e2e",
         )
         enrolled_parent = await enroll_client.enroll(requested_parent, "dev-enroll-token")
@@ -914,7 +914,7 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
                 provider="claude",
                 mode="registry",
                 connectivity_state="connected",
-                surface_capabilities=("registry",),
+                channel_capabilities=("registry",),
                 version="e2e",
             ),
             connectivity_state="connected",
@@ -931,7 +931,7 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
                 provider="claude",
                 mode="registry",
                 connectivity_state="connected",
-                surface_capabilities=("registry",),
+                channel_capabilities=("registry",),
                 version="e2e",
             ),
             connectivity_state="connected",
@@ -977,7 +977,7 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
 
         initial_poll = await parent_client.poll(cursor="0", limit=20, wait_seconds=0)
         initial_delivery = initial_poll["deliveries"][0]
-        assert initial_delivery["kind"] == "surface_input"
+        assert initial_delivery["kind"] == "channel_input"
         assert await handle_registry_delivery(
             cfg,
             initial_delivery,
@@ -1007,7 +1007,7 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
         )
 
         approve_poll = await parent_client.poll(cursor=initial_poll["next_cursor"], limit=20, wait_seconds=0)
-        approve_delivery = next(item for item in approve_poll["deliveries"] if item["kind"] == "surface_action")
+        approve_delivery = next(item for item in approve_poll["deliveries"] if item["kind"] == "channel_action")
         assert await handle_registry_delivery(
             cfg,
             approve_delivery,

@@ -198,7 +198,7 @@ def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
-    """Migrate transport DB from schema version 5 to 6: surface-neutral text identities."""
+    """Migrate transport DB from schema version 5 to 6: channel-neutral text identities."""
     conn.executescript(
         """
         CREATE TABLE updates_v2 (

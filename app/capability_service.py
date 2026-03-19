@@ -21,7 +21,7 @@ class CapabilityRecord:
 
 
 class CapabilityService:
-    """Surface-neutral capability lifecycle service."""
+    """Channel-neutral capability lifecycle service."""
 
     def __init__(self, store: AbstractRegistryStore) -> None:
         self._store = store

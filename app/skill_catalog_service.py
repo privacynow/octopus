@@ -40,7 +40,7 @@ class SkillInfoRecord:
 
 
 class SkillCatalogService:
-    """Surface-neutral runtime skill catalog service."""
+    """Channel-neutral runtime skill catalog service."""
 
     _SOURCE_LABELS = {
         "builtin": "builtin",

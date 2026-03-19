@@ -28,7 +28,7 @@ def _card(slug: str, capabilities: list[str] | None = None) -> dict:
         "provider": "codex",
         "mode": "registry",
         "connectivity_state": "connected",
-        "surface_capabilities": ["registry"],
+        "channel_capabilities": ["registry"],
         "version": "test",
     }
 
@@ -127,7 +127,7 @@ def test_poll_delivers_to_enrolled_agent(store):
     agent_id, agent_token = _enroll(store, "alpha-bot")
     delivery = store.create_delivery(
         target_agent_id=agent_id,
-        kind="surface_input",
+        kind="channel_input",
         payload={"conversation_id": "conv-1", "text": "hello"},
     )
 
@@ -135,7 +135,7 @@ def test_poll_delivers_to_enrolled_agent(store):
 
     assert delivery["delivery_id"]
     assert len(polled["deliveries"]) == 1
-    assert polled["deliveries"][0]["kind"] == "surface_input"
+    assert polled["deliveries"][0]["kind"] == "channel_input"
     assert polled["deliveries"][0]["payload"]["text"] == "hello"
 
 
@@ -143,7 +143,7 @@ def test_ack_marks_delivery_done(store):
     agent_id, agent_token = _enroll(store, "alpha-bot")
     store.create_delivery(
         target_agent_id=agent_id,
-        kind="surface_input",
+        kind="channel_input",
         payload={"conversation_id": "conv-1", "text": "hello"},
     )
 
@@ -230,7 +230,7 @@ def test_bind_conversation_is_visible(store):
         {
             "conversation_id": "c1",
             "title": "Conversation 1",
-            "origin_surface": "telegram",
+            "origin_channel": "telegram",
         },
     )
 
@@ -238,7 +238,7 @@ def test_bind_conversation_is_visible(store):
     assert [item["conversation_id"] for item in conversations] == ["c1"]
 
 
-def test_create_conversation_delivers_surface_input(store):
+def test_create_conversation_delivers_channel_input(store):
     agent_id, agent_token = _enroll(store, "alpha-bot")
 
     conversation = store.create_conversation(
@@ -250,7 +250,7 @@ def test_create_conversation_delivers_surface_input(store):
 
     assert conversation["conversation_id"]
     assert len(deliveries) == 1
-    assert deliveries[0]["kind"] == "surface_input"
+    assert deliveries[0]["kind"] == "channel_input"
     assert deliveries[0]["payload"]["text"] == "hello from registry"
 
 
@@ -261,7 +261,7 @@ def test_timeline_publish_and_retrieve(store):
         {
             "conversation_id": "conv-1",
             "title": "Bound conversation",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
         },
     )
 
@@ -292,7 +292,7 @@ def test_usage_summary_from_timeline(store):
         {
             "conversation_id": "conv-usage",
             "title": "Usage conversation",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
         },
     )
     store.publish_timeline(
@@ -384,7 +384,7 @@ def test_search_conversations_fts(store):
         {
             "conversation_id": "conv-search",
             "title": "Search conversation",
-            "origin_surface": "registry",
+            "origin_channel": "registry",
         },
     )
     store.publish_timeline(

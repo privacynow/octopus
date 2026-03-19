@@ -639,7 +639,7 @@ def test_telegram_ingress_line_count_stays_below_hard_cap() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     ingress_path = repo_root / "app" / "channels" / "telegram" / "ingress.py"
     line_count = sum(1 for _ in ingress_path.open())
-    assert line_count <= 1600, f"{ingress_path} regressed to {line_count} lines"
+    assert line_count <= 1500, f"{ingress_path} regressed to {line_count} lines"
 
 
 def test_telegram_shared_mode_dispatch_line_count_stays_below_hard_cap() -> None:

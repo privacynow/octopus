@@ -40,7 +40,10 @@ def test_status_doc_records_live_phase8_state_and_owners_in_authoritative_sectio
         "936c502",
         "274c6e4",
         "7804cf4",
-        "1631 passed, 23 skipped",
+        "07af844",
+        "837b4ed",
+        "a686565",
+        "1633 passed, 23 skipped",
     )
 
     for fragment in required_fragments:
@@ -76,6 +79,7 @@ def test_status_doc_historical_and_live_closure_sections_are_both_present() -> N
         "The historical log above is preserved intentionally, including intermediate",
         "42 passed",
         "62 passed",
+        "273 passed",
     )
 
     for fragment in required_fragments:
@@ -88,8 +92,8 @@ def test_status_doc_lede_points_to_live_phase8_closure_and_marks_phase7_as_histo
     required_fragments = (
         "The live accepted state is recorded in the final",
         "`## Historical Phase 7 Closure Status` (preserved Phase 7 baseline)",
-        "`## Current Authoritative Status` (live Phase 8 closure)",
-        "Architecture remediation is complete. Phase 8 closed the remaining ingress",
+        "`## Current Authoritative Status` (live post-Phase-8 closure)",
+        "Architecture remediation is complete. The initial Phase 8 closure at",
     )
 
     for fragment in required_fragments:

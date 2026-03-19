@@ -101,7 +101,7 @@ No checkout-scoped hashing — one deployment per bot name.
 | Bot volume | `octopus-<slug>_bot-home` | Compose auto-prefixes. |
 | Network | `octopus-net` | Shared across all bots. |
 | Registry project | `octopus-registry` | Single local registry. |
-| Registry volume | `octopus-registry_registry-data` | Compose auto-prefixes. |
+| Registry volume | `octopus-registry_data` | Compose auto-prefixes. |
 | Provider auth | `.deploy/provider-auth/<provider>/` | Bind mount, not Docker volume. |
 
 Bots reach local registry at `http://registry:8787` via a network
@@ -306,7 +306,7 @@ bot_is_registry()       # BOT_AGENT_MODE=registry
 bot_uses_local_reg()    # registry URL matches http://registry:8787
 bot_uses_remote_reg()   # registry URL starts with https://
 bot_is_running()        # docker compose -p octopus-$slug ps
-registry_is_running()   # docker compose -p octopus-registry ps
+registry_is_running()   # docker compose -p octopus-registry ps service
 network_exists()        # docker network inspect octopus-net
 provider_auth_hint()    # test -f .deploy/provider-auth/<provider>/.authed
                         # Fast hint for menu display only — NOT authoritative
@@ -642,7 +642,7 @@ networks:
     external: true
 
 services:
-  registry:
+  service:
     # ...
     networks:
       default:
@@ -697,7 +697,7 @@ provider_compose() {
   PROVIDER_AUTH_DIR="$auth_dir" \
   docker compose \
     --project-directory . \
-    -p "octopus-provider-${provider}" \
+    -p "octopus-auth-${provider}" \
     -f infra/compose/docker-compose.yml \
     --profile bot \
     "$@"

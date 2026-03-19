@@ -3,7 +3,12 @@
 
 volumes:
   bot-home:
-  registry-data:
+  data:
+
+networks:
+  default:
+    name: ${OCTOPUS_NETWORK:-octopus-net}
+    external: true
 
 services:
   postgres:
@@ -97,7 +102,7 @@ services:
       - "host.docker.internal:host-gateway"
     command: ["python", "-m", "app.main"]
 
-  registry:
+  service:
     build:
       context: .
       dockerfile: infra/docker/Dockerfile
@@ -105,13 +110,17 @@ services:
       - registry
     environment:
       REGISTRY_DB_PATH: /data/registry.sqlite3
-      REGISTRY_ENROLL_TOKEN: ${REGISTRY_ENROLL_TOKEN:?Set REGISTRY_ENROLL_TOKEN in .env.registry}
-      REGISTRY_UI_TOKEN: ${REGISTRY_UI_TOKEN:?Set REGISTRY_UI_TOKEN in .env.registry}
+      REGISTRY_ENROLL_TOKEN: ${REGISTRY_ENROLL_TOKEN:?Set REGISTRY_ENROLL_TOKEN in .deploy/registry/.env}
+      REGISTRY_UI_TOKEN: ${REGISTRY_UI_TOKEN:?Set REGISTRY_UI_TOKEN in .deploy/registry/.env}
       REGISTRY_ALLOW_HTTP: ${REGISTRY_ALLOW_HTTP-}
     volumes:
-      - registry-data:/data
+      - data:/data
     ports:
       - "${REGISTRY_BIND_HOST:-127.0.0.1}:${REGISTRY_PORT:-8787}:8787"
+    networks:
+      default:
+        aliases:
+          - registry
     command: ["uvicorn", "app.channels.registry.http:app", "--host", "0.0.0.0", "--port", "8787"]
 
   # TEST/DEV ONLY: stub-provider image for E2E when real provider unavailable (E2E_USE_STUB_IMAGE=1).

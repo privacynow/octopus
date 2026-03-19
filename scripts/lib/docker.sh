@@ -72,6 +72,7 @@ bot_compose() {
 bot_shared_compose() {
   local env_file="${BOT_ENV_FILE:-$(current_bot_env_file)}"
   local project="${BOT_COMPOSE_PROJECT:-}"
+  ensure_network
   if [ -z "$project" ] && [ "$env_file" != ".env.bot" ]; then
     project="octopus-agent-$(current_bot_instance "$env_file")"
   fi
@@ -86,6 +87,7 @@ bot_shared_compose() {
       "$@"
     return
   fi
+  OCTOPUS_NETWORK="octopus-net" \
   REGISTRY_ENROLL_TOKEN="${REGISTRY_ENROLL_TOKEN:-placeholder-registry-enroll}" \
   REGISTRY_UI_TOKEN="${REGISTRY_UI_TOKEN:-placeholder-registry-ui}" \
   docker compose --project-directory . \
@@ -120,7 +122,7 @@ provider_compose() {
   REGISTRY_UI_TOKEN="${REGISTRY_UI_TOKEN:-placeholder-registry-ui}" \
   docker compose \
     --project-directory . \
-    -p "octopus-provider-${provider}" \
+    -p "octopus-auth-${provider}" \
     -f infra/compose/docker-compose.yml \
     --profile bot \
     "$@"

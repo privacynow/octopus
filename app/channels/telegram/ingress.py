@@ -32,13 +32,11 @@ from app.channels.telegram.delegation_channel import (
 )
 from app.channels.telegram.execution import (
     allowed_roots,
-    approve_pending,
     build_conversation_runtime,
     build_delegation_channel_runtime,
     build_runtime_skill_runtime,
     build_pending_runtime,
     build_user_prompt,
-    reject_pending,
     resolve_context,
     send_formatted_reply,
     send_path_to_chat,
@@ -70,9 +68,11 @@ from app.channels.telegram.conversation import (
     cmd_settings as conversation_cmd_settings,
 )
 from app.channels.telegram.pending import (
+    approve_pending as pending_approve_pending,
     handle_pending_callback as pending_handle_callback,
     handle_recovery_action as pending_handle_recovery_action,
     handle_recovery_callback as pending_handle_recovery_callback,
+    reject_pending as pending_reject_pending,
 )
 from app.runtime import composition
 from app.runtime.inbound_types import InboundUser
@@ -622,7 +622,11 @@ async def cmd_approve(runtime: TelegramRuntime, event, update: Update, context: 
         message=update.effective_message,
         update_id=update.update_id,
     ):
-        await approve_pending(event.chat_id, update.effective_message, runtime=runtime)
+        await pending_approve_pending(
+            event.chat_id,
+            update.effective_message,
+            runtime=build_pending_runtime(runtime),
+        )
 
 
 @_command_handler
@@ -633,7 +637,11 @@ async def cmd_reject(runtime: TelegramRuntime, event, update: Update, context: C
         message=update.effective_message,
         update_id=update.update_id,
     ):
-        await reject_pending(event.chat_id, update.effective_message, runtime=runtime)
+        await pending_reject_pending(
+            event.chat_id,
+            update.effective_message,
+            runtime=build_pending_runtime(runtime),
+        )
 
 
 @_command_handler

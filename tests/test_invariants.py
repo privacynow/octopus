@@ -1126,13 +1126,13 @@ async def test_callback_exception_marks_work_item_failed(monkeypatch):
 # =====================================================================
 # INVARIANT 36: Error summarizer subprocess is cleaned up on timeout
 #
-# telegram.execution.format_provider_error spawns a subprocess for summarization.
+# summarize.format_provider_error spawns a subprocess for summarization.
 # If it times out, the child must be killed and reaped, not leaked.
 # =====================================================================
 
 @pytest.mark.asyncio
 async def test_format_provider_error_kills_subprocess_on_timeout():
-    import app.channels.telegram.execution as telegram_execution
+    import app.summarize as summarize_mod
 
     killed = []
 
@@ -1154,7 +1154,7 @@ async def test_format_provider_error_kills_subprocess_on_timeout():
     asyncio.create_subprocess_exec = mock_exec
     try:
         # Long text triggers summarization attempt
-        result = await telegram_execution.format_provider_error("E" * 5000, 1)
+        result = await summarize_mod.format_provider_error("E" * 5000, 1)
     finally:
         asyncio.create_subprocess_exec = mock_exec
         asyncio.create_subprocess_exec = original

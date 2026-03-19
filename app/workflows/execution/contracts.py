@@ -16,6 +16,15 @@ class ExecutionChannelContext:
 
 
 @dataclass(frozen=True)
+class ExecutionChannelMetadata:
+    channel_name: str = "telegram"
+    message_conversation_ref: str = ""
+    routed_task_id: str = ""
+    chat_id: int | str = ""
+    agent_mode: str = ""
+
+
+@dataclass(frozen=True)
 class RequestExecutionOutcome:
     status: str
     reply_text: str = ""
@@ -30,6 +39,7 @@ class RequestExecutionOutcome:
 class ExecutionRuntime:
     dispatch: RuntimeDispatchRuntime
     build_channel_context: Callable[[Any, int | str], ExecutionChannelContext]
+    render_provider_error: Callable[[str], str]
     show_foreign_setup: Callable[[Any, Any], Awaitable[None]]
     show_setup_prompt: Callable[[Any, str, dict[str, object]], Awaitable[None]]
     send_retry_prompt: Callable[[Any, tuple[dict[str, Any], ...]], Awaitable[None]]

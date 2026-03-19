@@ -1,6 +1,7 @@
 """Guards for the architecture-remediation status document."""
 
 from pathlib import Path
+import re
 
 
 def _status_text() -> str:
@@ -30,7 +31,6 @@ def test_status_doc_records_live_phase8_state_and_owners_in_authoritative_sectio
     authoritative = text.rsplit("## Current Authoritative Status", 1)[1]
 
     required_fragments = (
-        "Architecture remediation is complete.",
         "app/channels/telegram/bootstrap.py",
         "app/channels/telegram/ingress.py",
         "app/channels/telegram/session_io.py",
@@ -43,11 +43,17 @@ def test_status_doc_records_live_phase8_state_and_owners_in_authoritative_sectio
         "07af844",
         "837b4ed",
         "a686565",
-        "1633 passed, 23 skipped",
+        "b56473d",
     )
 
     for fragment in required_fragments:
         assert fragment in authoritative
+
+    assert (
+        "Architecture remediation is complete." in authoritative
+        or "The post-Phase-8 audit found additional workflow-ownership and traceability" in authoritative
+    )
+    assert re.search(r"Result: `\d+ passed, 23 skipped`", authoritative)
 
 
 def test_status_doc_includes_all_phase8_acceptance_gate_fragments() -> None:
@@ -93,7 +99,7 @@ def test_status_doc_lede_points_to_live_phase8_closure_and_marks_phase7_as_histo
         "The live accepted state is recorded in the final",
         "`## Historical Phase 7 Closure Status` (preserved Phase 7 baseline)",
         "`## Current Authoritative Status` (live post-Phase-8 closure)",
-        "Architecture remediation is complete. The initial Phase 8 closure at",
+        "The initial Phase 8 closure at",
     )
 
     for fragment in required_fragments:

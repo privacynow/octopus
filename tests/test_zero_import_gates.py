@@ -194,6 +194,25 @@ def test_telegram_execution_module_has_no_ingress_import() -> None:
     )
 
 
+def test_telegram_execution_module_does_not_own_workflow_context_or_error_formatting() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    execution_path = repo_root / "app" / "channels" / "telegram" / "execution.py"
+    text = execution_path.read_text()
+    forbidden = (
+        "def execution_channel_context(",
+        "async def format_provider_error(",
+        "async def execute_request(",
+        "async def request_approval(",
+        "def check_prompt_size_cross_chat(",
+        "async def approve_pending(",
+        "async def reject_pending(",
+        "async def retry_skip_pending(",
+        "async def retry_allow_pending(",
+    )
+    for token in forbidden:
+        assert token not in text, f"{token} still referenced in {execution_path}"
+
+
 def test_telegram_worker_module_has_no_ingress_import() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
@@ -228,6 +247,18 @@ def test_h1_extracted_telegram_modules_have_no_ingress_back_imports() -> None:
         text = path.read_text()
         assert "app.channels.telegram.ingress" not in text, (
             f"telegram ingress import still referenced in {path}"
+        )
+
+
+def test_no_channel_module_constructs_execution_channel_context() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    channels_root = repo_root / "app" / "channels"
+    for path in sorted(channels_root.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        text = path.read_text()
+        assert "ExecutionChannelContext(" not in text, (
+            f"workflow execution context still constructed in channel code at {path}"
         )
 
 

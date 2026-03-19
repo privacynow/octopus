@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import html
 from pathlib import Path
 from typing import Any, Callable
@@ -37,11 +36,13 @@ from app.runtime.inbound_types import InboundAttachment
 from app.runtime.session_runtime import resolve_session_context
 from app.session_state import SessionState
 from app.storage import chat_upload_dir, is_image_path, resolve_allowed_path
+from app.summarize import format_provider_error
 from app.workflows.execution.contracts import (
     ExecutionRuntime,
-    ExecutionChannelContext,
+    ExecutionChannelMetadata,
     RequestExecutionOutcome,
 )
+from app.workflows.execution.context import build_execution_channel_context
 from app.workflows.execution.requests import (
     check_prompt_size_cross_chat as execution_check_prompt_size_cross_chat,
     execute_request as execution_execute_request,
@@ -51,66 +52,6 @@ from app.workflows.execution.requests import (
 
 def run_result_was_interrupted(returncode: int) -> bool:
     return returncode < 0
-
-
-_ERROR_DISPLAY_LIMIT = 1500
-
-_ERROR_SUMMARY_PROMPT = """\
-Summarize the following provider error for a Telegram chat user.
-
-Rules:
-- Keep it under 400 characters.
-- Preserve: error type, root cause, actionable next step if obvious.
-- Drop: full stack traces, repeated lines, internal paths.
-- If the error is empty or uninformative, say so.
-- Output plain text, no markdown headers.
-
-Error (rc={rc}):
-{text}
-"""
-
-
-async def format_provider_error(raw_text: str, returncode: int) -> str:
-    raw_text = raw_text.strip()
-    if not raw_text:
-        return f"Provider exited with code {returncode} (no output)."
-    if len(raw_text) <= _ERROR_DISPLAY_LIMIT:
-        return html.escape(raw_text)
-
-    proc = None
-    try:
-        from app.summarize import _clean_env
-
-        prompt = _ERROR_SUMMARY_PROMPT.format(rc=returncode, text=raw_text[:4000])
-        proc = await asyncio.create_subprocess_exec(
-            "claude",
-            "-p",
-            "--model",
-            "claude-haiku-4-5-20251001",
-            "--output-format",
-            "text",
-            "--",
-            prompt,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=_clean_env(),
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
-        if proc.returncode == 0:
-            summary = stdout.decode("utf-8", errors="replace").strip()
-            if summary:
-                return html.escape(summary)
-    except Exception:
-        if proc and proc.returncode is None:
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
-
-    head = raw_text[:800]
-    tail = raw_text[-400:]
-    return html.escape(f"{head}\n\n[…truncated…]\n\n{tail}")
 
 
 def resolve_project(runtime: TelegramRuntime, session: SessionState):
@@ -277,10 +218,10 @@ def build_runtime_skill_runtime(
         state=runtime,
         chat_lock=chat_lock,
         validate_credential=validate_credential,
-        check_prompt_size_cross_chat=lambda data_dir, skill_name: check_prompt_size_cross_chat(
-            runtime,
+        check_prompt_size_cross_chat=lambda data_dir, skill_name: execution_check_prompt_size_cross_chat(
             data_dir,
             skill_name,
+            runtime=build_execution_runtime(runtime),
         ),
     )
 
@@ -294,51 +235,50 @@ def build_dispatch_runtime(runtime: TelegramRuntime) -> RuntimeDispatchRuntime:
         progress_factory=TelegramProgress,
         keep_typing=lambda chat: keep_typing(chat, runtime=runtime),
         heartbeat=heartbeat,
-        format_provider_error=format_provider_error,
+        format_provider_error=lambda raw_text, returncode: format_provider_error(
+            raw_text,
+            returncode,
+            model=getattr(runtime.config, "provider_error_summary_model", "claude-haiku-4-5-20251001"),
+        ),
         run_result_was_interrupted=run_result_was_interrupted,
     )
 
 
-def execution_channel_context(
+def execution_channel_metadata(
     runtime: TelegramRuntime,
     message,
     chat_id: int | str,
-) -> ExecutionChannelContext:
-    conversation_ref = ""
-    routed_task_id = ""
-    if getattr(message, "capabilities", None) and getattr(message.capabilities, "channel_name", "") == "registry":
-        conversation_ref = getattr(message, "conversation_ref", "")
-        routed_task_id = getattr(message, "routed_task_id", "")
-    elif runtime.config.agent_mode == "registry" and isinstance(chat_id, int):
-        conversation_ref = telegram_conversation_ref(runtime.config, telegram_chat_id(chat_id))
-    channel_name = getattr(getattr(message, "capabilities", None), "channel_name", "telegram")
-    if conversation_ref and channel_name != "registry":
-
-        async def timeline_callback(html_text: str, force: bool = False) -> None:
-            await progress_timeline_callback(
-                runtime,
-                conversation_ref,
-                routed_task_id,
-                html_text,
-                force=force,
-            )
-
-        return ExecutionChannelContext(
-            conversation_ref=conversation_ref,
-            routed_task_id=routed_task_id,
-            timeline_callback=timeline_callback,
-        )
-    return ExecutionChannelContext(
-        conversation_ref=conversation_ref,
-        routed_task_id=routed_task_id,
-        timeline_callback=None,
+) -> ExecutionChannelMetadata:
+    caps = getattr(message, "capabilities", None)
+    return ExecutionChannelMetadata(
+        channel_name=getattr(caps, "channel_name", "telegram"),
+        message_conversation_ref=getattr(message, "conversation_ref", ""),
+        routed_task_id=getattr(message, "routed_task_id", ""),
+        chat_id=chat_id,
+        agent_mode=runtime.config.agent_mode,
     )
 
 
 def build_execution_runtime(runtime: TelegramRuntime) -> ExecutionRuntime:
     return ExecutionRuntime(
         dispatch=build_dispatch_runtime(runtime),
-        build_channel_context=lambda message, chat_id: execution_channel_context(runtime, message, chat_id),
+        build_channel_context=lambda message, chat_id: build_execution_channel_context(
+            execution_channel_metadata(runtime, message, chat_id),
+            build_conversation_ref=lambda numeric_chat_id: telegram_conversation_ref(
+                runtime.config,
+                telegram_chat_id(numeric_chat_id),
+            ),
+            timeline_callback_factory=lambda conversation_ref, routed_task_id: (
+                lambda html_text, force=False: progress_timeline_callback(
+                    runtime,
+                    conversation_ref,
+                    routed_task_id,
+                    html_text,
+                    force=force,
+                )
+            ),
+        ),
+        render_provider_error=html.escape,
         show_foreign_setup=show_foreign_setup,
         show_setup_prompt=show_setup_prompt,
         send_retry_prompt=send_retry_prompt,
@@ -380,113 +320,20 @@ def build_pending_runtime(
     *,
     chat_lock: Callable[..., Any] = _unexpected_chat_lock,
 ) -> TelegramPendingRuntime:
+    execution_runtime = build_execution_runtime(runtime)
     return TelegramPendingRuntime(
         state=runtime,
         chat_lock=chat_lock,
         edit_or_reply_text=edit_or_reply_text,
-        execute_request=lambda *args, **kwargs: execute_request(*args, runtime=runtime, **kwargs),
-        request_approval=lambda *args, **kwargs: request_approval(*args, runtime=runtime, **kwargs),
+        execute_request=lambda *args, **kwargs: execution_execute_request(
+            *args,
+            runtime=execution_runtime,
+            **kwargs,
+        ),
+        request_approval=lambda *args, **kwargs: execution_request_approval(
+            *args,
+            runtime=execution_runtime,
+            **kwargs,
+        ),
         build_user_prompt=build_user_prompt,
-    )
-
-
-def check_prompt_size_cross_chat(
-    runtime: TelegramRuntime,
-    data_dir: Path,
-    skill_name: str,
-) -> list[str]:
-    return execution_check_prompt_size_cross_chat(
-        data_dir,
-        skill_name,
-        runtime=build_execution_runtime(runtime),
-    )
-
-
-async def execute_request(
-    chat_id: int | str,
-    prompt: str,
-    image_paths: list[str],
-    message,
-    extra_dirs: list[str] | None = None,
-    request_user_id: int | str = "",
-    skip_permissions: bool = False,
-    trust_tier: str = "trusted",
-    cancel_event: asyncio.Event | None = None,
-    *,
-    runtime: TelegramRuntime,
-) -> RequestExecutionOutcome:
-    return await execution_execute_request(
-        chat_id,
-        prompt,
-        image_paths,
-        message,
-        extra_dirs=extra_dirs,
-        request_user_id=request_user_id,
-        skip_permissions=skip_permissions,
-        trust_tier=trust_tier,
-        cancel_event=cancel_event,
-        runtime=build_execution_runtime(runtime),
-    )
-
-
-async def request_approval(
-    chat_id: int | str,
-    prompt: str,
-    image_paths: list[str],
-    attachments: list[InboundAttachment],
-    message,
-    request_user_id: int | str = "",
-    trust_tier: str = "trusted",
-    cancel_event: asyncio.Event | None = None,
-    *,
-    runtime: TelegramRuntime,
-) -> None:
-    await execution_request_approval(
-        chat_id,
-        prompt,
-        image_paths,
-        attachments,
-        message,
-        request_user_id=request_user_id,
-        trust_tier=trust_tier,
-        cancel_event=cancel_event,
-        runtime=build_execution_runtime(runtime),
-    )
-
-
-async def approve_pending(
-    chat_id: int | str,
-    message,
-    *,
-    cancel_event: asyncio.Event | None = None,
-    runtime: TelegramRuntime,
-) -> None:
-    await pending_approve_pending(
-        chat_id,
-        message,
-        cancel_event=cancel_event,
-        runtime=build_pending_runtime(runtime),
-    )
-
-
-async def reject_pending(chat_id: int | str, message, *, runtime: TelegramRuntime) -> None:
-    await pending_reject_pending(chat_id, message, runtime=build_pending_runtime(runtime))
-
-
-async def retry_skip_pending(chat_id: int | str, message, *, runtime: TelegramRuntime) -> None:
-    await pending_retry_skip_pending(chat_id, message, runtime=build_pending_runtime(runtime))
-
-
-async def retry_allow_pending(
-    chat_id: int | str,
-    message,
-    *,
-    cancel_event: asyncio.Event | None = None,
-    runtime: TelegramRuntime,
-) -> None:
-    await pending_retry_allow_pending(
-        chat_id,
-        message,
-        cancel_event=cancel_event,
-        runtime=build_pending_runtime(runtime),
     )

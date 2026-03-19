@@ -98,6 +98,27 @@ def test_runtime_skill_lifecycle_workflow_requires_publish_before_activation(tmp
         content_store_mod.reset_for_test()
 
 
+def test_runtime_skill_create_draft_returns_safe_validation_messages(tmp_path: Path):
+    _, data_dir = _init_runtime_content(tmp_path)
+    try:
+        actor_key = telegram_actor_key(42)
+        authoring = get_runtime_skill_authoring_use_cases()
+
+        invalid = authoring.create_draft("Bad Name", owner_actor=actor_key)
+        duplicate = authoring.create_draft("existing-skill", owner_actor=actor_key)
+        second_duplicate = authoring.create_draft("existing-skill", owner_actor=actor_key)
+
+        assert invalid.ok is False
+        assert invalid.message == "Skill names must use lowercase letters, digits, and hyphens."
+        assert "Bad Name" not in invalid.message
+        assert duplicate.ok is True
+        assert second_duplicate.ok is False
+        assert second_duplicate.message == "Skill 'existing-skill' already exists."
+    finally:
+        close_db(data_dir)
+        content_store_mod.reset_for_test()
+
+
 def test_provider_guidance_lifecycle_workflow_separates_draft_and_runtime(tmp_path: Path):
     _, data_dir = _init_runtime_content(tmp_path)
     try:

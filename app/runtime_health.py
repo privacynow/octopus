@@ -11,6 +11,7 @@ from typing import Any, Generic, Protocol, TYPE_CHECKING, TypeVar
 import httpx
 
 from app.config import ProcessRole, RuntimeMode, validate_config
+from app.registry_errors import registry_error_detail
 from app.session_state import session_from_dict
 from app.storage import list_sessions, load_session
 from app.time_utils import age_seconds, utc_now
@@ -482,7 +483,8 @@ def _collect_registry_diagnostics(config: BotConfig) -> list[RuntimeDiagnostic]:
 
     agent_state = load_agent_runtime_state(config.data_dir)
     if agent_state.connectivity_state == "degraded":
-        detail = f": {agent_state.last_error}" if agent_state.last_error else ""
+        detail_text = registry_error_detail(agent_state.last_error, agent_state.last_error_detail)
+        detail = f": {detail_text}" if detail_text else ""
         diagnostics.append(
             _diag(
                 "warning",

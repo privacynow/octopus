@@ -8,6 +8,7 @@ from dataclasses import replace
 from typing import Any, Awaitable, Callable
 
 from app.agents.client import AgentRegistryClient, RegistryClientError
+from app.registry_errors import registry_error_detail
 from app.agents.state import AgentRuntimeState, load_agent_runtime_state, save_agent_runtime_state
 from app.agents.types import AgentCard, utcnow_iso
 from app.config import BotConfig
@@ -83,9 +84,16 @@ class AgentRuntime:
     def _save_state(self) -> None:
         save_agent_runtime_state(self.config.data_dir, self._state)
 
-    def _mark_state(self, connectivity_state: str, *, error: str = "") -> None:
+    def _mark_state(
+        self,
+        connectivity_state: str,
+        *,
+        error: str = "",
+        detail: str = "",
+    ) -> None:
         self._state.connectivity_state = connectivity_state
         self._state.last_error = error
+        self._state.last_error_detail = detail
         if connectivity_state == "connected":
             self._state.last_successful_contact_at = utcnow_iso()
         self._save_state()
@@ -96,13 +104,21 @@ class AgentRuntime:
             return "standalone"
 
         if not self.config.agent_registry_url:
-            self._mark_state("degraded", error="Registry URL not configured")
+            self._mark_state(
+                "degraded",
+                error="registry_url_missing",
+                detail="Registry URL not configured.",
+            )
             return "degraded"
 
         try:
             if not self._state.agent_id or not self._state.agent_token:
                 if not self.config.agent_registry_enroll_token:
-                    self._mark_state("degraded", error="Enrollment token not configured")
+                    self._mark_state(
+                        "degraded",
+                        error="registry_enroll_token_missing",
+                        detail="Registry enrollment token not configured.",
+                    )
                     return "degraded"
                 enroll = await AgentRegistryClient(self.config.agent_registry_url).enroll(
                     self.requested_card(),
@@ -146,8 +162,21 @@ class AgentRuntime:
                 heartbeat_kwargs["runtime_health"] = runtime_health_payload
             await client.heartbeat(**heartbeat_kwargs)
         except (RegistryClientError, OSError, asyncio.TimeoutError) as exc:
-            log.warning("Agent registry sync degraded for %s: %s", self.config.instance, exc)
-            self._mark_state("degraded", error=str(exc))
+            if isinstance(exc, RegistryClientError):
+                error_code = exc.error_code
+                detail = exc.operator_detail
+            elif isinstance(exc, asyncio.TimeoutError):
+                error_code = "registry_timeout"
+                detail = "Registry sync timed out."
+            else:
+                error_code = "registry_unreachable"
+                detail = f"Registry sync failed with {exc.__class__.__name__}."
+            log.warning(
+                "Agent registry sync degraded for %s: %s",
+                self.config.instance,
+                registry_error_detail(error_code, detail),
+            )
+            self._mark_state("degraded", error=error_code, detail=detail)
             return "degraded"
 
         self._mark_state("connected")
@@ -216,8 +245,21 @@ class AgentRuntime:
                 try:
                     await self.poll_once()
                 except (RegistryClientError, OSError, asyncio.TimeoutError) as exc:
-                    log.warning("Agent registry poll degraded for %s: %s", self.config.instance, exc)
-                    self._mark_state("degraded", error=str(exc))
+                    if isinstance(exc, RegistryClientError):
+                        error_code = exc.error_code
+                        detail = exc.operator_detail
+                    elif isinstance(exc, asyncio.TimeoutError):
+                        error_code = "registry_timeout"
+                        detail = "Registry poll timed out."
+                    else:
+                        error_code = "registry_unreachable"
+                        detail = f"Registry poll failed with {exc.__class__.__name__}."
+                    log.warning(
+                        "Agent registry poll degraded for %s: %s",
+                        self.config.instance,
+                        registry_error_detail(error_code, detail),
+                    )
+                    self._mark_state("degraded", error=error_code, detail=detail)
                 except Exception:
                     log.exception("Unexpected registry poll failure for %s", self.config.instance)
             if self._state.connectivity_state == "connected":

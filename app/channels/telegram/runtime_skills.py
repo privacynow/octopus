@@ -340,20 +340,16 @@ async def skills_clear(event, update: Update, *, runtime: TelegramRuntimeSkillsR
 
 async def skills_create(event, update: Update, name: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:
     del runtime
-    try:
-        result = _flows().runtime_skills.authoring.create_draft(
-            name,
-            owner_actor=str(event.user.id),
-        )
-        if not result.ok or result.detail is None:
-            rendered = telegram_presenters.runtime_skill_mutation_message(result.message)
-            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-            return
-        rendered = telegram_presenters.runtime_skill_create_success_message(name, result.detail.visibility)
+    result = _flows().runtime_skills.authoring.create_draft(
+        name,
+        owner_actor=str(event.user.id),
+    )
+    if not result.ok or result.detail is None:
+        rendered = telegram_presenters.runtime_skill_mutation_message(result.message)
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-    except ValueError as exc:
-        rendered = telegram_presenters.runtime_skill_mutation_message(str(exc))
-        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+    rendered = telegram_presenters.runtime_skill_create_success_message(name, result.detail.visibility)
+    await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
 
 
 async def skills_edit(event, update: Update, name: str, body: str, *, runtime: TelegramRuntimeSkillsRuntime) -> None:

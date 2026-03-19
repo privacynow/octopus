@@ -10,6 +10,8 @@ from app.channels.telegram.presenters import (
     collapsed_response_message,
     conversation_role_current_message,
     delegation_plan_message,
+    discover_degraded_message,
+    discover_failed_message,
     discover_results_message,
     extract_summary,
     formatted_reply_messages,
@@ -166,6 +168,23 @@ def test_provider_guidance_mutation_message_escapes_html():
 
     assert rendered.parse_mode == ParseMode.HTML
     assert rendered.text == "&lt;saved&gt;"
+
+
+def test_discover_degraded_message_uses_safe_error_summary():
+    rendered = discover_degraded_message("registry_unreachable")
+
+    assert rendered.parse_mode is None
+    assert "could not be reached" in rendered.text.lower()
+    assert "registry_unreachable" not in rendered.text
+
+
+def test_discover_failed_message_does_not_echo_unknown_text():
+    rendered = discover_failed_message("<html>secret stack trace</html>")
+
+    assert rendered.parse_mode is None
+    assert "Agent discovery failed." in rendered.text
+    assert "request failed" in rendered.text.lower()
+    assert "stack trace" not in rendered.text.lower()
 
 
 def test_conversation_role_current_message_renders_expected_html():

@@ -7,6 +7,7 @@ import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from app.registry_errors import normalize_registry_error_state
 
 log = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ class AgentRuntimeState:
     last_successful_contact_at: str = ""
     connectivity_state: str = "standalone"
     last_error: str = ""
+    last_error_detail: str = ""
 
 
 def agent_state_path(data_dir: Path) -> Path:
@@ -35,6 +37,10 @@ def load_agent_runtime_state(data_dir: Path) -> AgentRuntimeState:
     except Exception:
         log.warning("Agent runtime state load failed, using defaults", exc_info=True)
         return AgentRuntimeState()
+    last_error, last_error_detail = normalize_registry_error_state(
+        str(raw.get("last_error", "")),
+        str(raw.get("last_error_detail", "")),
+    )
     return AgentRuntimeState(
         agent_id=raw.get("agent_id", ""),
         agent_token=raw.get("agent_token", ""),
@@ -42,7 +48,8 @@ def load_agent_runtime_state(data_dir: Path) -> AgentRuntimeState:
         registered_slug=raw.get("registered_slug", ""),
         last_successful_contact_at=raw.get("last_successful_contact_at", ""),
         connectivity_state=raw.get("connectivity_state", "standalone"),
-        last_error=raw.get("last_error", ""),
+        last_error=last_error,
+        last_error_detail=last_error_detail,
     )
 
 

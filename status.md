@@ -229,3 +229,17 @@
   - the final CLI contract now has direct tests for the remaining slice-11 acceptance gaps instead of relying on incidental coverage
   - the new tests found and drove out one real provider-auth bug before the final pass
   - final suite status: `1769 passed, 23 skipped`
+- Follow-up: plan/example alignment after final rollout review.
+  Scope:
+  - updated the plan’s provider-auth path sections to match the slice-3 probe (`.claude`, `.claude.json`, `.codex`) instead of the earlier `.config/...` assumptions
+  - documented the `BOT_DATA_DIR` fallback in Python config as a residual risk for host/debug runs, while noting the compose path sets `/home/bot/data` correctly
+  - deleted the legacy root env artifacts and replaced the tracked reference template with `.deploy/bots/.env.example`
+  - rewired `scripts/host/setup_instance.sh` to use the new tracked example path
+  Tests:
+  - `bash -n scripts/host/setup_instance.sh`
+  - `.venv/bin/python -m pytest -q tests/test_octopus_cli_contracts.py tests/test_octopus_provider_auth.py tests/test_readme_operator.py tests/test_readme_commands.py`
+  - `.venv/bin/python -m pytest -q -n 4`
+  Verified:
+  - the written plan now matches the probed implementation for provider auth
+  - the repo no longer carries the legacy root env artifacts
+  - full suite status after the follow-up remained `1769 passed, 23 skipped`

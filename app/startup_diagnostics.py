@@ -49,6 +49,8 @@ _SANITIZED_BEARER: Final[str] = "Bearer <redacted-bearer-token>"
 _SECRET_ENV_NAMES: Final[tuple[str, ...]] = (
     "TELEGRAM_BOT_TOKEN",
     "BOT_DATABASE_URL",
+    "BOT_WEBHOOK_SECRET",
+    "BOT_AGENT_REGISTRY_ENROLL_TOKEN",
     "REGISTRY_UI_TOKEN",
     "REGISTRY_ENROLL_TOKEN",
     "REGISTRY_SESSION_SECRET",

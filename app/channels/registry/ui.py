@@ -585,22 +585,6 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
         <div id="capabilities"><div class="loading-state">Loading…</div></div>
       </section>
     </main>
-    <script type="module">
-      import {{EditorState}} from "https://esm.sh/@codemirror/state@6.5.2";
-      import {{EditorView, keymap, lineNumbers}} from "https://esm.sh/@codemirror/view@6.38.7";
-      import {{defaultKeymap, history, historyKeymap}} from "https://esm.sh/@codemirror/commands@6.9.1";
-
-      window.__REGISTRY_CODEMIRROR__ = {{
-        EditorState,
-        EditorView,
-        keymap,
-        lineNumbers,
-        history,
-        defaultKeymap,
-        historyKeymap,
-      }};
-      window.dispatchEvent(new Event("registry-editor-ready"));
-    </script>
     <script>
       const csrfToken = document.querySelector('meta[name="registry-csrf-token"]')?.content || "";
       const EMPTY_STATES = {{
@@ -2287,14 +2271,6 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
         loadProviderGuidanceDetail(provider).catch(error => {{
           setStatus(error.message || "Failed to load provider guidance.");
         }});
-      }});
-      window.addEventListener("registry-editor-ready", () => {{
-        if (currentRuntimeSkillLifecycle) {{
-          mountRichEditor("runtime-skill-editor-textarea");
-        }}
-        if (currentProviderGuidanceDetail) {{
-          mountRichEditor("provider-guidance-editor-textarea");
-        }}
       }});
       var convSearchEl = document.getElementById('conv-search');
       if (convSearchEl) {{

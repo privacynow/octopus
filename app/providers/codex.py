@@ -19,7 +19,7 @@ from app.subprocess_env import build_subprocess_env
 
 log = logging.getLogger(__name__)
 
-_CODEX_ENV_KEYS = ("OPENAI_API_KEY",)
+_CODEX_ENV_KEYS = ("OPENAI_API_KEY", "CODEX_HOME")
 
 
 class CodexProvider:

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import html
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from app.agents.client import RegistryClientError
 from app.agents.bridge import registry_client
 from app.registry_errors import registry_error_summary
 from app.agents.state import load_agent_runtime_state
@@ -19,6 +20,8 @@ from app.workflows.delegation.coordination import (
     mark_task_submitted,
     prepare_delegation_approval,
 )
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -114,11 +117,31 @@ async def handle_delegation_approve(
                 routed_task_id=task.routed_task_id,
             )
             session.pending_delegation = submission.pending
-    except Exception as exc:
+    except RegistryClientError as exc:
         _save_session(runtime, chat_id, session)
+        log.warning(
+            "Delegation submission failed after %s request(s): %s",
+            len(submitted_ids),
+            exc.operator_detail,
+            exc_info=True,
+        )
         await channel_egress.send_text(
             f"Delegation submission failed after {len(submitted_ids)} request(s)."
-            f" {html.escape(str(exc))}",
+            f" {registry_error_summary(exc.error_code)}"
+            " Please try again after the registry recovers.",
+            reply_markup=retry_markup,
+        )
+        return
+    except Exception:
+        _save_session(runtime, chat_id, session)
+        log.exception(
+            "Delegation submission failed after %s request(s) due to an unexpected error",
+            len(submitted_ids),
+        )
+        await channel_egress.send_text(
+            f"Delegation submission failed after {len(submitted_ids)} request(s)."
+            " An unexpected error interrupted the remaining submissions."
+            " Please try again.",
             reply_markup=retry_markup,
         )
         return

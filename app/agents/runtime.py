@@ -85,6 +85,7 @@ class AgentRuntime:
             display_name=self.config.agent_display_name or self.config.instance,
             slug=self._state.registered_slug or self.config.agent_slug,
             role=self.config.agent_role or self.config.role,
+            registry_scope=self._registry.registry_scope if self._registry is not None else "full",
             capabilities=self.config.agent_capabilities,
             tags=self.config.agent_tags,
             description=self.config.agent_description,

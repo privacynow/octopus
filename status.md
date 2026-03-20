@@ -210,6 +210,29 @@
   - Telegram mirrors now fan out to every channel/full registry connection with partial-failure isolation and coordination-only skipping
   - Telegram progress, delegation, and finalization timeline events no longer leave a mixed singleton/fan-out path behind
   - full suite status after slice 8: `1811 passed, 23 skipped`
+- Complete: Slice 9 registry service scope enforcement (both stores).
+  Scope:
+  - added `registry_scope` as a first-class persisted agent field in both SQLite and Postgres registry stores, with SQLite auto-migration, a new Postgres migration (`0012_registry_scope.sql`), and the runtime enrollment card now sending the configured scope at enroll time
+  - added shared `RegistryScopeError`, `require_registry_scope()`, and delivery-kind filtering helpers in `store_base.py` so scope enforcement semantics are defined once and reused by both store implementations
+  - enforced `registry_scope` on protected agent operations: channel-only scopes can publish timeline and bind conversations, coordination-only scopes can perform discovery and routed-task/result work, and poll now filters queued deliveries by allowed kind for the authenticated scope
+  - updated the FastAPI registry endpoints to translate scope failures into explicit `403` responses with `error_code=registry_scope_not_permitted` instead of generic authorization failures
+  - extended the backend-neutral registry store contract tests and service API tests to cover persisted scope, scope rejection, and channel/coordination delivery filtering across both SQLite and Postgres
+  Tests:
+  - `./.venv/bin/python -m pytest -q -n 0 tests/contracts/test_registry_store_contract.py tests/test_registry_service.py tests/test_agents.py tests/test_registry_runtime.py`
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_registry.py tests/test_registry_service.py tests/contracts/test_registry_store_contract.py tests/test_agents.py tests/test_registry_runtime.py tests/test_handlers.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified channel-only agents now receive `403` on discovery and coordination-only agents receive `403` on channel timeline/bind endpoints with the new structured scope error payload
+  - verified store contract tests pass for both SQLite and Postgres with `registry_scope` persisted, `assert_agent_scope()` enforced, and poll filtering returning only the delivery kinds allowed for each scope
+  - verified the SQLite legacy-migration test now upgrades older registry databases to schema version `6`, including the new `registry_scope` column, while preserving the earlier channel-vocabulary and token-hashing migrations
+  Review:
+  - scope enforcement stays registry-specific; `role` remains persona metadata and was not overloaded
+  - the parity work landed through shared helpers plus both concrete stores and a migration file, which keeps SQLite/Postgres behavior aligned instead of letting one drift ahead
+  - the slice deliberately avoids inventing a second auth layer or queue path; enforcement happens where the existing registry token and delivery/store seams already exist
+  Verified:
+  - registry service scope enforcement now exists end to end across HTTP, SQLite, Postgres, and runtime enrollment
+  - coordination-only connections no longer receive channel deliveries, and channel-only connections cannot access coordination endpoints
+  - full suite status after slice 9: `1821 passed, 23 skipped`
 
 # Octopus CLI Implementation Status
 

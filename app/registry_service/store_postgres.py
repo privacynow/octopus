@@ -24,8 +24,10 @@ from app.registry_service.store_base import (
     CapabilityDisabledError,
     conversation_status_for_event,
     decode_json_field,
+    delivery_kinds_for_registry_scope,
     effective_connectivity_state,
     hash_agent_token,
+    require_registry_scope,
     runtime_health_detail,
     runtime_health_generated_at,
     runtime_health_summary,
@@ -112,6 +114,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "display_name": row["display_name"],
             "slug": row["slug"],
             "role": row["role"],
+            "registry_scope": row.get("registry_scope", "full"),
             "capabilities": decode_json_field(row["skills_json"], []),
             "tags": decode_json_field(row["tags_json"], []),
             "description": row["description"],
@@ -319,11 +322,11 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 cur.execute(
                     f"""
                     INSERT INTO {_SCHEMA}.agents (
-                        agent_id, agent_token, display_name, slug, role,
+                        agent_id, agent_token, display_name, slug, role, registry_scope,
                         skills_json, tags_json, description, provider, mode,
                         connectivity_state, current_capacity, max_capacity,
                         channel_capabilities_json, version, created_at, updated_at, last_heartbeat_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         agent_id,
@@ -331,6 +334,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
                         requested_card.get("display_name") or slug,
                         slug,
                         requested_card.get("role", ""),
+                        requested_card.get("registry_scope", "full") or "full",
                         _jsonb(declared_capabilities(requested_card)),
                         _jsonb(requested_card.get("tags", [])),
                         requested_card.get("description", ""),
@@ -352,6 +356,13 @@ class RegistryPostgresStore(AbstractRegistryStore):
             "agent_token": agent_token,
             "poll_cursor": "0",
         }
+
+    def assert_agent_scope(self, agent_token: str, required_scopes: set[str]) -> None:
+        with self._connect() as conn:
+            row = self._token_row(conn, agent_token)
+            if row is None:
+                raise PermissionError("Unknown agent token")
+            require_registry_scope(row, required_scopes)
 
     def register(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
@@ -439,6 +450,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            require_registry_scope(row, {"channel", "full"})
             for event in events:
                 with _cur(conn) as cur:
                     cur.execute(
@@ -491,6 +503,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            require_registry_scope(row, {"channel", "full"})
             with _cur(conn) as cur:
                 cur.execute(
                     f"""
@@ -801,19 +814,35 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            allowed_kinds = delivery_kinds_for_registry_scope(row["registry_scope"])
             with _cur(conn) as cur:
-                cur.execute(
-                    f"""
-                    SELECT seq, delivery_id, kind, payload_json, state, created_at
-                    FROM {_SCHEMA}.deliveries
-                    WHERE target_agent_id = %s
-                      AND state = 'queued'
-                      AND seq > %s
-                    ORDER BY seq ASC
-                    LIMIT %s
-                    """,
-                    (row["agent_id"], cursor, limit),
-                )
+                if allowed_kinds is None:
+                    cur.execute(
+                        f"""
+                        SELECT seq, delivery_id, kind, payload_json, state, created_at
+                        FROM {_SCHEMA}.deliveries
+                        WHERE target_agent_id = %s
+                          AND state = 'queued'
+                          AND seq > %s
+                        ORDER BY seq ASC
+                        LIMIT %s
+                        """,
+                        (row["agent_id"], cursor, limit),
+                    )
+                else:
+                    cur.execute(
+                        f"""
+                        SELECT seq, delivery_id, kind, payload_json, state, created_at
+                        FROM {_SCHEMA}.deliveries
+                        WHERE target_agent_id = %s
+                          AND state = 'queued'
+                          AND seq > %s
+                          AND kind = ANY(%s)
+                        ORDER BY seq ASC
+                        LIMIT %s
+                        """,
+                        (row["agent_id"], cursor, list(allowed_kinds), limit),
+                    )
                 deliveries = cur.fetchall()
             delivery_ids = [item["delivery_id"] for item in deliveries]
             if delivery_ids:
@@ -875,6 +904,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            require_registry_scope(row, {"coordination", "full"})
             with _cur(conn) as cur:
                 cur.execute(
                     f"""
@@ -907,6 +937,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            require_registry_scope(row, {"coordination", "full"})
             with _cur(conn) as cur:
                 cur.execute(
                     f"SELECT * FROM {_SCHEMA}.routed_tasks WHERE routed_task_id = %s",

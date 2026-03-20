@@ -648,3 +648,22 @@
   - capability-port consumers now have one bus-backed path for projection, routing, directory lookups, and health publication without touching registry runtime/client seams
   - positive and negative adapter paths are covered: multi-authority fan-out, request success, request timeout, targeted unavailability, and directory partial aggregation
   - full suite status after slice 4A: `1868 passed, 23 skipped`
+- Complete: Slice 4B processor runner.
+  Scope:
+  - added `app/control_plane/processor_base.py` with the generic `ControlProcessor` protocol and its per-authority capability map contract
+  - added `app/control_plane/processor_runner.py` with a generic claim loop over the control-plane bus, bounded in-flight claiming, pair-aware processor dispatch, runner-owned lease heartbeating, periodic expired-lease reclaim, and clean shutdown handling
+  - made duplicate `(authority_ref, capability)` ownership a registration error so control-plane routing cannot silently drift into ambiguous processor selection
+  - added slice coverage in `tests/test_control_plane_processor_runner.py` for pair-aware dispatch, transient retry recovery, retry exhaustion/dead-letter behavior, expired-lease reclaim, lease renewal, and clean shutdown
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_control_plane_processor_runner.py`
+  - `./.venv/bin/python -m compileall app/control_plane/processor_base.py app/control_plane/processor_runner.py tests/test_control_plane_processor_runner.py`
+  - `./.venv/bin/python -m pytest -q tests/test_control_plane_ports.py tests/test_control_plane_models.py tests/test_control_plane_adapters.py tests/test_control_plane_processor_runner.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - the runner stays generic infrastructure: it owns claiming, shutdown, lease renewal, and retry handoff, while processors remain pure domain handlers that never touch the bus directly
+  - in-flight bounding was kept in the runner rather than each processor so shutdown semantics and lease ownership stay centralized instead of becoming per-processor policy
+  - the reclaim/retry review found the correct behavior was already in the store layer; the test was fixed to zero backoff explicitly instead of weakening store semantics for convenience
+  Verified:
+  - command execution now has one generic processor loop that honors per-authority capability ownership and keeps leases alive while handlers run
+  - positive and negative runner paths are covered: routing by pair, transient failure retry, dead-letter on exhausted retries, reclaim of expired claims, lease heartbeats, and stop-with-inflight semantics
+  - full suite status after slice 4B: `1876 passed, 23 skipped`

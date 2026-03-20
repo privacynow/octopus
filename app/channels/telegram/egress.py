@@ -9,12 +9,6 @@ from typing import Any
 from telegram.constants import ParseMode
 
 from app import user_messages as _msg
-from app.agents.bridge import (
-    bind_conversation,
-    bind_conversation_to_registries,
-    publish_timeline_event,
-    publish_timeline_to_registries,
-)
 from app.channels.telegram import presenters as telegram_presenters
 from app.config import BotConfig
 from app.ports.egress import (
@@ -22,6 +16,7 @@ from app.ports.egress import (
     ChannelEgress,
     EditableHandle,
 )
+from app.runtime.services import BotServices, build_noop_bot_services
 
 
 log = logging.getLogger(__name__)
@@ -54,7 +49,7 @@ class TelegramChannelEgress(ChannelEgress):
         *,
         config: BotConfig | None = None,
         conversation_ref: str = "",
-        registry_runtime: Any = None,
+        services: BotServices | None = None,
         mirror_input_event: bool = True,
         target_message_id: int | None = None,
     ) -> None:
@@ -62,7 +57,7 @@ class TelegramChannelEgress(ChannelEgress):
         self.chat_id = chat_id
         self._config = config
         self.conversation_ref = conversation_ref
-        self._registry_runtime = registry_runtime
+        self._services = services or build_noop_bot_services()
         self._mirror_input_event = mirror_input_event
         self._target_message_id = target_message_id
         self.chat = _ChatShim(self)
@@ -99,22 +94,10 @@ class TelegramChannelEgress(ChannelEgress):
         return None
 
     async def bind(self, *, title: str, config: Any) -> None:
+        del config
         if not self.conversation_ref:
             return
-        bound_config = self._config or config
-        if bound_config is None:
-            return
-        if self._registry_runtime is not None:
-            await bind_conversation_to_registries(
-                self._registry_runtime,
-                conversation_ref=self.conversation_ref,
-                title=title,
-                origin_channel="telegram",
-                external_id=str(self.chat_id),
-            )
-            return
-        await bind_conversation(
-            bound_config,
+        await self._services.control_plane.conversation_projection.bind_external_conversation(
             conversation_ref=self.conversation_ref,
             title=title,
             origin_channel="telegram",
@@ -122,19 +105,9 @@ class TelegramChannelEgress(ChannelEgress):
         )
 
     async def on_message_received(self, text: str) -> None:
-        if not self._mirror_input_event or not self.conversation_ref or self._config is None:
+        if not self._mirror_input_event or not self.conversation_ref:
             return
-        if self._registry_runtime is not None:
-            await publish_timeline_to_registries(
-                self._registry_runtime,
-                conversation_ref=self.conversation_ref,
-                kind="channel_input",
-                title="Telegram message",
-                body=text,
-            )
-            return
-        await publish_timeline_event(
-            self._config,
+        await self._services.control_plane.conversation_projection.publish_external_timeline(
             conversation_ref=self.conversation_ref,
             kind="channel_input",
             title="Telegram message",
@@ -142,23 +115,13 @@ class TelegramChannelEgress(ChannelEgress):
         )
 
     async def on_outcome(self, outcome: Any) -> None:
-        if not self.conversation_ref or outcome is None or self._config is None:
+        if not self.conversation_ref or outcome is None:
             return
         body = getattr(outcome, "reply_text", "") or getattr(outcome, "error_text", "")
         if not body:
             return
         status = getattr(outcome, "status", "")
-        if self._registry_runtime is not None:
-            await publish_timeline_to_registries(
-                self._registry_runtime,
-                conversation_ref=self.conversation_ref,
-                kind="result" if status.startswith("completed") else "error",
-                title="Bot result" if status.startswith("completed") else "Bot error",
-                body=body,
-            )
-            return
-        await publish_timeline_event(
-            self._config,
+        await self._services.control_plane.conversation_projection.publish_external_timeline(
             conversation_ref=self.conversation_ref,
             kind="result" if status.startswith("completed") else "error",
             title="Bot result" if status.startswith("completed") else "Bot error",
@@ -166,23 +129,10 @@ class TelegramChannelEgress(ChannelEgress):
         )
 
     async def publish_timeline(self, event: Any) -> None:
-        if not self.conversation_ref or self._config is None:
+        if not self.conversation_ref:
             return
         body = getattr(event, "body", "") or getattr(event, "text", "") or ""
-        if self._registry_runtime is not None:
-            await publish_timeline_to_registries(
-                self._registry_runtime,
-                conversation_ref=self.conversation_ref,
-                kind=getattr(event, "kind", "timeline"),
-                title=getattr(event, "title", "Update"),
-                body=body,
-                status=getattr(event, "status", ""),
-                progress=getattr(event, "progress", None),
-                metadata=getattr(event, "metadata", None),
-            )
-            return
-        await publish_timeline_event(
-            self._config,
+        await self._services.control_plane.conversation_projection.publish_external_timeline(
             conversation_ref=self.conversation_ref,
             kind=getattr(event, "kind", "timeline"),
             title=getattr(event, "title", "Update"),
@@ -190,6 +140,7 @@ class TelegramChannelEgress(ChannelEgress):
             status=getattr(event, "status", ""),
             progress=getattr(event, "progress", None),
             metadata=getattr(event, "metadata", None),
+            event_id=getattr(event, "event_id", None),
         )
 
     async def send_recovery_notice(

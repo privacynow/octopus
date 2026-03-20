@@ -667,6 +667,26 @@ def test_worker_dispatch_no_longer_contains_inline_execution_workflow_logic() ->
         assert token not in text, f"{token} still referenced in {worker_path}"
 
 
+def test_worker_dispatch_does_not_import_registry_bridge_timeline_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
+    text = worker_path.read_text()
+    import_block_match = re.search(
+        r"from app\.agents\.bridge import \((?P<body>[\s\S]*?)\n\)",
+        text,
+    )
+    assert import_block_match is not None, f"bridge import block missing from {worker_path}"
+    import_block = import_block_match.group("body")
+    forbidden_tokens = (
+        "publish_timeline_event",
+        "_publish_timeline_event",
+        "bind_conversation",
+        "_bind_conversation",
+    )
+    for token in forbidden_tokens:
+        assert token not in import_block, f"{token} still imported from bridge in {worker_path}"
+
+
 def test_worker_dispatch_documents_completion_ownership() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"

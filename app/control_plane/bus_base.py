@@ -37,18 +37,20 @@ class AbstractControlPlaneStore(Protocol):
         data_dir: Path,
         command_id: str,
         *,
+        claimed_at: str,
         result_json: str | None = None,
     ) -> None: ...
 
-    def fail(self, data_dir: Path, command_id: str, *, error: str) -> None: ...
+    def fail(self, data_dir: Path, command_id: str, *, claimed_at: str, error: str) -> None: ...
 
-    def dead_letter(self, data_dir: Path, command_id: str, *, reason: str) -> None: ...
+    def dead_letter(self, data_dir: Path, command_id: str, *, claimed_at: str, reason: str) -> None: ...
 
     def renew_lease(
         self,
         data_dir: Path,
         command_id: str,
         *,
+        claimed_at: str,
         extension_seconds: float = 30.0,
     ) -> bool: ...
 

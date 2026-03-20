@@ -84,7 +84,11 @@ async def test_submit_poll_complete_and_reply_round_trip(backend_bus_and_data_di
     )
     assert [item.command_id for item in claimed] == [command_id]
 
-    await bus.complete(command_id, result_json='{"accepted": true}')
+    await bus.complete(
+        command_id,
+        claimed_at=claimed[0].claimed_at,
+        result_json='{"accepted": true}',
+    )
 
     reply = runtime_backend.control_plane_store().get_reply(data_dir, command_id)
     assert reply is not None
@@ -110,6 +114,7 @@ async def test_request_waits_for_processor_completion(backend_bus_and_data_dir):
             if claimed:
                 await bus.complete(
                     claimed[0].command_id,
+                    claimed_at=claimed[0].claimed_at,
                     result_json='{"status":"accepted","routed_task_id":"task-1"}',
                 )
                 return
@@ -173,7 +178,11 @@ async def test_fail_respects_retry_backoff_before_requeue(backend_bus_and_data_d
     )
     assert [item.command_id for item in claimed] == ["cmd-retry"]
 
-    await bus.fail("cmd-retry", error="transient failure")
+    await bus.fail(
+        "cmd-retry",
+        claimed_at=claimed[0].claimed_at,
+        error="transient failure",
+    )
 
     immediate = await bus.poll_commands(
         allowed_pairs={("registry:alpha", "conversation_projection")},
@@ -211,11 +220,56 @@ async def test_reclaim_expired_consumes_retry_budget(backend_bus_and_data_dir):
     )
     assert [item.command_id for item in reclaimed] == ["cmd-expired"]
 
-    await bus.fail("cmd-expired", error="second failure")
+    await bus.fail(
+        "cmd-expired",
+        claimed_at=reclaimed[0].claimed_at,
+        error="second failure",
+    )
     reply = store.get_reply(data_dir, "cmd-expired")
     assert reply is not None
     assert reply.status == "failed"
     assert reply.error == "second failure"
+
+
+@pytest.mark.asyncio
+async def test_stale_claim_token_cannot_complete_reclaimed_command(backend_bus_and_data_dir):
+    _backend, bus, data_dir = backend_bus_and_data_dir
+    from app import runtime_backend
+
+    store = runtime_backend.control_plane_store()
+    store.submit(data_dir, _command("cmd-stale-complete", max_retries=1))
+    claimed = store.poll_commands(
+        data_dir,
+        allowed_pairs={("registry:alpha", "conversation_projection")},
+        lease_seconds=0.01,
+    )
+    assert [item.command_id for item in claimed] == ["cmd-stale-complete"]
+
+    time.sleep(0.05)
+    assert store.reclaim_expired(data_dir) == 1
+    time.sleep(1.1)
+
+    reclaimed = await bus.poll_commands(
+        allowed_pairs={("registry:alpha", "conversation_projection")},
+    )
+    assert [item.command_id for item in reclaimed] == ["cmd-stale-complete"]
+
+    await bus.complete(
+        "cmd-stale-complete",
+        claimed_at=claimed[0].claimed_at,
+        result_json='{"accepted": false}',
+    )
+    assert store.get_reply(data_dir, "cmd-stale-complete") is None
+
+    await bus.complete(
+        "cmd-stale-complete",
+        claimed_at=reclaimed[0].claimed_at,
+        result_json='{"accepted": true}',
+    )
+    reply = store.get_reply(data_dir, "cmd-stale-complete")
+    assert reply is not None
+    assert reply.status == "completed"
+    assert reply.result_json == '{"accepted": true}'
 
 
 @pytest.mark.asyncio

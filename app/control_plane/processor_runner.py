@@ -126,6 +126,7 @@ class ProcessorRunner:
         if processor is None:
             await self._bus.dead_letter(
                 command.command_id,
+                claimed_at=command.claimed_at,
                 reason=(
                     "no control-plane processor registered for "
                     f"{command.authority_ref}/{command.capability}"
@@ -134,22 +135,45 @@ class ProcessorRunner:
             return
 
         heartbeat_stop = asyncio.Event()
-        heartbeat_task = asyncio.create_task(self._heartbeat_lease(command.command_id, heartbeat_stop))
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_lease(
+                command.command_id,
+                command.claimed_at,
+                heartbeat_stop,
+            )
+        )
         try:
             reply = await processor.process(command)
         except Exception as exc:
-            await self._bus.fail(command.command_id, error=str(exc) or exc.__class__.__name__)
+            await self._bus.fail(
+                command.command_id,
+                claimed_at=command.claimed_at,
+                error=str(exc) or exc.__class__.__name__,
+            )
             return
         finally:
             heartbeat_stop.set()
             await asyncio.gather(heartbeat_task, return_exceptions=True)
 
         if reply.status == "completed":
-            await self._bus.complete(command.command_id, result_json=reply.result_json)
+            await self._bus.complete(
+                command.command_id,
+                claimed_at=command.claimed_at,
+                result_json=reply.result_json,
+            )
             return
-        await self._bus.fail(command.command_id, error=reply.error or "control-plane processor failed")
+        await self._bus.fail(
+            command.command_id,
+            claimed_at=command.claimed_at,
+            error=reply.error or "control-plane processor failed",
+        )
 
-    async def _heartbeat_lease(self, command_id: str, stop_event: asyncio.Event) -> None:
+    async def _heartbeat_lease(
+        self,
+        command_id: str,
+        claimed_at: str,
+        stop_event: asyncio.Event,
+    ) -> None:
         while not stop_event.is_set():
             try:
                 await asyncio.wait_for(
@@ -160,6 +184,7 @@ class ProcessorRunner:
             except asyncio.TimeoutError:
                 renewed = await self._bus.renew_lease(
                     command_id,
+                    claimed_at=claimed_at,
                     extension_seconds=self._lease_extension_seconds,
                 )
                 if not renewed:

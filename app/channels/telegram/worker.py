@@ -6,11 +6,11 @@ import asyncio
 import contextlib
 import dataclasses
 import logging
+import uuid
 from typing import Any, AsyncIterator
 
 from app import work_queue
 from app.agents.bridge import (
-    publish_timeline_event as publish_single_registry_timeline,
     summarize_text,
     telegram_conversation_ref,
 )
@@ -19,6 +19,7 @@ from app.agents.delegation import (
     handle_delegation_approve as handle_channel_delegation_approve,
     handle_delegation_cancel as handle_channel_delegation_cancel,
 )
+from app.agents.types import TimelineEvent
 from app.channels.registry.refs import parse_registry_ref
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.conversation import handle_worker_conversation_action
@@ -158,14 +159,12 @@ def _resolve_registry_authority_ref(
     authority_ref: str,
     conversation_ref: str,
 ) -> str:
+    del runtime
     if authority_ref:
         return authority_ref
     parsed_registry_ref = parse_registry_ref(conversation_ref)
     if parsed_registry_ref is not None:
         return registry_authority_ref(parsed_registry_ref[0])
-    registries = tuple(getattr(runtime.config, "agent_registries", ()) or ())
-    if len(registries) == 1:
-        return registry_authority_ref(registries[0].registry_id)
     return ""
 
 
@@ -222,10 +221,12 @@ async def _publish_timeline_event_for_runtime(
     runtime: TelegramRuntime,
     *,
     config,
-    registry_id: str = "",
     **kwargs: Any,
 ) -> None:
+    del config
     conversation_ref = str(kwargs.get("conversation_ref", ""))
+    if not conversation_ref:
+        return
     dispatcher = _channel_dispatcher(runtime)
     if dispatcher.channel_type_for_ref(conversation_ref) == "telegram":
         await runtime.services.control_plane.conversation_projection.publish_external_timeline(
@@ -239,7 +240,25 @@ async def _publish_timeline_event_for_runtime(
             event_id=kwargs.get("event_id"),
         )
         return
-    await publish_single_registry_timeline(config, registry_id=registry_id or None, **kwargs)
+    channel_egress = dispatcher.create_egress(
+        conversation_ref,
+        config=runtime.config,
+        bot=runtime.bot_instance,
+        conversation_key=conversation_ref,
+        source="registry",
+    )
+    await channel_egress.publish_timeline(
+        TimelineEvent(
+            event_id=str(kwargs.get("event_id") or uuid.uuid4().hex),
+            conversation_id=conversation_ref,
+            kind=str(kwargs.get("kind", "")),
+            title=str(kwargs.get("title", "")),
+            body=str(kwargs.get("body", "")),
+            status=str(kwargs.get("status", "")),
+            progress=kwargs.get("progress"),
+            metadata=dict(kwargs.get("metadata") or {}),
+        )
+    )
 
 
 async def _execute_worker_action(
@@ -469,7 +488,6 @@ async def worker_dispatch(
                 publish_timeline_event=lambda config, **kwargs: _publish_timeline_event_for_runtime(
                     runtime,
                     config=config,
-                    registry_id=(parse_registry_ref(conversation_ref) or ("", "", ""))[0],
                     **kwargs,
                 ),
             ),

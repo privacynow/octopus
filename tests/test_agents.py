@@ -593,8 +593,8 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
         del args
         seen.append(("timeline", str(kwargs.get("conversation_ref", ""))))
 
-    monkeypatch.setattr("app.agents.bridge.bind_conversation", fake_bind)
-    monkeypatch.setattr("app.agents.bridge.publish_timeline_event", fake_timeline)
+    monkeypatch.setattr("app.agents.bridge._bind_conversation", fake_bind)
+    monkeypatch.setattr("app.agents.bridge._publish_timeline_event", fake_timeline)
     monkeypatch.setattr(
         "app.agents.bridge.work_queue.record_and_admit_message",
         lambda *args, **kwargs: ("queued", "queued-item"),
@@ -649,8 +649,8 @@ async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeyp
         del args
         seen.append(("timeline", str(kwargs.get("conversation_ref", ""))))
 
-    monkeypatch.setattr("app.agents.bridge.bind_conversation", fake_bind)
-    monkeypatch.setattr("app.agents.bridge.publish_timeline_event", fake_timeline)
+    monkeypatch.setattr("app.agents.bridge._bind_conversation", fake_bind)
+    monkeypatch.setattr("app.agents.bridge._publish_timeline_event", fake_timeline)
     monkeypatch.setattr(
         "app.agents.bridge.work_queue.record_and_admit_message",
         lambda *args, **kwargs: ("queued", "queued-item"),
@@ -702,7 +702,7 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
             }
         )
 
-    monkeypatch.setattr("app.agents.delivery.publish_timeline_event", fake_publish_timeline_event)
+    monkeypatch.setattr("app.agents.delivery._publish_timeline_event", fake_publish_timeline_event)
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
@@ -819,8 +819,8 @@ async def test_handle_registry_delivery_rejects_legacy_surface_input_kind(monkey
         del args
         seen.append(("timeline", str(kwargs.get("conversation_ref", ""))))
 
-    monkeypatch.setattr("app.agents.bridge.bind_conversation", fake_bind)
-    monkeypatch.setattr("app.agents.bridge.publish_timeline_event", fake_timeline)
+    monkeypatch.setattr("app.agents.bridge._bind_conversation", fake_bind)
+    monkeypatch.setattr("app.agents.bridge._publish_timeline_event", fake_timeline)
     monkeypatch.setattr(
         "app.agents.bridge.work_queue.record_and_admit_message",
         lambda *args, **kwargs: ("queued", "queued-item"),

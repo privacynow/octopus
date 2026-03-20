@@ -54,20 +54,36 @@ class _FakeLeaseBus:
         if self._claimed:
             return []
         self._claimed = True
-        return [self._command]
+        return [self._command.model_copy(update={"claimed_at": "claim-1"})]
 
-    async def renew_lease(self, command_id: str, *, extension_seconds: float = 30.0) -> bool:
+    async def renew_lease(
+        self,
+        command_id: str,
+        *,
+        claimed_at: str,
+        extension_seconds: float = 30.0,
+    ) -> bool:
         self.renewals.append((command_id, extension_seconds))
+        del claimed_at
         return True
 
-    async def complete(self, command_id: str, *, result_json: str | None = None) -> None:
+    async def complete(
+        self,
+        command_id: str,
+        *,
+        claimed_at: str,
+        result_json: str | None = None,
+    ) -> None:
+        del claimed_at
         del result_json
         self.completed.append(command_id)
 
-    async def fail(self, command_id: str, *, error: str) -> None:
+    async def fail(self, command_id: str, *, claimed_at: str, error: str) -> None:
+        del claimed_at
         self.failed.append((command_id, error))
 
-    async def dead_letter(self, command_id: str, *, reason: str) -> None:
+    async def dead_letter(self, command_id: str, *, claimed_at: str, reason: str) -> None:
+        del claimed_at
         self.dead_letters.append((command_id, reason))
 
 

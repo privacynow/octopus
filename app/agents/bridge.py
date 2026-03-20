@@ -80,7 +80,7 @@ def _registry_connection_client(
     return AgentRegistryClient(registry.url, agent_token=state.agent_token)
 
 
-async def bind_conversation(
+async def _bind_conversation(
     config: BotConfig,
     *,
     conversation_ref: str,
@@ -103,7 +103,7 @@ async def bind_conversation(
         log.debug("Registry conversation bind failed for %s: %s", conversation_ref, exc)
 
 
-async def publish_timeline_event(
+async def _publish_timeline_event(
     config: BotConfig,
     *,
     conversation_ref: str,
@@ -222,7 +222,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
             serialized,
         )
         if status in {"admitted", "queued", "duplicate"}:
-            await bind_conversation(
+            await _bind_conversation(
                 config,
                 conversation_ref=conversation_ref,
                 title=payload.get("title", "Registry conversation"),
@@ -230,7 +230,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
                 external_id=registry_ref_external_id(conversation_ref),
                 registry_id=registry_id,
             )
-            await publish_timeline_event(
+            await _publish_timeline_event(
                 config,
                 conversation_ref=conversation_ref,
                 kind="channel_input",
@@ -278,7 +278,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
             serialized,
         )
         if status in {"admitted", "queued", "duplicate"}:
-            await bind_conversation(
+            await _bind_conversation(
                 config,
                 conversation_ref=conversation_ref,
                 title=request.get("title", "Delegated task"),
@@ -286,7 +286,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
                 external_id=request["routed_task_id"],
                 registry_id=registry_id,
             )
-            await publish_timeline_event(
+            await _publish_timeline_event(
                 config,
                 conversation_ref=conversation_ref,
                 kind="routed_task",

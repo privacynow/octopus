@@ -28,7 +28,6 @@ class FinalizationContext:
     conversation_ref: str
     chat_id: int = 0
     routed_task_id: str = ""
-    registry_id: str = ""
     authority_ref: str = ""
     skip_approval: bool = False
     last_status_text: str = ""

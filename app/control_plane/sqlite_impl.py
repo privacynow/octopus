@@ -106,6 +106,7 @@ def _row_to_command(row: sqlite3.Row | dict[str, Any]) -> ControlCommand:
         capability=row["capability"],
         operation=row["operation"],
         payload_json=row["payload_json"],
+        claimed_at=row["claimed_at"] or "",
         priority=row["priority"],
         correlation_id=row["correlation_id"] or "",
         authority_ref=row["authority_ref"],
@@ -317,7 +318,13 @@ def poll_commands(
     return claimed
 
 
-def complete(conn: sqlite3.Connection, command_id: str, *, result_json: str | None = None) -> None:
+def complete(
+    conn: sqlite3.Connection,
+    command_id: str,
+    *,
+    claimed_at: str,
+    result_json: str | None = None,
+) -> None:
     now_iso = _utcnow_iso()
     with _write_tx(conn):
         conn.execute(
@@ -327,23 +334,32 @@ def complete(conn: sqlite3.Connection, command_id: str, *, result_json: str | No
                 result_json = ?,
                 error = NULL,
                 completed_at = ?,
-                lease_expires_at = NULL
+                claimed_at = NULL,
+                lease_expires_at = NULL,
+                next_attempt_at = NULL
             WHERE command_id = ?
               AND state = 'claimed'
+              AND claimed_at = ?
             """,
-            (result_json, now_iso, command_id),
+            (result_json, now_iso, command_id, claimed_at),
         )
 
 
-def fail(conn: sqlite3.Connection, command_id: str, *, error: str) -> None:
+def fail(conn: sqlite3.Connection, command_id: str, *, claimed_at: str, error: str) -> None:
     now = _utcnow()
     now_iso = now.isoformat()
     with _write_tx(conn):
         row = conn.execute(
-            "SELECT state, retry_count, max_retries FROM control_plane_commands WHERE command_id = ?",
-            (command_id,),
+            """
+            SELECT state, retry_count, max_retries
+            FROM control_plane_commands
+            WHERE command_id = ?
+              AND state = 'claimed'
+              AND claimed_at = ?
+            """,
+            (command_id, claimed_at),
         ).fetchone()
-        if row is None or row["state"] != "claimed":
+        if row is None:
             return
         record_failure = run_control_command_event(
             ControlCommandSnapshot(
@@ -378,8 +394,10 @@ def fail(conn: sqlite3.Connection, command_id: str, *, error: str) -> None:
                     next_attempt_at = ?,
                     completed_at = NULL
                 WHERE command_id = ?
+                  AND state = 'claimed'
+                  AND claimed_at = ?
                 """,
-                (error, retry.retry_count, backoff_iso, command_id),
+                (error, retry.retry_count, backoff_iso, command_id, claimed_at),
             )
             return
         conn.execute(
@@ -392,12 +410,14 @@ def fail(conn: sqlite3.Connection, command_id: str, *, error: str) -> None:
                 next_attempt_at = NULL,
                 completed_at = ?
             WHERE command_id = ?
+              AND state = 'claimed'
+              AND claimed_at = ?
             """,
-            (error, now_iso, command_id),
+            (error, now_iso, command_id, claimed_at),
         )
 
 
-def dead_letter(conn: sqlite3.Connection, command_id: str, *, reason: str) -> None:
+def dead_letter(conn: sqlite3.Connection, command_id: str, *, claimed_at: str, reason: str) -> None:
     now_iso = _utcnow_iso()
     with _write_tx(conn):
         conn.execute(
@@ -410,13 +430,20 @@ def dead_letter(conn: sqlite3.Connection, command_id: str, *, reason: str) -> No
                 lease_expires_at = NULL,
                 next_attempt_at = NULL
             WHERE command_id = ?
-              AND state IN ('pending', 'claimed', 'failed')
+              AND state = 'claimed'
+              AND claimed_at = ?
             """,
-            (reason, now_iso, command_id),
+            (reason, now_iso, command_id, claimed_at),
         )
 
 
-def renew_lease(conn: sqlite3.Connection, command_id: str, *, extension_seconds: float = 30.0) -> bool:
+def renew_lease(
+    conn: sqlite3.Connection,
+    command_id: str,
+    *,
+    claimed_at: str,
+    extension_seconds: float = 30.0,
+) -> bool:
     with _write_tx(conn):
         cur = conn.execute(
             """
@@ -424,8 +451,9 @@ def renew_lease(conn: sqlite3.Connection, command_id: str, *, extension_seconds:
             SET lease_expires_at = ?
             WHERE command_id = ?
               AND state = 'claimed'
+              AND claimed_at = ?
             """,
-            (_expiry_iso(extension_seconds), command_id),
+            (_expiry_iso(extension_seconds), command_id, claimed_at),
         )
         return cur.rowcount == 1
 
@@ -588,25 +616,44 @@ class SQLiteControlPlaneStore:
             lease_seconds=lease_seconds,
         )
 
-    def complete(self, data_dir: Path, command_id: str, *, result_json: str | None = None) -> None:
-        complete(self._control_plane_db(data_dir), command_id, result_json=result_json)
+    def complete(
+        self,
+        data_dir: Path,
+        command_id: str,
+        *,
+        claimed_at: str,
+        result_json: str | None = None,
+    ) -> None:
+        complete(
+            self._control_plane_db(data_dir),
+            command_id,
+            claimed_at=claimed_at,
+            result_json=result_json,
+        )
 
-    def fail(self, data_dir: Path, command_id: str, *, error: str) -> None:
-        fail(self._control_plane_db(data_dir), command_id, error=error)
+    def fail(self, data_dir: Path, command_id: str, *, claimed_at: str, error: str) -> None:
+        fail(self._control_plane_db(data_dir), command_id, claimed_at=claimed_at, error=error)
 
-    def dead_letter(self, data_dir: Path, command_id: str, *, reason: str) -> None:
-        dead_letter(self._control_plane_db(data_dir), command_id, reason=reason)
+    def dead_letter(self, data_dir: Path, command_id: str, *, claimed_at: str, reason: str) -> None:
+        dead_letter(
+            self._control_plane_db(data_dir),
+            command_id,
+            claimed_at=claimed_at,
+            reason=reason,
+        )
 
     def renew_lease(
         self,
         data_dir: Path,
         command_id: str,
         *,
+        claimed_at: str,
         extension_seconds: float = 30.0,
     ) -> bool:
         return renew_lease(
             self._control_plane_db(data_dir),
             command_id,
+            claimed_at=claimed_at,
             extension_seconds=extension_seconds,
         )
 

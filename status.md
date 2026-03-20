@@ -9,6 +9,29 @@
 
 ## Slice Log
 
+- Complete: Control-plane bug-fix pass after phase-8 rollout.
+  Scope:
+  - removed the remaining worker-side registry timeline bypass in `app/channels/telegram/worker.py`; non-Telegram timeline publication now reuses dispatcher-owned channel egress instead of calling registry HTTP helpers from `app/agents/bridge.py`
+  - removed dead `registry_id` state from `FinalizationContext` and dropped the stale worker lambda plumbing that only existed to feed the old bridge fallback
+  - stopped Telegram worker authority resolution from reading `runtime.config.agent_registries` directly; it now uses only explicit event provenance or parseable registry refs
+  - internalized registry-only bridge helpers by renaming `bind_conversation()` / `publish_timeline_event()` to private bridge functions and updating the registry delivery runtime/tests to use the registry-owned path
+  - tightened control-plane claim ownership by threading the existing `claimed_at` field through `ControlCommand`, `ControlPlaneBus`, `ProcessorRunner`, and both SQLite/Postgres stores so stale claimants cannot complete/fail/dead-letter/renew a reclaimed command
+  - updated grep gates to forbid bridge timeline/bind helper imports in Telegram worker code and cleaned the remaining low-noise issues (`progress.py` log wording, redundant `dict(json.loads(...))`)
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_telegram_worker_timeline.py tests/test_execution_finalization.py tests/test_zero_import_gates.py tests/contracts/test_control_plane_store_contract.py tests/test_control_plane_processor_runner.py tests/test_control_plane_integration.py`
+  - `./.venv/bin/python -m pytest -q tests/test_agents.py`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified worker timeline publication no longer imports or calls registry bridge publish helpers, and registry refs stay single-scoped through dispatcher-owned registry egress
+  - verified stale claim tokens can no longer terminally update a reclaimed control-plane command in both SQLite and Postgres contract tests
+  - verified the bridge-helper internalization did not regress registry delivery handling or the agent-facing test surface
+  Review:
+  - the fix pass stayed inside the existing architecture: dispatcher/egress for outbound channel routing, private registry bridge helpers for registry-owned delivery code, and the existing `claimed_at` column as the claim token instead of inventing a second bus ownership mechanism
+  - no new abstractions, alternate flows, or extra runtime state were introduced; the changes removed a leaked path and tightened ownership on the current control-plane bus
+  Verified:
+  - worker timeline publication is fully bus-backed for both Telegram and registry refs
+  - stale control-plane claimants can no longer win completion/failure races after reclaim
+  - full suite status after the bug-fix pass: `1900 passed, 23 skipped`
 - Complete: Slice 1 contracts and stable bot identity.
   Scope:
   - added stable runtime `bot_identity.json` persistence in `app/agents/state.py`

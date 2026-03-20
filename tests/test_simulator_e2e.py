@@ -7,6 +7,7 @@ import pytest
 
 from app import work_queue
 from app.agents.bridge import conversation_key_for_ref
+from app.channels.registry.refs import registry_conversation_ref
 from app.identity import telegram_conversation_key, telegram_actor_key, telegram_event_id
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
@@ -287,7 +288,7 @@ async def test_simulator_registry_message_runs_through_registry_surface_output()
         prov = FakeProvider("claude")
         sim = ConversationSimulator(data_dir, cfg, prov)
 
-        conversation_ref = "registry:sim-conv-1"
+        conversation_ref = registry_conversation_ref("default", "sim-conv-1")
         chat_id = _reg_conv(conversation_ref)
         session = default_session(prov.name, prov.new_provider_state(), "off")
         save_session(data_dir, chat_id, session)

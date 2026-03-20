@@ -291,13 +291,22 @@ def execution_channel_metadata(
     message,
     chat_id: int | str,
 ) -> ExecutionChannelMetadata:
-    caps = getattr(message, "capabilities", None)
+    conversation_ref = getattr(message, "conversation_ref", "")
+    dispatcher = getattr(runtime, "channel_dispatcher", None)
+    descriptor = None
+    resolved_ref = conversation_ref
+    if not resolved_ref and isinstance(chat_id, int):
+        resolved_ref = telegram_conversation_ref(
+            runtime.config,
+            telegram_chat_id(chat_id),
+        )
+    if dispatcher is not None and resolved_ref:
+        descriptor = dispatcher.descriptor_for_ref(resolved_ref)
     return ExecutionChannelMetadata(
-        channel_name=getattr(caps, "channel_name", "telegram"),
-        message_conversation_ref=getattr(message, "conversation_ref", ""),
+        descriptor=descriptor,
+        message_conversation_ref=conversation_ref,
         routed_task_id=getattr(message, "routed_task_id", ""),
         chat_id=chat_id,
-        agent_mode=runtime.config.agent_mode,
     )
 
 

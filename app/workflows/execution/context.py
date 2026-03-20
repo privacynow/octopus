@@ -17,9 +17,15 @@ def build_execution_channel_context(
     timeline_callback_factory: Callable[[str, str], Callable[[str, bool], Awaitable[None]]],
 ) -> ExecutionChannelContext:
     conversation_ref = metadata.message_conversation_ref
-    if not conversation_ref and metadata.agent_mode == "registry" and isinstance(metadata.chat_id, int):
+    if not conversation_ref and isinstance(metadata.chat_id, int):
         conversation_ref = build_conversation_ref(metadata.chat_id)
-    if conversation_ref and metadata.channel_name != "registry":
+    descriptor = metadata.descriptor
+    if (
+        conversation_ref
+        and descriptor is not None
+        and descriptor.supports_conversation_binding
+        and descriptor.supports_timeline
+    ):
         return ExecutionChannelContext(
             conversation_ref=conversation_ref,
             routed_task_id=metadata.routed_task_id,

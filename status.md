@@ -130,6 +130,35 @@
   - dispatcher-owned registry channel/task routing is now in place for qualified refs
   - `channel_capabilities` is now derived from registered channels instead of `agent_mode`
   - full suite status after slice 5: `1797 passed, 23 skipped`
+- Complete: Slice 6 replace hardwired outbound dispatch.
+  Scope:
+  - deleted `app/channel_egress_factory.py` and removed `conversation_channel_name()` from `app/runtime/composition.py`
+  - rewired Telegram worker and registry delivery resume handling to use `ChannelDispatcher.create_egress()` instead of the deleted hardwired factory
+  - threaded the dispatcher through `TelegramRuntime`, `RegistryDeliveryRuntime`, `main.py`, and the shared handler test runtime so all worker-owned egress creation now goes through the dispatcher-owned prefix map
+  - replaced `trust_tier_for_source()` with `trust_tier_for_ref()` in `app/runtime/work_admission.py`, using dispatcher descriptors for trusted registry channels while preserving user-based trust for Telegram/public mode
+  - removed orchestration-level channel branching from execution context and worker admission by moving ref/channel lookup through dispatcher queries and descriptor capabilities
+  - tightened Telegram ingress/recovery paths around the new ref-based model by persisting Telegram conversation refs on fresh inbound messages and routing recovery trust through the dispatcher-aware helper
+  - extracted Telegram inbound ref/trust helpers into `app/channels/telegram/inbound_context.py` and moved the message ref-persistence helper into `app/channels/telegram/normalization.py` to stay under the ingress hard line-count gate
+  - updated handler/simulator tests to use qualified registry conversation/task refs so the new no-shim dispatcher contract is exercised end to end
+  Tests:
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_worker_workflows.py tests/test_channel_egress_factory.py tests/test_request_flow.py::test_export_uses_resolved_skills_not_raw_session tests/test_runtime_dispatch_boundary.py tests/test_handlers.py tests/test_agents.py::test_handle_registry_routed_result_publishes_parent_timeline_before_retry_on_startup_race tests/test_config.py::test_main_registry_runtime_starts_and_stops_with_dispatcher_lifecycle`
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_worker_workflows.py tests/test_channel_egress_factory.py tests/test_request_flow.py::test_export_uses_resolved_skills_not_raw_session tests/test_runtime_dispatch_boundary.py tests/test_handlers.py tests/test_agents.py::test_handle_registry_routed_result_publishes_parent_timeline_before_retry_on_startup_race tests/test_runtime_composition.py tests/test_zero_import_gates.py::test_telegram_ingress_line_count_stays_below_hard_cap`
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_agents.py tests/test_config.py tests/test_handlers.py tests/test_worker_workflows.py tests/test_channel_egress_factory.py tests/test_runtime_dispatch_boundary.py tests/test_request_flow.py tests/test_runtime_composition.py tests/test_zero_import_gates.py`
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_simulator_e2e.py::test_simulator_registry_message_runs_through_registry_surface_output`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified `rg` returns no remaining `create_channel_egress`, `conversation_channel_name`, or `trust_tier_for_source` hits under `app/`
+  - verified dispatcher-based trust preserves public Telegram behavior while still treating registry channels/tasks as trusted
+  - verified registry conversation/task refs now route only when qualified (`registry:<id>:conversation:*`, `registry:<id>:task:*`), with simulator and handler coverage exercising the no-shim contract
+  - verified `app/channels/telegram/ingress.py` is back under the hard line-count cap at exactly `1500` lines after moving helper logic out
+  Review:
+  - the slice stayed within existing seams: dispatcher for ref ownership, work admission for trust resolution, recovery workflow for replay trust, and Telegram normalization for fresh inbound ref persistence
+  - no alternate outbound path remains; both worker-owned Telegram execution and routed-result resume now go through the same dispatcher contract
+  - when the broader regression run exposed lingering old-format registry refs in tests/simulator, the fix was to update callers to the plan’s qualified ref format rather than reintroduce compatibility shims
+  Verified:
+  - hardwired outbound dispatch is gone and orchestration-level channel branching is reduced to dispatcher/descriptor queries
+  - ref-based trust and execution context logic now align with the channel contract instead of string checks
+  - full suite status after slice 6: `1797 passed, 23 skipped`
 
 # Octopus CLI Implementation Status
 

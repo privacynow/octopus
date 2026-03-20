@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
+from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime.inbound_types import InboundMessage
 
 
@@ -51,6 +52,7 @@ class RecoveryPort(Protocol):
         worker_id: str,
         ignore_claimed_item_id: str = "",
         config: Any,
+        dispatcher: ChannelDispatcher | None = None,
     ) -> RecoveryActionOutcome: ...
 
     def complete_replay(self, *, data_dir: Path, item_id: str) -> None: ...

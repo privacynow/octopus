@@ -5,7 +5,9 @@ from __future__ import annotations
 import html
 from pathlib import Path
 
+from app.agents.bridge import telegram_conversation_ref
 from app import user_messages as _msg
+from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.workflows.recovery.contracts import (
     RecoveryActionOutcome,
     RecoveryReplayPlan,
@@ -15,12 +17,24 @@ from app.workflows.recovery.contracts import (
 )
 from app import work_queue
 from app.runtime.inbound_types import InboundMessage, deserialize_inbound
-from app.runtime.work_admission import trust_tier_for_source
+from app.runtime.work_admission import trust_tier_for_ref
 from app.workflows.recovery.results import TransportStateCorruption
 
 
 class RecoveryUseCases(RecoveryPort):
     """Canonical replay/discard flows shared by channels."""
+
+    @staticmethod
+    def _event_conversation_ref(event: InboundMessage, *, config) -> str:
+        if event.conversation_ref:
+            return event.conversation_ref
+        if getattr(event, "source", "telegram") != "telegram":
+            return event.conversation_ref or event.conversation_key
+        try:
+            chat_id = event.chat_id
+        except ValueError:
+            return event.conversation_ref or event.conversation_key
+        return telegram_conversation_ref(config, chat_id)
 
     def prepare_action(
         self,
@@ -32,6 +46,7 @@ class RecoveryUseCases(RecoveryPort):
         worker_id: str,
         ignore_claimed_item_id: str = "",
         config,
+        dispatcher: ChannelDispatcher | None = None,
     ) -> RecoveryActionOutcome:
         try:
             recovery_item = work_queue.get_pending_recovery_for_update(
@@ -123,10 +138,11 @@ class RecoveryUseCases(RecoveryPort):
                 status="not_message",
                 edit_message=_msg.recovery_replay_failed_edit(),
             )
-        trust_tier = trust_tier_for_source(
-            getattr(event, "source", "telegram"),
+        trust_tier = trust_tier_for_ref(
+            self._event_conversation_ref(event, config=config),
             event.user,
             config=config,
+            dispatcher=dispatcher,
         )
         return RecoveryActionOutcome(
             status="replay_ready",

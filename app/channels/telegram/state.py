@@ -55,6 +55,7 @@ class TelegramRuntime:
         default_factory=lambda: defaultdict(asyncio.Lock)
     )
     pending_work_items: dict[int, str] = field(default_factory=dict)
+    channel_dispatcher: Any = None
     registry_client_factory: Callable[[BotConfig], Any | None] = field(
         default_factory=lambda: _default_registry_client_factory
     )

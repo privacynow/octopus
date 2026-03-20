@@ -28,7 +28,7 @@ from app.agents.state import (
     save_registry_connection_state,
 )
 from tests.support.config_support import make_config
-from tests.support.handler_support import fresh_env
+from tests.support.handler_support import current_runtime, fresh_env
 
 
 def _reg_conv(conversation_ref: str) -> str:
@@ -752,45 +752,47 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
         )
 
     monkeypatch.setattr("app.agents.delivery.publish_timeline_event", fake_publish_timeline_event)
-    config = make_config(
-        data_dir=tmp_path,
-        agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
-    )
-
-    outcome = await handle_registry_delivery(
-        config,
-        {
-            "kind": "routed_result",
-            "payload": {
-                "routed_task_id": "task-1",
-                "parent_conversation_id": "telegram:agent-1:12345",
-                "result": {
-                    "status": "completed",
-                    "summary": "Summary",
-                    "full_text": "Delegated task completed successfully.",
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (_data_dir, config, prov):
+        parent_conversation_ref = telegram_conversation_ref(config, 12345)
+        outcome = await handle_registry_delivery(
+            config,
+            {
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "task-1",
+                    "parent_conversation_id": parent_conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Summary",
+                        "full_text": "Delegated task completed successfully.",
+                    },
                 },
             },
-        },
-        runtime=build_registry_delivery_runtime(
-            provider_name="claude",
-            provider_state_factory=dict,
-            bot=None,
-        ),
-    )
+            runtime=build_registry_delivery_runtime(
+                provider_name=prov.name,
+                provider_state_factory=prov.new_provider_state,
+                bot=None,
+                dispatcher=current_runtime().channel_dispatcher,
+            ),
+        )
 
-    assert outcome == "retry_later"
-    assert published == [
-        {
-            "conversation_ref": "telegram:agent-1:12345",
-            "kind": "delegated_result",
-            "title": "Delegated result received",
-            "body": "Delegated task completed successfully.",
-            "status": "completed",
-            "metadata": {"routed_task_id": "task-1"},
-        }
-    ]
+        assert outcome == "retry_later"
+        assert published == [
+            {
+                "conversation_ref": parent_conversation_ref,
+                "kind": "delegated_result",
+                "title": "Delegated result received",
+                "body": "Delegated task completed successfully.",
+                "status": "completed",
+                "metadata": {"routed_task_id": "task-1"},
+            }
+        ]
 
 
 async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Path):

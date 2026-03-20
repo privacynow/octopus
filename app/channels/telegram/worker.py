@@ -18,7 +18,6 @@ from app.agents.delegation import (
     handle_delegation_approve as handle_channel_delegation_approve,
     handle_delegation_cancel as handle_channel_delegation_cancel,
 )
-from app.channel_egress_factory import create_channel_egress
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.conversation import handle_worker_conversation_action
 from app.channels.telegram.execution import (
@@ -44,7 +43,7 @@ from app.runtime.inbound_types import (
     InboundMessage,
     InboundUser,
 )
-from app.runtime.work_admission import admit_worker_message, trust_tier_for_source
+from app.runtime.work_admission import admit_worker_message, trust_tier_for_ref
 from app.workflows.execution.contracts import ExecutionRuntime
 from app.workflows.execution.finalization import FinalizationContext, finalize_execution
 from app.workflows.execution.requests import dispatch_message_request, load_approval_mode
@@ -52,6 +51,13 @@ from app.workflows.recovery.replay import get_recovery_use_cases
 from app.worker import poll_interval_for_runtime
 
 log = logging.getLogger(__name__)
+
+
+def _channel_dispatcher(runtime: TelegramRuntime):
+    dispatcher = getattr(runtime, "channel_dispatcher", None)
+    if dispatcher is None:
+        raise RuntimeError("Telegram runtime is missing a channel dispatcher")
+    return dispatcher
 
 
 @contextlib.asynccontextmanager
@@ -173,18 +179,13 @@ def _build_channel_egress(
     item_id: str = "",
 ):
     bot_instance = runtime.bot_instance
-    chat_id = telegram_numeric_id(conversation_key) if source == "telegram" else None
-    if source == "telegram" and (chat_id is None or bot_instance is None):
-        raise RuntimeError(
-            f"Telegram item {item_id or conversation_key!r} missing bot or chat_id for {conversation_key!r}"
-        )
+    dispatcher = _channel_dispatcher(runtime)
+    chat_id = telegram_numeric_id(conversation_key)
     runtime_chat = chat_id if chat_id is not None else conversation_key
     resolved_conversation_ref = conversation_ref or (
-        telegram_conversation_ref(runtime.config, chat_id)
-        if source == "telegram" and chat_id is not None
-        else conversation_key
+        telegram_conversation_ref(runtime.config, chat_id) if chat_id is not None else conversation_key
     )
-    channel_egress = create_channel_egress(
+    channel_egress = dispatcher.create_egress(
         resolved_conversation_ref,
         config=runtime.config,
         bot=bot_instance,
@@ -211,7 +212,12 @@ async def _execute_worker_action(
         event,
         item=item,
     )
-    trust = trust_tier_for_source(source, event.user, config=runtime.config)
+    trust = trust_tier_for_ref(
+        conversation_ref,
+        event.user,
+        config=runtime.config,
+        dispatcher=_channel_dispatcher(runtime),
+    )
     action = event.action
     params = dict(event.params)
 
@@ -317,6 +323,13 @@ async def worker_dispatch(
         message_conversation_key = str(item.get("conversation_key") or getattr(event, "conversation_key", ""))
         routed_task_id = getattr(event, "routed_task_id", "")
         title = summarize_text(event.text) or "Conversation"
+        dispatcher = _channel_dispatcher(runtime)
+        message_chat_id = telegram_numeric_id(message_conversation_key)
+        admission_conversation_ref = event.conversation_ref or (
+            telegram_conversation_ref(runtime.config, message_chat_id)
+            if message_chat_id is not None
+            else message_conversation_key
+        )
         channel_egress, runtime_chat, chat_id, conversation_ref, source = _build_channel_egress(
             runtime,
             conversation_key=message_conversation_key,
@@ -329,9 +342,10 @@ async def worker_dispatch(
         admission = admit_worker_message(
             data_dir=data_dir,
             item_id=item["id"],
-            source=source,
+            conversation_ref=admission_conversation_ref,
             user=event.user,
             config=runtime.config,
+            dispatcher=dispatcher,
         )
         if not admission.allowed:
             return

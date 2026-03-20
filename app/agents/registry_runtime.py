@@ -50,7 +50,6 @@ class RegistryRuntime:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._runtimes: dict[str, AgentRuntime] = {}
         self._registry_by_id = {registry.registry_id: registry for registry in registries}
-        self._channels_registered = False
 
     @property
     def registries(self) -> tuple[RegistryConnectionConfig, ...]:
@@ -246,14 +245,6 @@ class RegistryRuntime:
             return matches[0]
         return ""
 
-    def register_channels(self) -> None:
-        if self._channels_registered:
-            return
-
-        from app.channels.registry.channel import register_registry_channels
-
-        register_registry_channels(self._config, self._registries, self._dispatcher)
-        self._channels_registered = True
     def _annotated_delivery_handler(
         self,
         registry_id: str,

@@ -811,3 +811,23 @@
   - discovery results, pending delegation tasks, and registry-originated inbound events now preserve opaque `authority_ref` provenance end to end
   - both positive and negative provenance paths are covered: modern `authority_ref` flow, legacy `registry_id` boundary fallback, overlapping routed-task provenance matching, and registry-backed discovery ordering/output
   - full suite status after slice 7: `1885 passed, 23 skipped`
+- Complete: Slice 7A rationalize registry channels.
+  Scope:
+  - rewired `app/channels/registry/channel.py` so registry conversation/task channels accept `BotServices` instead of registry client factories, and startup-owned channel registration now builds bus-backed scoped services per authority using the shared registry capability map
+  - rewired `app/channels/registry/egress.py` so registry-native bind/timeline publication goes through `services.control_plane.conversation_projection` instead of direct bridge helpers or registry client construction
+  - deleted `RegistryRuntime.register_channels()` and moved the remaining registration tests to the startup-owned `register_registry_channels(...)` helper so the dispatcher mutation path is no longer runtime-owned
+  - fixed a real SQLite session-store thread-affinity bug uncovered during the slice review by making the SQLite session store cache connections per `(data_dir, thread)` instead of per path only; registry UI/runtime-surface session loads now work correctly across TestClient threads
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_registry_adapter.py tests/test_registry_runtime.py tests/test_config.py -k "registry or control_plane or startup"`
+  - `./.venv/bin/python -m pytest -q tests/test_channel_dispatcher.py tests/test_telegram_channel_state.py tests/test_control_plane_adapters.py tests/test_control_plane_ports.py`
+  - `./.venv/bin/python -m pytest -q tests/test_handlers.py::test_registry_routed_task_executes_and_reports_result tests/test_handlers.py::test_registry_channel_parent_resumes_through_registry_channel tests/test_handlers.py::test_registry_recovery_notice_timeline_includes_update_id tests/test_registry_service.py::test_registry_conversation_skill_surface_lazy_loads_default_session tests/test_storage.py::test_session_store_uses_thread_local_sqlite_connections`
+  - `./.venv/bin/python -m pytest -q tests/test_registry_adapter.py tests/test_registry_runtime.py tests/test_storage.py::test_session_store_uses_thread_local_sqlite_connections`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - the slice keeps the control-plane abstraction intact by reusing the existing conversation-projection port; registry channels now target one authority by receiving per-authority scoped services from startup composition instead of teaching the port or the channel about registry clients again
+  - removing `RegistryRuntime.register_channels()` closed the last runtime-owned dispatcher mutation path rather than leaving a dead alternative seam behind for later cleanup
+  - the first full-suite run exposed stale handler tests still patching the removed direct bind seam and a real cross-thread SQLite session-store bug; both were fixed at the correct boundaries instead of reintroducing direct registry helpers or test-only shims
+  Verified:
+  - registry egress now depends only on the capability-port surface and no longer imports `bind_conversation`, `registry_connection_client`, or registry client factories
+  - startup-owned registry channel registration still routes by scope correctly, and registry-native conversation/task egress continues to publish non-fatally through the scoped port seam
+  - full suite status after slice 7A: `1885 passed, 23 skipped`

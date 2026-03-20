@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -36,11 +37,15 @@ class SQLiteSessionStore:
     """Session store backed by SQLite. One instance per backend; owns its connection cache."""
 
     def __init__(self) -> None:
-        self._connections: dict[Path, sqlite3.Connection] = {}
+        self._connections: dict[tuple[Path, int], sqlite3.Connection] = {}
+
+    def _connection_key(self, data_dir: Path) -> tuple[Path, int]:
+        return data_dir, threading.get_ident()
 
     def _db(self, data_dir: Path) -> sqlite3.Connection:
-        if data_dir in self._connections:
-            return self._connections[data_dir]
+        key = self._connection_key(data_dir)
+        if key in self._connections:
+            return self._connections[key]
         db_path = data_dir / "sessions.db"
         conn = sqlite3.connect(str(db_path), isolation_level="DEFERRED")
         try:
@@ -69,7 +74,7 @@ class SQLiteSessionStore:
         except Exception:
             conn.close()
             raise
-        self._connections[data_dir] = conn
+        self._connections[key] = conn
         return conn
 
     def _run_migrations(self, conn: sqlite3.Connection, stored_version: int) -> None:
@@ -254,9 +259,11 @@ class SQLiteSessionStore:
         return results
 
     def close_db(self, data_dir: Path) -> None:
-        conn = self._connections.pop(data_dir, None)
-        if conn:
-            conn.close()
+        keys = [key for key in self._connections if key[0] == data_dir]
+        for key in keys:
+            conn = self._connections.pop(key, None)
+            if conn:
+                conn.close()
 
     def close_all_db(self) -> None:
         for data_dir in list(self._connections.keys()):

@@ -251,6 +251,36 @@ async def test_registry_channels_build_scoped_egress_from_qualified_refs(tmp_pat
     assert projection.bind_calls[0]["external_id"] == "conv-42"
 
 
+async def test_registry_task_egress_does_not_project_task_ref_lifecycle(tmp_path):
+    cfg = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+    projection = _ProjectionRecorder()
+    task_egress = RegistryChannelEgress(
+        cfg,
+        conversation_ref=registry_task_ref("default", "task-no-project"),
+        services=_services(projection),
+    )
+
+    await task_egress.bind(title="Task", config=cfg)
+    handle = await task_egress.send_text("working…")
+    await handle.edit_text("<b>still working</b>")
+    await task_egress.on_outcome(RunResult(text="done", returncode=0))
+    await task_egress.send_recovery_notice(
+        preview="preview",
+        prompt="prompt",
+        run_again_label="Run again",
+        skip_label="Skip",
+        update_id=1,
+    )
+
+    assert task_egress.capabilities.can_render_timeline is False
+    assert projection.bind_calls == []
+    assert projection.timeline_calls == []
+
+
 def test_register_registry_channels_registers_channels_by_scope(tmp_path):
     prod = RegistryConnectionConfig(
         registry_id="prod",

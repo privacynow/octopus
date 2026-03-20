@@ -75,6 +75,7 @@ class RegistryChannelEgress(ChannelEgress):
             )
         self.config = config
         self.conversation_ref = conversation_ref
+        self._ref_kind = parsed_ref[1]
         self.registry_id = parsed_ref[0]
         self.routed_task_id = routed_task_id or (parsed_ref[2] if parsed_ref[1] == "task" else "")
         self.authority_ref = authority_ref
@@ -95,11 +96,14 @@ class RegistryChannelEgress(ChannelEgress):
             can_answer_action=True,
             can_send_photo=False,
             can_send_document=False,
-            can_render_timeline=True,
+            can_render_timeline=(self._ref_kind == "conversation"),
             can_present_actions=True,
-            can_share_conversation=True,
+            can_share_conversation=(self._ref_kind == "conversation"),
             channel_name="registry",
         )
+
+    def _is_task_ref(self) -> bool:
+        return self._ref_kind == "task"
 
     def _metadata(self) -> dict[str, Any]:
         return {"routed_task_id": self.routed_task_id} if self.routed_task_id else {}
@@ -146,6 +150,8 @@ class RegistryChannelEgress(ChannelEgress):
             )
 
     async def _publish_progress(self, html_text: str, *, event_id: str | None = None) -> None:
+        if self._is_task_ref():
+            return
         snippet = self._plain_text_snippet(html_text)
         if not snippet:
             return
@@ -165,15 +171,18 @@ class RegistryChannelEgress(ChannelEgress):
         event_id = uuid.uuid4().hex
         self.sent_messages.append(text)
         self._append_output("send", text)
-        await self._publish_event(
-            kind="bot_message",
-            title="Bot reply",
-            body=text,
-            event_id=event_id,
-        )
+        if not self._is_task_ref():
+            await self._publish_event(
+                kind="bot_message",
+                title="Bot reply",
+                body=text,
+                event_id=event_id,
+            )
         return RegistryEditableHandle(self, event_id=event_id, kind="bot_message", title="Bot reply")
 
     async def send_photo(self, photo: Path | str | bytes, **kwargs: Any) -> None:
+        if self._is_task_ref():
+            return
         caption = kwargs.get("caption", "[photo]")
         self._append_output("send", caption)
         await self._publish_event(
@@ -183,6 +192,8 @@ class RegistryChannelEgress(ChannelEgress):
         )
 
     async def send_document(self, document: Path | str | bytes, **kwargs: Any) -> None:
+        if self._is_task_ref():
+            return
         caption = kwargs.get("caption", "[document]")
         self._append_output("send", caption)
         await self._publish_event(
@@ -192,14 +203,20 @@ class RegistryChannelEgress(ChannelEgress):
         )
 
     async def send_action(self, action: str) -> None:
+        if self._is_task_ref():
+            return
         await self._publish_event(kind="channel_action", title="Bot action", body=action)
 
     async def answer_action(self, text: str | None = None, show_alert: bool = False) -> None:
+        if self._is_task_ref():
+            return
         detail = text or ("alert" if show_alert else "ack")
         self._append_output("answer", detail)
         await self._publish_event(kind="action_answer", title="Action handled", body=detail)
 
     async def publish_timeline(self, event: Any) -> None:
+        if self._is_task_ref():
+            return
         body = getattr(event, "body", "") or getattr(event, "text", "") or ""
         await self._publish_event(
             kind=getattr(event, "kind", "timeline"),
@@ -211,6 +228,8 @@ class RegistryChannelEgress(ChannelEgress):
         )
 
     async def sync_binding(self, binding: Any) -> None:
+        if self._is_task_ref():
+            return
         try:
             await self._services.control_plane.conversation_projection.bind_external_conversation(
                 conversation_ref=_binding_field(binding, "conversation_ref", self.conversation_ref),
@@ -227,6 +246,9 @@ class RegistryChannelEgress(ChannelEgress):
 
     async def bind(self, *, title: str, config: Any) -> None:
         del config
+        if self._is_task_ref():
+            self.title = title or self.title
+            return
         self.title = title or self.title
         try:
             await self._services.control_plane.conversation_projection.bind_external_conversation(
@@ -248,6 +270,8 @@ class RegistryChannelEgress(ChannelEgress):
         return None
 
     async def on_outcome(self, outcome: Any) -> None:
+        if self._is_task_ref():
+            return None
         if outcome is None:
             return None
         returncode = getattr(outcome, "returncode", 0)
@@ -290,6 +314,8 @@ class RegistryChannelEgress(ChannelEgress):
         skip_label: str,
         update_id: int,
     ) -> None:
+        if self._is_task_ref():
+            return
         del run_again_label, skip_label
         await self._publish_event(
             kind="recovery_notice",

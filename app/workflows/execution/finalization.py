@@ -154,7 +154,9 @@ async def finalize_execution(
                     context.item_id,
                     exc_info=True,
                 )
-        if (
+        if context.routed_task_id:
+            timeline_status = "skipped_routed_task"
+        elif (
             context.conversation_ref
             and context.publish_timeline_event is not None
             and (outcome.prompt_tokens > 0 or outcome.completion_tokens > 0)

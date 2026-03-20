@@ -29,13 +29,51 @@
 - Phase 11A landed green: routed-task execution no longer emits
   projected task-ref lifecycle side effects during worker dispatch or
   finalization.
-- Phase 11B and 11C remain outstanding: terminal routed-task state is
-  still partially inferred from progress text, and dispatcher readiness
-  still constructs full egress objects for probes.
-- Full suite status after the verified Phase 11A slice:
-  `1937 passed, 23 skipped`.
+- Phase 11B landed green: routed-task terminal state is no longer
+  inferred from progress text; terminal ownership is back on routed
+  result reporting.
+- Phase 11C remains outstanding: dispatcher readiness still constructs
+  full egress objects for probes.
+- Full suite status after the verified Phase 11B slice:
+  `1939 passed, 23 skipped`.
 
 ## Slice Log
+
+- Complete: Phase 11B remediation — stop inferring routed-task terminal state from progress text.
+  Scope:
+  - removed the routed-task progress callback’s terminal-state
+    inference from rendered user-facing message strings
+  - made routed-task progress updates always publish in-flight
+    `status="running"` summaries while leaving terminal ownership to
+    `report_routed_task_result()`
+  - broadened regression coverage so completion, cancellation, and
+    approval-timeout labels all remain in-flight progress updates
+    instead of silently rewriting routed-task terminal state
+  - updated routed-task worker progress expectations to prove the final
+    visible progress label no longer claims task completion on its own
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_telegram_progress_module.py tests/test_handlers.py::test_registry_routed_task_progress_updates_task_status tests/test_handlers.py::test_registry_routed_task_executes_and_reports_result tests/test_execution_finalization.py`
+  - `./.venv/bin/python -m pytest -q tests/test_progress.py::test_heartbeat_does_not_overwrite_provider_liveness tests/test_invariants.py::test_heartbeat_fires_on_idle tests/test_invariants.py::test_heartbeat_stops_when_content_starts tests/test_telegram_progress_module.py tests/test_handlers.py::test_registry_routed_task_progress_updates_task_status`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified `app/channels/telegram/progress.py` no longer contains
+    `_routed_task_status()` or any completion/cancellation/timeout
+    string matching for routed-task state
+  - verified terminal routed-task status is still produced by the
+    routed-result path rather than by progress callback text
+  Review:
+  - the first pass of this slice removed `_msg` too aggressively and
+    broke heartbeat; the full suite caught it immediately, and the fix
+    restored the heartbeat-owned user message import without reviving
+    routed-task text inference
+  - this slice stayed concern-owned: the progress callback still emits
+    user-visible summaries, but it no longer claims terminal ownership
+    that belongs to finalization/result reporting
+  Verified:
+  - routed-task progress no longer infers terminal task state from
+    rendered text
+  - heartbeat and generic Telegram progress behavior still work
+  - full suite status after Phase 11B: `1939 passed, 23 skipped`
 
 - Complete: Phase 11A remediation — remove projected task-ref side effects from routed-task execution.
   Scope:

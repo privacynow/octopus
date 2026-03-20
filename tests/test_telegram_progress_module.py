@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import app.channels.telegram.progress as telegram_progress
+import app.user_messages as _msg
 from app.agents.types import RoutedTaskUpdate
 from app.ports.agent_directory import NoOpAgentDirectory
 from app.ports.health_publication import NoOpHealthPublication
@@ -153,8 +154,16 @@ async def test_routed_task_progress_callback_skips_empty_markup() -> None:
     routing.update_routed_task_status.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Completed.",
+        _msg.cancel_live_completed(),
+        _msg.approval_timeout(),
+    ],
+)
 @pytest.mark.asyncio
-async def test_routed_task_progress_callback_maps_terminal_progress_label() -> None:
+async def test_routed_task_progress_callback_keeps_terminal_progress_label_in_flight(label: str) -> None:
     routing = SimpleNamespace(update_routed_task_status=AsyncMock())
     runtime = build_telegram_runtime(
         make_config(data_dir=Path("/tmp/telegram-progress-routed-task-terminal")),
@@ -166,11 +175,11 @@ async def test_routed_task_progress_callback_maps_terminal_progress_label() -> N
         runtime,
         "task-1",
         "registry:ops",
-        "Completed.",
+        label,
         force=True,
     )
 
     kwargs = routing.update_routed_task_status.await_args.kwargs
     update = kwargs["update"]
-    assert update.status == "completed"
-    assert update.summary == "Completed."
+    assert update.status == "running"
+    assert update.summary == label

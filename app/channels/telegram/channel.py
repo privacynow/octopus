@@ -51,18 +51,45 @@ class TelegramChannelBootstrap(ChannelBootstrap):
     def ref_prefix(self) -> str:
         return "telegram:"
 
+    def _resolve_chat_id(
+        self,
+        *,
+        conversation_ref: str,
+        conversation_key: str = "",
+        chat_id: int | None = None,
+    ) -> int | None:
+        if chat_id is not None:
+            return chat_id
+        if conversation_key:
+            resolved = telegram_numeric_id(conversation_key)
+            if resolved is not None:
+                return resolved
+        suffix = conversation_ref.rsplit(":", 1)[-1]
+        return int(suffix) if suffix.isdigit() else None
+
+    def can_build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> bool:
+        del config
+        if kw.get("bot") is None:
+            return False
+        conversation_key = str(kw.get("conversation_key", ""))
+        chat_id = kw.get("chat_id")
+        return self._resolve_chat_id(
+            conversation_ref=conversation_ref,
+            conversation_key=conversation_key,
+            chat_id=chat_id,
+        ) is not None
+
     def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> ChannelEgress:
         bot = kw.get("bot")
         if bot is None:
             raise RuntimeError("Telegram channel requires a bot instance")
 
         conversation_key = str(kw.get("conversation_key", ""))
-        chat_id = kw.get("chat_id")
-        if chat_id is None:
-            chat_id = telegram_numeric_id(conversation_key) if conversation_key else None
-        if chat_id is None:
-            suffix = conversation_ref.rsplit(":", 1)[-1]
-            chat_id = int(suffix) if suffix.isdigit() else None
+        chat_id = self._resolve_chat_id(
+            conversation_ref=conversation_ref,
+            conversation_key=conversation_key,
+            chat_id=kw.get("chat_id"),
+        )
         if chat_id is None:
             raise RuntimeError(
                 f"Telegram channel requires a Telegram conversation key, got {conversation_ref!r}"

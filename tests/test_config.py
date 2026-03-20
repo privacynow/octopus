@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,6 +15,7 @@ from telegram.error import InvalidToken, NetworkError
 
 from app.agents.types import RegistryConnectionConfig
 from app.config import _parse_projects, load_config, load_dotenv_file, parse_allowed_users, validate_config
+from app.runtime.services import BotServices
 from app.session_state import ProjectBinding
 from tests.support.config_support import make_config, make_registry_connection
 
@@ -334,6 +335,12 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
 
     dispatcher = MagicMock()
     mock_app.bot_data = {}
+    bus = SimpleNamespace(reconcile_orphans=AsyncMock(return_value=0))
+    processor_runner = SimpleNamespace(
+        register=MagicMock(),
+        run=AsyncMock(return_value=None),
+        stop=AsyncMock(return_value=None),
+    )
     ingress = SimpleNamespace(
         application=mock_app,
         runtime=SimpleNamespace(boot_id="test-boot"),
@@ -344,41 +351,68 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
     dispatcher.build_all_ingresses.return_value = {"telegram": ingress}
     dispatcher_runner = AsyncMock(return_value=None)
 
-    with patch("app.main.load_config", return_value=cfg), \
-         patch("app.main.make_provider", return_value=provider), \
-         patch("app.main.fail_fast"), \
-         patch("app.runtime_backend.init"), \
-         patch("app.main.ensure_data_dirs"), \
-         patch("app.main.init_content_store_for_config"), \
-         patch("app.main.ChannelDispatcher", return_value=dispatcher), \
-         patch("app.main.TelegramChannelBootstrap"), \
-         patch("app.main.run_dispatcher_process", dispatcher_runner), \
-         patch("app.main.close_db"), \
-         patch("app.main.close_transport_db"), \
-         patch("app.main.recover_stale_claims"), \
-         patch("app.main.purge_old"), \
-         patch("app.db.postgres.get_connection", side_effect=lambda *a, **k: _fake_conn()), \
-         patch("app.db.postgres_doctor.run_doctor", return_value=[]), \
-         patch("app.db.postgres.close_pools"), \
-         patch("sys.argv", ["bot"]):
-        yield provider, dispatcher, ingress, dispatcher_runner
+    with ExitStack() as stack:
+        stack.enter_context(patch("app.main.load_config", return_value=cfg))
+        stack.enter_context(patch("app.main.make_provider", return_value=provider))
+        stack.enter_context(patch("app.main.fail_fast"))
+        stack.enter_context(patch("app.runtime_backend.init"))
+        stack.enter_context(patch("app.main.ensure_data_dirs"))
+        stack.enter_context(patch("app.main.init_content_store_for_config"))
+        stack.enter_context(patch("app.main.init_credential_store_for_config"))
+        stack.enter_context(patch("app.main.ChannelDispatcher", return_value=dispatcher))
+        stack.enter_context(patch("app.main.ControlPlaneBus", return_value=bus))
+        stack.enter_context(patch("app.main.ProcessorRunner", return_value=processor_runner))
+        register_registry_channels = stack.enter_context(
+            patch("app.main.register_registry_channels")
+        )
+        telegram_bootstrap = stack.enter_context(
+            patch("app.main.TelegramChannelBootstrap")
+        )
+        stack.enter_context(patch("app.main.run_dispatcher_process", dispatcher_runner))
+        stack.enter_context(patch("app.main.close_db"))
+        stack.enter_context(patch("app.main.close_transport_db"))
+        stack.enter_context(patch("app.main.recover_stale_claims"))
+        stack.enter_context(patch("app.main.purge_old"))
+        stack.enter_context(
+            patch(
+                "app.db.postgres.get_connection",
+                side_effect=lambda *a, **k: _fake_conn(),
+            )
+        )
+        stack.enter_context(patch("app.db.postgres_doctor.run_doctor", return_value=[]))
+        stack.enter_context(patch("app.db.postgres.close_pools"))
+        stack.enter_context(patch("sys.argv", ["bot"]))
+        yield SimpleNamespace(
+            provider=provider,
+            dispatcher=dispatcher,
+            ingress=ingress,
+            dispatcher_runner=dispatcher_runner,
+            telegram_bootstrap=telegram_bootstrap,
+            bus=bus,
+            processor_runner=processor_runner,
+            register_registry_channels=register_registry_channels,
+        )
 
 def test_main_calls_run_polling_in_poll_mode():
     """When BOT_MODE=poll, main() runs the dispatcher-owned ingress process."""
     cfg = make_config(bot_mode="poll", database_url="postgresql://bot:bot@localhost:5432/bot")
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app) as (_provider, dispatcher, _ingress, dispatcher_runner):
+    with _patched_main_runtime(cfg, mock_app) as runtime:
         from app.main import main
         main()
-    dispatcher.build_all_ingresses.assert_called_once()
-    dispatcher_runner.assert_awaited_once_with(dispatcher)
+    runtime.dispatcher.build_all_ingresses.assert_called_once()
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
+    call = runtime.telegram_bootstrap.call_args
+    assert call is not None
+    assert call.args[:2] == (cfg, runtime.provider)
+    assert isinstance(call.args[2], BotServices)
 
 
 def test_main_polling_invalid_token_exits_with_operator_message(capsys):
     cfg = make_config(bot_mode="poll", database_url="postgresql://bot:bot@localhost:5432/bot")
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app) as (_provider, _dispatcher, _ingress, dispatcher_runner):
-        dispatcher_runner.side_effect = InvalidToken("The token was rejected")
+    with _patched_main_runtime(cfg, mock_app) as runtime:
+        runtime.dispatcher_runner.side_effect = InvalidToken("The token was rejected")
         from app.main import main
 
         with pytest.raises(SystemExit) as excinfo:
@@ -393,8 +427,8 @@ def test_main_polling_invalid_token_exits_with_operator_message(capsys):
 def test_main_polling_network_error_exits_with_connectivity_message(capsys):
     cfg = make_config(bot_mode="poll", database_url="postgresql://bot:bot@localhost:5432/bot")
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app) as (_provider, _dispatcher, _ingress, dispatcher_runner):
-        dispatcher_runner.side_effect = NetworkError("timeout")
+    with _patched_main_runtime(cfg, mock_app) as runtime:
+        runtime.dispatcher_runner.side_effect = NetworkError("timeout")
         from app.main import main
 
         with pytest.raises(SystemExit) as excinfo:
@@ -439,10 +473,10 @@ def test_main_calls_run_webhook_in_webhook_mode():
         database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app) as (_provider, dispatcher, _ingress, dispatcher_runner):
+    with _patched_main_runtime(cfg, mock_app) as runtime:
         from app.main import main
         main()
-    dispatcher_runner.assert_awaited_once_with(dispatcher)
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
 
 
 def test_main_allows_shared_runtime_in_webhook_mode():
@@ -453,11 +487,11 @@ def test_main_allows_shared_runtime_in_webhook_mode():
         database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app) as (_provider, dispatcher, _ingress, dispatcher_runner):
+    with _patched_main_runtime(cfg, mock_app) as runtime:
         from app.main import main
 
         main()
-    dispatcher_runner.assert_awaited_once_with(dispatcher)
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
 
 
 def test_main_worker_role_runs_worker_process_only():
@@ -469,11 +503,12 @@ def test_main_worker_role_runs_worker_process_only():
         database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app) as (_provider, dispatcher, _ingress, dispatcher_runner):
+    with _patched_main_runtime(cfg, mock_app) as runtime:
         from app.main import main
 
         main()
-    dispatcher_runner.assert_awaited_once_with(dispatcher)
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
+    runtime.processor_runner.register.assert_not_called()
 
 
 def test_main_registry_runtime_starts_and_stops_with_dispatcher_lifecycle():
@@ -488,27 +523,34 @@ def test_main_registry_runtime_starts_and_stops_with_dispatcher_lifecycle():
     )
     mock_app = MagicMock()
     registry_runtime = SimpleNamespace(
-        register_channels=MagicMock(),
         start=AsyncMock(return_value=None),
         stop=AsyncMock(return_value=None),
     )
 
-    with _patched_main_runtime(cfg, mock_app) as (_provider, dispatcher, ingress, dispatcher_runner):
+    with _patched_main_runtime(cfg, mock_app) as runtime:
         async def _run_dispatcher(_dispatcher):
-            ingress.application.bot_data["dispatcher_stop_event"] = asyncio.Event()
-            await ingress.application.post_init(ingress.application)
-            await ingress.application.post_shutdown(ingress.application)
+            runtime.ingress.application.bot_data["dispatcher_stop_event"] = asyncio.Event()
+            await runtime.ingress.application.post_init(runtime.ingress.application)
+            await runtime.ingress.application.post_shutdown(runtime.ingress.application)
 
-        dispatcher_runner.side_effect = _run_dispatcher
+        runtime.dispatcher_runner.side_effect = _run_dispatcher
         with patch("app.main.RegistryRuntime", return_value=registry_runtime):
             from app.main import main
 
             main()
 
-    dispatcher_runner.assert_awaited_once_with(dispatcher)
-    registry_runtime.register_channels.assert_called_once_with()
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
+    runtime.register_registry_channels.assert_called_once_with(
+        cfg,
+        cfg.agent_registries,
+        runtime.dispatcher,
+    )
     registry_runtime.start.assert_awaited_once()
     registry_runtime.stop.assert_awaited_once()
+    runtime.processor_runner.register.assert_called_once()
+    runtime.processor_runner.run.assert_awaited_once()
+    runtime.processor_runner.stop.assert_awaited_once()
+    runtime.bus.reconcile_orphans.assert_awaited_once()
 
 
 def test_main_registry_only_starts_without_telegram_ingress():
@@ -542,7 +584,6 @@ def test_main_registry_only_starts_without_telegram_ingress():
         worker_deserialize_failure_notifier=None,
     )
     registry_runtime = SimpleNamespace(
-        register_channels=MagicMock(),
         start=AsyncMock(return_value=None),
         stop=AsyncMock(return_value=None),
     )
@@ -556,33 +597,58 @@ def test_main_registry_only_starts_without_telegram_ingress():
 
     dispatcher_runner.side_effect = _run_dispatcher
 
-    with patch("app.main.load_config", return_value=cfg), \
-         patch("app.main.make_provider", return_value=provider), \
-         patch("app.main.fail_fast"), \
-         patch("app.runtime_backend.init"), \
-         patch("app.main.ensure_data_dirs"), \
-         patch("app.main.init_content_store_for_config"), \
-         patch("app.main.init_credential_store_for_config"), \
-         patch("app.main.ChannelDispatcher", return_value=dispatcher), \
-         patch("app.main.TelegramChannelBootstrap") as telegram_bootstrap, \
-         patch("app.main.build_worker_bundle", return_value=worker_bundle) as build_worker_bundle_mock, \
-         patch("app.main.RegistryRuntime", return_value=registry_runtime), \
-         patch("app.main.run_dispatcher_process", dispatcher_runner), \
-         patch("app.main.close_db"), \
-         patch("app.main.close_transport_db"), \
-         patch("app.main.recover_stale_claims"), \
-         patch("app.main.purge_old"), \
-         patch("sys.argv", ["bot"]):
+    with ExitStack() as stack:
+        stack.enter_context(patch("app.main.load_config", return_value=cfg))
+        stack.enter_context(patch("app.main.make_provider", return_value=provider))
+        stack.enter_context(patch("app.main.fail_fast"))
+        stack.enter_context(patch("app.runtime_backend.init"))
+        stack.enter_context(patch("app.main.ensure_data_dirs"))
+        stack.enter_context(patch("app.main.init_content_store_for_config"))
+        stack.enter_context(patch("app.main.init_credential_store_for_config"))
+        stack.enter_context(patch("app.main.ChannelDispatcher", return_value=dispatcher))
+        control_plane_bus_cls = stack.enter_context(patch("app.main.ControlPlaneBus"))
+        processor_runner_cls = stack.enter_context(patch("app.main.ProcessorRunner"))
+        register_registry_channels = stack.enter_context(
+            patch("app.main.register_registry_channels")
+        )
+        telegram_bootstrap = stack.enter_context(
+            patch("app.main.TelegramChannelBootstrap")
+        )
+        build_worker_bundle_mock = stack.enter_context(
+            patch("app.main.build_worker_bundle", return_value=worker_bundle)
+        )
+        stack.enter_context(patch("app.main.RegistryRuntime", return_value=registry_runtime))
+        stack.enter_context(patch("app.main.run_dispatcher_process", dispatcher_runner))
+        stack.enter_context(patch("app.main.close_db"))
+        stack.enter_context(patch("app.main.close_transport_db"))
+        stack.enter_context(patch("app.main.recover_stale_claims"))
+        stack.enter_context(patch("app.main.purge_old"))
+        stack.enter_context(patch("sys.argv", ["bot"]))
+        bus = SimpleNamespace(reconcile_orphans=AsyncMock(return_value=0))
+        processor_runner = SimpleNamespace(
+            register=MagicMock(),
+            run=AsyncMock(return_value=None),
+            stop=AsyncMock(return_value=None),
+        )
+        control_plane_bus_cls.return_value = bus
+        processor_runner_cls.return_value = processor_runner
         from app.main import main
 
         main()
 
     telegram_bootstrap.assert_not_called()
-    build_worker_bundle_mock.assert_called_once_with(cfg, provider)
+    build_worker_bundle_call = build_worker_bundle_mock.call_args
+    assert build_worker_bundle_call is not None
+    assert build_worker_bundle_call.args == (cfg, provider)
+    assert isinstance(build_worker_bundle_call.kwargs["services"], BotServices)
     dispatcher.build_all_ingresses.assert_not_called()
-    registry_runtime.register_channels.assert_called_once_with()
+    register_registry_channels.assert_called_once_with(cfg, cfg.agent_registries, dispatcher)
     registry_runtime.start.assert_awaited_once()
     registry_runtime.stop.assert_awaited_once()
+    processor_runner.register.assert_called_once()
+    processor_runner.run.assert_awaited_once()
+    processor_runner.stop.assert_awaited_once()
+    bus.reconcile_orphans.assert_awaited_once()
     dispatcher_runner.assert_awaited_once()
     await_args = dispatcher_runner.await_args
     assert await_args is not None
@@ -591,6 +657,37 @@ def test_main_registry_only_starts_without_telegram_ingress():
     assert callable(await_args.kwargs["shutdown"])
     assert worker_bundle.runtime.channel_dispatcher is dispatcher
     assert worker_bundle.runtime.registry_runtime is registry_runtime
+
+
+def test_main_shared_worker_with_registries_skips_control_plane_processor_startup():
+    cfg = make_config(
+        agent_mode="registry",
+        runtime_mode="shared",
+        process_role="worker",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+        agent_registries=(make_registry_connection(),),
+        database_url="postgresql://bot:bot@localhost:5432/bot",
+    )
+    mock_app = MagicMock()
+
+    with _patched_main_runtime(cfg, mock_app) as runtime, \
+         patch("app.main.RegistryRuntime") as registry_runtime_cls:
+        from app.main import main
+
+        main()
+
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
+    runtime.register_registry_channels.assert_called_once_with(
+        cfg,
+        cfg.agent_registries,
+        runtime.dispatcher,
+    )
+    registry_runtime_cls.assert_not_called()
+    runtime.processor_runner.register.assert_not_called()
+    runtime.processor_runner.run.assert_not_awaited()
+    runtime.processor_runner.stop.assert_not_awaited()
+    runtime.bus.reconcile_orphans.assert_not_awaited()
 
 
 def test_main_webhook_role_skips_provider_runtime_validation():
@@ -602,12 +699,12 @@ def test_main_webhook_role_skips_provider_runtime_validation():
     )
     provider = _runtime_ok_provider()
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app, provider=provider) as (_provider, dispatcher, _ingress, dispatcher_runner):
+    with _patched_main_runtime(cfg, mock_app, provider=provider) as runtime:
         from app.main import main
 
         main()
     assert provider.check_runtime_health.await_count == 0
-    dispatcher_runner.assert_awaited_once_with(dispatcher)
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
 
 
 def test_runs_registry_runtime_moves_to_webhook_role_in_shared_mode():
@@ -645,10 +742,10 @@ def test_main_webhook_empty_secret_passes_none():
         database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app) as (_provider, dispatcher, _ingress, dispatcher_runner):
+    with _patched_main_runtime(cfg, mock_app) as runtime:
         from app.main import main
         main()
-    dispatcher_runner.assert_awaited_once_with(dispatcher)
+    runtime.dispatcher_runner.assert_awaited_once_with(runtime.dispatcher)
 
 
 def test_load_config_reads_webhook_env_vars():

@@ -12,6 +12,7 @@ from app.channels.registry.refs import parse_registry_ref, registry_ref_external
 from app.config import BotConfig
 from app.ports.channel import Channel, ChannelDescriptor
 from app.ports.egress import ChannelEgress
+from app.runtime.channel_dispatcher import ChannelDispatcher
 
 
 class _RegistryChannel(Channel):
@@ -114,3 +115,15 @@ class RegistryTaskChannel(_RegistryChannel):
             ),
             registry_client_factory=registry_client_factory,
         )
+
+
+def register_registry_channels(
+    config: BotConfig,
+    registries: tuple[RegistryConnectionConfig, ...],
+    dispatcher: ChannelDispatcher,
+) -> None:
+    for registry in registries:
+        if registry.registry_scope in {"channel", "full"}:
+            dispatcher.register(RegistryConversationChannel(config, registry))
+        if registry.registry_scope in {"coordination", "full"}:
+            dispatcher.register(RegistryTaskChannel(config, registry))

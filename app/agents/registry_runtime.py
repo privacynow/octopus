@@ -249,30 +249,9 @@ class RegistryRuntime:
         if self._channels_registered:
             return
 
-        from app.channels.registry.channel import RegistryConversationChannel, RegistryTaskChannel
+        from app.channels.registry.channel import register_registry_channels
 
-        for registry in self._registries:
-            if registry.registry_scope in {"channel", "full"}:
-                self._dispatcher.register(
-                    RegistryConversationChannel(
-                        self._config,
-                        registry,
-                        registry_client_factory=lambda registry_id=registry.registry_id: self._client_for_registry(
-                            registry_id
-                        ),
-                    )
-                )
-            if registry.registry_scope in {"coordination", "full"}:
-                self._dispatcher.register(
-                    RegistryTaskChannel(
-                        self._config,
-                        registry,
-                        registry_client_factory=lambda registry_id=registry.registry_id: self._client_for_registry(
-                            registry_id
-                        ),
-                    )
-                )
-
+        register_registry_channels(self._config, self._registries, self._dispatcher)
         self._channels_registered = True
     def _annotated_delivery_handler(
         self,

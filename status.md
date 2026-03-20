@@ -687,3 +687,22 @@
   - registry now has a concrete control-plane processor that can execute every planned capability over existing runtime/client seams
   - positive and negative processor paths are covered: scope mapping, projection, routing, discovery, authority resolution, health publication, and isolated registry request failure handling
   - full suite status after slice 4C: `1880 passed, 23 skipped`
+- Complete: Slice 5 startup composition.
+  Scope:
+  - wired `app/main.py` to build one `ControlPlaneBus`, derive a startup `ControlPlaneDirectory` from `registry_authority_capabilities()`, and construct bus-backed or no-op `BotServices` before any channel runtime is built
+  - threaded `services` through `TelegramRuntime`, `build_worker_bundle()`, `build_bootstrap()`, and `TelegramChannelBootstrap` so every Telegram runtime now owns `BotServices` even before consumer cutovers land
+  - moved registry channel registration into startup composition with `register_registry_channels(...)` instead of mutating the dispatcher from `RegistryRuntime`
+  - added startup-owned `ProcessorRunner` wiring so registry-owning roles reconcile orphaned commands and run the control-plane processor loop, while non-owning roles still receive bus-backed services but do not start processors
+  - updated the shared handler fixture to build runtimes with the same services/channel-registration composition shape as startup
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_config.py tests/test_telegram_channel_state.py tests/test_telegram_runtime_skills.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - the slice reused the existing startup composition root and `runtime_backend` seam instead of introducing a second topology/bootstrap abstraction just to carry services
+  - `BotServices` injection is now startup-owned and runtime-local; consumers still keep their legacy fields during scaffolding, which matches the plan and avoids mixing composition with consumer cutover
+  - registry channel registration is now explicit startup work, which removes one runtime-owned dispatcher mutation path without yet forcing registry channel egress onto the new control-plane ports ahead of schedule
+  Verified:
+  - startup now produces non-null `BotServices` for polling, webhook, worker-only, and registry-only roles
+  - the control-plane processor loop starts only for registry-owning roles, while shared worker roles with registries still receive services and channel registration without starting a processor
+  - the shared test fixture now follows the same startup-owned services/channel-registration model as production composition
+  - full suite status after slice 5: `1881 passed, 23 skipped`

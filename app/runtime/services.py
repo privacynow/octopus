@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.control_plane.bus import ControlPlaneBus
+from app.control_plane.directory import ControlPlaneDirectory
 from app.ports.agent_directory import AgentDirectoryPort
+from app.ports.agent_directory import NoOpAgentDirectory
 from app.ports.conversation_projection import ConversationProjectionPort
+from app.ports.conversation_projection import NoOpConversationProjection
 from app.ports.health_publication import HealthPublicationPort
+from app.ports.health_publication import NoOpHealthPublication
 from app.ports.task_routing import TaskRoutingPort
+from app.ports.task_routing import NoOpTaskRouting
 
 
 @dataclass(frozen=True)
@@ -21,3 +27,42 @@ class ControlPlaneServices:
 @dataclass(frozen=True)
 class BotServices:
     control_plane: ControlPlaneServices
+
+
+def build_noop_control_plane_services() -> ControlPlaneServices:
+    return ControlPlaneServices(
+        conversation_projection=NoOpConversationProjection(),
+        task_routing=NoOpTaskRouting(),
+        agent_directory=NoOpAgentDirectory(),
+        health_publication=NoOpHealthPublication(),
+    )
+
+
+def build_bus_control_plane_services(
+    bus: ControlPlaneBus,
+    directory: ControlPlaneDirectory,
+) -> ControlPlaneServices:
+    from app.control_plane.adapters import (
+        BusAgentDirectory,
+        BusConversationProjection,
+        BusHealthPublication,
+        BusTaskRouting,
+    )
+
+    return ControlPlaneServices(
+        conversation_projection=BusConversationProjection(bus, directory),
+        task_routing=BusTaskRouting(bus, directory),
+        agent_directory=BusAgentDirectory(bus, directory),
+        health_publication=BusHealthPublication(bus, directory),
+    )
+
+
+def build_noop_bot_services() -> BotServices:
+    return BotServices(control_plane=build_noop_control_plane_services())
+
+
+def build_bus_bot_services(
+    bus: ControlPlaneBus,
+    directory: ControlPlaneDirectory,
+) -> BotServices:
+    return BotServices(control_plane=build_bus_control_plane_services(bus, directory))

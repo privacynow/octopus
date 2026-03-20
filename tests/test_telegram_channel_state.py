@@ -14,6 +14,7 @@ from app.channels.telegram.egress import TelegramChannelEgress
 from app.channels.telegram.cancellation import TelegramCancellationRegistry
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
 from app.runtime.channel_dispatcher import ChannelDispatcher
+from app.runtime.services import BotServices
 from tests.support.config_support import make_config
 from tests.support.handler_support import FakeProvider, MinimalFakeBot
 
@@ -92,6 +93,7 @@ def test_build_telegram_runtime_returns_explicit_runtime_instance():
     assert isinstance(runtime.cancellation_registry, TelegramCancellationRegistry)
     assert isinstance(runtime.chat_locks, defaultdict)
     assert runtime.pending_work_items == {}
+    assert isinstance(runtime.services, BotServices)
     assert callable(runtime.registry_client_factory)
 
 
@@ -120,6 +122,7 @@ def test_telegram_channel_bootstrap_builds_ingress_and_dispatches_egress():
     assert list(ingresses) == ["telegram"]
     assert isinstance(ingress, TelegramChannelIngress)
     assert ingress.runtime.config is cfg
+    assert isinstance(ingress.runtime.services, BotServices)
     assert dispatcher.active_channel_types() == ["telegram"]
 
     egress = dispatcher.create_egress(

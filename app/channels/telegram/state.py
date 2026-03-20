@@ -15,6 +15,7 @@ from app.channels.telegram.cancellation import TelegramCancellationRegistry
 from app.config import BotConfig
 from app.providers.base import Provider
 from app.ratelimit import RateLimiter
+from app.runtime.services import BotServices, build_noop_bot_services
 
 
 def make_boot_id() -> str:
@@ -47,6 +48,7 @@ class TelegramRuntime:
     provider: Provider
     boot_id: str
     rate_limiter: RateLimiter | None
+    services: BotServices = field(default_factory=build_noop_bot_services)
     bot_instance: Any = None
     cancellation_registry: TelegramCancellationRegistry = field(
         default_factory=TelegramCancellationRegistry
@@ -74,6 +76,7 @@ def build_telegram_runtime(
     *,
     boot_id: str | None = None,
     bot_instance: Any = None,
+    services: BotServices | None = None,
 ) -> TelegramRuntime:
     """Construct an explicit Telegram runtime instance."""
 
@@ -82,5 +85,6 @@ def build_telegram_runtime(
         provider=provider,
         boot_id=boot_id or make_boot_id(),
         rate_limiter=_build_rate_limiter(config),
+        services=services or build_noop_bot_services(),
         bot_instance=bot_instance,
     )

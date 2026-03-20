@@ -44,6 +44,7 @@ def build_delegation_plan(
             tasks=tuple(
                 DelegationTaskDraft(
                     routed_task_id=str(task["routed_task_id"]),
+                    registry_id=str(task.get("registry_id", "")),
                     title=str(task.get("title", "")),
                     target_agent_id=str(task.get("target_agent_id", "")),
                     instructions=str(task.get("instructions", "")),
@@ -78,10 +79,15 @@ def mark_task_submitted(
     pending: PendingDelegation | None,
     *,
     routed_task_id: str,
+    registry_id: str = "",
 ) -> DelegationUpdateOutcome:
     decision = decide_delegation_action(
         DelegationSnapshot(pending=pending),
-        UpdateTaskStatusAction(routed_task_id=routed_task_id, status="submitted"),
+        UpdateTaskStatusAction(
+            routed_task_id=routed_task_id,
+            registry_id=registry_id,
+            status="submitted",
+        ),
     )
     return DelegationUpdateOutcome(
         status=decision.status,
@@ -95,12 +101,14 @@ def apply_routed_result(
     pending: PendingDelegation | None,
     *,
     routed_task_id: str,
+    registry_id: str = "",
     result: RoutedTaskResult,
 ) -> DelegationUpdateOutcome:
     decision = decide_delegation_action(
         DelegationSnapshot(pending=pending),
         UpdateTaskStatusAction(
             routed_task_id=routed_task_id,
+            registry_id=registry_id,
             status=result.status or "completed",
             summary=result.summary,
             full_text=result.full_text,

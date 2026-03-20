@@ -83,6 +83,7 @@ def _registry_semantic_action(
     action: str,
     payload: dict[str, object],
     delivery_id: str,
+    registry_id: str,
 ):
     semantic = {
         "approve": "approve_pending",
@@ -111,6 +112,7 @@ def _registry_semantic_action(
         action_payload=params,
         actor_ref=f"registry-ui:{conversation_ref}",
         delivery_id=delivery_id,
+        registry_id=registry_id,
     )
 
 
@@ -146,6 +148,7 @@ async def handle_registry_delivery(
             action=action,
             payload=action_payload,
             delivery_id=delivery_id,
+            registry_id=registry_id,
         )
         if envelope is None:
             return "rejected"
@@ -210,6 +213,7 @@ async def handle_registry_delivery(
         applied = apply_routed_result(
             session.pending_delegation,
             routed_task_id=routed_task_id,
+            registry_id=registry_id,
             result=routed_result,
         )
         if not applied.matched:
@@ -227,6 +231,7 @@ async def handle_registry_delivery(
             text=continuation_text,
             actor_ref=f"delegation-resume:{routed_task_id}",
             delivery_id=resume_delivery_id,
+            registry_id=registry_id,
             skip_approval=True,
         )
         admit_status, _ = work_queue.record_and_admit_message(

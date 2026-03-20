@@ -348,6 +348,7 @@ def build_delegation_channel_runtime(runtime: TelegramRuntime):
         config=runtime.config,
         provider_name=runtime.provider.name,
         provider_state_factory=runtime.provider.new_provider_state,
+        registry_runtime=runtime.registry_runtime,
     )
 
 

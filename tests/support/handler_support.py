@@ -513,6 +513,7 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
     )
     dispatcher = ChannelDispatcher()
     dispatcher.register(TelegramChannelBootstrap(config, provider))
+    registry_runtime = None
     if config.agent_mode == "registry" and config.agent_registries:
         registry_runtime = RegistryRuntime(
             config.agent_registries,
@@ -523,6 +524,7 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
         )
         registry_runtime.register_channels()
     _TEST_RUNTIME.channel_dispatcher = dispatcher
+    _TEST_RUNTIME.registry_runtime = registry_runtime
     _TEST_APPLICATION = build_application(_TEST_RUNTIME)
     _TEST_RUNTIME.bot_instance = test_bot
 

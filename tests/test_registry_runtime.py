@@ -2,11 +2,16 @@ import asyncio
 from pathlib import Path
 
 import pytest
-
 from app.agents.registry_runtime import RegistryRuntime
 from app.agents.runtime import AgentRuntime
-from app.agents.state import AgentRuntimeState, load_agent_runtime_state, load_registry_connection_state, save_agent_runtime_state
-from app.agents.types import RegistryConnectionConfig, RegistryConnectionState
+from app.agents.state import (
+    AgentRuntimeState,
+    load_agent_runtime_state,
+    load_registry_connection_state,
+    save_agent_runtime_state,
+    save_registry_connection_state,
+)
+from app.agents.types import AgentDiscoveryQuery, RegistryConnectionConfig, RegistryConnectionState
 from app.channels.registry.refs import registry_conversation_ref
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from tests.support.config_support import make_config
@@ -219,3 +224,130 @@ def test_registry_runtime_register_channels_by_scope(tmp_path: Path):
     assert dispatcher.channel_type_for_ref("registry:ops:task:task-1") == "registry"
     assert dispatcher.channel_type_for_ref("registry:prod:task:task-1") is None
     assert dispatcher.active_channel_types() == ["registry"]
+
+
+@pytest.mark.asyncio
+async def test_registry_runtime_discover_fans_out_with_registry_provenance(monkeypatch, tmp_path: Path):
+    class FakeRegistryClient:
+        def __init__(self, base_url: str, *, agent_token: str = "", timeout_seconds: float = 10.0, client=None):
+            self.base_url = base_url
+            self.agent_token = agent_token
+
+        async def search(self, query):
+            if self.base_url.endswith("prod"):
+                assert query.exclude_agent_ids == ("prod-self",)
+                return [
+                    {
+                        "agent_id": "agent-prod-1",
+                        "display_name": "Prod Dev",
+                        "role": "developer",
+                        "capabilities": ["python"],
+                        "tags": ["prod"],
+                        "connectivity_state": "connected",
+                    }
+                ]
+            assert query.exclude_agent_ids == ("ops-self",)
+            return [
+                {
+                    "agent_id": "agent-ops-1",
+                    "display_name": "Ops Dev",
+                    "role": "developer",
+                    "capabilities": ["shell"],
+                    "tags": ["ops"],
+                    "connectivity_state": "connected",
+                }
+            ]
+
+    monkeypatch.setattr("app.agents.registry_runtime.AgentRegistryClient", FakeRegistryClient)
+
+    prod = RegistryConnectionConfig(
+        registry_id="prod",
+        url="http://registry.prod",
+        enroll_token="enroll-prod",
+        registry_scope="full",
+        poll_interval_seconds=5.0,
+    )
+    ops = RegistryConnectionConfig(
+        registry_id="ops",
+        url="http://registry.ops",
+        enroll_token="enroll-ops",
+        registry_scope="coordination",
+        poll_interval_seconds=5.0,
+    )
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(prod, ops),
+        agent_registry_url=prod.url,
+        agent_registry_enroll_token=prod.enroll_token,
+    )
+    runtime = RegistryRuntime((prod, ops), ChannelDispatcher(), None, config=config)
+    prod_state = load_registry_connection_state(tmp_path, "prod")
+    prod_state.agent_id = "prod-self"
+    prod_state.agent_token = "prod-token"
+    prod_state.connectivity_state = "connected"
+    save_registry_connection_state(tmp_path, prod_state)
+    ops_state = load_registry_connection_state(tmp_path, "ops")
+    ops_state.agent_id = "ops-self"
+    ops_state.agent_token = "ops-token"
+    ops_state.connectivity_state = "connected"
+    save_registry_connection_state(tmp_path, ops_state)
+
+    discovered = await runtime.discover(AgentDiscoveryQuery(role="developer"))
+
+    assert [(item.registry_id, item.agent_id) for item in discovered] == [
+        ("ops", "agent-ops-1"),
+        ("prod", "agent-prod-1"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_registry_runtime_resolves_target_registry_by_exact_agent_id(monkeypatch, tmp_path: Path):
+    class FakeRegistryClient:
+        def __init__(self, base_url: str, *, agent_token: str = "", timeout_seconds: float = 10.0, client=None):
+            self.base_url = base_url
+            self.agent_token = agent_token
+
+        async def search(self, query):
+            if self.base_url.endswith("prod"):
+                return [{"agent_id": "agent-prod-1"}]
+            return [{"agent_id": "agent-ops-1"}]
+
+    monkeypatch.setattr("app.agents.registry_runtime.AgentRegistryClient", FakeRegistryClient)
+
+    prod = RegistryConnectionConfig(
+        registry_id="prod",
+        url="http://registry.prod",
+        enroll_token="enroll-prod",
+        registry_scope="full",
+        poll_interval_seconds=5.0,
+    )
+    ops = RegistryConnectionConfig(
+        registry_id="ops",
+        url="http://registry.ops",
+        enroll_token="enroll-ops",
+        registry_scope="coordination",
+        poll_interval_seconds=5.0,
+    )
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(prod, ops),
+        agent_registry_url=prod.url,
+        agent_registry_enroll_token=prod.enroll_token,
+    )
+    runtime = RegistryRuntime((prod, ops), ChannelDispatcher(), None, config=config)
+    prod_state = load_registry_connection_state(tmp_path, "prod")
+    prod_state.agent_id = "prod-self"
+    prod_state.agent_token = "prod-token"
+    prod_state.connectivity_state = "connected"
+    save_registry_connection_state(tmp_path, prod_state)
+    ops_state = load_registry_connection_state(tmp_path, "ops")
+    ops_state.agent_id = "ops-self"
+    ops_state.agent_token = "ops-token"
+    ops_state.connectivity_state = "connected"
+    save_registry_connection_state(tmp_path, ops_state)
+
+    assert await runtime.resolve_target_registry_id("agent-ops-1") == "ops"
+    assert await runtime.resolve_target_registry_id("agent-prod-1") == "prod"
+    assert await runtime.resolve_target_registry_id("missing-agent") == ""

@@ -106,6 +106,7 @@ class CancelDelegationAction:
 class UpdateTaskStatusAction:
     routed_task_id: str
     status: str
+    registry_id: str = ""
     summary: str = ""
     full_text: str = ""
     follow_up_questions: tuple[str, ...] = ()
@@ -135,6 +136,7 @@ def _task_with_status(task: DelegatedTask, action: UpdateTaskStatusAction) -> De
     return replace(
         task,
         status=next_status,
+        registry_id=action.registry_id or task.registry_id,
         summary=action.summary or task.summary,
         full_text=action.full_text or task.full_text,
         follow_up_questions=list(action.follow_up_questions) if action.follow_up_questions else list(task.follow_up_questions),
@@ -149,6 +151,7 @@ def decide_delegation_action(snapshot: DelegationSnapshot, action: DelegationAct
         tasks = tuple(
             DelegatedTask(
                 routed_task_id=item.routed_task_id,
+                registry_id=item.registry_id,
                 title=item.title,
                 target_agent_id=item.target_agent_id,
                 instructions=item.instructions,
@@ -202,6 +205,9 @@ def decide_delegation_action(snapshot: DelegationSnapshot, action: DelegationAct
         tasks: list[DelegatedTask] = []
         for task in pending.tasks:
             if task.routed_task_id != action.routed_task_id:
+                tasks.append(task)
+                continue
+            if action.registry_id and task.registry_id and task.registry_id != action.registry_id:
                 tasks.append(task)
                 continue
             next_task = _task_with_status(task, action)

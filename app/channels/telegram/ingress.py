@@ -23,7 +23,6 @@ from app.session_state import (
     session_to_dict,
 )
 from app.agents.client import RegistryClientError
-from app.agents.state import load_agent_runtime_state
 from app.agents.types import AgentDiscoveryQuery
 from app.channels.telegram.delegation_channel import (
     handle_delegation_approve,
@@ -769,42 +768,39 @@ def _parse_discovery_query(
 
 
 @_command_handler
-async def cmd_discover(
-    runtime: TelegramRuntime,
-    event,
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> None:
+async def cmd_discover(runtime: TelegramRuntime, event, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     del context
     cfg = runtime.config
     if cfg.agent_mode == "standalone":
         rendered = telegram_presenters.discover_unavailable_standalone_message()
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    state = load_agent_runtime_state(cfg.data_dir)
-    if state.connectivity_state != "connected":
-        rendered = telegram_presenters.discover_degraded_message(state.last_error)
+    registry_runtime = runtime.registry_runtime
+    if registry_runtime is None or not registry_runtime.has_coordination_connections():
+        rendered = telegram_presenters.discover_not_enrolled_message()
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    query, error = _parse_discovery_query(event.args, exclude_agent_id=state.agent_id)
+    if not registry_runtime.has_connected_coordination_connection():
+        if not registry_runtime.has_enrolled_coordination_connection():
+            rendered = telegram_presenters.discover_not_enrolled_message()
+            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+            return
+        rendered = telegram_presenters.discover_degraded_message(registry_runtime.first_coordination_error())
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+    query, error = _parse_discovery_query(event.args)
     if error is not None or query is None:
         rendered = telegram_presenters.discover_usage_message()
         await update.effective_message.reply_text(error or rendered.text, parse_mode=rendered.parse_mode)
         return
-    client = runtime.registry_client_factory(cfg)
-    if client is None:
-        rendered = telegram_presenters.discover_not_enrolled_message()
-        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-        return
     try:
-        agents = await client.search(query)
+        agents = await registry_runtime.discover(query)
     except RegistryClientError as exc:
         rendered = telegram_presenters.discover_failed_message(exc.error_code)
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     rendered = telegram_presenters.discover_results_message(agents)
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-
 @_command_handler
 async def cmd_export(
     runtime: TelegramRuntime,

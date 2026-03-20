@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import re
 from dataclasses import dataclass
+from dataclasses import asdict, is_dataclass
 from typing import Any, Iterable
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -1153,14 +1154,24 @@ def discover_failed_message(error_code: str) -> TelegramRenderedMessage:
     return TelegramRenderedMessage(text=f"Agent discovery failed. {registry_error_summary(error_code)}")
 
 
-def discover_results_message(agents: list[dict[str, Any]]) -> TelegramRenderedMessage:
+def _agent_view(agent: Any) -> dict[str, Any]:
+    if is_dataclass(agent):
+        return asdict(agent)
+    if isinstance(agent, dict):
+        return agent
+    return {}
+
+
+def discover_results_message(agents: list[Any]) -> TelegramRenderedMessage:
     if not agents:
         return TelegramRenderedMessage(text="No matching agents found.")
     lines = ["<b>Matching agents</b>"]
-    for agent in agents[:8]:
+    for raw_agent in agents[:8]:
+        agent = _agent_view(raw_agent)
         display_name = html.escape(
             agent.get("display_name") or agent.get("slug") or agent.get("agent_id") or "Unnamed agent"
         )
+        registry_id = html.escape(str(agent.get("registry_id", "") or ""))
         role = html.escape(agent.get("role") or "(unspecified)")
         state = html.escape(agent.get("connectivity_state") or "unknown")
         current_capacity = int(agent.get("current_capacity", 0) or 0)
@@ -1169,6 +1180,8 @@ def discover_results_message(agents: list[dict[str, Any]]) -> TelegramRenderedMe
         lines.append(
             f"State: <code>{state}</code> · Capacity: <code>{current_capacity}/{max_capacity}</code>"
         )
+        if registry_id:
+            lines.append(f"Registry: <code>{registry_id}</code>")
         capabilities = [str(value) for value in agent.get("capabilities", agent.get("skills", [])) if value]
         if capabilities:
             lines.append(f"Capabilities: <code>{html.escape(', '.join(capabilities))}</code>")

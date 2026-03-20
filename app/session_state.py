@@ -74,6 +74,7 @@ class AwaitingSkillSetup:
 class DelegatedTask:
     """One child task tracked by a parent-side delegation plan."""
     routed_task_id: str
+    registry_id: str = ""
     title: str = ""
     target_agent_id: str = ""
     instructions: str = ""

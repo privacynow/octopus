@@ -40,6 +40,7 @@ class InboundMessage:
     source: str = "telegram"
     conversation_ref: str = ""
     routed_task_id: str = ""
+    registry_id: str = ""
     skip_approval: bool = False
 
     @property
@@ -97,6 +98,7 @@ class InboundAction:
     params: dict[str, Any] = field(default_factory=dict)
     source: str = "telegram"
     conversation_ref: str = ""
+    registry_id: str = ""
 
     @property
     def chat_id(self) -> int:
@@ -144,6 +146,7 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback |
                 "source": event.source,
                 "conversation_ref": event.conversation_ref,
                 "routed_task_id": event.routed_task_id,
+                "registry_id": event.registry_id,
                 "skip_approval": event.skip_approval,
                 "attachments": [
                     {
@@ -189,6 +192,7 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback |
                 "params": event.params,
                 "source": event.source,
                 "conversation_ref": event.conversation_ref,
+                "registry_id": event.registry_id,
             }
         )
     raise TypeError(f"Unknown inbound type: {type(event)}")
@@ -226,6 +230,7 @@ def deserialize_inbound(
             source=data.get("source", "telegram"),
             conversation_ref=data.get("conversation_ref", ""),
             routed_task_id=data.get("routed_task_id", ""),
+            registry_id=data.get("registry_id", ""),
             skip_approval=bool(data.get("skip_approval", False)),
         )
     if kind == "command":
@@ -256,5 +261,6 @@ def deserialize_inbound(
             params=dict(params),
             source=data.get("source", "telegram"),
             conversation_ref=data.get("conversation_ref", ""),
+            registry_id=data.get("registry_id", ""),
         )
     raise ValueError(f"Unknown kind: {kind}")

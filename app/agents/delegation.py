@@ -12,6 +12,7 @@ from app.agents.bridge import registry_client
 from app.registry_errors import registry_error_summary
 from app.agents.state import load_agent_runtime_state
 from app.agents.types import RoutedTaskRequest
+from app.agents.registry_runtime import RegistryRuntime
 from app.config import BotConfig
 from app.identity import parse_conversation_key
 from app.runtime.session_runtime import load_runtime_session, save_runtime_session
@@ -29,6 +30,7 @@ class DelegationRuntime:
     config: BotConfig
     provider_name: str
     provider_state_factory: Callable[[], dict[str, Any]]
+    registry_runtime: RegistryRuntime | None = None
 
 
 def build_delegation_runtime(
@@ -36,11 +38,13 @@ def build_delegation_runtime(
     config: BotConfig,
     provider_name: str,
     provider_state_factory: Callable[[], dict[str, Any]],
+    registry_runtime: RegistryRuntime | None = None,
 ) -> DelegationRuntime:
     return DelegationRuntime(
         config=config,
         provider_name=provider_name,
         provider_state_factory=provider_state_factory,
+        registry_runtime=registry_runtime,
     )
 
 
@@ -70,15 +74,38 @@ async def handle_delegation_approve(
 ) -> None:
     """Approve a pending delegation plan on any conversation channel."""
     cfg = runtime.config
-    state = load_agent_runtime_state(cfg.data_dir)
-    if state.connectivity_state != "connected":
-        detail = f" {registry_error_summary(state.last_error)}" if state.last_error else ""
-        await channel_egress.send_text(
-            "Delegation is unavailable because registry connectivity is degraded."
-            " The request was not sent." + detail,
-            reply_markup=retry_markup,
-        )
-        return
+    if runtime.registry_runtime is not None:
+        if not runtime.registry_runtime.has_coordination_connections():
+            await channel_egress.send_text(
+                "Delegation unavailable: no coordination-capable registry connections are configured.",
+                reply_markup=retry_markup,
+            )
+            return
+        if not runtime.registry_runtime.has_connected_coordination_connection():
+            if not runtime.registry_runtime.has_enrolled_coordination_connection():
+                await channel_egress.send_text(
+                    "Delegation unavailable: registry not enrolled.",
+                    reply_markup=retry_markup,
+                )
+                return
+            detail_code = runtime.registry_runtime.first_coordination_error()
+            detail = f" {registry_error_summary(detail_code)}" if detail_code else ""
+            await channel_egress.send_text(
+                "Delegation is unavailable because registry connectivity is degraded."
+                " The request was not sent." + detail,
+                reply_markup=retry_markup,
+            )
+            return
+    else:
+        state = load_agent_runtime_state(cfg.data_dir)
+        if state.connectivity_state != "connected":
+            detail = f" {registry_error_summary(state.last_error)}" if state.last_error else ""
+            await channel_egress.send_text(
+                "Delegation is unavailable because registry connectivity is degraded."
+                " The request was not sent." + detail,
+                reply_markup=retry_markup,
+            )
+            return
 
     session = _load_session(runtime, chat_id)
     approval = prepare_delegation_approval(
@@ -90,18 +117,38 @@ async def handle_delegation_approve(
         return
     delegation = approval.pending
 
-    client = registry_client(cfg)
-    if client is None:
-        await channel_egress.send_text(
-            "Delegation unavailable: registry not enrolled.",
-            reply_markup=retry_markup,
-        )
-        return
-
-    origin_agent_id = state.agent_id or ""
     submitted_ids: list[str] = []
     try:
         for task in approval.tasks_to_submit:
+            registry_id = task.registry_id
+            origin_agent_id = ""
+            client = None
+            if runtime.registry_runtime is not None:
+                registry_id = await runtime.registry_runtime.resolve_target_registry_id(
+                    task.target_agent_id,
+                    hinted_registry_id=task.registry_id,
+                )
+                if not registry_id:
+                    _save_session(runtime, chat_id, session)
+                    await channel_egress.send_text(
+                        "Delegation unavailable: could not resolve which registry owns"
+                        f" target agent {task.target_agent_id or task.routed_task_id}.",
+                        reply_markup=retry_markup,
+                    )
+                    return
+                client = runtime.registry_runtime.client_for_registry(registry_id)
+                origin_agent_id = runtime.registry_runtime.origin_agent_id(registry_id)
+            else:
+                state = load_agent_runtime_state(cfg.data_dir)
+                client = registry_client(cfg)
+                origin_agent_id = state.agent_id or ""
+            if client is None or not origin_agent_id:
+                _save_session(runtime, chat_id, session)
+                await channel_egress.send_text(
+                    "Delegation unavailable: registry not enrolled.",
+                    reply_markup=retry_markup,
+                )
+                return
             request = RoutedTaskRequest(
                 routed_task_id=task.routed_task_id,
                 parent_conversation_id=delegation.conversation_ref,
@@ -115,6 +162,7 @@ async def handle_delegation_approve(
             submission = mark_task_submitted(
                 session.pending_delegation,
                 routed_task_id=task.routed_task_id,
+                registry_id=registry_id,
             )
             session.pending_delegation = submission.pending
     except RegistryClientError as exc:

@@ -72,6 +72,43 @@ def test_admit_worker_message_allows_registry_input() -> None:
         assert result.trust_tier == "trusted"
 
 
+def test_admit_worker_message_does_not_auto_allow_unknown_surface() -> None:
+    with fresh_env(config_overrides={"allowed_user_ids": frozenset()}) as (data_dir, _cfg, _prov):
+        _, item_id = work_queue.record_and_enqueue(
+            data_dir,
+            "future-event-1",
+            "future:workspace:room-1",
+            telegram_actor_key(42),
+            "message",
+            payload='{"text": "blocked"}',
+        )
+        work_queue.set_user_access(
+            data_dir,
+            actor_key=telegram_actor_key(42),
+            access="blocked",
+            reason="blocked for test",
+            granted_by=telegram_actor_key(1),
+        )
+
+        result = admit_worker_message(
+            data_dir=data_dir,
+            item_id=item_id,
+            conversation_ref="future:workspace:room-1",
+            user=InboundUser(id=telegram_actor_key(42), username="blocked"),
+            config=current_runtime().config,
+            dispatcher=current_runtime().channel_dispatcher,
+        )
+
+        row = work_queue.debug_transport_connection(data_dir).execute(
+            "SELECT state, error FROM work_items WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        assert result.allowed is False
+        assert result.status == "not_allowed"
+        assert row["state"] == "failed"
+        assert row["error"] == "not_allowed"
+
+
 @pytest.mark.asyncio
 async def test_recovery_workflow_binds_and_sends_notice_before_marking_pending_recovery() -> None:
     with fresh_env() as (data_dir, _cfg, _prov):

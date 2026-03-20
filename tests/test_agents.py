@@ -722,7 +722,8 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
         def fake_create_egress(conversation_ref, *, config, **kwargs):
             del config
             assert conversation_ref == parent_conversation_ref
-            assert kwargs["bot"] is not None
+            if kwargs["bot"] is None:
+                raise RuntimeError("Telegram channel requires a bot instance")
             return _FakeEgress()
 
         monkeypatch.setattr(dispatcher, "create_egress", fake_create_egress)

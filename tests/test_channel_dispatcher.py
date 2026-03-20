@@ -120,6 +120,14 @@ class _FailingBootstrap(_FakeChannel, ChannelBootstrap):
         return self.ingress
 
 
+class _BotDependentChannel(_FakeChannel):
+    def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> ChannelEgress:
+        del conversation_ref, config
+        if kw.get("bot") is None:
+            raise RuntimeError("bot not ready")
+        return _FakeEgress(self._descriptor.channel_type)
+
+
 def test_dispatcher_routes_by_registered_prefix() -> None:
     dispatcher = ChannelDispatcher()
     telegram = _FakeBootstrap(
@@ -189,6 +197,24 @@ def test_dispatcher_rejects_unknown_refs() -> None:
 
     with pytest.raises(ValueError, match="unknown conversation ref"):
         dispatcher.create_egress("unknown:ref", config=cfg)
+
+
+def test_dispatcher_egress_ready_for_ref_checks_runtime_readiness() -> None:
+    dispatcher = ChannelDispatcher()
+    telegram = _BotDependentChannel(
+        "telegram:",
+        ChannelDescriptor(
+            channel_type="telegram",
+            display_name="Telegram",
+            supports_multiple=False,
+            requires_polling=False,
+        ),
+    )
+    dispatcher.register(telegram)
+    cfg = make_config()
+
+    assert dispatcher.egress_ready_for_ref("telegram:bot123:42", config=cfg, bot=object()) is True
+    assert dispatcher.egress_ready_for_ref("telegram:bot123:42", config=cfg, bot=None) is False
 
 
 def test_active_channel_types_deduplicates_and_skips_non_capability_channels() -> None:

@@ -588,7 +588,7 @@ def render_shell_html(*, title_text: str, heading_text: str, logout_link: str, c
     <script>
       const csrfToken = document.querySelector('meta[name="registry-csrf-token"]')?.content || "";
       const EMPTY_STATES = {{
-        bots: "No bots connected yet. Start a bot in registry mode and it will appear here.<br><code>./scripts/app/guided_start.sh</code>",
+        bots: "No bots connected yet. Start a bot in registry mode and it will appear here.<br><code>./octopus</code>",
         conversations: "No conversations yet. Send a message to your bot in Telegram to start.",
         tasks: "No routed tasks yet. Delegated tasks appear here in real time.",
         runtimeSkills: "No runtime skills matched the current filter.",

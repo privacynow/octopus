@@ -32,7 +32,8 @@ def load_dotenv_file(path: Path) -> dict[str, str]:
 
 
 def env_path_for_instance(instance: str) -> Path:
-    return Path.home() / ".config" / "octopus-agent" / f"{instance}.env"
+    slug = (instance or "default").strip() or "default"
+    return Path.cwd() / ".deploy" / "bots" / slug / ".env"
 
 
 def derive_agent_slug(raw: str, *, fallback: str = "agent") -> str:
@@ -102,7 +103,7 @@ def _has_valid_http_url(raw: str) -> bool:
 def _is_local_http_url(raw: str) -> bool:
     parsed = urlparse(raw)
     host = (parsed.hostname or "").lower()
-    return host in {"localhost", "127.0.0.1", "::1", "host.docker.internal", "172.17.0.1"}
+    return host in {"registry", "localhost", "127.0.0.1", "::1"}
 
 
 def _has_valid_postgres_url(raw: str) -> bool:
@@ -269,7 +270,7 @@ def _parse_projects(raw: str) -> tuple[ProjectBinding, ...]:
 def load_config(instance: str | None = None) -> BotConfig:
     """Load config from env file + environment variables.
 
-    Instance env file: ~/.config/octopus-agent/<instance>.env
+    Instance env file: .deploy/bots/<instance>/.env
     Environment variables override the file (env file is the base,
     os.environ wins on conflicts).
 
@@ -535,19 +536,19 @@ def validate_config(config: BotConfig) -> list[str]:
 
     if not config.telegram_token:
         errors.append(
-            "TELEGRAM_BOT_TOKEN is not set. Get a token from @BotFather and set it in .env.bot (or your env file)."
+            "TELEGRAM_BOT_TOKEN is not set. Get a token from @BotFather and set it in your bot env file, or run ./octopus."
         )
 
     if config.provider_name not in ProviderName._value2member_map_:
         errors.append(
             f"BOT_PROVIDER must be 'claude' or 'codex', got '{config.provider_name}'. "
-            "Set BOT_PROVIDER=claude or BOT_PROVIDER=codex in .env.bot."
+            "Set BOT_PROVIDER=claude or BOT_PROVIDER=codex in the bot env file."
         )
 
     if not config.allowed_actor_keys and not config.allowed_usernames and not config.allow_open:
         errors.append(
             "Access not configured: BOT_ALLOWED_USERS is empty and BOT_ALLOW_OPEN is not set. "
-            "Set BOT_ALLOWED_USERS=<your-telegram-user-id> or BOT_ALLOW_OPEN=1 in .env.bot."
+            "Set BOT_ALLOWED_USERS=<your-telegram-user-id> or BOT_ALLOW_OPEN=1 in the bot env file."
         )
 
     if not config.working_dir.is_dir():

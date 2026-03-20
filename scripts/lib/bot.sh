@@ -1,25 +1,15 @@
-# Shared env and image checks for scripts that require .env.bot.
-# Source after: REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)" and cd "$REPO_DIR".
-# Usage: source "$(dirname "$0")/lib_env.sh"  (from a script in scripts/).
+#!/usr/bin/env bash
+# Bot env I/O and token helpers.
 
-current_bot_env_file() {
-  if [ -n "${BOT_ENV_FILE:-}" ]; then
-    echo "$BOT_ENV_FILE"
-    return
+resolve_bot_env_file() {
+  local env_file="${1:-${BOT_ENV_FILE:-}}"
+  if [ -n "$env_file" ]; then
+    printf '%s\n' "$env_file"
+    return 0
   fi
-  if [ -n "${1:-}" ] && [ -f ".env.bot.$1" ]; then
-    echo ".env.bot.$1"
-    return
-  fi
-  echo ".env.bot"
-}
-
-current_bot_instance() {
-  local env_file="${1:-$(current_bot_env_file)}"
-  case "$env_file" in
-    .env.bot.*) echo "${env_file#.env.bot.}" ;;
-    *) echo "default" ;;
-  esac
+  echo "No bot configuration is selected." >&2
+  echo "Run ./octopus to create or choose a bot first." >&2
+  return 1
 }
 
 prompt_with_default() {
@@ -50,7 +40,8 @@ write_env_assignment_line() {
 }
 
 upsert_env_file_value() {
-  local key="$1" value="${2:-}" env_file="${3:-$(current_bot_env_file)}"
+  local key="$1" value="${2:-}" env_file=""
+  env_file="$(resolve_bot_env_file "${3:-}")" || return 1
   local tmp_file found=0 line=""
   tmp_file="$(mktemp "${TMPDIR:-/tmp}/octopus-env.XXXXXX")"
   if [ -f "$env_file" ]; then
@@ -70,6 +61,28 @@ upsert_env_file_value() {
     write_env_assignment_line "$key" "$value" >> "$tmp_file"
   fi
   mv "$tmp_file" "$env_file"
+  restrict_secret_file_permissions "$env_file"
+}
+
+remove_env_file_value() {
+  local key="$1" env_file=""
+  env_file="$(resolve_bot_env_file "${2:-}")" || return 1
+  local tmp_file line=""
+  tmp_file="$(mktemp "${TMPDIR:-/tmp}/octopus-env.XXXXXX")"
+  if [ -f "$env_file" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        "$key="*|[[:space:]]"$key="*)
+          ;;
+        *)
+          printf '%s\n' "$line" >> "$tmp_file"
+          ;;
+      esac
+    done < "$env_file"
+    mv "$tmp_file" "$env_file"
+  else
+    rm -f "$tmp_file"
+  fi
   restrict_secret_file_permissions "$env_file"
 }
 
@@ -129,12 +142,16 @@ channel_token_looks_plausible() {
   local channel="${1:-telegram}" value="${2:-}"
   case "$channel" in
     telegram)
-      [[ "$value" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]
+      telegram_token_format_valid "$value"
       ;;
     *)
       return 1
       ;;
   esac
+}
+
+telegram_token_format_valid() {
+  [[ "${1:-}" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]
 }
 
 prompt_channel_token_with_help() {
@@ -183,38 +200,11 @@ prompt_channel_token_with_help() {
 registry_url_is_local() {
   local value="${1:-}"
   case "$value" in
-    http://localhost:*|http://127.0.0.1:*|http://[::1]:*|http://host.docker.internal:*|http://172.17.0.1:*)
+    http://registry:*|http://localhost:*|http://127.0.0.1:*|http://[::1]:*)
       return 0
       ;;
   esac
   return 1
-}
-
-doctor_output_has_token_rejection() {
-  printf '%s\n' "${1:-}" | grep -q "Telegram rejected TELEGRAM_BOT_TOKEN"
-}
-
-format_doctor_output_for_operator() {
-  printf '%s\n' "${1:-}" | while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      "" )
-        ;;
-      [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*)
-        ;;
-      *"HTTP Request:"*)
-        ;;
-      *)
-        printf '%s\n' "$line"
-        ;;
-    esac
-  done
-}
-
-print_doctor_output_for_operator() {
-  local output="${1:-}" line=""
-  while IFS= read -r line || [ -n "$line" ]; do
-    printf '%s\n' "$line" >&2
-  done < <(format_doctor_output_for_operator "$output")
 }
 
 restrict_secret_file_permissions() {
@@ -224,20 +214,24 @@ restrict_secret_file_permissions() {
 }
 
 check_env_bot_required() {
-  local env_file="${1:-$(current_bot_env_file)}"
+  local env_file="${1:-}" slug=""
+  env_file="$(resolve_bot_env_file "$env_file")" || exit 1
   if [ ! -f "$env_file" ]; then
-    if [ "$env_file" = ".env.bot" ]; then
-      echo "Create .env.bot first (TELEGRAM_BOT_TOKEN, BOT_PROVIDER, BOT_ALLOWED_USERS or BOT_ALLOW_OPEN=1)." >&2
+    slug="$(basename "$(dirname "$env_file")" 2>/dev/null || true)"
+    if [ -n "$slug" ] && [ "$slug" != "." ] && [ "$slug" != ".." ]; then
+      echo "Bot '$slug' is not configured." >&2
     else
-      echo "Create .env.bot first for the default bot, or create $env_file for this instance (TELEGRAM_BOT_TOKEN, BOT_PROVIDER, BOT_ALLOWED_USERS or BOT_ALLOW_OPEN=1)." >&2
+      echo "Bot configuration is missing." >&2
     fi
+    echo "Run ./octopus to create or repair the bot." >&2
     exit 1
   fi
 }
 
 read_bot_env_value() {
-  local key="$1" env_file="${2:-$(current_bot_env_file)}"
-  grep -E "^\s*${key}=" "$env_file" 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true
+  local key="$1" env_file="${2:-${BOT_ENV_FILE:-}}"
+  [ -n "$env_file" ] || return 0
+  grep -E "^[[:space:]]*${key}=" "$env_file" 2>/dev/null | sed 's/^[^=]*=[[:space:]]*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true
 }
 
 telegram_token_is_placeholder() {
@@ -252,7 +246,7 @@ telegram_token_is_placeholder() {
 }
 
 require_real_telegram_token() {
-  local value="${1:-}" env_file="${2:-$(current_bot_env_file)}"
+  local value="${1:-}" env_file="${2:-${BOT_ENV_FILE:-bot env file}}"
   if [ -z "$value" ]; then
     echo "TELEGRAM_BOT_TOKEN must be set in $env_file" >&2
     exit 1
@@ -264,56 +258,41 @@ require_real_telegram_token() {
   fi
 }
 
-# Echo BOT_PROVIDER from the selected env file (claude or codex), default claude.
 get_bot_provider() {
-  local env_file="${1:-$(current_bot_env_file)}"
+  local env_file="${1:-${BOT_ENV_FILE:-}}"
   local p
-  p=$(grep -E '^\s*BOT_PROVIDER=' "$env_file" 2>/dev/null | sed 's/.*=\s*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)
+  [ -n "$env_file" ] || {
+    echo "claude"
+    return 0
+  }
+  p=$(grep -E '^[[:space:]]*BOT_PROVIDER=' "$env_file" 2>/dev/null | sed 's/^[^=]*=[[:space:]]*//' | tr -d '\r' | tr -d '"' | tr -d "'" || true)
   echo "${p:-claude}"
 }
 
-# Exit with message if image octopus-agent:$1 is missing. Call with provider from get_bot_provider or arg.
-check_provider_image() {
-  local provider="${1:-}"
-  if [ -z "$provider" ]; then
-    provider=$(get_bot_provider)
-  fi
-  if ! docker image inspect "octopus-agent:$provider" >/dev/null 2>&1; then
-    echo "Image octopus-agent:$provider not found." >&2
-    echo "Run: ./scripts/provider/build_bot_image.sh $provider" >&2
-    exit 1
-  fi
-  echo "$provider"
+normalize_slug() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9-' '-' | sed 's/^-//;s/-$//' | cut -c1-32
 }
 
-bot_compose() {
-  local env_file="${BOT_ENV_FILE:-$(current_bot_env_file)}"
-  local project="${BOT_COMPOSE_PROJECT:-}"
-  if [ -z "$project" ] && [ "$env_file" != ".env.bot" ]; then
-    project="octopus-agent-$(current_bot_instance "$env_file")"
-  fi
-  if [ -n "$project" ]; then
-    docker compose --project-directory . -p "$project" -f infra/compose/docker-compose.yml --profile bot --env-file "$env_file" "$@"
-    return
-  fi
-  docker compose --project-directory . -f infra/compose/docker-compose.yml --profile bot --env-file "$env_file" "$@"
-}
+validate_telegram_token() {
+  local token="$1"
+  printf '%s' "$token" | python3 -c "
+import json
+import sys
+import urllib.request
 
-bot_shared_compose() {
-  local env_file="${BOT_ENV_FILE:-$(current_bot_env_file)}"
-  local project="${BOT_COMPOSE_PROJECT:-}"
-  if [ -z "$project" ] && [ "$env_file" != ".env.bot" ]; then
-    project="octopus-agent-$(current_bot_instance "$env_file")"
-  fi
-  if [ -n "$project" ]; then
-    docker compose --project-directory . -p "$project" \
-      -f infra/compose/docker-compose.yml \
-      -f infra/compose/docker-compose.shared.yml \
-      --env-file "$env_file" "$@"
-    return
-  fi
-  docker compose --project-directory . \
-    -f infra/compose/docker-compose.yml \
-    -f infra/compose/docker-compose.shared.yml \
-    --env-file "$env_file" "$@"
+token = sys.stdin.read().strip()
+url = f'https://api.telegram.org/bot{token}/getMe'
+try:
+    with urllib.request.urlopen(url, timeout=10) as resp:
+        data = json.loads(resp.read())
+    if data.get('ok'):
+        result = data['result']
+        print(result.get('id', ''))
+        print(result.get('username', ''))
+        print(result.get('first_name', ''))
+        sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+"
 }

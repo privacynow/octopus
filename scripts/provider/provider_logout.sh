@@ -1,26 +1,33 @@
 #!/usr/bin/env bash
-# Clear persisted provider auth state in the bot-home volume (best-effort).
+# Clear persisted provider auth state from the current provider paths (best-effort).
 # Use when switching accounts, troubleshooting, or changing providers.
-# Same image and volume as bot; does not remove the volume.
-# Providers may store auth in other paths; if logout seems ineffective, re-login or check provider docs.
+# Providers store auth in the shared provider-auth mount under /home/bot/.provider-auth.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR"
-# shellcheck source=scripts/lib_env.sh
-. "$REPO_DIR/scripts/lib_env.sh"
+#
+# Clear shared provider auth for one provider at a time.
+# Usage: ./scripts/provider/provider_logout.sh <claude|codex>
+. "$REPO_DIR/scripts/lib/bot.sh"
+. "$REPO_DIR/scripts/lib/docker.sh"
+. "$REPO_DIR/scripts/lib/provider.sh"
 
-env_file="$(current_bot_env_file)"
-BOT_ENV_FILE="$env_file"
-export BOT_ENV_FILE
-check_env_bot_required "$env_file"
-provider=$(get_bot_provider "$env_file")
+provider="${1:-${BOT_PROVIDER:-}}"
+case "$provider" in
+  claude|codex) ;;
+  *)
+    echo "Usage: ./scripts/provider/provider_logout.sh <claude|codex>" >&2
+    exit 1
+    ;;
+esac
 check_provider_image "$provider" >/dev/null
+ensure_provider_auth_dir "$provider"
 
-echo "Clearing provider auth state from bot-home volume (no Postgres required)..."
-bot_compose run --rm bot-provider sh -c '
+echo "Clearing provider auth state from shared provider-auth storage (no Postgres required)..."
+provider_compose "$provider" run --rm bot-provider sh -c '
   removed=
-  for d in /home/bot/.config/Claude /home/bot/.config/claude /home/bot/.config/Codex /home/bot/.config/codex /home/bot/.config/openai /home/bot/.local/share/Claude /home/bot/.local/share/codex; do
+  for d in /home/bot/.claude /home/bot/.claude.json /home/bot/.codex; do
     if [ -d "$d" ] || [ -f "$d" ]; then
       rm -rf "$d"
       removed="$removed $d"

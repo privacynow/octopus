@@ -11,17 +11,17 @@ services:
     profiles:
       - bot
     env_file:
-      - ${BOT_ENV_FILE:-.env.bot}
+      - ${BOT_ENV_FILE:-/dev/null}
     environment:
+      BOT_PROVIDER: ${BOT_PROVIDER:-claude}
       BOT_DATA_DIR: /home/bot/data
       BOT_RUNTIME_MODE: shared
       BOT_MODE: webhook
       BOT_PROCESS_ROLE: webhook
       BOT_WEBHOOK_LISTEN: 0.0.0.0
     volumes:
-      - bot-home:/home/bot
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - ${PROVIDER_AUTH_DIR:-.deploy/provider-auth/claude}:/home/bot/.provider-auth:rw
+      - bot-home:/home/bot/data
     command: ["python", "-m", "app.main"]
     ports:
       - "${BOT_WEBHOOK_PORT:-8443}:8443"
@@ -31,14 +31,14 @@ services:
     profiles:
       - bot
     env_file:
-      - ${BOT_ENV_FILE:-.env.bot}
+      - ${BOT_ENV_FILE:-/dev/null}
     environment:
+      BOT_PROVIDER: ${BOT_PROVIDER:-claude}
       BOT_DATA_DIR: /home/bot/data
       BOT_RUNTIME_MODE: shared
       BOT_MODE: webhook
       BOT_PROCESS_ROLE: worker
     volumes:
-      - bot-home:/home/bot
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - ${PROVIDER_AUTH_DIR:-.deploy/provider-auth/claude}:/home/bot/.provider-auth:rw
+      - bot-home:/home/bot/data
     command: ["python", "-m", "app.main"]

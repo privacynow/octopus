@@ -19,7 +19,7 @@ def _get_url() -> str:
     if not url:
         print(
             "BOT_DATABASE_URL is not set. For Docker: Compose sets it for the container. "
-            "For host-run: set it in .env.bot (e.g. postgresql://bot:bot@localhost:5432/bot).",
+            "For host-run: set it in the bot env file (for example postgresql://bot:bot@localhost:5432/bot).",
             file=sys.stderr,
         )
         sys.exit(1)

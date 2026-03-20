@@ -189,7 +189,9 @@ def configure_startup_logging() -> None:
 
 
 def env_file_hint(instance: str) -> str:
-    return ".env.bot" if instance in ("", "default") else f".env.bot.{instance}"
+    if instance in ("", "default"):
+        return ".deploy/bots/<slug>/.env"
+    return f".deploy/bots/{instance}/.env"
 
 
 def telegram_token_is_placeholder(token: str) -> bool:

@@ -17,8 +17,8 @@ from app.startup_diagnostics import (
 
 
 def test_env_file_hint_uses_instance_name():
-    assert env_file_hint("default") == ".env.bot"
-    assert env_file_hint("blue") == ".env.bot.blue"
+    assert env_file_hint("default") == ".deploy/bots/<slug>/.env"
+    assert env_file_hint("blue") == ".deploy/bots/blue/.env"
 
 
 def test_format_startup_exception_for_invalid_token():

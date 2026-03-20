@@ -13,11 +13,16 @@ from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.runtime import AgentRuntime
 from app.agents.state import AgentRuntimeState, bot_identity, load_agent_runtime_state
-from app.agents.types import AgentDiscoveryQuery
+from app.agents.types import AgentDiscoveryQuery, RegistryConnectionState
 from app.config import derive_agent_slug
 from app.runtime.inbound_types import deserialize_inbound
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
-from app.agents.state import load_bot_identity_state, save_agent_runtime_state
+from app.agents.state import (
+    load_bot_identity_state,
+    load_registry_connection_state,
+    save_agent_runtime_state,
+    save_registry_connection_state,
+)
 from tests.support.config_support import make_config
 from tests.support.handler_support import fresh_env
 
@@ -108,6 +113,39 @@ def test_bot_identity_regenerates_when_file_is_corrupt(tmp_path: Path, caplog):
     assert new_id == state.bot_id
     assert state.created_at.endswith("Z")
     assert any("Bot identity load failed" in record.message for record in caplog.records)
+
+
+def test_registry_connection_state_round_trips_per_connection_file(tmp_path: Path):
+    state = RegistryConnectionState(
+        registry_id="prod",
+        registry_scope="coordination",
+        agent_id="agent-1",
+        agent_token="secret-token",
+        poll_cursor="42",
+    )
+
+    save_registry_connection_state(tmp_path, state)
+    restored = load_registry_connection_state(tmp_path, "prod")
+    state_path = tmp_path / "agent" / "registries" / "prod.json"
+
+    assert restored == state
+    assert state_path.exists()
+    assert state_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_registry_connection_state_uses_defaults_when_missing_or_corrupt(tmp_path: Path, caplog):
+    missing = load_registry_connection_state(tmp_path, "analytics")
+    assert missing == RegistryConnectionState(registry_id="analytics")
+
+    corrupt_path = tmp_path / "agent" / "registries" / "analytics.json"
+    corrupt_path.parent.mkdir(parents=True, exist_ok=True)
+    corrupt_path.write_text("{not-json", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        restored = load_registry_connection_state(tmp_path, "analytics")
+
+    assert restored == RegistryConnectionState(registry_id="analytics")
+    assert any("Registry connection state load failed" in record.message for record in caplog.records)
 
 
 async def test_agent_runtime_standalone_marks_state(tmp_path: Path):

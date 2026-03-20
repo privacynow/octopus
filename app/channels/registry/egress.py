@@ -64,12 +64,18 @@ class RegistryChannelEgress(ChannelEgress):
         services: BotServices,
     ) -> None:
         parsed_ref = parse_registry_ref(conversation_ref)
+        if parsed_ref is None:
+            raise ValueError(
+                f"Registry channel egress requires a qualified registry ref, got {conversation_ref!r}"
+            )
+        if registry_id and registry_id != parsed_ref[0]:
+            raise ValueError(
+                "Registry channel egress registry_id must match the qualified registry ref"
+            )
         self.config = config
         self.conversation_ref = conversation_ref
-        self.registry_id = registry_id or (parsed_ref[0] if parsed_ref is not None else "default")
-        self.routed_task_id = routed_task_id or (
-            parsed_ref[2] if parsed_ref is not None and parsed_ref[1] == "task" else ""
-        )
+        self.registry_id = parsed_ref[0]
+        self.routed_task_id = routed_task_id or (parsed_ref[2] if parsed_ref[1] == "task" else "")
         self.title = title or "Registry conversation"
         self.external_id = external_id or registry_ref_external_id(conversation_ref)
         self.sent_messages: list[str] = []

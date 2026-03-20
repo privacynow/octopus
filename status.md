@@ -10,15 +10,37 @@
 ## Current State
 
 - Phases 1-8 of the control-plane rollout landed and the repo is green.
-- Phase 9 remediation is in progress; slices 9A-9E are now complete and the repo is green.
+- Phase 9 remediation is in progress; slices 9A-9F are now complete and the repo is green.
 - The remaining work is now tracked explicitly in `PLAN-control-plane-bus.md` Phase 9:
-  - singleton/default fallbacks still remain
   - dead registry-shaped runtime API and scaffolding-preserving tests still remain
   - some tests still encode scaffolding behavior instead of the final architecture
 - Status should be read as: rollout complete through Phase 8, remediation in progress through Phase 9.
 
 ## Slice Log
 
+- Complete: Phase 9F remediation — fail-fast registry refs and singleton/default fallbacks.
+  Scope:
+  - removed singleton/default coercion from registry delivery admission and registry delivery handling; registry-owned `channel_input`, `routed_task`, `channel_action`, and `routed_result` deliveries now require explicit top-level `registry_id`
+  - tightened `app/agents/bridge.py` so registry message/action envelope builders and registry-parent ref qualification require explicit registry ownership instead of silently producing empty/implicit provenance
+  - tightened `RegistryChannelEgress` to require qualified registry refs and reject mismatched explicit `registry_id` inputs rather than inventing `"default"`
+  - removed the implicit first-registry selection from `AgentRuntime`; registry mode now requires an explicit registry connection while standalone mode keeps an in-memory empty-state instead of persisting a fake `"default"` registry state file
+  - updated registry-owned tests and fixtures to use production-shape qualified refs and explicit `registry_id` on registry deliveries
+  - added/kept gates that forbid `"default"` / first-registry fallback from reappearing in the targeted registry-owned paths
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_handlers.py tests/test_agents.py tests/test_registry_adapter.py tests/test_agents_runtime.py tests/test_zero_import_gates.py tests/e2e/test_compose_flows.py -k 'registry or routed_result or channel_action or default or runtime'`
+  - `./.venv/bin/python -m pytest -x -vv`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified `app/agents/bridge.py`, `app/agents/delivery.py`, `app/channels/registry/egress.py`, and `app/agents/runtime.py` no longer synthesize `"default"` registry ownership or select `config.agent_registries[0]`
+  - verified registry-owned tests now carry explicit top-level `registry_id` where the delivery contract requires it
+  - verified standalone `AgentRuntime` no longer writes fake default registry state just to satisfy the old singleton shape
+  Review:
+  - this slice removed coercion at the existing registry-owned boundaries instead of adding another validation or compatibility layer
+  - the only fallout was stale tests still emitting non-canonical registry delivery shapes; those fixtures were corrected to the production contract rather than relaxing the runtime back to singleton-era behavior
+  Verified:
+  - registry-owned paths now fail fast on missing ownership/qualified refs instead of inventing singleton defaults
+  - registry mode `AgentRuntime` construction is explicit, while standalone mode no longer persists fake registry state
+  - full suite status after Phase 9F: `1921 passed, 23 skipped`
 - Complete: Phase 9E remediation — close the runtime compatibility window.
   Scope:
   - removed runtime-boundary translators that silently rewrote non-canonical `registry_id`, `user_id`, and `chat_id` payloads into canonical `authority_ref`, `actor_key`, and `conversation_key`

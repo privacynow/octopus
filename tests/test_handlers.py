@@ -520,6 +520,7 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
             cfg,
             {
                 "delivery_id": "registry-approve-delegation",
+                "registry_id": "default",
                 "kind": "channel_action",
                 "payload": {
                     "conversation_ref": _reg_ref("conv-approve"),
@@ -572,6 +573,7 @@ async def test_cancel_delegation_from_registry_delivery():
             cfg,
             {
                 "delivery_id": "registry-cancel-delegation",
+                "registry_id": "default",
                 "kind": "channel_action",
                 "payload": {
                     "conversation_ref": _reg_ref("conv-cancel"),
@@ -786,6 +788,7 @@ async def test_registry_routed_result_resumes_parent_conversation_without_new_ap
         outcome = await handle_registry_delivery(
             cfg,
             {
+                "registry_id": "default",
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-1",
@@ -841,6 +844,7 @@ async def test_delegation_completion_sends_final_message_all_completed():
         outcome = await handle_registry_delivery(
             cfg,
             {
+                "registry_id": "default",
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-1",
@@ -896,6 +900,7 @@ async def test_delegation_completion_sends_final_message_partial_failed():
         first = await handle_registry_delivery(
             cfg,
             {
+                "registry_id": "default",
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-1",
@@ -912,6 +917,7 @@ async def test_delegation_completion_sends_final_message_partial_failed():
         second = await handle_registry_delivery(
             cfg,
             {
+                "registry_id": "default",
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-2",
@@ -966,6 +972,7 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
         outcome = await handle_registry_delivery(
             cfg,
             {
+                "registry_id": "default",
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-2",
@@ -1021,6 +1028,7 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
         outcome = await handle_registry_delivery(
             cfg,
             {
+                "registry_id": "default",
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-dup",
@@ -1080,6 +1088,7 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
         first_outcome = await handle_registry_delivery(
             cfg,
             {
+                "registry_id": "default",
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-a",
@@ -1106,6 +1115,7 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
         final_outcome = await handle_registry_delivery(
             cfg,
             {
+                "registry_id": "default",
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-b",
@@ -1169,6 +1179,7 @@ async def test_registry_channel_parent_resumes_through_registry_channel(monkeypa
         outcome = await handle_registry_delivery(
             cfg,
             {
+                "registry_id": "default",
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "child-task-registry",
@@ -1218,6 +1229,7 @@ async def test_registry_channel_action_retry_skip_clears_pending_retry():
             cfg,
             {
                 "delivery_id": "registry-retry-skip",
+                "registry_id": "default",
                 "kind": "channel_action",
                 "payload": {
                     "conversation_id": telegram_conversation_ref(cfg, chat_id),
@@ -1260,6 +1272,7 @@ async def test_registry_channel_action_retry_allow_executes_request():
             cfg,
             {
                 "delivery_id": "registry-retry-allow",
+                "registry_id": "default",
                 "kind": "channel_action",
                 "payload": {
                     "conversation_id": telegram_conversation_ref(cfg, chat_id),
@@ -1303,6 +1316,7 @@ async def test_registry_channel_action_recovery_discard_discards_pending_recover
             cfg,
             {
                 "delivery_id": "registry-recovery-discard",
+                "registry_id": "default",
                 "kind": "channel_action",
                 "payload": {
                     "conversation_id": telegram_conversation_ref(cfg, chat_id),
@@ -1348,6 +1362,7 @@ async def test_registry_channel_action_recovery_replay_executes_request():
             cfg,
             {
                 "delivery_id": "registry-recovery-replay",
+                "registry_id": "default",
                 "kind": "channel_action",
                 "payload": {
                     "conversation_id": telegram_conversation_ref(cfg, chat_id),

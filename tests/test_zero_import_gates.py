@@ -718,6 +718,27 @@ def test_runtime_boundaries_accept_only_canonical_identity_and_provenance_shapes
     assert "parse_registry_ref(" not in worker_text
 
 
+def test_registry_owned_paths_do_not_invent_default_registry_or_first_registry_selection() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    bridge_path = repo_root / "app" / "agents" / "bridge.py"
+    delivery_path = repo_root / "app" / "agents" / "delivery.py"
+    registry_egress_path = repo_root / "app" / "channels" / "registry" / "egress.py"
+    runtime_path = repo_root / "app" / "agents" / "runtime.py"
+
+    bridge_text = bridge_path.read_text()
+    assert 'or "default"' not in bridge_text
+
+    delivery_text = delivery_path.read_text()
+    assert 'or "default"' not in delivery_text
+
+    registry_egress_text = registry_egress_path.read_text()
+    assert 'else "default"' not in registry_egress_text
+
+    runtime_text = runtime_path.read_text()
+    assert "config.agent_registries[0]" not in runtime_text
+    assert 'else "default"' not in runtime_text
+
+
 def test_worker_dispatch_documents_completion_ownership() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"

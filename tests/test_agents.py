@@ -187,7 +187,7 @@ async def test_agent_runtime_standalone_marks_state(tmp_path: Path):
     runtime = AgentRuntime(config)
 
     result = await runtime.sync_once()
-    state = load_runtime_registry_connection_state(tmp_path, "default")
+    state = runtime.state
 
     assert result == "standalone"
     assert state.connectivity_state == "standalone"
@@ -202,7 +202,7 @@ async def test_agent_runtime_registry_without_url_degrades(tmp_path: Path):
         agent_registries=(make_registry_connection(url="", enroll_token="token"),),
         agent_display_name="Registry Bot",
     )
-    runtime = AgentRuntime(config)
+    runtime = AgentRuntime(config, registry=config.agent_registries[0])
 
     result = await runtime.sync_once()
     state = load_runtime_registry_connection_state(tmp_path, "default")
@@ -211,6 +211,17 @@ async def test_agent_runtime_registry_without_url_degrades(tmp_path: Path):
     assert state.connectivity_state == "degraded"
     assert state.last_error == "registry_url_missing"
     assert state.last_error_detail == "Registry URL not configured."
+
+
+def test_agent_runtime_registry_mode_requires_explicit_registry(tmp_path: Path):
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    with pytest.raises(ValueError, match="explicit registry connection"):
+        AgentRuntime(config)
 
 
 async def test_registry_client_error_omits_response_body():
@@ -271,7 +282,7 @@ async def test_agent_runtime_persists_safe_registry_error_code_and_detail(monkey
         agent_mode="registry",
         agent_registries=(make_registry_connection(),),
     )
-    runtime = AgentRuntime(config)
+    runtime = AgentRuntime(config, registry=config.agent_registries[0])
 
     result = await runtime.sync_once()
     state = load_runtime_registry_connection_state(tmp_path, "default")
@@ -318,7 +329,7 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
         agent_capabilities=("planning", "delegation"),
         agent_registries=(make_registry_connection(),),
     )
-    runtime = AgentRuntime(config)
+    runtime = AgentRuntime(config, registry=config.agent_registries[0])
 
     result = await runtime.sync_once()
     state = load_runtime_registry_connection_state(tmp_path, "default")
@@ -397,6 +408,7 @@ async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypa
         config,
         runtime_health_provider=FakeHealthProvider(),
         provider=object(),
+        registry=config.agent_registries[0],
     )
 
     assert await runtime.sync_once() == "connected"
@@ -452,9 +464,15 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
             calls.append(("poll", cursor))
             return {
                 "deliveries": [
-                    {"delivery_id": "d1", "kind": "channel_input", "payload": {"conversation_id": "c1", "text": "hello"}},
+                    {
+                        "delivery_id": "d1",
+                        "registry_id": "default",
+                        "kind": "channel_input",
+                        "payload": {"conversation_id": "c1", "text": "hello"},
+                    },
                     {
                         "delivery_id": "d2",
+                        "registry_id": "default",
                         "kind": "channel_action",
                         "payload": {"conversation_id": "c1", "action": "cancel_conversation"},
                     },
@@ -479,7 +497,7 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
         agent_display_name="Product Bot",
         agent_registries=(make_registry_connection(),),
     )
-    runtime = AgentRuntime(config, delivery_handler=handler)
+    runtime = AgentRuntime(config, delivery_handler=handler, registry=config.agent_registries[0])
     assert await runtime.sync_once() == "connected"
 
     processed = await runtime.poll_once()
@@ -546,7 +564,7 @@ async def test_agent_runtime_poll_isolates_bad_delivery_and_acks_rest(monkeypatc
         agent_display_name="Product Bot",
         agent_registries=(make_registry_connection(),),
     )
-    runtime = AgentRuntime(config, delivery_handler=handler)
+    runtime = AgentRuntime(config, delivery_handler=handler, registry=config.agent_registries[0])
     assert await runtime.sync_once() == "connected"
 
     processed = await runtime.poll_once()
@@ -566,7 +584,7 @@ async def test_agent_runtime_run_forever_survives_unexpected_poll_error(tmp_path
         agent_mode="registry",
         agent_registries=(make_registry_connection(),),
     )
-    runtime = AgentRuntime(config)
+    runtime = AgentRuntime(config, registry=config.agent_registries[0])
     stop_event = asyncio.Event()
 
     async def fake_sync_once():
@@ -711,6 +729,7 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
         outcome = await handle_registry_delivery(
             config,
             {
+                "registry_id": "default",
                 "kind": "routed_result",
                 "payload": {
                     "routed_task_id": "task-1",
@@ -741,6 +760,40 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
                 "metadata": {"routed_task_id": "task-1"},
             }
         ]
+
+
+async def test_admit_registry_delivery_rejects_missing_registry_id(monkeypatch, tmp_path: Path):
+    seen: list[str] = []
+
+    monkeypatch.setattr(
+        "app.agents.bridge.work_queue.record_and_admit_message",
+        lambda *args, **kwargs: ("queued", "queued-item"),
+    )
+
+    class _FakeDispatcher:
+        def create_egress(self, conversation_ref, *, config, **kwargs):
+            del conversation_ref, config, kwargs
+            seen.append("create_egress")
+            raise AssertionError("missing registry_id should reject before egress creation")
+
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    outcome = await admit_registry_delivery(
+        config,
+        {
+            "kind": "channel_input",
+            "delivery_id": "delivery-missing-registry",
+            "payload": {"conversation_id": "conv-1", "text": "hello"},
+        },
+        dispatcher=_FakeDispatcher(),
+    )
+
+    assert outcome == "rejected"
+    assert seen == []
 
 
 async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Path):
@@ -870,3 +923,40 @@ async def test_handle_registry_delivery_rejects_legacy_surface_action_kind(tmp_p
         assert outcome == "rejected"
         approve_payload = work_queue.get_update_payload(data_dir, "reg:d-legacy-approve")
         assert approve_payload is None
+
+
+async def test_handle_registry_delivery_rejects_missing_registry_id_for_registry_owned_kinds(tmp_path: Path):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_data_dir, cfg, prov):
+        runtime = build_registry_delivery_runtime(
+            provider_name=prov.name,
+            provider_state_factory=prov.new_provider_state,
+            bot=None,
+        )
+
+        assert await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-missing-action-registry",
+                "kind": "channel_action",
+                "payload": {"conversation_id": "conv-1", "action": "approve"},
+            },
+            runtime=runtime,
+        ) == "rejected"
+        assert await handle_registry_delivery(
+            cfg,
+            {
+                "delivery_id": "d-missing-result-registry",
+                "kind": "routed_result",
+                "payload": {
+                    "routed_task_id": "task-1",
+                    "parent_conversation_id": "telegram:bot-1:12345",
+                    "result": {"status": "completed", "summary": "done"},
+                },
+            },
+            runtime=runtime,
+        ) == "rejected"

@@ -588,16 +588,18 @@ async def test_delegation_proposed_event_published(monkeypatch):
         }
     ) as (_, _, prov):
         import app.channels.telegram.ingress as th
-        from app.channels.registry.egress import RegistryChannelEgress
 
         published: list[tuple[str, str, str]] = []
 
-        async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
-            del self, status, progress, metadata, event_id
+        async def fake_publish_timeline(*, conversation_ref, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
+            del conversation_ref, status, progress, metadata, event_id
             published.append((kind, title, body))
 
-        monkeypatch.setattr("app.channels.registry.egress.bind_conversation", async_noop)
-        monkeypatch.setattr(RegistryChannelEgress, "_publish_event", fake_publish_event)
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.conversation_projection,
+            "publish_external_timeline",
+            fake_publish_timeline,
+        )
         prov.run_results = [
             RunResult(
                 text="",

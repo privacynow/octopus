@@ -1171,9 +1171,7 @@ def discover_results_message(agents: list[Any]) -> TelegramRenderedMessage:
         display_name = html.escape(
             agent.get("display_name") or agent.get("slug") or agent.get("agent_id") or "Unnamed agent"
         )
-        authority_ref = html.escape(
-            str(agent.get("authority_ref", "") or agent.get("registry_id", "") or "")
-        )
+        authority_ref = html.escape(str(agent.get("authority_ref", "") or ""))
         role = html.escape(agent.get("role") or "(unspecified)")
         state = html.escape(agent.get("connectivity_state") or "unknown")
         current_capacity = int(agent.get("current_capacity", 0) or 0)

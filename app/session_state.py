@@ -17,7 +17,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.agents.registry_capabilities import registry_authority_ref
 from app.identity import parse_actor_key
 
 
@@ -180,8 +179,6 @@ def session_from_dict(d: dict[str, Any]) -> SessionState:
                 continue
             valid_keys = {f.name for f in DelegatedTask.__dataclass_fields__.values()}
             filtered = {k: v for k, v in task_raw.items() if k in valid_keys}
-            if not filtered.get("authority_ref") and task_raw.get("registry_id"):
-                filtered["authority_ref"] = registry_authority_ref(str(task_raw["registry_id"]))
             try:
                 tasks.append(DelegatedTask(**filtered))
             except TypeError:

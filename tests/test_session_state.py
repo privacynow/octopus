@@ -70,3 +70,26 @@ def test_pending_delegation_status_round_trips():
 
     assert restored.pending_delegation is not None
     assert restored.pending_delegation.status == "partial_failed"
+
+
+def test_session_from_dict_does_not_rewrite_registry_id_to_authority_ref() -> None:
+    restored = session_from_dict(
+        {
+            "provider": "claude",
+            "provider_state": {},
+            "approval_mode": "off",
+            "pending_delegation": {
+                "conversation_ref": "registry:conv-1",
+                "tasks": [
+                    {
+                        "routed_task_id": "task-1",
+                        "registry_id": "prod",
+                        "status": "submitted",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert restored.pending_delegation is not None
+    assert restored.pending_delegation.tasks[0].authority_ref == ""

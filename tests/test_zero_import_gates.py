@@ -688,6 +688,36 @@ def test_worker_dispatch_does_not_import_registry_bridge_timeline_helpers() -> N
         assert token not in import_block, f"{token} still imported from bridge in {worker_path}"
 
 
+def test_runtime_boundaries_accept_only_canonical_identity_and_provenance_shapes() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    inbound_types_path = repo_root / "app" / "runtime" / "inbound_types.py"
+    session_state_path = repo_root / "app" / "session_state.py"
+    coordination_path = repo_root / "app" / "workflows" / "delegation" / "coordination.py"
+    presenters_path = repo_root / "app" / "channels" / "telegram" / "presenters.py"
+    worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
+
+    inbound_text = inbound_types_path.read_text()
+    assert '"user_id" in data' not in inbound_text
+    assert '"chat_id" in data' not in inbound_text
+    assert '"registry_id"' not in inbound_text
+    assert "telegram_actor_key(" not in inbound_text
+    assert "telegram_conversation_key(" not in inbound_text
+    assert "registry_authority_ref(" not in inbound_text
+
+    session_text = session_state_path.read_text()
+    assert "registry_authority_ref(" not in session_text
+
+    coordination_text = coordination_path.read_text()
+    assert "registry_authority_ref(" not in coordination_text
+
+    presenters_text = presenters_path.read_text()
+    assert 'agent.get("registry_id"' not in presenters_text
+
+    worker_text = worker_path.read_text()
+    assert "_resolve_registry_authority_ref" not in worker_text
+    assert "parse_registry_ref(" not in worker_text
+
+
 def test_worker_dispatch_documents_completion_ownership() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"

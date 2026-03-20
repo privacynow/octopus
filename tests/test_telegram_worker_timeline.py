@@ -94,36 +94,3 @@ async def test_publish_timeline_event_for_runtime_projects_registry_refs_via_por
         metadata={"prompt_tokens": 12},
         event_id=None,
     )
-
-
-def test_resolve_registry_authority_ref_uses_explicit_or_parseable_provenance_only():
-    runtime = build_telegram_runtime(
-        make_config(data_dir=Path("/tmp/telegram-worker-authority")),
-        FakeProvider("codex"),
-        services=_services(),
-    )
-
-    assert (
-        telegram_worker._resolve_registry_authority_ref(
-            runtime,
-            authority_ref="registry:alpha",
-            conversation_ref="telegram:bot-1:12345",
-        )
-        == "registry:alpha"
-    )
-    assert (
-        telegram_worker._resolve_registry_authority_ref(
-            runtime,
-            authority_ref="",
-            conversation_ref="registry:prod:conversation:conv-1",
-        )
-        == "registry:prod"
-    )
-    assert (
-        telegram_worker._resolve_registry_authority_ref(
-            runtime,
-            authority_ref="",
-            conversation_ref="telegram:bot-1:12345",
-        )
-        == ""
-    )

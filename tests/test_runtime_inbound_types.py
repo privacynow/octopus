@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from app.runtime.inbound_types import (
     InboundAction,
     InboundEnvelope,
@@ -63,3 +65,20 @@ def test_registry_inbound_payloads_round_trip_authority_ref() -> None:
     assert isinstance(action, InboundAction)
     assert message.authority_ref == "registry:prod"
     assert action.authority_ref == "registry:prod"
+
+
+def test_deserialize_inbound_rejects_non_canonical_identity_payloads() -> None:
+    payload = '{"user_id":42,"chat_id":99,"text":"hello","source":"telegram"}'
+
+    with pytest.raises(ValueError, match="canonical actor_key/conversation_key"):
+        deserialize_inbound("message", payload)
+
+
+def test_deserialize_inbound_rejects_registry_payload_without_authority_ref() -> None:
+    payload = (
+        '{"actor_key":"reg:actor","username":"registry","conversation_key":"registry:prod:task:task-1",'
+        '"text":"hello","source":"registry","conversation_ref":"registry:prod:task:task-1","routed_task_id":"task-1"}'
+    )
+
+    with pytest.raises(ValueError, match="canonical authority_ref"):
+        deserialize_inbound("message", payload)

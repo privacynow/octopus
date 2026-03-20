@@ -215,6 +215,7 @@ async def test_worker_dispatch_skips_completion_webhook_for_delegation_proposed(
             text="Delegate this work.",
             source="registry",
             conversation_ref=_reg_ref("conv-webhook"),
+            authority_ref="registry:default",
         )
         item = {"id": "webhook-item-2", "conversation_key": _reg_conv(_reg_ref("conv-webhook")), "event_id": _event(7002), "dispatch_mode": "fresh"}
 
@@ -448,6 +449,7 @@ async def test_registry_channel_input_respects_approval_mode():
             text="Please refine this specification.",
             source="registry",
             conversation_ref=_reg_ref("registry-conv-1"),
+            authority_ref="registry:default",
         )
         item = {"id": "registry-item-1", "conversation_key": _reg_conv(_reg_ref("registry-conv-1")), "event_id": _event(7001), "dispatch_mode": "fresh"}
 
@@ -629,6 +631,7 @@ async def test_delegation_proposed_event_published(monkeypatch):
             text="Ship the feature.",
             source="registry",
             conversation_ref=_reg_ref("conv-proposed"),
+            authority_ref="registry:default",
         )
         item = {"id": "registry-item-proposed", "conversation_key": _reg_conv(_reg_ref("conv-proposed")), "event_id": _event(7101), "dispatch_mode": "fresh"}
 
@@ -680,6 +683,7 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
             source="registry",
             conversation_ref=_reg_task("routed-task-1"),
             routed_task_id="routed-task-1",
+            authority_ref="registry:default",
         )
         item = {"id": "registry-item-2", "conversation_key": _reg_task("routed-task-1"), "event_id": _event(7002), "dispatch_mode": "fresh"}
 
@@ -738,6 +742,7 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
             source="registry",
             conversation_ref=_reg_task("routed-task-2"),
             routed_task_id="routed-task-2",
+            authority_ref="registry:default",
         )
         item = {"id": "registry-item-3", "conversation_key": _reg_task("routed-task-2"), "event_id": _event(7003), "dispatch_mode": "fresh"}
 
@@ -1387,6 +1392,7 @@ async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch)
                 text="resume later",
                 source="registry",
                 conversation_ref=_reg_ref("registry-conv-2"),
+                authority_ref="registry:default",
             )
             item = {"id": "registry-item-4", "conversation_key": event.conversation_key, "event_id": _event(8123), "dispatch_mode": "recovery"}
 

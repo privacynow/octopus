@@ -10,14 +10,31 @@
 ## Current State
 
 - Phases 1-8 of the control-plane rollout landed and the repo is green.
-- Phase 9 remediation is in progress; slices 9A-9F are now complete and the repo is green.
+- Phase 9 remediation is in progress; slices 9A-9G are now complete and the repo is green.
 - The remaining work is now tracked explicitly in `PLAN-control-plane-bus.md` Phase 9:
-  - dead registry-shaped runtime API and scaffolding-preserving tests still remain
+  - scaffolding-preserving tests and low-noise cleanup still remain
   - some tests still encode scaffolding behavior instead of the final architecture
 - Status should be read as: rollout complete through Phase 8, remediation in progress through Phase 9.
 
 ## Slice Log
 
+- Complete: Phase 9G remediation — delete dead registry-shaped runtime API.
+  Scope:
+  - deleted `RegistryRuntime.runtime_for_registry()` and `RegistryRuntime.resolve_target_registry_id()` after confirming no app callers remained
+  - removed the last dead test that exercised `resolve_target_registry_id()` directly
+  - added a zero-import gate that asserts the removed runtime API stays absent from app code
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_registry_runtime.py tests/test_zero_import_gates.py tests/test_control_plane_adapters.py tests/test_handlers.py -k 'registry_runtime or zero_import or resolve_target_authority or discover'`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified `rg` finds no remaining app callers for `runtime_for_registry(` or `resolve_target_registry_id(`
+  - verified current discovery/authority behavior remains covered by the control-plane adapter and handler tests rather than the deleted runtime helper
+  Review:
+  - this slice removed dead public surface instead of wrapping or renaming it
+  - the replacement coverage stayed on live seams (`discover`, control-plane authority resolution, and grep gates) rather than inventing another compatibility API
+  Verified:
+  - dead registry-shaped runtime API is gone and guarded against reintroduction
+  - full suite status after Phase 9G: `1921 passed, 23 skipped`
 - Complete: Phase 9F remediation — fail-fast registry refs and singleton/default fallbacks.
   Scope:
   - removed singleton/default coercion from registry delivery admission and registry delivery handling; registry-owned `channel_input`, `routed_task`, `channel_action`, and `routed_result` deliveries now require explicit top-level `registry_id`

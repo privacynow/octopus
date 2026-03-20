@@ -117,9 +117,6 @@ class RegistryRuntime:
     def channel_capabilities(self) -> tuple[str, ...]:
         return tuple(self._dispatcher.active_channel_types())
 
-    def runtime_for_registry(self, registry_id: str) -> AgentRuntime | None:
-        return self._runtimes.get(registry_id)
-
     def client_for_registry(self, registry_id: str) -> AgentRegistryClient | None:
         return self._client_for_registry(registry_id)
 
@@ -199,40 +196,6 @@ class RegistryRuntime:
                 agent.agent_id,
             ),
         )
-
-    async def resolve_target_registry_id(
-        self,
-        target_agent_id: str,
-        *,
-        hinted_registry_id: str = "",
-    ) -> str:
-        target_agent_id = (target_agent_id or "").strip()
-        if hinted_registry_id:
-            client = self._client_for_registry(hinted_registry_id)
-            if client is not None and self.origin_agent_id(hinted_registry_id):
-                return hinted_registry_id
-        if not target_agent_id:
-            return ""
-        connected = self._connected_registries(scopes={"coordination", "full"})
-        if len(connected) == 1:
-            return connected[0].registry.registry_id
-        matches: list[str] = []
-        query = AgentDiscoveryQuery(required_state="connected")
-        for connection in connected:
-            scoped_query = query
-            if connection.local_agent_id:
-                scoped_query = replace(query, exclude_agent_ids=(connection.local_agent_id,))
-            try:
-                rows = await connection.client.search(scoped_query)
-            except RegistryClientError:
-                continue
-            for row in rows:
-                if str(row.get("agent_id", "")) == target_agent_id:
-                    matches.append(connection.registry.registry_id)
-                    break
-        if len(matches) == 1:
-            return matches[0]
-        return ""
 
     def _annotated_delivery_handler(
         self,

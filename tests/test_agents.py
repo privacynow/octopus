@@ -8,12 +8,13 @@ import httpx
 import pytest
 
 from app import work_queue
-from app.agents.bridge import admit_registry_delivery, conversation_key_for_ref
+from app.agents.bridge import admit_registry_delivery, conversation_key_for_ref, telegram_conversation_ref
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.runtime import AgentRuntime
 from app.agents.state import AgentRuntimeState, bot_identity, load_agent_runtime_state
 from app.agents.types import AgentDiscoveryQuery, RegistryConnectionState
+from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
 from app.config import derive_agent_slug
 from app.runtime.inbound_types import deserialize_inbound
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
@@ -50,6 +51,14 @@ def test_requested_card_uses_agent_capabilities_without_default_skill_fallback(t
     card = AgentRuntime(config).requested_card()
 
     assert card.capabilities == ()
+
+
+def test_telegram_conversation_ref_uses_stable_bot_identity(tmp_path: Path):
+    config = make_config(data_dir=tmp_path)
+
+    conversation_ref = telegram_conversation_ref(config, 12345)
+
+    assert conversation_ref == f"telegram:{bot_identity(tmp_path)}:12345"
 
 
 def test_load_agent_runtime_state_logs_when_file_is_corrupt(tmp_path: Path, caplog):
@@ -649,6 +658,7 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
         {
             "kind": "channel_input",
             "delivery_id": "delivery-1",
+            "registry_id": "prod",
             "payload": {"conversation_id": "conv-1", "text": "hello"},
         },
     )
@@ -657,6 +667,7 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
         {
             "kind": "routed_task",
             "delivery_id": "delivery-2",
+            "registry_id": "prod",
             "payload": {
                 "routed_task_id": "task-1",
                 "title": "Review",
@@ -669,10 +680,10 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
 
     assert outcome_message == "accepted"
     assert outcome_task == "accepted"
-    assert ("bind", "conv-1") in seen
-    assert ("timeline", "conv-1") in seen
-    assert ("bind", "task-1") in seen
-    assert ("timeline", "task-1") in seen
+    assert ("bind", registry_conversation_ref("prod", "conv-1")) in seen
+    assert ("timeline", registry_conversation_ref("prod", "conv-1")) in seen
+    assert ("bind", registry_task_ref("prod", "task-1")) in seen
+    assert ("timeline", registry_task_ref("prod", "task-1")) in seen
 
 
 async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
@@ -726,8 +737,9 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
         progress: int | None = None,
         metadata: dict[str, object] | None = None,
         event_id: str | None = None,
+        registry_id: str | None = None,
     ) -> None:
-        del config, progress, event_id
+        del config, progress, event_id, registry_id
         published.append(
             {
                 "conversation_ref": conversation_ref,
@@ -799,6 +811,7 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
             cfg,
             {
                 "delivery_id": "d-approve",
+                "registry_id": "prod",
                 "kind": "channel_action",
                 "payload": {"conversation_id": "conv-approve", "action": "approve"},
             },
@@ -808,6 +821,7 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
             cfg,
             {
                 "delivery_id": "d-cancel",
+                "registry_id": "prod",
                 "kind": "channel_action",
                 "payload": {"conversation_id": "conv-cancel", "action": "cancel_conversation"},
             },
@@ -827,12 +841,20 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
             approve_event.action,
             approve_event.conversation_key,
             approve_event.conversation_ref,
-        ) == ("approve_pending", _reg_conv("conv-approve"), "conv-approve")
+        ) == (
+            "approve_pending",
+            _reg_conv(registry_conversation_ref("prod", "conv-approve")),
+            registry_conversation_ref("prod", "conv-approve"),
+        )
         assert (
             cancel_event.action,
             cancel_event.conversation_key,
             cancel_event.conversation_ref,
-        ) == ("cancel_conversation", _reg_conv("conv-cancel"), "conv-cancel")
+        ) == (
+            "cancel_conversation",
+            _reg_conv(registry_conversation_ref("prod", "conv-cancel")),
+            registry_conversation_ref("prod", "conv-cancel"),
+        )
 
 
 async def test_handle_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):

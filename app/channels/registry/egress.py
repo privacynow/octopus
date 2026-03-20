@@ -10,10 +10,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from app.agents.bridge import bind_conversation
+from collections.abc import Callable
+
+from app.agents.bridge import bind_conversation, registry_client
 from app.agents.client import AgentRegistryClient
-from app.agents.state import load_agent_runtime_state
 from app.agents.types import TimelineEvent
+from app.channels.registry.refs import parse_registry_ref, registry_ref_external_id
 from app.config import BotConfig
 from app.formatting import trim_text
 from app.ports.egress import (
@@ -50,17 +52,26 @@ class RegistryChannelEgress(ChannelEgress):
         config: BotConfig,
         *,
         conversation_ref: str,
+        registry_id: str = "",
         routed_task_id: str = "",
         title: str = "",
         output_log: list[dict[str, str]] | None = None,
+        external_id: str = "",
+        registry_client_factory: Callable[[], AgentRegistryClient | None] | None = None,
     ) -> None:
+        parsed_ref = parse_registry_ref(conversation_ref)
         self.config = config
         self.conversation_ref = conversation_ref
-        self.routed_task_id = routed_task_id
+        self.registry_id = registry_id or (parsed_ref[0] if parsed_ref is not None else "default")
+        self.routed_task_id = routed_task_id or (
+            parsed_ref[2] if parsed_ref is not None and parsed_ref[1] == "task" else ""
+        )
         self.title = title or "Registry conversation"
+        self.external_id = external_id or registry_ref_external_id(conversation_ref)
         self.sent_messages: list[str] = []
         self.last_status_text = ""
         self._output_log = output_log
+        self._registry_client_factory = registry_client_factory
         self._timeline_client: AgentRegistryClient | None = None
         self._timeline_client_checked = False
         self._last_progress_published_at: float = 0.0
@@ -92,13 +103,10 @@ class RegistryChannelEgress(ChannelEgress):
         if self._timeline_client_checked:
             return self._timeline_client
         self._timeline_client_checked = True
-        state = load_agent_runtime_state(self.config.data_dir)
-        if not state.agent_token or not self.config.agent_registry_url:
-            return None
-        self._timeline_client = AgentRegistryClient(
-            self.config.agent_registry_url,
-            agent_token=state.agent_token,
-        )
+        if self._registry_client_factory is not None:
+            self._timeline_client = self._registry_client_factory()
+            return self._timeline_client
+        self._timeline_client = registry_client(self.config, registry_id=self.registry_id)
         return self._timeline_client
 
     def _plain_text_snippet(self, text: str, *, limit: int = 200) -> str:
@@ -214,7 +222,8 @@ class RegistryChannelEgress(ChannelEgress):
             conversation_ref=self.conversation_ref,
             title=self.title,
             origin_channel="registry",
-            external_id=self.conversation_ref,
+            external_id=self.external_id,
+            registry_id=self.registry_id,
         )
         await self._publish_event(kind="started", title="Conversation started")
 

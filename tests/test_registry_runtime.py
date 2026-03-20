@@ -7,6 +7,7 @@ from app.agents.registry_runtime import RegistryRuntime
 from app.agents.runtime import AgentRuntime
 from app.agents.state import AgentRuntimeState, load_agent_runtime_state, load_registry_connection_state, save_agent_runtime_state
 from app.agents.types import RegistryConnectionConfig, RegistryConnectionState
+from app.channels.registry.refs import registry_conversation_ref
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from tests.support.config_support import make_config
 
@@ -42,7 +43,7 @@ async def test_registry_runtime_annotates_deliveries_and_scopes_poll(monkeypatch
                     {
                         "delivery_id": "delivery-1",
                         "kind": "channel_input",
-                        "payload": {"conversation_id": "registry:prod:conversation:conv-1", "text": "hello"},
+                        "payload": {"conversation_id": "conv-1", "text": "hello"},
                     }
                 ],
                 "next_cursor": "1",
@@ -79,6 +80,7 @@ async def test_registry_runtime_annotates_deliveries_and_scopes_poll(monkeypatch
         handler,
         config=config,
     )
+    runtime.register_channels()
 
     await runtime.start(stop_event=stop_event)
     await asyncio.wait_for(stop_event.wait(), timeout=0.5)
@@ -86,7 +88,7 @@ async def test_registry_runtime_annotates_deliveries_and_scopes_poll(monkeypatch
 
     assert seen_registry_ids == ["prod"]
     assert poll_calls == [("0", ("channel_input", "channel_action"))]
-    assert runtime.channel_capabilities() == ("telegram", "registry")
+    assert runtime.channel_capabilities() == ("registry",)
     state = load_registry_connection_state(tmp_path, "prod")
     assert state == RegistryConnectionState(
         registry_id="prod",
@@ -180,3 +182,40 @@ async def test_registry_runtime_start_surfaces_wrapped_agent_runtime_failures(mo
 
     with pytest.raises(RuntimeError, match="runtime boom"):
         await runtime.start(stop_event=asyncio.Event())
+
+
+def test_registry_runtime_register_channels_by_scope(tmp_path: Path):
+    prod = RegistryConnectionConfig(
+        registry_id="prod",
+        url="http://registry.prod",
+        enroll_token="enroll-prod",
+        registry_scope="channel",
+        poll_interval_seconds=5.0,
+    )
+    ops = RegistryConnectionConfig(
+        registry_id="ops",
+        url="http://registry.ops",
+        enroll_token="enroll-ops",
+        registry_scope="coordination",
+        poll_interval_seconds=5.0,
+    )
+    dispatcher = ChannelDispatcher()
+    runtime = RegistryRuntime(
+        (prod, ops),
+        dispatcher,
+        None,
+        config=make_config(
+            data_dir=tmp_path,
+            agent_mode="registry",
+            agent_registries=(prod, ops),
+            agent_registry_url=prod.url,
+            agent_registry_enroll_token=prod.enroll_token,
+        ),
+    )
+
+    runtime.register_channels()
+
+    assert dispatcher.channel_type_for_ref(registry_conversation_ref("prod", "conv-1")) == "registry"
+    assert dispatcher.channel_type_for_ref("registry:ops:task:task-1") == "registry"
+    assert dispatcher.channel_type_for_ref("registry:prod:task:task-1") is None
+    assert dispatcher.active_channel_types() == ["registry"]

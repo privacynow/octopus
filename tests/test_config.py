@@ -450,6 +450,7 @@ def test_main_registry_runtime_starts_and_stops_with_dispatcher_lifecycle():
     )
     mock_app = MagicMock()
     registry_runtime = SimpleNamespace(
+        register_channels=MagicMock(),
         start=AsyncMock(return_value=None),
         stop=AsyncMock(return_value=None),
     )
@@ -467,6 +468,7 @@ def test_main_registry_runtime_starts_and_stops_with_dispatcher_lifecycle():
             main()
 
     dispatcher_runner.assert_awaited_once_with(dispatcher)
+    registry_runtime.register_channels.assert_called_once_with()
     registry_runtime.start.assert_awaited_once()
     registry_runtime.stop.assert_awaited_once()
 

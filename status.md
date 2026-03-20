@@ -102,6 +102,34 @@
   - per-connection registry runtime ownership now exists without changing registry egress or ref-routing behavior ahead of schedule
   - `main.py` no longer relies on `start_agent_runtime_task()` for the live registry path
   - full suite status after slice 4: `1793 passed, 23 skipped`
+- Complete: Slice 5 registry conversation and task channels.
+  Scope:
+  - added `app/channels/registry/refs.py` with the shared qualified registry ref format helpers:
+    `registry:<id>:conversation:<external_id>` and `registry:<id>:task:<task_id>`
+  - added `app/channels/registry/channel.py` with `RegistryConversationChannel` and `RegistryTaskChannel` as real dispatcher-owned `Channel` implementations
+  - extended `RegistryRuntime` with `register_channels()` so channel/full connections register conversation channels and coordination/full connections register task channels
+  - switched `RegistryRuntime.channel_capabilities()` from the slice-4 hardcoded fallback to `dispatcher.active_channel_types()`
+  - updated `main.py` to register registry channels after constructing the registry runtime and before runtime startup
+  - made `RegistryChannelEgress` connection-aware by inferring/parsing qualified registry refs, carrying `registry_id`, and resolving the correct scoped registry client
+  - updated bot-local registry ref generation/admission in `app/agents/bridge.py` and `app/agents/delivery.py`:
+    Telegram refs now use stable `bot_identity`, routed task refs are qualified, registry conversation refs are qualified on admission, and scoped timeline/bind calls target the correct registry connection
+  Tests:
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_agents.py tests/test_agents_runtime.py tests/test_registry_runtime.py tests/test_registry_adapter.py tests/test_config.py tests/test_channel_dispatcher.py tests/test_channel_egress_factory.py tests/test_handlers.py tests/test_handlers_delegation.py tests/test_agents_delegation_boundary.py`
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_zero_import_gates.py::test_agents_delivery_has_no_channel_imports tests/test_agents.py::test_handle_registry_routed_result_publishes_parent_timeline_before_retry_on_startup_race tests/test_handlers.py::test_approve_delegation_from_registry_delivery tests/test_handlers.py::test_cancel_delegation_from_registry_delivery tests/test_handlers.py::test_registry_routed_task_result_report_failure_does_not_escape_worker tests/test_handlers.py::test_registry_channel_parent_resumes_through_registry_channel`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified channel-capable registry connections now contribute `"registry"` through dispatcher registration, while coordination-only task channels do not
+  - verified qualified task refs and conversation refs route to registry-scoped egress without changing the old outbound factory yet
+  - verified `telegram_conversation_ref()` now uses the stable runtime `bot_identity` instead of a registry-issued `agent_id`
+  - verified legacy `registry:<id>`-style conversation refs already present in tests/session state still survive the scaffolding window because qualification preserves legacy `registry:` refs instead of double-wrapping them
+  Review:
+  - registry ref parsing/formatting was centralized in one helper module to avoid duplicating string-shape logic across bridge, runtime, egress, and tests
+  - registry channels remain plain `Channel` instances, not fake `ChannelBootstrap`s; all registry polling still belongs to `RegistryRuntime`
+  - the registry service still stores raw conversation IDs internally; the bot now qualifies them at admission because `registry_id` is a local bot/runtime connection label, not a server-side store field
+  Verified:
+  - dispatcher-owned registry channel/task routing is now in place for qualified refs
+  - `channel_capabilities` is now derived from registered channels instead of `agent_mode`
+  - full suite status after slice 5: `1797 passed, 23 skipped`
 
 # Octopus CLI Implementation Status
 

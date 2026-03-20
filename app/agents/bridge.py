@@ -10,8 +10,13 @@ from typing import Any
 
 from app import work_queue
 from app.agents.client import AgentRegistryClient, RegistryClientError
-from app.agents.state import load_agent_runtime_state
+from app.agents.state import bot_identity, load_agent_runtime_state, load_runtime_registry_connection_state
 from app.agents.types import RoutedTaskResult, TimelineEvent
+from app.channels.registry.refs import (
+    qualify_registry_conversation_ref,
+    registry_ref_external_id,
+    registry_task_ref,
+)
 from app.config import BotConfig
 from app.identity import telegram_conversation_key
 from app.runtime.inbound_types import (
@@ -35,22 +40,41 @@ def conversation_key_for_ref(conversation_ref: str) -> str:
     return conversation_ref
 
 
-def agent_identity(config: BotConfig) -> str:
-    state = load_agent_runtime_state(config.data_dir)
-    return state.agent_id or config.agent_slug or config.instance
+def qualify_registry_parent_ref(registry_id: str, conversation_ref: str) -> str:
+    return qualify_registry_conversation_ref(registry_id, conversation_ref)
 
 
 def telegram_conversation_ref(config: BotConfig, chat_id: int) -> str:
-    return f"telegram:{agent_identity(config)}:{chat_id}"
+    return f"telegram:{bot_identity(config.data_dir)}:{chat_id}"
 
 
-def registry_client(config: BotConfig) -> AgentRegistryClient | None:
-    if config.agent_mode != "registry" or not config.agent_registry_url:
+def registry_client(config: BotConfig, *, registry_id: str | None = None) -> AgentRegistryClient | None:
+    if config.agent_mode != "registry":
         return None
-    state = load_agent_runtime_state(config.data_dir)
-    if not state.agent_token:
+    if registry_id is None:
+        state = load_agent_runtime_state(config.data_dir)
+        registry_url = config.agent_registry_url
+    else:
+        registry = next(
+            (item for item in config.agent_registries if item.registry_id == registry_id),
+            None,
+        )
+        if registry is None:
+            if registry_id != "default":
+                return None
+            registry_url = config.agent_registry_url
+            registry_scope = "full"
+        else:
+            registry_url = registry.url
+            registry_scope = registry.registry_scope
+        state = load_runtime_registry_connection_state(
+            config.data_dir,
+            registry_id,
+            registry_scope=registry_scope,
+        )
+    if not state.agent_token or not registry_url:
         return None
-    return AgentRegistryClient(config.agent_registry_url, agent_token=state.agent_token)
+    return AgentRegistryClient(registry_url, agent_token=state.agent_token)
 
 
 async def bind_conversation(
@@ -60,8 +84,9 @@ async def bind_conversation(
     title: str,
     origin_channel: str,
     external_id: str,
+    registry_id: str | None = None,
 ) -> None:
-    client = registry_client(config)
+    client = registry_client(config, registry_id=registry_id)
     if client is None:
         return
     try:
@@ -86,8 +111,9 @@ async def publish_timeline_event(
     progress: int | None = None,
     metadata: dict[str, Any] | None = None,
     event_id: str | None = None,
+    registry_id: str | None = None,
 ) -> None:
-    client = registry_client(config)
+    client = registry_client(config, registry_id=registry_id)
     if client is None:
         return
     event = TimelineEvent(
@@ -168,10 +194,11 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
     kind = str(delivery.get("kind", ""))
     payload = delivery.get("payload", {})
     delivery_id = delivery.get("delivery_id", "")
+    registry_id = str(delivery.get("registry_id", "") or "default")
     data_dir = config.data_dir
 
     if kind == "channel_input":
-        conversation_ref = payload["conversation_id"]
+        conversation_ref = qualify_registry_conversation_ref(registry_id, str(payload["conversation_id"]))
         conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
             conversation_ref=conversation_ref,
             text=payload.get("text", ""),
@@ -192,7 +219,8 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
                 conversation_ref=conversation_ref,
                 title=payload.get("title", "Registry conversation"),
                 origin_channel="registry",
-                external_id=conversation_ref,
+                external_id=registry_ref_external_id(conversation_ref),
+                registry_id=registry_id,
             )
             await publish_timeline_event(
                 config,
@@ -200,6 +228,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
                 kind="channel_input",
                 title="Registry message",
                 body=payload.get("text", ""),
+                registry_id=registry_id,
             )
         return "accepted"
 
@@ -219,7 +248,11 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
             text = f"{request['title']}\n\n{text}".strip()
         if context_lines:
             text = text + "\n\n" + "\n".join(context_lines)
-        conversation_ref = request["routed_task_id"]
+        conversation_ref = registry_task_ref(registry_id, request["routed_task_id"])
+        parent_conversation_id = qualify_registry_conversation_ref(
+            registry_id,
+            str(request.get("parent_conversation_id", "") or ""),
+        )
         conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
             conversation_ref=conversation_ref,
             text=text,
@@ -242,6 +275,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
                 title=request.get("title", "Delegated task"),
                 origin_channel="registry",
                 external_id=request["routed_task_id"],
+                registry_id=registry_id,
             )
             await publish_timeline_event(
                 config,
@@ -251,9 +285,10 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
                 body=text,
                 metadata={
                     "routed_task_id": request["routed_task_id"],
-                    "parent_conversation_id": request.get("parent_conversation_id", ""),
+                    "parent_conversation_id": parent_conversation_id,
                     "origin_agent_id": request.get("origin_agent_id", ""),
                 },
+                registry_id=registry_id,
             )
         return "accepted"
 

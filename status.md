@@ -849,3 +849,19 @@
   - there are no remaining `runtime.registry_runtime`, `registry_client_factory`, `bind_conversation_to_registries`, `publish_timeline_to_registries`, or `clients_for_mirroring()` references in app/test consumer code
   - positive and negative discovery behavior is covered through the control-plane services seam, including unavailable and exception paths that preserve operator-safe messaging
   - full suite status after slice 7B: `1884 passed, 23 skipped`
+- Complete: Slice 7C grep gates.
+  Scope:
+  - added cleanup-specific zero-import gates for the non-registry orchestration surface so `registry_runtime`, `registry_client_factory`, `registry_connection_client`, and `resolve_registry_connection` cannot drift back into channel/workflow code
+  - added a regex gate forbidding new `if ... registry_runtime is not None` presence branches outside the allowed registry/main ownership boundary
+  - added a repo-wide gate ensuring the deleted fan-out helpers `bind_conversation_to_registries` and `publish_timeline_to_registries` do not reappear
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_zero_import_gates.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - the gates are scoped to non-registry orchestration, not the composition root or registry-owned implementation files, which keeps the enforcement aligned with the architecture boundary instead of forbidding legitimate owners
+  - the post-suite grep confirms the only remaining registry connection helpers are the intentionally private bridge internals and the `main.py` startup-owned runtime lifecycle branches
+  - no production code changed in this slice; the work is pure boundary enforcement over the shape established in slices 7A and 7B
+  Verified:
+  - cleanup regressions now fail fast in the test suite if registry runtime/client tokens leak back into Telegram/workflow orchestration
+  - the removed multi-registry fan-out helper names are now guarded repo-wide
+  - full suite status after slice 7C: `1888 passed, 23 skipped`

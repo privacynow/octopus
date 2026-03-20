@@ -993,3 +993,76 @@ def test_agents_do_not_edit_delegation_status_strings_directly() -> None:
         text = path.read_text()
         for token in forbidden:
             assert token not in text, f"{token} still referenced in {path}"
+
+
+def _non_registry_orchestration_paths() -> list[Path]:
+    repo_root = Path(__file__).resolve().parents[1]
+    app_root = repo_root / "app"
+    excluded_files = {
+        app_root / "main.py",
+        app_root / "agents" / "bridge.py",
+        app_root / "agents" / "registry_runtime.py",
+        app_root / "agents" / "registry_control_processor.py",
+    }
+    excluded_dirs = {
+        app_root / "channels" / "registry",
+        app_root / "registry_service",
+        app_root / "db" / "migrations",
+    }
+    paths: list[Path] = []
+    for path in sorted(app_root.rglob("*.py")):
+        if "__pycache__" in path.parts or path in excluded_files:
+            continue
+        if any(excluded_dir in path.parents for excluded_dir in excluded_dirs):
+            continue
+        paths.append(path)
+    return paths
+
+
+def test_non_registry_orchestration_has_no_registry_runtime_or_factory_tokens() -> None:
+    forbidden = (
+        "registry_runtime",
+        "registry_client_factory",
+    )
+    for path in _non_registry_orchestration_paths():
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_non_registry_orchestration_has_no_registry_connection_helpers() -> None:
+    forbidden = (
+        "registry_connection_client",
+        "resolve_registry_connection",
+    )
+    for path in _non_registry_orchestration_paths():
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_non_registry_orchestration_has_no_registry_runtime_presence_branch() -> None:
+    pattern = re.compile(r"if\s+.*registry_runtime.*is\s+not\s+None")
+    for path in _non_registry_orchestration_paths():
+        text = path.read_text()
+        assert pattern.search(text) is None, (
+            f"registry_runtime presence branch still referenced in {path}"
+        )
+
+
+def test_removed_registry_fanout_helpers_do_not_reappear() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    gate_path = Path(__file__).resolve()
+    candidate_paths = sorted(
+        path
+        for path in repo_root.rglob("*.py")
+        if "__pycache__" not in path.parts and path != gate_path
+    )
+    forbidden = (
+        "bind_conversation_to_registries",
+        "publish_timeline_to_registries",
+    )
+    for path in candidate_paths:
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"

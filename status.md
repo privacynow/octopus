@@ -10,14 +10,39 @@
 ## Current State
 
 - Phases 1-8 of the control-plane rollout landed and the repo is green.
-- Phase 9 remediation is in progress; slices 9A-9D are now complete and the repo is green.
+- Phase 9 remediation is in progress; slices 9A-9E are now complete and the repo is green.
 - The remaining work is now tracked explicitly in `PLAN-control-plane-bus.md` Phase 9:
-  - compatibility translators and singleton/default fallbacks still remain
+  - singleton/default fallbacks still remain
+  - dead registry-shaped runtime API and scaffolding-preserving tests still remain
   - some tests still encode scaffolding behavior instead of the final architecture
 - Status should be read as: rollout complete through Phase 8, remediation in progress through Phase 9.
 
 ## Slice Log
 
+- Complete: Phase 9E remediation — close the runtime compatibility window.
+  Scope:
+  - removed runtime-boundary translators that silently rewrote non-canonical `registry_id`, `user_id`, and `chat_id` payloads into canonical `authority_ref`, `actor_key`, and `conversation_key`
+  - tightened `deserialize_inbound()` to require canonical identity keys and explicit `authority_ref` on registry-sourced message/action payloads
+  - removed the Telegram worker fallback that reparsed registry refs to synthesize authority provenance during finalization; routed-task reporting now consumes only explicit event provenance
+  - removed presenter and delegation/session compatibility rewrites so shared boundaries no longer translate old shapes into the target architecture
+  - updated direct registry test fixtures and the conversation simulator to emit canonical registry provenance instead of depending on removed fallback logic
+  - added negative boundary tests and a grep gate that lock the canonical-only contract in the targeted runtime/session/provenance files
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_runtime_inbound_types.py tests/test_session_state.py tests/test_orchestration.py tests/test_telegram_worker_timeline.py tests/test_transport.py tests/test_handlers.py -k 'registry or delegation or inbound or timeline or webhook or recovery or skip_approval' tests/test_zero_import_gates.py`
+  - `./.venv/bin/python -m pytest -q tests/test_simulator_e2e.py tests/test_runtime_inbound_types.py tests/test_zero_import_gates.py`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified `app/runtime/inbound_types.py` no longer rewrites `user_id`, `chat_id`, or `registry_id` at deserialization time
+  - verified `app/channels/telegram/worker.py` no longer parses registry refs to backfill missing authority provenance
+  - verified session/delegation/presenter boundaries no longer rewrite `registry_id` into `authority_ref`
+  - verified simulator/test helpers now produce canonical registry inbound payloads with explicit authority provenance
+  Review:
+  - this slice enforced the target-state boundary instead of preserving a “legacy payload” mode; non-canonical inbound identities now fail fast at the runtime boundary
+  - the fix stayed inside the existing seams (`deserialize_inbound`, `session_from_dict`, delegation planning, worker finalization) and updated producers/tests to match, rather than adding a new migration or validation layer
+  Verified:
+  - shared runtime boundaries now accept only canonical identity/provenance payloads
+  - Telegram worker finalization no longer synthesizes registry authority from conversation refs
+  - full suite status after Phase 9E: `1916 passed, 23 skipped`
 - Complete: Phase 9D remediation — generic health/discovery cleanup.
   Scope:
   - replaced `AuthorityStatus.registry_scope` with capability lists on the generic health-publication port

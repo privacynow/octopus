@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agents.registry_capabilities import registry_authority_ref
 from app.agents.types import RoutedTaskResult
 from app.formatting import trim_text
 from app.session_state import DelegatedTask, PendingDelegation
@@ -45,14 +44,7 @@ def build_delegation_plan(
             tasks=tuple(
                 DelegationTaskDraft(
                     routed_task_id=str(task["routed_task_id"]),
-                    authority_ref=(
-                        str(task.get("authority_ref", ""))
-                        or (
-                            registry_authority_ref(str(task["registry_id"]))
-                            if task.get("registry_id")
-                            else ""
-                        )
-                    ),
+                    authority_ref=str(task.get("authority_ref", "")),
                     title=str(task.get("title", "")),
                     target_agent_id=str(task.get("target_agent_id", "")),
                     instructions=str(task.get("instructions", "")),

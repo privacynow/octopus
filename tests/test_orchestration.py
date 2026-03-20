@@ -58,6 +58,25 @@ def test_build_delegation_plan_preserves_task_fields():
     assert task.instructions == "Write focused regression tests."
 
 
+def test_build_delegation_plan_does_not_translate_registry_id_to_authority_ref():
+    plan = build_delegation_plan(
+        "registry:conv-legacy",
+        "Spec delegation",
+        "Resume when the child task returns.",
+        [
+            {
+                "routed_task_id": "task-legacy",
+                "registry_id": "prod",
+                "title": "Draft tests",
+                "target_agent_id": "test-writer-1",
+                "instructions": "Write focused regression tests.",
+            },
+        ],
+    )
+
+    assert plan.tasks[0].authority_ref == ""
+
+
 def test_pending_delegation_status_transitions_completed():
     plan = build_delegation_plan(
         "registry:conv-1",

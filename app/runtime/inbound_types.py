@@ -8,8 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.agents.registry_capabilities import registry_authority_ref
-from app.identity import telegram_actor_key, telegram_conversation_key, telegram_numeric_id
+from app.identity import telegram_numeric_id
 
 
 @dataclass(frozen=True)
@@ -206,16 +205,16 @@ def deserialize_inbound(
     """Reconstruct a normalized inbound event from stored JSON."""
 
     data = json.loads(payload_json)
-    actor_key = data.get("actor_key")
-    if not actor_key and "user_id" in data:
-        actor_key = telegram_actor_key(data["user_id"])
-    conversation_key = data.get("conversation_key")
-    if not conversation_key and "chat_id" in data:
-        conversation_key = telegram_conversation_key(data["chat_id"])
-    user = InboundUser(id=str(actor_key or ""), username=data.get("username", ""))
+    actor_key = str(data.get("actor_key", "") or "")
+    conversation_key = str(data.get("conversation_key", "") or "")
+    if not actor_key or not conversation_key:
+        raise ValueError("Inbound payload missing canonical actor_key/conversation_key")
+    user = InboundUser(id=actor_key, username=data.get("username", ""))
+    source = str(data.get("source", "telegram") or "telegram")
+    conversation_ref = str(data.get("conversation_ref", "") or "")
     authority_ref = str(data.get("authority_ref", "") or "")
-    if not authority_ref and data.get("registry_id"):
-        authority_ref = registry_authority_ref(str(data["registry_id"]))
+    if source == "registry" and kind in {"message", "action"} and not authority_ref:
+        raise ValueError("Registry inbound payload missing canonical authority_ref")
     if kind == "message":
         attachments = tuple(
             InboundAttachment(
@@ -228,11 +227,11 @@ def deserialize_inbound(
         )
         return InboundMessage(
             user=user,
-            conversation_key=str(conversation_key or ""),
+            conversation_key=conversation_key,
             text=data.get("text", ""),
             attachments=attachments,
-            source=data.get("source", "telegram"),
-            conversation_ref=data.get("conversation_ref", ""),
+            source=source,
+            conversation_ref=conversation_ref,
             routed_task_id=data.get("routed_task_id", ""),
             authority_ref=authority_ref,
             skip_approval=bool(data.get("skip_approval", False)),
@@ -240,19 +239,19 @@ def deserialize_inbound(
     if kind == "command":
         return InboundCommand(
             user=user,
-            conversation_key=str(conversation_key or ""),
+            conversation_key=conversation_key,
             command=data["command"],
             args=tuple(data.get("args", [])),
-            source=data.get("source", "telegram"),
-            conversation_ref=data.get("conversation_ref", ""),
+            source=source,
+            conversation_ref=conversation_ref,
         )
     if kind == "callback":
         return InboundCallback(
             user=user,
-            conversation_key=str(conversation_key or ""),
+            conversation_key=conversation_key,
             data=data.get("data", ""),
-            source=data.get("source", "telegram"),
-            conversation_ref=data.get("conversation_ref", ""),
+            source=source,
+            conversation_ref=conversation_ref,
         )
     if kind == "action":
         params = data.get("params", {})
@@ -260,11 +259,11 @@ def deserialize_inbound(
             params = {}
         return InboundAction(
             user=user,
-            conversation_key=str(conversation_key or ""),
+            conversation_key=conversation_key,
             action=data.get("action", ""),
             params=dict(params),
-            source=data.get("source", "telegram"),
-            conversation_ref=data.get("conversation_ref", ""),
+            source=source,
+            conversation_ref=conversation_ref,
             authority_ref=authority_ref,
         )
     raise ValueError(f"Unknown kind: {kind}")

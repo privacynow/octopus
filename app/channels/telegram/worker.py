@@ -13,12 +13,10 @@ from app.agents.bridge import (
     summarize_text,
     telegram_conversation_ref,
 )
-from app.agents.registry_capabilities import registry_authority_ref
 from app.agents.delegation import (
     handle_delegation_approve as handle_channel_delegation_approve,
     handle_delegation_cancel as handle_channel_delegation_cancel,
 )
-from app.channels.registry.refs import parse_registry_ref
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.conversation import handle_worker_conversation_action
 from app.channels.telegram.execution import (
@@ -149,21 +147,6 @@ def _action_target_message_id(event: InboundAction) -> int | None:
     if isinstance(raw, str) and raw.isdigit():
         return int(raw)
     return None
-
-
-def _resolve_registry_authority_ref(
-    runtime: TelegramRuntime,
-    *,
-    authority_ref: str,
-    conversation_ref: str,
-) -> str:
-    del runtime
-    if authority_ref:
-        return authority_ref
-    parsed_registry_ref = parse_registry_ref(conversation_ref)
-    if parsed_registry_ref is not None:
-        return registry_authority_ref(parsed_registry_ref[0])
-    return ""
 
 
 def _build_action_channel_egress(
@@ -450,11 +433,7 @@ async def worker_dispatch(
                 conversation_ref=conversation_ref,
                 chat_id=chat_id or 0,
                 routed_task_id=routed_task_id,
-                authority_ref=_resolve_registry_authority_ref(
-                    runtime,
-                    authority_ref=authority_ref,
-                    conversation_ref=conversation_ref,
-                ),
+                authority_ref=authority_ref,
                 skip_approval=getattr(event, "skip_approval", False),
                 last_status_text=getattr(channel_egress, "last_status_text", ""),
                 load_session=lambda target_chat: load_session(runtime, target_chat),

@@ -273,6 +273,7 @@ def test_inbound_message_skip_approval_round_trips():
             source="registry",
             conversation_ref="registry:conv-1",
             routed_task_id="task-42",
+            authority_ref="registry:default",
             skip_approval=True,
         )
     )
@@ -283,6 +284,7 @@ def test_inbound_message_skip_approval_round_trips():
     assert restored.source == "registry"
     assert restored.conversation_ref == "registry:conv-1"
     assert restored.routed_task_id == "task-42"
+    assert restored.authority_ref == "registry:default"
     assert restored.skip_approval is True
 
 

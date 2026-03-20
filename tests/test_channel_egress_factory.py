@@ -17,6 +17,7 @@ from tests.support.handler_support import (
     make_config,
     setup_globals,
 )
+from tests.support.config_support import make_registry_connection
 
 
 def _setup_runtime(*, allow_open: bool = False, allowed_user_ids=frozenset({1})):
@@ -51,8 +52,7 @@ def test_dispatcher_registry_ref_produces_registry_channel_egress():
     cfg = make_config(
         Path(tmp.name),
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
     setup_globals(cfg, FakeProvider("claude"))
     try:
@@ -73,8 +73,7 @@ def test_dispatcher_trust_tier_registry_ref_is_trusted():
     cfg = make_config(
         Path(tmp.name),
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
     setup_globals(cfg, FakeProvider("claude"))
     try:

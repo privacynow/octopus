@@ -137,7 +137,6 @@ def emit(path, fallback_id):
 if registries_dir.exists():
     for path in sorted(registries_dir.glob("*.json")):
         emit(path, path.stem)
-emit(data_dir / "registry_state.json", "default")
 ' 2>/dev/null || true
 }
 
@@ -350,19 +349,15 @@ from pathlib import Path
 import os
 
 data_dir = Path(os.environ.get("BOT_DATA_DIR", "/home/bot/data")) / "agent"
-legacy_path = data_dir / "registry_state.json"
 registries_dir = data_dir / "registries"
 registry_ids = [item for item in os.environ.get("OCTOPUS_CLEAR_REGISTRY_IDS", "").split() if item]
 
 if not registry_ids:
-    legacy_path.unlink(missing_ok=True)
     if registries_dir.exists():
         for path in registries_dir.glob("*.json"):
             path.unlink(missing_ok=True)
 else:
     for registry_id in registry_ids:
-        if registry_id == "default":
-            legacy_path.unlink(missing_ok=True)
         if registries_dir.exists():
             (registries_dir / f"{registry_id}.json").unlink(missing_ok=True)
 ' >/dev/null 2>&1 || true
@@ -389,13 +384,10 @@ registry_id = os.environ.get("OCTOPUS_REGISTRY_ID", "").strip()
 paths = []
 if registry_id:
     paths.append(data_dir / "registries" / f"{registry_id}.json")
-    if registry_id == "default":
-        paths.append(data_dir / "registry_state.json")
 else:
     registries_dir = data_dir / "registries"
     if registries_dir.exists():
         paths.extend(sorted(registries_dir.glob("*.json")))
-    paths.append(data_dir / "registry_state.json")
 
 for path in paths:
     if not path.exists():

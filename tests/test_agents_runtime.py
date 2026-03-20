@@ -3,7 +3,7 @@ from collections.abc import Awaitable
 from pathlib import Path
 
 from app.agents.runtime import AgentRuntime
-from tests.support.config_support import make_config
+from tests.support.config_support import make_config, make_registry_connection
 
 
 def _close_awaitable(awaitable: Awaitable[object]) -> None:
@@ -16,8 +16,7 @@ async def test_run_forever_backoff_doubles_on_consecutive_failures(monkeypatch, 
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
         agent_poll_interval_seconds=2.0,
     )
     runtime = AgentRuntime(config)
@@ -51,8 +50,7 @@ async def test_run_forever_backoff_resets_after_reconnect(monkeypatch, tmp_path:
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
         agent_poll_interval_seconds=2.0,
     )
     runtime = AgentRuntime(config)
@@ -91,8 +89,7 @@ async def test_run_forever_polls_only_when_connected(monkeypatch, tmp_path: Path
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
         agent_poll_interval_seconds=2.0,
     )
     runtime = AgentRuntime(config)

@@ -1,4 +1,4 @@
-"""Local persisted agent runtime state and stable bot identity."""
+"""Local persisted registry connection state and stable bot identity."""
 
 from __future__ import annotations
 
@@ -13,18 +13,6 @@ from app.agents.types import RegistryConnectionState
 from app.registry_errors import normalize_registry_error_state
 
 log = logging.getLogger(__name__)
-
-
-@dataclass
-class AgentRuntimeState:
-    agent_id: str = ""
-    agent_token: str = ""
-    poll_cursor: str = "0"
-    registered_slug: str = ""
-    last_successful_contact_at: str = ""
-    connectivity_state: str = "standalone"
-    last_error: str = ""
-    last_error_detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -74,96 +62,12 @@ def bot_identity(data_dir: Path) -> str:
     return load_bot_identity_state(data_dir).bot_id
 
 
-def agent_state_path(data_dir: Path) -> Path:
-    return data_dir / "agent" / "registry_state.json"
-
-
 def registry_state_dir(data_dir: Path) -> Path:
     return data_dir / "agent" / "registries"
 
 
 def registry_connection_state_path(data_dir: Path, registry_id: str) -> Path:
     return registry_state_dir(data_dir) / f"{registry_id}.json"
-
-
-def load_agent_runtime_state(data_dir: Path) -> AgentRuntimeState:
-    path = agent_state_path(data_dir)
-    if not path.exists():
-        return AgentRuntimeState()
-    try:
-        raw = json.loads(path.read_text())
-    except Exception:
-        log.warning("Agent runtime state load failed, using defaults", exc_info=True)
-        return AgentRuntimeState()
-    last_error, last_error_detail = normalize_registry_error_state(
-        str(raw.get("last_error", "")),
-        str(raw.get("last_error_detail", "")),
-    )
-    return AgentRuntimeState(
-        agent_id=raw.get("agent_id", ""),
-        agent_token=raw.get("agent_token", ""),
-        poll_cursor=str(raw.get("poll_cursor", "0")),
-        registered_slug=raw.get("registered_slug", ""),
-        last_successful_contact_at=raw.get("last_successful_contact_at", ""),
-        connectivity_state=raw.get("connectivity_state", "standalone"),
-        last_error=last_error,
-        last_error_detail=last_error_detail,
-    )
-
-
-def save_agent_runtime_state(data_dir: Path, state: AgentRuntimeState) -> None:
-    path = agent_state_path(data_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(state), indent=2, sort_keys=True))
-    path.chmod(0o600)
-
-
-def project_agent_runtime_state(
-    state: RegistryConnectionState,
-) -> AgentRuntimeState:
-    return AgentRuntimeState(
-        agent_id=state.agent_id,
-        agent_token=state.agent_token,
-        poll_cursor=state.poll_cursor,
-        registered_slug=state.registered_slug,
-        last_successful_contact_at=state.last_successful_contact_at,
-        connectivity_state=state.connectivity_state,
-        last_error=state.last_error,
-        last_error_detail=state.last_error_detail,
-    )
-
-
-def project_registry_connection_state(
-    state: AgentRuntimeState,
-    *,
-    registry_id: str = "default",
-    registry_scope: str = "full",
-) -> RegistryConnectionState:
-    return RegistryConnectionState(
-        registry_id=registry_id,
-        registry_scope=registry_scope,
-        agent_id=state.agent_id,
-        agent_token=state.agent_token,
-        poll_cursor=state.poll_cursor,
-        registered_slug=state.registered_slug,
-        last_successful_contact_at=state.last_successful_contact_at,
-        connectivity_state=state.connectivity_state,
-        last_error=state.last_error,
-        last_error_detail=state.last_error_detail,
-    )
-
-
-def _agent_runtime_state_has_data(state: AgentRuntimeState) -> bool:
-    return any(
-        (
-            state.agent_id,
-            state.agent_token,
-            state.registered_slug,
-            state.last_successful_contact_at,
-            state.last_error,
-            state.last_error_detail,
-        )
-    ) or state.poll_cursor != "0" or state.connectivity_state != "standalone"
 
 
 def load_registry_connection_state(data_dir: Path, registry_id: str) -> RegistryConnectionState:
@@ -199,41 +103,20 @@ def load_runtime_registry_connection_state(
     *,
     registry_scope: str = "full",
 ) -> RegistryConnectionState:
-    state = load_registry_connection_state(data_dir, registry_id)
-    default_state = RegistryConnectionState(registry_id=registry_id)
-    if registry_id != "default":
-        if state == default_state or not state.registry_scope:
-            state.registry_scope = registry_scope
-        return state
-
-    if state != default_state:
-        if not state.registry_scope:
-            state.registry_scope = registry_scope
-        return state
-
-    legacy_state = load_agent_runtime_state(data_dir)
-    if _agent_runtime_state_has_data(legacy_state):
-        return project_registry_connection_state(
-            legacy_state,
-            registry_id="default",
+    path = registry_connection_state_path(data_dir, registry_id)
+    if not path.exists():
+        return RegistryConnectionState(
+            registry_id=registry_id,
             registry_scope=registry_scope,
         )
-    state.registry_scope = registry_scope
+    state = load_registry_connection_state(data_dir, registry_id)
+    if not state.registry_scope:
+        state.registry_scope = registry_scope
     return state
 
 
-def save_registry_connection_state(
-    data_dir: Path,
-    state: RegistryConnectionState,
-    *,
-    project_legacy_default: bool = False,
-) -> None:
+def save_registry_connection_state(data_dir: Path, state: RegistryConnectionState) -> None:
     path = registry_connection_state_path(data_dir, state.registry_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(asdict(state), indent=2, sort_keys=True))
     path.chmod(0o600)
-    if project_legacy_default and state.registry_id == "default":
-        save_agent_runtime_state(
-            data_dir,
-            project_agent_runtime_state(state),
-        )

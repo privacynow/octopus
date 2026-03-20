@@ -31,9 +31,9 @@ def _build_rate_limiter(config: BotConfig) -> RateLimiter:
 
 
 def _default_registry_client_factory(config: BotConfig):
-    from app.agents.bridge import registry_client
+    from app.agents.bridge import registry_connection_client
 
-    return registry_client(config)
+    return registry_connection_client(config)
 
 
 @dataclass

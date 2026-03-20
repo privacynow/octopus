@@ -5,10 +5,7 @@ import pytest
 from app.agents.registry_runtime import RegistryRuntime
 from app.agents.runtime import AgentRuntime
 from app.agents.state import (
-    AgentRuntimeState,
-    load_agent_runtime_state,
     load_registry_connection_state,
-    save_agent_runtime_state,
     save_registry_connection_state,
 )
 from app.agents.types import AgentDiscoveryQuery, RegistryConnectionConfig, RegistryConnectionState
@@ -75,8 +72,6 @@ async def test_registry_runtime_annotates_deliveries_and_scopes_poll(monkeypatch
         data_dir=tmp_path,
         agent_mode="registry",
         agent_registries=(registry,),
-        agent_registry_url=registry.url,
-        agent_registry_enroll_token=registry.enroll_token,
         agent_poll_interval_seconds=registry.poll_interval_seconds,
     )
     runtime = RegistryRuntime(
@@ -109,17 +104,7 @@ async def test_registry_runtime_annotates_deliveries_and_scopes_poll(monkeypatch
     )
 
 
-async def test_agent_runtime_default_registry_projects_legacy_state_and_dual_writes(tmp_path: Path):
-    save_agent_runtime_state(
-        tmp_path,
-        AgentRuntimeState(
-            agent_id="legacy-agent",
-            agent_token="legacy-token",
-            poll_cursor="8",
-            registered_slug="legacy-bot",
-            connectivity_state="connected",
-        ),
-    )
+async def test_agent_runtime_default_registry_persists_only_connection_state(tmp_path: Path):
     registry = RegistryConnectionConfig(
         registry_id="default",
         url="http://registry.test",
@@ -131,30 +116,17 @@ async def test_agent_runtime_default_registry_projects_legacy_state_and_dual_wri
         data_dir=tmp_path,
         agent_mode="registry",
         agent_registries=(registry,),
-        agent_registry_url=registry.url,
-        agent_registry_enroll_token=registry.enroll_token,
     )
 
     runtime = AgentRuntime(config, registry=registry)
 
-    assert runtime.state == RegistryConnectionState(
-        registry_id="default",
-        registry_scope="full",
-        agent_id="legacy-agent",
-        agent_token="legacy-token",
-        poll_cursor="8",
-        registered_slug="legacy-bot",
-        connectivity_state="connected",
-    )
+    assert runtime.state == RegistryConnectionState(registry_id="default", registry_scope="full")
 
     runtime._mark_state("degraded", error="registry_timeout", detail="Registry sync timed out.")
 
     new_state = load_registry_connection_state(tmp_path, "default")
-    legacy_state = load_agent_runtime_state(tmp_path)
     assert new_state.connectivity_state == "degraded"
     assert new_state.last_error == "registry_timeout"
-    assert legacy_state.connectivity_state == "degraded"
-    assert legacy_state.last_error == "registry_timeout"
 
 
 async def test_registry_runtime_start_surfaces_wrapped_agent_runtime_failures(monkeypatch, tmp_path: Path):
@@ -175,8 +147,6 @@ async def test_registry_runtime_start_surfaces_wrapped_agent_runtime_failures(mo
         data_dir=tmp_path,
         agent_mode="registry",
         agent_registries=(registry,),
-        agent_registry_url=registry.url,
-        agent_registry_enroll_token=registry.enroll_token,
     )
     runtime = RegistryRuntime(
         config.agent_registries,
@@ -213,8 +183,6 @@ def test_registry_runtime_register_channels_by_scope(tmp_path: Path):
             data_dir=tmp_path,
             agent_mode="registry",
             agent_registries=(prod, ops),
-            agent_registry_url=prod.url,
-            agent_registry_enroll_token=prod.enroll_token,
         ),
     )
 
@@ -270,8 +238,6 @@ def test_registry_runtime_clients_for_mirroring_skip_coordination_only(tmp_path:
             data_dir=tmp_path,
             agent_mode="registry",
             agent_registries=(channel, coordination, full),
-            agent_registry_url=channel.url,
-            agent_registry_enroll_token=channel.enroll_token,
         ),
     )
 
@@ -332,8 +298,6 @@ async def test_registry_runtime_discover_fans_out_with_registry_provenance(monke
         data_dir=tmp_path,
         agent_mode="registry",
         agent_registries=(prod, ops),
-        agent_registry_url=prod.url,
-        agent_registry_enroll_token=prod.enroll_token,
     )
     runtime = RegistryRuntime((prod, ops), ChannelDispatcher(), None, config=config)
     prod_state = load_registry_connection_state(tmp_path, "prod")
@@ -387,8 +351,6 @@ async def test_registry_runtime_resolves_target_registry_by_exact_agent_id(monke
         data_dir=tmp_path,
         agent_mode="registry",
         agent_registries=(prod, ops),
-        agent_registry_url=prod.url,
-        agent_registry_enroll_token=prod.enroll_token,
     )
     runtime = RegistryRuntime((prod, ops), ChannelDispatcher(), None, config=config)
     prod_state = load_registry_connection_state(tmp_path, "prod")

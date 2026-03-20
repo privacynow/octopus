@@ -4,8 +4,10 @@ from app.agents.delegation import (
     handle_delegation_approve,
     handle_delegation_cancel,
 )
-from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+from app.agents.state import save_registry_connection_state
+from app.agents.types import RegistryConnectionState
 from app.storage import default_session, save_session
+from tests.support.config_support import make_registry_connection
 from tests.support.handler_support import fresh_env, load_session_disk
 
 
@@ -21,8 +23,7 @@ async def test_delegation_approve_boundary_uses_explicit_runtime(monkeypatch):
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         submitted = []
@@ -32,10 +33,14 @@ async def test_delegation_approve_boundary_uses_explicit_runtime(monkeypatch):
                 submitted.append(request)
                 return {"ok": True}
 
-        monkeypatch.setattr("app.agents.delegation.registry_client", lambda _cfg: FakeRegistryClient())
-        save_agent_runtime_state(
+        monkeypatch.setattr(
+            "app.agents.delegation.registry_connection_client",
+            lambda _cfg, registry_id=None: FakeRegistryClient(),
+        )
+        save_registry_connection_state(
             data_dir,
-            AgentRuntimeState(
+            RegistryConnectionState(
+                registry_id="default",
                 agent_id="origin-agent",
                 agent_token="secret",
                 connectivity_state="connected",
@@ -91,8 +96,7 @@ async def test_delegation_cancel_boundary_uses_explicit_runtime():
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345

@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +16,11 @@ async def test_publish_timeline_event_for_runtime_fans_out_telegram_refs(monkeyp
         FakeProvider("codex"),
     )
     runtime.registry_runtime = object()
+    runtime.channel_dispatcher = SimpleNamespace(
+        channel_type_for_ref=lambda conversation_ref: (
+            "telegram" if conversation_ref.startswith("telegram:") else "registry"
+        )
+    )
     published: list[dict[str, object]] = []
 
     async def _record(registry_runtime, **kwargs):
@@ -57,6 +63,11 @@ async def test_publish_timeline_event_for_runtime_keeps_registry_refs_single_sco
         FakeProvider("codex"),
     )
     runtime.registry_runtime = object()
+    runtime.channel_dispatcher = SimpleNamespace(
+        channel_type_for_ref=lambda conversation_ref: (
+            "telegram" if conversation_ref.startswith("telegram:") else "registry"
+        )
+    )
     published: list[dict[str, object]] = []
 
     async def _record(config, **kwargs):

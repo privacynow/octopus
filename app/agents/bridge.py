@@ -10,7 +10,7 @@ from typing import Any
 
 from app import work_queue
 from app.agents.client import AgentRegistryClient, RegistryClientError
-from app.agents.state import bot_identity, load_agent_runtime_state, load_runtime_registry_connection_state
+from app.agents.state import bot_identity, load_runtime_registry_connection_state
 from app.agents.types import RoutedTaskResult, TimelineEvent
 from app.channels.registry.refs import (
     qualify_registry_conversation_ref,
@@ -44,33 +44,39 @@ def telegram_conversation_ref(config: BotConfig, chat_id: int) -> str:
     return f"telegram:{bot_identity(config.data_dir)}:{chat_id}"
 
 
-def registry_client(config: BotConfig, *, registry_id: str | None = None) -> AgentRegistryClient | None:
+def resolve_registry_connection(
+    config: BotConfig,
+    *,
+    registry_id: str | None = None,
+):
     if config.agent_mode != "registry":
         return None
     if registry_id is None:
-        state = load_agent_runtime_state(config.data_dir)
-        registry_url = config.agent_registry_url
-    else:
-        registry = next(
-            (item for item in config.agent_registries if item.registry_id == registry_id),
-            None,
-        )
-        if registry is None:
-            if registry_id != "default":
-                return None
-            registry_url = config.agent_registry_url
-            registry_scope = "full"
-        else:
-            registry_url = registry.url
-            registry_scope = registry.registry_scope
-        state = load_runtime_registry_connection_state(
-            config.data_dir,
-            registry_id,
-            registry_scope=registry_scope,
-        )
-    if not state.agent_token or not registry_url:
+        if len(config.agent_registries) != 1:
+            return None
+        return config.agent_registries[0]
+    return next(
+        (item for item in config.agent_registries if item.registry_id == registry_id),
+        None,
+    )
+
+
+def registry_connection_client(
+    config: BotConfig,
+    *,
+    registry_id: str | None = None,
+) -> AgentRegistryClient | None:
+    registry = resolve_registry_connection(config, registry_id=registry_id)
+    if registry is None:
         return None
-    return AgentRegistryClient(registry_url, agent_token=state.agent_token)
+    state = load_runtime_registry_connection_state(
+        config.data_dir,
+        registry.registry_id,
+        registry_scope=registry.registry_scope,
+    )
+    if not state.agent_token or not registry.url:
+        return None
+    return AgentRegistryClient(registry.url, agent_token=state.agent_token)
 
 
 async def bind_conversation(
@@ -82,7 +88,7 @@ async def bind_conversation(
     external_id: str,
     registry_id: str | None = None,
 ) -> None:
-    client = registry_client(config, registry_id=registry_id)
+    client = registry_connection_client(config, registry_id=registry_id)
     if client is None:
         return
     try:
@@ -134,7 +140,7 @@ async def publish_timeline_event(
     event_id: str | None = None,
     registry_id: str | None = None,
 ) -> None:
-    client = registry_client(config, registry_id=registry_id)
+    client = registry_connection_client(config, registry_id=registry_id)
     if client is None:
         return
     event = TimelineEvent(

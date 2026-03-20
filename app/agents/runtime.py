@@ -11,10 +11,7 @@ from typing import Any, Awaitable, Callable
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.registry_errors import registry_error_detail
 from app.agents.state import (
-    AgentRuntimeState,
-    load_agent_runtime_state,
     load_runtime_registry_connection_state,
-    save_agent_runtime_state,
     save_registry_connection_state,
 )
 from app.agents.types import AgentCard, RegistryConnectionConfig, RegistryConnectionState, utcnow_iso
@@ -44,40 +41,42 @@ class AgentRuntime:
     ) -> None:
         self.config = config
         self._delivery_handler = delivery_handler
-        self._registry = registry
+        self._registry = registry or (config.agent_registries[0] if len(config.agent_registries) == 1 else None)
         self._channel_capabilities_resolver = channel_capabilities_resolver
-        if registry is None:
-            self._state: AgentRuntimeState | RegistryConnectionState = load_agent_runtime_state(config.data_dir)
-        else:
-            self._state = load_runtime_registry_connection_state(
-                config.data_dir,
-                registry.registry_id,
-                registry_scope=registry.registry_scope,
-            )
+        registry_state_id = self._registry.registry_id if self._registry is not None else "default"
+        registry_state_scope = self._registry.registry_scope if self._registry is not None else "full"
+        self._state = load_runtime_registry_connection_state(
+            config.data_dir,
+            registry_state_id,
+            registry_scope=registry_state_scope,
+        )
         self._runtime_health_provider = runtime_health_provider
         self._runtime_health_projector = runtime_health_projector or RuntimeHealthJsonProjector()
         self._provider = provider
 
     @property
-    def state(self) -> AgentRuntimeState | RegistryConnectionState:
+    def state(self) -> RegistryConnectionState:
         return self._state
 
     def _channel_capabilities(self) -> tuple[str, ...]:
         if self._channel_capabilities_resolver is not None:
             return self._channel_capabilities_resolver()
-        if self.config.agent_mode == "registry":
-            return ("telegram", "registry")
-        return ("telegram",)
+        channels: list[str] = []
+        if self.config.telegram_token:
+            channels.append("telegram")
+        if any(registry.registry_scope in {"channel", "full"} for registry in self.config.agent_registries):
+            channels.append("registry")
+        return tuple(channels)
 
     def _configured_registry_url(self) -> str:
-        if self._registry is not None:
-            return self._registry.url
-        return self.config.agent_registry_url
+        if self._registry is None:
+            return ""
+        return self._registry.url
 
     def _configured_enroll_token(self) -> str:
-        if self._registry is not None:
-            return self._registry.enroll_token
-        return self.config.agent_registry_enroll_token
+        if self._registry is None:
+            return ""
+        return self._registry.enroll_token
 
     def requested_card(self) -> AgentCard:
         return AgentCard(
@@ -85,7 +84,7 @@ class AgentRuntime:
             display_name=self.config.agent_display_name or self.config.instance,
             slug=self._state.registered_slug or self.config.agent_slug,
             role=self.config.agent_role or self.config.role,
-            registry_scope=self._registry.registry_scope if self._registry is not None else "full",
+            registry_scope=self._state.registry_scope or (self._registry.registry_scope if self._registry is not None else "full"),
             capabilities=self.config.agent_capabilities,
             tags=self.config.agent_tags,
             description=self.config.agent_description,
@@ -118,14 +117,7 @@ class AgentRuntime:
         return payload, active_work_count
 
     def _save_state(self) -> None:
-        if self._registry is None:
-            save_agent_runtime_state(self.config.data_dir, self._state)
-            return
-        save_registry_connection_state(
-            self.config.data_dir,
-            self._state,
-            project_legacy_default=(self._registry.registry_id == "default"),
-        )
+        save_registry_connection_state(self.config.data_dir, self._state)
 
     def _mark_state(
         self,

@@ -527,3 +527,23 @@
   - the written plan now matches the probed implementation for provider auth
   - the repo no longer carries the legacy root env artifacts
   - full suite status after the follow-up remained `1769 passed, 23 skipped`
+- Complete: Slice 12 removed the remaining singleton registry scaffolding.
+  Scope:
+  - deleted the singleton registry config fields from `BotConfig` and removed the internal projection back from `agent_registries[0]`
+  - removed the legacy single-file registry runtime state path and collapsed runtime persistence onto `data/agent/registries/<id>.json`
+  - deleted the singleton bridge helper and moved registry client/state lookup to per-connection resolution
+  - updated runtime health, delegation, registry egress, and CLI state checks to operate on explicit registry connections only
+  - finished the final consumer cleanup in tests, E2E flows, and CLI helpers so the repo no longer references the removed singleton paths
+  - tightened the Telegram worker timeline mirroring check to use dispatcher channel resolution instead of hardcoded prefix branching
+  Tests:
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_config.py tests/test_agents.py tests/test_agents_runtime.py tests/test_registry_runtime.py tests/test_doctor.py tests/test_handlers_delegation.py tests/test_agents_delegation_boundary.py tests/test_registry_adapter.py tests/test_channel_egress_factory.py tests/test_worker_workflows.py tests/test_simulator_e2e.py`
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_telegram_worker_timeline.py tests/test_handlers.py -k "registry_routed_task_executes_and_reports_result or registry_routed_task_result_report_failure_does_not_escape_worker or registry_channel_parent_resumes_through_registry_channel or publish_timeline_event_for_runtime_fans_out_telegram_refs or publish_timeline_event_for_runtime_keeps_registry_refs_single_scoped"`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - repo-wide grep across `app/`, `tests/`, `scripts/`, and `octopus` returned zero matches for `registry_state.json`, `agent_registry_url`, `conversation_channel_name`, and `create_channel_egress`
+  - verified the broader singleton audit also returned zero matches for the removed singleton config/state helper names across shipped code
+  - verified the full suite stayed green after the final bridge and dispatcher cleanup
+  Verified:
+  - registry runtime/config/state ownership is now per connection only; there is no residual singleton registry path in active code
+  - the final-slice cleanup removed more code than it added, which reduced duplication instead of hiding it behind compatibility helpers
+  - final suite status: `1827 passed, 23 skipped`

@@ -7,6 +7,7 @@ from app.identity import telegram_actor_key, telegram_conversation_key, telegram
 from app.runtime.inbound_types import InboundUser
 from app.runtime.work_admission import admit_worker_message
 from app.workflows.recovery.replay import get_recovery_use_cases
+from tests.support.config_support import make_registry_connection
 from tests.support.handler_support import (
     current_runtime,
     fresh_env,
@@ -54,8 +55,7 @@ def test_admit_worker_message_allows_registry_input() -> None:
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, _cfg, _prov):
         result = admit_worker_message(

@@ -9,7 +9,7 @@ import platform
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from app.channels.telegram.cancellation import TelegramCancellationRegistry
 from app.config import BotConfig
@@ -29,12 +29,6 @@ def _build_rate_limiter(config: BotConfig) -> RateLimiter:
         per_minute = 5
         per_hour = 30
     return RateLimiter(per_minute=per_minute, per_hour=per_hour)
-
-
-def _default_registry_client_factory(config: BotConfig):
-    from app.agents.bridge import registry_connection_client
-
-    return registry_connection_client(config)
 
 
 @dataclass
@@ -58,10 +52,6 @@ class TelegramRuntime:
     )
     pending_work_items: dict[int, str] = field(default_factory=dict)
     channel_dispatcher: Any = None
-    registry_runtime: Any = None
-    registry_client_factory: Callable[[BotConfig], Any | None] = field(
-        default_factory=lambda: _default_registry_client_factory
-    )
     current_update_id: contextvars.ContextVar[int | None] = field(
         default_factory=lambda: contextvars.ContextVar(
             "telegram_current_update_id",

@@ -193,58 +193,6 @@ def test_register_registry_channels_by_scope(tmp_path: Path):
     assert dispatcher.active_channel_types() == ["registry"]
 
 
-def test_registry_runtime_clients_for_mirroring_skip_coordination_only(tmp_path: Path):
-    channel = RegistryConnectionConfig(
-        registry_id="channel",
-        url="http://registry.channel",
-        enroll_token="enroll-channel",
-        registry_scope="channel",
-        poll_interval_seconds=5.0,
-    )
-    coordination = RegistryConnectionConfig(
-        registry_id="coordination",
-        url="http://registry.coordination",
-        enroll_token="enroll-coordination",
-        registry_scope="coordination",
-        poll_interval_seconds=5.0,
-    )
-    full = RegistryConnectionConfig(
-        registry_id="full",
-        url="http://registry.full",
-        enroll_token="enroll-full",
-        registry_scope="full",
-        poll_interval_seconds=5.0,
-    )
-    for registry in (channel, coordination, full):
-        save_registry_connection_state(
-            tmp_path,
-            RegistryConnectionState(
-                registry_id=registry.registry_id,
-                registry_scope=registry.registry_scope,
-                agent_id=f"{registry.registry_id}-agent",
-                agent_token=f"{registry.registry_id}-token",
-                poll_cursor="0",
-                registered_slug=f"{registry.registry_id}-slug",
-                connectivity_state="connected",
-            ),
-        )
-
-    runtime = RegistryRuntime(
-        (channel, coordination, full),
-        ChannelDispatcher(),
-        None,
-        config=make_config(
-            data_dir=tmp_path,
-            agent_mode="registry",
-            agent_registries=(channel, coordination, full),
-        ),
-    )
-
-    mirrored = runtime.clients_for_mirroring()
-
-    assert [registry_id for registry_id, _client in mirrored] == ["channel", "full"]
-
-
 @pytest.mark.asyncio
 async def test_registry_runtime_discover_fans_out_with_registry_provenance(monkeypatch, tmp_path: Path):
     class FakeRegistryClient:

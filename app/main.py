@@ -341,7 +341,6 @@ def main() -> None:
         )
         control_plane_runner = ProcessorRunner(bus)
         control_plane_runner.register(RegistryControlProcessor(registry_runtime))
-        worker_runtime_bundle.runtime.registry_runtime = registry_runtime
 
     async def _start_background_runtime(stop_event: asyncio.Event) -> None:
         nonlocal _worker_task, _worker_stop, control_plane_runner_task

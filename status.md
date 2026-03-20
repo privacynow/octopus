@@ -831,3 +831,21 @@
   - registry egress now depends only on the capability-port surface and no longer imports `bind_conversation`, `registry_connection_client`, or registry client factories
   - startup-owned registry channel registration still routes by scope correctly, and registry-native conversation/task egress continues to publish non-fatally through the scoped port seam
   - full suite status after slice 7A: `1885 passed, 23 skipped`
+- Complete: Slice 7B delete leaked registry fields.
+  Scope:
+  - deleted the remaining Telegram runtime registry fields and the `_default_registry_client_factory()` fallback so `TelegramRuntime` now carries only `services` and channel-owned state
+  - removed the worker/main/test-fixture plumbing that was still threading `registry_runtime` through Telegram worker bundles after the port cutover
+  - rewired `/discover` to use `services.control_plane.health_publication.connection_summary()` and `services.control_plane.agent_directory.search_agents()` instead of a live `RegistryRuntime`
+  - removed the obsolete bridge/runtime fan-out surface by deleting `bind_conversation_to_registries()`, `publish_timeline_to_registries()`, `RegistryRuntime.clients_for_mirroring()`, and the stale tests that encoded those paths
+  - added direct adapter coverage for `BusHealthPublication.connection_summary()` so the new discovery dependency is tested at the control-plane seam
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_control_plane_adapters.py tests/test_telegram_channel_state.py tests/test_config.py tests/test_agents.py tests/test_registry_runtime.py tests/test_handlers.py -k "discover or registry_routed_task_result_report_failure_does_not_escape_worker or control_plane or registry or telegram_channel_state or main"`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - the cleanup removes the stale runtime/client escape hatches instead of keeping them around behind renamed helpers; the only remaining registry client construction helpers are private and isolated inside `app/agents/bridge.py`
+  - `/discover` now depends on the same startup-owned control-plane services as the rest of the Telegram control-plane flow, which closes one of the last user-facing branches on live runtime shape
+  - the first focused run exposed only slice-local issues: a missing `RegistryClientError` test import, a too-weak scope expectation in the new health-summary tests, and a presenter-message assertion that no longer matched the intentionally generic failure text; all were fixed without reintroducing a fallback path
+  Verified:
+  - there are no remaining `runtime.registry_runtime`, `registry_client_factory`, `bind_conversation_to_registries`, `publish_timeline_to_registries`, or `clients_for_mirroring()` references in app/test consumer code
+  - positive and negative discovery behavior is covered through the control-plane services seam, including unavailable and exception paths that preserve operator-safe messaging
+  - full suite status after slice 7B: `1884 passed, 23 skipped`

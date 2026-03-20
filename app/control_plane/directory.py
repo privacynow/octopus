@@ -13,6 +13,13 @@ class ControlPlaneDirectory:
     def authorities_for_capability(self, capability: str) -> set[str]:
         return set(self._by_capability.get(capability, set()))
 
+    def capabilities_for_authority(self, authority_ref: str) -> set[str]:
+        capabilities: set[str] = set()
+        for capability, authorities in self._by_capability.items():
+            if authority_ref in authorities:
+                capabilities.add(capability)
+        return capabilities
+
     def all_capabilities(self) -> set[str]:
         return set(self._by_capability.keys())
 

@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from app.agents.bridge import conversation_key_for_ref, telegram_conversation_ref
-from app.agents.client import RegistryClientError
 from app.agents.state import save_registry_connection_state
 from app.agents.types import RegistryConnectionState
 from app.agents.delivery import handle_registry_delivery
@@ -20,7 +19,8 @@ from app.channels.telegram.session_io import (
     save as telegram_save_session,
 )
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
-from app.ports.agent_directory import AuthorityResolution
+from app.ports.agent_directory import AgentSearchResult, AuthorityResolution
+from app.ports.health_publication import AuthorityStatus, ConnectionSummary
 from app.ports.task_routing import TaskSubmissionResult
 from app.ports.task_routing import TaskResultReport
 from app.providers.base import RunContext, RunResult
@@ -263,19 +263,11 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
 
         seen_queries: list[object] = []
 
-        class FakeRegistryRuntime:
-            def has_coordination_connections(self):
-                return True
-
-            def has_connected_coordination_connection(self):
-                return True
-
-            def first_coordination_error(self):
-                return ""
-
-            async def discover(self, query):
-                seen_queries.append(query)
-                return [
+        async def fake_search_agents(*, query):
+            seen_queries.append(query)
+            return AgentSearchResult(
+                status="complete",
+                agents=[
                     {
                         "authority_ref": "registry:prod",
                         "agent_id": "agent-2",
@@ -289,9 +281,22 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
                         "current_capacity": 0,
                         "max_capacity": 2,
                     }
-                ]
+                ],
+                responding_authorities=["registry:prod"],
+            )
 
-        current_runtime().registry_runtime = FakeRegistryRuntime()
+        current_runtime().services.control_plane.health_publication.connection_summary = (
+            lambda: ConnectionSummary(
+                authorities=[
+                    AuthorityStatus(
+                        authority_ref="registry:prod",
+                        connectivity_state="configured",
+                        registry_scope="full",
+                    )
+                ]
+            )
+        )
+        current_runtime().services.control_plane.agent_directory.search_agents = fake_search_agents
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -348,20 +353,23 @@ async def test_discover_degraded_reports_registry_connectivity():
     ) as (data_dir, _cfg, prov):
         import app.channels.telegram.ingress as th
 
-        class FakeRegistryRuntime:
-            def has_coordination_connections(self):
-                return True
+        current_runtime().services.control_plane.health_publication.connection_summary = (
+            lambda: ConnectionSummary(
+                authorities=[
+                    AuthorityStatus(
+                        authority_ref="registry:default",
+                        connectivity_state="configured",
+                        registry_scope="full",
+                    )
+                ]
+            )
+        )
 
-            def has_connected_coordination_connection(self):
-                return False
+        async def fake_search_agents(*, query):
+            del query
+            return AgentSearchResult(status="unavailable")
 
-            def has_enrolled_coordination_connection(self):
-                return True
-
-            def first_coordination_error(self):
-                return "registry_unreachable"
-
-        current_runtime().registry_runtime = FakeRegistryRuntime()
+        current_runtime().services.control_plane.agent_directory.search_agents = fake_search_agents
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -388,25 +396,23 @@ async def test_discover_registry_failure_omits_backend_response_details():
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
 
-        class FakeRegistryRuntime:
-            def has_coordination_connections(self):
-                return True
+        current_runtime().services.control_plane.health_publication.connection_summary = (
+            lambda: ConnectionSummary(
+                authorities=[
+                    AuthorityStatus(
+                        authority_ref="registry:default",
+                        connectivity_state="configured",
+                        registry_scope="full",
+                    )
+                ]
+            )
+        )
 
-            def has_connected_coordination_connection(self):
-                return True
+        async def fake_search_agents(*, query):
+            del query
+            raise RuntimeError("search failed")
 
-            def first_coordination_error(self):
-                return ""
-
-            async def discover(self, query):
-                raise RegistryClientError(
-                    "Registry POST /v1/agents/discovery/search failed: HTTP 500",
-                    error_code="registry_server_error",
-                    operator_detail="Registry POST /v1/agents/discovery/search failed with HTTP 500.",
-                    status_code=500,
-                )
-
-        current_runtime().registry_runtime = FakeRegistryRuntime()
+        current_runtime().services.control_plane.agent_directory.search_agents = fake_search_agents
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -420,7 +426,8 @@ async def test_discover_registry_failure_omits_backend_response_details():
 
         reply = msg.replies[0]["text"]
         assert "Agent discovery failed." in reply
-        assert "temporarily unavailable" in reply
+        assert "request failed" in reply
+        assert "search failed" not in reply
         assert "HTTP 500" not in reply
         assert "/v1/agents/discovery/search" not in reply
 
@@ -712,25 +719,7 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
         }
     ) as (_, cfg, prov):
         import app.channels.telegram.ingress as th
-        import app.agents.bridge as bridge
 
-        class FakeRegistryClient:
-            async def sync_binding(self, **kwargs):
-                return {"ok": True}
-
-            async def publish_timeline(self, events, *, checkpoint: str = ""):
-                del events, checkpoint
-                return {"accepted": 0}
-
-            async def routed_task_result(self, routed_task_id, result):
-                del routed_task_id, result
-                raise RuntimeError("registry unavailable")
-
-        monkeypatch.setattr(
-            bridge,
-            "registry_connection_client",
-            lambda config, registry_id=None: FakeRegistryClient(),
-        )
         async def fake_report_routed_task_result(*, routed_task_id, authority_ref, result):
             del routed_task_id, authority_ref, result
             return TaskResultReport(status="failed", error="registry unavailable")

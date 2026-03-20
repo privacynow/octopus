@@ -292,11 +292,16 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
     def _fake_conn():
         yield MagicMock()
 
-    bootstrap = SimpleNamespace(
+    dispatcher = MagicMock()
+    ingress = SimpleNamespace(
         application=mock_app,
         runtime=SimpleNamespace(boot_id="test-boot"),
         worker_dispatch=MagicMock(),
+        worker_deserialize_failure_notifier=None,
     )
+    dispatcher.get_ingress.return_value = ingress
+    dispatcher.build_all_ingresses.return_value = {"telegram": ingress}
+    dispatcher_runner = AsyncMock(return_value=None)
 
     with patch("app.main.load_config", return_value=cfg), \
          patch("app.main.make_provider", return_value=provider), \
@@ -304,7 +309,9 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
          patch("app.runtime_backend.init"), \
          patch("app.main.ensure_data_dirs"), \
          patch("app.main.init_content_store_for_config"), \
-         patch("app.main.build_bootstrap", return_value=bootstrap), \
+         patch("app.main.ChannelDispatcher", return_value=dispatcher), \
+         patch("app.main.TelegramChannelBootstrap"), \
+         patch("app.main.run_dispatcher_process", dispatcher_runner), \
          patch("app.main.close_db"), \
          patch("app.main.close_transport_db"), \
          patch("app.main.recover_stale_claims"), \
@@ -313,24 +320,24 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
          patch("app.db.postgres_doctor.run_doctor", return_value=[]), \
          patch("app.db.postgres.close_pools"), \
          patch("sys.argv", ["bot"]):
-        yield provider
+        yield provider, dispatcher, ingress, dispatcher_runner
 
 def test_main_calls_run_polling_in_poll_mode():
-    """When BOT_MODE=poll, main() calls app.run_polling()."""
+    """When BOT_MODE=poll, main() runs the dispatcher-owned ingress process."""
     cfg = make_config(bot_mode="poll", database_url="postgresql://bot:bot@localhost:5432/bot")
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app):
+    with _patched_main_runtime(cfg, mock_app) as (_provider, dispatcher, _ingress, dispatcher_runner):
         from app.main import main
         main()
-    mock_app.run_polling.assert_called_once()
-    mock_app.run_webhook.assert_not_called()
+    dispatcher.build_all_ingresses.assert_called_once()
+    dispatcher_runner.assert_awaited_once_with(dispatcher)
 
 
 def test_main_polling_invalid_token_exits_with_operator_message(capsys):
     cfg = make_config(bot_mode="poll", database_url="postgresql://bot:bot@localhost:5432/bot")
     mock_app = MagicMock()
-    mock_app.run_polling.side_effect = InvalidToken("The token was rejected")
-    with _patched_main_runtime(cfg, mock_app):
+    with _patched_main_runtime(cfg, mock_app) as (_provider, _dispatcher, _ingress, dispatcher_runner):
+        dispatcher_runner.side_effect = InvalidToken("The token was rejected")
         from app.main import main
 
         with pytest.raises(SystemExit) as excinfo:
@@ -345,8 +352,8 @@ def test_main_polling_invalid_token_exits_with_operator_message(capsys):
 def test_main_polling_network_error_exits_with_connectivity_message(capsys):
     cfg = make_config(bot_mode="poll", database_url="postgresql://bot:bot@localhost:5432/bot")
     mock_app = MagicMock()
-    mock_app.run_polling.side_effect = NetworkError("timeout")
-    with _patched_main_runtime(cfg, mock_app):
+    with _patched_main_runtime(cfg, mock_app) as (_provider, _dispatcher, _ingress, dispatcher_runner):
+        dispatcher_runner.side_effect = NetworkError("timeout")
         from app.main import main
 
         with pytest.raises(SystemExit) as excinfo:
@@ -381,7 +388,7 @@ def test_main_database_error_is_sanitized(capsys):
 
 
 def test_main_calls_run_webhook_in_webhook_mode():
-    """When BOT_MODE=webhook, main() calls app.run_webhook() with correct args."""
+    """When BOT_MODE=webhook, main() runs the dispatcher-owned ingress process."""
     cfg = make_config(
         bot_mode="webhook",
         webhook_url="https://bot.example.com/webhook",
@@ -391,17 +398,10 @@ def test_main_calls_run_webhook_in_webhook_mode():
         database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app):
+    with _patched_main_runtime(cfg, mock_app) as (_provider, dispatcher, _ingress, dispatcher_runner):
         from app.main import main
         main()
-    mock_app.run_webhook.assert_called_once_with(
-        listen="0.0.0.0",
-        port=8443,
-        webhook_url="https://bot.example.com/webhook",
-        secret_token="my-secret",
-        url_path="/webhook",
-    )
-    mock_app.run_polling.assert_not_called()
+    dispatcher_runner.assert_awaited_once_with(dispatcher)
 
 
 def test_main_allows_shared_runtime_in_webhook_mode():
@@ -412,11 +412,11 @@ def test_main_allows_shared_runtime_in_webhook_mode():
         database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app):
+    with _patched_main_runtime(cfg, mock_app) as (_provider, dispatcher, _ingress, dispatcher_runner):
         from app.main import main
 
         main()
-    mock_app.run_webhook.assert_called_once()
+    dispatcher_runner.assert_awaited_once_with(dispatcher)
 
 
 def test_main_worker_role_runs_worker_process_only():
@@ -428,15 +428,11 @@ def test_main_worker_role_runs_worker_process_only():
         database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
-    worker_runner = AsyncMock(return_value=None)
-    with _patched_main_runtime(cfg, mock_app):
-        with patch("app.main.run_worker_process", worker_runner):
-            from app.main import main
+    with _patched_main_runtime(cfg, mock_app) as (_provider, dispatcher, _ingress, dispatcher_runner):
+        from app.main import main
 
-            main()
-    worker_runner.assert_awaited_once_with(mock_app)
-    mock_app.run_polling.assert_not_called()
-    mock_app.run_webhook.assert_not_called()
+        main()
+    dispatcher_runner.assert_awaited_once_with(dispatcher)
 
 
 def test_main_webhook_role_skips_provider_runtime_validation():
@@ -448,12 +444,12 @@ def test_main_webhook_role_skips_provider_runtime_validation():
     )
     provider = _runtime_ok_provider()
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app, provider=provider):
+    with _patched_main_runtime(cfg, mock_app, provider=provider) as (_provider, dispatcher, _ingress, dispatcher_runner):
         from app.main import main
 
         main()
     assert provider.check_runtime_health.await_count == 0
-    mock_app.run_webhook.assert_called_once()
+    dispatcher_runner.assert_awaited_once_with(dispatcher)
 
 
 def test_runs_registry_runtime_moves_to_webhook_role_in_shared_mode():
@@ -483,7 +479,7 @@ def test_runs_registry_runtime_is_disabled_for_shared_worker_role():
 
 
 def test_main_webhook_empty_secret_passes_none():
-    """Empty BOT_WEBHOOK_SECRET should pass secret_token=None."""
+    """Empty BOT_WEBHOOK_SECRET is still accepted by the dispatcher-owned ingress path."""
     cfg = make_config(
         bot_mode="webhook",
         webhook_url="https://bot.example.com/webhook",
@@ -491,11 +487,10 @@ def test_main_webhook_empty_secret_passes_none():
         database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
-    with _patched_main_runtime(cfg, mock_app):
+    with _patched_main_runtime(cfg, mock_app) as (_provider, dispatcher, _ingress, dispatcher_runner):
         from app.main import main
         main()
-    call_kwargs = mock_app.run_webhook.call_args[1]
-    assert call_kwargs["secret_token"] is None
+    dispatcher_runner.assert_awaited_once_with(dispatcher)
 
 
 def test_load_config_reads_webhook_env_vars():

@@ -77,13 +77,34 @@ class ChannelDispatcher:
             self._ingress_tasks[ingress.channel_id] = asyncio.create_task(
                 ingress.start(stop_event=stop_event)
             )
+        await asyncio.sleep(0)
+        startup_errors: list[BaseException] = []
+        for task in self._ingress_tasks.values():
+            if not task.done():
+                continue
+            exc = task.exception()
+            if exc is not None:
+                startup_errors.append(exc)
+        if startup_errors:
+            try:
+                await self.stop_all_ingresses()
+            finally:
+                raise startup_errors[0]
 
     async def stop_all_ingresses(self) -> None:
         for ingress in self._ingresses.values():
             await ingress.stop()
+        task_failures: list[BaseException] = []
         if self._ingress_tasks:
-            await asyncio.gather(*self._ingress_tasks.values(), return_exceptions=True)
+            results = await asyncio.gather(*self._ingress_tasks.values(), return_exceptions=True)
+            task_failures = [
+                result
+                for result in results
+                if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError)
+            ]
         self._ingress_tasks = {}
+        if task_failures:
+            raise task_failures[0]
 
     def descriptor_for_ref(self, conversation_ref: str) -> ChannelDescriptor | None:
         channel = self._channel_for_ref(conversation_ref)

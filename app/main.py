@@ -19,7 +19,8 @@ from app.credential_store import init_credential_store_for_config
 from app.storage import close_db, ensure_data_dirs
 from app.work_queue import close_transport_db, recover_stale_claims, purge_old
 from app.worker import poll_interval_for_runtime, start_worker_task
-from app.channels.telegram.bootstrap import build_bootstrap
+from app.channels.telegram.channel import TelegramChannelBootstrap
+from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime_health import CanonicalRuntimeHealthProvider
 from app.startup_diagnostics import (
     collect_telegram_doctor_diagnostics,
@@ -140,8 +141,8 @@ def _exit_startup_failure(exc: BaseException, config: BotConfig, *, mode: str) -
     raise SystemExit(1)
 
 
-async def run_worker_process(app) -> None:
-    """Initialize the Telegram app globals and keep worker-owned tasks alive."""
+async def run_dispatcher_process(dispatcher: ChannelDispatcher) -> None:
+    """Start all dispatcher-owned ingresses and wait for shutdown."""
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
@@ -151,15 +152,12 @@ async def run_worker_process(app) -> None:
         except NotImplementedError:
             continue
 
-    await app.initialize()
     try:
-        if app.post_init:
-            await app.post_init(app)
+        await dispatcher.start_all_ingresses(stop_event=stop_event)
         await stop_event.wait()
     finally:
-        if app.post_shutdown:
-            await app.post_shutdown(app)
-        await app.shutdown()
+        stop_event.set()
+        await dispatcher.stop_all_ingresses()
 
 
 def main() -> None:
@@ -247,9 +245,15 @@ def main() -> None:
         log.warning("Bot is open to everyone (BOT_ALLOW_OPEN=1)")
 
     log.info("Process role: %s", config.process_role)
-    telegram_bootstrap = build_bootstrap(config, provider)
-    app = telegram_bootstrap.application
-    boot_id = telegram_bootstrap.runtime.boot_id
+    dispatcher = ChannelDispatcher()
+    dispatcher.register(TelegramChannelBootstrap(config, provider))
+    dispatcher.build_all_ingresses(config=config, delivery_handler=lambda *_args, **_kwargs: None)
+    telegram_ingress = dispatcher.get_ingress("telegram")
+    if telegram_ingress is None:
+        raise RuntimeError("Telegram channel ingress was not built")
+
+    app = telegram_ingress.application
+    boot_id = telegram_ingress.runtime.boot_id
 
     if _runs_worker(config):
         # Recover stale work items from previous boot and purge old transport data
@@ -274,8 +278,8 @@ def main() -> None:
             _worker_task, _worker_stop = start_worker_task(
                 config.data_dir,
                 boot_id,
-                telegram_bootstrap.worker_dispatch,
-                deserialize_failure_notifier=telegram_bootstrap.worker_deserialize_failure_notifier,
+                telegram_ingress.worker_dispatch,
+                deserialize_failure_notifier=telegram_ingress.worker_deserialize_failure_notifier,
                 poll_interval=poll_interval_for_runtime(config.runtime_mode),
                 lease_ttl=config.claim_lease_ttl_seconds,
                 sweep_interval=config.claim_sweep_interval_seconds,
@@ -321,7 +325,7 @@ def main() -> None:
     if config.process_role == ProcessRole.WORKER.value:
         log.info("Bot starting (worker-only)...")
         try:
-            asyncio.run(run_worker_process(app))
+            asyncio.run(run_dispatcher_process(dispatcher))
         except KeyboardInterrupt:
             pass
         except Exception as exc:
@@ -333,13 +337,9 @@ def main() -> None:
         log.info("Webhook URL: %s", sanitize_url_for_logging(config.webhook_url))
         log.info("Listening on %s:%d", config.webhook_listen, config.webhook_port)
         try:
-            app.run_webhook(
-                listen=config.webhook_listen,
-                port=config.webhook_port,
-                webhook_url=config.webhook_url,
-                secret_token=config.webhook_secret or None,
-                url_path="/webhook",
-            )
+            asyncio.run(run_dispatcher_process(dispatcher))
+        except KeyboardInterrupt:
+            pass
         except Exception as exc:
             _exit_startup_failure(exc, config, mode="webhook")
         finally:
@@ -365,7 +365,9 @@ def main() -> None:
 
         log.info("Bot starting (long-poll)...")
         try:
-            app.run_polling()
+            asyncio.run(run_dispatcher_process(dispatcher))
+        except KeyboardInterrupt:
+            pass
         except Exception as exc:
             _exit_startup_failure(exc, config, mode="polling")
         finally:

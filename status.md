@@ -21,6 +21,25 @@
 
 ## Slice Log
 
+- Complete: Phase 9B remediation — claim-token contract completion.
+  Scope:
+  - added stale-claim negative coverage for `fail()`, `dead_letter()`, and `renew_lease()` in the control-plane store contract for both SQLite and Postgres
+  - expanded the processor-runner fake bus to capture `claimed_at` on renew, complete, fail, and dead-letter paths
+  - added runner tests proving the claimed token is forwarded through renew/complete, exception→fail, and unowned-pair→dead-letter flows
+  - kept the bus/store/runner implementation unchanged because the expanded tests confirmed the current CAS behavior already rejects stale claimants correctly
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/contracts/test_control_plane_store_contract.py tests/test_control_plane_processor_runner.py`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified stale `claimed_at` cannot mutate reclaimed commands via complete, fail, dead-letter, or lease-renewal paths
+  - verified the processor runner forwards the original claim token to every bus mutation path it owns
+  Review:
+  - this slice strengthened the existing invariant tests instead of widening the bus/store interface
+  - no new claim token, no new status, and no new runner path were introduced; the tests now match the already-intended durable contract
+  Verified:
+  - stale-claim rejection is covered across all mutation paths
+  - runner token forwarding is now asserted rather than assumed
+  - full suite status after Phase 9B: `1908 passed, 23 skipped`
 - Complete: Phase 9A remediation — worker timeline single owner path.
   Scope:
   - collapsed `app/channels/telegram/worker.py:_publish_timeline_event_for_runtime()` to one control-plane projection path for all conversation refs

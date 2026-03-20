@@ -1,3 +1,37 @@
+# Multi-Registry Connections & Channel Bootstrap Status
+
+## Baseline
+
+- Track: multi-registry connections and channel bootstrap
+- Plan: `multiregistry_plan.md`
+- Baseline branch: `feature/multi_registry`
+- Baseline goal: replace singleton registry assumptions and hardwired channel dispatch with per-connection registry runtime state, dispatcher-owned channel routing, and optional Telegram.
+
+## Slice Log
+
+- Complete: Slice 1 contracts and stable bot identity.
+  Scope:
+  - added stable runtime `bot_identity.json` persistence in `app/agents/state.py`
+  - exposed `bot_identity(data_dir)` and `load_bot_identity_state(data_dir)` without changing existing registry-state behavior
+  - added `app/ports/channel.py` with `ChannelDescriptor`, `Channel`, `ChannelBootstrap`, and `ChannelIngress`
+  - added `app/runtime/channel_dispatcher.py` with prefix registration, conflict detection, ref-based egress routing, active channel type discovery, descriptor lookup, and ingress lifecycle hooks
+  - kept all existing runtime paths intact; no live dispatch or registry behavior changed in this slice
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_agents.py tests/test_channel_dispatcher.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified `bot_identity()` creates a stable 32-char runtime id, persists it under `agent/bot_identity.json`, and regenerates safely from corrupt state
+  - verified dispatcher routing covers positive and negative cases: telegram ref, registry task ref, unknown ref rejection, and conflicting prefix rejection
+  - verified dispatcher ingress lifecycle only builds/starts `ChannelBootstrap` ingresses, not plain `Channel` instances
+  Review:
+  - slice 1 stays within the existing state seam instead of introducing a parallel runtime state module
+  - the new dispatcher is additive and unused by production call sites so there is no slice-1 behavior drift
+  - full-suite validation required running outside the sandbox because the existing socket-bind test in `tests/test_octopus_registry_network.py` cannot bind under the sandbox; the elevated rerun passed cleanly
+  Verified:
+  - stable local bot identity now exists as runtime state, not env/config
+  - the new channel contracts and dispatcher are in place for later slices
+  - full suite status after slice 1: `1777 passed, 23 skipped`
+
 # Octopus CLI Implementation Status
 
 ## Baseline

@@ -90,3 +90,7 @@ def run_control_command_event(
         new_state=machine.current_state.id,
         retry_count=retry_count,
     )
+
+
+def retry_backoff_seconds(retry_count: int) -> int:
+    return min(2**retry_count, 60)

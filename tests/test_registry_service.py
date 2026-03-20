@@ -65,7 +65,13 @@ def _ui_csrf_token(client: TestClient) -> str:
     return match.group(1)
 
 
-def _enroll_and_register(client: TestClient, name: str, slug: str) -> tuple[str, str]:
+def _enroll_and_register(
+    client: TestClient,
+    name: str,
+    slug: str,
+    *,
+    registry_scope: str = "full",
+) -> tuple[str, str]:
     enroll = client.post(
         "/v1/agents/enroll",
         json={
@@ -74,6 +80,7 @@ def _enroll_and_register(client: TestClient, name: str, slug: str) -> tuple[str,
                 "display_name": name,
                 "slug": slug,
                 "role": "developer",
+                "registry_scope": registry_scope,
                 "capabilities": ["python", "tests"],
                 "tags": ["backend"],
                 "description": "Writes and tests code",
@@ -96,6 +103,7 @@ def _enroll_and_register(client: TestClient, name: str, slug: str) -> tuple[str,
                 "display_name": name,
                 "slug": slug,
                 "role": "developer",
+                "registry_scope": registry_scope,
                 "capabilities": ["python", "tests"],
                 "tags": ["backend"],
                 "description": "Writes and tests code",
@@ -197,6 +205,70 @@ def test_registry_enroll_register_heartbeat_and_search(monkeypatch, tmp_path: Pa
     assert len(agents) == 1
     assert agents[0]["slug"] == "dev-bot"
     assert agents[0]["connectivity_state"] == "connected"
+
+
+def test_registry_channel_only_agent_gets_403_on_discovery(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    _agent_id, token = _enroll_and_register(
+        client,
+        "Channel Bot",
+        "channel-bot",
+        registry_scope="channel",
+    )
+
+    response = client.post(
+        "/v1/agents/discovery/search",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"role": "developer", "required_state": "connected"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error_code"] == "registry_scope_not_permitted"
+
+
+def test_registry_coordination_only_agent_gets_403_on_timeline_publish(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    _agent_id, token = _enroll_and_register(
+        client,
+        "Coordination Bot",
+        "coordination-bot",
+        registry_scope="coordination",
+    )
+
+    bind = client.post(
+        "/v1/agents/conversations/bind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "conversation_id": "registry:default:conversation:conv-1",
+            "title": "Registry conversation",
+            "origin_channel": "registry",
+        },
+    )
+    timeline = client.post(
+        "/v1/agents/timeline",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "events": [
+                {
+                    "event_id": "evt-1",
+                    "conversation_id": "registry:default:conversation:conv-1",
+                    "kind": "progress",
+                    "title": "Working",
+                    "body": "Doing work",
+                    "created_at": "2026-03-19T00:00:00+00:00",
+                }
+            ]
+        },
+    )
+
+    assert bind.status_code == 403
+    assert bind.json()["detail"]["error_code"] == "registry_scope_not_permitted"
+    assert timeline.status_code == 403
+    assert timeline.json()["detail"]["error_code"] == "registry_scope_not_permitted"
 
 
 def test_registry_ui_exposes_runtime_health_summary_and_detail(monkeypatch, tmp_path: Path):
@@ -1653,12 +1725,13 @@ def test_registry_store_migrations_are_idempotent_and_upgrade_legacy_channel_col
 
     conn = sqlite3.connect(db_path)
     version = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-    assert version == "5"
+    assert version == "6"
     agent_columns = {
         row[1]
         for row in conn.execute("PRAGMA table_info(agents)").fetchall()
     }
     assert "channel_capabilities_json" in agent_columns
+    assert "registry_scope" in agent_columns
     assert "surface_capabilities_json" not in agent_columns
     stored_agent_token = conn.execute(
         "SELECT agent_token FROM agents WHERE agent_id = 'agent-1'"

@@ -68,6 +68,7 @@ class AgentCard:
     display_name: str = ""
     slug: str = ""
     role: str = ""
+    registry_scope: str = "full"
     capabilities: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
     description: str = ""

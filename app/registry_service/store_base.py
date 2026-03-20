@@ -22,6 +22,18 @@ class CapabilityDisabledError(RuntimeError):
     """Raised when routing requests a capability that has been globally disabled."""
 
 
+class RegistryScopeError(PermissionError):
+    """Raised when an agent registry scope cannot access a protected action."""
+
+    def __init__(self, scope: str, required_scopes: set[str]) -> None:
+        self.scope = scope or "full"
+        self.required_scopes = tuple(sorted(required_scopes))
+        super().__init__(
+            f"Agent registry_scope '{self.scope}' cannot access this endpoint. "
+            f"Required: {', '.join(self.required_scopes)}"
+        )
+
+
 def utcnow_iso() -> str:
     """Return the current UTC timestamp in ISO 8601 format."""
     return datetime.now(timezone.utc).isoformat()
@@ -77,6 +89,33 @@ def effective_connectivity_state(connectivity_state: str, last_heartbeat_at: str
     return effective_state
 
 
+def registry_scope_for_agent_row(agent_row: Any) -> str:
+    """Return the stored registry scope for an authenticated agent row."""
+    try:
+        scope = agent_row["registry_scope"]
+    except Exception:
+        scope = "full"
+    return str(scope or "full")
+
+
+def require_registry_scope(agent_row: Any, required_scopes: set[str]) -> str:
+    """Validate an agent row against the required registry scopes."""
+    scope = registry_scope_for_agent_row(agent_row)
+    if scope not in required_scopes:
+        raise RegistryScopeError(scope, required_scopes)
+    return scope
+
+
+def delivery_kinds_for_registry_scope(registry_scope: str) -> tuple[str, ...] | None:
+    """Return the delivery kinds visible to the provided registry scope."""
+    scope = (registry_scope or "full").strip().lower() or "full"
+    if scope == "channel":
+        return ("channel_input", "channel_action")
+    if scope == "coordination":
+        return ("routed_task", "routed_result")
+    return None
+
+
 def runtime_health_summary(value: Any) -> dict[str, Any]:
     """Return the canonical mirrored health summary, or an empty dict."""
     report = report_from_dict(decode_json_field(value, {}))
@@ -125,6 +164,9 @@ class AbstractRegistryStore(Protocol):
 
     def search_agents(self, query: dict[str, Any]) -> list[dict[str, Any]]:
         """Return agents matching the requested discovery constraints."""
+
+    def assert_agent_scope(self, agent_token: str, required_scopes: set[str]) -> None:
+        """Validate that the authenticated agent token has one of the required scopes."""
 
     def create_delivery(self, *, target_agent_id: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Queue a delivery for an agent and return its durable identifiers."""

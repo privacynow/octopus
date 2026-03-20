@@ -8,6 +8,7 @@ import pytest
 from app.registry_service.store import RegistrySQLiteStore
 from app.registry_service.store_base import hash_agent_token
 from app.registry_service.store_base import CapabilityDisabledError
+from app.registry_service.store_base import RegistryScopeError
 from app.runtime_health import (
     QueueSnapshot,
     RuntimeDiagnostic,
@@ -19,11 +20,17 @@ from app.runtime_health import (
 )
 
 
-def _card(slug: str, capabilities: list[str] | None = None) -> dict:
+def _card(
+    slug: str,
+    capabilities: list[str] | None = None,
+    *,
+    registry_scope: str = "full",
+) -> dict:
     return {
         "display_name": slug,
         "slug": slug,
         "role": "developer",
+        "registry_scope": registry_scope,
         "capabilities": capabilities or ["python"],
         "tags": ["backend"],
         "description": f"{slug} description",
@@ -35,12 +42,18 @@ def _card(slug: str, capabilities: list[str] | None = None) -> dict:
     }
 
 
-def _enroll(store, slug: str, capabilities: list[str] | None = None) -> tuple[str, str]:
-    enrolled = store.enroll(_card(slug, capabilities))
+def _enroll(
+    store,
+    slug: str,
+    capabilities: list[str] | None = None,
+    *,
+    registry_scope: str = "full",
+) -> tuple[str, str]:
+    enrolled = store.enroll(_card(slug, capabilities, registry_scope=registry_scope))
     store.register(
         enrolled["agent_token"],
         {
-            "agent_card": _card(slug, capabilities),
+            "agent_card": _card(slug, capabilities, registry_scope=registry_scope),
             "connectivity_state": "connected",
             "current_capacity": 0,
             "max_capacity": 2,
@@ -152,6 +165,16 @@ def test_enroll_and_register_returns_agent_id(store):
     assert agents[0]["agent_id"] == agent_id
 
 
+def test_enroll_persists_registry_scope(store):
+    agent_id, _agent_token = _enroll(store, "channel-bot", registry_scope="channel")
+
+    agents = store.list_agents()
+
+    assert len(agents) == 1
+    assert agents[0]["agent_id"] == agent_id
+    assert agents[0]["registry_scope"] == "channel"
+
+
 def test_enroll_hashes_agent_token_at_rest(store):
     agent_id, agent_token = _enroll(store, "hashed-bot")
 
@@ -236,6 +259,49 @@ def test_create_routed_task_and_lookup(store):
     assert routed["delivery_id"]
     assert len(deliveries) == 1
     assert deliveries[0]["kind"] == "routed_task"
+
+
+def test_assert_agent_scope_rejects_wrong_scope(store):
+    _, agent_token = _enroll(store, "channel-bot", registry_scope="channel")
+
+    with pytest.raises(RegistryScopeError):
+        store.assert_agent_scope(agent_token, {"coordination", "full"})
+
+
+def test_channel_scope_poll_filters_routed_deliveries(store):
+    agent_id, agent_token = _enroll(store, "channel-bot", registry_scope="channel")
+    store.create_delivery(
+        target_agent_id=agent_id,
+        kind="channel_input",
+        payload={"conversation_id": "conv-1", "text": "hello"},
+    )
+    store.create_delivery(
+        target_agent_id=agent_id,
+        kind="routed_task",
+        payload={"routed_task_id": "task-1"},
+    )
+
+    deliveries = store.poll(agent_token, cursor=0, limit=20)["deliveries"]
+
+    assert [item["kind"] for item in deliveries] == ["channel_input"]
+
+
+def test_coordination_scope_poll_filters_channel_deliveries(store):
+    agent_id, agent_token = _enroll(store, "coord-bot", registry_scope="coordination")
+    store.create_delivery(
+        target_agent_id=agent_id,
+        kind="channel_input",
+        payload={"conversation_id": "conv-1", "text": "hello"},
+    )
+    store.create_delivery(
+        target_agent_id=agent_id,
+        kind="routed_task",
+        payload={"routed_task_id": "task-1"},
+    )
+
+    deliveries = store.poll(agent_token, cursor=0, limit=20)["deliveries"]
+
+    assert [item["kind"] for item in deliveries] == ["routed_task"]
 
 
 def test_create_routed_task_disabled_capability_raises(store):

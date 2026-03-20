@@ -58,7 +58,11 @@ from app.channels.registry.ingress import (
     update_catalog_skill,
 )
 from app.registry_service.backend import get_registry_store
-from app.registry_service.store_base import AbstractRegistryStore, CapabilityDisabledError
+from app.registry_service.store_base import (
+    AbstractRegistryStore,
+    CapabilityDisabledError,
+    RegistryScopeError,
+)
 from app.session_state import session_to_dict
 
 _REGISTRY_UI_SECURITY_HEADERS = {
@@ -151,6 +155,14 @@ configure_session_middleware(app)
 
 
 def _agent_permission_http_error(exc: PermissionError) -> HTTPException:
+    if isinstance(exc, RegistryScopeError):
+        return HTTPException(
+            status_code=403,
+            detail={
+                "error_code": "registry_scope_not_permitted",
+                "message": str(exc),
+            },
+        )
     detail = str(exc).strip().lower()
     if detail == "unknown agent token":
         return HTTPException(status_code=401, detail="Invalid or expired agent token.")
@@ -227,7 +239,7 @@ def search_agents(
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
-        # Auth check only; search itself does not need the token contents.
+        store.assert_agent_scope(agent_token, {"coordination", "full"})
         store.heartbeat(agent_token, {"connectivity_state": "connected"})
     except PermissionError as exc:
         raise _agent_permission_http_error(exc) from exc
@@ -241,6 +253,7 @@ def create_routed_task(
     store: AbstractRegistryStore = Depends(get_store),
 ) -> dict[str, Any]:
     try:
+        store.assert_agent_scope(agent_token, {"coordination", "full"})
         store.heartbeat(agent_token, {"connectivity_state": "connected"})
         return store.create_routed_task(payload)
     except PermissionError as exc:

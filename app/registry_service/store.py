@@ -22,16 +22,18 @@ from app.registry_service.store_base import (
     CapabilityDisabledError,
     conversation_status_for_event,
     decode_json_field,
+    delivery_kinds_for_registry_scope,
     effective_connectivity_state,
     ensure_json,
     hash_agent_token,
+    require_registry_scope,
     runtime_health_detail,
     runtime_health_generated_at,
     runtime_health_summary,
     utcnow_iso,
 )
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 _BASE_SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -47,6 +49,7 @@ CREATE TABLE IF NOT EXISTS agents (
     display_name TEXT NOT NULL,
     slug TEXT NOT NULL UNIQUE,
     role TEXT NOT NULL DEFAULT '',
+    registry_scope TEXT NOT NULL DEFAULT 'full',
     skills_json TEXT NOT NULL DEFAULT '[]',
     tags_json TEXT NOT NULL DEFAULT '[]',
     description TEXT NOT NULL DEFAULT '',
@@ -278,6 +281,16 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                 (hash_agent_token(str(row["agent_token"])), row["agent_id"]),
             )
 
+    def _migrate_v6_registry_scope(self, conn: sqlite3.Connection) -> None:
+        columns = self._table_columns(conn, "agents")
+        if "registry_scope" not in columns:
+            conn.execute(
+                "ALTER TABLE agents ADD COLUMN registry_scope TEXT NOT NULL DEFAULT 'full'"
+            )
+        conn.execute(
+            "UPDATE agents SET registry_scope = 'full' WHERE coalesce(registry_scope, '') = ''"
+        )
+
     def _run_migrations(self, conn: sqlite3.Connection) -> None:
         current = self._current_schema_version(conn)
         if current > _SCHEMA_VERSION:
@@ -308,6 +321,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             self._migrate_v5_agent_token_hashing(conn)
             self._set_schema_version(conn, 5)
             conn.commit()
+            current = 5
+        if current < 6:
+            self._migrate_v6_registry_scope(conn)
+            self._set_schema_version(conn, 6)
+            conn.commit()
 
     def _ensure_unique_slug(self, conn: sqlite3.Connection, requested: str) -> str:
         slug = requested
@@ -329,6 +347,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "display_name": row["display_name"],
             "slug": row["slug"],
             "role": row["role"],
+            "registry_scope": row["registry_scope"] if "registry_scope" in row_keys else "full",
             "capabilities": decode_json_field(row["skills_json"], []),
             "tags": decode_json_field(row["tags_json"], []),
             "description": row["description"],
@@ -533,11 +552,11 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             conn.execute(
                 """
                 INSERT INTO agents (
-                    agent_id, agent_token, display_name, slug, role,
+                    agent_id, agent_token, display_name, slug, role, registry_scope,
                     skills_json, tags_json, description, provider, mode,
                     connectivity_state, current_capacity, max_capacity,
                     channel_capabilities_json, version, created_at, updated_at, last_heartbeat_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     agent_id,
@@ -545,6 +564,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
                     requested_card.get("display_name") or slug,
                     slug,
                     requested_card.get("role", ""),
+                    requested_card.get("registry_scope", "full") or "full",
                     ensure_json(declared_capabilities(requested_card)),
                     ensure_json(requested_card.get("tags", [])),
                     requested_card.get("description", ""),
@@ -566,6 +586,13 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             "agent_token": agent_token,
             "poll_cursor": "0",
         }
+
+    def assert_agent_scope(self, agent_token: str, required_scopes: set[str]) -> None:
+        with self._connect() as conn:
+            row = self._token_row(conn, agent_token)
+            if row is None:
+                raise PermissionError("Unknown agent token")
+            require_registry_scope(row, required_scopes)
 
     def register(self, agent_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = utcnow_iso()
@@ -655,6 +682,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            require_registry_scope(row, {"channel", "full"})
             for event in events:
                 conversation_id = event["conversation_id"]
                 conversation = conn.execute(
@@ -703,6 +731,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            require_registry_scope(row, {"channel", "full"})
             conn.execute(
                 """
                 INSERT INTO conversations (
@@ -1014,18 +1043,35 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
-            deliveries = conn.execute(
-                """
-                SELECT seq, delivery_id, kind, payload_json, state, created_at
-                FROM deliveries
-                WHERE target_agent_id = ?
-                  AND state = 'queued'
-                  AND seq > ?
-                ORDER BY seq ASC
-                LIMIT ?
-                """,
-                (row["agent_id"], cursor, limit),
-            ).fetchall()
+            allowed_kinds = delivery_kinds_for_registry_scope(row["registry_scope"])
+            if allowed_kinds is None:
+                deliveries = conn.execute(
+                    """
+                    SELECT seq, delivery_id, kind, payload_json, state, created_at
+                    FROM deliveries
+                    WHERE target_agent_id = ?
+                      AND state = 'queued'
+                      AND seq > ?
+                    ORDER BY seq ASC
+                    LIMIT ?
+                    """,
+                    (row["agent_id"], cursor, limit),
+                ).fetchall()
+            else:
+                placeholders = ",".join("?" for _ in allowed_kinds)
+                deliveries = conn.execute(
+                    f"""
+                    SELECT seq, delivery_id, kind, payload_json, state, created_at
+                    FROM deliveries
+                    WHERE target_agent_id = ?
+                      AND state = 'queued'
+                      AND seq > ?
+                      AND kind IN ({placeholders})
+                    ORDER BY seq ASC
+                    LIMIT ?
+                    """,
+                    (row["agent_id"], cursor, *allowed_kinds, limit),
+                ).fetchall()
             delivery_ids = [item["delivery_id"] for item in deliveries]
             if delivery_ids:
                 placeholders = ",".join("?" for _ in delivery_ids)
@@ -1086,6 +1132,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            require_registry_scope(row, {"coordination", "full"})
             conn.execute(
                 """
                 UPDATE routed_tasks
@@ -1117,6 +1164,7 @@ class RegistrySQLiteStore(AbstractRegistryStore):
             row = self._token_row(conn, agent_token)
             if row is None:
                 raise PermissionError("Unknown agent token")
+            require_registry_scope(row, {"coordination", "full"})
             task = conn.execute(
                 "SELECT * FROM routed_tasks WHERE routed_task_id = ?",
                 (routed_task_id,),

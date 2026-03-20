@@ -51,6 +51,10 @@ class RegistryRuntime:
         self._registry_by_id = {registry.registry_id: registry for registry in registries}
         self._channels_registered = False
 
+    @property
+    def registries(self) -> tuple[RegistryConnectionConfig, ...]:
+        return self._registries
+
     async def start(self, *, stop_event: asyncio.Event) -> None:
         if self._tasks:
             return

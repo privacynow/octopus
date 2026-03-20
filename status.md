@@ -706,3 +706,20 @@
   - the control-plane processor loop starts only for registry-owning roles, while shared worker roles with registries still receive services and channel registration without starting a processor
   - the shared test fixture now follows the same startup-owned services/channel-registration model as production composition
   - full suite status after slice 5: `1881 passed, 23 skipped`
+- Complete: Slice 6A cut Telegram egress to ports.
+  Scope:
+  - rewired `app/channels/telegram/egress.py` so binding, input mirroring, outcome mirroring, and generic timeline publication all go through `services.control_plane.conversation_projection`
+  - removed Telegram egress imports of bridge mirroring helpers and removed its direct `registry_runtime` branch/state
+  - updated `TelegramChannelBootstrap.build_egress()` to inject the startup-owned `BotServices` into every Telegram egress instance created by the dispatcher
+  - preserved the surrounding worker/delivery call shapes during scaffolding: dispatcher callers can still pass old kwargs, but Telegram egress now ignores the registry-runtime detail entirely
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_telegram_channel_egress.py tests/test_telegram_channel_state.py tests/test_telegram_worker_timeline.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - the slice removes one full parallel path instead of adding another adapter layer: Telegram egress no longer imports or branches on bridge/runtime control-plane helpers at all
+  - the services injection point stays at the channel bootstrap, which keeps the control-plane dependency startup-owned and avoids smuggling a new runtime-specific collaborator through worker callsites ahead of schedule
+  - timeline publication now forwards `event_id` when present, which keeps the new port path compatible with the existing idempotent timeline model instead of silently dropping dedupe metadata
+  Verified:
+  - Telegram egress now depends only on the conversation-projection capability port for bind/input/outcome/timeline projection
+  - positive and negative egress paths are covered: normal projection, missing-conversation bind skip, disabled input mirroring skip, outcome projection, and timeline event-id forwarding
+  - full suite status after slice 6A: `1885 passed, 23 skipped`

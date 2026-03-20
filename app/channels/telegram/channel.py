@@ -73,7 +73,7 @@ class TelegramChannelBootstrap(ChannelBootstrap):
             chat_id,
             config=config,
             conversation_ref=conversation_ref,
-            registry_runtime=kw.get("registry_runtime"),
+            services=self._services,
             mirror_input_event=(kw.get("source", "telegram") == "telegram"),
             target_message_id=kw.get("target_message_id"),
         )

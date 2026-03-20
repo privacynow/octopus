@@ -7,7 +7,12 @@ from typing import Any
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.session_io import save as save_session
 from app.channels.telegram.state import TelegramRuntime
-from app.agents.bridge import publish_timeline_event, summarize_text, telegram_conversation_ref
+from app.agents.bridge import (
+    publish_timeline_event,
+    publish_timeline_to_registries,
+    summarize_text,
+    telegram_conversation_ref,
+)
 from app.agents.delegation import (
     DelegationRuntime,
     handle_delegation_approve as handle_channel_delegation_approve,
@@ -67,6 +72,17 @@ async def publish_delegation_proposed_event(
     publisher = getattr(message, "publish_timeline", None)
     if callable(publisher):
         await publisher(event)
+        return
+    if runtime.registry_runtime is not None:
+        await publish_timeline_to_registries(
+            runtime.registry_runtime,
+            conversation_ref=delegation.conversation_ref,
+            kind=event.kind,
+            title=event.title,
+            body=event.body,
+            status=event.status,
+            event_id=event.event_id,
+        )
         return
     await publish_timeline_event(
         runtime.config,

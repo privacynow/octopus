@@ -25,7 +25,8 @@
   still partially coupled to progress-text handling, and dispatcher
   readiness still pays the cost of constructing full egress objects for
   probes.
-- Phase 11 remediation is now the active cleanup track.
+- Phase 11 remediation landed green and closed the remaining cleanup
+  track.
 - Phase 11A landed green: routed-task execution no longer emits
   projected task-ref lifecycle side effects during worker dispatch or
   finalization.

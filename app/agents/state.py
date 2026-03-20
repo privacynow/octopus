@@ -1,11 +1,13 @@
-"""Local persisted agent runtime state (registry-issued identity and cursors)."""
+"""Local persisted agent runtime state and stable bot identity."""
 
 from __future__ import annotations
 
 import json
 import logging
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from app.registry_errors import normalize_registry_error_state
 
@@ -22,6 +24,53 @@ class AgentRuntimeState:
     connectivity_state: str = "standalone"
     last_error: str = ""
     last_error_detail: str = ""
+
+
+@dataclass(frozen=True)
+class BotIdentityState:
+    bot_id: str
+    created_at: str
+
+
+def bot_identity_path(data_dir: Path) -> Path:
+    return data_dir / "agent" / "bot_identity.json"
+
+
+def _new_bot_identity() -> BotIdentityState:
+    return BotIdentityState(
+        bot_id=uuid4().hex,
+        created_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    )
+
+
+def _save_bot_identity_state(path: Path, state: BotIdentityState) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(asdict(state), indent=2, sort_keys=True))
+    path.chmod(0o600)
+
+
+def load_bot_identity_state(data_dir: Path) -> BotIdentityState:
+    path = bot_identity_path(data_dir)
+    if not path.exists():
+        state = _new_bot_identity()
+        _save_bot_identity_state(path, state)
+        return state
+    try:
+        raw = json.loads(path.read_text())
+        bot_id = str(raw.get("bot_id", "")).strip()
+        created_at = str(raw.get("created_at", "")).strip()
+        if bot_id and created_at:
+            return BotIdentityState(bot_id=bot_id, created_at=created_at)
+        raise ValueError("missing required bot identity fields")
+    except Exception:
+        log.warning("Bot identity load failed, regenerating", exc_info=True)
+        state = _new_bot_identity()
+        _save_bot_identity_state(path, state)
+        return state
+
+
+def bot_identity(data_dir: Path) -> str:
+    return load_bot_identity_state(data_dir).bot_id
 
 
 def agent_state_path(data_dir: Path) -> Path:

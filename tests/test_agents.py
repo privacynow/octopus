@@ -12,12 +12,12 @@ from app.agents.bridge import admit_registry_delivery, conversation_key_for_ref
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.runtime import AgentRuntime
-from app.agents.state import AgentRuntimeState, load_agent_runtime_state
+from app.agents.state import AgentRuntimeState, bot_identity, load_agent_runtime_state
 from app.agents.types import AgentDiscoveryQuery
 from app.config import derive_agent_slug
 from app.runtime.inbound_types import deserialize_inbound
 from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
-from app.agents.state import save_agent_runtime_state
+from app.agents.state import load_bot_identity_state, save_agent_runtime_state
 from tests.support.config_support import make_config
 from tests.support.handler_support import fresh_env
 
@@ -80,6 +80,34 @@ def test_save_agent_runtime_state_uses_private_file_permissions(tmp_path: Path):
     mode = state_path.stat().st_mode & 0o777
 
     assert mode == 0o600
+
+
+def test_bot_identity_creates_and_reuses_stable_runtime_id(tmp_path: Path):
+    first = bot_identity(tmp_path)
+    second = bot_identity(tmp_path)
+    state = load_bot_identity_state(tmp_path)
+    identity_path = tmp_path / "agent" / "bot_identity.json"
+
+    assert first == second == state.bot_id
+    assert len(first) == 32
+    assert state.created_at.endswith("Z")
+    assert identity_path.exists()
+    assert identity_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_bot_identity_regenerates_when_file_is_corrupt(tmp_path: Path, caplog):
+    identity_path = tmp_path / "agent" / "bot_identity.json"
+    identity_path.parent.mkdir(parents=True, exist_ok=True)
+    identity_path.write_text("{not-json", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        new_id = bot_identity(tmp_path)
+
+    state = load_bot_identity_state(tmp_path)
+
+    assert new_id == state.bot_id
+    assert state.created_at.endswith("Z")
+    assert any("Bot identity load failed" in record.message for record in caplog.records)
 
 
 async def test_agent_runtime_standalone_marks_state(tmp_path: Path):

@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import dataclasses
 import logging
-import uuid
 from typing import Any, AsyncIterator
 
 from app import work_queue
@@ -19,7 +18,6 @@ from app.agents.delegation import (
     handle_delegation_approve as handle_channel_delegation_approve,
     handle_delegation_cancel as handle_channel_delegation_cancel,
 )
-from app.agents.types import TimelineEvent
 from app.channels.registry.refs import parse_registry_ref
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.conversation import handle_worker_conversation_action
@@ -227,37 +225,15 @@ async def _publish_timeline_event_for_runtime(
     conversation_ref = str(kwargs.get("conversation_ref", ""))
     if not conversation_ref:
         return
-    dispatcher = _channel_dispatcher(runtime)
-    if dispatcher.channel_type_for_ref(conversation_ref) == "telegram":
-        await runtime.services.control_plane.conversation_projection.publish_external_timeline(
-            conversation_ref=conversation_ref,
-            kind=str(kwargs.get("kind", "")),
-            title=str(kwargs.get("title", "")),
-            body=str(kwargs.get("body", "")),
-            status=str(kwargs.get("status", "")),
-            progress=kwargs.get("progress"),
-            metadata=kwargs.get("metadata"),
-            event_id=kwargs.get("event_id"),
-        )
-        return
-    channel_egress = dispatcher.create_egress(
-        conversation_ref,
-        config=runtime.config,
-        bot=runtime.bot_instance,
-        conversation_key=conversation_ref,
-        source="registry",
-    )
-    await channel_egress.publish_timeline(
-        TimelineEvent(
-            event_id=str(kwargs.get("event_id") or uuid.uuid4().hex),
-            conversation_id=conversation_ref,
-            kind=str(kwargs.get("kind", "")),
-            title=str(kwargs.get("title", "")),
-            body=str(kwargs.get("body", "")),
-            status=str(kwargs.get("status", "")),
-            progress=kwargs.get("progress"),
-            metadata=dict(kwargs.get("metadata") or {}),
-        )
+    await runtime.services.control_plane.conversation_projection.publish_external_timeline(
+        conversation_ref=conversation_ref,
+        kind=str(kwargs.get("kind", "")),
+        title=str(kwargs.get("title", "")),
+        body=str(kwargs.get("body", "")),
+        status=str(kwargs.get("status", "")),
+        progress=kwargs.get("progress"),
+        metadata=kwargs.get("metadata"),
+        event_id=kwargs.get("event_id"),
     )
 
 

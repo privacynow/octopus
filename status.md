@@ -7,12 +7,46 @@
 - Baseline branch: `feature/multi_registry`
 - Baseline goal: replace singleton registry assumptions and hardwired channel dispatch with per-connection registry runtime state, dispatcher-owned channel routing, and optional Telegram.
 
+## Current State
+
+- Phases 1-8 of the control-plane rollout landed and the repo is green.
+- An initial post-rollout bug-fix pass also landed, but deeper review found residual architecture drift that still needs removal.
+- The remaining work is now tracked explicitly in `PLAN-control-plane-bus.md` Phase 9:
+  - worker timeline publication still has a non-target-architecture split
+  - registry delivery still has direct bridge-driven timeline side effects
+  - generic health/discovery still leaks `registry_scope`
+  - compatibility translators and singleton/default fallbacks still remain
+  - some tests still encode scaffolding behavior instead of the final architecture
+- Status should be read as: rollout complete through Phase 8, remediation not yet complete.
+
 ## Slice Log
 
-- Complete: Control-plane bug-fix pass after phase-8 rollout.
+- Complete: Phase 9A remediation — worker timeline single owner path.
+  Scope:
+  - collapsed `app/channels/telegram/worker.py:_publish_timeline_event_for_runtime()` to one control-plane projection path for all conversation refs
+  - removed the worker-side surface split that branched between direct projection for Telegram refs and dispatcher-owned registry egress for registry refs
+  - deleted the dead `FinalizationContext.registry_id` field so the finalization contract matches the post-`authority_ref` architecture
+  - updated worker timeline tests to assert the final single-path projection contract for both Telegram and registry refs
+  - updated the zero-import gate so removing an old bridge import entirely is treated as success, not failure
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_telegram_worker_timeline.py tests/test_execution_finalization.py tests/test_zero_import_gates.py`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified `worker.py` no longer branches on channel type inside `_publish_timeline_event_for_runtime()`
+  - verified registry-ref usage publication now flows through `ConversationProjectionPort` just like Telegram refs
+  - verified `FinalizationContext` no longer carries dead registry-era state
+  Review:
+  - this slice removed orchestration drift instead of wrapping it in a new helper or fallback
+  - the fix stayed on the existing control-plane seam; no new service field, adapter, or runtime collaborator was introduced
+  - the grep gate now matches the intended end state: old imports may disappear entirely
+  Verified:
+  - worker timeline publication has one owner path
+  - `FinalizationContext` no longer exposes the dead `registry_id` field
+  - full suite status after Phase 9A: `1900 passed, 23 skipped`
+- Complete: Initial control-plane bug-fix pass after phase-8 rollout.
   Scope:
   - removed the remaining worker-side registry timeline bypass in `app/channels/telegram/worker.py`; non-Telegram timeline publication now reuses dispatcher-owned channel egress instead of calling registry HTTP helpers from `app/agents/bridge.py`
-  - removed dead `registry_id` state from `FinalizationContext` and dropped the stale worker lambda plumbing that only existed to feed the old bridge fallback
+  - dropped the stale worker lambda plumbing that only existed to feed the old bridge fallback; deeper review later found the dead `FinalizationContext.registry_id` field still remains and is now tracked in Phase 9 remediation
   - stopped Telegram worker authority resolution from reading `runtime.config.agent_registries` directly; it now uses only explicit event provenance or parseable registry refs
   - internalized registry-only bridge helpers by renaming `bind_conversation()` / `publish_timeline_event()` to private bridge functions and updating the registry delivery runtime/tests to use the registry-owned path
   - tightened control-plane claim ownership by threading the existing `claimed_at` field through `ControlCommand`, `ControlPlaneBus`, `ProcessorRunner`, and both SQLite/Postgres stores so stale claimants cannot complete/fail/dead-letter/renew a reclaimed command
@@ -22,14 +56,14 @@
   - `./.venv/bin/python -m pytest -q tests/test_agents.py`
   - `./.venv/bin/python -m pytest -q`
   Direct checks:
-  - verified worker timeline publication no longer imports or calls registry bridge publish helpers, and registry refs stay single-scoped through dispatcher-owned registry egress
+  - verified worker timeline publication no longer imports or calls registry bridge publish helpers; registry refs currently route through dispatcher-owned registry egress
   - verified stale claim tokens can no longer terminally update a reclaimed control-plane command in both SQLite and Postgres contract tests
   - verified the bridge-helper internalization did not regress registry delivery handling or the agent-facing test surface
   Review:
   - the fix pass stayed inside the existing architecture: dispatcher/egress for outbound channel routing, private registry bridge helpers for registry-owned delivery code, and the existing `claimed_at` column as the claim token instead of inventing a second bus ownership mechanism
-  - no new abstractions, alternate flows, or extra runtime state were introduced; the changes removed a leaked path and tightened ownership on the current control-plane bus
+  - no new abstractions, alternate flows, or extra runtime state were introduced; later review found additional residual drift that is now tracked in Phase 9 rather than treating this pass as the final architecture cleanup
   Verified:
-  - worker timeline publication is fully bus-backed for both Telegram and registry refs
+  - the direct bridge-helper leak from Telegram worker timeline publication is gone
   - stale control-plane claimants can no longer win completion/failure races after reclaim
   - full suite status after the bug-fix pass: `1900 passed, 23 skipped`
 - Complete: Slice 1 contracts and stable bot identity.

@@ -16,6 +16,7 @@ class ControlCommand(BaseModel):
     capability: str = Field(..., min_length=1)
     operation: str = Field(..., min_length=1)
     payload_json: str = Field(..., min_length=2)
+    claimed_at: str = ""
     priority: int = 0
     correlation_id: str = ""
     authority_ref: str = Field(..., min_length=1)

@@ -10,11 +10,11 @@ from typing import Any
 from app import work_queue
 from app.agents.registry_capabilities import registry_authority_ref
 from app.agents.bridge import (
+    _publish_timeline_event,
     admit_registry_delivery,
     build_registry_action_envelope,
     build_registry_message_delivery,
     conversation_key_for_ref,
-    publish_timeline_event,
     qualify_registry_parent_ref,
 )
 from app.agents.types import RoutedTaskResult
@@ -191,7 +191,7 @@ async def handle_registry_delivery(
             follow_up_questions=tuple(str(item) for item in (result.get("follow_up_questions", ()) or ()) if item),
             completed_at=str(result.get("completed_at", "") or ""),
         )
-        await publish_timeline_event(
+        await _publish_timeline_event(
             config,
             conversation_ref=parent_conversation_id,
             kind="delegated_result",
@@ -261,7 +261,7 @@ async def handle_registry_delivery(
                     parent_conversation_id,
                     exc_info=True,
                 )
-            await publish_timeline_event(
+            await _publish_timeline_event(
                 config,
                 conversation_ref=parent_conversation_id,
                 kind="delegation_ready",
@@ -272,7 +272,7 @@ async def handle_registry_delivery(
                 registry_id=registry_id,
             )
         elif admit_status == "duplicate":
-            await publish_timeline_event(
+            await _publish_timeline_event(
                 config,
                 conversation_ref=parent_conversation_id,
                 kind="delegation_ready",

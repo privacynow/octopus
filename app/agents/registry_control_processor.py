@@ -262,7 +262,7 @@ class RegistryControlProcessor(ControlProcessor):
         request = PublishHealthRequest.model_validate_json(command.payload_json)
         runtime_health: dict[str, Any] | None = None
         if request.runtime_health_json:
-            runtime_health = dict(json.loads(request.runtime_health_json))
+            runtime_health = json.loads(request.runtime_health_json)
         await client.heartbeat(
             connectivity_state=request.connectivity_state,
             current_capacity=request.current_capacity,

@@ -151,7 +151,7 @@ async def test_finalization_reports_routed_task_result() -> None:
 
 
 @pytest.mark.asyncio
-async def test_finalization_reports_routed_task_result_through_explicit_registry_id() -> None:
+async def test_finalization_reports_routed_task_result_through_explicit_authority_ref() -> None:
     reported: list[dict[str, object]] = []
 
     class FakeTaskRouting:
@@ -182,7 +182,6 @@ async def test_finalization_reports_routed_task_result_through_explicit_registry
             runtime_chat="registry:prod:task:task-3b",
             conversation_ref="registry:prod:task:task-3b",
             routed_task_id="task-3b",
-            registry_id="prod",
             authority_ref=registry_authority_ref("prod"),
             task_routing=FakeTaskRouting(),
         ),

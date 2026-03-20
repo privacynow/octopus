@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import app.channels.telegram.worker as telegram_worker
+from app.agents.types import TimelineEvent
 from app.channels.telegram.state import build_telegram_runtime
 from app.ports.agent_directory import NoOpAgentDirectory
 from app.ports.health_publication import NoOpHealthPublication
@@ -66,7 +67,7 @@ async def test_publish_timeline_event_for_runtime_projects_telegram_refs_via_por
 
 
 @pytest.mark.asyncio
-async def test_publish_timeline_event_for_runtime_keeps_registry_refs_single_scoped(monkeypatch):
+async def test_publish_timeline_event_for_runtime_keeps_registry_refs_single_scoped():
     runtime = build_telegram_runtime(
         make_config(data_dir=Path("/tmp/telegram-worker-timeline-single")),
         FakeProvider("codex"),
@@ -77,34 +78,87 @@ async def test_publish_timeline_event_for_runtime_keeps_registry_refs_single_sco
             "telegram" if conversation_ref.startswith("telegram:") else "registry"
         )
     )
-    published: list[dict[str, object]] = []
+    published: list[TimelineEvent] = []
 
-    async def _record(config, **kwargs):
-        published.append({"config": config, **kwargs})
+    class _FakeRegistryEgress:
+        async def publish_timeline(self, event):
+            published.append(event)
 
     runtime.services.control_plane.conversation_projection.publish_external_timeline = AsyncMock(
         side_effect=AssertionError("control-plane projection path should not be used for registry refs")
     )
+    created: list[dict[str, object]] = []
 
-    monkeypatch.setattr(telegram_worker, "publish_single_registry_timeline", _record)
+    def _create_egress(conversation_ref, *, config, **kwargs):
+        created.append(
+            {
+                "conversation_ref": conversation_ref,
+                "config": config,
+                **kwargs,
+            }
+        )
+        return _FakeRegistryEgress()
+
+    runtime.channel_dispatcher = SimpleNamespace(
+        channel_type_for_ref=lambda conversation_ref: (
+            "telegram" if conversation_ref.startswith("telegram:") else "registry"
+        ),
+        create_egress=_create_egress,
+    )
 
     await telegram_worker._publish_timeline_event_for_runtime(
         runtime,
         config=runtime.config,
-        registry_id="prod",
         conversation_ref="registry:prod:conversation:conv-1",
         kind="usage",
         title="Token usage",
         metadata={"prompt_tokens": 12},
     )
 
-    assert published == [
+    assert created == [
         {
+            "bot": runtime.bot_instance,
             "config": runtime.config,
-            "registry_id": "prod",
             "conversation_ref": "registry:prod:conversation:conv-1",
-            "kind": "usage",
-            "title": "Token usage",
-            "metadata": {"prompt_tokens": 12},
+            "conversation_key": "registry:prod:conversation:conv-1",
+            "source": "registry",
         }
     ]
+    assert len(published) == 1
+    assert published[0].conversation_id == "registry:prod:conversation:conv-1"
+    assert published[0].kind == "usage"
+    assert published[0].title == "Token usage"
+    assert published[0].metadata == {"prompt_tokens": 12}
+
+
+def test_resolve_registry_authority_ref_uses_explicit_or_parseable_provenance_only():
+    runtime = build_telegram_runtime(
+        make_config(data_dir=Path("/tmp/telegram-worker-authority")),
+        FakeProvider("codex"),
+        services=_services(),
+    )
+
+    assert (
+        telegram_worker._resolve_registry_authority_ref(
+            runtime,
+            authority_ref="registry:alpha",
+            conversation_ref="telegram:bot-1:12345",
+        )
+        == "registry:alpha"
+    )
+    assert (
+        telegram_worker._resolve_registry_authority_ref(
+            runtime,
+            authority_ref="",
+            conversation_ref="registry:prod:conversation:conv-1",
+        )
+        == "registry:prod"
+    )
+    assert (
+        telegram_worker._resolve_registry_authority_ref(
+            runtime,
+            authority_ref="",
+            conversation_ref="telegram:bot-1:12345",
+        )
+        == ""
+    )

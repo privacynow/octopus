@@ -63,25 +63,38 @@ class ControlPlaneBus:
         self,
         command_id: str,
         *,
+        claimed_at: str,
         result_json: str | None = None,
     ) -> None:
-        self._store().complete(self._data_dir, command_id, result_json=result_json)
+        self._store().complete(
+            self._data_dir,
+            command_id,
+            claimed_at=claimed_at,
+            result_json=result_json,
+        )
 
-    async def fail(self, command_id: str, *, error: str) -> None:
-        self._store().fail(self._data_dir, command_id, error=error)
+    async def fail(self, command_id: str, *, claimed_at: str, error: str) -> None:
+        self._store().fail(self._data_dir, command_id, claimed_at=claimed_at, error=error)
 
-    async def dead_letter(self, command_id: str, *, reason: str) -> None:
-        self._store().dead_letter(self._data_dir, command_id, reason=reason)
+    async def dead_letter(self, command_id: str, *, claimed_at: str, reason: str) -> None:
+        self._store().dead_letter(
+            self._data_dir,
+            command_id,
+            claimed_at=claimed_at,
+            reason=reason,
+        )
 
     async def renew_lease(
         self,
         command_id: str,
         *,
+        claimed_at: str,
         extension_seconds: float = 30.0,
     ) -> bool:
         return self._store().renew_lease(
             self._data_dir,
             command_id,
+            claimed_at=claimed_at,
             extension_seconds=extension_seconds,
         )
 

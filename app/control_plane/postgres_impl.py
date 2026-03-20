@@ -23,6 +23,14 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _iso_or_str(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
 @contextmanager
 def _cur(conn):
     cur = conn.cursor(row_factory=dict_row)
@@ -53,6 +61,7 @@ def _row_to_command(row: dict[str, Any]) -> ControlCommand:
         capability=row["capability"],
         operation=row["operation"],
         payload_json=row["payload_json"],
+        claimed_at=_iso_or_str(row.get("claimed_at")),
         priority=row["priority"],
         correlation_id=row.get("correlation_id") or "",
         authority_ref=row["authority_ref"],
@@ -223,7 +232,13 @@ def poll_commands(
     return claimed
 
 
-def complete(conn, command_id: str, *, result_json: str | None = None) -> None:
+def complete(
+    conn,
+    command_id: str,
+    *,
+    claimed_at: str,
+    result_json: str | None = None,
+) -> None:
     now = _utcnow()
     with _write_tx(conn), _cur(conn) as cur:
         cur.execute(
@@ -233,15 +248,18 @@ def complete(conn, command_id: str, *, result_json: str | None = None) -> None:
                 result_json = %s,
                 error = NULL,
                 completed_at = %s,
-                lease_expires_at = NULL
+                claimed_at = NULL,
+                lease_expires_at = NULL,
+                next_attempt_at = NULL
             WHERE command_id = %s
               AND state = 'claimed'
+              AND claimed_at = %s
             """,
-            (result_json, now, command_id),
+            (result_json, now, command_id, claimed_at),
         )
 
 
-def fail(conn, command_id: str, *, error: str) -> None:
+def fail(conn, command_id: str, *, claimed_at: str, error: str) -> None:
     now = _utcnow()
     with _write_tx(conn), _cur(conn) as cur:
         cur.execute(
@@ -249,11 +267,13 @@ def fail(conn, command_id: str, *, error: str) -> None:
             SELECT state, retry_count, max_retries
             FROM {_SCHEMA}.control_plane_commands
             WHERE command_id = %s
+              AND state = 'claimed'
+              AND claimed_at = %s
             """,
-            (command_id,),
+            (command_id, claimed_at),
         )
         row = cur.fetchone()
-        if row is None or row["state"] != "claimed":
+        if row is None:
             return
         record_failure = run_control_command_event(
             ControlCommandSnapshot(
@@ -288,8 +308,10 @@ def fail(conn, command_id: str, *, error: str) -> None:
                     next_attempt_at = %s,
                     completed_at = NULL
                 WHERE command_id = %s
+                  AND state = 'claimed'
+                  AND claimed_at = %s
                 """,
-                (error, retry.retry_count, backoff_at, command_id),
+                (error, retry.retry_count, backoff_at, command_id, claimed_at),
             )
             return
         cur.execute(
@@ -302,12 +324,14 @@ def fail(conn, command_id: str, *, error: str) -> None:
                 next_attempt_at = NULL,
                 completed_at = %s
             WHERE command_id = %s
+              AND state = 'claimed'
+              AND claimed_at = %s
             """,
-            (error, now, command_id),
+            (error, now, command_id, claimed_at),
         )
 
 
-def dead_letter(conn, command_id: str, *, reason: str) -> None:
+def dead_letter(conn, command_id: str, *, claimed_at: str, reason: str) -> None:
     now = _utcnow()
     with _write_tx(conn), _cur(conn) as cur:
         cur.execute(
@@ -320,13 +344,14 @@ def dead_letter(conn, command_id: str, *, reason: str) -> None:
                 lease_expires_at = NULL,
                 next_attempt_at = NULL
             WHERE command_id = %s
-              AND state IN ('pending', 'claimed', 'failed')
+              AND state = 'claimed'
+              AND claimed_at = %s
             """,
-            (reason, now, command_id),
+            (reason, now, command_id, claimed_at),
         )
 
 
-def renew_lease(conn, command_id: str, *, extension_seconds: float = 30.0) -> bool:
+def renew_lease(conn, command_id: str, *, claimed_at: str, extension_seconds: float = 30.0) -> bool:
     with _write_tx(conn), _cur(conn) as cur:
         cur.execute(
             f"""
@@ -334,8 +359,9 @@ def renew_lease(conn, command_id: str, *, extension_seconds: float = 30.0) -> bo
             SET lease_expires_at = %s
             WHERE command_id = %s
               AND state = 'claimed'
+              AND claimed_at = %s
             """,
-            (_utcnow() + timedelta(seconds=extension_seconds), command_id),
+            (_utcnow() + timedelta(seconds=extension_seconds), command_id, claimed_at),
         )
         return cur.rowcount == 1
 
@@ -504,31 +530,44 @@ class PostgresControlPlaneStore:
                 lease_seconds=lease_seconds,
             )
 
-    def complete(self, data_dir: Path, command_id: str, *, result_json: str | None = None) -> None:
+    def complete(
+        self,
+        data_dir: Path,
+        command_id: str,
+        *,
+        claimed_at: str,
+        result_json: str | None = None,
+    ) -> None:
         del data_dir
         with self._conn() as conn:
-            complete(conn, command_id, result_json=result_json)
+            complete(conn, command_id, claimed_at=claimed_at, result_json=result_json)
 
-    def fail(self, data_dir: Path, command_id: str, *, error: str) -> None:
+    def fail(self, data_dir: Path, command_id: str, *, claimed_at: str, error: str) -> None:
         del data_dir
         with self._conn() as conn:
-            fail(conn, command_id, error=error)
+            fail(conn, command_id, claimed_at=claimed_at, error=error)
 
-    def dead_letter(self, data_dir: Path, command_id: str, *, reason: str) -> None:
+    def dead_letter(self, data_dir: Path, command_id: str, *, claimed_at: str, reason: str) -> None:
         del data_dir
         with self._conn() as conn:
-            dead_letter(conn, command_id, reason=reason)
+            dead_letter(conn, command_id, claimed_at=claimed_at, reason=reason)
 
     def renew_lease(
         self,
         data_dir: Path,
         command_id: str,
         *,
+        claimed_at: str,
         extension_seconds: float = 30.0,
     ) -> bool:
         del data_dir
         with self._conn() as conn:
-            return renew_lease(conn, command_id, extension_seconds=extension_seconds)
+            return renew_lease(
+                conn,
+                command_id,
+                claimed_at=claimed_at,
+                extension_seconds=extension_seconds,
+            )
 
     def reclaim_expired(self, data_dir: Path) -> int:
         del data_dir

@@ -1,0 +1,1275 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+OCTOPUS_SCRIPT="${BASH_SOURCE[0]:-$0}"
+REPO_DIR="$(cd "$(dirname "$OCTOPUS_SCRIPT")" && pwd)"
+cd "$REPO_DIR"
+
+# shellcheck source=scripts/lib/state.sh
+source "$REPO_DIR/scripts/lib/state.sh"
+# shellcheck source=scripts/lib/bot.sh
+source "$REPO_DIR/scripts/lib/bot.sh"
+# shellcheck source=scripts/lib/docker.sh
+source "$REPO_DIR/scripts/lib/docker.sh"
+# shellcheck source=scripts/lib/provider.sh
+source "$REPO_DIR/scripts/lib/provider.sh"
+# shellcheck source=scripts/lib/registry.sh
+source "$REPO_DIR/scripts/lib/registry.sh"
+# shellcheck source=scripts/lib/ui.sh
+source "$REPO_DIR/scripts/lib/ui.sh"
+
+octopus_error() {
+  printf '%s\n' "$1" >&2
+}
+
+unsupported_slice_command() {
+  octopus_error "$1"
+  return 1
+}
+
+bot_identity_label() {
+  local slug="$1" display="" username="" label=""
+  display="$(bot_display_name "$slug")"
+  username="$(bot_telegram_username "$slug")"
+  label="${display:-$slug}"
+  [ -n "$username" ] && label="${label} (@${username})"
+  printf '%s\n' "$label"
+}
+
+print_bot_choices() {
+  local slugs=() slug="" index=1
+  while IFS= read -r slug; do
+    [ -n "$slug" ] && slugs+=("$slug")
+  done < <(list_bot_slugs)
+  for slug in "${slugs[@]}"; do
+    printf '  %d. %s\n' "$index" "$(bot_identity_label "$slug")"
+    index=$((index + 1))
+  done
+}
+
+resolve_bot_slug() {
+  local requested="${1:-}" choice="" slug=""
+  local slugs=()
+  if [ -n "$requested" ]; then
+    if [ -f "$(bot_env_file "$requested")" ]; then
+      printf '%s\n' "$requested"
+      return 0
+    fi
+    octopus_error "No bot named '$requested' is configured."
+    return 1
+  fi
+
+  while IFS= read -r slug; do
+    [ -n "$slug" ] && slugs+=("$slug")
+  done < <(list_bot_slugs)
+  case "${#slugs[@]}" in
+    0)
+      octopus_error "No bots configured. Run ./octopus to get started."
+      return 1
+      ;;
+    1)
+      printf '%s\n' "${slugs[0]}"
+      return 0
+      ;;
+  esac
+
+  printf 'Select a bot:\n'
+  print_bot_choices
+  while true; do
+    read -r -p "Bot slug or number: " choice || return 1
+    case "$choice" in
+      '' ) octopus_error "Choose a bot to continue." ;;
+      *[!0-9]*)
+        if [ -f "$(bot_env_file "$choice")" ]; then
+          printf '%s\n' "$choice"
+          return 0
+        fi
+        octopus_error "No bot named '$choice' is configured."
+        ;;
+      *)
+        if [ "$choice" -ge 1 ] 2>/dev/null && [ "$choice" -le "${#slugs[@]}" ]; then
+          slug="${slugs[$((choice - 1))]}"
+          printf '%s\n' "$slug"
+          return 0
+        fi
+        octopus_error "Choose one of the listed bots."
+        ;;
+    esac
+  done
+}
+
+docker_status_for_slug() {
+  local slug="$1"
+  docker ps -a \
+    --filter "label=com.docker.compose.project=octopus-$slug" \
+    --filter "label=com.docker.compose.service=bot" \
+    --format '{{.Status}}' 2>/dev/null | head -n 1
+}
+
+bot_mode_label() {
+  local slug="$1" mode=""
+  mode="$(read_bot_env_value BOT_AGENT_MODE "$(bot_env_file "$slug")")"
+  printf '%s\n' "${mode:-standalone}"
+}
+
+cmd_status() {
+  local slug="" provider="" mode="" running="" detail="" raw_status="" label=""
+  if [ "$(count_bots)" -eq 0 ]; then
+    printf 'No bots configured. Run ./octopus to get started.\n'
+    return 0
+  fi
+
+  printf 'Bots:\n'
+  for slug in $(list_bot_slugs); do
+    provider="$(get_bot_provider "$(bot_env_file "$slug")")"
+    mode="$(bot_mode_label "$slug")"
+    running="stopped"
+    detail=""
+    label="$(bot_identity_label "$slug")"
+    if bot_is_running "$slug"; then
+      running="running"
+      raw_status="$(docker_status_for_slug "$slug")"
+      [ -n "$raw_status" ] && detail="(${raw_status})"
+    fi
+    printf '  %s    %s   %s   %s   %s\n' "$label" "$provider" "$mode" "$running" "$detail"
+  done
+
+  printf '\nRegistry:\n'
+  if has_local_registry; then
+    local registry_port=""
+    registry_port="$(read_bot_env_value REGISTRY_PORT .deploy/registry/.env)"
+    if registry_is_running; then
+      printf '  local      running    http://localhost:%s/ui\n' "${registry_port:-8787}"
+    else
+      printf '  local      stopped    http://localhost:%s/ui\n' "${registry_port:-8787}"
+    fi
+  else
+    printf '  local      not configured\n'
+  fi
+
+  printf '\nProvider auth:\n'
+  for provider in claude codex; do
+    if provider_auth_hint "$provider"; then
+      printf '  %-10s authenticated\n' "$provider"
+    else
+      printf '  %-10s not configured\n' "$provider"
+    fi
+  done
+}
+
+cmd_start() {
+  local slug
+  slug="$(resolve_bot_slug "${1:-}")" || return 1
+  bot_compose "$slug" up -d bot
+}
+
+cmd_stop() {
+  local slug
+  slug="$(resolve_bot_slug "${1:-}")" || return 1
+  bot_compose "$slug" stop bot
+}
+
+cmd_logs() {
+  local slug
+  slug="$(resolve_bot_slug "${1:-}")" || return 1
+  bot_compose "$slug" logs -f bot
+}
+
+cmd_doctor() {
+  local slug output rc=0
+  slug="$(resolve_bot_slug "${1:-}")" || return 1
+  output="$(run_bot_doctor "$slug")" || rc=$?
+  print_doctor_output_for_operator "$output"
+  return "$rc"
+}
+
+registry_ui_url() {
+  local registry_port=""
+  registry_port="$(read_bot_env_value REGISTRY_PORT .deploy/registry/.env)"
+  printf 'http://localhost:%s/ui\n' "${registry_port:-8787}"
+}
+
+read_local_registry_enroll_token() {
+  read_bot_env_value REGISTRY_ENROLL_TOKEN .deploy/registry/.env
+}
+
+configure_bot_for_registry() {
+  local slug="$1" registry_url="$2" enroll_token="$3" env_file=""
+  env_file="$(bot_env_file "$slug")"
+  upsert_env_file_value BOT_AGENT_MODE "registry" "$env_file"
+  upsert_env_file_value BOT_AGENT_REGISTRY_URL "$registry_url" "$env_file"
+  upsert_env_file_value BOT_AGENT_REGISTRY_ENROLL_TOKEN "$enroll_token" "$env_file"
+}
+
+configure_bot_for_standalone() {
+  local slug="$1" env_file=""
+  env_file="$(bot_env_file "$slug")"
+  upsert_env_file_value BOT_AGENT_MODE "standalone" "$env_file"
+  remove_env_file_value BOT_AGENT_REGISTRY_URL "$env_file"
+  remove_env_file_value BOT_AGENT_REGISTRY_ENROLL_TOKEN "$env_file"
+}
+
+clear_bot_registry_state() {
+  local slug="$1"
+  bot_compose "$slug" run --rm bot-provider sh -lc 'rm -f "$BOT_DATA_DIR/agent/registry_state.json"' >/dev/null 2>&1 || true
+}
+
+restart_bot_after_config_change() {
+  local slug="$1"
+  clear_bot_registry_state "$slug"
+  bot_compose "$slug" stop bot >/dev/null 2>&1 || true
+  start_bot_until_running "$slug"
+}
+
+bot_registry_state_json() {
+  local slug="$1"
+  bot_compose "$slug" run --rm bot-provider python -c '
+from pathlib import Path
+import os
+
+path = Path(os.environ.get("BOT_DATA_DIR", "/home/bot/data")) / "agent" / "registry_state.json"
+if path.exists():
+    print(path.read_text())
+'
+}
+
+bot_registry_has_identity() {
+  local slug="$1" state_json=""
+  state_json="$(bot_registry_state_json "$slug" 2>/dev/null || true)"
+  [ -n "$state_json" ] || return 1
+  printf '%s' "$state_json" | python3 -c '
+import json
+import sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+
+raise SystemExit(0 if data.get("agent_id") and data.get("agent_token") else 1)
+'
+}
+
+registry_logs_excerpt() {
+  local slug="$1" logs=""
+  logs="$(bot_compose "$slug" logs --tail 40 bot 2>/dev/null || true)"
+  logs="$(printf '%s\n' "$logs" | grep -Ei 'registry|enroll|connect|degraded|agent_id' | tail -n 20 || true)"
+  [ -n "$logs" ] && printf '%s\n' "$logs"
+}
+
+verify_registry_enrollment() {
+  local slug="$1" doctor_output="" log_excerpt="" attempt=0
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    if bot_registry_has_identity "$slug"; then
+      return 0
+    fi
+    sleep 2
+  done
+  octopus_error "Registry enrollment has not completed yet."
+  doctor_output="$(run_bot_doctor "$slug" || true)"
+  [ -n "$doctor_output" ] && print_doctor_output_for_operator "$doctor_output"
+  log_excerpt="$(registry_logs_excerpt "$slug" || true)"
+  if [ -n "$log_excerpt" ]; then
+    printf 'Recent registry log lines:\n' >&2
+    printf '%s\n' "$log_excerpt" >&2
+  fi
+  return 1
+}
+
+bots_using_local_registry_count() {
+  local slug="" count=0
+  for slug in $(list_bot_slugs); do
+    if bot_uses_local_reg "$slug"; then
+      count=$((count + 1))
+    fi
+  done
+  printf '%s\n' "$count"
+}
+
+offer_stop_unused_local_registry() {
+  local answer=""
+  if ! has_local_registry; then
+    return 0
+  fi
+  if [ "$(bots_using_local_registry_count)" -ne 0 ]; then
+    return 0
+  fi
+  read -r -p "No bots use the local registry. Stop it? [y/N] " answer || return 0
+  case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+    y|yes)
+      registry_compose down --remove-orphans >/dev/null
+      printf 'Local registry stopped.\n'
+      ;;
+  esac
+}
+
+prompt_remote_registry_url() {
+  local registry_url=""
+  while true; do
+    read -r -p "Remote registry URL (https://...): " registry_url || return 1
+    case "$registry_url" in
+      https://*)
+        printf '%s\n' "$registry_url"
+        return 0
+        ;;
+      "")
+        octopus_error "Remote registry URL is required."
+        ;;
+      *)
+        octopus_error "Remote registry URLs must start with https://."
+        ;;
+    esac
+  done
+}
+
+prompt_remote_registry_token() {
+  local enroll_token=""
+  while true; do
+    read -r -p "Remote enrollment token: " enroll_token || return 1
+    if [ -n "$enroll_token" ]; then
+      printf '%s\n' "$enroll_token"
+      return 0
+    fi
+    octopus_error "Enrollment token is required."
+  done
+}
+
+prompt_registry_target() {
+  local default_mode="${1:-local}" choice="" lowered="" registry_url="" enroll_token=""
+  REGISTRY_TARGET_KIND=""
+  REGISTRY_TARGET_URL=""
+  REGISTRY_TARGET_TOKEN=""
+  while true; do
+    case "$default_mode" in
+      local_existing)
+        read -r -p "Press Enter to use the local registry, or type 'remote' to use a remote registry: " choice || return 1
+        ;;
+      local_new)
+        read -r -p "Press Enter to start a local registry, or type 'remote' to use a remote registry: " choice || return 1
+        ;;
+      *)
+        read -r -p "Use the local registry or a remote registry? [local/remote] " choice || return 1
+        ;;
+    esac
+    lowered="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')"
+    case "$lowered" in
+      ""|local)
+        ensure_local_registry || {
+          octopus_error "Could not start the local registry. Run ./octopus registry and try again."
+          return 1
+        }
+        enroll_token="$(read_local_registry_enroll_token)"
+        if [ -z "$enroll_token" ]; then
+          octopus_error "Local registry setup is incomplete. Run ./octopus registry and try again."
+          return 1
+        fi
+        REGISTRY_TARGET_KIND="local"
+        REGISTRY_TARGET_URL="http://registry:8787"
+        REGISTRY_TARGET_TOKEN="$enroll_token"
+        return 0
+        ;;
+      remote)
+        registry_url="$(prompt_remote_registry_url)" || return 1
+        enroll_token="$(prompt_remote_registry_token)" || return 1
+        REGISTRY_TARGET_KIND="remote"
+        REGISTRY_TARGET_URL="$registry_url"
+        REGISTRY_TARGET_TOKEN="$enroll_token"
+        return 0
+        ;;
+      *)
+        octopus_error "Choose the local registry or type 'remote'."
+        ;;
+    esac
+  done
+}
+
+prompt_new_bot_registry_target() {
+  local answer="" lowered=""
+  REGISTRY_TARGET_KIND="standalone"
+  REGISTRY_TARGET_URL=""
+  REGISTRY_TARGET_TOKEN=""
+  read -r -p "Connect to registry? [y/N] " answer || return 1
+  lowered="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')"
+  case "$lowered" in
+    y|yes)
+      if has_local_registry; then
+        prompt_registry_target local_existing
+      else
+        prompt_registry_target local_new
+      fi
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+print_registry_connection_success() {
+  local slug="$1" registry_kind="$2" registry_url="$3"
+  if [ "$registry_kind" = "local" ]; then
+    printf 'Bot %s is now connected to the local registry.\n' "$slug"
+    printf 'Registry UI: %s\n' "$(registry_ui_url)"
+  else
+    printf 'Bot %s is now connected to the registry at %s.\n' "$slug" "$registry_url"
+  fi
+}
+
+connect_bot_to_registry_flow() {
+  local slug="${1:-}"
+  slug="$(resolve_bot_slug "$slug")" || return 1
+  if bot_is_registry "$slug"; then
+    octopus_error "This bot is already connected to a registry. Choose switch or disconnect instead."
+    return 1
+  fi
+  if has_local_registry; then
+    prompt_registry_target local_existing || return 1
+  else
+    prompt_registry_target local_new || return 1
+  fi
+  configure_bot_for_registry "$slug" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN"
+  restart_bot_after_config_change "$slug" || return 1
+  verify_registry_enrollment "$slug" || return 1
+  print_registry_connection_success "$slug" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL"
+}
+
+disconnect_bot_from_registry_flow() {
+  local slug="${1:-}" answer=""
+  slug="$(resolve_bot_slug "$slug")" || return 1
+  if ! bot_is_registry "$slug"; then
+    octopus_error "This bot is already running standalone."
+    return 1
+  fi
+  read -r -p "Disconnect ${slug} from registry? Bot data is preserved. [y/N] " answer || return 1
+  case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+    y|yes)
+      configure_bot_for_standalone "$slug"
+      restart_bot_after_config_change "$slug" || return 1
+      printf 'Bot %s is now running standalone.\n' "$slug"
+      offer_stop_unused_local_registry
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+switch_local_bot_to_remote_registry_flow() {
+  local slug="${1:-}" remote_url="" enroll_token=""
+  slug="$(resolve_bot_slug "$slug")" || return 1
+  if ! bot_uses_local_reg "$slug"; then
+    octopus_error "This bot is not using the local registry."
+    return 1
+  fi
+  remote_url="$(prompt_remote_registry_url)" || return 1
+  enroll_token="$(prompt_remote_registry_token)" || return 1
+  configure_bot_for_registry "$slug" "$remote_url" "$enroll_token"
+  restart_bot_after_config_change "$slug" || return 1
+  verify_registry_enrollment "$slug" || return 1
+  printf 'Bot %s is now connected to the registry at %s.\n' "$slug" "$remote_url"
+  offer_stop_unused_local_registry
+}
+
+switch_remote_bot_to_local_registry_flow() {
+  local slug="${1:-}" enroll_token=""
+  slug="$(resolve_bot_slug "$slug")" || return 1
+  if ! bot_uses_remote_reg "$slug"; then
+    octopus_error "This bot is not using a remote registry."
+    return 1
+  fi
+  ensure_local_registry || {
+    octopus_error "Could not start the local registry. Run ./octopus registry and try again."
+    return 1
+  }
+  enroll_token="$(read_local_registry_enroll_token)"
+  if [ -z "$enroll_token" ]; then
+    octopus_error "Local registry setup is incomplete. Run ./octopus registry and try again."
+    return 1
+  fi
+  configure_bot_for_registry "$slug" "http://registry:8787" "$enroll_token"
+  restart_bot_after_config_change "$slug" || return 1
+  verify_registry_enrollment "$slug" || return 1
+  printf 'Bot %s is now connected to the local registry.\n' "$slug"
+  printf 'Registry UI: %s\n' "$(registry_ui_url)"
+}
+
+manage_bot_registry_flow() {
+  local slug="${1:-}" choice=""
+  slug="$(resolve_bot_slug "$slug")" || return 1
+  if bot_is_standalone "$slug"; then
+    connect_bot_to_registry_flow "$slug"
+    return $?
+  fi
+
+  while true; do
+    if bot_uses_local_reg "$slug"; then
+      printf 'Bot: %s\n\n' "$(bot_identity_label "$slug")"
+      printf '  1. Switch to remote registry\n'
+      printf '  2. Disconnect from registry\n'
+      printf '  3. Back\n'
+      read -r -p "Choose an option: " choice || return 1
+      case "$choice" in
+        1) switch_local_bot_to_remote_registry_flow "$slug"; return $? ;;
+        2) disconnect_bot_from_registry_flow "$slug"; return $? ;;
+        3) return 0 ;;
+        *) octopus_error "Choose one of the listed options." ;;
+      esac
+    else
+      printf 'Bot: %s\n\n' "$(bot_identity_label "$slug")"
+      printf '  1. Switch to local registry\n'
+      printf '  2. Disconnect from registry\n'
+      printf '  3. Back\n'
+      read -r -p "Choose an option: " choice || return 1
+      case "$choice" in
+        1) switch_remote_bot_to_local_registry_flow "$slug"; return $? ;;
+        2) disconnect_bot_from_registry_flow "$slug"; return $? ;;
+        3) return 0 ;;
+        *) octopus_error "Choose one of the listed options." ;;
+      esac
+    fi
+  done
+}
+
+manage_bot_menu() {
+  local slug choice="" provider="" mode="" running="" label=""
+  slug="$(resolve_bot_slug "${1:-}")" || return 1
+  while true; do
+    label="$(bot_identity_label "$slug")"
+    provider="$(get_bot_provider "$(bot_env_file "$slug")")"
+    mode="$(bot_mode_label "$slug")"
+    running="stopped"
+    bot_is_running "$slug" && running="running"
+    printf 'Bot: %s — %s, %s, %s\n\n' "$label" "$provider" "$mode" "$running"
+    printf '  1. View logs\n'
+    printf '  2. Restart\n'
+    printf '  3. Stop\n'
+    printf '  4. Health check\n'
+    printf '  5. Edit settings\n'
+    printf '  6. Connect to registry\n'
+    printf '  7. Back\n'
+    read -r -p "Choose an option: " choice || return 1
+    case "$choice" in
+      1) cmd_logs "$slug"; return $? ;;
+      2)
+        bot_compose "$slug" stop bot >/dev/null 2>&1 || true
+        cmd_start "$slug" || return $?
+        printf '\n'
+        ;;
+      3)
+        cmd_stop "$slug" || return $?
+        printf '\n'
+        ;;
+      4)
+        cmd_doctor "$slug" || return $?
+        printf '\n'
+        ;;
+      5) edit_bot_settings_menu "$slug"; return $? ;;
+      6) manage_bot_registry_flow "$slug"; return $? ;;
+      7) return 0 ;;
+      *) octopus_error "Choose one of the listed options." ;;
+    esac
+  done
+}
+
+main_menu() {
+  local choice=""
+  printf 'What would you like to do?\n'
+  printf '  1. Add a bot\n'
+  printf '  2. Manage bots\n'
+  printf '  3. Connect bot to registry\n'
+  printf '  4. Advanced\n'
+  read -r -p "Choose an option: " choice || return 1
+  case "$choice" in
+    1) add_bot_flow quick ;;
+    2) manage_bot_menu ;;
+    3) manage_bot_registry_flow ;;
+    4) advanced_menu ;;
+    *) octopus_error "Choose one of the listed options."; return 1 ;;
+  esac
+}
+
+cmd_registry() {
+  local choice="" url=""
+  printf 'Registry:\n'
+  if has_local_registry; then
+    url="$(registry_ui_url)"
+    if registry_is_running; then
+      printf '  local      running    %s\n\n' "$url"
+      printf '  1. Follow local registry logs\n'
+      printf '  2. Stop local registry\n'
+      printf '  3. Back\n'
+      read -r -p "Choose an option: " choice || return 1
+      case "$choice" in
+        1) registry_compose logs -f service ;;
+        2) registry_compose down --remove-orphans >/dev/null; printf 'Local registry stopped.\n' ;;
+        3) return 0 ;;
+        *) octopus_error "Choose one of the listed options."; return 1 ;;
+      esac
+    else
+      printf '  local      stopped    %s\n\n' "$url"
+      printf '  1. Start local registry\n'
+      printf '  2. Back\n'
+      read -r -p "Choose an option: " choice || return 1
+      case "$choice" in
+        1) ensure_local_registry; printf 'Registry UI: %s\n' "$(registry_ui_url)" ;;
+        2) return 0 ;;
+        *) octopus_error "Choose one of the listed options."; return 1 ;;
+      esac
+    fi
+  else
+    printf '  local      not configured\n\n'
+    printf '  1. Start local registry\n'
+    printf '  2. Back\n'
+    read -r -p "Choose an option: " choice || return 1
+    case "$choice" in
+      1) ensure_local_registry; printf 'Registry UI: %s\n' "$(registry_ui_url)" ;;
+      2) return 0 ;;
+      *) octopus_error "Choose one of the listed options."; return 1 ;;
+    esac
+  fi
+}
+
+prompt_first_bot_identity() {
+  local token result telegram_id username display_name
+  while true; do
+    read -r -p "Paste your Telegram bot token: " token || return 1
+    case "$token" in
+      help|\?)
+        print_channel_setup_help telegram
+        continue
+        ;;
+    esac
+    if [ -z "$token" ]; then
+      octopus_error "Telegram bot token is required."
+      continue
+    fi
+    if telegram_token_is_placeholder "$token"; then
+      octopus_error "That still looks like a placeholder token. Copy the full token from @BotFather."
+      continue
+    fi
+    if ! telegram_token_format_valid "$token"; then
+      octopus_error "Telegram bot tokens look like digits:letters from @BotFather."
+      continue
+    fi
+    if ! result="$(validate_telegram_token "$token")"; then
+      octopus_error "Token was rejected by Telegram. Check with @BotFather that the token is correct."
+      continue
+    fi
+    telegram_id="$(sed -n '1p' <<< "$result")"
+    username="$(sed -n '2p' <<< "$result")"
+    display_name="$(sed -n '3p' <<< "$result")"
+    if [ -z "$telegram_id" ] || [ -z "$username" ]; then
+      octopus_error "Telegram returned incomplete bot identity. Try again."
+      continue
+    fi
+    display_name="${display_name:-$username}"
+    printf 'This token belongs to %s (@%s).\n' "$display_name" "$username"
+    FIRST_BOT_TOKEN="$token"
+    FIRST_BOT_TELEGRAM_ID="$telegram_id"
+    FIRST_BOT_TELEGRAM_USERNAME="$username"
+    FIRST_BOT_DISPLAY_NAME="$display_name"
+    return 0
+  done
+}
+
+prompt_provider_choice() {
+  local provider=""
+  while true; do
+    provider="$(prompt_with_default "Provider (claude or codex)" "claude")"
+    case "$provider" in
+      claude|codex)
+        printf '%s\n' "$provider"
+        return 0
+        ;;
+      *)
+        octopus_error "Choose 'claude' or 'codex'."
+        ;;
+    esac
+  done
+}
+
+prompt_setup_mode_hatch() {
+  local choice=""
+  while true; do
+    read -r -p "Press Enter for quick setup, or type 'full' for advanced options: " choice || return 1
+    case "$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')" in
+      "")
+        printf 'quick\n'
+        return 0
+        ;;
+      full)
+        printf 'full\n'
+        return 0
+        ;;
+      *)
+        octopus_error "Press Enter for quick setup, or type 'full' for advanced options."
+        ;;
+    esac
+  done
+}
+
+ensure_provider_image_ready() {
+  local provider="$1" need_build=0 current_rev="" built_rev=""
+  if ! docker image inspect "octopus-agent:$provider" >/dev/null 2>&1; then
+    need_build=1
+  elif [ -f .bot-image-build-rev ]; then
+    current_rev="$(git rev-parse HEAD 2>/dev/null || true)"
+    built_rev="$(cat .bot-image-build-rev 2>/dev/null || true)"
+    if [ -n "$current_rev" ] && [ -n "$built_rev" ] && [ "$current_rev" != "$built_rev" ]; then
+      need_build=1
+    fi
+  fi
+  if [ "$need_build" -eq 1 ]; then
+    printf 'Building bot image for %s...\n' "$provider"
+    "$REPO_DIR/scripts/provider/build_bot_image.sh" "$provider"
+  fi
+}
+
+ensure_provider_auth_ready() {
+  local provider="$1"
+  if provider_is_authed "$provider" >/dev/null 2>&1; then
+    return 0
+  fi
+  octopus_error "Provider authentication is required. Starting the login flow now."
+  provider_compose "$provider" run --rm bot-provider sh /app/scripts/provider/container_provider_login.sh
+  if ! provider_is_authed "$provider" >/dev/null 2>&1; then
+    octopus_error "Provider authentication is still incomplete. Finish login, then run ./octopus again."
+    return 1
+  fi
+}
+
+reset_bot_setup_overrides() {
+  BOT_SETUP_ROLE=""
+  BOT_SETUP_TAGS=""
+  BOT_SETUP_DESCRIPTION=""
+  BOT_SETUP_SKILLS=""
+  BOT_SETUP_ALLOWED_USERS=""
+  BOT_SETUP_TIMEOUT_SECONDS="3600"
+  BOT_SETUP_WORKING_DIR="/home/bot"
+  BOT_SETUP_COMPLETION_WEBHOOK_URL=""
+  NEW_BOT_SETUP_MODE=""
+  REGISTRY_TARGET_KIND="standalone"
+  REGISTRY_TARGET_URL=""
+  REGISTRY_TARGET_TOKEN=""
+}
+
+prompt_timeout_seconds_value() {
+  local current="${1:-3600}" value=""
+  while true; do
+    value="$(prompt_with_default "Timeout seconds" "$current")"
+    case "$value" in
+      ''|*[!0-9]*)
+        octopus_error "Timeout must be a whole number of seconds."
+        ;;
+      0)
+        octopus_error "Timeout must be greater than zero."
+        ;;
+      *)
+        printf '%s\n' "$value"
+        return 0
+        ;;
+    esac
+  done
+}
+
+prompt_port_value() {
+  local current="${1:-8443}" value=""
+  while true; do
+    value="$(prompt_with_default "Webhook port" "$current")"
+    case "$value" in
+      ''|*[!0-9]*)
+        octopus_error "Webhook port must be a whole number."
+        ;;
+      0)
+        octopus_error "Webhook port must be greater than zero."
+        ;;
+      *)
+        printf '%s\n' "$value"
+        return 0
+        ;;
+    esac
+  done
+}
+
+prompt_allowed_users_value() {
+  local current="${1:-}" value=""
+  if [ -n "$current" ]; then
+    read -r -p "Allowed users (blank = open) [$current]: " value || return 1
+    printf '%s\n' "$value"
+    return 0
+  fi
+  read -r -p "Allowed users (blank = open): " value || return 1
+  printf '%s\n' "$value"
+}
+
+prompt_full_bot_setup_options() {
+  local registry_choice=""
+  BOT_SETUP_ROLE="$(prompt_with_default "Role" "$BOT_SETUP_ROLE")"
+  BOT_SETUP_TAGS="$(prompt_with_default "Tags (comma-separated)" "$BOT_SETUP_TAGS")"
+  BOT_SETUP_DESCRIPTION="$(prompt_with_default "Description" "$BOT_SETUP_DESCRIPTION")"
+  BOT_SETUP_SKILLS="$(prompt_with_default "Skills (comma-separated)" "$BOT_SETUP_SKILLS")"
+  BOT_SETUP_ALLOWED_USERS="$(prompt_allowed_users_value "$BOT_SETUP_ALLOWED_USERS")" || return 1
+  BOT_SETUP_WORKING_DIR="$(prompt_with_default "Working directory" "$BOT_SETUP_WORKING_DIR")"
+  BOT_SETUP_TIMEOUT_SECONDS="$(prompt_timeout_seconds_value "$BOT_SETUP_TIMEOUT_SECONDS")"
+  while true; do
+    registry_choice="$(prompt_with_default "Standalone or Registry" "standalone")"
+    case "$(printf '%s' "$registry_choice" | tr '[:upper:]' '[:lower:]')" in
+      standalone)
+        REGISTRY_TARGET_KIND="standalone"
+        REGISTRY_TARGET_URL=""
+        REGISTRY_TARGET_TOKEN=""
+        break
+        ;;
+      registry)
+        if has_local_registry; then
+          prompt_registry_target local_existing || return 1
+        else
+          prompt_registry_target local_new || return 1
+        fi
+        break
+        ;;
+      *)
+        octopus_error "Choose 'standalone' or 'registry'."
+        ;;
+    esac
+  done
+  BOT_SETUP_COMPLETION_WEBHOOK_URL="$(prompt_with_default "Completion webhook URL" "$BOT_SETUP_COMPLETION_WEBHOOK_URL")"
+}
+
+prepare_new_bot_setup() {
+  local mode="${1:-quick}" existing_slug=""
+  local telegram_id="" username="" display_name="" token=""
+  ensure_deploy_dirs
+  reset_bot_setup_overrides
+  prompt_first_bot_identity || return 1
+  telegram_id="$FIRST_BOT_TELEGRAM_ID"
+  username="$FIRST_BOT_TELEGRAM_USERNAME"
+  display_name="$FIRST_BOT_DISPLAY_NAME"
+  token="$FIRST_BOT_TOKEN"
+
+  existing_slug="$(find_bot_slug_by_telegram_id "$telegram_id" || true)"
+  if [ -n "$existing_slug" ]; then
+    octopus_error "This Telegram bot is already configured as '$existing_slug'. Run ./octopus to manage the existing bot."
+    return 1
+  fi
+
+  NEW_BOT_SLUG="$(normalize_slug "$username")"
+  NEW_BOT_SLUG="${NEW_BOT_SLUG:-bot}"
+  if [ -d ".deploy/bots/$NEW_BOT_SLUG" ]; then
+    octopus_error "A different bot already uses the local slug '$NEW_BOT_SLUG'. Remove that bot or choose a different Telegram bot token."
+    return 1
+  fi
+
+  NEW_BOT_TELEGRAM_ID="$telegram_id"
+  NEW_BOT_TELEGRAM_USERNAME="$username"
+  NEW_BOT_DISPLAY_NAME="$display_name"
+  NEW_BOT_TOKEN="$token"
+  NEW_BOT_PROVIDER="$(prompt_provider_choice)"
+  NEW_BOT_SETUP_MODE="$mode"
+
+  if [ "$mode" = "quick" ]; then
+    NEW_BOT_SETUP_MODE="$(prompt_setup_mode_hatch)" || return 1
+  fi
+
+  if [ "$NEW_BOT_SETUP_MODE" = "full" ]; then
+    prompt_full_bot_setup_options || return 1
+  fi
+}
+
+write_first_bot_env() {
+  local slug="$1" telegram_id="$2" username="$3" display_name="$4" token="$5" provider="$6"
+  local env_file bot_dir
+  local role="${BOT_SETUP_ROLE:-}" tags="${BOT_SETUP_TAGS:-}" description="${BOT_SETUP_DESCRIPTION:-}"
+  local skills="${BOT_SETUP_SKILLS:-}" allowed_users="${BOT_SETUP_ALLOWED_USERS:-}"
+  local timeout_seconds="${BOT_SETUP_TIMEOUT_SECONDS:-3600}" working_dir="${BOT_SETUP_WORKING_DIR:-/home/bot}"
+  local completion_webhook_url="${BOT_SETUP_COMPLETION_WEBHOOK_URL:-}"
+  bot_dir=".deploy/bots/$slug"
+  env_file="$bot_dir/.env"
+  mkdir -p "$bot_dir"
+  {
+    write_env_assignment_line BOT_INSTANCE "$slug"
+    write_env_assignment_line BOT_SLUG "$slug"
+    write_env_assignment_line BOT_AGENT_SLUG "$slug"
+    write_env_assignment_line BOT_TELEGRAM_ID "$telegram_id"
+    write_env_assignment_line BOT_TELEGRAM_USERNAME "$username"
+    write_env_assignment_line BOT_DISPLAY_NAME "$display_name"
+    write_env_assignment_line BOT_AGENT_DISPLAY_NAME "$display_name"
+    write_env_assignment_line TELEGRAM_BOT_TOKEN "$token"
+    write_env_assignment_line BOT_PROVIDER "$provider"
+    write_env_assignment_line BOT_AGENT_MODE "standalone"
+    write_env_assignment_line BOT_COMPACT_MODE "1"
+    if [ -n "$role" ]; then
+      write_env_assignment_line BOT_ROLE "$role"
+      write_env_assignment_line BOT_AGENT_ROLE "$role"
+    fi
+    if [ -n "$tags" ]; then
+      write_env_assignment_line BOT_AGENT_TAGS "$tags"
+    fi
+    if [ -n "$description" ]; then
+      write_env_assignment_line BOT_AGENT_DESCRIPTION "$description"
+    fi
+    if [ -n "$skills" ]; then
+      write_env_assignment_line BOT_SKILLS "$skills"
+      write_env_assignment_line BOT_AGENT_CAPABILITIES "$skills"
+    fi
+    if [ -n "$allowed_users" ]; then
+      write_env_assignment_line BOT_ALLOWED_USERS "$allowed_users"
+      write_env_assignment_line BOT_ALLOW_OPEN "0"
+    else
+      write_env_assignment_line BOT_ALLOW_OPEN "1"
+    fi
+    write_env_assignment_line BOT_TIMEOUT_SECONDS "$timeout_seconds"
+    write_env_assignment_line BOT_WORKING_DIR "$working_dir"
+    write_env_assignment_line BOT_DATA_DIR "/home/bot/data"
+    if [ -n "$completion_webhook_url" ]; then
+      write_env_assignment_line BOT_COMPLETION_WEBHOOK_URL "$completion_webhook_url"
+    fi
+  } > "$env_file"
+  restrict_secret_file_permissions "$env_file"
+}
+
+prompt_rejected_telegram_token_repair() {
+  local slug="$1" env_file current_token new_token
+  env_file="$(bot_env_file "$slug")"
+  current_token="$(read_bot_env_value TELEGRAM_BOT_TOKEN "$env_file")"
+  new_token="$(prompt_channel_token_with_help \
+    telegram \
+    "Paste a replacement Telegram bot token" \
+    "$current_token" \
+    "Telegram rejected the bot token. Check with @BotFather that it is correct." \
+    0)" || return 1
+  upsert_env_file_value TELEGRAM_BOT_TOKEN "$new_token" "$env_file"
+  return 0
+}
+
+run_bot_doctor() {
+  local slug="$1"
+  bot_compose "$slug" run --rm bot python -m app.main --doctor 2>&1
+}
+
+run_bot_doctor_until_ready() {
+  local slug="$1" doctor_output=""
+  while true; do
+    if doctor_output="$(run_bot_doctor "$slug")"; then
+      return 0
+    fi
+    print_doctor_output_for_operator "$doctor_output"
+    if doctor_output_has_token_rejection "$doctor_output"; then
+      if prompt_rejected_telegram_token_repair "$slug"; then
+        octopus_error "Re-running the health check with the updated Telegram token."
+        continue
+      fi
+    fi
+    octopus_error "Full app health check failed. Fix the issue above, then run ./octopus again."
+    return 1
+  done
+}
+
+start_bot_until_running() {
+  local slug="$1" doctor_output=""
+  while true; do
+    bot_compose "$slug" up -d bot >/dev/null
+    sleep 5
+    if bot_is_running "$slug"; then
+      return 0
+    fi
+    octopus_error "Bot failed to stay up after startup."
+    doctor_output="$(run_bot_doctor "$slug" || true)"
+    print_doctor_output_for_operator "$doctor_output"
+    if doctor_output_has_token_rejection "$doctor_output"; then
+      if prompt_rejected_telegram_token_repair "$slug"; then
+        octopus_error "Retrying startup with the updated Telegram token."
+        continue
+      fi
+    fi
+    octopus_error "Could not start the bot cleanly. Review the health output above, then run ./octopus again."
+    return 1
+  done
+}
+
+restart_bot_service() {
+  local slug="$1"
+  bot_compose "$slug" stop bot >/dev/null 2>&1 || true
+  start_bot_until_running "$slug"
+}
+
+current_allowed_users_value() {
+  local slug="$1"
+  read_bot_env_value BOT_ALLOWED_USERS "$(bot_env_file "$slug")"
+}
+
+current_allowed_users_display() {
+  local slug="$1" allowed_users=""
+  allowed_users="$(current_allowed_users_value "$slug")"
+  if [ -n "$allowed_users" ]; then
+    printf '%s\n' "$allowed_users"
+    return 0
+  fi
+  printf 'open\n'
+}
+
+offer_restart_if_running() {
+  local slug="$1" answer=""
+  if ! bot_is_running "$slug"; then
+    return 0
+  fi
+  read -r -p "Restart the bot now to apply this change? [Y/n] " answer || return 0
+  case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+    ""|y|yes)
+      restart_bot_service "$slug"
+      ;;
+  esac
+}
+
+open_bot_env_in_editor() {
+  local slug="$1" env_file=""
+  env_file="$(bot_env_file "$slug")"
+  if [ -n "${EDITOR:-}" ]; then
+    "$EDITOR" "$env_file"
+    return $?
+  fi
+  printf 'Config file: %s\n' "$env_file"
+}
+
+edit_bot_settings_menu() {
+  local slug="$1" choice="" env_file="" display_name="" provider="" mode="" role="" tags="" allowed_users="" timeout=""
+  env_file="$(bot_env_file "$slug")"
+  while true; do
+    display_name="$(bot_display_name "$slug")"
+    provider="$(get_bot_provider "$env_file")"
+    mode="$(bot_mode_label "$slug")"
+    role="$(read_bot_env_value BOT_ROLE "$env_file")"
+    tags="$(read_bot_env_value BOT_AGENT_TAGS "$env_file")"
+    allowed_users="$(current_allowed_users_display "$slug")"
+    timeout="$(read_bot_env_value BOT_TIMEOUT_SECONDS "$env_file")"
+    printf 'Current settings for %s:\n' "$(bot_identity_label "$slug")"
+    printf '  Display name:  %s\n' "${display_name:-$slug}"
+    printf '  Provider:      %s\n' "$provider"
+    printf '  Mode:          %s\n' "$mode"
+    printf '  Role:          %s\n' "${role:-"(not set)"}"
+    printf '  Timeout:       %ss\n\n' "${timeout:-3600}"
+    printf 'What would you like to change?\n'
+    printf '  1. Display name\n'
+    printf '  2. Role\n'
+    printf '  3. Tags\n'
+    printf '  4. Allowed users\n'
+    printf '  5. Timeout\n'
+    printf '  6. Open full config in editor\n'
+    printf '  7. Back\n'
+    read -r -p "Choose an option: " choice || return 1
+    case "$choice" in
+      1)
+        display_name="$(prompt_with_default "Display name" "${display_name:-$slug}")"
+        upsert_env_file_value BOT_DISPLAY_NAME "$display_name" "$env_file"
+        upsert_env_file_value BOT_AGENT_DISPLAY_NAME "$display_name" "$env_file"
+        offer_restart_if_running "$slug"
+        printf '\n'
+        ;;
+      2)
+        role="$(prompt_with_default "Role" "$role")"
+        upsert_env_file_value BOT_ROLE "$role" "$env_file"
+        upsert_env_file_value BOT_AGENT_ROLE "$role" "$env_file"
+        offer_restart_if_running "$slug"
+        printf '\n'
+        ;;
+      3)
+        tags="$(prompt_with_default "Tags (comma-separated)" "$tags")"
+        upsert_env_file_value BOT_AGENT_TAGS "$tags" "$env_file"
+        offer_restart_if_running "$slug"
+        printf '\n'
+        ;;
+      4)
+        allowed_users="$(prompt_allowed_users_value "$(current_allowed_users_value "$slug")")" || return 1
+        if [ -n "$allowed_users" ]; then
+          upsert_env_file_value BOT_ALLOWED_USERS "$allowed_users" "$env_file"
+          upsert_env_file_value BOT_ALLOW_OPEN "0" "$env_file"
+        else
+          remove_env_file_value BOT_ALLOWED_USERS "$env_file"
+          upsert_env_file_value BOT_ALLOW_OPEN "1" "$env_file"
+        fi
+        offer_restart_if_running "$slug"
+        printf '\n'
+        ;;
+      5)
+        timeout="$(prompt_timeout_seconds_value "${timeout:-3600}")"
+        upsert_env_file_value BOT_TIMEOUT_SECONDS "$timeout" "$env_file"
+        offer_restart_if_running "$slug"
+        printf '\n'
+        ;;
+      6)
+        open_bot_env_in_editor "$slug"
+        printf '\n'
+        ;;
+      7)
+        return 0
+        ;;
+      *)
+        octopus_error "Choose one of the listed options."
+        ;;
+    esac
+  done
+}
+
+prompt_webhook_url_value() {
+  local current="${1:-}" value=""
+  while true; do
+    value="$(prompt_with_default "Webhook URL" "$current")"
+    case "$value" in
+      https://*)
+        printf '%s\n' "$value"
+        return 0
+        ;;
+      "")
+        octopus_error "Webhook URL is required."
+        ;;
+      *)
+        octopus_error "Webhook URL must start with https://."
+        ;;
+    esac
+  done
+}
+
+configure_webhook_mode_flow() {
+  local slug="" env_file="" webhook_url="" webhook_port=""
+  slug="$(resolve_bot_slug "${1:-}")" || return 1
+  env_file="$(bot_env_file "$slug")"
+  webhook_url="$(prompt_webhook_url_value "$(read_bot_env_value BOT_WEBHOOK_URL "$env_file")")" || return 1
+  webhook_port="$(prompt_port_value "$(read_bot_env_value BOT_WEBHOOK_PORT "$env_file")")"
+  upsert_env_file_value BOT_MODE "webhook" "$env_file"
+  upsert_env_file_value BOT_RUNTIME_MODE "shared" "$env_file"
+  upsert_env_file_value BOT_PROCESS_ROLE "all" "$env_file"
+  upsert_env_file_value BOT_WEBHOOK_URL "$webhook_url" "$env_file"
+  upsert_env_file_value BOT_WEBHOOK_LISTEN "0.0.0.0" "$env_file"
+  upsert_env_file_value BOT_WEBHOOK_PORT "$webhook_port" "$env_file"
+  printf 'Webhook mode settings saved for %s.\n' "$slug"
+  printf 'Use the shared runtime deployment when you are ready to run webhook mode.\n'
+  offer_restart_if_running "$slug"
+}
+
+advanced_menu() {
+  local choice=""
+  while true; do
+    printf 'Advanced:\n'
+    printf '  1. Add a bot with full setup\n'
+    printf '  2. Configure webhook mode\n'
+    printf '  3. Back\n'
+    read -r -p "Choose an option: " choice || return 1
+    case "$choice" in
+      1)
+        add_bot_flow full
+        return $?
+        ;;
+      2)
+        configure_webhook_mode_flow
+        return $?
+        ;;
+      3)
+        return 0
+        ;;
+      *)
+        octopus_error "Choose one of the listed options."
+        ;;
+    esac
+  done
+}
+
+print_first_bot_success() {
+  local username="$1"
+  cat <<EOF
+╔═══════════════════════════════════════════╗
+║  Bot is running!                          ║
+║                                           ║
+║  Open Telegram and message @${username}   ║
+║                                           ║
+║  ./octopus status    — check bot health   ║
+║  ./octopus logs      — follow live logs   ║
+║  ./octopus stop      — stop the bot       ║
+║                                           ║
+║  Run ./octopus again to add more bots     ║
+║  or connect to a registry.                ║
+╚═══════════════════════════════════════════╝
+EOF
+  printf '%s\n' "Advanced settings (role, tags, skills, allowed users) can be configured by running ./octopus and choosing Manage bots."
+}
+
+add_bot_flow() {
+  local mode="${1:-quick}"
+  prepare_new_bot_setup "$mode" || return 1
+  if [ "${NEW_BOT_SETUP_MODE:-$mode}" = "quick" ]; then
+    prompt_new_bot_registry_target || return 1
+  fi
+  ensure_provider_image_ready "$NEW_BOT_PROVIDER"
+  ensure_provider_auth_ready "$NEW_BOT_PROVIDER"
+  ensure_network
+  write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER"
+  if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
+    configure_bot_for_registry "$NEW_BOT_SLUG" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN"
+  fi
+  run_bot_doctor_until_ready "$NEW_BOT_SLUG"
+  start_bot_until_running "$NEW_BOT_SLUG"
+  if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
+    verify_registry_enrollment "$NEW_BOT_SLUG" || return 1
+  fi
+  print_first_bot_success "$NEW_BOT_TELEGRAM_USERNAME"
+  if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
+    print_registry_connection_success "$NEW_BOT_SLUG" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL"
+  fi
+}
+
+first_bot_flow() {
+  local mode="${1:-quick}"
+  prepare_new_bot_setup "$mode" || return 1
+  ensure_provider_image_ready "$NEW_BOT_PROVIDER"
+  ensure_provider_auth_ready "$NEW_BOT_PROVIDER"
+  ensure_network
+  write_first_bot_env "$NEW_BOT_SLUG" "$NEW_BOT_TELEGRAM_ID" "$NEW_BOT_TELEGRAM_USERNAME" "$NEW_BOT_DISPLAY_NAME" "$NEW_BOT_TOKEN" "$NEW_BOT_PROVIDER"
+  if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
+    configure_bot_for_registry "$NEW_BOT_SLUG" "$REGISTRY_TARGET_URL" "$REGISTRY_TARGET_TOKEN"
+  fi
+  run_bot_doctor_until_ready "$NEW_BOT_SLUG"
+  start_bot_until_running "$NEW_BOT_SLUG"
+  if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
+    verify_registry_enrollment "$NEW_BOT_SLUG" || return 1
+  fi
+  print_first_bot_success "$NEW_BOT_TELEGRAM_USERNAME"
+  if [ "${REGISTRY_TARGET_KIND:-standalone}" != "standalone" ]; then
+    print_registry_connection_success "$NEW_BOT_SLUG" "$REGISTRY_TARGET_KIND" "$REGISTRY_TARGET_URL"
+  fi
+}
+
+main() {
+  ensure_deploy_dirs
+
+  case "${1:-}" in
+    --full)
+      shift
+      if [ "$(count_bots)" -eq 0 ]; then
+        first_bot_flow full
+      else
+        add_bot_flow full
+      fi
+      ;;
+    status)   shift; cmd_status "$@" ;;
+    start)    shift; cmd_start "$@" ;;
+    stop)     shift; cmd_stop "$@" ;;
+    logs)     shift; cmd_logs "$@" ;;
+    doctor)   shift; cmd_doctor "$@" ;;
+    registry) shift; cmd_registry "$@" ;;
+    "")
+      if [ "$(count_bots)" -eq 0 ]; then
+        first_bot_flow quick
+      else
+        main_menu
+      fi
+      ;;
+    *)
+      octopus_error "Unknown command: $1"
+      return 1
+      ;;
+  esac
+}
+
+if [ "${OCTOPUS_SOURCE_ONLY:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
+main "$@"

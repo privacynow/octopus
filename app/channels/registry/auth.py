@@ -32,7 +32,7 @@ def registry_allows_http() -> bool:
 
 
 def load_settings() -> RegistrySettings:
-    db_path = Path(os.environ.get("REGISTRY_DB_PATH", "/tmp/telegram-agent-registry/registry.sqlite3"))
+    db_path = Path(os.environ.get("REGISTRY_DB_PATH", "/tmp/octopus-registry/registry.sqlite3"))
     enroll_token = os.environ.get("REGISTRY_ENROLL_TOKEN", "").strip()
     ui_token = os.environ.get("REGISTRY_UI_TOKEN", "").strip()
     display_name = os.environ.get("REGISTRY_DISPLAY_NAME", "").strip()

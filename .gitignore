@@ -6,16 +6,17 @@ __pycache__/
 
 # Instance config (contains tokens/secrets)
 *.env
-!.env.example
-.env.bot
-.env.bot.*
 .env.registry
 .env.registry.*
+.deploy/*
+!.deploy/bots/
+.deploy/bots/*
+!.deploy/bots/.env.example
 
 # Runtime data
 *.log
 
-# Build marker (guided_start uses this to detect repo rev change)
+# Build marker for provider image drift detection
 .bot-image-build-rev
 
 # Test artifacts

@@ -190,7 +190,7 @@ if [ -f "$ENV_FILE" ]; then
         fi
     fi
 else
-    cp "$REPO_DIR/.env.example" "$ENV_FILE"
+    cp "$REPO_DIR/.deploy/bots/.env.example" "$ENV_FILE"
     echo "Created instance config: $ENV_FILE"
     echo
 

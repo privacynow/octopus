@@ -213,7 +213,7 @@ rm -f "$CONFIG_DIR/test-setup-nouser.env"
 output=$(echo -e "$FAKE_TOKEN\nclaude\n\n\n\n\nn" | env XDG_CONFIG_HOME="$XDG_CONFIG_HOME" "$PATCHED_SETUP" test-setup-nouser 2>&1)
 
 ENV_FILE="$CONFIG_DIR/test-setup-nouser.env"
-# When blank, the line keeps the inline comment from .env.example — just check no real value was set
+# When blank, the line stays unset in the copied example config — just check no real value was set
 users_line=$(grep "^BOT_ALLOWED_USERS=" "$ENV_FILE")
 check "allowed users not populated" "$(echo "$users_line" | grep -cE '^BOT_ALLOWED_USERS=\s*(#|$)')" "1"
 # Blank users should auto-enable open access so the bot can launch

@@ -42,5 +42,5 @@ else
   exit 1
 fi
 
-echo "Postgres stack ready. Set BOT_DATABASE_URL=postgresql://bot:bot@postgres:5432/bot in .env.bot to use it."
-echo "To run the bot: ./scripts/app/guided_start.sh"
+echo "Postgres stack ready. Set BOT_DATABASE_URL=postgresql://bot:bot@postgres:5432/bot in the bot env file to use it."
+echo "To run the bot: ./octopus"

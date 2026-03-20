@@ -19,8 +19,8 @@
     policy code
   - one dead `"default"` registry-id default remains in
     `RegistryConnectionState`
-- Phase 10 is now open and in progress; Slice 10A is landed and
-  Slices 10A-10B are landed and Slices 10C-10E remain.
+- Phase 10 is now open and in progress; Slices 10A-10C are landed and
+  Slices 10D-10E remain.
 - Status should be read as: rollout complete through Phase 9, but the
   architecture cleanup is not complete until Phase 10 lands.
 
@@ -62,16 +62,9 @@
   - task-channel projection side effects are gone
   - full suite status after Phase 10A: `1923 passed, 23 skipped`
 
-- Pending: Phase 10 remediation — remaining routed-task surface and
-  final surface-boundary cleanup (Slices 10C-10E).
+- Pending: Phase 10 remediation — remaining surface-boundary cleanup
+  (Slices 10D-10E).
   Planned scope:
-  - route routed-task progress through
-    `TaskRoutingPort.update_routed_task_status()`
-  - add the routed-task progress callback bridge explicitly
-    (`html_text`/`force` -> `RoutedTaskUpdate`) with throttling on the
-    existing progress cadence rather than flooding the bus
-  - fix the callback-builder seam explicitly so progress callback
-    selection can use `authority_ref` without reparsing refs
   - replace remaining raw `"telegram"` checks in shared
     delivery/admission policy code with the correct existing seam:
     dispatcher runtime-readiness for delivery, descriptor/static policy
@@ -80,11 +73,63 @@
     "default"` default
   Notes:
   - the repo is currently green, but this residual drift means the
-    remaining task-progress and surface-policy work is still not fully
+    remaining surface-policy work is still not fully
     aligned with the target architecture
-  - execution should follow the remaining Phase 10 slices 10B-10E from
-  - execution should follow the remaining Phase 10 slices 10C-10E from
+  - execution should follow the remaining Phase 10 slices 10D-10E from
     `PLAN-control-plane-bus.md` in order
+
+- Complete: Phase 10C remediation — route routed-task execution progress through task routing.
+  Scope:
+  - split the existing Telegram execution collaborator seam by concern
+    so the workflow context builder can choose between conversation
+    projection callbacks and routed-task status callbacks without
+    overloading a single factory signature
+  - updated workflow context resolution to choose the routed-task
+    callback whenever both `routed_task_id` and canonical
+    `authority_ref` are present, while conversation surfaces still use
+    the existing projection callback
+  - added `routed_task_progress_callback()` in the Telegram progress
+    module, mapping rendered progress HTML to `RoutedTaskUpdate`
+    summaries and sending them through
+    `TaskRoutingPort.update_routed_task_status()`
+  - kept the existing progress cadence: the routed-task callback runs
+    only when `TelegramProgress.update()` actually emits a visible
+    update, so the bus inherits the existing throttling behavior
+  - fixed the remaining provenance gap by carrying canonical
+    `authority_ref` on registry egress instances built from inbound
+    events, rather than reparsing it from registry refs during
+    execution
+  - added positive and negative tests for callback selection,
+    HTML-to-summary mapping, terminal status mapping, and worker-side
+    routed-task status emission during execution
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_telegram_progress_module.py tests/test_runtime_dispatch_boundary.py tests/test_handlers.py::test_registry_routed_task_progress_updates_task_status tests/test_handlers.py::test_registry_routed_task_executes_and_reports_result tests/test_control_plane_integration.py::test_routed_task_status_update_persists_timeline_events_and_progress`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified the old single `build_timeline_callback` seam is gone and
+    the execution builder now binds separate conversation and
+    routed-task progress factories
+  - verified routed-task callback selection depends on explicit
+    `routed_task_id` + `authority_ref`, not on ref parsing or channel
+    type checks
+  - verified registry egress now carries canonical `authority_ref`
+    when worker dispatch builds it from inbound registry events
+  Review:
+  - the first attempt exposed a real gap: 10B had threaded
+    `authority_ref` through metadata, but the execution path builds
+    context from the channel egress object, so the egress had to carry
+    canonical provenance too
+  - the second correction mapped terminal workflow labels like
+    `Completed.` to terminal routed-task states instead of emitting
+    them as another `running` update
+  - this slice still reused existing seams (`TelegramProgress`,
+    `ExecutionChannelContext`, `TaskRoutingPort`, registry egress) and
+    did not add a new abstraction layer
+  Verified:
+  - routed-task execution progress now reaches task routing instead of
+    being silently dropped
+  - conversation-surface progress still uses the projection port
+  - full suite status after Phase 10C: `1930 passed, 23 skipped`
 
 - Complete: Phase 10B remediation — thread canonical authority provenance through execution context.
   Scope:

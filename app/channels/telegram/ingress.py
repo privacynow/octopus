@@ -47,6 +47,7 @@ from app.channels.telegram.progress import (
     heartbeat,
     keep_typing,
     progress_timeline_callback,
+    routed_task_progress_callback,
 )
 from app.channels.telegram import conversation as telegram_conversation
 from app.channels.telegram import normalization as telegram_normalization
@@ -242,6 +243,7 @@ def _bound_execution_runtime(runtime: TelegramRuntime):
         keep_typing_fn=keep_typing,
         heartbeat_fn=heartbeat,
         progress_timeline_callback_fn=progress_timeline_callback,
+        routed_task_progress_callback_fn=routed_task_progress_callback,
         propose_delegation_plan_fn=propose_delegation_plan,
     )
     return build_execution_runtime(runtime, collaborators=collaborators)

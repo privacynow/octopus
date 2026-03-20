@@ -58,6 +58,7 @@ class RegistryChannelEgress(ChannelEgress):
         conversation_ref: str,
         registry_id: str = "",
         routed_task_id: str = "",
+        authority_ref: str = "",
         title: str = "",
         output_log: list[dict[str, str]] | None = None,
         external_id: str = "",
@@ -76,6 +77,7 @@ class RegistryChannelEgress(ChannelEgress):
         self.conversation_ref = conversation_ref
         self.registry_id = parsed_ref[0]
         self.routed_task_id = routed_task_id or (parsed_ref[2] if parsed_ref[1] == "task" else "")
+        self.authority_ref = authority_ref
         self.title = title or "Registry conversation"
         self.external_id = external_id or registry_ref_external_id(conversation_ref)
         self.sent_messages: list[str] = []

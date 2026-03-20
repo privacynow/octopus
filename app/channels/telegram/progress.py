@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
+import re
 import time
 
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import BadRequest, NetworkError, TimedOut
 
+from app.agents.types import RoutedTaskUpdate
 from app.formatting import trim_text
 from app import user_messages as _msg
 from app.config import BotConfig
@@ -16,6 +19,7 @@ from app.channels.telegram.state import TelegramRuntime
 
 
 log = logging.getLogger(__name__)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 class TelegramProgress:
@@ -72,6 +76,50 @@ async def progress_timeline_callback(
         title="Progress",
         body=html_text,
         metadata={"routed_task_id": routed_task_id} if routed_task_id else {},
+    )
+
+
+def _progress_summary(html_text: str, *, limit: int = 200) -> str:
+    clean = html.unescape(_HTML_TAG_RE.sub(" ", html_text or ""))
+    lines = [" ".join(line.split()) for line in clean.splitlines()]
+    lines = [line for line in lines if line]
+    body = lines[-1] if lines else " ".join(clean.split())
+    return trim_text(body, limit)
+
+
+def _routed_task_status(summary: str) -> str:
+    if summary in {
+        _msg.progress_completed(),
+        _msg.progress_completed_with_blocked(),
+        "Delegation plan ready.",
+    }:
+        return "completed"
+    if summary == _msg.cancel_live_completed():
+        return "cancelled"
+    if summary == _msg.approval_timeout() or summary.startswith("Request timed out after "):
+        return "failed"
+    return "running"
+
+
+async def routed_task_progress_callback(
+    runtime: TelegramRuntime,
+    routed_task_id: str,
+    authority_ref: str,
+    html_text: str,
+    *,
+    force: bool = False,
+) -> None:
+    del force
+    summary = _progress_summary(html_text)
+    if not summary:
+        return
+    await runtime.services.control_plane.task_routing.update_routed_task_status(
+        update=RoutedTaskUpdate(
+            routed_task_id=routed_task_id,
+            status=_routed_task_status(summary),
+            summary=summary,
+        ),
+        authority_ref=authority_ref,
     )
 
 

@@ -1105,3 +1105,15 @@ def test_removed_bridge_http_helpers_do_not_reappear() -> None:
         text = path.read_text()
         for token in forbidden:
             assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_generic_health_and_discover_paths_do_not_reference_registry_scope() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    candidate_paths = (
+        repo_root / "app" / "ports" / "health_publication.py",
+        repo_root / "app" / "control_plane" / "adapters" / "health_publication.py",
+        repo_root / "app" / "channels" / "telegram" / "ingress.py",
+    )
+    for path in candidate_paths:
+        text = path.read_text()
+        assert "registry_scope" not in text, f"registry_scope still referenced in {path}"

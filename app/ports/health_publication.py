@@ -17,7 +17,7 @@ class HealthReport(BaseModel):
 class AuthorityStatus(BaseModel):
     authority_ref: str
     connectivity_state: str
-    registry_scope: str
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class ConnectionSummary(BaseModel):

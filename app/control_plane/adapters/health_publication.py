@@ -9,19 +9,6 @@ from app.control_plane.directory import ControlPlaneDirectory
 from app.control_plane.models import ControlCommand
 from app.ports.health_publication import AuthorityStatus, ConnectionSummary, HealthReport
 
-
-def _registry_scope_for_capabilities(capabilities: set[str]) -> str:
-    has_projection = "conversation_projection" in capabilities
-    has_coordination = bool({"task_routing", "agent_directory"} & capabilities)
-    if has_projection and has_coordination:
-        return "full"
-    if has_projection:
-        return "channel"
-    if has_coordination:
-        return "coordination"
-    return "full"
-
-
 class BusHealthPublication:
     def __init__(self, bus: ControlPlaneBus, directory: ControlPlaneDirectory) -> None:
         self._bus = bus
@@ -46,7 +33,7 @@ class BusHealthPublication:
             AuthorityStatus(
                 authority_ref=authority_ref,
                 connectivity_state="configured",
-                registry_scope=_registry_scope_for_capabilities(
+                capabilities=sorted(
                     self._directory.capabilities_for_authority(authority_ref)
                 ),
             )

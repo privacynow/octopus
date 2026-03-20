@@ -230,7 +230,7 @@ async def test_health_publication_fans_out_to_health_authorities_only() -> None:
     assert [cmd.authority_ref for cmd in bus.submitted] == ["registry:alpha"]
 
 
-def test_health_publication_connection_summary_maps_authority_scope_from_directory() -> None:
+def test_health_publication_connection_summary_reports_authority_capabilities() -> None:
     directory = ControlPlaneDirectory()
     directory.register(capability="conversation_projection", authority_ref="registry:full")
     directory.register(capability="task_routing", authority_ref="registry:full")
@@ -244,17 +244,17 @@ def test_health_publication_connection_summary_maps_authority_scope_from_directo
         {
             "authority_ref": "registry:channel",
             "connectivity_state": "configured",
-            "registry_scope": "channel",
+            "capabilities": ["conversation_projection"],
         },
         {
             "authority_ref": "registry:coord",
             "connectivity_state": "configured",
-            "registry_scope": "coordination",
+            "capabilities": ["agent_directory"],
         },
         {
             "authority_ref": "registry:full",
             "connectivity_state": "configured",
-            "registry_scope": "full",
+            "capabilities": ["conversation_projection", "task_routing"],
         },
     ]
 

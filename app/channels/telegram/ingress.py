@@ -778,7 +778,7 @@ async def cmd_discover(runtime: TelegramRuntime, event, update: Update, context:
     coordination_authorities = [
         authority
         for authority in summary.authorities
-        if authority.registry_scope in {"coordination", "full"}
+        if "agent_directory" in authority.capabilities
     ]
     if not coordination_authorities:
         rendered = telegram_presenters.discover_not_enrolled_message()

@@ -35,6 +35,15 @@ class TelegramBootstrap:
     worker_deserialize_failure_notifier: Callable[[dict[str, object]], Awaitable[None]] | None = None
 
 
+@dataclass(frozen=True)
+class TelegramWorkerBundle:
+    """Runtime-only Telegram worker bundle for non-Telegram ingress processes."""
+
+    runtime: TelegramRuntime
+    worker_dispatch: Callable[[str, Any, dict], Awaitable[None]]
+    worker_deserialize_failure_notifier: Callable[[dict[str, object]], Awaitable[None]] | None = None
+
+
 def _execution_runtime(runtime: TelegramRuntime):
     execution_collaborators = telegram_execution.bind_execution_collaborators(
         runtime,
@@ -179,14 +188,12 @@ def build_application(runtime: TelegramRuntime) -> Application:
     return app
 
 
-def build_bootstrap(config: BotConfig, provider: Provider) -> TelegramBootstrap:
-    """Construct the Telegram runtime, PTB application, and worker dispatch."""
+def build_worker_bundle(config: BotConfig, provider: Provider) -> TelegramWorkerBundle:
+    """Construct the Telegram-owned worker/runtime collaborators without PTB ingress."""
 
     runtime = build_telegram_runtime(config, provider)
-    application = build_application(runtime)
     execution_runtime = _execution_runtime(runtime)
-    return TelegramBootstrap(
-        application=application,
+    return TelegramWorkerBundle(
         runtime=runtime,
         worker_dispatch=functools.partial(
             telegram_worker.worker_dispatch,
@@ -197,4 +204,18 @@ def build_bootstrap(config: BotConfig, provider: Provider) -> TelegramBootstrap:
             telegram_worker.notify_deserialize_failure,
             runtime=runtime,
         ),
+    )
+
+
+def build_bootstrap(config: BotConfig, provider: Provider) -> TelegramBootstrap:
+    """Construct the Telegram runtime, PTB application, and worker dispatch."""
+
+    worker_bundle = build_worker_bundle(config, provider)
+    runtime = worker_bundle.runtime
+    application = build_application(runtime)
+    return TelegramBootstrap(
+        application=application,
+        runtime=runtime,
+        worker_dispatch=worker_bundle.worker_dispatch,
+        worker_deserialize_failure_notifier=worker_bundle.worker_deserialize_failure_notifier,
     )

@@ -233,6 +233,29 @@
   - registry service scope enforcement now exists end to end across HTTP, SQLite, Postgres, and runtime enrollment
   - coordination-only connections no longer receive channel deliveries, and channel-only connections cannot access coordination endpoints
   - full suite status after slice 9: `1821 passed, 23 skipped`
+- Complete: Slice 10 Telegram optionality.
+  Scope:
+  - updated `validate_config()` so startup now requires at least one ingress-capable channel instead of always requiring `TELEGRAM_BOT_TOKEN`
+  - added `build_worker_bundle()` in `app/channels/telegram/bootstrap.py` so registry-only processes can reuse the existing Telegram worker/runtime collaborators without constructing PTB ingress
+  - rewired `main.py` to register Telegram only when a token is configured and to start registry-only processes through `run_dispatcher_process(..., startup=..., shutdown=...)`
+  - kept the existing Telegram lifecycle path intact by preserving `post_init` / `post_shutdown` ownership when Telegram ingress is present, while using the same background-runtime helpers for the no-Telegram path
+  - added config and startup tests covering channel-capable registry-only bots, coordination-only/no-channel rejection, and registry-only process startup without Telegram bootstrap
+  Tests:
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_config.py`
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_config.py tests/test_registry_runtime.py tests/test_telegram_channel_state.py tests/test_handlers.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified registry-only startup uses `build_worker_bundle()` and `RegistryRuntime` without constructing `TelegramChannelBootstrap`
+  - verified no-channel bots are rejected while channel/full registry connections satisfy the ingress requirement without a Telegram token
+  - verified Telegram-present startup still goes through the existing dispatcher-owned Telegram ingress path and only builds ingresses once
+  Review:
+  - the slice extends existing seams instead of inventing a registry-only runtime framework: dispatcher still owns ingress lifecycle, Telegram bootstrap still owns PTB app construction, and the shared background-runtime helpers own worker/registry startup for both paths
+  - `build_worker_bundle()` factors reusable worker/runtime construction out of `build_bootstrap()` so registry-only mode does not duplicate Telegram execution setup
+  - registry-only support intentionally stops at the plan boundary here; credential-store requirements and other non-channel runtime concerns remain unchanged and were not broadened into speculative config rules
+  Verified:
+  - Telegram is now optional for bots that have at least one channel-capable registry connection
+  - coordination-only/no-channel bots still fail fast at config validation
+  - full suite status after slice 10: `1824 passed, 23 skipped`
 
 # Octopus CLI Implementation Status
 

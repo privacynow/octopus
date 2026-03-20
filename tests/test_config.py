@@ -87,6 +87,47 @@ def test_validate_config_missing_token():
     assert any("TOKEN" in e for e in errors2)
     assert any("env file" in e or "./octopus" in e for e in errors2)
 
+def test_validate_config_accepts_channel_capable_registry_without_telegram():
+    registry = RegistryConnectionConfig(
+        registry_id="prod",
+        url="http://registry.test",
+        enroll_token="enroll-secret",
+        registry_scope="channel",
+        poll_interval_seconds=5.0,
+    )
+    errors = validate_config(
+        make_config(
+            telegram_token="",
+            agent_mode="registry",
+            agent_registries=(registry,),
+            agent_registry_url=registry.url,
+            agent_registry_enroll_token=registry.enroll_token,
+        )
+    )
+
+    assert not any("ingress-capable channel" in error for error in errors)
+
+def test_validate_config_rejects_coordination_only_registry_without_telegram():
+    registry = RegistryConnectionConfig(
+        registry_id="ops",
+        url="http://registry.test",
+        enroll_token="enroll-secret",
+        registry_scope="coordination",
+        poll_interval_seconds=5.0,
+    )
+    errors = validate_config(
+        make_config(
+            telegram_token="",
+            agent_mode="registry",
+            agent_registries=(registry,),
+            agent_registry_url=registry.url,
+            agent_registry_enroll_token=registry.enroll_token,
+        )
+    )
+
+    assert any("ingress-capable channel" in error for error in errors)
+    assert any("TELEGRAM_BOT_TOKEN" in error or "BOT_AGENT_REGISTRY_SCOPE" in error for error in errors)
+
 def test_validate_config_bad_provider():
     errors3 = validate_config(
         make_config(
@@ -471,6 +512,90 @@ def test_main_registry_runtime_starts_and_stops_with_dispatcher_lifecycle():
     registry_runtime.register_channels.assert_called_once_with()
     registry_runtime.start.assert_awaited_once()
     registry_runtime.stop.assert_awaited_once()
+
+
+def test_main_registry_only_starts_without_telegram_ingress():
+    registry = RegistryConnectionConfig(
+        registry_id="prod",
+        url="http://registry.test",
+        enroll_token="enroll-secret",
+        registry_scope="channel",
+        poll_interval_seconds=5.0,
+    )
+    cfg = make_config(
+        telegram_token="",
+        credential_key="credential-secret",
+        agent_mode="registry",
+        agent_registries=(registry,),
+        agent_registry_url=registry.url,
+        agent_registry_enroll_token=registry.enroll_token,
+        runtime_mode="shared",
+        process_role="webhook",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+    )
+    provider = _runtime_ok_provider()
+    dispatcher = MagicMock()
+    dispatcher_runner = AsyncMock(return_value=None)
+    worker_bundle = SimpleNamespace(
+        runtime=SimpleNamespace(
+            boot_id="registry-only-boot",
+            channel_dispatcher=None,
+            registry_runtime=None,
+        ),
+        worker_dispatch=MagicMock(),
+        worker_deserialize_failure_notifier=None,
+    )
+    registry_runtime = SimpleNamespace(
+        register_channels=MagicMock(),
+        start=AsyncMock(return_value=None),
+        stop=AsyncMock(return_value=None),
+    )
+
+    async def _run_dispatcher(_dispatcher, *, startup=None, shutdown=None):
+        assert startup is not None
+        assert shutdown is not None
+        stop_event = asyncio.Event()
+        await startup(stop_event)
+        await shutdown()
+
+    dispatcher_runner.side_effect = _run_dispatcher
+
+    with patch("app.main.load_config", return_value=cfg), \
+         patch("app.main.make_provider", return_value=provider), \
+         patch("app.main.fail_fast"), \
+         patch("app.runtime_backend.init"), \
+         patch("app.main.ensure_data_dirs"), \
+         patch("app.main.init_content_store_for_config"), \
+         patch("app.main.init_credential_store_for_config"), \
+         patch("app.main.ChannelDispatcher", return_value=dispatcher), \
+         patch("app.main.TelegramChannelBootstrap") as telegram_bootstrap, \
+         patch("app.main.build_worker_bundle", return_value=worker_bundle) as build_worker_bundle_mock, \
+         patch("app.main.RegistryRuntime", return_value=registry_runtime), \
+         patch("app.main.run_dispatcher_process", dispatcher_runner), \
+         patch("app.main.close_db"), \
+         patch("app.main.close_transport_db"), \
+         patch("app.main.recover_stale_claims"), \
+         patch("app.main.purge_old"), \
+         patch("sys.argv", ["bot"]):
+        from app.main import main
+
+        main()
+
+    telegram_bootstrap.assert_not_called()
+    build_worker_bundle_mock.assert_called_once_with(cfg, provider)
+    dispatcher.build_all_ingresses.assert_not_called()
+    registry_runtime.register_channels.assert_called_once_with()
+    registry_runtime.start.assert_awaited_once()
+    registry_runtime.stop.assert_awaited_once()
+    dispatcher_runner.assert_awaited_once()
+    await_args = dispatcher_runner.await_args
+    assert await_args is not None
+    assert await_args.args == (dispatcher,)
+    assert callable(await_args.kwargs["startup"])
+    assert callable(await_args.kwargs["shutdown"])
+    assert worker_bundle.runtime.channel_dispatcher is dispatcher
+    assert worker_bundle.runtime.registry_runtime is registry_runtime
 
 
 def test_main_webhook_role_skips_provider_runtime_validation():

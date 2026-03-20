@@ -606,9 +606,15 @@ def validate_config(config: BotConfig) -> list[str]:
     """Return list of errors. Empty means healthy."""
     errors: list[str] = []
 
-    if not config.telegram_token:
+    has_registry_ingress_channel = (
+        config.agent_mode == AgentMode.REGISTRY.value
+        and any(registry.registry_scope in {"channel", "full"} for registry in config.agent_registries)
+    )
+    if not config.telegram_token and not has_registry_ingress_channel:
         errors.append(
-            "TELEGRAM_BOT_TOKEN is not set. Get a token from @BotFather and set it in your bot env file, or run ./octopus."
+            "At least one ingress-capable channel is required. Set TELEGRAM_BOT_TOKEN in your bot env file, "
+            "or configure a registry connection with BOT_AGENT_REGISTRY_SCOPE=channel/full "
+            "(or BOT_AGENT_REGISTRY_<n>_SCOPE=channel/full), or run ./octopus."
         )
 
     if config.provider_name not in ProviderName._value2member_map_:

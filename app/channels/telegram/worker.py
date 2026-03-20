@@ -11,7 +11,6 @@ from typing import Any, AsyncIterator
 from app import work_queue
 from app.agents.bridge import (
     publish_timeline_event as publish_single_registry_timeline,
-    publish_timeline_to_registries,
     summarize_text,
     telegram_conversation_ref,
 )
@@ -210,9 +209,8 @@ async def _publish_timeline_event_for_runtime(
 ) -> None:
     conversation_ref = str(kwargs.get("conversation_ref", ""))
     dispatcher = _channel_dispatcher(runtime)
-    if runtime.registry_runtime is not None and dispatcher.channel_type_for_ref(conversation_ref) == "telegram":
-        await publish_timeline_to_registries(
-            runtime.registry_runtime,
+    if dispatcher.channel_type_for_ref(conversation_ref) == "telegram":
+        await runtime.services.control_plane.conversation_projection.publish_external_timeline(
             conversation_ref=conversation_ref,
             kind=str(kwargs.get("kind", "")),
             title=str(kwargs.get("title", "")),

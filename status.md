@@ -723,3 +723,19 @@
   - Telegram egress now depends only on the conversation-projection capability port for bind/input/outcome/timeline projection
   - positive and negative egress paths are covered: normal projection, missing-conversation bind skip, disabled input mirroring skip, outcome projection, and timeline event-id forwarding
   - full suite status after slice 6A: `1885 passed, 23 skipped`
+- Complete: Slice 6B cut progress and worker timeline to ports.
+  Scope:
+  - rewired `app/channels/telegram/progress.py` so `progress_timeline_callback()` publishes through `runtime.services.control_plane.conversation_projection` instead of bridge/runtime mirroring helpers
+  - rewired `app/channels/telegram/worker.py::_publish_timeline_event_for_runtime()` so Telegram refs project through the same conversation-projection port even when no live `registry_runtime` is present
+  - kept registry refs on the existing single-scoped timeline path for now, which matches the plan’s slice boundary and avoids pulling finalization/registry cleanup forward
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_telegram_progress_module.py tests/test_telegram_worker_timeline.py tests/test_telegram_execution_module.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - the slice removes the remaining Telegram timeline branch on live runtime presence; Telegram projection now depends on the same startup-owned capability port in egress, progress, and worker timeline paths
+  - the worker helper still routes registry refs through the existing single-scoped publication seam, which keeps the ref-sensitive behavior intact until the later registry cleanup slices own that contract migration
+  - no new control-plane abstraction or helper was introduced; the change stays within the existing runtime/services boundary and the existing ref-type split in worker timeline publication
+  Verified:
+  - Telegram progress and worker-owned usage/timeline publication no longer require `runtime.registry_runtime` to mirror externally
+  - positive and negative paths are covered: progress projection, progress without live runtime, Telegram-ref worker projection through the port, and registry-ref worker publication staying single-scoped
+  - full suite status after slice 6B: `1885 passed, 23 skipped`

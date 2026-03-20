@@ -87,20 +87,6 @@ def _progress_summary(html_text: str, *, limit: int = 200) -> str:
     return trim_text(body, limit)
 
 
-def _routed_task_status(summary: str) -> str:
-    if summary in {
-        _msg.progress_completed(),
-        _msg.progress_completed_with_blocked(),
-        "Delegation plan ready.",
-    }:
-        return "completed"
-    if summary == _msg.cancel_live_completed():
-        return "cancelled"
-    if summary == _msg.approval_timeout() or summary.startswith("Request timed out after "):
-        return "failed"
-    return "running"
-
-
 async def routed_task_progress_callback(
     runtime: TelegramRuntime,
     routed_task_id: str,
@@ -116,7 +102,9 @@ async def routed_task_progress_callback(
     await runtime.services.control_plane.task_routing.update_routed_task_status(
         update=RoutedTaskUpdate(
             routed_task_id=routed_task_id,
-            status=_routed_task_status(summary),
+            # Terminal routed-task state is owned by report_routed_task_result().
+            # Progress callbacks only publish in-flight summaries.
+            status="running",
             summary=summary,
         ),
         authority_ref=authority_ref,

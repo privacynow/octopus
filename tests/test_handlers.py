@@ -775,7 +775,7 @@ async def test_registry_routed_task_progress_updates_task_status(monkeypatch):
         last_authority_ref, last_update = status_updates[-1]
         assert last_authority_ref == "registry:default"
         assert last_update.routed_task_id == "routed-task-progress-1"
-        assert last_update.status == "completed"
+        assert last_update.status == "running"
         assert last_update.summary == "Completed."
 
 

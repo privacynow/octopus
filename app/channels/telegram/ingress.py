@@ -22,7 +22,6 @@ from app.session_state import (
     SessionState,
     session_to_dict,
 )
-from app.agents.client import RegistryClientError
 from app.agents.types import AgentDiscoveryQuery
 from app.channels.telegram.delegation_channel import (
     handle_delegation_approve,
@@ -775,17 +774,14 @@ async def cmd_discover(runtime: TelegramRuntime, event, update: Update, context:
         rendered = telegram_presenters.discover_unavailable_standalone_message()
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    registry_runtime = runtime.registry_runtime
-    if registry_runtime is None or not registry_runtime.has_coordination_connections():
+    summary = runtime.services.control_plane.health_publication.connection_summary()
+    coordination_authorities = [
+        authority
+        for authority in summary.authorities
+        if authority.registry_scope in {"coordination", "full"}
+    ]
+    if not coordination_authorities:
         rendered = telegram_presenters.discover_not_enrolled_message()
-        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-        return
-    if not registry_runtime.has_connected_coordination_connection():
-        if not registry_runtime.has_enrolled_coordination_connection():
-            rendered = telegram_presenters.discover_not_enrolled_message()
-            await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
-            return
-        rendered = telegram_presenters.discover_degraded_message(registry_runtime.first_coordination_error())
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     query, error = _parse_discovery_query(event.args)
@@ -794,13 +790,19 @@ async def cmd_discover(runtime: TelegramRuntime, event, update: Update, context:
         await update.effective_message.reply_text(error or rendered.text, parse_mode=rendered.parse_mode)
         return
     try:
-        agents = await registry_runtime.discover(query)
-    except RegistryClientError as exc:
-        rendered = telegram_presenters.discover_failed_message(exc.error_code)
+        search = await runtime.services.control_plane.agent_directory.search_agents(query=query)
+    except Exception:
+        rendered = telegram_presenters.discover_failed_message("registry_request_failed")
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
-    rendered = telegram_presenters.discover_results_message(agents)
+    if search.status == "unavailable":
+        rendered = telegram_presenters.discover_degraded_message("registry_unreachable")
+        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        return
+    rendered = telegram_presenters.discover_results_message(search.agents)
     await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+
+
 @_command_handler
 async def cmd_export(
     runtime: TelegramRuntime,

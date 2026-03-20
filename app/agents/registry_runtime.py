@@ -114,17 +114,6 @@ class RegistryRuntime:
         if task_failures:
             raise task_failures[0]
 
-    def clients_for_mirroring(self) -> list[tuple[str, AgentRegistryClient]]:
-        clients: list[tuple[str, AgentRegistryClient]] = []
-        for registry in self._registries:
-            if registry.registry_scope not in {"channel", "full"}:
-                continue
-            client = self._client_for_registry(registry.registry_id)
-            if client is None:
-                continue
-            clients.append((registry.registry_id, client))
-        return clients
-
     def channel_capabilities(self) -> tuple[str, ...]:
         return tuple(self._dispatcher.active_channel_types())
 

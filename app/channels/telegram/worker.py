@@ -209,7 +209,6 @@ def _build_channel_egress(
         config=runtime.config,
         bot=bot_instance,
         conversation_key=conversation_key,
-        registry_runtime=runtime.registry_runtime,
         source=source,
         routed_task_id=routed_task_id,
         target_message_id=target_message_id,

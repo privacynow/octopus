@@ -45,7 +45,7 @@ def telegram_conversation_ref(config: BotConfig, chat_id: int) -> str:
     return f"telegram:{bot_identity(config.data_dir)}:{chat_id}"
 
 
-def resolve_registry_connection(
+def _resolve_registry_connection(
     config: BotConfig,
     *,
     registry_id: str | None = None,
@@ -62,12 +62,12 @@ def resolve_registry_connection(
     )
 
 
-def registry_connection_client(
+def _registry_connection_client(
     config: BotConfig,
     *,
     registry_id: str | None = None,
 ) -> AgentRegistryClient | None:
-    registry = resolve_registry_connection(config, registry_id=registry_id)
+    registry = _resolve_registry_connection(config, registry_id=registry_id)
     if registry is None:
         return None
     state = load_runtime_registry_connection_state(
@@ -89,7 +89,7 @@ async def bind_conversation(
     external_id: str,
     registry_id: str | None = None,
 ) -> None:
-    client = registry_connection_client(config, registry_id=registry_id)
+    client = _registry_connection_client(config, registry_id=registry_id)
     if client is None:
         return
     try:
@@ -101,31 +101,6 @@ async def bind_conversation(
         )
     except RegistryClientError as exc:
         log.debug("Registry conversation bind failed for %s: %s", conversation_ref, exc)
-
-
-async def bind_conversation_to_registries(
-    registry_runtime,
-    *,
-    conversation_ref: str,
-    title: str,
-    origin_channel: str,
-    external_id: str,
-) -> None:
-    for registry_id, client in registry_runtime.clients_for_mirroring():
-        try:
-            await client.sync_binding(
-                conversation_id=conversation_ref,
-                title=title,
-                origin_channel=origin_channel,
-                external_id=external_id,
-            )
-        except RegistryClientError as exc:
-            log.debug(
-                "Registry %s conversation bind failed for %s: %s",
-                registry_id,
-                conversation_ref,
-                exc,
-            )
 
 
 async def publish_timeline_event(
@@ -141,7 +116,7 @@ async def publish_timeline_event(
     event_id: str | None = None,
     registry_id: str | None = None,
 ) -> None:
-    client = registry_connection_client(config, registry_id=registry_id)
+    client = _registry_connection_client(config, registry_id=registry_id)
     if client is None:
         return
     event = TimelineEvent(
@@ -158,40 +133,6 @@ async def publish_timeline_event(
         await client.publish_timeline([event])
     except RegistryClientError as exc:
         log.debug("Registry timeline publish failed for %s: %s", conversation_ref, exc)
-
-
-async def publish_timeline_to_registries(
-    registry_runtime,
-    *,
-    conversation_ref: str,
-    kind: str,
-    title: str,
-    body: str = "",
-    status: str = "",
-    progress: int | None = None,
-    metadata: dict[str, Any] | None = None,
-    event_id: str | None = None,
-) -> None:
-    event = TimelineEvent(
-        event_id=event_id or uuid.uuid4().hex,
-        conversation_id=conversation_ref,
-        kind=kind,
-        title=title,
-        body=body,
-        status=status,
-        progress=progress,
-        metadata=metadata or {},
-    )
-    for registry_id, client in registry_runtime.clients_for_mirroring():
-        try:
-            await client.publish_timeline([event])
-        except RegistryClientError as exc:
-            log.debug(
-                "Registry %s timeline publish failed for %s: %s",
-                registry_id,
-                conversation_ref,
-                exc,
-            )
 
 
 def build_registry_message_delivery(

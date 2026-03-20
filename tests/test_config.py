@@ -578,7 +578,6 @@ def test_main_registry_only_starts_without_telegram_ingress():
         runtime=SimpleNamespace(
             boot_id="registry-only-boot",
             channel_dispatcher=None,
-            registry_runtime=None,
         ),
         worker_dispatch=MagicMock(),
         worker_deserialize_failure_notifier=None,
@@ -656,7 +655,6 @@ def test_main_registry_only_starts_without_telegram_ingress():
     assert callable(await_args.kwargs["startup"])
     assert callable(await_args.kwargs["shutdown"])
     assert worker_bundle.runtime.channel_dispatcher is dispatcher
-    assert worker_bundle.runtime.registry_runtime is registry_runtime
 
 
 def test_main_shared_worker_with_registries_skips_control_plane_processor_startup():

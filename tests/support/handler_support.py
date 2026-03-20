@@ -31,7 +31,6 @@ from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime.services import build_bus_bot_services, build_noop_bot_services
 from app.storage import close_db, ensure_data_dirs, load_session
 from app import work_queue as _work_queue
-from app.agents.registry_runtime import RegistryRuntime
 from tests.support.config_support import make_config as _make_config
 
 
@@ -530,18 +529,9 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
     )
     dispatcher = ChannelDispatcher()
     dispatcher.register(TelegramChannelBootstrap(config, provider, services))
-    registry_runtime = None
     if config.agent_mode == "registry" and config.agent_registries:
         register_registry_channels(config, config.agent_registries, dispatcher)
-        registry_runtime = RegistryRuntime(
-            config.agent_registries,
-            dispatcher,
-            None,
-            config=config,
-            provider=provider,
-        )
     _TEST_RUNTIME.channel_dispatcher = dispatcher
-    _TEST_RUNTIME.registry_runtime = registry_runtime
     _TEST_APPLICATION = build_application(_TEST_RUNTIME)
     _TEST_RUNTIME.bot_instance = test_bot
 

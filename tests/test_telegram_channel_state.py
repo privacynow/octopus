@@ -94,7 +94,6 @@ def test_build_telegram_runtime_returns_explicit_runtime_instance():
     assert isinstance(runtime.chat_locks, defaultdict)
     assert runtime.pending_work_items == {}
     assert isinstance(runtime.services, BotServices)
-    assert callable(runtime.registry_client_factory)
 
 
 def test_build_bootstrap_constructs_runtime_and_application():

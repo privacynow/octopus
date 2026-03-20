@@ -739,6 +739,23 @@ def test_registry_owned_paths_do_not_invent_default_registry_or_first_registry_s
     assert 'else "default"' not in runtime_text
 
 
+def test_dead_registry_runtime_api_is_deleted() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    registry_runtime_path = repo_root / "app" / "agents" / "registry_runtime.py"
+    registry_runtime_text = registry_runtime_path.read_text()
+    assert "def runtime_for_registry(" not in registry_runtime_text
+    assert "def resolve_target_registry_id(" not in registry_runtime_text
+
+    for path in repo_root.joinpath("app").rglob("*.py"):
+        if path == registry_runtime_path:
+            continue
+        text = path.read_text()
+        assert "runtime_for_registry(" not in text, f"runtime_for_registry survived in {path}"
+        assert "resolve_target_registry_id(" not in text, (
+            f"resolve_target_registry_id survived in {path}"
+        )
+
+
 def test_worker_dispatch_documents_completion_ownership() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"

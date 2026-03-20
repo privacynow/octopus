@@ -865,3 +865,20 @@
   - cleanup regressions now fail fast in the test suite if registry runtime/client tokens leak back into Telegram/workflow orchestration
   - the removed multi-registry fan-out helper names are now guarded repo-wide
   - full suite status after slice 7C: `1888 passed, 23 skipped`
+- Complete: Slice 8 production-shape integration tests.
+  Scope:
+  - added `tests/test_control_plane_integration.py` with ownership-boundary integration coverage that exercises the real bus → runner → processor path against store-backed registry clients instead of unit-only monkeypatch seams
+  - covered shared-worker Telegram projection across multiple registries, shared-worker routed-task result reporting, local-mode bus + processor execution, registry-only bot projection without Telegram runtime, degraded-registry isolation, coordination-only projection suppression, command durability across runtime restart, and routed-task status persistence with timeline events/progress
+  - kept the test harness aligned with the actual architecture by reusing `RegistryRuntime`, `RegistryControlProcessor`, `ProcessorRunner`, `ControlPlaneBus`, and the real SQLite registry store, while only faking the network client boundary
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_control_plane_integration.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - the first integration pass exposed only harness-level issues: polling helpers that treated “not processed yet” as a hard failure, and one stale `TimelineEvent` constructor argument; fixing those left the production path unchanged and green
+  - the new file stays within the plan’s architecture bar: consumers operate through capability ports, the runner owns dispatch/retry/lease behavior, and verification happens at the registry store boundary rather than through direct client assertions alone
+  - the registry-only and coordination-only tests are particularly important because they guard the two easy regression shapes: assuming Telegram is always present, and accidentally enqueuing projection work for authorities that do not own that capability
+  Verified:
+  - shared worker + multiple registries now has production-shape coverage for bind/input/progress/outcome/usage projection through the durable bus path
+  - routed-task result and routed-task status updates are verified end to end through the processor into the registry store, including timeline-event progress persistence
+  - command persistence across runtime restart is covered with a real pending command surviving backend reset and later processing
+  - full suite status after slice 8: `1896 passed, 23 skipped`

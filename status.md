@@ -608,3 +608,22 @@
   - the control-plane bus now has typed command/reply contracts and validated payload models without introducing persistence or runtime wiring ahead of schedule
   - lifecycle invariants for retry budget and lease-expiry reclaim are now explicit and tested instead of being deferred to store-specific SQL
   - full suite status after slice 3A: `1844 passed, 23 skipped`
+- Complete: Slice 3B bus storage and runtime backend seam.
+  Scope:
+  - added `app/control_plane/bus.py` as the async facade over `runtime_backend.control_plane_store()`
+  - added SQLite and Postgres control-plane store implementations in `app/control_plane/sqlite_impl.py` and `app/control_plane/postgres_impl.py`, including submit/request primitives, pair-aware claiming, lease renewal, expiry reclaim, retry backoff, idempotency, and orphan reconciliation
+  - extended `app/runtime_backend.py` so backend selection now owns `control_plane_store` alongside the existing session and transport stores
+  - added Postgres migration `app/db/migrations/postgres/0013_control_plane_commands.sql` and updated the Postgres test truncation helper to reset the new runtime table between tests
+  - added backend-neutral contract coverage in `tests/contracts/test_control_plane_store_contract.py`
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/contracts/test_control_plane_store_contract.py`
+  - `./.venv/bin/python -m compileall app/control_plane app/runtime_backend.py tests/contracts/test_control_plane_store_contract.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - the storage slice extends the existing runtime-backend seam instead of introducing a second backend-selection path; `database_url` branching remains centralized in `app/runtime_backend.py`
+  - the new control-plane store follows the existing transport-store pattern: backend-neutral protocol, SQLite/Postgres implementations, migration-backed Postgres schema, and contract tests running through the selected backend
+  - the initial implementation review found an idempotency race under concurrent submit; both backends were hardened to query-and-return the existing command after a unique-conflict rollback so dedup remains stable under contention
+  Verified:
+  - the bus now has durable SQLite/Postgres persistence with pair-aware claiming and backend-selection parity
+  - runtime backend reset/init owns the control-plane store lifecycle just like session and transport
+  - full suite status after slice 3B: `1860 passed, 23 skipped`

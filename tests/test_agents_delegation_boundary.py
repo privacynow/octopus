@@ -4,11 +4,11 @@ from app.agents.delegation import (
     handle_delegation_approve,
     handle_delegation_cancel,
 )
-from app.agents.state import save_registry_connection_state
-from app.agents.types import RegistryConnectionState
+from app.ports.agent_directory import AuthorityResolution
+from app.ports.task_routing import TaskSubmissionResult
 from app.storage import default_session, save_session
 from tests.support.config_support import make_registry_connection
-from tests.support.handler_support import fresh_env, load_session_disk
+from tests.support.handler_support import current_runtime, fresh_env, load_session_disk
 
 
 class _ChannelEgress:
@@ -28,23 +28,24 @@ async def test_delegation_approve_boundary_uses_explicit_runtime(monkeypatch):
     ) as (data_dir, cfg, prov):
         submitted = []
 
-        class FakeRegistryClient:
-            async def submit_routed_task(self, request):
-                submitted.append(request)
-                return {"ok": True}
+        async def fake_resolve_target_authority(*, target_agent_id):
+            assert target_agent_id == "developer-1"
+            return AuthorityResolution(status="resolved", authority_ref="registry:default")
+
+        async def fake_submit_routed_task(*, request, authority_ref):
+            assert authority_ref == "registry:default"
+            submitted.append(request)
+            return TaskSubmissionResult(status="accepted", routed_task_id=request.routed_task_id)
 
         monkeypatch.setattr(
-            "app.agents.delegation.registry_connection_client",
-            lambda _cfg, registry_id=None: FakeRegistryClient(),
+            current_runtime().services.control_plane.agent_directory,
+            "resolve_target_authority",
+            fake_resolve_target_authority,
         )
-        save_registry_connection_state(
-            data_dir,
-            RegistryConnectionState(
-                registry_id="default",
-                agent_id="origin-agent",
-                agent_token="secret",
-                connectivity_state="connected",
-            ),
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "submit_routed_task",
+            fake_submit_routed_task,
         )
 
         chat_id = 12345
@@ -74,6 +75,8 @@ async def test_delegation_approve_boundary_uses_explicit_runtime(monkeypatch):
                 config=cfg,
                 provider_name=prov.name,
                 provider_state_factory=prov.new_provider_state,
+                task_routing=current_runtime().services.control_plane.task_routing,
+                agent_directory=current_runtime().services.control_plane.agent_directory,
             ),
         )
 
@@ -126,6 +129,8 @@ async def test_delegation_cancel_boundary_uses_explicit_runtime():
                 config=cfg,
                 provider_name=prov.name,
                 provider_state_factory=prov.new_provider_state,
+                task_routing=current_runtime().services.control_plane.task_routing,
+                agent_directory=current_runtime().services.control_plane.agent_directory,
             ),
         )
 

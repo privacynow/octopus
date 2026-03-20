@@ -1,7 +1,7 @@
 from app.agents.bridge import telegram_conversation_ref
-from app.agents.state import save_registry_connection_state
-from app.agents.types import RegistryConnectionState
 from app.identity import telegram_conversation_key
+from app.ports.agent_directory import AuthorityResolution
+from app.ports.task_routing import TaskSubmissionResult
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
 from tests.support.config_support import make_registry_connection
@@ -82,43 +82,24 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
 
         submitted = []
 
-        class FakeRegistryClient:
-            async def submit_routed_task(self, request):
-                submitted.append(request)
-                return {"ok": True}
+        async def fake_resolve_target_authority(*, target_agent_id):
+            assert target_agent_id == "developer-1"
+            return AuthorityResolution(status="resolved", authority_ref="registry:default")
 
-        class FakeRegistryRuntime:
-            def has_coordination_connections(self):
-                return True
+        async def fake_submit_routed_task(*, request, authority_ref):
+            submitted.append((request, authority_ref))
+            return TaskSubmissionResult(status="accepted", routed_task_id=request.routed_task_id)
 
-            def has_connected_coordination_connection(self):
-                return True
-
-            def first_coordination_error(self):
-                return ""
-
-            async def resolve_target_registry_id(self, target_agent_id, *, hinted_registry_id=""):
-                assert target_agent_id == "developer-1"
-                return hinted_registry_id or "default"
-
-            def client_for_registry(self, registry_id):
-                assert registry_id == "default"
-                return FakeRegistryClient()
-
-            def origin_agent_id(self, registry_id):
-                assert registry_id == "default"
-                return "origin-agent"
-
-        save_registry_connection_state(
-            data_dir,
-            RegistryConnectionState(
-                registry_id="default",
-                agent_id="origin-agent",
-                agent_token="secret",
-                connectivity_state="connected",
-            ),
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.agent_directory,
+            "resolve_target_authority",
+            fake_resolve_target_authority,
         )
-        current_runtime().registry_runtime = FakeRegistryRuntime()
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "submit_routed_task",
+            fake_submit_routed_task,
+        )
 
         chat = FakeChat()
         user = FakeUser()
@@ -143,10 +124,12 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
         session_after = load_session_disk(data_dir, telegram_conversation_key(chat.id), prov)
         pending = session_after.get("pending_delegation")
         assert len(submitted) == 1
-        assert submitted[0].routed_task_id == "task-1"
-        assert submitted[0].origin_agent_id == "origin-agent"
-        assert submitted[0].target_agent_id == "developer-1"
-        assert submitted[0].instructions == "Build the feature end to end."
+        request, authority_ref = submitted[0]
+        assert request.routed_task_id == "task-1"
+        assert request.origin_agent_id == ""
+        assert request.target_agent_id == "developer-1"
+        assert request.instructions == "Build the feature end to end."
+        assert authority_ref == "registry:default"
         assert pending is not None
         assert pending["status"] == "submitted"
         assert pending["tasks"][0]["registry_id"] == "default"
@@ -167,14 +150,14 @@ async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_s
 
         called = []
 
-        class FakeRegistryClient:
-            async def submit_routed_task(self, request):
-                called.append(request)
-                return {"ok": True}
+        async def fake_submit_routed_task(*, request, authority_ref):
+            called.append((request, authority_ref))
+            return TaskSubmissionResult(status="accepted", routed_task_id=request.routed_task_id)
 
         monkeypatch.setattr(
-            "app.agents.delegation.registry_connection_client",
-            lambda cfg, registry_id=None: FakeRegistryClient(),
+            current_runtime().services.control_plane.task_routing,
+            "submit_routed_task",
+            fake_submit_routed_task,
         )
 
         chat = FakeChat()
@@ -216,36 +199,24 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
 
         called = []
 
-        class FakeRegistryClient:
-            async def submit_routed_task(self, request):
-                called.append(request)
-                return {"ok": True}
+        async def fake_resolve_target_authority(*, target_agent_id):
+            del target_agent_id
+            return AuthorityResolution(status="unavailable", error="registry_unreachable")
 
-        class FakeRegistryRuntime:
-            def has_coordination_connections(self):
-                return True
+        async def fake_submit_routed_task(*, request, authority_ref):
+            called.append((request, authority_ref))
+            return TaskSubmissionResult(status="accepted", routed_task_id=request.routed_task_id)
 
-            def has_connected_coordination_connection(self):
-                return False
-
-            def has_enrolled_coordination_connection(self):
-                return True
-
-            def first_coordination_error(self):
-                return "registry_unreachable"
-
-        save_registry_connection_state(
-            data_dir,
-            RegistryConnectionState(
-                registry_id="default",
-                agent_id="origin-agent",
-                agent_token="secret",
-                connectivity_state="degraded",
-                last_error="registry_unreachable",
-                last_error_detail="Registry poll failed with ConnectError.",
-            ),
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.agent_directory,
+            "resolve_target_authority",
+            fake_resolve_target_authority,
         )
-        current_runtime().registry_runtime = FakeRegistryRuntime()
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "submit_routed_task",
+            fake_submit_routed_task,
+        )
 
         chat = FakeChat()
         user = FakeUser()
@@ -287,16 +258,6 @@ async def test_delegation_approve_no_pending_is_a_no_op():
         import app.channels.telegram.ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
 
-        save_registry_connection_state(
-            data_dir,
-            RegistryConnectionState(
-                registry_id="default",
-                agent_id="origin-agent",
-                agent_token="secret",
-                connectivity_state="connected",
-            ),
-        )
-
         chat = FakeChat()
         user = FakeUser()
         query, msg = await send_callback(th.handle_delegation_callback, chat, user, f"delegation_approve:{chat.id}")
@@ -315,51 +276,26 @@ async def test_delegation_approve_hides_registry_error_text(monkeypatch):
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
-        from app.agents.client import RegistryClientError
         from tests.support.handler_support import FakeChat, FakeUser
 
-        class FakeRegistryClient:
-            async def submit_routed_task(self, request):
-                del request
-                raise RegistryClientError(
-                    "Registry POST /v1/tasks failed: HTTP 503",
-                    error_code="registry_server_error",
-                    operator_detail="Registry POST /v1/tasks failed with HTTP 503 and proxy banner.",
-                    status_code=503,
-                )
+        async def fake_resolve_target_authority(*, target_agent_id):
+            del target_agent_id
+            return AuthorityResolution(status="resolved", authority_ref="registry:default")
 
-        class FakeRegistryRuntime:
-            def has_coordination_connections(self):
-                return True
+        async def fake_submit_routed_task(*, request, authority_ref):
+            del request, authority_ref
+            return TaskSubmissionResult(status="failed", error="registry_server_error")
 
-            def has_connected_coordination_connection(self):
-                return True
-
-            def first_coordination_error(self):
-                return ""
-
-            async def resolve_target_registry_id(self, target_agent_id, *, hinted_registry_id=""):
-                del target_agent_id, hinted_registry_id
-                return "default"
-
-            def client_for_registry(self, registry_id):
-                assert registry_id == "default"
-                return FakeRegistryClient()
-
-            def origin_agent_id(self, registry_id):
-                assert registry_id == "default"
-                return "origin-agent"
-
-        save_registry_connection_state(
-            data_dir,
-            RegistryConnectionState(
-                registry_id="default",
-                agent_id="origin-agent",
-                agent_token="secret",
-                connectivity_state="connected",
-            ),
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.agent_directory,
+            "resolve_target_authority",
+            fake_resolve_target_authority,
         )
-        current_runtime().registry_runtime = FakeRegistryRuntime()
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "submit_routed_task",
+            fake_submit_routed_task,
+        )
 
         chat = FakeChat()
         user = FakeUser()

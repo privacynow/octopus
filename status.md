@@ -757,3 +757,22 @@
   - routed-task result reporting no longer uses registry client factories or `RegistryRuntime.client_for_registry()`
   - explicit and fallback routed-result authority paths are covered, along with non-blocking failure behavior
   - full suite status after slice 6C: `1885 passed, 23 skipped`
+- Complete: Slice 6D cut delegation to ports.
+  Scope:
+  - rewired `app/agents/delegation.py` so delegation approval resolves target ownership through `AgentDirectoryPort.resolve_target_authority()` and submits work through `TaskRoutingPort.submit_routed_task()`
+  - removed delegation imports of registry-client construction helpers and live `registry_runtime` branching; `DelegationRuntime` now carries only the capability ports it needs
+  - rewired `app/channels/telegram/execution.py` so Telegram delegation callbacks build their runtime from `runtime.services.control_plane`
+  - updated Telegram and registry-delivery delegation tests to patch the new control-plane seams instead of monkeypatching registry clients or fake registry runtimes
+  - kept the session-state compatibility shim at the workflow boundary by translating `authority_ref` back to legacy `registry_id` only when marking a task submitted; no new registry client path was introduced
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_handlers_delegation.py tests/test_agents_delegation_boundary.py`
+  - `./.venv/bin/python -m pytest -q tests/test_handlers.py -k "approve_delegation_from_registry_delivery or delegation"`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - delegation now depends on the capability ports only; there are no remaining `registry_runtime`, `registry_connection_client`, or `resolve_registry_connection` references in the slice-owned codepaths
+  - the first full-suite run exposed one stale registry-delivery test still asserting the old runtime/client path; that test was converted to the new services/port seam instead of reintroducing a fallback
+  - the only remaining registry-shaped detail is the intentional legacy `registry_id` compatibility write when updating pending-delegation session state, which matches the plan boundary until provenance generalization lands
+  Verified:
+  - Telegram and registry-delivery delegation approval/cancel flows now route through `AgentDirectoryPort` and `TaskRoutingPort`
+  - positive and negative delegation behavior is covered: success, cancel/no-op, unavailable coordination, hidden backend failure text, and explicit-runtime boundary use
+  - full suite status after slice 6D: `1885 passed, 23 skipped`

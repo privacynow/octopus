@@ -743,6 +743,7 @@ def test_registry_owned_paths_do_not_invent_default_registry_or_first_registry_s
     delivery_path = repo_root / "app" / "agents" / "delivery.py"
     registry_egress_path = repo_root / "app" / "channels" / "registry" / "egress.py"
     runtime_path = repo_root / "app" / "agents" / "runtime.py"
+    agent_types_path = repo_root / "app" / "agents" / "types.py"
 
     bridge_text = bridge_path.read_text()
     assert 'or "default"' not in bridge_text
@@ -756,6 +757,9 @@ def test_registry_owned_paths_do_not_invent_default_registry_or_first_registry_s
     runtime_text = runtime_path.read_text()
     assert "config.agent_registries[0]" not in runtime_text
     assert 'else "default"' not in runtime_text
+
+    agent_types_text = agent_types_path.read_text()
+    assert 'registry_id: str = "default"' not in agent_types_text
 
 
 def test_dead_registry_runtime_api_is_deleted() -> None:

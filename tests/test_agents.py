@@ -62,6 +62,11 @@ def test_telegram_conversation_ref_uses_stable_bot_identity(tmp_path: Path):
     assert conversation_ref == f"telegram:{bot_identity(tmp_path)}:12345"
 
 
+def test_registry_connection_state_requires_explicit_registry_id() -> None:
+    with pytest.raises(TypeError):
+        RegistryConnectionState()
+
+
 def test_load_registry_connection_state_logs_when_file_is_corrupt(tmp_path: Path, caplog):
     state_path = tmp_path / "agent" / "registries" / "default.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)

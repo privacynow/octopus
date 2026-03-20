@@ -627,3 +627,24 @@
   - the bus now has durable SQLite/Postgres persistence with pair-aware claiming and backend-selection parity
   - runtime backend reset/init owns the control-plane store lifecycle just like session and transport
   - full suite status after slice 3B: `1860 passed, 23 skipped`
+- Complete: Slice 4A bus-backed capability adapters.
+  Scope:
+  - added `app/control_plane/directory.py` with the startup-built `ControlPlaneDirectory` used by adapters for capability-to-authority expansion
+  - added bus-backed capability adapters in `app/control_plane/adapters/` for conversation projection, task routing, agent directory, and health publication
+  - implemented targeted fan-out for conversation projection and health publication by expanding one capability-port call into one `ControlCommand` per registered authority
+  - implemented request/reply task routing adapters with typed timeout and failure fallback handling, plus fire-and-forget routed-task status submission that preserves the full `RoutedTaskUpdate` payload shape
+  - implemented agent-directory scatter/gather over targeted authority requests with aggregated `partial` / `unavailable` status handling
+  - added focused adapter coverage in `tests/test_control_plane_adapters.py`
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_control_plane_ports.py tests/test_control_plane_models.py tests/test_control_plane_adapters.py`
+  - `./.venv/bin/python -m compileall app/control_plane/adapters app/control_plane/directory.py tests/test_control_plane_adapters.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - the adapters stay thin and intent-shaped: all routing knowledge comes from `ControlPlaneDirectory`, while command persistence and retry semantics remain in the bus/store layer
+  - targeted fan-out is now explicit and per-authority, which avoids reintroducing the old broadcast ambiguity the plan was written to eliminate
+  - routed-task status updates keep the full domain payload shape instead of collapsing timeline/progress fields into a narrower transport-only shape
+  - the adapter review caught one stray internal deletion in `BusTaskRouting` before commit; it was removed rather than worked around
+  Verified:
+  - capability-port consumers now have one bus-backed path for projection, routing, directory lookups, and health publication without touching registry runtime/client seams
+  - positive and negative adapter paths are covered: multi-authority fan-out, request success, request timeout, targeted unavailability, and directory partial aggregation
+  - full suite status after slice 4A: `1868 passed, 23 skipped`

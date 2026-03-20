@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from app.config import BotConfig
+from app.agents.types import RegistryConnectionConfig
 from app.identity import telegram_actor_key
 from app.session_state import ProjectBinding
 
@@ -92,6 +93,7 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         agent_tags=(),
         agent_description="",
         agent_capabilities=(),
+        agent_registries=(),
         agent_registry_url="",
         agent_registry_enroll_token="",
         agent_poll_interval_seconds=5.0,
@@ -105,6 +107,19 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         db_connect_timeout_seconds=10,
     )
     defaults.update(overrides)
+    if not defaults.get("agent_registries"):
+        agent_registry_url = defaults.get("agent_registry_url", "")
+        agent_registry_enroll_token = defaults.get("agent_registry_enroll_token", "")
+        if agent_registry_url or agent_registry_enroll_token:
+            defaults["agent_registries"] = (
+                RegistryConnectionConfig(
+                    registry_id="default",
+                    url=agent_registry_url,
+                    enroll_token=agent_registry_enroll_token,
+                    registry_scope="full",
+                    poll_interval_seconds=defaults.get("agent_poll_interval_seconds", 5.0),
+                ),
+            )
     if "projects" in defaults:
         defaults["projects"] = _normalize_projects(defaults["projects"])
     return BotConfig(**defaults)

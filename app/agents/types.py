@@ -81,6 +81,29 @@ class AgentCard:
 
 
 @dataclass(frozen=True)
+class RegistryConnectionConfig:
+    registry_id: str
+    url: str
+    enroll_token: str
+    registry_scope: str
+    poll_interval_seconds: float = 5.0
+
+
+@dataclass
+class RegistryConnectionState:
+    registry_id: str = "default"
+    registry_scope: str = "full"
+    agent_id: str = ""
+    agent_token: str = ""
+    poll_cursor: str = "0"
+    registered_slug: str = ""
+    last_successful_contact_at: str = ""
+    connectivity_state: str = "standalone"
+    last_error: str = ""
+    last_error_detail: str = ""
+
+
+@dataclass(frozen=True)
 class AgentDiscoveryQuery:
     role: str = ""
     capabilities: tuple[str, ...] = ()

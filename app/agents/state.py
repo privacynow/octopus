@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from app.agents.types import RegistryConnectionState
 from app.registry_errors import normalize_registry_error_state
 
 log = logging.getLogger(__name__)
@@ -77,6 +78,14 @@ def agent_state_path(data_dir: Path) -> Path:
     return data_dir / "agent" / "registry_state.json"
 
 
+def registry_state_dir(data_dir: Path) -> Path:
+    return data_dir / "agent" / "registries"
+
+
+def registry_connection_state_path(data_dir: Path, registry_id: str) -> Path:
+    return registry_state_dir(data_dir) / f"{registry_id}.json"
+
+
 def load_agent_runtime_state(data_dir: Path) -> AgentRuntimeState:
     path = agent_state_path(data_dir)
     if not path.exists():
@@ -104,6 +113,40 @@ def load_agent_runtime_state(data_dir: Path) -> AgentRuntimeState:
 
 def save_agent_runtime_state(data_dir: Path, state: AgentRuntimeState) -> None:
     path = agent_state_path(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(asdict(state), indent=2, sort_keys=True))
+    path.chmod(0o600)
+
+
+def load_registry_connection_state(data_dir: Path, registry_id: str) -> RegistryConnectionState:
+    path = registry_connection_state_path(data_dir, registry_id)
+    if not path.exists():
+        return RegistryConnectionState(registry_id=registry_id)
+    try:
+        raw = json.loads(path.read_text())
+    except Exception:
+        log.warning("Registry connection state load failed, using defaults", exc_info=True)
+        return RegistryConnectionState(registry_id=registry_id)
+    last_error, last_error_detail = normalize_registry_error_state(
+        str(raw.get("last_error", "")),
+        str(raw.get("last_error_detail", "")),
+    )
+    return RegistryConnectionState(
+        registry_id=str(raw.get("registry_id", registry_id)) or registry_id,
+        registry_scope=str(raw.get("registry_scope", "full")) or "full",
+        agent_id=raw.get("agent_id", ""),
+        agent_token=raw.get("agent_token", ""),
+        poll_cursor=str(raw.get("poll_cursor", "0")),
+        registered_slug=raw.get("registered_slug", ""),
+        last_successful_contact_at=raw.get("last_successful_contact_at", ""),
+        connectivity_state=raw.get("connectivity_state", "standalone"),
+        last_error=last_error,
+        last_error_detail=last_error_detail,
+    )
+
+
+def save_registry_connection_state(data_dir: Path, state: RegistryConnectionState) -> None:
+    path = registry_connection_state_path(data_dir, state.registry_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(asdict(state), indent=2, sort_keys=True))
     path.chmod(0o600)

@@ -31,6 +31,29 @@
   - stable local bot identity now exists as runtime state, not env/config
   - the new channel contracts and dispatcher are in place for later slices
   - full suite status after slice 1: `1777 passed, 23 skipped`
+- Complete: Slice 2 registry connection config and state.
+  Scope:
+  - added `RegistryConnectionConfig` and `RegistryConnectionState` to the shared agent type layer
+  - extended `BotConfig` with `agent_registries` while keeping the old singleton fields projected from the first configured connection
+  - taught `load_config()` to parse indexed `BOT_AGENT_REGISTRY_<n>_*` variables and to synthesize a default `agent_registries` entry from the existing singleton env vars
+  - added per-connection state persistence under `data/agent/registries/<id>.json` without disturbing the old `registry_state.json` path
+  - updated the shared test config factory to project singleton registry inputs into `agent_registries`
+  - made `app.agents` lazy-load `AgentRuntime` / `start_agent_runtime_task` so shared agent types can be imported from `config.py` without a package-init cycle
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_agents.py tests/test_config.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified singleton registry env still projects into `cfg.agent_registries` as `registry_id="default"` while preserving the old `agent_registry_url` / `agent_registry_enroll_token` fields
+  - verified indexed registry env parses into multiple connection configs in order and projects the first entry back to the old singleton fields
+  - verified per-connection state round-trips to `agent/registries/<id>.json`, uses private file permissions, and falls back safely from corrupt JSON
+  Review:
+  - the new config/state path extends the existing config and state seams instead of introducing a second config loader or second state module
+  - the lazy `app.agents` package surface fixed the only slice-2 integration regression at the package boundary instead of moving the new shared dataclasses out of the planned type layer
+  - old runtime consumers are still green because the singleton config fields and `registry_state.json` path remain intact for scaffolding
+  Verified:
+  - per-connection registry config/state now exists without changing current runtime behavior
+  - the slice-2 scaffolding for later runtime migration is in place and the repo remains fully green
+  - full suite status after slice 2: `1781 passed, 23 skipped`
 
 # Octopus CLI Implementation Status
 

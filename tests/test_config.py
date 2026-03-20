@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from telegram.error import InvalidToken, NetworkError
 
+from app.agents.types import RegistryConnectionConfig
 from app.config import _parse_projects, load_config, load_dotenv_file, parse_allowed_users, validate_config
 from app.session_state import ProjectBinding
 from tests.support.config_support import make_config
@@ -566,6 +567,72 @@ def test_load_config_reads_bot_credential_key():
         with patch("app.config.env_path_for_instance", return_value=envfile):
             cfg = load_config("test-credential-key")
         assert cfg.credential_key == "credential-key-123"
+
+
+def test_load_config_builds_default_agent_registries_from_singleton_fields():
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write("TELEGRAM_BOT_TOKEN=tok\n")
+        f.write("BOT_PROVIDER=claude\n")
+        f.write("BOT_ALLOW_OPEN=1\n")
+        f.write("BOT_AGENT_REGISTRY_URL=http://registry:8787\n")
+        f.write("BOT_AGENT_REGISTRY_ENROLL_TOKEN=enroll-secret\n")
+        env_path = f.name
+    try:
+        with patch("app.config.env_path_for_instance", return_value=Path(env_path)):
+            cfg = load_config("test-registry-single")
+        assert cfg.agent_registries == (
+            RegistryConnectionConfig(
+                registry_id="default",
+                url="http://registry:8787",
+                enroll_token="enroll-secret",
+                registry_scope="full",
+                poll_interval_seconds=5.0,
+            ),
+        )
+        assert cfg.agent_registry_url == "http://registry:8787"
+        assert cfg.agent_registry_enroll_token == "enroll-secret"
+    finally:
+        os.unlink(env_path)
+
+
+def test_load_config_reads_indexed_agent_registries_and_projects_first_back_to_singleton():
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write("TELEGRAM_BOT_TOKEN=tok\n")
+        f.write("BOT_PROVIDER=claude\n")
+        f.write("BOT_ALLOW_OPEN=1\n")
+        f.write("BOT_AGENT_REGISTRY_1_ID=prod\n")
+        f.write("BOT_AGENT_REGISTRY_1_URL=https://registry-prod.example.com\n")
+        f.write("BOT_AGENT_REGISTRY_1_ENROLL_TOKEN=prod-secret\n")
+        f.write("BOT_AGENT_REGISTRY_1_SCOPE=full\n")
+        f.write("BOT_AGENT_REGISTRY_2_ID=analytics\n")
+        f.write("BOT_AGENT_REGISTRY_2_URL=https://registry-analytics.example.com\n")
+        f.write("BOT_AGENT_REGISTRY_2_ENROLL_TOKEN=analytics-secret\n")
+        f.write("BOT_AGENT_REGISTRY_2_SCOPE=channel\n")
+        env_path = f.name
+    try:
+        with patch("app.config.env_path_for_instance", return_value=Path(env_path)):
+            cfg = load_config("test-registry-indexed")
+        assert cfg.agent_registries == (
+            RegistryConnectionConfig(
+                registry_id="prod",
+                url="https://registry-prod.example.com",
+                enroll_token="prod-secret",
+                registry_scope="full",
+                poll_interval_seconds=5.0,
+            ),
+            RegistryConnectionConfig(
+                registry_id="analytics",
+                url="https://registry-analytics.example.com",
+                enroll_token="analytics-secret",
+                registry_scope="channel",
+                poll_interval_seconds=5.0,
+            ),
+        )
+        assert cfg.agent_registry_url == "https://registry-prod.example.com"
+        assert cfg.agent_registry_enroll_token == "prod-secret"
+        assert cfg.agent_mode == "registry"
+    finally:
+        os.unlink(env_path)
 
 
 def test_validate_config_shared_runtime_requires_webhook_mode():

@@ -13,6 +13,7 @@ from app.session_state import ProjectBinding, field
 from pathlib import Path
 
 from dotenv import dotenv_values
+from app.agents.types import RegistryConnectionConfig
 from app.identity import parse_actor_key, telegram_numeric_id
 from app.startup_diagnostics import sanitize_url_for_logging
 
@@ -174,6 +175,7 @@ class BotConfig:
     agent_tags: tuple[str, ...]
     agent_description: str
     agent_capabilities: tuple[str, ...]
+    agent_registries: tuple[RegistryConnectionConfig, ...]
     agent_registry_url: str
     agent_registry_enroll_token: str
     agent_poll_interval_seconds: float
@@ -267,6 +269,57 @@ def _parse_projects(raw: str) -> tuple[ProjectBinding, ...]:
     return tuple(projects)
 
 
+def _parse_agent_registries(
+    *,
+    get,
+    env_keys: set[str],
+    default_url: str,
+    default_enroll_token: str,
+    default_scope: str,
+    default_poll_interval_seconds: float,
+) -> tuple[RegistryConnectionConfig, ...]:
+    indexed_pattern = re.compile(r"^BOT_AGENT_REGISTRY_(\d+)_(ID|URL|ENROLL_TOKEN|SCOPE)$")
+    indices = sorted(
+        {
+            int(match.group(1))
+            for key in env_keys
+            if (match := indexed_pattern.match(key))
+        }
+    )
+    registries: list[RegistryConnectionConfig] = []
+    for index in indices:
+        url = get(f"BOT_AGENT_REGISTRY_{index}_URL").strip()
+        enroll_token = get(f"BOT_AGENT_REGISTRY_{index}_ENROLL_TOKEN").strip()
+        registry_id = get(f"BOT_AGENT_REGISTRY_{index}_ID", f"registry-{index}").strip() or f"registry-{index}"
+        registry_scope = (
+            get(f"BOT_AGENT_REGISTRY_{index}_SCOPE", default_scope).strip().lower() or default_scope
+        )
+        if not url and not enroll_token:
+            continue
+        registries.append(
+            RegistryConnectionConfig(
+                registry_id=registry_id,
+                url=url,
+                enroll_token=enroll_token,
+                registry_scope=registry_scope,
+                poll_interval_seconds=default_poll_interval_seconds,
+            )
+        )
+    if registries:
+        return tuple(registries)
+    if not default_url and not default_enroll_token:
+        return ()
+    return (
+        RegistryConnectionConfig(
+            registry_id="default",
+            url=default_url,
+            enroll_token=default_enroll_token,
+            registry_scope=default_scope,
+            poll_interval_seconds=default_poll_interval_seconds,
+        ),
+    )
+
+
 def load_config(instance: str | None = None) -> BotConfig:
     """Load config from env file + environment variables.
 
@@ -282,6 +335,7 @@ def load_config(instance: str | None = None) -> BotConfig:
     # Build a merged config dict: env file as base, os.environ overrides
     env_file = env_path_for_instance(instance)
     file_vars = load_dotenv_file(env_file) if env_file.exists() else {}
+    env_keys = set(file_vars) | set(os.environ)
 
     def get(key: str, default: str = "") -> str:
         """Env var wins over file, file wins over default."""
@@ -329,9 +383,25 @@ def load_config(instance: str | None = None) -> BotConfig:
     )
 
     agent_display_name = get("BOT_AGENT_DISPLAY_NAME", instance).strip() or instance
-    agent_registry_url = get("BOT_AGENT_REGISTRY_URL").strip()
+    raw_agent_registry_url = get("BOT_AGENT_REGISTRY_URL").strip()
+    raw_agent_registry_enroll_token = get("BOT_AGENT_REGISTRY_ENROLL_TOKEN").strip()
+    agent_poll_interval_seconds = max(1.0, get_float("BOT_AGENT_POLL_INTERVAL_SECONDS", "5.0"))
+    default_registry_scope = get("BOT_AGENT_REGISTRY_SCOPE", "full").strip().lower() or "full"
+    agent_registries = _parse_agent_registries(
+        get=get,
+        env_keys=env_keys,
+        default_url=raw_agent_registry_url,
+        default_enroll_token=raw_agent_registry_enroll_token,
+        default_scope=default_registry_scope,
+        default_poll_interval_seconds=agent_poll_interval_seconds,
+    )
+    primary_registry = agent_registries[0] if agent_registries else None
+    agent_registry_url = primary_registry.url if primary_registry is not None else raw_agent_registry_url
+    agent_registry_enroll_token = (
+        primary_registry.enroll_token if primary_registry is not None else raw_agent_registry_enroll_token
+    )
     raw_agent_mode = get("BOT_AGENT_MODE", "").strip().lower()
-    agent_mode = raw_agent_mode or ("registry" if agent_registry_url else "standalone")
+    agent_mode = raw_agent_mode or ("registry" if agent_registries else "standalone")
     agent_role = get("BOT_AGENT_ROLE").strip()
     agent_tags = tuple(
         s.strip() for s in get("BOT_AGENT_TAGS").split(",") if s.strip()
@@ -417,9 +487,10 @@ def load_config(instance: str | None = None) -> BotConfig:
         agent_tags=agent_tags,
         agent_description=get("BOT_AGENT_DESCRIPTION").strip(),
         agent_capabilities=agent_capabilities,
+        agent_registries=agent_registries,
         agent_registry_url=agent_registry_url,
-        agent_registry_enroll_token=get("BOT_AGENT_REGISTRY_ENROLL_TOKEN").strip(),
-        agent_poll_interval_seconds=max(1.0, get_float("BOT_AGENT_POLL_INTERVAL_SECONDS", "5.0")),
+        agent_registry_enroll_token=agent_registry_enroll_token,
+        agent_poll_interval_seconds=agent_poll_interval_seconds,
         runtime_mode=get("BOT_RUNTIME_MODE", "local").strip().lower() or "local",
         process_role=get("BOT_PROCESS_ROLE", "all").strip().lower() or "all",
         claim_lease_ttl_seconds=get_int("BOT_CLAIM_LEASE_TTL", "300"),
@@ -516,6 +587,7 @@ def load_config_provider_health() -> BotConfig:
         agent_tags=(),
         agent_description="",
         agent_capabilities=(),
+        agent_registries=(),
         agent_registry_url="",
         agent_registry_enroll_token="",
         agent_poll_interval_seconds=5.0,

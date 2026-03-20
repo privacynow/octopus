@@ -92,7 +92,7 @@ class RegistryConnectionConfig:
 
 @dataclass
 class RegistryConnectionState:
-    registry_id: str = "default"
+    registry_id: str
     registry_scope: str = "full"
     agent_id: str = ""
     agent_token: str = ""

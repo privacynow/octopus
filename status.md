@@ -19,10 +19,10 @@
     policy code
   - one dead `"default"` registry-id default remains in
     `RegistryConnectionState`
-- Phase 10 is now open and in progress; Slices 10A-10D are landed and
-  Slice 10E remains.
+- Phase 10 remediation is complete; Slices 10A-10E are landed and the
+  repo is green.
 - Status should be read as: rollout complete through Phase 9, but the
-  architecture cleanup is not complete until Phase 10 lands.
+  architecture cleanup is now complete through Phase 10.
 
 ## Slice Log
 
@@ -62,17 +62,33 @@
   - task-channel projection side effects are gone
   - full suite status after Phase 10A: `1923 passed, 23 skipped`
 
-- Pending: Phase 10 remediation — remaining cleanup
-  (Slice 10E).
-  Planned scope:
-  - remove the dead `RegistryConnectionState.registry_id =
-    "default"` default
-  Notes:
-  - the repo is currently green, but this residual drift means the
-    last fallback/default cleanup is still not fully
-    aligned with the target architecture
-  - execution should follow the remaining Phase 10 slice 10E from
-    `PLAN-control-plane-bus.md` in order
+- Complete: Phase 10E remediation — remove the final dead registry-state default and seal the guardrail.
+  Scope:
+  - removed the dead `RegistryConnectionState.registry_id = "default"`
+    default so registry connection state now always requires explicit
+    ownership
+  - added a direct regression test proving
+    `RegistryConnectionState()` without a registry id is now invalid
+  - extended the zero-import/default guard so the singleton-era default
+    cannot quietly return in `app/agents/types.py`
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_agents.py tests/test_registry_runtime.py tests/test_doctor.py tests/test_zero_import_gates.py`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified there are no zero-argument runtime call sites for
+    `RegistryConnectionState()`
+  - verified the dead `"default"` field initializer is gone from
+    `app/agents/types.py`
+  Review:
+  - this slice stayed intentionally small: the dead default was already
+    unused, so the only real risk was hidden constructor assumptions in
+    tests or startup helpers; the focused state suites covered those
+  - the fix removed the fallback instead of preserving it behind
+    another translator or factory wrapper
+  Verified:
+  - explicit registry ownership is now required at the state type
+    boundary too
+  - full suite status after Phase 10E: `1934 passed, 23 skipped`
 
 - Complete: Phase 10D remediation — remove raw surface-name policy checks from shared delivery/admission code.
   Scope:

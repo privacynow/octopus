@@ -547,3 +547,27 @@
   - registry runtime/config/state ownership is now per connection only; there is no residual singleton registry path in active code
   - the final-slice cleanup removed more code than it added, which reduced duplication instead of hiding it behind compatibility helpers
   - final suite status: `1827 passed, 23 skipped`
+
+# Control-Plane Capability Architecture Status
+
+## Baseline
+
+- Track: control-plane capability architecture
+- Plan: `PLAN-control-plane-bus.md`
+- Baseline branch: `feature/multi_registry`
+- Baseline goal: replace registry-shaped control-plane coupling with capability ports, a durable control-plane bus, and startup-owned composition through `BotServices`.
+
+## Slice Log
+
+- Complete: Slice 1 ADR and contract freeze.
+  Scope:
+  - added `docs/adr/0001-control-plane-capability-architecture.md` documenting the architecture decision for capability ports, the durable control-plane bus, the channel-neutral services container, and the internal-only status of persisted registry state
+  - added `docs/adr/README.md` so the repo has an explicit ADR index instead of a one-off markdown file
+  - initialized this control-plane slice log in `status.md` without changing runtime code
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_zero_import_gates.py`
+  Review:
+  - slice 1 is documentation-only and intentionally does not change runtime behavior
+  Verified:
+  - the architecture decision now exists outside the implementation plan and status log
+  - baseline sanity after the doc-only slice: `65 passed`

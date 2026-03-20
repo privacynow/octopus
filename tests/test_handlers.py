@@ -20,6 +20,8 @@ from app.channels.telegram.session_io import (
     save as telegram_save_session,
 )
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from app.ports.agent_directory import AuthorityResolution
+from app.ports.task_routing import TaskSubmissionResult
 from app.ports.task_routing import TaskResultReport
 from app.providers.base import RunContext, RunResult
 from app.runtime.inbound_types import InboundMessage, InboundUser
@@ -465,43 +467,25 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
     ) as (data_dir, cfg, prov):
         submitted = []
 
-        class FakeRegistryClient:
-            async def submit_routed_task(self, request):
-                submitted.append(request)
-                return {"ok": True}
+        async def fake_resolve_target_authority(*, target_agent_id):
+            assert target_agent_id == "developer-1"
+            return AuthorityResolution(status="resolved", authority_ref="registry:default")
 
-        class FakeRegistryRuntime:
-            def has_coordination_connections(self):
-                return True
+        async def fake_submit_routed_task(*, request, authority_ref):
+            assert authority_ref == "registry:default"
+            submitted.append(request)
+            return TaskSubmissionResult(status="accepted", routed_task_id=request.routed_task_id)
 
-            def has_connected_coordination_connection(self):
-                return True
-
-            def first_coordination_error(self):
-                return ""
-
-            async def resolve_target_registry_id(self, target_agent_id, *, hinted_registry_id=""):
-                assert target_agent_id == "developer-1"
-                return hinted_registry_id or "default"
-
-            def client_for_registry(self, registry_id):
-                assert registry_id == "default"
-                return FakeRegistryClient()
-
-            def origin_agent_id(self, registry_id):
-                assert registry_id == "default"
-                return "origin-agent"
-
-        save_registry_connection_state(
-            data_dir,
-            RegistryConnectionState(
-                registry_id="default",
-                agent_id="origin-agent",
-                agent_token="secret",
-                connectivity_state="connected",
-            ),
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.agent_directory,
+            "resolve_target_authority",
+            fake_resolve_target_authority,
         )
-        current_runtime().registry_runtime = FakeRegistryRuntime()
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "submit_routed_task",
+            fake_submit_routed_task,
+        )
         save_session(
             data_dir,
             _reg_conv(_reg_ref("conv-approve")),

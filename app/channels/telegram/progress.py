@@ -11,7 +11,6 @@ from telegram.error import BadRequest, NetworkError, TimedOut
 
 from app.formatting import trim_text
 from app import user_messages as _msg
-from app.agents.bridge import publish_timeline_event, publish_timeline_to_registries
 from app.config import BotConfig
 from app.channels.telegram.state import TelegramRuntime
 
@@ -67,18 +66,7 @@ async def progress_timeline_callback(
     force: bool = False,
 ) -> None:
     del force
-    if runtime.registry_runtime is not None:
-        await publish_timeline_to_registries(
-            runtime.registry_runtime,
-            conversation_ref=conversation_ref,
-            kind="progress",
-            title="Progress",
-            body=html_text,
-            metadata={"routed_task_id": routed_task_id} if routed_task_id else {},
-        )
-        return
-    await publish_timeline_event(
-        runtime.config,
+    await runtime.services.control_plane.conversation_projection.publish_external_timeline(
         conversation_ref=conversation_ref,
         kind="progress",
         title="Progress",

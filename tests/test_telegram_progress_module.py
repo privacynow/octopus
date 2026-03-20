@@ -1,12 +1,33 @@
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 import app.channels.telegram.progress as telegram_progress
+from app.ports.agent_directory import NoOpAgentDirectory
+from app.ports.health_publication import NoOpHealthPublication
+from app.ports.task_routing import NoOpTaskRouting
+from app.runtime.services import BotServices, ControlPlaneServices
 from app.channels.telegram.state import build_telegram_runtime
 from tests.support.config_support import make_config
 from tests.support.handler_support import FakeProvider
+
+
+def _services(*, publish=None) -> BotServices:
+    projection = SimpleNamespace(
+        bind_external_conversation=AsyncMock(),
+        publish_external_timeline=publish or AsyncMock(),
+    )
+    return BotServices(
+        control_plane=ControlPlaneServices(
+            conversation_projection=projection,
+            task_routing=NoOpTaskRouting(),
+            agent_directory=NoOpAgentDirectory(),
+            health_publication=NoOpHealthPublication(),
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -34,16 +55,12 @@ async def test_keep_typing_uses_explicit_runtime_until_cancelled():
 
 @pytest.mark.asyncio
 async def test_progress_timeline_callback_publishes_progress_event(monkeypatch):
+    publish = AsyncMock()
     runtime = build_telegram_runtime(
         make_config(data_dir=Path("/tmp/telegram-progress-timeline")),
         FakeProvider("codex"),
+        services=_services(publish=publish),
     )
-    published: list[dict[str, object]] = []
-
-    async def _record(config, **kwargs):
-        published.append({"config": config, **kwargs})
-
-    monkeypatch.setattr(telegram_progress, "publish_timeline_event", _record)
 
     await telegram_progress.progress_timeline_callback(
         runtime,
@@ -52,36 +69,24 @@ async def test_progress_timeline_callback_publishes_progress_event(monkeypatch):
         "<i>Working</i>",
     )
 
-    assert published == [
-        {
-            "config": runtime.config,
-            "conversation_ref": "telegram:12345",
-            "kind": "progress",
-            "title": "Progress",
-            "body": "<i>Working</i>",
-            "metadata": {"routed_task_id": "task-1"},
-        }
-    ]
+    publish.assert_awaited_once_with(
+        conversation_ref="telegram:12345",
+        kind="progress",
+        title="Progress",
+        body="<i>Working</i>",
+        metadata={"routed_task_id": "task-1"},
+    )
 
 
 @pytest.mark.asyncio
-async def test_progress_timeline_callback_uses_registry_runtime_fanout(monkeypatch):
+async def test_progress_timeline_callback_uses_port_without_registry_runtime(monkeypatch):
+    del monkeypatch
+    publish = AsyncMock()
     runtime = build_telegram_runtime(
         make_config(data_dir=Path("/tmp/telegram-progress-fanout")),
         FakeProvider("codex"),
+        services=_services(publish=publish),
     )
-    runtime.registry_runtime = object()
-    published: list[dict[str, object]] = []
-
-    async def _record(registry_runtime, **kwargs):
-        published.append({"registry_runtime": registry_runtime, **kwargs})
-
-    async def _fail(config, **kwargs):
-        del config, kwargs
-        raise AssertionError("singleton timeline path should not be used when registry runtime is present")
-
-    monkeypatch.setattr(telegram_progress, "publish_timeline_to_registries", _record)
-    monkeypatch.setattr(telegram_progress, "publish_timeline_event", _fail)
 
     await telegram_progress.progress_timeline_callback(
         runtime,
@@ -90,13 +95,10 @@ async def test_progress_timeline_callback_uses_registry_runtime_fanout(monkeypat
         "<i>Working</i>",
     )
 
-    assert published == [
-        {
-            "registry_runtime": runtime.registry_runtime,
-            "conversation_ref": "telegram:12345",
-            "kind": "progress",
-            "title": "Progress",
-            "body": "<i>Working</i>",
-            "metadata": {"routed_task_id": "task-1"},
-        }
-    ]
+    publish.assert_awaited_once_with(
+        conversation_ref="telegram:12345",
+        kind="progress",
+        title="Progress",
+        body="<i>Working</i>",
+        metadata={"routed_task_id": "task-1"},
+    )

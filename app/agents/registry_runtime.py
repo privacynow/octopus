@@ -9,6 +9,7 @@ from typing import Any
 
 from app.agents.client import AgentRegistryClient
 from app.agents.runtime import AgentRuntime
+from app.agents.state import load_runtime_registry_connection_state
 from app.agents.types import RegistryConnectionConfig
 from app.config import BotConfig
 from app.runtime.channel_dispatcher import ChannelDispatcher
@@ -40,6 +41,8 @@ class RegistryRuntime:
         self._parent_stop_task: asyncio.Task[None] | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._runtimes: dict[str, AgentRuntime] = {}
+        self._registry_by_id = {registry.registry_id: registry for registry in registries}
+        self._channels_registered = False
 
     async def start(self, *, stop_event: asyncio.Event) -> None:
         if self._tasks:
@@ -105,24 +108,47 @@ class RegistryRuntime:
         for registry in self._registries:
             if registry.registry_scope not in {"channel", "full"}:
                 continue
-            runtime = self._runtimes.get(registry.registry_id)
-            if runtime is None or not runtime.state.agent_token:
+            client = self._client_for_registry(registry.registry_id)
+            if client is None:
                 continue
-            clients.append(
-                (
-                    registry.registry_id,
-                    AgentRegistryClient(registry.url, agent_token=runtime.state.agent_token),
-                )
-            )
+            clients.append((registry.registry_id, client))
         return clients
 
     def channel_capabilities(self) -> tuple[str, ...]:
-        if self._registries:
-            return ("telegram", "registry")
         return tuple(self._dispatcher.active_channel_types())
 
     def runtime_for_registry(self, registry_id: str) -> AgentRuntime | None:
         return self._runtimes.get(registry_id)
+
+    def register_channels(self) -> None:
+        if self._channels_registered:
+            return
+
+        from app.channels.registry.channel import RegistryConversationChannel, RegistryTaskChannel
+
+        for registry in self._registries:
+            if registry.registry_scope in {"channel", "full"}:
+                self._dispatcher.register(
+                    RegistryConversationChannel(
+                        self._config,
+                        registry,
+                        registry_client_factory=lambda registry_id=registry.registry_id: self._client_for_registry(
+                            registry_id
+                        ),
+                    )
+                )
+            if registry.registry_scope in {"coordination", "full"}:
+                self._dispatcher.register(
+                    RegistryTaskChannel(
+                        self._config,
+                        registry,
+                        registry_client_factory=lambda registry_id=registry.registry_id: self._client_for_registry(
+                            registry_id
+                        ),
+                    )
+                )
+
+        self._channels_registered = True
 
     def _connection_config(self, registry: RegistryConnectionConfig) -> BotConfig:
         return replace(
@@ -157,3 +183,23 @@ class RegistryRuntime:
         if registry_scope == "coordination":
             return ("routed_task", "routed_result")
         return None
+
+    def _client_for_registry(self, registry_id: str) -> AgentRegistryClient | None:
+        registry = self._registry_by_id.get(registry_id)
+        if registry is None:
+            return None
+
+        runtime = self._runtimes.get(registry_id)
+        agent_token = ""
+        if runtime is not None:
+            agent_token = runtime.state.agent_token
+        if not agent_token:
+            state = load_runtime_registry_connection_state(
+                self._config.data_dir,
+                registry_id,
+                registry_scope=registry.registry_scope,
+            )
+            agent_token = state.agent_token
+        if not agent_token:
+            return None
+        return AgentRegistryClient(registry.url, agent_token=agent_token)

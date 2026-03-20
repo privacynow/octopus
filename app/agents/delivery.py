@@ -14,6 +14,7 @@ from app.agents.bridge import (
     build_registry_message_delivery,
     conversation_key_for_ref,
     publish_timeline_event,
+    qualify_registry_parent_ref,
 )
 from app.agents.types import RoutedTaskResult
 from app.config import BotConfig
@@ -119,6 +120,7 @@ async def handle_registry_delivery(
 ) -> str:
     kind = str(delivery.get("kind", ""))
     delivery_id = str(delivery.get("delivery_id", ""))
+    registry_id = str(delivery.get("registry_id", "") or "default")
     if kind in {"channel_input", "routed_task"}:
         return await admit_registry_delivery(config, delivery)
 
@@ -129,6 +131,7 @@ async def handle_registry_delivery(
         conversation_ref = str(payload.get("conversation_ref", "") or payload.get("conversation_id", ""))
         if not conversation_ref:
             return "rejected"
+        conversation_ref = qualify_registry_parent_ref(registry_id, conversation_ref)
         action_payload = payload.get("payload", {})
         if not isinstance(action_payload, dict):
             action_payload = {}
@@ -166,7 +169,10 @@ async def handle_registry_delivery(
 
     if kind == "routed_result":
         routed_task_id = str(payload.get("routed_task_id", ""))
-        parent_conversation_id = str(payload.get("parent_conversation_id", ""))
+        parent_conversation_id = qualify_registry_parent_ref(
+            registry_id,
+            str(payload.get("parent_conversation_id", "")),
+        )
         result = payload.get("result", {})
         if not parent_conversation_id or not routed_task_id or not isinstance(result, dict):
             return "rejected"
@@ -188,6 +194,7 @@ async def handle_registry_delivery(
             status=routed_result.status,
             metadata={"routed_task_id": routed_task_id},
             event_id=f"delegated-result:{routed_task_id}",
+            registry_id=registry_id,
         )
         channel_name = composition.conversation_channel_name(parent_conversation_id)
         if channel_name == "telegram" and runtime.bot is None:
@@ -248,6 +255,7 @@ async def handle_registry_delivery(
                 body=continuation_text,
                 metadata={"routed_task_id": routed_task_id},
                 event_id=f"delegation-ready:{parent_conversation_id}",
+                registry_id=registry_id,
             )
         elif admit_status == "duplicate":
             await publish_timeline_event(
@@ -258,6 +266,7 @@ async def handle_registry_delivery(
                 body=continuation_text,
                 metadata={"routed_task_id": routed_task_id},
                 event_id=f"delegation-ready:{parent_conversation_id}",
+                registry_id=registry_id,
             )
         return "accepted"
 

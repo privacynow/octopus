@@ -288,6 +288,7 @@ def main() -> None:
             runtime_health_provider=CanonicalRuntimeHealthProvider(),
             provider=provider,
         )
+        registry_runtime.register_channels()
 
     async def _on_post_init(_app) -> None:
         nonlocal _worker_task, _worker_stop

@@ -121,8 +121,19 @@ class _FailingBootstrap(_FakeChannel, ChannelBootstrap):
 
 
 class _BotDependentChannel(_FakeChannel):
+    def __init__(self, prefix: str, descriptor: ChannelDescriptor) -> None:
+        super().__init__(prefix, descriptor)
+        self.build_calls = 0
+        self.readiness_calls = 0
+
+    def can_build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> bool:
+        del conversation_ref, config
+        self.readiness_calls += 1
+        return kw.get("bot") is not None
+
     def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> ChannelEgress:
         del conversation_ref, config
+        self.build_calls += 1
         if kw.get("bot") is None:
             raise RuntimeError("bot not ready")
         return _FakeEgress(self._descriptor.channel_type)
@@ -215,6 +226,8 @@ def test_dispatcher_egress_ready_for_ref_checks_runtime_readiness() -> None:
 
     assert dispatcher.egress_ready_for_ref("telegram:bot123:42", config=cfg, bot=object()) is True
     assert dispatcher.egress_ready_for_ref("telegram:bot123:42", config=cfg, bot=None) is False
+    assert telegram.readiness_calls == 2
+    assert telegram.build_calls == 0
 
 
 def test_active_channel_types_deduplicates_and_skips_non_capability_channels() -> None:

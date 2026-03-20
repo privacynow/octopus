@@ -44,6 +44,13 @@ class Channel(ABC):
     def build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> ChannelEgress:
         ...
 
+    def can_build_egress(self, *, conversation_ref: str, config: Any, **kw: Any) -> bool:
+        try:
+            self.build_egress(conversation_ref=conversation_ref, config=config, **kw)
+        except RuntimeError:
+            return False
+        return True
+
 
 class ChannelBootstrap(Channel):
     """A channel that also owns an ingress runner."""

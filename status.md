@@ -32,12 +32,50 @@
 - Phase 11B landed green: routed-task terminal state is no longer
   inferred from progress text; terminal ownership is back on routed
   result reporting.
-- Phase 11C remains outstanding: dispatcher readiness still constructs
-  full egress objects for probes.
-- Full suite status after the verified Phase 11B slice:
-  `1939 passed, 23 skipped`.
+- Phase 11C landed green: dispatcher readiness now uses the channel
+  seam directly and no longer constructs full Telegram egress objects
+  for probes.
+- Status should now be read as: rollout and remediation complete
+  through Phase 11.
+- Full suite status after the verified Phase 11 completion:
+  `1940 passed, 23 skipped`.
 
 ## Slice Log
+
+- Complete: Phase 11C remediation — keep readiness on the channel seam and make it cheap.
+  Scope:
+  - extended the existing `Channel` contract with a default
+    `can_build_egress()` readiness hook instead of introducing another
+    dispatcher policy surface
+  - updated `ChannelDispatcher.egress_ready_for_ref()` to ask the
+    owning channel for readiness rather than constructing a full egress
+    object and discarding it
+  - overrode the hook in `TelegramChannelBootstrap` so Telegram can
+    answer bot/chat-id readiness using the same precondition logic as
+    `build_egress()` without wiring a full `TelegramChannelEgress`
+  - added dispatcher and real Telegram bootstrap tests proving the
+    readiness path uses the cheap hook and still returns the same
+    answer as real egress preconditions
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_channel_dispatcher.py tests/test_telegram_channel_state.py tests/test_agents.py::test_handle_registry_routed_result_publishes_parent_timeline_before_retry_on_startup_race tests/test_worker_workflows.py -k 'egress_ready_for_ref or can_build_egress or startup_race or admit_worker_message'`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified `ChannelDispatcher.egress_ready_for_ref()` no longer calls
+    `create_egress()`
+  - verified Telegram is the only production channel overriding
+    `can_build_egress()`; registry channels continue to use the default
+    readiness behavior because they have no special runtime precondition
+  Review:
+  - this slice stayed within the existing abstraction boundary: the
+    dispatcher still asks the channel whether it can own the ref right
+    now, but it no longer pays the cost of fully instantiating an
+    egress object to answer that question
+  - the Telegram override reuses the same chat-id resolution logic as
+    `build_egress()`, so readiness and construction stay in sync
+  Verified:
+  - readiness probes no longer construct full Telegram egress objects
+  - routed-result startup-race behavior still retries correctly
+  - full suite status after Phase 11C: `1940 passed, 23 skipped`
 
 - Complete: Phase 11B remediation — stop inferring routed-task terminal state from progress text.
   Scope:

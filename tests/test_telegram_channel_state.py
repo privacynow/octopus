@@ -146,6 +146,39 @@ def test_telegram_channel_bootstrap_rejects_missing_bot_for_egress():
         )
 
 
+def test_telegram_channel_bootstrap_can_build_egress_without_constructing_one():
+    cfg = make_config(data_dir=Path("/tmp/telegram-channel-readiness"))
+    bootstrap = TelegramChannelBootstrap(cfg, FakeProvider("claude"))
+
+    assert (
+        bootstrap.can_build_egress(
+            conversation_ref="telegram:test-bot:12345",
+            config=cfg,
+            bot=MinimalFakeBot(),
+            source="telegram",
+        )
+        is True
+    )
+    assert (
+        bootstrap.can_build_egress(
+            conversation_ref="telegram:test-bot:not-a-chat-id",
+            config=cfg,
+            bot=MinimalFakeBot(),
+            source="telegram",
+        )
+        is False
+    )
+    assert (
+        bootstrap.can_build_egress(
+            conversation_ref="telegram:test-bot:12345",
+            config=cfg,
+            bot=None,
+            source="telegram",
+        )
+        is False
+    )
+
+
 async def test_telegram_channel_ingress_poll_mode_runs_ptb_lifecycle():
     cfg = make_config(data_dir=Path("/tmp/telegram-ingress-poll"), bot_mode="poll")
     lifecycle: list[object] = []

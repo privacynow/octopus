@@ -291,6 +291,7 @@ def main() -> None:
             provider=provider,
         )
         registry_runtime.register_channels()
+        telegram_ingress.runtime.registry_runtime = registry_runtime
 
     async def _on_post_init(_app) -> None:
         nonlocal _worker_task, _worker_stop

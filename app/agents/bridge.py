@@ -135,6 +135,7 @@ def build_registry_message_delivery(
     actor_ref: str,
     delivery_id: str,
     routed_task_id: str = "",
+    registry_id: str = "",
     skip_approval: bool = False,
 ) -> tuple[str, str, str, str]:
     conversation_key = conversation_key_for_ref(conversation_ref)
@@ -149,6 +150,7 @@ def build_registry_message_delivery(
             source="registry",
             conversation_ref=conversation_ref,
             routed_task_id=routed_task_id,
+            registry_id=registry_id,
             skip_approval=skip_approval,
         )
     )
@@ -162,6 +164,7 @@ def build_registry_action_envelope(
     action_payload: dict[str, Any],
     actor_ref: str,
     delivery_id: str,
+    registry_id: str = "",
 ) -> InboundEnvelope:
     conversation_key = conversation_key_for_ref(conversation_ref)
     actor_key = f"reg:{actor_ref}"
@@ -173,6 +176,7 @@ def build_registry_action_envelope(
         params=dict(action_payload),
         source="registry",
         conversation_ref=conversation_ref,
+        registry_id=registry_id,
     )
     return InboundEnvelope(
         transport="registry",
@@ -200,6 +204,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
             text=payload.get("text", ""),
             actor_ref=f"registry-ui:{conversation_ref}",
             delivery_id=delivery_id,
+            registry_id=registry_id,
         )
         status, _ = work_queue.record_and_admit_message(
             data_dir,
@@ -255,6 +260,7 @@ async def admit_registry_delivery(config: BotConfig, delivery: dict[str, Any]) -
             actor_ref=f"agent:{request.get('origin_agent_id', '')}",
             delivery_id=delivery_id,
             routed_task_id=request["routed_task_id"],
+            registry_id=registry_id,
         )
         status, _ = work_queue.record_and_admit_message(
             data_dir,

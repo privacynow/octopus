@@ -53,6 +53,7 @@ def test_build_delegation_plan_preserves_task_fields():
     assert plan.resume_instruction == "Resume when both child tasks return."
     assert task.routed_task_id == "task-3"
     assert task.title == "Draft tests"
+    assert task.registry_id == ""
     assert task.target_agent_id == "test-writer-1"
     assert task.instructions == "Write focused regression tests."
 
@@ -143,6 +144,43 @@ def test_pending_delegation_status_transitions_partial_failed():
     assert plan.status == "partial_failed"
     assert all_tasks_terminal(plan) is True
     assert any_task_failed(plan) is True
+
+
+def test_apply_routed_result_matches_registry_provenance_when_task_ids_overlap():
+    plan = build_delegation_plan(
+        "registry:prod:conversation:conv-1",
+        "Spec delegation",
+        "Resume when both child tasks return.",
+        [
+            {
+                "routed_task_id": "task-shared",
+                "registry_id": "prod",
+                "title": "Prod task",
+                "target_agent_id": "developer-prod",
+                "instructions": "Handle prod.",
+            },
+            {
+                "routed_task_id": "task-shared",
+                "registry_id": "ops",
+                "title": "Ops task",
+                "target_agent_id": "developer-ops",
+                "instructions": "Handle ops.",
+            },
+        ],
+    )
+    for task in plan.tasks:
+        task.status = "submitted"
+
+    outcome = apply_routed_result(
+        plan,
+        routed_task_id="task-shared",
+        registry_id="ops",
+        result=RoutedTaskResult(routed_task_id="task-shared", status="completed", summary="ops done"),
+    )
+
+    assert outcome.pending is not None
+    assert outcome.pending.tasks[0].status == "submitted"
+    assert outcome.pending.tasks[1].status == "completed"
 
 
 def test_build_delegation_completion_message_partial_failed_names_failed_tasks():

@@ -4,16 +4,24 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from dataclasses import replace
 from typing import Any
 
-from app.agents.client import AgentRegistryClient
+from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.runtime import AgentRuntime
 from app.agents.state import load_runtime_registry_connection_state
-from app.agents.types import RegistryConnectionConfig
+from app.agents.types import AgentDiscoveryQuery, DiscoveredAgentRef, RegistryConnectionConfig
 from app.config import BotConfig
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime_health import RuntimeHealthProjector, RuntimeHealthProvider
+
+
+@dataclass(frozen=True)
+class _ConnectedRegistry:
+    registry: RegistryConnectionConfig
+    client: AgentRegistryClient
+    local_agent_id: str
 
 
 class RegistryRuntime:
@@ -120,6 +128,120 @@ class RegistryRuntime:
     def runtime_for_registry(self, registry_id: str) -> AgentRuntime | None:
         return self._runtimes.get(registry_id)
 
+    def client_for_registry(self, registry_id: str) -> AgentRegistryClient | None:
+        return self._client_for_registry(registry_id)
+
+    def origin_agent_id(self, registry_id: str) -> str:
+        return self._state_for_registry(registry_id).agent_id
+
+    def has_coordination_connections(self) -> bool:
+        return any(
+            registry.registry_scope in {"coordination", "full"}
+            for registry in self._registries
+        )
+
+    def has_connected_coordination_connection(self) -> bool:
+        return bool(self._connected_registries(scopes={"coordination", "full"}))
+
+    def has_enrolled_coordination_connection(self) -> bool:
+        for registry in self._registries:
+            if registry.registry_scope not in {"coordination", "full"}:
+                continue
+            state = self._state_for_registry(registry.registry_id)
+            if state.agent_token or state.agent_id:
+                return True
+        return False
+
+    def first_coordination_error(self) -> str:
+        for registry in self._registries:
+            if registry.registry_scope not in {"coordination", "full"}:
+                continue
+            state = self._state_for_registry(registry.registry_id)
+            if state.last_error:
+                return state.last_error
+        return ""
+
+    async def discover(self, query: AgentDiscoveryQuery) -> list[DiscoveredAgentRef]:
+        discovered: list[DiscoveredAgentRef] = []
+        first_error: RegistryClientError | None = None
+        successful_search = False
+        for connection in self._connected_registries(scopes={"coordination", "full"}):
+            scoped_query = query
+            if connection.local_agent_id:
+                excludes = tuple(
+                    dict.fromkeys(
+                        (*query.exclude_agent_ids, connection.local_agent_id)
+                    )
+                )
+                scoped_query = replace(query, exclude_agent_ids=excludes)
+            try:
+                rows = await connection.client.search(scoped_query)
+            except RegistryClientError as exc:
+                if first_error is None:
+                    first_error = exc
+                continue
+            successful_search = True
+            discovered.extend(
+                DiscoveredAgentRef(
+                    registry_id=connection.registry.registry_id,
+                    agent_id=str(row.get("agent_id", "")),
+                    display_name=str(row.get("display_name", "")),
+                    slug=str(row.get("slug", "")),
+                    role=str(row.get("role", "")),
+                    capabilities=tuple(str(item) for item in row.get("capabilities", row.get("skills", [])) if item),
+                    tags=tuple(str(item) for item in row.get("tags", []) if item),
+                    description=str(row.get("description", "")),
+                    connectivity_state=str(row.get("connectivity_state", "")),
+                    current_capacity=int(row.get("current_capacity", 0) or 0),
+                    max_capacity=int(row.get("max_capacity", 1) or 1),
+                )
+                for row in rows
+            )
+        if first_error is not None and not successful_search:
+            raise first_error
+        return sorted(
+            discovered,
+            key=lambda agent: (
+                (agent.display_name or agent.slug or agent.agent_id).lower(),
+                agent.registry_id,
+                agent.agent_id,
+            ),
+        )
+
+    async def resolve_target_registry_id(
+        self,
+        target_agent_id: str,
+        *,
+        hinted_registry_id: str = "",
+    ) -> str:
+        target_agent_id = (target_agent_id or "").strip()
+        if hinted_registry_id:
+            client = self._client_for_registry(hinted_registry_id)
+            if client is not None and self.origin_agent_id(hinted_registry_id):
+                return hinted_registry_id
+        if not target_agent_id:
+            return ""
+        connected = self._connected_registries(scopes={"coordination", "full"})
+        if len(connected) == 1:
+            return connected[0].registry.registry_id
+        matches: list[str] = []
+        query = AgentDiscoveryQuery(required_state="connected")
+        for connection in connected:
+            scoped_query = query
+            if connection.local_agent_id:
+                scoped_query = replace(query, exclude_agent_ids=(connection.local_agent_id,))
+            try:
+                rows = await connection.client.search(scoped_query)
+            except RegistryClientError:
+                continue
+            for row in rows:
+                if str(row.get("agent_id", "")) == target_agent_id:
+                    matches.append(connection.registry.registry_id)
+                    break
+        if len(matches) == 1:
+            return matches[0]
+        return ""
+
     def register_channels(self) -> None:
         if self._channels_registered:
             return
@@ -183,6 +305,42 @@ class RegistryRuntime:
         if registry_scope == "coordination":
             return ("routed_task", "routed_result")
         return None
+
+    def _state_for_registry(self, registry_id: str):
+        registry = self._registry_by_id.get(registry_id)
+        if registry is None:
+            return load_runtime_registry_connection_state(
+                self._config.data_dir,
+                registry_id,
+            )
+        runtime = self._runtimes.get(registry_id)
+        if runtime is not None:
+            return runtime.state
+        return load_runtime_registry_connection_state(
+            self._config.data_dir,
+            registry_id,
+            registry_scope=registry.registry_scope,
+        )
+
+    def _connected_registries(self, *, scopes: set[str]) -> list[_ConnectedRegistry]:
+        connected: list[_ConnectedRegistry] = []
+        for registry in self._registries:
+            if registry.registry_scope not in scopes:
+                continue
+            state = self._state_for_registry(registry.registry_id)
+            if state.connectivity_state != "connected":
+                continue
+            client = self._client_for_registry(registry.registry_id)
+            if client is None:
+                continue
+            connected.append(
+                _ConnectedRegistry(
+                    registry=registry,
+                    client=client,
+                    local_agent_id=state.agent_id,
+                )
+            )
+        return connected
 
     def _client_for_registry(self, registry_id: str) -> AgentRegistryClient | None:
         registry = self._registry_by_id.get(registry_id)

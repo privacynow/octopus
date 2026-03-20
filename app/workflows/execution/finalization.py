@@ -27,11 +27,13 @@ class FinalizationContext:
     conversation_ref: str
     chat_id: int = 0
     routed_task_id: str = ""
+    registry_id: str = ""
     skip_approval: bool = False
     last_status_text: str = ""
     load_session: Callable[[int | str], SessionState] | None = None
     save_session: Callable[[int | str, SessionState], None] | None = None
     registry_client_factory: Callable[[Any], Any | None] | None = None
+    registry_client_for_registry: Callable[[str], Any | None] | None = None
     record_usage: Callable[..., None] | None = None
     publish_timeline_event: Callable[..., Awaitable[None]] | None = None
     completion_webhook_sender: Callable[..., Awaitable[None]] | None = None
@@ -78,8 +80,14 @@ async def finalize_execution(
 
     routed_result_status = ""
     routed_result_warning_text = ""
-    if context.routed_task_id and context.registry_client_factory is not None:
-        client = context.registry_client_factory(context.config)
+    if context.routed_task_id and (
+        context.registry_client_factory is not None or context.registry_client_for_registry is not None
+    ):
+        client = None
+        if context.registry_client_for_registry is not None and context.registry_id:
+            client = context.registry_client_for_registry(context.registry_id)
+        if client is None:
+            client = context.registry_client_factory(context.config) if context.registry_client_factory is not None else None
         if client is not None:
             full_text = _result_full_text(outcome, last_status_text=context.last_status_text)
             result_status = (

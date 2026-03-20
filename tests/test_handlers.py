@@ -258,15 +258,24 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
         }
     ) as (data_dir, _cfg, prov):
         import app.channels.telegram.ingress as th
-        from app.agents.state import AgentRuntimeState, save_agent_runtime_state
 
         seen_queries: list[object] = []
 
-        class FakeRegistryClient:
-            async def search(self, query):
+        class FakeRegistryRuntime:
+            def has_coordination_connections(self):
+                return True
+
+            def has_connected_coordination_connection(self):
+                return True
+
+            def first_coordination_error(self):
+                return ""
+
+            async def discover(self, query):
                 seen_queries.append(query)
                 return [
                     {
+                        "registry_id": "prod",
                         "agent_id": "agent-2",
                         "display_name": "Dev Bot",
                         "slug": "dev-bot",
@@ -280,15 +289,7 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
                     }
                 ]
 
-        save_agent_runtime_state(
-            data_dir,
-            AgentRuntimeState(
-                agent_id="self-agent",
-                agent_token="agent-token",
-                connectivity_state="connected",
-            ),
-        )
-        current_runtime().registry_client_factory = lambda config: FakeRegistryClient()
+        current_runtime().registry_runtime = FakeRegistryRuntime()
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -306,10 +307,11 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
         assert query.capabilities == ("python",)
         assert query.tags == ("backend",)
         assert query.free_text == "schema review"
-        assert query.exclude_agent_ids == ("self-agent",)
+        assert query.exclude_agent_ids == ()
         reply = msg.replies[0]["text"]
         assert "Dev Bot" in reply
         assert "developer" in reply
+        assert "prod" in reply
         assert "python, testing" in reply
         assert "Builds backend features." in reply
 
@@ -344,18 +346,21 @@ async def test_discover_degraded_reports_registry_connectivity():
         }
     ) as (data_dir, _cfg, prov):
         import app.channels.telegram.ingress as th
-        from app.agents.state import AgentRuntimeState, save_agent_runtime_state
 
-        save_agent_runtime_state(
-            data_dir,
-            AgentRuntimeState(
-                agent_id="self-agent",
-                agent_token="agent-token",
-                connectivity_state="degraded",
-                last_error="registry_unreachable",
-                last_error_detail="Registry poll failed with ConnectError.",
-            ),
-        )
+        class FakeRegistryRuntime:
+            def has_coordination_connections(self):
+                return True
+
+            def has_connected_coordination_connection(self):
+                return False
+
+            def has_enrolled_coordination_connection(self):
+                return True
+
+            def first_coordination_error(self):
+                return "registry_unreachable"
+
+        current_runtime().registry_runtime = FakeRegistryRuntime()
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -382,10 +387,18 @@ async def test_discover_registry_failure_omits_backend_response_details():
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
-        from app.agents.state import AgentRuntimeState, save_agent_runtime_state
 
-        class FakeRegistryClient:
-            async def search(self, query):
+        class FakeRegistryRuntime:
+            def has_coordination_connections(self):
+                return True
+
+            def has_connected_coordination_connection(self):
+                return True
+
+            def first_coordination_error(self):
+                return ""
+
+            async def discover(self, query):
                 raise RegistryClientError(
                     "Registry POST /v1/agents/discovery/search failed: HTTP 500",
                     error_code="registry_server_error",
@@ -393,15 +406,7 @@ async def test_discover_registry_failure_omits_backend_response_details():
                     status_code=500,
                 )
 
-        save_agent_runtime_state(
-            data_dir,
-            AgentRuntimeState(
-                agent_id="self-agent",
-                agent_token="agent-token",
-                connectivity_state="connected",
-            ),
-        )
-        current_runtime().registry_client_factory = lambda _cfg: FakeRegistryClient()
+        current_runtime().registry_runtime = FakeRegistryRuntime()
 
         chat = FakeChat(12345)
         user = FakeUser(42)
@@ -469,7 +474,28 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
                 submitted.append(request)
                 return {"ok": True}
 
-        monkeypatch.setattr("app.agents.delegation.registry_client", lambda _cfg: FakeRegistryClient())
+        class FakeRegistryRuntime:
+            def has_coordination_connections(self):
+                return True
+
+            def has_connected_coordination_connection(self):
+                return True
+
+            def first_coordination_error(self):
+                return ""
+
+            async def resolve_target_registry_id(self, target_agent_id, *, hinted_registry_id=""):
+                assert target_agent_id == "developer-1"
+                return hinted_registry_id or "default"
+
+            def client_for_registry(self, registry_id):
+                assert registry_id == "default"
+                return FakeRegistryClient()
+
+            def origin_agent_id(self, registry_id):
+                assert registry_id == "default"
+                return "origin-agent"
+
         save_agent_runtime_state(
             data_dir,
             AgentRuntimeState(
@@ -478,6 +504,7 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
                 connectivity_state="connected",
             ),
         )
+        current_runtime().registry_runtime = FakeRegistryRuntime()
         save_session(
             data_dir,
             _reg_conv(_reg_ref("conv-approve")),

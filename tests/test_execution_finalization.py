@@ -133,6 +133,37 @@ async def test_finalization_reports_routed_task_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_finalization_reports_routed_task_result_through_explicit_registry_id() -> None:
+    reported: list[tuple[str, object]] = []
+
+    class FakeClient:
+        async def routed_task_result(self, routed_task_id, result):
+            reported.append((routed_task_id, result))
+            return {"ok": True}
+
+    fallback_used: list[bool] = []
+
+    result = await finalize_execution(
+        RequestExecutionOutcome(status="completed", reply_text="done"),
+        context=FinalizationContext(
+            config=type("Cfg", (), {"data_dir": "/tmp/data", "provider_name": "claude", "completion_webhook_url": ""})(),
+            item_id="item-3b",
+            conversation_key="registry:prod:task:task-3b",
+            runtime_chat="registry:prod:task:task-3b",
+            conversation_ref="registry:prod:task:task-3b",
+            routed_task_id="task-3b",
+            registry_id="prod",
+            registry_client_factory=lambda config: fallback_used.append(True),
+            registry_client_for_registry=lambda registry_id: FakeClient() if registry_id == "prod" else None,
+        ),
+    )
+
+    assert result.routed_result_status == "reported"
+    assert fallback_used == []
+    assert reported and reported[0][0] == "task-3b"
+
+
+@pytest.mark.asyncio
 async def test_finalization_usage_recording_failure_is_non_blocking() -> None:
     timeline_calls: list[dict[str, object]] = []
 

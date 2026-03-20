@@ -13,6 +13,7 @@ def test_delegated_task_instructions_round_trips():
             tasks=[
                 DelegatedTask(
                     routed_task_id="task-1",
+                    registry_id="prod",
                     title="Implement feature",
                     target_agent_id="developer-1",
                     instructions="Add the endpoint and tests.",
@@ -20,6 +21,7 @@ def test_delegated_task_instructions_round_trips():
                 ),
                 DelegatedTask(
                     routed_task_id="task-2",
+                    registry_id="ops",
                     title="Review feature",
                     target_agent_id="reviewer-1",
                     instructions="Review for correctness and risk.",
@@ -37,6 +39,7 @@ def test_delegated_task_instructions_round_trips():
         "Add the endpoint and tests.",
         "Review for correctness and risk.",
     ]
+    assert [task.registry_id for task in restored.pending_delegation.tasks] == ["prod", "ops"]
 
 
 def test_pending_delegation_status_round_trips():

@@ -322,6 +322,7 @@ async def worker_dispatch(
         source = getattr(event, "source", "telegram")
         message_conversation_key = str(item.get("conversation_key") or getattr(event, "conversation_key", ""))
         routed_task_id = getattr(event, "routed_task_id", "")
+        registry_id = getattr(event, "registry_id", "")
         title = summarize_text(event.text) or "Conversation"
         dispatcher = _channel_dispatcher(runtime)
         message_chat_id = telegram_numeric_id(message_conversation_key)
@@ -411,11 +412,17 @@ async def worker_dispatch(
                 conversation_ref=conversation_ref,
                 chat_id=chat_id or 0,
                 routed_task_id=routed_task_id,
+                registry_id=registry_id,
                 skip_approval=getattr(event, "skip_approval", False),
                 last_status_text=getattr(channel_egress, "last_status_text", ""),
                 load_session=lambda target_chat: load_session(runtime, target_chat),
                 save_session=lambda target_chat, session: save_session(runtime, target_chat, session),
                 registry_client_factory=runtime.registry_client_factory,
+                registry_client_for_registry=(
+                    runtime.registry_runtime.client_for_registry
+                    if runtime.registry_runtime is not None
+                    else None
+                ),
                 record_usage=work_queue.record_usage,
                 publish_timeline_event=publish_timeline_event,
             ),

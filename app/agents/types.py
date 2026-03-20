@@ -114,6 +114,21 @@ class AgentDiscoveryQuery:
 
 
 @dataclass(frozen=True)
+class DiscoveredAgentRef:
+    registry_id: str
+    agent_id: str
+    display_name: str = ""
+    slug: str = ""
+    role: str = ""
+    capabilities: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
+    description: str = ""
+    connectivity_state: str = ""
+    current_capacity: int = 0
+    max_capacity: int = 1
+
+
+@dataclass(frozen=True)
 class RoutedTaskRequest:
     routed_task_id: str
     parent_conversation_id: str

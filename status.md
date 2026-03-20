@@ -159,6 +159,32 @@
   - hardwired outbound dispatch is gone and orchestration-level channel branching is reduced to dispatcher/descriptor queries
   - ref-based trust and execution context logic now align with the channel contract instead of string checks
   - full suite status after slice 6: `1797 passed, 23 skipped`
+- Complete: Slice 7 coordination provenance.
+  Scope:
+  - added `DiscoveredAgentRef` with explicit `registry_id` provenance and extended `RegistryRuntime` with coordination-aware discovery fan-out, per-registry client lookup, and target-registry resolution
+  - extended delegated task/session state to persist `registry_id` per child task and threaded that provenance through delegation planning, submission, and routed-result application
+  - extended durable inbound transport payloads so registry-originated `InboundMessage` and `InboundAction` events persist `registry_id` instead of reconstructing it later from ref guesses
+  - rewired Telegram `/discover` to use `RegistryRuntime` instead of the old singleton registry client path, with correct not-enrolled vs degraded messaging for coordination/full connections
+  - rewired routed-task finalization to report results back through the explicit originating registry connection when `registry_id` is present, while keeping the singleton fallback for older direct-call seams during scaffolding
+  - updated handler/runtime/presenter/session tests to exercise cross-registry provenance, registry-scoped delegation submission, explicit registry result reporting, and inbound payload round-trips
+  Tests:
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_registry_runtime.py tests/test_handlers_delegation.py tests/test_handlers.py tests/test_execution_finalization.py tests/test_session_state.py tests/test_orchestration.py tests/test_runtime_inbound_types.py tests/test_telegram_presenters.py tests/test_agents_delegation_boundary.py`
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_agents.py tests/test_registry_runtime.py tests/test_handlers.py tests/test_handlers_delegation.py tests/test_execution_finalization.py tests/test_session_state.py tests/test_orchestration.py tests/test_runtime_inbound_types.py tests/test_transport.py tests/test_work_queue.py tests/test_telegram_presenters.py tests/test_agents_delegation_boundary.py tests/test_telegram_delegation_channel.py`
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_zero_import_gates.py::test_telegram_ingress_line_count_stays_below_hard_cap`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified discovery now fans out across coordination/full registry connections and returns results tagged with the owning `registry_id`
+  - verified delegation approval persists resolved registry provenance on each child task and routes routed-task submission through the owning registry connection instead of a singleton client
+  - verified registry-originated inbound messages/actions and child-task finalization now carry/report `registry_id` explicitly through durable transport and runtime finalization paths
+  - verified `app/channels/telegram/ingress.py` stays under the hard line-count gate after the slice-7 discover changes
+  Review:
+  - provenance now lives in the correct owners: `RegistryRuntime` for per-registry lookup, session state for per-task routing, and durable inbound payloads for worker/finalization replay
+  - no new parallel discovery/delegation subsystem was introduced; existing handler, worker, and finalization seams were extended in place
+  - the remaining singleton fallback is intentionally confined to direct non-runtime delegation/finalization call sites and can be removed cleanly in later cleanup slices
+  Verified:
+  - multi-registry discovery and delegated-task routing now preserve explicit registry provenance end to end
+  - routed task results return through the originating registry connection instead of an implicit singleton
+  - full suite status after slice 7: `1802 passed, 23 skipped`
 
 # Octopus CLI Implementation Status
 

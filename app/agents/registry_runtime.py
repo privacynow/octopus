@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from app.agents.client import AgentRegistryClient, RegistryClientError
+from app.agents.registry_capabilities import registry_authority_ref
 from app.agents.runtime import AgentRuntime
 from app.agents.state import load_runtime_registry_connection_state
 from app.agents.types import AgentDiscoveryQuery, DiscoveredAgentRef, RegistryConnectionConfig
@@ -186,7 +187,7 @@ class RegistryRuntime:
             successful_search = True
             discovered.extend(
                 DiscoveredAgentRef(
-                    registry_id=connection.registry.registry_id,
+                    authority_ref=registry_authority_ref(connection.registry.registry_id),
                     agent_id=str(row.get("agent_id", "")),
                     display_name=str(row.get("display_name", "")),
                     slug=str(row.get("slug", "")),
@@ -206,7 +207,7 @@ class RegistryRuntime:
             discovered,
             key=lambda agent: (
                 (agent.display_name or agent.slug or agent.agent_id).lower(),
-                agent.registry_id,
+                agent.authority_ref,
                 agent.agent_id,
             ),
         )

@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from app.agents.registry_capabilities import registry_authority_ref
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_numeric_id
 
 
@@ -40,7 +41,7 @@ class InboundMessage:
     source: str = "telegram"
     conversation_ref: str = ""
     routed_task_id: str = ""
-    registry_id: str = ""
+    authority_ref: str = ""
     skip_approval: bool = False
 
     @property
@@ -98,7 +99,7 @@ class InboundAction:
     params: dict[str, Any] = field(default_factory=dict)
     source: str = "telegram"
     conversation_ref: str = ""
-    registry_id: str = ""
+    authority_ref: str = ""
 
     @property
     def chat_id(self) -> int:
@@ -146,7 +147,7 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback |
                 "source": event.source,
                 "conversation_ref": event.conversation_ref,
                 "routed_task_id": event.routed_task_id,
-                "registry_id": event.registry_id,
+                "authority_ref": event.authority_ref,
                 "skip_approval": event.skip_approval,
                 "attachments": [
                     {
@@ -192,7 +193,7 @@ def serialize_inbound(event: InboundMessage | InboundCommand | InboundCallback |
                 "params": event.params,
                 "source": event.source,
                 "conversation_ref": event.conversation_ref,
-                "registry_id": event.registry_id,
+                "authority_ref": event.authority_ref,
             }
         )
     raise TypeError(f"Unknown inbound type: {type(event)}")
@@ -212,6 +213,9 @@ def deserialize_inbound(
     if not conversation_key and "chat_id" in data:
         conversation_key = telegram_conversation_key(data["chat_id"])
     user = InboundUser(id=str(actor_key or ""), username=data.get("username", ""))
+    authority_ref = str(data.get("authority_ref", "") or "")
+    if not authority_ref and data.get("registry_id"):
+        authority_ref = registry_authority_ref(str(data["registry_id"]))
     if kind == "message":
         attachments = tuple(
             InboundAttachment(
@@ -230,7 +234,7 @@ def deserialize_inbound(
             source=data.get("source", "telegram"),
             conversation_ref=data.get("conversation_ref", ""),
             routed_task_id=data.get("routed_task_id", ""),
-            registry_id=data.get("registry_id", ""),
+            authority_ref=authority_ref,
             skip_approval=bool(data.get("skip_approval", False)),
         )
     if kind == "command":
@@ -261,6 +265,6 @@ def deserialize_inbound(
             params=dict(params),
             source=data.get("source", "telegram"),
             conversation_ref=data.get("conversation_ref", ""),
-            registry_id=data.get("registry_id", ""),
+            authority_ref=authority_ref,
         )
     raise ValueError(f"Unknown kind: {kind}")

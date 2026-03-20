@@ -10,7 +10,7 @@ from app.session_state import DelegatedTask, PendingDelegation
 @dataclass(frozen=True)
 class DelegationTaskDraft:
     routed_task_id: str
-    registry_id: str = ""
+    authority_ref: str = ""
     title: str = ""
     target_agent_id: str = ""
     instructions: str = ""

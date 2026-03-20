@@ -331,7 +331,7 @@ def test_discover_results_message_renders_matching_agents():
     rendered = discover_results_message(
         [
             {
-                "registry_id": "prod",
+                "authority_ref": "registry:prod",
                 "display_name": "Reviewer",
                 "role": "developer",
                 "connectivity_state": "connected",
@@ -347,7 +347,7 @@ def test_discover_results_message_renders_matching_agents():
     assert rendered.parse_mode == ParseMode.HTML
     assert "Matching agents" in rendered.text
     assert "Reviewer" in rendered.text
-    assert "prod" in rendered.text
+    assert "registry:prod" in rendered.text
     assert "backend" in rendered.text
 
 

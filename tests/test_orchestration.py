@@ -53,7 +53,7 @@ def test_build_delegation_plan_preserves_task_fields():
     assert plan.resume_instruction == "Resume when both child tasks return."
     assert task.routed_task_id == "task-3"
     assert task.title == "Draft tests"
-    assert task.registry_id == ""
+    assert task.authority_ref == ""
     assert task.target_agent_id == "test-writer-1"
     assert task.instructions == "Write focused regression tests."
 
@@ -154,14 +154,14 @@ def test_apply_routed_result_matches_registry_provenance_when_task_ids_overlap()
         [
             {
                 "routed_task_id": "task-shared",
-                "registry_id": "prod",
+                "authority_ref": "registry:prod",
                 "title": "Prod task",
                 "target_agent_id": "developer-prod",
                 "instructions": "Handle prod.",
             },
             {
                 "routed_task_id": "task-shared",
-                "registry_id": "ops",
+                "authority_ref": "registry:ops",
                 "title": "Ops task",
                 "target_agent_id": "developer-ops",
                 "instructions": "Handle ops.",
@@ -174,7 +174,7 @@ def test_apply_routed_result_matches_registry_provenance_when_task_ids_overlap()
     outcome = apply_routed_result(
         plan,
         routed_task_id="task-shared",
-        registry_id="ops",
+        authority_ref="registry:ops",
         result=RoutedTaskResult(routed_task_id="task-shared", status="completed", summary="ops done"),
     )
 

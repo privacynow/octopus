@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app import work_queue
+from app.agents.registry_capabilities import registry_authority_ref
 from app.agents.bridge import (
     admit_registry_delivery,
     build_registry_action_envelope,
@@ -213,7 +214,7 @@ async def handle_registry_delivery(
         applied = apply_routed_result(
             session.pending_delegation,
             routed_task_id=routed_task_id,
-            registry_id=registry_id,
+            authority_ref=registry_authority_ref(registry_id),
             result=routed_result,
         )
         if not applied.matched:

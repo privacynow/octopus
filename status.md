@@ -793,3 +793,21 @@
   - Telegram delegation-plan projection now uses the same conversation-projection capability port as the rest of the Telegram external timeline flow
   - both positive and negative delegation-channel paths are covered: state persistence and plan send, direct projection through the port, and explicit rejection of the removed shortcut path
   - full suite status after slice 6E: `1885 passed, 23 skipped`
+- Complete: Slice 7 provenance generalization.
+  Scope:
+  - replaced consumer-facing delegation/discovery provenance from `registry_id` to `authority_ref` in `DiscoveredAgentRef`, pending-delegation session state, delegation workflow contracts, and inbound registry message/action annotations
+  - rewired delegation/session progression so submitted and completed child tasks now match and persist by `authority_ref` instead of converting back to registry ids during normal workflow execution
+  - rewired registry delivery admission to serialize `authority_ref` on inbound events, with boundary-only fallback reads from legacy `registry_id` payload/session data so older queued items and stored sessions still restore safely
+  - rewired registry-backed discovery producers (`RegistryRuntime` and `RegistryControlProcessor`) to emit `authority_ref`, and updated Telegram discovery presentation to render generic authority provenance instead of a registry-specific field label
+  - confirmed `RoutedTaskRequest` itself needed no shape change in this slice because it already carried no registry-specific provenance; authority targeting remains transport-envelope metadata on the control-plane command
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_session_state.py tests/test_orchestration.py tests/test_runtime_inbound_types.py tests/test_handlers_delegation.py tests/test_registry_control_processor.py tests/test_control_plane_adapters.py tests/test_telegram_presenters.py tests/test_registry_runtime.py tests/test_execution_finalization.py tests/test_worker_workflows.py tests/test_handlers.py -k "discover or delegation or routed_task"`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - provenance now changes shape only at true boundaries: control-plane producers emit `authority_ref`, consumer-facing session/runtime types store `authority_ref`, and compatibility with old `registry_id` survives only in deserialization/storage fallbacks
+  - the slice removed the temporary delegation shim that parsed `authority_ref` back into a registry id, which closes the main architectural leak left behind by the earlier port cutovers
+  - registry-specific parsing remains only inside registry-owned implementations (`registry_capabilities`, `RegistryControlProcessor`) or boundary compatibility code, not in workflow consumers
+  Verified:
+  - discovery results, pending delegation tasks, and registry-originated inbound events now preserve opaque `authority_ref` provenance end to end
+  - both positive and negative provenance paths are covered: modern `authority_ref` flow, legacy `registry_id` boundary fallback, overlapping routed-task provenance matching, and registry-backed discovery ordering/output
+  - full suite status after slice 7: `1885 passed, 23 skipped`

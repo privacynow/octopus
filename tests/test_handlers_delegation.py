@@ -132,7 +132,7 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
         assert authority_ref == "registry:default"
         assert pending is not None
         assert pending["status"] == "submitted"
-        assert pending["tasks"][0]["registry_id"] == "default"
+        assert pending["tasks"][0]["authority_ref"] == "registry:default"
         assert pending["tasks"][0]["status"] == "submitted"
         assert "Delegation approved. 1 request(s) sent to specialist bots." in last_reply(msg)
         assert query.answered is True

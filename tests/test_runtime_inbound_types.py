@@ -32,7 +32,7 @@ def test_inbound_envelope_constructs_without_surface_binding_id() -> None:
     assert not hasattr(envelope, "surface_binding_id")
 
 
-def test_registry_inbound_payloads_round_trip_registry_id() -> None:
+def test_registry_inbound_payloads_round_trip_authority_ref() -> None:
     message_payload = serialize_inbound(
         InboundMessage(
             user=InboundUser(id="reg:actor", username="registry"),
@@ -41,7 +41,7 @@ def test_registry_inbound_payloads_round_trip_registry_id() -> None:
             source="registry",
             conversation_ref="registry:prod:task:task-1",
             routed_task_id="task-1",
-            registry_id="prod",
+            authority_ref="registry:prod",
         )
     )
     action_payload = serialize_inbound(
@@ -52,7 +52,7 @@ def test_registry_inbound_payloads_round_trip_registry_id() -> None:
             params={"ok": True},
             source="registry",
             conversation_ref="registry:prod:conversation:conv-1",
-            registry_id="prod",
+            authority_ref="registry:prod",
         )
     )
 
@@ -61,5 +61,5 @@ def test_registry_inbound_payloads_round_trip_registry_id() -> None:
 
     assert isinstance(message, InboundMessage)
     assert isinstance(action, InboundAction)
-    assert message.registry_id == "prod"
-    assert action.registry_id == "prod"
+    assert message.authority_ref == "registry:prod"
+    assert action.authority_ref == "registry:prod"

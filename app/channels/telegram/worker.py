@@ -155,11 +155,11 @@ def _action_target_message_id(event: InboundAction) -> int | None:
 def _resolve_registry_authority_ref(
     runtime: TelegramRuntime,
     *,
-    registry_id: str,
+    authority_ref: str,
     conversation_ref: str,
 ) -> str:
-    if registry_id:
-        return registry_authority_ref(registry_id)
+    if authority_ref:
+        return authority_ref
     parsed_registry_ref = parse_registry_ref(conversation_ref)
     if parsed_registry_ref is not None:
         return registry_authority_ref(parsed_registry_ref[0])
@@ -366,7 +366,7 @@ async def worker_dispatch(
         source = getattr(event, "source", "telegram")
         message_conversation_key = str(item.get("conversation_key") or getattr(event, "conversation_key", ""))
         routed_task_id = getattr(event, "routed_task_id", "")
-        registry_id = getattr(event, "registry_id", "")
+        authority_ref = getattr(event, "authority_ref", "")
         title = summarize_text(event.text) or "Conversation"
         dispatcher = _channel_dispatcher(runtime)
         message_chat_id = telegram_numeric_id(message_conversation_key)
@@ -456,10 +456,9 @@ async def worker_dispatch(
                 conversation_ref=conversation_ref,
                 chat_id=chat_id or 0,
                 routed_task_id=routed_task_id,
-                registry_id=registry_id,
                 authority_ref=_resolve_registry_authority_ref(
                     runtime,
-                    registry_id=registry_id,
+                    authority_ref=authority_ref,
                     conversation_ref=conversation_ref,
                 ),
                 skip_approval=getattr(event, "skip_approval", False),
@@ -471,7 +470,7 @@ async def worker_dispatch(
                 publish_timeline_event=lambda config, **kwargs: _publish_timeline_event_for_runtime(
                     runtime,
                     config=config,
-                    registry_id=registry_id,
+                    registry_id=(parse_registry_ref(conversation_ref) or ("", "", ""))[0],
                     **kwargs,
                 ),
             ),

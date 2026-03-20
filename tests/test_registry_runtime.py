@@ -313,9 +313,9 @@ async def test_registry_runtime_discover_fans_out_with_registry_provenance(monke
 
     discovered = await runtime.discover(AgentDiscoveryQuery(role="developer"))
 
-    assert [(item.registry_id, item.agent_id) for item in discovered] == [
-        ("ops", "agent-ops-1"),
-        ("prod", "agent-prod-1"),
+    assert [(item.authority_ref, item.agent_id) for item in discovered] == [
+        ("registry:ops", "agent-ops-1"),
+        ("registry:prod", "agent-prod-1"),
     ]
 
 

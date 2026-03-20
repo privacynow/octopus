@@ -14,10 +14,12 @@ from app.agents.bridge import (
     summarize_text,
     telegram_conversation_ref,
 )
+from app.agents.registry_capabilities import registry_authority_ref
 from app.agents.delegation import (
     handle_delegation_approve as handle_channel_delegation_approve,
     handle_delegation_cancel as handle_channel_delegation_cancel,
 )
+from app.channels.registry.refs import parse_registry_ref
 from app.channels.telegram import presenters as telegram_presenters
 from app.channels.telegram.conversation import handle_worker_conversation_action
 from app.channels.telegram.execution import (
@@ -148,6 +150,23 @@ def _action_target_message_id(event: InboundAction) -> int | None:
     if isinstance(raw, str) and raw.isdigit():
         return int(raw)
     return None
+
+
+def _resolve_registry_authority_ref(
+    runtime: TelegramRuntime,
+    *,
+    registry_id: str,
+    conversation_ref: str,
+) -> str:
+    if registry_id:
+        return registry_authority_ref(registry_id)
+    parsed_registry_ref = parse_registry_ref(conversation_ref)
+    if parsed_registry_ref is not None:
+        return registry_authority_ref(parsed_registry_ref[0])
+    registries = tuple(getattr(runtime.config, "agent_registries", ()) or ())
+    if len(registries) == 1:
+        return registry_authority_ref(registries[0].registry_id)
+    return ""
 
 
 def _build_action_channel_egress(
@@ -438,16 +457,16 @@ async def worker_dispatch(
                 chat_id=chat_id or 0,
                 routed_task_id=routed_task_id,
                 registry_id=registry_id,
+                authority_ref=_resolve_registry_authority_ref(
+                    runtime,
+                    registry_id=registry_id,
+                    conversation_ref=conversation_ref,
+                ),
                 skip_approval=getattr(event, "skip_approval", False),
                 last_status_text=getattr(channel_egress, "last_status_text", ""),
                 load_session=lambda target_chat: load_session(runtime, target_chat),
                 save_session=lambda target_chat, session: save_session(runtime, target_chat, session),
-                registry_client_factory=runtime.registry_client_factory,
-                registry_client_for_registry=(
-                    runtime.registry_runtime.client_for_registry
-                    if runtime.registry_runtime is not None
-                    else None
-                ),
+                task_routing=runtime.services.control_plane.task_routing,
                 record_usage=work_queue.record_usage,
                 publish_timeline_event=lambda config, **kwargs: _publish_timeline_event_for_runtime(
                     runtime,

@@ -776,3 +776,20 @@
   - Telegram and registry-delivery delegation approval/cancel flows now route through `AgentDirectoryPort` and `TaskRoutingPort`
   - positive and negative delegation behavior is covered: success, cancel/no-op, unavailable coordination, hidden backend failure text, and explicit-runtime boundary use
   - full suite status after slice 6D: `1885 passed, 23 skipped`
+- Complete: Slice 6E cut delegation channel to ports.
+  Scope:
+  - rewired `app/channels/telegram/delegation_channel.py` so delegation-plan timeline publication always goes through `runtime.services.control_plane.conversation_projection.publish_external_timeline()`
+  - removed the last Telegram delegation-channel branches on `runtime.registry_runtime`, bridge fan-out helpers, and the old `message.publish_timeline` shortcut
+  - updated Telegram delegation-channel and handler integration tests to assert the new control-plane projection seam instead of registry-channel egress behavior
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_telegram_delegation_channel.py`
+  - `./.venv/bin/python -m pytest -q tests/test_handlers.py -k delegation_proposed_event_published tests/test_telegram_delegation_channel.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - the slice removes the final alternate Telegram delegation timeline path instead of layering another adapter over it; projection now has one owner for egress, progress, worker timeline, and delegation-plan events
+  - the first full-suite run exposed one stale handler test still observing registry-channel egress; it was converted to the capability-port seam rather than preserving the obsolete path for test convenience
+  - no new control-plane abstraction landed here; the change stays within the existing runtime/services boundary introduced in earlier slices
+  Verified:
+  - Telegram delegation-plan projection now uses the same conversation-projection capability port as the rest of the Telegram external timeline flow
+  - both positive and negative delegation-channel paths are covered: state persistence and plan send, direct projection through the port, and explicit rejection of the removed shortcut path
+  - full suite status after slice 6E: `1885 passed, 23 skipped`

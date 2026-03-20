@@ -1,6 +1,8 @@
 import pytest
 
+from app.agents.bridge import telegram_conversation_ref
 from app.identity import telegram_actor_key, telegram_conversation_key
+from app.ports.channel import ChannelDescriptor
 from app.channels.telegram.delegation_channel import propose_delegation_plan
 from app.channels.telegram.execution import (
     TelegramExecutionCollaborators,
@@ -110,7 +112,7 @@ def test_execution_runtime_uses_injected_timeline_and_delegation_callbacks() -> 
 
         runtime = build_execution_runtime(current_runtime(), collaborators=collaborators)
         message = FakeMessage(chat=FakeChat(12345))
-        message.conversation_ref = "tg:12345"
+        message.conversation_ref = telegram_conversation_ref(current_runtime().config, 12345)
         context = runtime.build_channel_context(message, 12345)
 
         assert context.timeline_callback is fake_timeline
@@ -192,11 +194,20 @@ async def test_request_approval_runs_from_explicit_execution_runtime():
 def test_workflow_context_builder_resolves_registry_conversation_metadata() -> None:
     context = build_execution_channel_context(
         ExecutionChannelMetadata(
-            channel_name="telegram",
+            descriptor=ChannelDescriptor(
+                channel_type="registry",
+                display_name="Registry",
+                supports_multiple=True,
+                requires_polling=True,
+                trust_tier="trusted",
+                contributes_channel_capability=True,
+                accepts_channel_input=True,
+                supports_conversation_binding=True,
+                supports_timeline=True,
+            ),
             message_conversation_ref="",
             routed_task_id="task-9",
             chat_id=12345,
-            agent_mode="registry",
         ),
         build_conversation_ref=lambda chat_id: f"registry:{chat_id}",
         timeline_callback_factory=lambda conversation_ref, routed_task_id: (

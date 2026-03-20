@@ -19,8 +19,7 @@ from app.agents.bridge import (
 from app.agents.types import RoutedTaskResult
 from app.config import BotConfig
 from app.runtime.work_admission import enqueue_inbound_envelope, record_inbound_envelope
-from app.channel_egress_factory import create_channel_egress
-from app.runtime import composition
+from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime.session_runtime import load_runtime_session, save_runtime_session
 from app.skill_activation_service import get_skill_activation_service
 from app.workflows.delegation.coordination import apply_routed_result, send_delegation_completion_message
@@ -33,6 +32,7 @@ class RegistryDeliveryRuntime:
     provider_name: str
     provider_state_factory: Callable[[], dict[str, Any]]
     bot: Any | None = None
+    dispatcher: ChannelDispatcher | None = None
 
 
 def build_registry_delivery_runtime(
@@ -40,11 +40,13 @@ def build_registry_delivery_runtime(
     provider_name: str,
     provider_state_factory: Callable[[], dict[str, Any]],
     bot: Any | None = None,
+    dispatcher: ChannelDispatcher | None = None,
 ) -> RegistryDeliveryRuntime:
     return RegistryDeliveryRuntime(
         provider_name=provider_name,
         provider_state_factory=provider_state_factory,
         bot=bot,
+        dispatcher=dispatcher,
     )
 
 
@@ -196,7 +198,11 @@ async def handle_registry_delivery(
             event_id=f"delegated-result:{routed_task_id}",
             registry_id=registry_id,
         )
-        channel_name = composition.conversation_channel_name(parent_conversation_id)
+        channel_name = (
+            runtime.dispatcher.channel_type_for_ref(parent_conversation_id)
+            if runtime.dispatcher is not None
+            else None
+        )
         if channel_name == "telegram" and runtime.bot is None:
             return "retry_later"
         conversation_key = conversation_key_for_ref(parent_conversation_id)
@@ -232,7 +238,9 @@ async def handle_registry_delivery(
             serialized,
         )
         if admit_status == "admitted":
-            channel_egress = create_channel_egress(
+            if runtime.dispatcher is None:
+                raise RuntimeError("Registry delivery runtime requires a channel dispatcher")
+            channel_egress = runtime.dispatcher.create_egress(
                 parent_conversation_id,
                 config=config,
                 bot=runtime.bot,

@@ -1,6 +1,8 @@
 import pytest
 
 from app import work_queue
+from app.agents.bridge import telegram_conversation_ref
+from app.channels.registry.refs import registry_conversation_ref
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
 from app.runtime.inbound_types import InboundUser
 from app.runtime.work_admission import admit_worker_message
@@ -32,9 +34,10 @@ def test_admit_worker_message_fails_unauthorized_telegram_item() -> None:
         result = admit_worker_message(
             data_dir=data_dir,
             item_id=item_id,
-            source="telegram",
+            conversation_ref=telegram_conversation_ref(current_runtime().config, 12345),
             user=InboundUser(id=telegram_actor_key(42), username="blocked"),
             config=current_runtime().config,
+            dispatcher=current_runtime().channel_dispatcher,
         )
 
         row = work_queue.debug_transport_connection(data_dir).execute(
@@ -48,13 +51,20 @@ def test_admit_worker_message_fails_unauthorized_telegram_item() -> None:
 
 
 def test_admit_worker_message_allows_registry_input() -> None:
-    with fresh_env() as (data_dir, _cfg, _prov):
+    with fresh_env(
+        config_overrides={
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
+        }
+    ) as (data_dir, _cfg, _prov):
         result = admit_worker_message(
             data_dir=data_dir,
             item_id="registry-item",
-            source="registry",
+            conversation_ref=registry_conversation_ref("default", "conv-1"),
             user=InboundUser(id="registry:actor", username="registry"),
             config=current_runtime().config,
+            dispatcher=current_runtime().channel_dispatcher,
         )
 
         assert result.allowed is True

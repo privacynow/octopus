@@ -18,7 +18,7 @@ from app.channels.registry.refs import (
     registry_task_ref,
 )
 from app.config import BotConfig
-from app.identity import telegram_conversation_key
+from app.identity import telegram_chat_id_from_ref, telegram_conversation_key
 from app.runtime.inbound_types import (
     InboundAction,
     InboundEnvelope,
@@ -26,17 +26,13 @@ from app.runtime.inbound_types import (
     InboundUser,
     serialize_inbound,
 )
-from app.runtime.composition import conversation_channel_name
-
 log = logging.getLogger(__name__)
 
 
 def conversation_key_for_ref(conversation_ref: str) -> str:
-    if conversation_channel_name(conversation_ref) == "telegram":
-        try:
-            return telegram_conversation_key(conversation_ref.rsplit(":", 1)[1])
-        except (IndexError, ValueError):
-            return conversation_ref
+    chat_id = telegram_chat_id_from_ref(conversation_ref)
+    if chat_id is not None:
+        return telegram_conversation_key(chat_id)
     return conversation_ref
 
 

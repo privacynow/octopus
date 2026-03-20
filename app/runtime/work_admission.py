@@ -8,13 +8,22 @@ from typing import Any
 
 from app.access import is_allowed_user_with_override, trust_tier
 from app import work_queue
+from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime.inbound_types import InboundEnvelope, serialize_inbound
 
 
-def trust_tier_for_source(source: str, user: Any, *, config) -> str:
+def trust_tier_for_ref(
+    conversation_ref: str,
+    user: Any,
+    *,
+    config,
+    dispatcher: ChannelDispatcher | None,
+) -> str:
     """Resolve trust at the inbound admission boundary."""
-    if source == "registry":
-        return "trusted"
+    if dispatcher is not None:
+        descriptor = dispatcher.descriptor_for_ref(conversation_ref)
+        if descriptor is not None and descriptor.trust_tier == "trusted":
+            return descriptor.trust_tier
     return trust_tier(config, user)
 
 
@@ -29,12 +38,19 @@ def admit_worker_message(
     *,
     data_dir: Path,
     item_id: str,
-    source: str,
+    conversation_ref: str,
     user: Any,
     config,
+    dispatcher: ChannelDispatcher | None,
 ) -> WorkerMessageAdmission:
-    resolved_trust = trust_tier_for_source(source, user, config=config)
-    if source != "telegram":
+    resolved_trust = trust_tier_for_ref(
+        conversation_ref,
+        user,
+        config=config,
+        dispatcher=dispatcher,
+    )
+    channel_type = dispatcher.channel_type_for_ref(conversation_ref) if dispatcher is not None else None
+    if channel_type != "telegram":
         return WorkerMessageAdmission(
             status="allowed",
             allowed=True,

@@ -251,6 +251,7 @@ def main() -> None:
     telegram_ingress = dispatcher.get_ingress("telegram")
     if telegram_ingress is None:
         raise RuntimeError("Telegram channel ingress was not built")
+    telegram_ingress.runtime.channel_dispatcher = dispatcher
 
     app = telegram_ingress.application
     boot_id = telegram_ingress.runtime.boot_id
@@ -275,6 +276,7 @@ def main() -> None:
             provider_name=provider.name,
             provider_state_factory=provider.new_provider_state,
             bot=app.bot,
+            dispatcher=dispatcher,
         )
         registry_runtime = RegistryRuntime(
             config.agent_registries,

@@ -238,6 +238,7 @@ async def handle_recovery_action(
         worker_id=runtime.state.boot_id,
         ignore_claimed_item_id=str(getattr(message, "_worker_item_id", "")),
         config=cfg,
+        dispatcher=getattr(runtime.state, "channel_dispatcher", None),
     )
     if outcome.toast_message:
         await answer_action(outcome.toast_message, show_alert=outcome.show_alert)

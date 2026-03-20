@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+from app.ports.channel import ChannelDescriptor
 from app.runtime.dispatch import RuntimeDispatchRuntime
 
 
@@ -17,11 +18,10 @@ class ExecutionChannelContext:
 
 @dataclass(frozen=True)
 class ExecutionChannelMetadata:
-    channel_name: str = "telegram"
+    descriptor: ChannelDescriptor | None = None
     message_conversation_ref: str = ""
     routed_task_id: str = ""
     chat_id: int | str = ""
-    agent_mode: str = ""
 
 
 @dataclass(frozen=True)

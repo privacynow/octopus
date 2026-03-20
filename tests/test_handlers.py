@@ -11,6 +11,7 @@ from app.agents.bridge import conversation_key_for_ref, telegram_conversation_re
 from app.agents.client import RegistryClientError
 from app.agents.state import AgentRuntimeState, save_agent_runtime_state
 from app.agents.delivery import handle_registry_delivery
+from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
 from app.channels.telegram.bootstrap import build_bootstrap
 import app.channels.telegram.worker as telegram_worker
 from app.channels.telegram.session_io import (
@@ -63,6 +64,14 @@ def _event(value):
 
 def _reg_conv(conversation_ref: str) -> str:
     return conversation_key_for_ref(conversation_ref)
+
+
+def _reg_ref(external_id: str) -> str:
+    return registry_conversation_ref("default", external_id)
+
+
+def _reg_task(external_id: str) -> str:
+    return registry_task_ref("default", external_id)
 
 
 def _registry_delivery_runtime(cfg, prov):
@@ -158,6 +167,9 @@ async def test_worker_dispatch_skips_completion_webhook_for_delegation_proposed(
         config_overrides={
             "approval_mode": "off",
             "completion_webhook_url": "https://hooks.example.com/completed",
+            "agent_mode": "registry",
+            "agent_registry_url": "http://registry.test",
+            "agent_registry_enroll_token": "enroll-secret",
         }
     ) as (_data_dir, _cfg, prov):
         import app.channels.telegram.ingress as th
@@ -195,12 +207,12 @@ async def test_worker_dispatch_skips_completion_webhook_for_delegation_proposed(
 
         event = InboundMessage(
             user=InboundUser(id=_actor(42), username="registry-ui"),
-            conversation_key=_reg_conv("registry:conv-webhook"),
+            conversation_key=_reg_conv(_reg_ref("conv-webhook")),
             text="Delegate this work.",
             source="registry",
-            conversation_ref="registry:conv-webhook",
+            conversation_ref=_reg_ref("conv-webhook"),
         )
-        item = {"id": "webhook-item-2", "conversation_key": _reg_conv("registry:conv-webhook"), "event_id": _event(7002), "dispatch_mode": "fresh"}
+        item = {"id": "webhook-item-2", "conversation_key": _reg_conv(_reg_ref("conv-webhook")), "event_id": _event(7002), "dispatch_mode": "fresh"}
 
         await telegram_worker.worker_dispatch(
             "message",
@@ -421,12 +433,12 @@ async def test_registry_channel_input_respects_approval_mode():
 
         event = InboundMessage(
             user=InboundUser(id=_actor(42), username="registry-ui"),
-            conversation_key=_reg_conv("registry-conv-1"),
+            conversation_key=_reg_conv(_reg_ref("registry-conv-1")),
             text="Please refine this specification.",
             source="registry",
-            conversation_ref="registry-conv-1",
+            conversation_ref=_reg_ref("registry-conv-1"),
         )
-        item = {"id": "registry-item-1", "conversation_key": _reg_conv("registry-conv-1"), "event_id": _event(7001), "dispatch_mode": "fresh"}
+        item = {"id": "registry-item-1", "conversation_key": _reg_conv(_reg_ref("registry-conv-1")), "event_id": _event(7001), "dispatch_mode": "fresh"}
 
         await telegram_worker.worker_dispatch(
             "message",
@@ -436,7 +448,7 @@ async def test_registry_channel_input_respects_approval_mode():
             execution_runtime=current_execution_runtime(),
         )
 
-        session = load_session_disk(data_dir, _reg_conv("registry-conv-1"), prov)
+        session = load_session_disk(data_dir, _reg_conv(_reg_ref("registry-conv-1")), prov)
         assert len(prov.preflight_calls) == 1
         assert len(prov.run_calls) == 0
         assert session.get("pending_approval") is not None
@@ -468,11 +480,11 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
         )
         save_session(
             data_dir,
-            _reg_conv("registry:conv-approve"),
+            _reg_conv(_reg_ref("conv-approve")),
             {
                 **default_session(prov.name, prov.new_provider_state(), "off"),
                 "pending_delegation": {
-                    "conversation_ref": "registry:conv-approve",
+                    "conversation_ref": _reg_ref("conv-approve"),
                     "title": "Registry delegation",
                     "tasks": [
                         {
@@ -493,7 +505,7 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
                 "delivery_id": "registry-approve-delegation",
                 "kind": "channel_action",
                 "payload": {
-                    "conversation_ref": "registry:conv-approve",
+                    "conversation_ref": _reg_ref("conv-approve"),
                     "action": "approve_delegation",
                     "payload": {},
                 },
@@ -502,7 +514,7 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
         )
         assert await drain_one_worker_item(data_dir) is True
 
-        session_after = load_session_disk(data_dir, _reg_conv("registry:conv-approve"), prov)
+        session_after = load_session_disk(data_dir, _reg_conv(_reg_ref("conv-approve")), prov)
         pending = session_after.get("pending_delegation")
         assert outcome == "accepted"
         assert len(submitted) == 1
@@ -521,11 +533,11 @@ async def test_cancel_delegation_from_registry_delivery():
     ) as (data_dir, cfg, prov):
         save_session(
             data_dir,
-            _reg_conv("registry:conv-cancel"),
+            _reg_conv(_reg_ref("conv-cancel")),
             {
                 **default_session(prov.name, prov.new_provider_state(), "off"),
                 "pending_delegation": {
-                    "conversation_ref": "registry:conv-cancel",
+                    "conversation_ref": _reg_ref("conv-cancel"),
                     "title": "Registry delegation",
                     "tasks": [
                         {
@@ -546,7 +558,7 @@ async def test_cancel_delegation_from_registry_delivery():
                 "delivery_id": "registry-cancel-delegation",
                 "kind": "channel_action",
                 "payload": {
-                    "conversation_ref": "registry:conv-cancel",
+                    "conversation_ref": _reg_ref("conv-cancel"),
                     "action": "cancel_delegation",
                     "payload": {},
                 },
@@ -555,7 +567,7 @@ async def test_cancel_delegation_from_registry_delivery():
         )
         assert await drain_one_worker_item(data_dir) is True
 
-        session_after = load_session_disk(data_dir, _reg_conv("registry:conv-cancel"), prov)
+        session_after = load_session_disk(data_dir, _reg_conv(_reg_ref("conv-cancel")), prov)
         assert outcome == "accepted"
         assert session_after.get("pending_delegation") is None
 
@@ -598,12 +610,12 @@ async def test_delegation_proposed_event_published(monkeypatch):
 
         event = InboundMessage(
             user=InboundUser(id=_actor(42), username="registry-ui"),
-            conversation_key=_reg_conv("registry:conv-proposed"),
+            conversation_key=_reg_conv(_reg_ref("conv-proposed")),
             text="Ship the feature.",
             source="registry",
-            conversation_ref="registry:conv-proposed",
+            conversation_ref=_reg_ref("conv-proposed"),
         )
-        item = {"id": "registry-item-proposed", "conversation_key": _reg_conv("registry:conv-proposed"), "event_id": _event(7101), "dispatch_mode": "fresh"}
+        item = {"id": "registry-item-proposed", "conversation_key": _reg_conv(_reg_ref("conv-proposed")), "event_id": _event(7101), "dispatch_mode": "fresh"}
 
         await telegram_worker.worker_dispatch(
             "message",
@@ -658,13 +670,13 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
 
         event = InboundMessage(
             user=InboundUser(id=_actor(42), username="origin-bot"),
-            conversation_key=_reg_conv("routed-task-1"),
+            conversation_key=_reg_task("routed-task-1"),
             text="Review the latest spec.",
             source="registry",
-            conversation_ref="routed-task-1",
+            conversation_ref=_reg_task("routed-task-1"),
             routed_task_id="routed-task-1",
         )
-        item = {"id": "registry-item-2", "conversation_key": _reg_conv("routed-task-1"), "event_id": _event(7002), "dispatch_mode": "fresh"}
+        item = {"id": "registry-item-2", "conversation_key": _reg_task("routed-task-1"), "event_id": _event(7002), "dispatch_mode": "fresh"}
 
         await telegram_worker.worker_dispatch(
             "message",
@@ -722,13 +734,13 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
 
         event = InboundMessage(
             user=InboundUser(id=_actor(42), username="origin-bot"),
-            conversation_key=_reg_conv("routed-task-2"),
+            conversation_key=_reg_task("routed-task-2"),
             text="Review the latest spec.",
             source="registry",
-            conversation_ref="routed-task-2",
+            conversation_ref=_reg_task("routed-task-2"),
             routed_task_id="routed-task-2",
         )
-        item = {"id": "registry-item-3", "conversation_key": _reg_conv("routed-task-2"), "event_id": _event(7003), "dispatch_mode": "fresh"}
+        item = {"id": "registry-item-3", "conversation_key": _reg_task("routed-task-2"), "event_id": _event(7003), "dispatch_mode": "fresh"}
 
         await telegram_worker.worker_dispatch(
             "message",
@@ -1154,7 +1166,7 @@ async def test_registry_channel_parent_resumes_through_registry_channel(monkeypa
 
         monkeypatch.setattr(RegistryChannelEgress, "_publish_event", fake_publish_event)
 
-        conversation_ref = "registry:parent-conv-1"
+        conversation_ref = _reg_ref("parent-conv-1")
         chat_id = _reg_conv(conversation_ref)
         session = default_session(prov.name, prov.new_provider_state(), "on")
         session["pending_delegation"] = {
@@ -1400,10 +1412,10 @@ async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch)
 
             event = InboundMessage(
                 user=InboundUser(id=_actor(42), username="registry-ui"),
-                conversation_key=_reg_conv("registry-conv-2"),
+                conversation_key=_reg_conv(_reg_ref("registry-conv-2")),
                 text="resume later",
                 source="registry",
-                conversation_ref="registry-conv-2",
+                conversation_ref=_reg_ref("registry-conv-2"),
             )
             item = {"id": "registry-item-4", "conversation_key": event.conversation_key, "event_id": _event(8123), "dispatch_mode": "recovery"}
 

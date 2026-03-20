@@ -1,17 +1,19 @@
-"""Contract tests for channel egress composition."""
+"""Contract tests for dispatcher-based channel egress composition."""
 
 import tempfile
 from pathlib import Path
 
-import app.channel_egress_factory as channel_factory
+from app.agents.bridge import telegram_conversation_ref
+from app.channels.registry.refs import registry_conversation_ref
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.telegram.egress import TelegramChannelEgress
 from app.identity import telegram_actor_key
 from app.runtime.inbound_types import InboundUser
-from app.runtime.work_admission import trust_tier_for_source
+from app.runtime.work_admission import trust_tier_for_ref
 from tests.support.handler_support import (
     FakeProvider,
     MinimalFakeBot,
+    current_runtime,
     make_config,
     setup_globals,
 )
@@ -29,11 +31,11 @@ def _setup_runtime(*, allow_open: bool = False, allowed_user_ids=frozenset({1}))
     return tmp, cfg
 
 
-def test_factory_telegram_ref_produces_telegram_channel_egress():
+def test_dispatcher_telegram_ref_produces_telegram_channel_egress():
     tmp, cfg = _setup_runtime()
     try:
-        channel_egress = channel_factory.create_channel_egress(
-            "telegram:mybot:12345",
+        channel_egress = current_runtime().channel_dispatcher.create_egress(
+            telegram_conversation_ref(cfg, 12345),
             bot=MinimalFakeBot(),
             chat_id=12345,
             source="telegram",
@@ -44,11 +46,18 @@ def test_factory_telegram_ref_produces_telegram_channel_egress():
         tmp.cleanup()
 
 
-def test_factory_registry_ref_produces_registry_channel_egress():
-    tmp, cfg = _setup_runtime()
+def test_dispatcher_registry_ref_produces_registry_channel_egress():
+    tmp = tempfile.TemporaryDirectory()
+    cfg = make_config(
+        Path(tmp.name),
+        agent_mode="registry",
+        agent_registry_url="http://registry.test",
+        agent_registry_enroll_token="enroll-secret",
+    )
+    setup_globals(cfg, FakeProvider("claude"))
     try:
-        channel_egress = channel_factory.create_channel_egress(
-            "registry:abc123",
+        channel_egress = current_runtime().channel_dispatcher.create_egress(
+            registry_conversation_ref("default", "abc123"),
             bot=MinimalFakeBot(),
             chat_id=0,
             source="registry",
@@ -59,22 +68,35 @@ def test_factory_registry_ref_produces_registry_channel_egress():
         tmp.cleanup()
 
 
-def test_factory_trust_tier_registry_source_is_trusted():
-    tmp, cfg = _setup_runtime()
+def test_dispatcher_trust_tier_registry_ref_is_trusted():
+    tmp = tempfile.TemporaryDirectory()
+    cfg = make_config(
+        Path(tmp.name),
+        agent_mode="registry",
+        agent_registry_url="http://registry.test",
+        agent_registry_enroll_token="enroll-secret",
+    )
+    setup_globals(cfg, FakeProvider("claude"))
     try:
-        tier = trust_tier_for_source("registry", user=None, config=cfg)
+        tier = trust_tier_for_ref(
+            registry_conversation_ref("default", "conv-1"),
+            user=None,
+            config=cfg,
+            dispatcher=current_runtime().channel_dispatcher,
+        )
         assert tier == "trusted"
     finally:
         tmp.cleanup()
 
 
-def test_factory_trust_tier_telegram_source_uses_user_tier():
+def test_dispatcher_trust_tier_telegram_ref_uses_user_tier():
     tmp, cfg = _setup_runtime(allow_open=True, allowed_user_ids=frozenset())
     try:
-        tier = trust_tier_for_source(
-            "telegram",
+        tier = trust_tier_for_ref(
+            telegram_conversation_ref(cfg, 12345),
             user=InboundUser(id=telegram_actor_key(999), username="stranger"),
             config=cfg,
+            dispatcher=current_runtime().channel_dispatcher,
         )
         assert tier == "public"
     finally:

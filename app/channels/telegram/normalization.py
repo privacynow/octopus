@@ -6,8 +6,10 @@ and durable serialization live under ``app.runtime.inbound_types``.
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
+from app.agents.bridge import telegram_conversation_ref
 from app.identity import (
     telegram_actor_key,
     telegram_conversation_key,
@@ -100,6 +102,15 @@ async def normalize_message(
         conversation_key=conversation_key,
         text=text,
         attachments=tuple(attachments),
+    )
+
+
+def normalize_message_with_conversation_ref(message: InboundMessage, *, config, chat_id: int) -> InboundMessage:
+    if message.conversation_ref:
+        return message
+    return dataclasses.replace(
+        message,
+        conversation_ref=telegram_conversation_ref(config, chat_id),
     )
 
 

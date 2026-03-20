@@ -83,6 +83,7 @@ from app.channels.telegram.pending import (
     handle_recovery_callback as pending_handle_recovery_callback,
     reject_pending as pending_reject_pending,
 )
+from app.channels.telegram.inbound_context import event_trust_tier
 from app.runtime import composition
 from app.runtime.inbound_types import InboundUser
 from app.workflows.execution.requests import (
@@ -94,7 +95,6 @@ from app.runtime.inbound_types import (
 )
 from app.runtime.work_admission import (
     admit_fresh_message,
-    trust_tier_for_source,
 )
 from app.storage import (
     resolve_allowed_path,
@@ -504,7 +504,11 @@ async def cmd_session(
 ) -> None:
     session = telegram_session_io.load(runtime, event.chat_id)
     cfg = runtime.config
-    trust = trust_tier_for_source("telegram", event.user, config=runtime.config)
+    trust = event_trust_tier(
+        config=runtime.config,
+        dispatcher=getattr(runtime, "channel_dispatcher", None),
+        event=event,
+    )
     resolved = resolve_context(runtime, session, trust_tier=trust)
     pstate = session.provider_state
 
@@ -632,7 +636,11 @@ async def cmd_send(runtime: TelegramRuntime, event, update: Update, context: Con
     resolved_ctx = resolve_context(
         runtime,
         session,
-        trust_tier=trust_tier_for_source("telegram", event.user, config=runtime.config),
+        trust_tier=event_trust_tier(
+            config=runtime.config,
+            dispatcher=getattr(runtime, "channel_dispatcher", None),
+            event=event,
+        ),
     )
     resolved = resolve_allowed_path(raw_path, allowed_roots(runtime, event.chat_id, resolved_ctx))
     if not resolved:
@@ -672,7 +680,11 @@ async def cmd_doctor(
         resolved = resolve_context(
             runtime,
             session,
-            trust_tier=trust_tier_for_source("telegram", event.user, config=runtime.config),
+            trust_tier=event_trust_tier(
+                config=runtime.config,
+                dispatcher=getattr(runtime, "channel_dispatcher", None),
+                event=event,
+            ),
         )
         session_context = SessionHealthContext(
             session=session_to_dict(session),
@@ -690,7 +702,11 @@ async def cmd_doctor(
         resolved = resolve_context(
             runtime,
             session,
-            trust_tier=trust_tier_for_source("telegram", event.user, config=runtime.config),
+            trust_tier=event_trust_tier(
+                config=runtime.config,
+                dispatcher=getattr(runtime, "channel_dispatcher", None),
+                event=event,
+            ),
         )
         prompt_weight_count = execution_prompt_weight(resolved.role, resolved.active_skills) or None
     rendered = telegram_presenters.doctor_report_message(
@@ -807,7 +823,11 @@ async def cmd_export(
 
     # Add session metadata header — use resolved context for user-visible data
     session = telegram_session_io.load(runtime, chat_id)
-    trust = trust_tier_for_source("telegram", event.user, config=runtime.config)
+    trust = event_trust_tier(
+        config=runtime.config,
+        dispatcher=getattr(runtime, "channel_dispatcher", None),
+        event=event,
+    )
     resolved = resolve_context(runtime, session, trust_tier=trust)
     skills = resolved.active_skills
     header_lines = [
@@ -1096,6 +1116,8 @@ async def handle_message(
 
     cfg = runtime.config
     needs_welcome = not session_exists(cfg.data_dir, telegram_session_io.conversation_key(chat_id))
+    if not msg.conversation_ref:
+        msg = telegram_normalization.normalize_message_with_conversation_ref(msg, config=cfg, chat_id=chat_id)
 
     data_dir = cfg.data_dir
     if await runtime_skill_maybe_handle_setup_message(

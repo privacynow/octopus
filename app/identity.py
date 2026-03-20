@@ -76,6 +76,18 @@ def telegram_numeric_id(key: str) -> int | None:
     return int(suffix)
 
 
+def telegram_chat_id_from_ref(conversation_ref: str) -> int | None:
+    if not isinstance(conversation_ref, str):
+        return None
+    parts = conversation_ref.split(":", 2)
+    if len(parts) != 3 or parts[0] != "telegram":
+        return None
+    chat_id = parts[2]
+    if not chat_id.isdigit():
+        return None
+    return int(chat_id)
+
+
 def filesystem_component_for_key(key: str | int) -> str:
     """Return a stable filesystem-safe component for a conversation/actor key."""
 

@@ -18,12 +18,15 @@ import app.channels.telegram.ingress as _th
 import app.channels.telegram.progress as _telegram_progress
 import app.channels.telegram.worker as _telegram_worker
 from app.channels.telegram.bootstrap import build_application
+from app.channels.telegram.channel import TelegramChannelBootstrap
 from app.channels.telegram.delegation_channel import propose_delegation_plan as _propose_delegation_plan
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
 from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.providers.base import RunResult
+from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.storage import close_db, ensure_data_dirs, load_session
 from app import work_queue as _work_queue
+from app.agents.registry_runtime import RegistryRuntime
 from tests.support.config_support import make_config as _make_config
 
 
@@ -390,6 +393,7 @@ def make_registry_delivery_runtime(config, provider, *, bot_instance=None):
         provider_name=provider.name,
         provider_state_factory=provider.new_provider_state,
         bot=bot,
+        dispatcher=current_runtime().channel_dispatcher,
     )
 
 
@@ -507,6 +511,18 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
         boot_id=boot_id,
         bot_instance=test_bot,
     )
+    dispatcher = ChannelDispatcher()
+    dispatcher.register(TelegramChannelBootstrap(config, provider))
+    if config.agent_mode == "registry" and config.agent_registries:
+        registry_runtime = RegistryRuntime(
+            config.agent_registries,
+            dispatcher,
+            None,
+            config=config,
+            provider=provider,
+        )
+        registry_runtime.register_channels()
+    _TEST_RUNTIME.channel_dispatcher = dispatcher
     _TEST_APPLICATION = build_application(_TEST_RUNTIME)
     _TEST_RUNTIME.bot_instance = test_bot
 

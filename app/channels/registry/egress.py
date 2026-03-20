@@ -24,6 +24,14 @@ log = logging.getLogger(__name__)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
+def _binding_field(binding: Any, key: str, default: str = "") -> str:
+    if isinstance(binding, dict):
+        value = binding.get(key, default)
+    else:
+        value = getattr(binding, key, default)
+    return str(value or default)
+
+
 class RegistryEditableHandle(EditableHandle):
     def __init__(self, conversation: "RegistryChannelEgress", *, event_id: str, kind: str, title: str) -> None:
         self._conversation = conversation
@@ -195,8 +203,19 @@ class RegistryChannelEgress(ChannelEgress):
         )
 
     async def sync_binding(self, binding: Any) -> None:
-        del binding
-        return None
+        try:
+            await self._services.control_plane.conversation_projection.bind_external_conversation(
+                conversation_ref=_binding_field(binding, "conversation_ref", self.conversation_ref),
+                title=_binding_field(binding, "title", self.title),
+                origin_channel=_binding_field(binding, "origin_channel", "registry"),
+                external_id=_binding_field(binding, "external_id", self.external_id),
+            )
+        except Exception:
+            log.warning(
+                "Conversation sync failed for %s (non-fatal)",
+                self.conversation_ref,
+                exc_info=True,
+            )
 
     async def bind(self, *, title: str, config: Any) -> None:
         del config

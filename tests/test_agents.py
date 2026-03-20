@@ -585,16 +585,18 @@ async def test_agent_runtime_run_forever_survives_unexpected_poll_error(tmp_path
 async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path: Path):
     seen: list[tuple[str, str]] = []
 
-    async def fake_bind(*args, **kwargs):
-        del args
-        seen.append(("bind", str(kwargs.get("conversation_ref", ""))))
+    class _FakeEgress:
+        async def sync_binding(self, binding):
+            seen.append(("bind", str(binding.get("conversation_ref", ""))))
 
-    async def fake_timeline(*args, **kwargs):
-        del args
-        seen.append(("timeline", str(kwargs.get("conversation_ref", ""))))
+        async def publish_timeline(self, event):
+            seen.append(("timeline", str(event.conversation_id)))
 
-    monkeypatch.setattr("app.agents.bridge._bind_conversation", fake_bind)
-    monkeypatch.setattr("app.agents.bridge._publish_timeline_event", fake_timeline)
+    class _FakeDispatcher:
+        def create_egress(self, conversation_ref, *, config, **kwargs):
+            del conversation_ref, config, kwargs
+            return _FakeEgress()
+
     monkeypatch.setattr(
         "app.agents.bridge.work_queue.record_and_admit_message",
         lambda *args, **kwargs: ("queued", "queued-item"),
@@ -613,6 +615,7 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
             "registry_id": "prod",
             "payload": {"conversation_id": "conv-1", "text": "hello"},
         },
+        dispatcher=_FakeDispatcher(),
     )
     outcome_task = await admit_registry_delivery(
         config,
@@ -628,6 +631,7 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
                 "requested_capabilities": ["reviewer"],
             },
         },
+        dispatcher=_FakeDispatcher(),
     )
 
     assert outcome_message == "accepted"
@@ -639,22 +643,19 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
 
 
 async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
-    seen: list[tuple[str, str]] = []
+    seen: list[str] = []
 
-    async def fake_bind(*args, **kwargs):
-        del args
-        seen.append(("bind", str(kwargs.get("conversation_ref", ""))))
-
-    async def fake_timeline(*args, **kwargs):
-        del args
-        seen.append(("timeline", str(kwargs.get("conversation_ref", ""))))
-
-    monkeypatch.setattr("app.agents.bridge._bind_conversation", fake_bind)
-    monkeypatch.setattr("app.agents.bridge._publish_timeline_event", fake_timeline)
     monkeypatch.setattr(
         "app.agents.bridge.work_queue.record_and_admit_message",
         lambda *args, **kwargs: ("queued", "queued-item"),
     )
+
+    class _FakeDispatcher:
+        def create_egress(self, conversation_ref, *, config, **kwargs):
+            del conversation_ref, config, kwargs
+            seen.append("create_egress")
+            raise AssertionError("legacy surface input should not create egress")
+
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
@@ -668,6 +669,7 @@ async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeyp
             "delivery_id": "delivery-legacy",
             "payload": {"conversation_id": "conv-legacy", "text": "hello"},
         },
+        dispatcher=_FakeDispatcher(),
     )
 
     assert outcome == "rejected"
@@ -677,32 +679,6 @@ async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeyp
 async def test_handle_registry_routed_result_publishes_parent_timeline_before_retry_on_startup_race(monkeypatch, tmp_path: Path):
     published: list[dict[str, object]] = []
 
-    async def fake_publish_timeline_event(
-        config,
-        *,
-        conversation_ref: str,
-        kind: str,
-        title: str,
-        body: str = "",
-        status: str = "",
-        progress: int | None = None,
-        metadata: dict[str, object] | None = None,
-        event_id: str | None = None,
-        registry_id: str | None = None,
-    ) -> None:
-        del config, progress, event_id, registry_id
-        published.append(
-            {
-                "conversation_ref": conversation_ref,
-                "kind": kind,
-                "title": title,
-                "body": body,
-                "status": status,
-                "metadata": metadata or {},
-            }
-        )
-
-    monkeypatch.setattr("app.agents.delivery._publish_timeline_event", fake_publish_timeline_event)
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
@@ -710,6 +686,28 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
         }
     ) as (_data_dir, config, prov):
         parent_conversation_ref = telegram_conversation_ref(config, 12345)
+        dispatcher = current_runtime().channel_dispatcher
+
+        class _FakeEgress:
+            async def publish_timeline(self, event):
+                published.append(
+                    {
+                        "conversation_ref": event.conversation_id,
+                        "kind": event.kind,
+                        "title": event.title,
+                        "body": event.body,
+                        "status": event.status,
+                        "metadata": event.metadata or {},
+                    }
+                )
+
+        def fake_create_egress(conversation_ref, *, config, **kwargs):
+            del config
+            assert conversation_ref == parent_conversation_ref
+            assert kwargs["bot"] is not None
+            return _FakeEgress()
+
+        monkeypatch.setattr(dispatcher, "create_egress", fake_create_egress)
         outcome = await handle_registry_delivery(
             config,
             {
@@ -728,7 +726,7 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
                 provider_name=prov.name,
                 provider_state_factory=prov.new_provider_state,
                 bot=None,
-                dispatcher=current_runtime().channel_dispatcher,
+                dispatcher=dispatcher,
             ),
         )
 
@@ -809,18 +807,8 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
 
 
 async def test_handle_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):
-    seen: list[tuple[str, str]] = []
+    seen: list[str] = []
 
-    async def fake_bind(*args, **kwargs):
-        del args
-        seen.append(("bind", str(kwargs.get("conversation_ref", ""))))
-
-    async def fake_timeline(*args, **kwargs):
-        del args
-        seen.append(("timeline", str(kwargs.get("conversation_ref", ""))))
-
-    monkeypatch.setattr("app.agents.bridge._bind_conversation", fake_bind)
-    monkeypatch.setattr("app.agents.bridge._publish_timeline_event", fake_timeline)
     monkeypatch.setattr(
         "app.agents.bridge.work_queue.record_and_admit_message",
         lambda *args, **kwargs: ("queued", "queued-item"),
@@ -830,6 +818,12 @@ async def test_handle_registry_delivery_rejects_legacy_surface_input_kind(monkey
         agent_mode="registry",
         agent_registries=(make_registry_connection(),),
     )
+
+    class _RejectingDispatcher:
+        def create_egress(self, conversation_ref, *, config, **kwargs):
+            del config, kwargs
+            seen.append(str(conversation_ref))
+            raise AssertionError("legacy surface input should not create egress")
 
     outcome = await handle_registry_delivery(
         config,
@@ -842,6 +836,7 @@ async def test_handle_registry_delivery_rejects_legacy_surface_input_kind(monkey
             provider_name="claude",
             provider_state_factory=dict,
             bot=None,
+            dispatcher=_RejectingDispatcher(),
         ),
     )
 

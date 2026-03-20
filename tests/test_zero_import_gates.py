@@ -1087,3 +1087,21 @@ def test_removed_registry_fanout_helpers_do_not_reappear() -> None:
         text = path.read_text()
         for token in forbidden:
             assert token not in text, f"{token} still referenced in {path}"
+
+
+def test_removed_bridge_http_helpers_do_not_reappear() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    gate_path = Path(__file__).resolve()
+    candidate_paths = sorted(
+        path
+        for path in repo_root.rglob("*.py")
+        if "__pycache__" not in path.parts and path != gate_path
+    )
+    forbidden = (
+        "_bind_conversation(",
+        "_publish_timeline_event(",
+    )
+    for path in candidate_paths:
+        text = path.read_text()
+        for token in forbidden:
+            assert token not in text, f"{token} still referenced in {path}"

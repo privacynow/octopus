@@ -10,17 +10,37 @@
 ## Current State
 
 - Phases 1-8 of the control-plane rollout landed and the repo is green.
-- An initial post-rollout bug-fix pass also landed, but deeper review found residual architecture drift that still needs removal.
+- Phase 9 remediation is in progress; slices 9A-9C are now complete and the repo is green.
 - The remaining work is now tracked explicitly in `PLAN-control-plane-bus.md` Phase 9:
-  - worker timeline publication still has a non-target-architecture split
-  - registry delivery still has direct bridge-driven timeline side effects
   - generic health/discovery still leaks `registry_scope`
   - compatibility translators and singleton/default fallbacks still remain
   - some tests still encode scaffolding behavior instead of the final architecture
-- Status should be read as: rollout complete through Phase 8, remediation not yet complete.
+- Status should be read as: rollout complete through Phase 8, remediation in progress through Phase 9.
 
 ## Slice Log
 
+- Complete: Phase 9C remediation — registry delivery timeline convergence.
+  Scope:
+  - removed the last direct registry-delivery timeline side effects from `app/agents/delivery.py`; routed-result and delegation-ready publication now go through dispatcher-built channel egress instead of bridge HTTP helpers
+  - rewired `app/agents/bridge.py:admit_registry_delivery()` to use dispatcher-built egress plus `ChannelEgress.sync_binding()` / `publish_timeline()` for registry channel input and routed-task admission instead of constructing registry clients from persisted state
+  - extended `RegistryChannelEgress.sync_binding()` to project bindings through the existing control-plane conversation-projection port without emitting an extra `started` event
+  - deleted the private bridge HTTP bind/timeline helper path entirely; the bridge module now keeps only ref/envelope helpers plus work admission logic
+  - tightened tests and gates so the removed bridge helper names cannot reappear and added shared multi-registry integration coverage for registry-delivery projection to a Telegram parent conversation
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_agents.py tests/test_registry_adapter.py tests/test_zero_import_gates.py tests/test_control_plane_integration.py`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified runtime code no longer contains `_bind_conversation(` or `_publish_timeline_event(` outside the zero-import gate strings
+  - verified both bridge admission and registry delivery now publish through dispatcher-owned egress and the existing channel/control-plane seams
+  - verified shared-worker multi-registry delivery projection reaches both registries once the parent conversation is bound
+  Review:
+  - this slice removed the second control-plane side-effect mechanism instead of wrapping it in another helper or adding a new service field
+  - the fix stayed inside existing seams: `ChannelDispatcher.create_egress()`, `ChannelEgress.sync_binding()`, `ChannelEgress.publish_timeline()`, and the existing projection port behind channel egress
+  - no direct registry HTTP remains outside `RegistryControlProcessor`
+  Verified:
+  - registry delivery timeline publication no longer depends on single-registry bridge helpers
+  - bridge admission and delivery now share the same dispatcher/egress-owned publication path
+  - full suite status after Phase 9C: `1911 passed, 23 skipped`
 - Complete: Phase 9B remediation — claim-token contract completion.
   Scope:
   - added stale-claim negative coverage for `fail()`, `dead_letter()`, and `renew_lease()` in the control-plane store contract for both SQLite and Postgres

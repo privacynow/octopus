@@ -73,6 +73,12 @@ class _FakeIngress(ChannelIngress):
         return {"ok": True}
 
 
+class _FailingIngress(_FakeIngress):
+    async def start(self, *, stop_event: asyncio.Event) -> None:
+        del stop_event
+        raise RuntimeError("boom")
+
+
 class _FakeChannel(Channel):
     def __init__(self, prefix: str, descriptor: ChannelDescriptor) -> None:
         self._prefix = prefix
@@ -98,6 +104,16 @@ class _FakeBootstrap(_FakeChannel, ChannelBootstrap):
     def __init__(self, prefix: str, descriptor: ChannelDescriptor) -> None:
         super().__init__(prefix, descriptor)
         self.ingress = _FakeIngress(descriptor, self.channel_id)
+
+    def build_ingress(self, *, config: Any, delivery_handler: Any) -> ChannelIngress:
+        del config, delivery_handler
+        return self.ingress
+
+
+class _FailingBootstrap(_FakeChannel, ChannelBootstrap):
+    def __init__(self, prefix: str, descriptor: ChannelDescriptor) -> None:
+        super().__init__(prefix, descriptor)
+        self.ingress = _FailingIngress(descriptor, self.channel_id)
 
     def build_ingress(self, *, config: Any, delivery_handler: Any) -> ChannelIngress:
         del config, delivery_handler
@@ -256,3 +272,22 @@ async def test_build_start_and_stop_all_ingresses_only_uses_bootstraps() -> None
     stop_event.set()
     await dispatcher.stop_all_ingresses()
     assert telegram.ingress.stopped is True
+
+
+async def test_start_all_ingresses_surfaces_startup_failures() -> None:
+    dispatcher = ChannelDispatcher()
+    dispatcher.register(
+        _FailingBootstrap(
+            "telegram:",
+            ChannelDescriptor(
+                channel_type="telegram",
+                display_name="Telegram",
+                supports_multiple=False,
+                requires_polling=False,
+            ),
+        )
+    )
+    dispatcher.build_all_ingresses(config=make_config(), delivery_handler=lambda *args: args)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await dispatcher.start_all_ingresses(stop_event=asyncio.Event())

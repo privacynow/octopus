@@ -54,6 +54,30 @@
   - per-connection registry config/state now exists without changing current runtime behavior
   - the slice-2 scaffolding for later runtime migration is in place and the repo remains fully green
   - full suite status after slice 2: `1781 passed, 23 skipped`
+- Complete: Slice 3 Telegram channel bootstrap.
+  Scope:
+  - added `app/channels/telegram/channel.py` with `TelegramChannelBootstrap` and `TelegramChannelIngress`
+  - kept `app/channels/telegram/bootstrap.py` as the existing PTB application-construction seam and wrapped it instead of duplicating handler-registration logic
+  - switched `main.py` from direct `build_bootstrap()` / `run_polling()` / `run_webhook()` calls to dispatcher-managed Telegram ingress startup via `ChannelDispatcher`
+  - kept the legacy single-registry runtime path in `post_init` unchanged for this slice; only Telegram lifecycle moved under the dispatcher
+  - hardened `ChannelDispatcher.start_all_ingresses()` / `stop_all_ingresses()` so ingress startup failures surface immediately instead of hanging behind a background task
+  - removed the now-dead `run_worker_process()` helper after the dispatcher cutover and kept `KeyboardInterrupt` handling aligned across worker, webhook, and polling modes
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_telegram_channel_state.py tests/test_shared_runtime.py tests/test_handlers.py tests/test_config.py tests/test_channel_dispatcher.py tests/test_zero_import_gates.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified dispatcher registration builds exactly one Telegram ingress and routes `telegram:` refs to `TelegramChannelEgress`
+  - verified the new Telegram ingress follows PTB startup/shutdown order for polling and webhook paths and skips live updater startup for worker-only processes
+  - verified `main.py` now builds Telegram ingress through `ChannelDispatcher` and no longer imports or calls `build_bootstrap()` directly
+  - verified ingress startup failures now raise through the dispatcher instead of silently dying in an unmanaged task
+  Review:
+  - slice 3 reused the existing Telegram bootstrap file as the authoritative handler-registration owner instead of cloning PTB setup into a second module
+  - the dispatcher cutover stayed scoped to Telegram; registry startup is still the old `start_agent_runtime_task()` path until slice 4 as planned
+  - the only cleanup beyond the plan was removing dead startup code created by the cutover and tightening the dispatcher failure path to avoid a real operability regression
+  Verified:
+  - Telegram now satisfies the new `ChannelBootstrap` / `ChannelIngress` contract without introducing a parallel Telegram runtime path
+  - `main.py` uses dispatcher-managed Telegram ingress startup while preserving current worker and registry scaffolding behavior
+  - full suite status after slice 3: `1787 passed, 23 skipped`
 
 # Octopus CLI Implementation Status
 

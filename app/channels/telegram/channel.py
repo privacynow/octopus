@@ -117,6 +117,9 @@ class TelegramChannelIngress(ChannelIngress):
     async def start(self, *, stop_event: asyncio.Event) -> None:
         self._stop_requested.clear()
         try:
+            if not hasattr(self.application, "bot_data"):
+                self.application.bot_data = {}
+            self.application.bot_data["dispatcher_stop_event"] = stop_event
             await self.application._bootstrap_initialize(max_retries=0)
             self._bootstrapped = True
             if self.application.post_init:
@@ -200,6 +203,9 @@ class TelegramChannelIngress(ChannelIngress):
                 finally:
                     if self._bootstrapped and self.application.post_shutdown:
                         await self.application.post_shutdown(self.application)
+                    bot_data = getattr(self.application, "bot_data", None)
+                    if isinstance(bot_data, dict):
+                        bot_data.pop("dispatcher_stop_event", None)
                     self._updater_started = False
                     self._app_started = False
                     self._bootstrapped = False

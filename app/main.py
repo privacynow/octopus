@@ -13,7 +13,7 @@ from app.providers.base import Provider
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
-from app.agents.runtime import start_agent_runtime_task
+from app.agents.registry_runtime import RegistryRuntime
 from app.content_store import init_content_store_for_config
 from app.credential_store import init_credential_store_for_config
 from app.storage import close_db, ensure_data_dirs
@@ -269,11 +269,28 @@ def main() -> None:
     # worker loop catches items that survived a crash or were left behind.
     _worker_task = None
     _worker_stop = None
-    _agent_task = None
-    _agent_stop = None
+    registry_runtime = None
+    if _runs_registry_runtime(config):
+        delivery_runtime = build_registry_delivery_runtime(
+            provider_name=provider.name,
+            provider_state_factory=provider.new_provider_state,
+            bot=app.bot,
+        )
+        registry_runtime = RegistryRuntime(
+            config.agent_registries,
+            dispatcher,
+            lambda delivery: handle_registry_delivery(
+                config,
+                delivery,
+                runtime=delivery_runtime,
+            ),
+            config=config,
+            runtime_health_provider=CanonicalRuntimeHealthProvider(),
+            provider=provider,
+        )
 
     async def _on_post_init(_app) -> None:
-        nonlocal _worker_task, _worker_stop, _agent_task, _agent_stop
+        nonlocal _worker_task, _worker_stop
         if _runs_worker(config):
             _worker_task, _worker_stop = start_worker_task(
                 config.data_dir,
@@ -286,33 +303,17 @@ def main() -> None:
                 process_role=config.process_role,
                 heartbeat_enabled=(config.runtime_mode == "shared"),
             )
-        if _runs_registry_runtime(config):
-            delivery_runtime = build_registry_delivery_runtime(
-                provider_name=provider.name,
-                provider_state_factory=provider.new_provider_state,
-                bot=app.bot,
-            )
-            _agent_task, _agent_stop = start_agent_runtime_task(
-                config,
-                delivery_handler=lambda delivery: handle_registry_delivery(
-                    config,
-                    delivery,
-                    runtime=delivery_runtime,
-                ),
-                runtime_health_provider=CanonicalRuntimeHealthProvider(),
-                provider=provider,
-            )
+        if registry_runtime is not None:
+            process_stop_event = _app.bot_data.get("dispatcher_stop_event")
+            if not isinstance(process_stop_event, asyncio.Event):
+                raise RuntimeError("Dispatcher stop event is not attached to the Telegram application")
+            await registry_runtime.start(stop_event=process_stop_event)
 
     async def _on_post_shutdown(_app) -> None:
-        if _agent_stop:
-            _agent_stop.set()
+        if registry_runtime is not None:
+            await registry_runtime.stop()
         if _worker_stop:
             _worker_stop.set()
-        if _agent_task:
-            try:
-                await asyncio.wait_for(_agent_task, timeout=5.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                _agent_task.cancel()
         if _worker_task:
             try:
                 await asyncio.wait_for(_worker_task, timeout=5.0)

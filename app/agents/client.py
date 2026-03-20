@@ -226,15 +226,25 @@ class AgentRegistryClient:
             json_data=to_wire(request),
         )
 
-    async def poll(self, *, cursor: str = "0", limit: int = 20, wait_seconds: int = 1) -> dict[str, Any]:
+    async def poll(
+        self,
+        *,
+        cursor: str = "0",
+        limit: int = 20,
+        wait_seconds: int = 1,
+        kind_filter: tuple[str, ...] | None = None,
+    ) -> dict[str, Any]:
+        params = {
+            "cursor": cursor,
+            "limit": limit,
+            "wait_seconds": wait_seconds,
+        }
+        if kind_filter is not None:
+            params["kind_filter"] = list(kind_filter)
         return await self._request(
             "GET",
             "/v1/agents/poll",
-            params={
-                "cursor": cursor,
-                "limit": limit,
-                "wait_seconds": wait_seconds,
-            },
+            params=params,
         )
 
     async def ack(self, delivery_ids: list[str], *, classification: str) -> dict[str, Any]:

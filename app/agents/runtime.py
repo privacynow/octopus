@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any, Awaitable, Callable
 
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.registry_errors import registry_error_detail
-from app.agents.state import AgentRuntimeState, load_agent_runtime_state, save_agent_runtime_state
-from app.agents.types import AgentCard, utcnow_iso
+from app.agents.state import (
+    AgentRuntimeState,
+    load_agent_runtime_state,
+    load_runtime_registry_connection_state,
+    save_agent_runtime_state,
+    save_registry_connection_state,
+)
+from app.agents.types import AgentCard, RegistryConnectionConfig, RegistryConnectionState, utcnow_iso
 from app.config import BotConfig
 from app.runtime_health import (
     RuntimeHealthJsonProjector,
@@ -32,17 +39,45 @@ class AgentRuntime:
         runtime_health_provider: RuntimeHealthProvider | None = None,
         runtime_health_projector: RuntimeHealthProjector[dict[str, Any]] | None = None,
         provider=None,
+        registry: RegistryConnectionConfig | None = None,
+        channel_capabilities_resolver: Callable[[], tuple[str, ...]] | None = None,
     ) -> None:
         self.config = config
         self._delivery_handler = delivery_handler
-        self._state = load_agent_runtime_state(config.data_dir)
+        self._registry = registry
+        self._channel_capabilities_resolver = channel_capabilities_resolver
+        if registry is None:
+            self._state: AgentRuntimeState | RegistryConnectionState = load_agent_runtime_state(config.data_dir)
+        else:
+            self._state = load_runtime_registry_connection_state(
+                config.data_dir,
+                registry.registry_id,
+                registry_scope=registry.registry_scope,
+            )
         self._runtime_health_provider = runtime_health_provider
         self._runtime_health_projector = runtime_health_projector or RuntimeHealthJsonProjector()
         self._provider = provider
 
     @property
-    def state(self) -> AgentRuntimeState:
+    def state(self) -> AgentRuntimeState | RegistryConnectionState:
         return self._state
+
+    def _channel_capabilities(self) -> tuple[str, ...]:
+        if self._channel_capabilities_resolver is not None:
+            return self._channel_capabilities_resolver()
+        if self.config.agent_mode == "registry":
+            return ("telegram", "registry")
+        return ("telegram",)
+
+    def _configured_registry_url(self) -> str:
+        if self._registry is not None:
+            return self._registry.url
+        return self.config.agent_registry_url
+
+    def _configured_enroll_token(self) -> str:
+        if self._registry is not None:
+            return self._registry.enroll_token
+        return self.config.agent_registry_enroll_token
 
     def requested_card(self) -> AgentCard:
         return AgentCard(
@@ -58,13 +93,13 @@ class AgentRuntime:
             connectivity_state=self._state.connectivity_state,
             current_capacity=0,
             max_capacity=1,
-            channel_capabilities=("telegram", "registry") if self.config.agent_mode == "registry" else ("telegram",),
+            channel_capabilities=self._channel_capabilities(),
             version="phase-19-foundation",
         )
 
     def _client(self) -> AgentRegistryClient:
         return AgentRegistryClient(
-            self.config.agent_registry_url,
+            self._configured_registry_url(),
             agent_token=self._state.agent_token,
         )
 
@@ -82,7 +117,14 @@ class AgentRuntime:
         return payload, active_work_count
 
     def _save_state(self) -> None:
-        save_agent_runtime_state(self.config.data_dir, self._state)
+        if self._registry is None:
+            save_agent_runtime_state(self.config.data_dir, self._state)
+            return
+        save_registry_connection_state(
+            self.config.data_dir,
+            self._state,
+            project_legacy_default=(self._registry.registry_id == "default"),
+        )
 
     def _mark_state(
         self,
@@ -103,7 +145,7 @@ class AgentRuntime:
             self._mark_state("standalone")
             return "standalone"
 
-        if not self.config.agent_registry_url:
+        if not self._configured_registry_url():
             self._mark_state(
                 "degraded",
                 error="registry_url_missing",
@@ -113,16 +155,17 @@ class AgentRuntime:
 
         try:
             if not self._state.agent_id or not self._state.agent_token:
-                if not self.config.agent_registry_enroll_token:
+                enroll_token = self._configured_enroll_token()
+                if not enroll_token:
                     self._mark_state(
                         "degraded",
                         error="registry_enroll_token_missing",
                         detail="Registry enrollment token not configured.",
                     )
                     return "degraded"
-                enroll = await AgentRegistryClient(self.config.agent_registry_url).enroll(
+                enroll = await AgentRegistryClient(self._configured_registry_url()).enroll(
                     self.requested_card(),
-                    self.config.agent_registry_enroll_token,
+                    enroll_token,
                 )
                 self._state.agent_id = str(enroll.get("agent_id", ""))
                 self._state.agent_token = str(enroll.get("agent_token", ""))
@@ -182,14 +225,19 @@ class AgentRuntime:
         self._mark_state("connected")
         return "connected"
 
-    async def poll_once(self) -> int:
+    async def poll_once(self, *, kind_filter: Sequence[str] | None = None) -> int:
         if self._delivery_handler is None or self._state.connectivity_state != "connected":
             return 0
         client = self._client()
+        poll_kwargs: dict[str, object] = {
+            "cursor": self._state.poll_cursor or "0",
+            "limit": 20,
+            "wait_seconds": 0,
+        }
+        if kind_filter is not None:
+            poll_kwargs["kind_filter"] = tuple(kind_filter)
         result = await client.poll(
-            cursor=self._state.poll_cursor or "0",
-            limit=20,
-            wait_seconds=0,
+            **poll_kwargs,
         )
         deliveries = list(result.get("deliveries", []))
         if not deliveries:
@@ -233,7 +281,12 @@ class AgentRuntime:
         self._save_state()
         return len(deliveries)
 
-    async def run_forever(self, stop_event: asyncio.Event) -> None:
+    async def run_forever(
+        self,
+        stop_event: asyncio.Event,
+        *,
+        kind_filter: Sequence[str] | None = None,
+    ) -> None:
         import random
 
         base = max(1.0, self.config.agent_poll_interval_seconds)
@@ -243,7 +296,10 @@ class AgentRuntime:
             state = await self.sync_once()
             if state == "connected":
                 try:
-                    await self.poll_once()
+                    if kind_filter is None:
+                        await self.poll_once()
+                    else:
+                        await self.poll_once(kind_filter=kind_filter)
                 except (RegistryClientError, OSError, asyncio.TimeoutError) as exc:
                     if isinstance(exc, RegistryClientError):
                         error_code = exc.error_code
@@ -280,6 +336,7 @@ def start_agent_runtime_task(
     runtime_health_provider: RuntimeHealthProvider | None = None,
     runtime_health_projector: RuntimeHealthProjector[dict[str, Any]] | None = None,
     provider=None,
+    kind_filter: Sequence[str] | None = None,
 ) -> tuple[asyncio.Task[None], asyncio.Event]:
     stop_event = asyncio.Event()
     runtime = AgentRuntime(
@@ -289,5 +346,5 @@ def start_agent_runtime_task(
         runtime_health_projector=runtime_health_projector,
         provider=provider,
     )
-    task = asyncio.create_task(runtime.run_forever(stop_event))
+    task = asyncio.create_task(runtime.run_forever(stop_event, kind_filter=kind_filter))
     return task, stop_event

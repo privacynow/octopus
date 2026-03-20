@@ -44,12 +44,23 @@ from app.runtime.inbound_types import (
 )
 from app.runtime.work_admission import admit_worker_message, trust_tier_for_ref
 from app.workflows.execution.contracts import ExecutionRuntime
+from app.workflows.execution.contracts import RequestExecutionOutcome
 from app.workflows.execution.finalization import FinalizationContext, finalize_execution
 from app.workflows.execution.requests import dispatch_message_request, load_approval_mode
 from app.workflows.recovery.replay import get_recovery_use_cases
 from app.worker import poll_interval_for_runtime
 
 log = logging.getLogger(__name__)
+
+
+def _routed_task_requires_interactive_failure() -> RequestExecutionOutcome:
+    return RequestExecutionOutcome(
+        status="failed",
+        error_text=(
+            "Routed task could not continue because it requires an interactive "
+            "setup or approval step."
+        ),
+    )
 
 
 def _channel_dispatcher(runtime: TelegramRuntime):
@@ -347,6 +358,7 @@ async def worker_dispatch(
         message_conversation_key = str(item.get("conversation_key") or getattr(event, "conversation_key", ""))
         routed_task_id = getattr(event, "routed_task_id", "")
         authority_ref = getattr(event, "authority_ref", "")
+        is_routed_task = bool(routed_task_id)
         title = summarize_text(event.text) or "Conversation"
         dispatcher = _channel_dispatcher(runtime)
         message_chat_id = telegram_numeric_id(message_conversation_key)
@@ -398,8 +410,9 @@ async def worker_dispatch(
 
         prompt, image_paths = build_user_prompt(event.text, list(event.attachments))
         user_id = event.user.id
-        await channel_egress.bind(title=title, config=runtime.config)
-        await channel_egress.on_message_received(event.text)
+        if not is_routed_task:
+            await channel_egress.bind(title=title, config=runtime.config)
+            await channel_egress.on_message_received(event.text)
         try:
             async with _worker_chat_lock(runtime, runtime_chat, worker_item=item):
                 outcome = None
@@ -425,8 +438,11 @@ async def worker_dispatch(
                 await _run_with_cancel_watch(runtime, item, _run_message)
         except work_queue.LeaveClaimed:
             raise
+        if is_routed_task and outcome is None:
+            outcome = _routed_task_requires_interactive_failure()
         if outcome is not None:
-            await channel_egress.on_outcome(outcome)
+            if not is_routed_task:
+                await channel_egress.on_outcome(outcome)
         finalization = await finalize_execution(
             outcome,
             context=FinalizationContext(
@@ -451,7 +467,7 @@ async def worker_dispatch(
                 ),
             ),
         )
-        if finalization.routed_result_warning_text:
+        if finalization.routed_result_warning_text and not is_routed_task:
             await channel_egress.send_text(finalization.routed_result_warning_text)
         return
 

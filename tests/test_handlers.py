@@ -699,10 +699,6 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
 
         assert len(prov.preflight_calls) == 0
         assert len(prov.run_calls) == 1
-        assert any(
-            entry[0] == "surface_event" and entry[1] == "started"
-            for entry in reported
-        )
         result_entries = [entry for entry in reported if entry[0] == "result"]
         assert len(result_entries) == 1
         _, routed_task_id, authority_ref, result = result_entries[0]
@@ -710,10 +706,7 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
         assert authority_ref == "registry:default"
         assert result.status == "completed"
         assert "Delegated review complete." in result.full_text
-        assert any(
-            entry[0] == "surface_event" and entry[1] == "completed" and "Delegated review complete." in entry[3]
-            for entry in reported
-        )
+        assert [entry for entry in reported if entry[0] == "surface_event"] == []
 
 
 async def test_registry_routed_task_progress_updates_task_status(monkeypatch):
@@ -795,16 +788,24 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
         }
     ) as (_, cfg, prov):
         import app.channels.telegram.ingress as th
+        from app.channels.registry.egress import RegistryChannelEgress
+
+        published: list[tuple[str, str, str]] = []
 
         async def fake_report_routed_task_result(*, routed_task_id, authority_ref, result):
             del routed_task_id, authority_ref, result
             return TaskResultReport(status="failed", error="registry unavailable")
+
+        async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
+            del self, status, progress, metadata, event_id
+            published.append((kind, title, body))
 
         monkeypatch.setattr(
             current_runtime().services.control_plane.task_routing,
             "report_routed_task_result",
             fake_report_routed_task_result,
         )
+        monkeypatch.setattr(RegistryChannelEgress, "_publish_event", fake_publish_event)
         prov.run_results = [RunResult(text="Delegated review complete.")]
 
         event = InboundMessage(
@@ -827,6 +828,72 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
         )
 
         assert len(prov.run_calls) == 1
+        assert published == []
+
+
+async def test_registry_routed_task_interactive_block_reports_failure(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_, _cfg, _prov):
+        from app.channels.registry.egress import RegistryChannelEgress
+
+        reported: list[tuple[str, str, str]] = []
+        published: list[tuple[str, str, str]] = []
+
+        async def fake_dispatch_message_request(*args, **kwargs):
+            del args, kwargs
+            return None
+
+        async def fake_report_routed_task_result(*, routed_task_id, authority_ref, result):
+            reported.append((routed_task_id, authority_ref, result.status))
+            return TaskResultReport(status="reported", routed_task_id=routed_task_id)
+
+        async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
+            del self, status, progress, metadata, event_id
+            published.append((kind, title, body))
+
+        monkeypatch.setattr(
+            telegram_worker,
+            "dispatch_message_request",
+            fake_dispatch_message_request,
+        )
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "report_routed_task_result",
+            fake_report_routed_task_result,
+        )
+        monkeypatch.setattr(RegistryChannelEgress, "_publish_event", fake_publish_event)
+
+        event = InboundMessage(
+            user=InboundUser(id=_actor(42), username="origin-bot"),
+            conversation_key=_reg_task("routed-task-blocked-1"),
+            text="Run the protected task.",
+            source="registry",
+            conversation_ref=_reg_task("routed-task-blocked-1"),
+            routed_task_id="routed-task-blocked-1",
+            authority_ref="registry:default",
+        )
+        item = {
+            "id": "registry-item-blocked-1",
+            "conversation_key": _reg_task("routed-task-blocked-1"),
+            "event_id": _event(7004),
+            "dispatch_mode": "fresh",
+        }
+
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
+
+        assert reported == [("routed-task-blocked-1", "registry:default", "failed")]
+        assert published == []
 
 
 async def test_registry_routed_result_resumes_parent_conversation_without_new_approval():

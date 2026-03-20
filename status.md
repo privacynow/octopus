@@ -19,12 +19,71 @@
     policy code
   - one dead `"default"` registry-id default remains in
     `RegistryConnectionState`
-- Phase 10 remediation is complete; Slices 10A-10E are landed and the
-  repo is green.
-- Status should be read as: rollout complete through Phase 9, but the
-  architecture cleanup is now complete through Phase 10.
+- Phase 10 landed green, but a deeper post-Phase-10 review found that
+  routed-task execution still leaks through projected task-ref egress
+  behavior during worker/finalization, terminal routed-task state is
+  still partially coupled to progress-text handling, and dispatcher
+  readiness still pays the cost of constructing full egress objects for
+  probes.
+- Phase 11 remediation is now the active cleanup track.
+- Phase 11A landed green: routed-task execution no longer emits
+  projected task-ref lifecycle side effects during worker dispatch or
+  finalization.
+- Phase 11B and 11C remain outstanding: terminal routed-task state is
+  still partially inferred from progress text, and dispatcher readiness
+  still constructs full egress objects for probes.
+- Full suite status after the verified Phase 11A slice:
+  `1937 passed, 23 skipped`.
 
 ## Slice Log
+
+- Complete: Phase 11A remediation — remove projected task-ref side effects from routed-task execution.
+  Scope:
+  - made task-ref `RegistryChannelEgress` lifecycle methods inert for
+    execution-only surfaces: no projected bind, bot-message, progress,
+    outcome, or recovery-notice events are emitted for
+    `registry:{id}:task:{task_id}` refs
+  - updated Telegram worker dispatch so routed-task executions skip the
+    normal channel bind/message/outcome surface lifecycle and do not
+    send routed-result warning text back through task-ref egress
+  - converted the routed-task interactive dead-end into an explicit
+    failed routed-task result instead of leaving the task without a
+    terminal report
+  - updated finalization so usage audit timeline publication is skipped
+    for routed-task executions instead of targeting fake task
+    conversations
+  - added regression tests proving routed-task execution still reports
+    results, produces no projected task-ref surface events, and handles
+    interactive-block failures without leaking projection
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_handlers.py::test_registry_routed_task_executes_and_reports_result tests/test_handlers.py::test_registry_routed_task_result_report_failure_does_not_escape_worker tests/test_handlers.py::test_registry_routed_task_interactive_block_reports_failure tests/test_execution_finalization.py tests/test_registry_adapter.py tests/test_control_plane_integration.py::test_coordination_only_registry_enqueues_no_projection_commands`
+  - `./.venv/bin/python -m pytest -q tests/test_content_store_migrations.py::test_postgres_content_store_migrates_v1_schema tests/test_db_postgres.py::test_doctor_passes_after_bootstrap tests/test_db_postgres.py::test_run_bootstrap_is_idempotent_on_bootstrapped_db tests/test_db_postgres.py::test_run_update_renames_legacy_registry_columns_and_delivery_kinds tests/test_db_postgres.py::test_run_update_fails_with_bootstrap_first_message_on_empty_db`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified routed-task worker execution no longer calls task-ref
+    bind/outcome lifecycle hooks or sends routed-result warning text
+    through channel egress
+  - verified task-ref registry egress instances still satisfy the
+    existing dispatcher seam but their projection-capability surface is
+    now inert
+  - verified finalization marks routed-task usage projection as
+    `skipped_routed_task`
+  Review:
+  - this slice corrected live behavior, not just dead code: the routed
+    task now behaves like a task-routing surface during execution
+    instead of a fake projected conversation
+  - the implementation reused existing seams (`RegistryChannelEgress`,
+    Telegram worker dispatch, finalization) rather than introducing a
+    separate task channel abstraction
+  - the first full-suite run was blocked by Docker/Postgres disk
+    exhaustion; after reclaiming Docker images, volumes, and build
+    cache, the failing DB subset and the full suite both passed cleanly
+  Verified:
+  - routed-task execution produces no projected task-ref lifecycle
+    events
+  - routed-task completion and routed-result failure handling still
+    work
+  - full suite status after Phase 11A: `1937 passed, 23 skipped`
 
 - Complete: Phase 10A remediation — correct the routed-task channel contract.
   Scope:

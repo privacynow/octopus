@@ -228,6 +228,37 @@ async def test_finalization_usage_recording_failure_is_non_blocking() -> None:
 
 
 @pytest.mark.asyncio
+async def test_finalization_skips_usage_timeline_for_routed_task() -> None:
+    timeline_calls: list[dict[str, object]] = []
+
+    async def fake_publish_timeline(config, **kwargs):
+        del config
+        timeline_calls.append(kwargs)
+
+    result = await finalize_execution(
+        RequestExecutionOutcome(
+            status="completed",
+            reply_text="done",
+            prompt_tokens=1,
+            completion_tokens=2,
+        ),
+        context=FinalizationContext(
+            config=type("Cfg", (), {"data_dir": "/tmp/data", "provider_name": "claude", "completion_webhook_url": ""})(),
+            item_id="item-4b",
+            conversation_key="registry:prod:task:task-4b",
+            runtime_chat="registry:prod:task:task-4b",
+            conversation_ref="registry:prod:task:task-4b",
+            routed_task_id="task-4b",
+            authority_ref=registry_authority_ref("prod"),
+            publish_timeline_event=fake_publish_timeline,
+        ),
+    )
+
+    assert result.timeline_status == "skipped_routed_task"
+    assert timeline_calls == []
+
+
+@pytest.mark.asyncio
 async def test_finalization_report_failure_sets_user_warning(caplog) -> None:
     class FailingTaskRouting:
         async def report_routed_task_result(self, *, routed_task_id, authority_ref, result):

@@ -571,3 +571,21 @@
   Verified:
   - the architecture decision now exists outside the implementation plan and status log
   - baseline sanity after the doc-only slice: `65 passed`
+- Complete: Slice 2 capability ports and services.
+  Scope:
+  - added shared capability-port contracts in `app/ports/conversation_projection.py`, `app/ports/task_routing.py`, `app/ports/agent_directory.py`, and `app/ports/health_publication.py`
+  - added typed no-op implementations for each capability so standalone/no-control-plane paths have one contract-shaped fallback instead of ad hoc `None` checks
+  - added `app/runtime/services.py` with `ControlPlaneServices` nested under `BotServices`
+  - kept the slice additive only: no runtime wiring or consumer migration landed yet
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_control_plane_ports.py`
+  - `./.venv/bin/python -m pytest -q tests/test_zero_import_gates.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - the new contracts reuse the existing shared-port seam under `app/ports/` instead of inventing a parallel workflow-local contract package
+  - no-op behavior is defined per method, which matches the plan and avoids the earlier mistake of treating whole ports as purely request/reply or purely fire-and-forget
+  - the result models stay minimal and typed; the extra `TaskResultReport.details` field was removed during review because it was not part of the plan or current contract need
+  Verified:
+  - shared control-plane contracts now exist independently of any concrete registry runtime wiring
+  - standalone/no-control-plane behavior is explicit and typed instead of implicit `None` handling
+  - full suite status after slice 2: `1832 passed, 23 skipped`

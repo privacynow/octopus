@@ -13,6 +13,7 @@ from app.runtime.dispatch import RuntimeDispatchRuntime
 class ExecutionChannelContext:
     conversation_ref: str = ""
     routed_task_id: str = ""
+    authority_ref: str = ""
     timeline_callback: Callable[[str, bool], Awaitable[None]] | None = None
 
 
@@ -21,6 +22,7 @@ class ExecutionChannelMetadata:
     descriptor: ChannelDescriptor | None = None
     message_conversation_ref: str = ""
     routed_task_id: str = ""
+    authority_ref: str = ""
     chat_id: int | str = ""
 
 

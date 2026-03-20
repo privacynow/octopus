@@ -306,6 +306,7 @@ def execution_channel_metadata(
         descriptor=descriptor,
         message_conversation_ref=conversation_ref,
         routed_task_id=getattr(message, "routed_task_id", ""),
+        authority_ref=getattr(message, "authority_ref", ""),
         chat_id=chat_id,
     )
 

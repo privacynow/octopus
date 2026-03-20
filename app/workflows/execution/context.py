@@ -29,6 +29,7 @@ def build_execution_channel_context(
         return ExecutionChannelContext(
             conversation_ref=conversation_ref,
             routed_task_id=metadata.routed_task_id,
+            authority_ref=metadata.authority_ref,
             timeline_callback=timeline_callback_factory(
                 conversation_ref,
                 metadata.routed_task_id,
@@ -37,5 +38,6 @@ def build_execution_channel_context(
     return ExecutionChannelContext(
         conversation_ref=conversation_ref,
         routed_task_id=metadata.routed_task_id,
+        authority_ref=metadata.authority_ref,
         timeline_callback=None,
     )

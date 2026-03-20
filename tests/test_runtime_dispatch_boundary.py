@@ -7,6 +7,7 @@ from app.channels.telegram.delegation_channel import propose_delegation_plan
 from app.channels.telegram.execution import (
     TelegramExecutionCollaborators,
     build_dispatch_runtime,
+    execution_channel_metadata,
     build_execution_runtime,
     send_compact_reply,
     send_directed_artifacts,
@@ -222,6 +223,7 @@ def test_workflow_context_builder_resolves_registry_conversation_metadata() -> N
 
     assert context.conversation_ref == "registry:12345"
     assert context.routed_task_id == "task-9"
+    assert context.authority_ref == ""
     assert context.timeline_callback is not None
 
 
@@ -241,6 +243,7 @@ def test_workflow_context_builder_keeps_registry_task_without_timeline_callback(
             ),
             message_conversation_ref="registry:ops:task:task-1",
             routed_task_id="task-1",
+            authority_ref="registry:ops",
             chat_id="registry:ops:task:task-1",
         ),
         build_conversation_ref=lambda chat_id: str(chat_id),
@@ -256,7 +259,38 @@ def test_workflow_context_builder_keeps_registry_task_without_timeline_callback(
 
     assert context.conversation_ref == "registry:ops:task:task-1"
     assert context.routed_task_id == "task-1"
+    assert context.authority_ref == "registry:ops"
     assert context.timeline_callback is None
+
+
+def test_execution_channel_metadata_copies_authority_ref_from_inbound_message() -> None:
+    with fresh_env():
+        runtime = current_runtime()
+        message = FakeMessage(chat=FakeChat(12345), text="hello")
+        message.conversation_ref = "registry:ops:task:task-1"
+        message.routed_task_id = "task-1"
+        message.authority_ref = "registry:ops"
+
+        metadata = execution_channel_metadata(runtime, message, 12345)
+
+    assert metadata.message_conversation_ref == "registry:ops:task:task-1"
+    assert metadata.routed_task_id == "task-1"
+    assert metadata.authority_ref == "registry:ops"
+
+
+def test_execution_channel_metadata_does_not_infer_authority_ref_from_registry_ref() -> None:
+    with fresh_env():
+        runtime = current_runtime()
+        message = FakeMessage(chat=FakeChat(12345), text="hello")
+        message.conversation_ref = "registry:ops:task:task-1"
+        message.routed_task_id = "task-1"
+        message.authority_ref = ""
+
+        metadata = execution_channel_metadata(runtime, message, 12345)
+
+    assert metadata.message_conversation_ref == "registry:ops:task:task-1"
+    assert metadata.routed_task_id == "task-1"
+    assert metadata.authority_ref == ""
 
 
 @pytest.mark.asyncio

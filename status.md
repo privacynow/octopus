@@ -256,6 +256,31 @@
   - Telegram is now optional for bots that have at least one channel-capable registry connection
   - coordination-only/no-channel bots still fail fast at config validation
   - full suite status after slice 10: `1824 passed, 23 skipped`
+- Complete: Slice 11 Octopus CLI multi-registry support.
+  Scope:
+  - added shell helpers for parsing, counting, clearing, and writing registry connections so `./octopus` can manage indexed `BOT_AGENT_REGISTRY_<n>_*` env entries instead of a singleton registry pair
+  - updated `./octopus` registry connect/setup flows to capture `registry_scope`, derive stable local registry connection ids, write indexed env vars, verify enrollment against per-connection state files, and support adding or removing additional registry connections
+  - updated CLI status output to show every configured registry connection with id, scope, connectivity state, and URL, while preserving the existing top-level bot/provider/local-registry summary
+  - kept `cmd_doctor` on the existing doctor output seam and added coverage proving per-connection health lines survive operator formatting
+  - centralized run/doctor env sanitization in `scripts/app/env-setup.sh`, including indexed registry vars, so parent-shell overrides do not corrupt the new multi-registry env model
+  - fixed two slice-11 integration issues during review: replaced `mapfile` with portable bash loops for macOS shell compatibility, and updated the “unused local registry” check to inspect all configured registry connections instead of only the primary one
+  Tests:
+  - `bash -n octopus scripts/lib/bot.sh scripts/lib/state.sh scripts/app/env-setup.sh scripts/app/run.sh scripts/app/doctor.sh`
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_octopus_registry_management.py tests/test_octopus_management.py tests/test_octopus_full_mode.py tests/test_octopus_cli_contracts.py`
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_octopus_registry_management.py tests/test_octopus_management.py tests/test_octopus_full_mode.py tests/test_octopus_first_bot_flow.py tests/test_octopus_cli_contracts.py tests/test_octopus_provider_auth.py tests/test_octopus_registry_network.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified first-bot, add-bot, connect, switch, and add-second-registry flows now write indexed registry vars with explicit scope and without introducing `BOT_ID` into env
+  - verified `cmd_status` can display multiple registry connections for a single bot and that `cmd_doctor` preserves per-connection health lines after operator formatting
+  - verified the new shell helpers still read the old singleton registry keys during the scaffolding window, while all active write paths now emit indexed registry entries
+  Review:
+  - the slice extends the existing `./octopus` env/state helpers instead of creating a second registry-config path; all CLI registry writes now go through the same shell helper seam
+  - registry-connectivity display stays a CLI concern and reads runtime state via the existing compose/runtime boundary rather than inventing a separate host-side state cache
+  - the indexed-env unsetting in `env-setup.sh` was necessary to keep the runtime boot path consistent with the new CLI write model and to avoid parent-shell override regressions
+  Verified:
+  - Octopus now understands multi-registry bot envs, captures per-connection scope, and can append additional registry connections
+  - CLI status/doctor output now reflects the multi-registry runtime model instead of a single-registry shortcut
+  - full suite status after slice 11: `1828 passed, 23 skipped`
 
 # Octopus CLI Implementation Status
 

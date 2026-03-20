@@ -10,6 +10,7 @@ import pytest
 from app import runtime_backend
 from app.agents.bridge import telegram_conversation_ref
 from app.agents.client import RegistryClientError
+from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.registry_capabilities import (
     registry_authority_capabilities,
     registry_authority_ref,
@@ -410,6 +411,95 @@ async def test_shared_worker_projects_telegram_events_through_bus_to_multiple_re
             "result",
             "usage",
         }
+
+
+@pytest.mark.asyncio
+async def test_shared_worker_registry_delivery_projects_parent_timeline_to_multiple_registries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    channel = make_registry_connection(
+        registry_id="channel",
+        url="http://registry.channel",
+        registry_scope="channel",
+    )
+    full = make_registry_connection(
+        registry_id="full",
+        url="http://registry.full",
+        registry_scope="full",
+    )
+    config = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(channel, full),
+        runtime_mode="shared",
+        process_role="worker",
+    )
+    _init_backend(config)
+    stores_dir = tmp_path / "registry-stores"
+    stores_dir.mkdir()
+    seeded = [
+        _seed_registry(data_dir=tmp_path, registry=channel, stores_dir=stores_dir),
+        _seed_registry(data_dir=tmp_path, registry=full, stores_dir=stores_dir),
+    ]
+    _install_store_backed_clients(monkeypatch, seeded)
+    services = _services_for_config(config)
+    _runtime, dispatcher = _build_telegram_runtime_with_dispatcher(config, services=services)
+    delivery_runtime = build_registry_delivery_runtime(
+        provider_name="claude",
+        provider_state_factory=dict,
+        bot=None,
+        dispatcher=dispatcher,
+    )
+    parent_conversation_ref = telegram_conversation_ref(config, 456)
+
+    async with _running_registry_processor(config):
+        await services.control_plane.conversation_projection.bind_external_conversation(
+            conversation_ref=parent_conversation_ref,
+            title="Parent conversation",
+            origin_channel="telegram",
+            external_id="456",
+        )
+        await _wait_for(
+            lambda: all(
+                seeded_registry.store.get_conversation(parent_conversation_ref)["conversation_id"]
+                == parent_conversation_ref
+                for seeded_registry in seeded
+            ),
+            message="parent conversation bind did not reach both registries",
+        )
+        outcome = await handle_registry_delivery(
+            config,
+            {
+                "kind": "routed_result",
+                "registry_id": "full",
+                "payload": {
+                    "routed_task_id": "task-1",
+                    "parent_conversation_id": parent_conversation_ref,
+                    "result": {
+                        "status": "completed",
+                        "summary": "Delegated summary",
+                        "full_text": "Delegated full text",
+                    },
+                },
+            },
+            runtime=delivery_runtime,
+        )
+
+        await _wait_for(
+            lambda: all(
+                "delegated_result" in _timeline_kinds(seeded_registry.store, parent_conversation_ref)
+                for seeded_registry in seeded
+            ),
+            message="registry delivery timeline did not reach both registries",
+        )
+
+    assert outcome == "retry_later"
+    for seeded_registry in seeded:
+        assert "delegated_result" in _timeline_kinds(
+            seeded_registry.store,
+            parent_conversation_ref,
+        )
 
 
 @pytest.mark.asyncio

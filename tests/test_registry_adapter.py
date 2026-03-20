@@ -80,6 +80,39 @@ async def test_registry_channel_publishes_started_event_on_bind(tmp_path):
     assert projection.timeline_calls[0]["title"] == "Conversation started"
 
 
+async def test_registry_channel_sync_binding_uses_projection_port_without_started_event(tmp_path):
+    cfg = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+    projection = _ProjectionRecorder()
+    channel_egress = RegistryChannelEgress(
+        cfg,
+        conversation_ref="conv-sync",
+        services=_services(projection),
+    )
+
+    await channel_egress.sync_binding(
+        {
+            "conversation_ref": "conv-sync",
+            "title": "Delegated task",
+            "origin_channel": "registry",
+            "external_id": "task-1",
+        }
+    )
+
+    assert projection.bind_calls == [
+        {
+            "conversation_ref": "conv-sync",
+            "title": "Delegated task",
+            "origin_channel": "registry",
+            "external_id": "task-1",
+        }
+    ]
+    assert projection.timeline_calls == []
+
+
 async def test_registry_channel_publishes_completed_event_on_outcome(tmp_path):
     cfg = make_config(
         data_dir=tmp_path,

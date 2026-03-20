@@ -41,15 +41,18 @@ class AgentRuntime:
     ) -> None:
         self.config = config
         self._delivery_handler = delivery_handler
-        self._registry = registry or (config.agent_registries[0] if len(config.agent_registries) == 1 else None)
+        if registry is None and config.agent_mode == "registry":
+            raise ValueError("AgentRuntime requires an explicit registry connection in registry mode")
+        self._registry = registry
         self._channel_capabilities_resolver = channel_capabilities_resolver
-        registry_state_id = self._registry.registry_id if self._registry is not None else "default"
-        registry_state_scope = self._registry.registry_scope if self._registry is not None else "full"
-        self._state = load_runtime_registry_connection_state(
-            config.data_dir,
-            registry_state_id,
-            registry_scope=registry_state_scope,
-        )
+        if self._registry is None:
+            self._state = RegistryConnectionState(registry_id="", registry_scope="full")
+        else:
+            self._state = load_runtime_registry_connection_state(
+                config.data_dir,
+                self._registry.registry_id,
+                registry_scope=self._registry.registry_scope,
+            )
         self._runtime_health_provider = runtime_health_provider
         self._runtime_health_projector = runtime_health_projector or RuntimeHealthJsonProjector()
         self._provider = provider
@@ -117,6 +120,8 @@ class AgentRuntime:
         return payload, active_work_count
 
     def _save_state(self) -> None:
+        if self._registry is None:
+            return
         save_registry_connection_state(self.config.data_dir, self._state)
 
     def _mark_state(

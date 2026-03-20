@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
+import pytest
+
 from app.channels.registry.channel import (
     RegistryConversationChannel,
     RegistryTaskChannel,
@@ -62,7 +64,7 @@ async def test_registry_channel_publishes_started_event_on_bind(tmp_path):
     projection = _ProjectionRecorder()
     channel_egress = RegistryChannelEgress(
         cfg,
-        conversation_ref="conv-1",
+        conversation_ref=registry_conversation_ref("default", "conv-1"),
         services=_services(projection),
     )
 
@@ -70,7 +72,7 @@ async def test_registry_channel_publishes_started_event_on_bind(tmp_path):
 
     assert projection.bind_calls == [
         {
-            "conversation_ref": "conv-1",
+            "conversation_ref": registry_conversation_ref("default", "conv-1"),
             "title": "Spec review",
             "origin_channel": "registry",
             "external_id": "conv-1",
@@ -89,13 +91,13 @@ async def test_registry_channel_sync_binding_uses_projection_port_without_starte
     projection = _ProjectionRecorder()
     channel_egress = RegistryChannelEgress(
         cfg,
-        conversation_ref="conv-sync",
+        conversation_ref=registry_conversation_ref("default", "conv-sync"),
         services=_services(projection),
     )
 
     await channel_egress.sync_binding(
         {
-            "conversation_ref": "conv-sync",
+            "conversation_ref": registry_conversation_ref("default", "conv-sync"),
             "title": "Delegated task",
             "origin_channel": "registry",
             "external_id": "task-1",
@@ -104,7 +106,7 @@ async def test_registry_channel_sync_binding_uses_projection_port_without_starte
 
     assert projection.bind_calls == [
         {
-            "conversation_ref": "conv-sync",
+            "conversation_ref": registry_conversation_ref("default", "conv-sync"),
             "title": "Delegated task",
             "origin_channel": "registry",
             "external_id": "task-1",
@@ -122,7 +124,7 @@ async def test_registry_channel_publishes_completed_event_on_outcome(tmp_path):
     projection = _ProjectionRecorder()
     channel_egress = RegistryChannelEgress(
         cfg,
-        conversation_ref="conv-2",
+        conversation_ref=registry_conversation_ref("default", "conv-2"),
         services=_services(projection),
     )
 
@@ -141,7 +143,7 @@ async def test_registry_channel_rate_limits_progress_events(tmp_path, monkeypatc
     projection = _ProjectionRecorder()
     channel_egress = RegistryChannelEgress(
         cfg,
-        conversation_ref="conv-4",
+        conversation_ref=registry_conversation_ref("default", "conv-4"),
         services=_services(projection),
     )
 
@@ -175,7 +177,7 @@ async def test_registry_channel_swallows_projection_failures(tmp_path):
     projection = _ProjectionRecorder(fail_binds=True, fail_timeline=True)
     channel_egress = RegistryChannelEgress(
         cfg,
-        conversation_ref="conv-5",
+        conversation_ref=registry_conversation_ref("default", "conv-5"),
         output_log=output_log,
         services=_services(projection),
     )
@@ -188,6 +190,21 @@ async def test_registry_channel_swallows_projection_failures(tmp_path):
     assert channel_egress.sent_messages == ["hello"]
     assert len(projection.bind_calls) == 1
     assert len(projection.timeline_calls) >= 2
+
+
+async def test_registry_channel_rejects_unqualified_refs(tmp_path):
+    cfg = make_config(
+        data_dir=tmp_path,
+        agent_mode="registry",
+        agent_registries=(make_registry_connection(),),
+    )
+
+    with pytest.raises(ValueError, match="qualified registry ref"):
+        RegistryChannelEgress(
+            cfg,
+            conversation_ref="conv-unqualified",
+            services=_services(_ProjectionRecorder()),
+        )
 
 
 async def test_registry_channels_build_scoped_egress_from_qualified_refs(tmp_path):

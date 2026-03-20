@@ -33,6 +33,8 @@ def conversation_key_for_ref(conversation_ref: str) -> str:
 
 
 def qualify_registry_parent_ref(registry_id: str, conversation_ref: str) -> str:
+    if not registry_id:
+        raise ValueError("Registry parent ref qualification requires an explicit registry_id")
     return qualify_registry_conversation_ref(registry_id, conversation_ref)
 
 
@@ -51,9 +53,11 @@ def build_registry_message_delivery(
     actor_ref: str,
     delivery_id: str,
     routed_task_id: str = "",
-    registry_id: str = "",
+    registry_id: str,
     skip_approval: bool = False,
 ) -> tuple[str, str, str, str]:
+    if not registry_id:
+        raise ValueError("Registry message delivery requires an explicit registry_id")
     conversation_key = conversation_key_for_ref(conversation_ref)
     actor_key = f"reg:{actor_ref}"
     event_id = f"reg:{delivery_id}"
@@ -66,7 +70,7 @@ def build_registry_message_delivery(
             source="registry",
             conversation_ref=conversation_ref,
             routed_task_id=routed_task_id,
-            authority_ref=registry_authority_ref(registry_id) if registry_id else "",
+            authority_ref=registry_authority_ref(registry_id),
             skip_approval=skip_approval,
         )
     )
@@ -80,8 +84,10 @@ def build_registry_action_envelope(
     action_payload: dict[str, Any],
     actor_ref: str,
     delivery_id: str,
-    registry_id: str = "",
+    registry_id: str,
 ) -> InboundEnvelope:
+    if not registry_id:
+        raise ValueError("Registry action delivery requires an explicit registry_id")
     conversation_key = conversation_key_for_ref(conversation_ref)
     actor_key = f"reg:{actor_ref}"
     event_id = f"reg:{delivery_id}"
@@ -92,7 +98,7 @@ def build_registry_action_envelope(
         params=dict(action_payload),
         source="registry",
         conversation_ref=conversation_ref,
-        authority_ref=registry_authority_ref(registry_id) if registry_id else "",
+        authority_ref=registry_authority_ref(registry_id),
     )
     return InboundEnvelope(
         transport="registry",
@@ -116,10 +122,12 @@ async def admit_registry_delivery(
     kind = str(delivery.get("kind", ""))
     payload = delivery.get("payload", {})
     delivery_id = delivery.get("delivery_id", "")
-    registry_id = str(delivery.get("registry_id", "") or "default")
+    registry_id = str(delivery.get("registry_id", "") or "")
     data_dir = config.data_dir
 
     if kind == "channel_input":
+        if not registry_id:
+            return "rejected"
         conversation_ref = qualify_registry_conversation_ref(registry_id, str(payload["conversation_id"]))
         conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
             conversation_ref=conversation_ref,
@@ -166,6 +174,8 @@ async def admit_registry_delivery(
         return "accepted"
 
     if kind == "routed_task":
+        if not registry_id:
+            return "rejected"
         request = payload
         context_lines = []
         if request.get("context"):

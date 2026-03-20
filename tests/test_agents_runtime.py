@@ -19,7 +19,7 @@ async def test_run_forever_backoff_doubles_on_consecutive_failures(monkeypatch, 
         agent_registries=(make_registry_connection(),),
         agent_poll_interval_seconds=2.0,
     )
-    runtime = AgentRuntime(config)
+    runtime = AgentRuntime(config, registry=config.agent_registries[0])
     stop_event = asyncio.Event()
     sleeps: list[float] = []
 
@@ -53,7 +53,7 @@ async def test_run_forever_backoff_resets_after_reconnect(monkeypatch, tmp_path:
         agent_registries=(make_registry_connection(),),
         agent_poll_interval_seconds=2.0,
     )
-    runtime = AgentRuntime(config)
+    runtime = AgentRuntime(config, registry=config.agent_registries[0])
     stop_event = asyncio.Event()
     sleeps: list[float] = []
     states = iter(["degraded", "degraded", "connected"])
@@ -92,7 +92,7 @@ async def test_run_forever_polls_only_when_connected(monkeypatch, tmp_path: Path
         agent_registries=(make_registry_connection(),),
         agent_poll_interval_seconds=2.0,
     )
-    runtime = AgentRuntime(config)
+    runtime = AgentRuntime(config, registry=config.agent_registries[0])
     stop_event = asyncio.Event()
     poll_calls: list[str] = []
 

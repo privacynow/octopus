@@ -732,6 +732,7 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
     from app.agents.types import RegistryConnectionState
     from app.agents.types import AgentCard
     from app.channels.registry.egress import RegistryChannelEgress
+    from app.channels.registry.refs import registry_conversation_ref
     from tests.support.config_support import make_config, make_registry_connection
 
     ctx = _registry_ui_ctx(postgres_up)
@@ -810,7 +811,10 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
         assert deliveries["deliveries"], deliveries
         delivery = deliveries["deliveries"][0]
         assert delivery["kind"] == "channel_input"
-        channel_egress = RegistryChannelEgress(cfg, conversation_ref=conversation_id)
+        channel_egress = RegistryChannelEgress(
+            cfg,
+            conversation_ref=registry_conversation_ref("default", conversation_id),
+        )
         await channel_egress.bind(title="Registry UI E2E", config=cfg)
         await client.ack([delivery["delivery_id"]], classification="accepted")
         return conversation_id

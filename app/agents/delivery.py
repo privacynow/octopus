@@ -164,7 +164,7 @@ async def handle_registry_delivery(
 ) -> str:
     kind = str(delivery.get("kind", ""))
     delivery_id = str(delivery.get("delivery_id", ""))
-    registry_id = str(delivery.get("registry_id", "") or "default")
+    registry_id = str(delivery.get("registry_id", "") or "")
     if kind in {"channel_input", "routed_task"}:
         return await admit_registry_delivery(
             config,
@@ -177,6 +177,8 @@ async def handle_registry_delivery(
     if not isinstance(payload, dict):
         return "rejected"
     if kind == "channel_action":
+        if not registry_id:
+            return "rejected"
         conversation_ref = str(payload.get("conversation_ref", "") or payload.get("conversation_id", ""))
         if not conversation_ref:
             return "rejected"
@@ -218,6 +220,8 @@ async def handle_registry_delivery(
         return "accepted"
 
     if kind == "routed_result":
+        if not registry_id:
+            return "rejected"
         routed_task_id = str(payload.get("routed_task_id", ""))
         parent_conversation_id = qualify_registry_parent_ref(
             registry_id,

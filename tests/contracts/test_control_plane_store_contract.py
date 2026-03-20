@@ -273,6 +273,123 @@ async def test_stale_claim_token_cannot_complete_reclaimed_command(backend_bus_a
 
 
 @pytest.mark.asyncio
+async def test_stale_claim_token_cannot_fail_reclaimed_command(backend_bus_and_data_dir):
+    _backend, bus, data_dir = backend_bus_and_data_dir
+    from app import runtime_backend
+
+    store = runtime_backend.control_plane_store()
+    store.submit(data_dir, _command("cmd-stale-fail", max_retries=0))
+    claimed = store.poll_commands(
+        data_dir,
+        allowed_pairs={("registry:alpha", "conversation_projection")},
+        lease_seconds=0.01,
+    )
+    assert [item.command_id for item in claimed] == ["cmd-stale-fail"]
+
+    time.sleep(0.05)
+    assert store.reclaim_expired(data_dir) == 1
+    time.sleep(1.1)
+
+    reclaimed = await bus.poll_commands(
+        allowed_pairs={("registry:alpha", "conversation_projection")},
+    )
+    assert [item.command_id for item in reclaimed] == ["cmd-stale-fail"]
+
+    await bus.fail(
+        "cmd-stale-fail",
+        claimed_at=claimed[0].claimed_at,
+        error="stale failure",
+    )
+    assert store.get_reply(data_dir, "cmd-stale-fail") is None
+
+    await bus.fail(
+        "cmd-stale-fail",
+        claimed_at=reclaimed[0].claimed_at,
+        error="current failure",
+    )
+    reply = store.get_reply(data_dir, "cmd-stale-fail")
+    assert reply is not None
+    assert reply.status == "failed"
+    assert reply.error == "current failure"
+
+
+@pytest.mark.asyncio
+async def test_stale_claim_token_cannot_dead_letter_reclaimed_command(backend_bus_and_data_dir):
+    _backend, bus, data_dir = backend_bus_and_data_dir
+    from app import runtime_backend
+
+    store = runtime_backend.control_plane_store()
+    store.submit(data_dir, _command("cmd-stale-dead-letter"))
+    claimed = store.poll_commands(
+        data_dir,
+        allowed_pairs={("registry:alpha", "conversation_projection")},
+        lease_seconds=0.01,
+    )
+    assert [item.command_id for item in claimed] == ["cmd-stale-dead-letter"]
+
+    time.sleep(0.05)
+    assert store.reclaim_expired(data_dir) == 1
+    time.sleep(1.1)
+
+    reclaimed = await bus.poll_commands(
+        allowed_pairs={("registry:alpha", "conversation_projection")},
+    )
+    assert [item.command_id for item in reclaimed] == ["cmd-stale-dead-letter"]
+
+    await bus.dead_letter(
+        "cmd-stale-dead-letter",
+        claimed_at=claimed[0].claimed_at,
+        reason="stale dead-letter",
+    )
+    assert store.get_reply(data_dir, "cmd-stale-dead-letter") is None
+
+    await bus.dead_letter(
+        "cmd-stale-dead-letter",
+        claimed_at=reclaimed[0].claimed_at,
+        reason="current dead-letter",
+    )
+    reply = store.get_reply(data_dir, "cmd-stale-dead-letter")
+    assert reply is not None
+    assert reply.status == "failed"
+    assert reply.error == "current dead-letter"
+
+
+@pytest.mark.asyncio
+async def test_stale_claim_token_cannot_renew_reclaimed_command(backend_bus_and_data_dir):
+    _backend, bus, data_dir = backend_bus_and_data_dir
+    from app import runtime_backend
+
+    store = runtime_backend.control_plane_store()
+    store.submit(data_dir, _command("cmd-stale-renew"))
+    claimed = store.poll_commands(
+        data_dir,
+        allowed_pairs={("registry:alpha", "conversation_projection")},
+        lease_seconds=0.01,
+    )
+    assert [item.command_id for item in claimed] == ["cmd-stale-renew"]
+
+    time.sleep(0.05)
+    assert store.reclaim_expired(data_dir) == 1
+    time.sleep(1.1)
+
+    reclaimed = await bus.poll_commands(
+        allowed_pairs={("registry:alpha", "conversation_projection")},
+    )
+    assert [item.command_id for item in reclaimed] == ["cmd-stale-renew"]
+
+    assert not await bus.renew_lease(
+        "cmd-stale-renew",
+        claimed_at=claimed[0].claimed_at,
+        extension_seconds=30.0,
+    )
+    assert await bus.renew_lease(
+        "cmd-stale-renew",
+        claimed_at=reclaimed[0].claimed_at,
+        extension_seconds=30.0,
+    )
+
+
+@pytest.mark.asyncio
 async def test_reconcile_orphans_dead_letters_removed_and_revoked_pairs(backend_bus_and_data_dir):
     _backend, bus, data_dir = backend_bus_and_data_dir
     from app import runtime_backend

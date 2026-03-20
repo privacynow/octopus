@@ -41,10 +41,10 @@ class _FakeLeaseBus:
     def __init__(self, command: ControlCommand) -> None:
         self._command = command
         self._claimed = False
-        self.renewals: list[tuple[str, float]] = []
-        self.completed: list[str] = []
-        self.failed: list[tuple[str, str]] = []
-        self.dead_letters: list[tuple[str, str]] = []
+        self.renewals: list[tuple[str, str, float]] = []
+        self.completed: list[tuple[str, str]] = []
+        self.failed: list[tuple[str, str, str]] = []
+        self.dead_letters: list[tuple[str, str, str]] = []
 
     async def reclaim_expired(self) -> int:
         return 0
@@ -63,8 +63,7 @@ class _FakeLeaseBus:
         claimed_at: str,
         extension_seconds: float = 30.0,
     ) -> bool:
-        self.renewals.append((command_id, extension_seconds))
-        del claimed_at
+        self.renewals.append((command_id, claimed_at, extension_seconds))
         return True
 
     async def complete(
@@ -74,17 +73,14 @@ class _FakeLeaseBus:
         claimed_at: str,
         result_json: str | None = None,
     ) -> None:
-        del claimed_at
         del result_json
-        self.completed.append(command_id)
+        self.completed.append((command_id, claimed_at))
 
     async def fail(self, command_id: str, *, claimed_at: str, error: str) -> None:
-        del claimed_at
-        self.failed.append((command_id, error))
+        self.failed.append((command_id, claimed_at, error))
 
     async def dead_letter(self, command_id: str, *, claimed_at: str, reason: str) -> None:
-        del claimed_at
-        self.dead_letters.append((command_id, reason))
+        self.dead_letters.append((command_id, claimed_at, reason))
 
 
 def _command(
@@ -357,7 +353,69 @@ async def test_processor_runner_renews_leases_for_inflight_commands() -> None:
     await task
 
     assert bus.renewals
-    assert bus.completed == ["cmd-lease"]
+    assert bus.renewals[0] == ("cmd-lease", "claim-1", 30.0)
+    assert bus.completed == [("cmd-lease", "claim-1")]
+
+
+@pytest.mark.asyncio
+async def test_processor_runner_forwards_claim_token_on_processor_failure() -> None:
+    command = _command("cmd-fail")
+    bus = _FakeLeaseBus(command)
+
+    async def boom(_command: ControlCommand) -> ControlReply:
+        raise RuntimeError("boom")
+
+    runner = ProcessorRunner(
+        bus,
+        poll_interval_seconds=0.01,
+        reclaim_interval_seconds=0.01,
+        lease_renewal_interval_seconds=1.0,
+    )
+    runner.register(
+        _RecordingProcessor(
+            authority_capabilities={"registry:alpha": {"conversation_projection"}},
+            side_effect=boom,
+        )
+    )
+
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(runner.run(stop_event=stop_event))
+    while not bus.failed:
+        await asyncio.sleep(0.01)
+    stop_event.set()
+    await task
+
+    assert bus.failed == [("cmd-fail", "claim-1", "boom")]
+
+
+@pytest.mark.asyncio
+async def test_processor_runner_forwards_claim_token_on_dead_letter_without_owner() -> None:
+    command = _command("cmd-dead-letter", authority_ref="registry:beta")
+    bus = _FakeLeaseBus(command)
+    runner = ProcessorRunner(
+        bus,
+        poll_interval_seconds=0.01,
+        reclaim_interval_seconds=0.01,
+        lease_renewal_interval_seconds=1.0,
+    )
+    runner.register(
+        _RecordingProcessor(
+            authority_capabilities={"registry:alpha": {"conversation_projection"}},
+        )
+    )
+
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(runner.run(stop_event=stop_event))
+    while not bus.dead_letters:
+        await asyncio.sleep(0.01)
+    stop_event.set()
+    await task
+
+    assert len(bus.dead_letters) == 1
+    command_id, claimed_at, reason = bus.dead_letters[0]
+    assert command_id == "cmd-dead-letter"
+    assert claimed_at == "claim-1"
+    assert "no control-plane processor registered" in reason
 
 
 def test_processor_runner_rejects_duplicate_pair_ownership(sqlite_bus_and_data_dir) -> None:

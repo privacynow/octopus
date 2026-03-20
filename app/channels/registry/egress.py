@@ -10,11 +10,6 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from collections.abc import Callable
-
-from app.agents.bridge import bind_conversation, registry_connection_client
-from app.agents.client import AgentRegistryClient
-from app.agents.types import TimelineEvent
 from app.channels.registry.refs import parse_registry_ref, registry_ref_external_id
 from app.config import BotConfig
 from app.formatting import trim_text
@@ -23,6 +18,7 @@ from app.ports.egress import (
     ChannelEgress,
     EditableHandle,
 )
+from app.runtime.services import BotServices
 
 log = logging.getLogger(__name__)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -57,7 +53,7 @@ class RegistryChannelEgress(ChannelEgress):
         title: str = "",
         output_log: list[dict[str, str]] | None = None,
         external_id: str = "",
-        registry_client_factory: Callable[[], AgentRegistryClient | None] | None = None,
+        services: BotServices,
     ) -> None:
         parsed_ref = parse_registry_ref(conversation_ref)
         self.config = config
@@ -71,9 +67,7 @@ class RegistryChannelEgress(ChannelEgress):
         self.sent_messages: list[str] = []
         self.last_status_text = ""
         self._output_log = output_log
-        self._registry_client_factory = registry_client_factory
-        self._timeline_client: AgentRegistryClient | None = None
-        self._timeline_client_checked = False
+        self._services = services
         self._last_progress_published_at: float = 0.0
         self._PROGRESS_MIN_INTERVAL = 5.0
         self.chat = _RegistryChatShim(self)
@@ -99,16 +93,6 @@ class RegistryChannelEgress(ChannelEgress):
             return
         self._output_log.append({"type": kind, "text": text})
 
-    def _timeline_client_for_publish(self) -> AgentRegistryClient | None:
-        if self._timeline_client_checked:
-            return self._timeline_client
-        self._timeline_client_checked = True
-        if self._registry_client_factory is not None:
-            self._timeline_client = self._registry_client_factory()
-            return self._timeline_client
-        self._timeline_client = registry_connection_client(self.config, registry_id=self.registry_id)
-        return self._timeline_client
-
     def _plain_text_snippet(self, text: str, *, limit: int = 200) -> str:
         clean = html.unescape(_HTML_TAG_RE.sub(" ", text or ""))
         lines = [" ".join(line.split()) for line in clean.splitlines()]
@@ -127,23 +111,23 @@ class RegistryChannelEgress(ChannelEgress):
         metadata: dict[str, Any] | None = None,
         event_id: str | None = None,
     ) -> None:
-        client = self._timeline_client_for_publish()
-        if client is None:
-            return
-        event = TimelineEvent(
-            event_id=event_id or uuid.uuid4().hex,
-            conversation_id=self.conversation_ref,
-            kind=kind,
-            title=title,
-            body=body,
-            status=status,
-            progress=progress,
-            metadata={**self._metadata(), **(metadata or {})},
-        )
         try:
-            await client.publish_timeline([event])
+            await self._services.control_plane.conversation_projection.publish_external_timeline(
+                conversation_ref=self.conversation_ref,
+                kind=kind,
+                title=title,
+                body=body,
+                status=status,
+                progress=progress,
+                metadata={**self._metadata(), **(metadata or {})},
+                event_id=event_id,
+            )
         except Exception:
-            log.warning("Timeline publish failed for %s (non-fatal)", self.conversation_ref, exc_info=True)
+            log.warning(
+                "Timeline publish failed for %s (non-fatal)",
+                self.conversation_ref,
+                exc_info=True,
+            )
 
     async def _publish_progress(self, html_text: str, *, event_id: str | None = None) -> None:
         snippet = self._plain_text_snippet(html_text)
@@ -217,14 +201,19 @@ class RegistryChannelEgress(ChannelEgress):
     async def bind(self, *, title: str, config: Any) -> None:
         del config
         self.title = title or self.title
-        await bind_conversation(
-            self.config,
-            conversation_ref=self.conversation_ref,
-            title=self.title,
-            origin_channel="registry",
-            external_id=self.external_id,
-            registry_id=self.registry_id,
-        )
+        try:
+            await self._services.control_plane.conversation_projection.bind_external_conversation(
+                conversation_ref=self.conversation_ref,
+                title=self.title,
+                origin_channel="registry",
+                external_id=self.external_id,
+            )
+        except Exception:
+            log.warning(
+                "Conversation bind failed for %s (non-fatal)",
+                self.conversation_ref,
+                exc_info=True,
+            )
         await self._publish_event(kind="started", title="Conversation started")
 
     async def on_message_received(self, text: str) -> None:

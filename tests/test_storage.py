@@ -2,6 +2,7 @@
 
 import json
 import tempfile
+import threading
 from pathlib import Path
 
 from app.identity import telegram_conversation_key
@@ -118,6 +119,40 @@ def test_session_management():
         assert fresh["provider_state"]["thread_id"] is None
 
         reset_db_for_test(data_dir)
+
+
+def test_session_store_uses_thread_local_sqlite_connections():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        ensure_data_dirs(data_dir)
+        conversation_key = telegram_conversation_key(4242)
+        session = default_session("claude", {"session_id": "abc", "started": False}, "on")
+        save_session(data_dir, conversation_key, session)
+
+        loaded_from_thread: dict[str, object] = {}
+        error_from_thread: list[BaseException] = []
+
+        def _load() -> None:
+            try:
+                loaded_from_thread.update(
+                    load_session(
+                        data_dir,
+                        conversation_key,
+                        "claude",
+                        lambda: {"session_id": "abc", "started": False},
+                        "on",
+                    )
+                )
+            except BaseException as exc:  # pragma: no cover - assertion below
+                error_from_thread.append(exc)
+
+        worker = threading.Thread(target=_load)
+        worker.start()
+        worker.join()
+
+        assert error_from_thread == []
+        assert loaded_from_thread["provider"] == "claude"
+        assert loaded_from_thread["provider_state"]["session_id"] == "abc"
 
 
 # -- resolve_allowed_path --

@@ -645,31 +645,9 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
         }
     ) as (_, cfg, prov):
         import app.channels.telegram.ingress as th
-        import app.agents.bridge as bridge
         from app.channels.registry.egress import RegistryChannelEgress
 
         reported: list[tuple[str, object]] = []
-
-        class FakeRegistryClient:
-            async def sync_binding(self, **kwargs):
-                reported.append(("binding", kwargs))
-                return {"ok": True}
-
-            async def publish_timeline(self, events, *, checkpoint: str = ""):
-                del checkpoint
-                reported.append(("timeline", events))
-                return {"accepted": len(events)}
-
-            async def routed_task_result(self, routed_task_id, result):
-                reported.append(("result", routed_task_id, result))
-                return {"ok": True}
-
-        monkeypatch.setattr(
-            bridge,
-            "registry_connection_client",
-            lambda config, registry_id=None: FakeRegistryClient(),
-        )
-        monkeypatch.setattr("app.channels.registry.egress.bind_conversation", async_noop)
 
         async def fake_report_routed_task_result(*, routed_task_id, authority_ref, result):
             reported.append(("result", routed_task_id, authority_ref, result))
@@ -1167,27 +1145,9 @@ async def test_registry_channel_parent_resumes_through_registry_channel(monkeypa
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
-        import app.agents.bridge as bridge
         from app.channels.registry.egress import RegistryChannelEgress
 
         published: list[tuple[str, str, str]] = []
-
-        class FakeRegistryClient:
-            async def sync_binding(self, **kwargs):
-                return {"ok": True, **kwargs}
-
-            async def publish_timeline(self, events, *, checkpoint: str = ""):
-                del checkpoint
-                for event in events:
-                    published.append((event.kind, event.title, event.body))
-                return {"accepted": len(events)}
-
-        monkeypatch.setattr(
-            bridge,
-            "registry_connection_client",
-            lambda config, registry_id=None: FakeRegistryClient(),
-        )
-        monkeypatch.setattr("app.channels.registry.egress.bind_conversation", async_noop)
 
         async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
             del self, status, progress, metadata, event_id
@@ -1425,8 +1385,6 @@ async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch)
             from app.channels.registry.egress import RegistryChannelEgress
 
             published: list[dict[str, object]] = []
-
-            monkeypatch.setattr("app.channels.registry.egress.bind_conversation", async_noop)
 
             async def fake_publish_event(self, **kwargs):
                 del self

@@ -9,6 +9,7 @@ from app.agents.state import (
     save_registry_connection_state,
 )
 from app.agents.types import AgentDiscoveryQuery, RegistryConnectionConfig, RegistryConnectionState
+from app.channels.registry.channel import register_registry_channels
 from app.channels.registry.refs import registry_conversation_ref
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from tests.support.config_support import make_config
@@ -74,13 +75,14 @@ async def test_registry_runtime_annotates_deliveries_and_scopes_poll(monkeypatch
         agent_registries=(registry,),
         agent_poll_interval_seconds=registry.poll_interval_seconds,
     )
+    dispatcher = ChannelDispatcher()
     runtime = RegistryRuntime(
         config.agent_registries,
-        ChannelDispatcher(),
+        dispatcher,
         handler,
         config=config,
     )
-    runtime.register_channels()
+    register_registry_channels(config, config.agent_registries, dispatcher)
 
     await runtime.start(stop_event=stop_event)
     await asyncio.wait_for(stop_event.wait(), timeout=0.5)
@@ -159,7 +161,7 @@ async def test_registry_runtime_start_surfaces_wrapped_agent_runtime_failures(mo
         await runtime.start(stop_event=asyncio.Event())
 
 
-def test_registry_runtime_register_channels_by_scope(tmp_path: Path):
+def test_register_registry_channels_by_scope(tmp_path: Path):
     prod = RegistryConnectionConfig(
         registry_id="prod",
         url="http://registry.prod",
@@ -175,18 +177,15 @@ def test_registry_runtime_register_channels_by_scope(tmp_path: Path):
         poll_interval_seconds=5.0,
     )
     dispatcher = ChannelDispatcher()
-    runtime = RegistryRuntime(
-        (prod, ops),
-        dispatcher,
-        None,
-        config=make_config(
+    register_registry_channels(
+        make_config(
             data_dir=tmp_path,
             agent_mode="registry",
             agent_registries=(prod, ops),
         ),
+        (prod, ops),
+        dispatcher,
     )
-
-    runtime.register_channels()
 
     assert dispatcher.channel_type_for_ref(registry_conversation_ref("prod", "conv-1")) == "registry"
     assert dispatcher.channel_type_for_ref("registry:ops:task:task-1") == "registry"

@@ -739,3 +739,21 @@
   - Telegram progress and worker-owned usage/timeline publication no longer require `runtime.registry_runtime` to mirror externally
   - positive and negative paths are covered: progress projection, progress without live runtime, Telegram-ref worker projection through the port, and registry-ref worker publication staying single-scoped
   - full suite status after slice 6B: `1885 passed, 23 skipped`
+- Complete: Slice 6C cut finalization to `TaskRoutingPort`.
+  Scope:
+  - rewired `app/workflows/execution/finalization.py` so routed-task result reporting goes through `FinalizationContext.task_routing` instead of registry client factories or live runtime clients
+  - kept finalization itself generic by making it consume an `authority_ref` from context instead of importing registry-specific authority helpers
+  - rewired Telegram worker finalization context construction to pass `runtime.services.control_plane.task_routing`
+  - added a temporary worker-side authority fallback so legacy registry task refs still derive the correct `authority_ref` when older inbound events do not yet carry explicit provenance
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_execution_finalization.py tests/test_worker_workflows.py`
+  - `./.venv/bin/python -m pytest -q tests/test_execution_finalization.py tests/test_worker_workflows.py tests/test_handlers.py -k routed_task`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - finalization now depends only on the task-routing port and generic authority context, which removes another direct registry-client seam from the execution workflow
+  - the authority fallback was kept at the worker boundary after review; this preserves the generic workflow boundary while still supporting legacy registry task refs until the provenance-generalization slice lands
+  - the handler regression found during full-suite review was fixed by updating the tests to patch the new `TaskRoutingPort` seam instead of reintroducing a finalization fallback
+  Verified:
+  - routed-task result reporting no longer uses registry client factories or `RegistryRuntime.client_for_registry()`
+  - explicit and fallback routed-result authority paths are covered, along with non-blocking failure behavior
+  - full suite status after slice 6C: `1885 passed, 23 skipped`

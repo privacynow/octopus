@@ -3,7 +3,9 @@ import logging
 
 import pytest
 
+from app.agents.registry_capabilities import registry_authority_ref
 from app.session_state import DelegatedTask, PendingDelegation, SessionState
+from app.ports.task_routing import TaskResultReport
 from app.workflows.execution.contracts import RequestExecutionOutcome
 from app.workflows.execution.finalization import FinalizationContext, finalize_execution
 
@@ -99,12 +101,18 @@ async def test_finalization_clears_resumed_delegation_after_outcome() -> None:
 
 @pytest.mark.asyncio
 async def test_finalization_reports_routed_task_result() -> None:
-    reported: list[tuple[str, object]] = []
+    reported: list[dict[str, object]] = []
 
-    class FakeClient:
-        async def routed_task_result(self, routed_task_id, result):
-            reported.append((routed_task_id, result))
-            return {"ok": True}
+    class FakeTaskRouting:
+        async def report_routed_task_result(self, *, routed_task_id, authority_ref, result):
+            reported.append(
+                {
+                    "routed_task_id": routed_task_id,
+                    "authority_ref": authority_ref,
+                    "result": result,
+                }
+            )
+            return TaskResultReport(status="reported", routed_task_id=routed_task_id)
 
     outcome = RequestExecutionOutcome(
         status="completed_with_denials",
@@ -114,53 +122,75 @@ async def test_finalization_reports_routed_task_result() -> None:
     result = await finalize_execution(
         outcome,
         context=FinalizationContext(
-            config=type("Cfg", (), {"data_dir": "/tmp/data", "provider_name": "claude", "completion_webhook_url": ""})(),
+            config=type(
+                "Cfg",
+                (),
+                {
+                    "data_dir": "/tmp/data",
+                    "provider_name": "claude",
+                    "completion_webhook_url": "",
+                },
+            )(),
             item_id="item-3",
             conversation_key="registry:conv-3",
             runtime_chat="registry:conv-3",
             conversation_ref="registry:conv-3",
             routed_task_id="task-3",
-            registry_client_factory=lambda config: FakeClient(),
+            authority_ref=registry_authority_ref("default"),
+            task_routing=FakeTaskRouting(),
         ),
     )
 
     assert result.routed_result_status == "reported"
     assert len(reported) == 1
-    routed_task_id, payload = reported[0]
-    assert routed_task_id == "task-3"
+    assert reported[0]["routed_task_id"] == "task-3"
+    assert reported[0]["authority_ref"] == registry_authority_ref("default")
+    payload = reported[0]["result"]
     assert payload.status == "completed"
     assert "Partial completion" in payload.full_text
 
 
 @pytest.mark.asyncio
 async def test_finalization_reports_routed_task_result_through_explicit_registry_id() -> None:
-    reported: list[tuple[str, object]] = []
+    reported: list[dict[str, object]] = []
 
-    class FakeClient:
-        async def routed_task_result(self, routed_task_id, result):
-            reported.append((routed_task_id, result))
-            return {"ok": True}
-
-    fallback_used: list[bool] = []
+    class FakeTaskRouting:
+        async def report_routed_task_result(self, *, routed_task_id, authority_ref, result):
+            reported.append(
+                {
+                    "routed_task_id": routed_task_id,
+                    "authority_ref": authority_ref,
+                    "result": result,
+                }
+            )
+            return TaskResultReport(status="reported", routed_task_id=routed_task_id)
 
     result = await finalize_execution(
         RequestExecutionOutcome(status="completed", reply_text="done"),
         context=FinalizationContext(
-            config=type("Cfg", (), {"data_dir": "/tmp/data", "provider_name": "claude", "completion_webhook_url": ""})(),
+            config=type(
+                "Cfg",
+                (),
+                {
+                    "data_dir": "/tmp/data",
+                    "provider_name": "claude",
+                    "completion_webhook_url": "",
+                },
+            )(),
             item_id="item-3b",
             conversation_key="registry:prod:task:task-3b",
             runtime_chat="registry:prod:task:task-3b",
             conversation_ref="registry:prod:task:task-3b",
             routed_task_id="task-3b",
             registry_id="prod",
-            registry_client_factory=lambda config: fallback_used.append(True),
-            registry_client_for_registry=lambda registry_id: FakeClient() if registry_id == "prod" else None,
+            authority_ref=registry_authority_ref("prod"),
+            task_routing=FakeTaskRouting(),
         ),
     )
 
     assert result.routed_result_status == "reported"
-    assert fallback_used == []
-    assert reported and reported[0][0] == "task-3b"
+    assert reported and reported[0]["routed_task_id"] == "task-3b"
+    assert reported[0]["authority_ref"] == registry_authority_ref("prod")
 
 
 @pytest.mark.asyncio
@@ -200,10 +230,10 @@ async def test_finalization_usage_recording_failure_is_non_blocking() -> None:
 
 @pytest.mark.asyncio
 async def test_finalization_report_failure_sets_user_warning(caplog) -> None:
-    class FailingClient:
-        async def routed_task_result(self, routed_task_id, result):
-            del routed_task_id, result
-            raise RuntimeError("registry internal stacktrace")
+    class FailingTaskRouting:
+        async def report_routed_task_result(self, *, routed_task_id, authority_ref, result):
+            del routed_task_id, authority_ref, result
+            return TaskResultReport(status="failed", error="registry internal stacktrace")
 
     with caplog.at_level(logging.ERROR):
         result = await finalize_execution(
@@ -212,13 +242,22 @@ async def test_finalization_report_failure_sets_user_warning(caplog) -> None:
                 reply_text="done",
             ),
             context=FinalizationContext(
-                config=type("Cfg", (), {"data_dir": "/tmp/data", "provider_name": "claude", "completion_webhook_url": ""})(),
+                config=type(
+                    "Cfg",
+                    (),
+                    {
+                        "data_dir": "/tmp/data",
+                        "provider_name": "claude",
+                        "completion_webhook_url": "",
+                    },
+                )(),
                 item_id="item-5",
                 conversation_key="registry:conv-5",
                 runtime_chat="registry:conv-5",
                 conversation_ref="registry:conv-5",
                 routed_task_id="task-5",
-                registry_client_factory=lambda config: FailingClient(),
+                authority_ref=registry_authority_ref("default"),
+                task_routing=FailingTaskRouting(),
             ),
         )
 

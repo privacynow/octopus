@@ -20,6 +20,7 @@ from app.channels.telegram.session_io import (
     save as telegram_save_session,
 )
 from app.identity import telegram_actor_key, telegram_conversation_key, telegram_event_id
+from app.ports.task_routing import TaskResultReport
 from app.providers.base import RunContext, RunResult
 from app.runtime.inbound_types import InboundMessage, InboundUser
 from app.storage import debug_session_connection, default_session, save_session
@@ -682,8 +683,17 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
             "registry_connection_client",
             lambda config, registry_id=None: FakeRegistryClient(),
         )
-        current_runtime().registry_client_factory = lambda config: FakeRegistryClient()
         monkeypatch.setattr("app.channels.registry.egress.bind_conversation", async_noop)
+
+        async def fake_report_routed_task_result(*, routed_task_id, authority_ref, result):
+            reported.append(("result", routed_task_id, authority_ref, result))
+            return TaskResultReport(status="reported", routed_task_id=routed_task_id)
+
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "report_routed_task_result",
+            fake_report_routed_task_result,
+        )
 
         async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
             del self, status, progress, metadata, event_id
@@ -718,8 +728,9 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
         )
         result_entries = [entry for entry in reported if entry[0] == "result"]
         assert len(result_entries) == 1
-        _, routed_task_id, result = result_entries[0]
+        _, routed_task_id, authority_ref, result = result_entries[0]
         assert routed_task_id == "routed-task-1"
+        assert authority_ref == "registry:default"
         assert result.status == "completed"
         assert "Delegated review complete." in result.full_text
         assert any(
@@ -756,7 +767,15 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
             "registry_connection_client",
             lambda config, registry_id=None: FakeRegistryClient(),
         )
-        current_runtime().registry_client_factory = lambda config: FakeRegistryClient()
+        async def fake_report_routed_task_result(*, routed_task_id, authority_ref, result):
+            del routed_task_id, authority_ref, result
+            return TaskResultReport(status="failed", error="registry unavailable")
+
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "report_routed_task_result",
+            fake_report_routed_task_result,
+        )
         prov.run_results = [RunResult(text="Delegated review complete.")]
 
         event = InboundMessage(

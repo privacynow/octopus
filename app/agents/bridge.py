@@ -10,6 +10,7 @@ from typing import Any
 
 from app import work_queue
 from app.agents.client import AgentRegistryClient, RegistryClientError
+from app.agents.registry_capabilities import registry_authority_ref
 from app.agents.state import bot_identity, load_runtime_registry_connection_state
 from app.agents.types import RoutedTaskResult, TimelineEvent
 from app.channels.registry.refs import (
@@ -215,7 +216,7 @@ def build_registry_message_delivery(
             source="registry",
             conversation_ref=conversation_ref,
             routed_task_id=routed_task_id,
-            registry_id=registry_id,
+            authority_ref=registry_authority_ref(registry_id) if registry_id else "",
             skip_approval=skip_approval,
         )
     )
@@ -241,7 +242,7 @@ def build_registry_action_envelope(
         params=dict(action_payload),
         source="registry",
         conversation_ref=conversation_ref,
-        registry_id=registry_id,
+        authority_ref=registry_authority_ref(registry_id) if registry_id else "",
     )
     return InboundEnvelope(
         transport="registry",

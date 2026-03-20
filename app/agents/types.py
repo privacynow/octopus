@@ -116,7 +116,7 @@ class AgentDiscoveryQuery:
 
 @dataclass(frozen=True)
 class DiscoveredAgentRef:
-    registry_id: str
+    authority_ref: str
     agent_id: str
     display_name: str = ""
     slug: str = ""

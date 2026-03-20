@@ -1171,7 +1171,9 @@ def discover_results_message(agents: list[Any]) -> TelegramRenderedMessage:
         display_name = html.escape(
             agent.get("display_name") or agent.get("slug") or agent.get("agent_id") or "Unnamed agent"
         )
-        registry_id = html.escape(str(agent.get("registry_id", "") or ""))
+        authority_ref = html.escape(
+            str(agent.get("authority_ref", "") or agent.get("registry_id", "") or "")
+        )
         role = html.escape(agent.get("role") or "(unspecified)")
         state = html.escape(agent.get("connectivity_state") or "unknown")
         current_capacity = int(agent.get("current_capacity", 0) or 0)
@@ -1180,8 +1182,8 @@ def discover_results_message(agents: list[Any]) -> TelegramRenderedMessage:
         lines.append(
             f"State: <code>{state}</code> · Capacity: <code>{current_capacity}/{max_capacity}</code>"
         )
-        if registry_id:
-            lines.append(f"Registry: <code>{registry_id}</code>")
+        if authority_ref:
+            lines.append(f"Authority: <code>{authority_ref}</code>")
         capabilities = [str(value) for value in agent.get("capabilities", agent.get("skills", [])) if value]
         if capabilities:
             lines.append(f"Capabilities: <code>{html.escape(', '.join(capabilities))}</code>")

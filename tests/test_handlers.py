@@ -277,7 +277,7 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
                 seen_queries.append(query)
                 return [
                     {
-                        "registry_id": "prod",
+                        "authority_ref": "registry:prod",
                         "agent_id": "agent-2",
                         "display_name": "Dev Bot",
                         "slug": "dev-bot",

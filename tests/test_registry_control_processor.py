@@ -348,7 +348,7 @@ async def test_registry_control_processor_processes_task_routing_and_directory_c
     assert submission.status == "accepted"
     assert submission.delivery_id == "delivery-1"
     assert report.status == "reported"
-    assert search.agents[0].registry_id == "alpha"
+    assert search.agents[0].authority_ref == "registry:alpha"
     assert search.agents[0].agent_id == "target-1"
     assert resolution.status == "resolved"
     assert resolution.authority_ref == "registry:alpha"

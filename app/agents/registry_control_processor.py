@@ -200,7 +200,7 @@ class RegistryControlProcessor(ControlProcessor):
             rows = await client.search(query)
             agents = [
                 DiscoveredAgentRef(
-                    registry_id=registry_id,
+                    authority_ref=command.authority_ref,
                     agent_id=str(row.get("agent_id", "")),
                     display_name=str(row.get("display_name", "")),
                     slug=str(row.get("slug", "")),

@@ -161,7 +161,7 @@ async def test_agent_directory_scatter_gather_returns_partial_result_on_timeout(
             status="complete",
             agents=[
                 DiscoveredAgentRef(
-                    registry_id="alpha",
+                    authority_ref="registry:alpha",
                     agent_id="agent-1",
                     display_name="Alpha",
                 )

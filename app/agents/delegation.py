@@ -7,7 +7,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from app.agents.registry_capabilities import registry_id_from_authority_ref
 from app.registry_errors import registry_error_summary
 from app.agents.types import RoutedTaskRequest
 from app.config import BotConfig
@@ -111,7 +110,7 @@ async def handle_delegation_approve(
                     )
                     return
                 await channel_egress.send_text(
-                    "Delegation unavailable: could not resolve which registry owns"
+                    "Delegation unavailable: could not resolve which authority owns"
                     f" target agent {task.target_agent_id or task.routed_task_id}.",
                     reply_markup=retry_markup,
                 )
@@ -147,7 +146,7 @@ async def handle_delegation_approve(
             submission = mark_task_submitted(
                 session.pending_delegation,
                 routed_task_id=task.routed_task_id,
-                registry_id=registry_id_from_authority_ref(resolution.authority_ref),
+                authority_ref=resolution.authority_ref,
             )
             session.pending_delegation = submission.pending
     except Exception:

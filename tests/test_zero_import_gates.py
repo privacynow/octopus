@@ -688,6 +688,25 @@ def test_worker_dispatch_does_not_import_registry_bridge_timeline_helpers() -> N
         assert token not in import_block, f"{token} still imported from bridge in {worker_path}"
 
 
+def test_worker_timeline_helper_has_no_dispatcher_or_surface_split() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"
+    text = worker_path.read_text()
+    match = re.search(
+        r"async def _publish_timeline_event_for_runtime\([\s\S]*?\nasync def _execute_worker_action\(",
+        text,
+    )
+    assert match is not None, "_publish_timeline_event_for_runtime block missing"
+    helper_block = match.group(0)
+    forbidden = (
+        "_channel_dispatcher(",
+        "channel_type_for_ref(",
+        "create_egress(",
+    )
+    for token in forbidden:
+        assert token not in helper_block, f"{token} leaked back into _publish_timeline_event_for_runtime"
+
+
 def test_runtime_boundaries_accept_only_canonical_identity_and_provenance_shapes() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     inbound_types_path = repo_root / "app" / "runtime" / "inbound_types.py"

@@ -30,18 +30,12 @@ def _services(*, publish=None) -> BotServices:
 
 
 @pytest.mark.asyncio
-async def test_publish_timeline_event_for_runtime_projects_telegram_refs_via_port(monkeypatch):
-    del monkeypatch
+async def test_publish_timeline_event_for_runtime_projects_telegram_refs_via_port():
     publish = AsyncMock()
     runtime = build_telegram_runtime(
         make_config(data_dir=Path("/tmp/telegram-worker-timeline-fanout")),
         FakeProvider("codex"),
         services=_services(publish=publish),
-    )
-    runtime.channel_dispatcher = SimpleNamespace(
-        channel_type_for_ref=lambda conversation_ref: (
-            "telegram" if conversation_ref.startswith("telegram:") else "registry"
-        )
     )
 
     await telegram_worker._publish_timeline_event_for_runtime(

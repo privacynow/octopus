@@ -10,14 +10,29 @@
 ## Current State
 
 - Phases 1-8 of the control-plane rollout landed and the repo is green.
-- Phase 9 remediation is in progress; slices 9A-9G are now complete and the repo is green.
-- The remaining work is now tracked explicitly in `PLAN-control-plane-bus.md` Phase 9:
-  - scaffolding-preserving tests and low-noise cleanup still remain
-  - some tests still encode scaffolding behavior instead of the final architecture
-- Status should be read as: rollout complete through Phase 8, remediation in progress through Phase 9.
+- Phase 9 remediation is complete; slices 9A-9H are landed and the repo is green.
+- Status should be read as: rollout complete through Phase 8 and Phase 9 remediation complete.
 
 ## Slice Log
 
+- Complete: Phase 9H remediation — final test-hygiene and guardrail cleanup.
+  Scope:
+  - removed stale dispatcher scaffolding from the Telegram worker timeline tests now that `_publish_timeline_event_for_runtime()` has a single control-plane owner path
+  - added a zero-import/structure guard that asserts the worker timeline helper does not regain dispatcher lookup, channel-type branching, or egress creation logic
+  - left the code paths unchanged because the structural slices had already removed the runtime drift; this slice aligned the tests and guardrails with the final architecture
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_telegram_worker_timeline.py tests/test_zero_import_gates.py tests/contracts/test_control_plane_store_contract.py`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified the worker timeline helper block in `app/channels/telegram/worker.py` remains free of `_channel_dispatcher(...)`, `channel_type_for_ref(...)`, and `create_egress(...)`
+  - verified the worker timeline tests no longer carry dead dispatcher setup from the pre-remediation split path
+  Review:
+  - this slice stayed in test/guardrail territory and did not reopen runtime code paths that were already structurally corrected
+  - the new guard is specific to the helper block, so it protects the final architecture without forbidding legitimate dispatcher usage elsewhere in `worker.py`
+  Verified:
+  - scaffolding-preserving worker timeline test setup is gone
+  - final guardrails now match the final architecture instead of the migration scaffolding
+  - full suite status after Phase 9H: `1922 passed, 23 skipped`
 - Complete: Phase 9G remediation — delete dead registry-shaped runtime API.
   Scope:
   - deleted `RegistryRuntime.runtime_for_registry()` and `RegistryRuntime.resolve_target_registry_id()` after confirming no app callers remained

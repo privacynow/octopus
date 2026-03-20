@@ -20,6 +20,7 @@ from app.storage import close_db, ensure_data_dirs
 from app.work_queue import close_transport_db, recover_stale_claims, purge_old
 from app.worker import poll_interval_for_runtime, start_worker_task
 from app.channels.telegram.channel import TelegramChannelBootstrap
+from app.channels.telegram.bootstrap import build_worker_bundle
 from app.runtime.channel_dispatcher import ChannelDispatcher
 from app.runtime_health import CanonicalRuntimeHealthProvider
 from app.startup_diagnostics import (
@@ -96,7 +97,10 @@ async def _run_provider_health(provider: Provider) -> None:
 
 
 def _runs_ingress(config: BotConfig) -> bool:
-    return config.process_role in {ProcessRole.ALL.value, ProcessRole.WEBHOOK.value}
+    return bool(config.telegram_token) and config.process_role in {
+        ProcessRole.ALL.value,
+        ProcessRole.WEBHOOK.value,
+    }
 
 
 def _runs_worker(config: BotConfig) -> bool:
@@ -141,7 +145,12 @@ def _exit_startup_failure(exc: BaseException, config: BotConfig, *, mode: str) -
     raise SystemExit(1)
 
 
-async def run_dispatcher_process(dispatcher: ChannelDispatcher) -> None:
+async def run_dispatcher_process(
+    dispatcher: ChannelDispatcher,
+    *,
+    startup=None,
+    shutdown=None,
+) -> None:
     """Start all dispatcher-owned ingresses and wait for shutdown."""
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -153,11 +162,15 @@ async def run_dispatcher_process(dispatcher: ChannelDispatcher) -> None:
             continue
 
     try:
+        if startup is not None:
+            await startup(stop_event)
         await dispatcher.start_all_ingresses(stop_event=stop_event)
         await stop_event.wait()
     finally:
         stop_event.set()
         await dispatcher.stop_all_ingresses()
+        if shutdown is not None:
+            await shutdown()
 
 
 def main() -> None:
@@ -246,15 +259,24 @@ def main() -> None:
 
     log.info("Process role: %s", config.process_role)
     dispatcher = ChannelDispatcher()
-    dispatcher.register(TelegramChannelBootstrap(config, provider))
-    dispatcher.build_all_ingresses(config=config, delivery_handler=lambda *_args, **_kwargs: None)
-    telegram_ingress = dispatcher.get_ingress("telegram")
-    if telegram_ingress is None:
-        raise RuntimeError("Telegram channel ingress was not built")
-    telegram_ingress.runtime.channel_dispatcher = dispatcher
+    telegram_ingress = None
+    worker_runtime_bundle = None
+    app = None
+    if config.telegram_token:
+        dispatcher.register(TelegramChannelBootstrap(config, provider))
+        dispatcher.build_all_ingresses(config=config, delivery_handler=lambda *_args, **_kwargs: None)
+        telegram_ingress = dispatcher.get_ingress("telegram")
+        if telegram_ingress is None:
+            raise RuntimeError("Telegram channel ingress was not built")
+        telegram_ingress.runtime.channel_dispatcher = dispatcher
+        worker_runtime_bundle = telegram_ingress
+        app = telegram_ingress.application
+    else:
+        worker_runtime_bundle = build_worker_bundle(config, provider)
+        worker_runtime_bundle.runtime.channel_dispatcher = dispatcher
 
-    app = telegram_ingress.application
-    boot_id = telegram_ingress.runtime.boot_id
+    assert worker_runtime_bundle is not None
+    boot_id = worker_runtime_bundle.runtime.boot_id
 
     if _runs_worker(config):
         # Recover stale work items from previous boot and purge old transport data
@@ -275,7 +297,7 @@ def main() -> None:
         delivery_runtime = build_registry_delivery_runtime(
             provider_name=provider.name,
             provider_state_factory=provider.new_provider_state,
-            bot=app.bot,
+            bot=app.bot if app is not None else None,
             dispatcher=dispatcher,
         )
         registry_runtime = RegistryRuntime(
@@ -291,16 +313,16 @@ def main() -> None:
             provider=provider,
         )
         registry_runtime.register_channels()
-        telegram_ingress.runtime.registry_runtime = registry_runtime
+        worker_runtime_bundle.runtime.registry_runtime = registry_runtime
 
-    async def _on_post_init(_app) -> None:
+    async def _start_background_runtime(stop_event: asyncio.Event) -> None:
         nonlocal _worker_task, _worker_stop
         if _runs_worker(config):
             _worker_task, _worker_stop = start_worker_task(
                 config.data_dir,
                 boot_id,
-                telegram_ingress.worker_dispatch,
-                deserialize_failure_notifier=telegram_ingress.worker_deserialize_failure_notifier,
+                worker_runtime_bundle.worker_dispatch,
+                deserialize_failure_notifier=worker_runtime_bundle.worker_deserialize_failure_notifier,
                 poll_interval=poll_interval_for_runtime(config.runtime_mode),
                 lease_ttl=config.claim_lease_ttl_seconds,
                 sweep_interval=config.claim_sweep_interval_seconds,
@@ -308,12 +330,9 @@ def main() -> None:
                 heartbeat_enabled=(config.runtime_mode == "shared"),
             )
         if registry_runtime is not None:
-            process_stop_event = _app.bot_data.get("dispatcher_stop_event")
-            if not isinstance(process_stop_event, asyncio.Event):
-                raise RuntimeError("Dispatcher stop event is not attached to the Telegram application")
-            await registry_runtime.start(stop_event=process_stop_event)
+            await registry_runtime.start(stop_event=stop_event)
 
-    async def _on_post_shutdown(_app) -> None:
+    async def _stop_background_runtime() -> None:
         if registry_runtime is not None:
             await registry_runtime.stop()
         if _worker_stop:
@@ -324,10 +343,36 @@ def main() -> None:
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 _worker_task.cancel()
 
-    app.post_init = _on_post_init
-    app.post_shutdown = _on_post_shutdown
+    if app is not None:
+        async def _on_post_init(_app) -> None:
+            process_stop_event = _app.bot_data.get("dispatcher_stop_event")
+            if not isinstance(process_stop_event, asyncio.Event):
+                raise RuntimeError("Dispatcher stop event is not attached to the Telegram application")
+            await _start_background_runtime(process_stop_event)
 
-    if config.process_role == ProcessRole.WORKER.value:
+        async def _on_post_shutdown(_app) -> None:
+            await _stop_background_runtime()
+
+        app.post_init = _on_post_init
+        app.post_shutdown = _on_post_shutdown
+
+    if not config.telegram_token:
+        log.info("Bot starting (registry-only)...")
+        try:
+            asyncio.run(
+                run_dispatcher_process(
+                    dispatcher,
+                    startup=_start_background_runtime,
+                    shutdown=_stop_background_runtime,
+                )
+            )
+        except KeyboardInterrupt:
+            pass
+        except Exception as exc:
+            _exit_startup_failure(exc, config, mode="registry-only")
+        finally:
+            _close_runtime_resources(config)
+    elif config.process_role == ProcessRole.WORKER.value:
         log.info("Bot starting (worker-only)...")
         try:
             asyncio.run(run_dispatcher_process(dispatcher))

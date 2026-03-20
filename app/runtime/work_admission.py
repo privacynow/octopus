@@ -49,8 +49,8 @@ def admit_worker_message(
         config=config,
         dispatcher=dispatcher,
     )
-    channel_type = dispatcher.channel_type_for_ref(conversation_ref) if dispatcher is not None else None
-    if channel_type != "telegram":
+    descriptor = dispatcher.descriptor_for_ref(conversation_ref) if dispatcher is not None else None
+    if descriptor is not None and descriptor.trust_tier == "trusted":
         return WorkerMessageAdmission(
             status="allowed",
             allowed=True,

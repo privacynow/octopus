@@ -250,12 +250,15 @@ async def handle_registry_delivery(
             metadata={"routed_task_id": routed_task_id},
             event_id=f"delegated-result:{routed_task_id}",
         )
-        channel_name = (
-            runtime.dispatcher.channel_type_for_ref(parent_conversation_id)
-            if runtime.dispatcher is not None
-            else None
-        )
-        if channel_name == "telegram" and runtime.bot is None:
+        if runtime.dispatcher is None:
+            raise RuntimeError("Registry delivery runtime requires a channel dispatcher")
+        if not runtime.dispatcher.egress_ready_for_ref(
+            parent_conversation_id,
+            config=config,
+            bot=runtime.bot,
+            conversation_key=conversation_key_for_ref(parent_conversation_id),
+            source="registry",
+        ):
             return "retry_later"
         conversation_key = conversation_key_for_ref(parent_conversation_id)
         session = _load_session(config, runtime, conversation_key)

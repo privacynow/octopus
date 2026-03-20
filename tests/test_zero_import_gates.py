@@ -775,6 +775,19 @@ def test_dead_registry_runtime_api_is_deleted() -> None:
         )
 
 
+def test_shared_delivery_and_admission_do_not_branch_on_raw_telegram_surface_names() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    delivery_path = repo_root / "app" / "agents" / "delivery.py"
+    work_admission_path = repo_root / "app" / "runtime" / "work_admission.py"
+
+    delivery_text = delivery_path.read_text()
+    assert 'channel_name == "telegram"' not in delivery_text
+
+    work_admission_text = work_admission_path.read_text()
+    assert 'channel_type != "telegram"' not in work_admission_text
+    assert 'channel_type == "telegram"' not in work_admission_text
+
+
 def test_worker_dispatch_documents_completion_ownership() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     worker_path = repo_root / "app" / "channels" / "telegram" / "worker.py"

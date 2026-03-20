@@ -42,6 +42,13 @@ class ChannelDispatcher:
             raise ValueError(f"unknown conversation ref: {conversation_ref}")
         return channel.build_egress(conversation_ref=conversation_ref, config=config, **kw)
 
+    def egress_ready_for_ref(self, conversation_ref: str, *, config: Any, **kw: Any) -> bool:
+        try:
+            self.create_egress(conversation_ref, config=config, **kw)
+        except RuntimeError:
+            return False
+        return True
+
     def channel_type_for_ref(self, conversation_ref: str) -> str | None:
         channel = self._channel_for_ref(conversation_ref)
         if channel is None:

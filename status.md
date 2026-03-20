@@ -19,8 +19,8 @@
     policy code
   - one dead `"default"` registry-id default remains in
     `RegistryConnectionState`
-- Phase 10 is now open and in progress; Slices 10A-10C are landed and
-  Slices 10D-10E remain.
+- Phase 10 is now open and in progress; Slices 10A-10D are landed and
+  Slice 10E remains.
 - Status should be read as: rollout complete through Phase 9, but the
   architecture cleanup is not complete until Phase 10 lands.
 
@@ -62,21 +62,60 @@
   - task-channel projection side effects are gone
   - full suite status after Phase 10A: `1923 passed, 23 skipped`
 
-- Pending: Phase 10 remediation — remaining surface-boundary cleanup
-  (Slices 10D-10E).
+- Pending: Phase 10 remediation — remaining cleanup
+  (Slice 10E).
   Planned scope:
-  - replace remaining raw `"telegram"` checks in shared
-    delivery/admission policy code with the correct existing seam:
-    dispatcher runtime-readiness for delivery, descriptor/static policy
-    for admission
   - remove the dead `RegistryConnectionState.registry_id =
     "default"` default
   Notes:
   - the repo is currently green, but this residual drift means the
-    remaining surface-policy work is still not fully
+    last fallback/default cleanup is still not fully
     aligned with the target architecture
-  - execution should follow the remaining Phase 10 slices 10D-10E from
+  - execution should follow the remaining Phase 10 slice 10E from
     `PLAN-control-plane-bus.md` in order
+
+- Complete: Phase 10D remediation — remove raw surface-name policy checks from shared delivery/admission code.
+  Scope:
+  - added a small runtime-readiness query on `ChannelDispatcher` so
+    registry delivery can ask whether a live egress can be built for a
+    parent conversation ref without branching on raw channel names
+  - replaced the routed-result startup-race check in
+    `app/agents/delivery.py` with dispatcher egress readiness, keeping
+    timeline publication on the dispatcher seam while returning
+    `retry_later` only when the process cannot build a live parent
+    egress yet
+  - replaced the worker-admission `channel_type != "telegram"`
+    shortcut with descriptor-based trust policy in
+    `app/runtime/work_admission.py`: trusted channels bypass user
+    allow-list checks, while untrusted or unknown surfaces still go
+    through normal user admission
+  - added dispatcher, worker-admission, routed-result, and grep-gate
+    tests to lock the policy onto the correct seams
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_agents.py::test_handle_registry_routed_result_publishes_parent_timeline_before_retry_on_startup_race tests/test_worker_workflows.py tests/test_channel_dispatcher.py tests/test_zero_import_gates.py -k 'startup_race or admit_worker_message or egress_ready_for_ref or shared_delivery_and_admission_do_not_branch_on_raw_telegram_surface_names'`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified `app/agents/delivery.py` no longer contains
+    `channel_name == "telegram"`
+  - verified `app/runtime/work_admission.py` no longer contains
+    `channel_type != "telegram"` and now consults channel descriptors
+    instead
+  - verified the new dispatcher helper is a runtime query on the
+    existing egress-construction seam, not a new policy layer
+  Review:
+  - this slice needed one explicit design choice from the Phase 10
+    review: delivery readiness is a runtime question, so it belongs on
+    the dispatcher seam rather than on `ChannelDescriptor`
+  - worker admission stayed static and reused the existing descriptor
+    trust model instead of introducing another admission flag
+  - unknown future surfaces are no longer auto-allowed just because
+    they are “not Telegram”
+  Verified:
+  - shared delivery/admission code no longer branches on raw Telegram
+    surface names
+  - startup-race retry behavior still works through dispatcher
+    readiness
+  - full suite status after Phase 10D: `1933 passed, 23 skipped`
 
 - Complete: Phase 10C remediation — route routed-task execution progress through task routing.
   Scope:

@@ -62,3 +62,41 @@ async def test_progress_timeline_callback_publishes_progress_event(monkeypatch):
             "metadata": {"routed_task_id": "task-1"},
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_progress_timeline_callback_uses_registry_runtime_fanout(monkeypatch):
+    runtime = build_telegram_runtime(
+        make_config(data_dir=Path("/tmp/telegram-progress-fanout")),
+        FakeProvider("codex"),
+    )
+    runtime.registry_runtime = object()
+    published: list[dict[str, object]] = []
+
+    async def _record(registry_runtime, **kwargs):
+        published.append({"registry_runtime": registry_runtime, **kwargs})
+
+    async def _fail(config, **kwargs):
+        del config, kwargs
+        raise AssertionError("singleton timeline path should not be used when registry runtime is present")
+
+    monkeypatch.setattr(telegram_progress, "publish_timeline_to_registries", _record)
+    monkeypatch.setattr(telegram_progress, "publish_timeline_event", _fail)
+
+    await telegram_progress.progress_timeline_callback(
+        runtime,
+        "telegram:12345",
+        "task-1",
+        "<i>Working</i>",
+    )
+
+    assert published == [
+        {
+            "registry_runtime": runtime.registry_runtime,
+            "conversation_ref": "telegram:12345",
+            "kind": "progress",
+            "title": "Progress",
+            "body": "<i>Working</i>",
+            "metadata": {"routed_task_id": "task-1"},
+        }
+    ]

@@ -8,7 +8,13 @@ import httpx
 import pytest
 
 from app import work_queue
-from app.agents.bridge import admit_registry_delivery, conversation_key_for_ref, telegram_conversation_ref
+from app.agents.bridge import (
+    admit_registry_delivery,
+    bind_conversation_to_registries,
+    conversation_key_for_ref,
+    publish_timeline_to_registries,
+    telegram_conversation_ref,
+)
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.runtime import AgentRuntime
@@ -59,6 +65,78 @@ def test_telegram_conversation_ref_uses_stable_bot_identity(tmp_path: Path):
     conversation_ref = telegram_conversation_ref(config, 12345)
 
     assert conversation_ref == f"telegram:{bot_identity(tmp_path)}:12345"
+
+
+@pytest.mark.asyncio
+async def test_bind_conversation_to_registries_fans_out_and_isolates_failures() -> None:
+    seen: list[tuple[str, str, str]] = []
+
+    class FakeRegistryClient:
+        def __init__(self, registry_id: str, *, fail: bool = False) -> None:
+            self.registry_id = registry_id
+            self.fail = fail
+
+        async def sync_binding(self, *, conversation_id: str, title: str, origin_channel: str, external_id: str):
+            if self.fail:
+                raise RegistryClientError("bind failed")
+            seen.append((self.registry_id, conversation_id, external_id))
+
+    class FakeRegistryRuntime:
+        def clients_for_mirroring(self):
+            return [
+                ("prod", FakeRegistryClient("prod")),
+                ("ops", FakeRegistryClient("ops", fail=True)),
+                ("mirror", FakeRegistryClient("mirror")),
+            ]
+
+    await bind_conversation_to_registries(
+        FakeRegistryRuntime(),
+        conversation_ref="telegram:bot-1:12345",
+        title="Conversation",
+        origin_channel="telegram",
+        external_id="12345",
+    )
+
+    assert seen == [
+        ("prod", "telegram:bot-1:12345", "12345"),
+        ("mirror", "telegram:bot-1:12345", "12345"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_publish_timeline_to_registries_fans_out_and_isolates_failures() -> None:
+    seen: list[tuple[str, str, str]] = []
+
+    class FakeRegistryClient:
+        def __init__(self, registry_id: str, *, fail: bool = False) -> None:
+            self.registry_id = registry_id
+            self.fail = fail
+
+        async def publish_timeline(self, events):
+            if self.fail:
+                raise RegistryClientError("timeline failed")
+            seen.append((self.registry_id, events[0].kind, events[0].conversation_id))
+
+    class FakeRegistryRuntime:
+        def clients_for_mirroring(self):
+            return [
+                ("prod", FakeRegistryClient("prod")),
+                ("ops", FakeRegistryClient("ops", fail=True)),
+                ("mirror", FakeRegistryClient("mirror")),
+            ]
+
+    await publish_timeline_to_registries(
+        FakeRegistryRuntime(),
+        conversation_ref="telegram:bot-1:12345",
+        kind="channel_input",
+        title="Telegram message",
+        body="hello",
+    )
+
+    assert seen == [
+        ("prod", "channel_input", "telegram:bot-1:12345"),
+        ("mirror", "channel_input", "telegram:bot-1:12345"),
+    ]
 
 
 def test_load_agent_runtime_state_logs_when_file_is_corrupt(tmp_path: Path, caplog):

@@ -96,6 +96,31 @@ async def bind_conversation(
         log.debug("Registry conversation bind failed for %s: %s", conversation_ref, exc)
 
 
+async def bind_conversation_to_registries(
+    registry_runtime,
+    *,
+    conversation_ref: str,
+    title: str,
+    origin_channel: str,
+    external_id: str,
+) -> None:
+    for registry_id, client in registry_runtime.clients_for_mirroring():
+        try:
+            await client.sync_binding(
+                conversation_id=conversation_ref,
+                title=title,
+                origin_channel=origin_channel,
+                external_id=external_id,
+            )
+        except RegistryClientError as exc:
+            log.debug(
+                "Registry %s conversation bind failed for %s: %s",
+                registry_id,
+                conversation_ref,
+                exc,
+            )
+
+
 async def publish_timeline_event(
     config: BotConfig,
     *,
@@ -126,6 +151,40 @@ async def publish_timeline_event(
         await client.publish_timeline([event])
     except RegistryClientError as exc:
         log.debug("Registry timeline publish failed for %s: %s", conversation_ref, exc)
+
+
+async def publish_timeline_to_registries(
+    registry_runtime,
+    *,
+    conversation_ref: str,
+    kind: str,
+    title: str,
+    body: str = "",
+    status: str = "",
+    progress: int | None = None,
+    metadata: dict[str, Any] | None = None,
+    event_id: str | None = None,
+) -> None:
+    event = TimelineEvent(
+        event_id=event_id or uuid.uuid4().hex,
+        conversation_id=conversation_ref,
+        kind=kind,
+        title=title,
+        body=body,
+        status=status,
+        progress=progress,
+        metadata=metadata or {},
+    )
+    for registry_id, client in registry_runtime.clients_for_mirroring():
+        try:
+            await client.publish_timeline([event])
+        except RegistryClientError as exc:
+            log.debug(
+                "Registry %s timeline publish failed for %s: %s",
+                registry_id,
+                conversation_ref,
+                exc,
+            )
 
 
 def build_registry_message_delivery(

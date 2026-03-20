@@ -185,6 +185,31 @@
   - multi-registry discovery and delegated-task routing now preserve explicit registry provenance end to end
   - routed task results return through the originating registry connection instead of an implicit singleton
   - full suite status after slice 7: `1802 passed, 23 skipped`
+- Complete: Slice 8 Telegram mirroring fan-out.
+  Scope:
+  - added `bind_conversation_to_registries()` and `publish_timeline_to_registries()` in `app/agents/bridge.py` so Telegram-originated mirroring fans out through `RegistryRuntime.clients_for_mirroring()` instead of the old singleton registry client path
+  - rewired `TelegramChannelEgress` binding, input mirroring, outcome mirroring, and generic timeline publication to use registry-runtime fan-out when available while preserving the existing single-registry fallback for non-runtime seams
+  - threaded `registry_runtime` through Telegram egress construction and worker finalization so usage/timeline events for Telegram refs fan out to channel/full connections, while registry refs stay single-registry and scoped by `registry_id`
+  - rewired Telegram progress and delegation-plan timeline publication to the same fan-out helpers so Telegram mirroring uses one consistent path instead of mixing runtime fan-out with singleton bridge calls
+  - added direct tests for partial-failure isolation, coordination-only skipping, Telegram egress fan-out, progress/delegation fan-out, and worker timeline routing
+  Tests:
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_agents.py tests/test_registry_runtime.py tests/test_telegram_channel_egress.py tests/test_telegram_progress_module.py tests/test_telegram_delegation_channel.py tests/test_telegram_worker_timeline.py`
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_handlers.py tests/test_execution_finalization.py tests/test_telegram_channel_state.py tests/test_workitem_integration.py tests/test_agents.py tests/test_registry_runtime.py tests/test_telegram_channel_egress.py tests/test_telegram_progress_module.py tests/test_telegram_delegation_channel.py tests/test_telegram_worker_timeline.py`
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_zero_import_gates.py::test_worker_dispatch_no_longer_contains_inline_execution_workflow_logic tests/test_telegram_worker_timeline.py tests/test_telegram_channel_egress.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified `RegistryRuntime.clients_for_mirroring()` returns only channel/full connections, so coordination-only registries receive no Telegram mirrors
+  - verified Telegram-originated binding, progress, delegation, message, outcome, and usage timeline publication now route through the same registry-runtime fan-out seam when the runtime is available
+  - verified the worker keeps registry conversation/task timeline publication single-scoped and ref-aware instead of incorrectly fanning registry refs out to every mirroring target
+  - verified the slice still satisfies the no-inline-worker-logic gate by removing the old literal singleton timeline call from `worker.py`
+  Review:
+  - the slice extends the existing registry-runtime ownership boundary instead of introducing a second mirroring helper object or teaching the dispatcher about registry clients
+  - Telegram mirroring now has a single authoritative fan-out path; the remaining singleton helper is intentionally confined to registry-scoped publication and non-runtime fallbacks until the later cleanup slices remove those old seams
+  - `app/channels/telegram/progress.py` already had a local transient-network hardening change in flight; it was included in this slice because the file had to be touched for fan-out and the user explicitly approved committing it
+  Verified:
+  - Telegram mirrors now fan out to every channel/full registry connection with partial-failure isolation and coordination-only skipping
+  - Telegram progress, delegation, and finalization timeline events no longer leave a mixed singleton/fan-out path behind
+  - full suite status after slice 8: `1811 passed, 23 skipped`
 
 # Octopus CLI Implementation Status
 

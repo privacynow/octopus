@@ -10,9 +10,10 @@ from typing import Any, AsyncIterator
 
 from app import work_queue
 from app.agents.bridge import (
-    telegram_conversation_ref,
-    publish_timeline_event,
+    publish_timeline_event as publish_single_registry_timeline,
+    publish_timeline_to_registries,
     summarize_text,
+    telegram_conversation_ref,
 )
 from app.agents.delegation import (
     handle_delegation_approve as handle_channel_delegation_approve,
@@ -190,6 +191,7 @@ def _build_channel_egress(
         config=runtime.config,
         bot=bot_instance,
         conversation_key=conversation_key,
+        registry_runtime=runtime.registry_runtime,
         source=source,
         routed_task_id=routed_task_id,
         target_message_id=target_message_id,
@@ -197,6 +199,30 @@ def _build_channel_egress(
     )
     setattr(channel_egress, "_worker_item_id", item_id)
     return channel_egress, runtime_chat, chat_id, resolved_conversation_ref, source
+
+
+async def _publish_timeline_event_for_runtime(
+    runtime: TelegramRuntime,
+    *,
+    config,
+    registry_id: str = "",
+    **kwargs: Any,
+) -> None:
+    conversation_ref = str(kwargs.get("conversation_ref", ""))
+    if runtime.registry_runtime is not None and conversation_ref.startswith("telegram:"):
+        await publish_timeline_to_registries(
+            runtime.registry_runtime,
+            conversation_ref=conversation_ref,
+            kind=str(kwargs.get("kind", "")),
+            title=str(kwargs.get("title", "")),
+            body=str(kwargs.get("body", "")),
+            status=str(kwargs.get("status", "")),
+            progress=kwargs.get("progress"),
+            metadata=kwargs.get("metadata"),
+            event_id=kwargs.get("event_id"),
+        )
+        return
+    await publish_single_registry_timeline(config, registry_id=registry_id or None, **kwargs)
 
 
 async def _execute_worker_action(
@@ -424,7 +450,12 @@ async def worker_dispatch(
                     else None
                 ),
                 record_usage=work_queue.record_usage,
-                publish_timeline_event=publish_timeline_event,
+                publish_timeline_event=lambda config, **kwargs: _publish_timeline_event_for_runtime(
+                    runtime,
+                    config=config,
+                    registry_id=registry_id,
+                    **kwargs,
+                ),
             ),
         )
         if finalization.routed_result_warning_text:

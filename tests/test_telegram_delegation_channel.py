@@ -66,3 +66,46 @@ async def test_propose_delegation_plan_persists_state_and_sends_plan(monkeypatch
     assert published and published[0][2] is session.pending_delegation
     assert message.replies[-1]["reply_markup"] is not None
     assert "Delegation plan" in message.replies[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_publish_delegation_proposed_event_uses_registry_runtime_fanout(monkeypatch, tmp_path: Path):
+    runtime = build_telegram_runtime(
+        make_config(tmp_path),
+        FakeProvider("codex"),
+    )
+    runtime.registry_runtime = object()
+    delegation = delegation_channel.build_delegation_plan(
+        "telegram:bot-1:12345",
+        "Delegate this",
+        "resume",
+        [
+            {
+                "routed_task_id": "task-1",
+                "title": "Review docs",
+                "target_agent_id": "agent-reviewer",
+                "instructions": "Review the docs",
+            },
+        ],
+    )
+    published: list[dict[str, object]] = []
+
+    async def _record(registry_runtime, **kwargs):
+        published.append({"registry_runtime": registry_runtime, **kwargs})
+
+    async def _fail(*args, **kwargs):
+        raise AssertionError("singleton timeline path should not be used when registry runtime is present")
+
+    monkeypatch.setattr(delegation_channel, "publish_timeline_to_registries", _record)
+    monkeypatch.setattr(delegation_channel, "publish_timeline_event", _fail)
+
+    await delegation_channel.publish_delegation_proposed_event(
+        runtime,
+        SimpleNamespace(),
+        delegation,
+    )
+
+    assert published
+    assert published[0]["registry_runtime"] is runtime.registry_runtime
+    assert published[0]["conversation_ref"] == "telegram:bot-1:12345"
+    assert published[0]["kind"] == "delegation_proposed"

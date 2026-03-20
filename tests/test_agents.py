@@ -18,7 +18,7 @@ from app.agents.bridge import (
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
 from app.agents.runtime import AgentRuntime
-from app.agents.state import AgentRuntimeState, bot_identity, load_agent_runtime_state
+from app.agents.state import bot_identity
 from app.agents.types import AgentDiscoveryQuery, RegistryConnectionState
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
 from app.config import derive_agent_slug
@@ -28,12 +28,9 @@ from app.agents.state import (
     load_bot_identity_state,
     load_registry_connection_state,
     load_runtime_registry_connection_state,
-    project_agent_runtime_state,
-    project_registry_connection_state,
-    save_agent_runtime_state,
     save_registry_connection_state,
 )
-from tests.support.config_support import make_config
+from tests.support.config_support import make_config, make_registry_connection
 from tests.support.handler_support import current_runtime, fresh_env
 
 
@@ -139,39 +136,43 @@ async def test_publish_timeline_to_registries_fans_out_and_isolates_failures() -
     ]
 
 
-def test_load_agent_runtime_state_logs_when_file_is_corrupt(tmp_path: Path, caplog):
-    state_path = tmp_path / "agent" / "registry_state.json"
+def test_load_registry_connection_state_logs_when_file_is_corrupt(tmp_path: Path, caplog):
+    state_path = tmp_path / "agent" / "registries" / "default.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text("{not-json", encoding="utf-8")
 
     with caplog.at_level(logging.WARNING):
-        state = load_agent_runtime_state(tmp_path)
+        state = load_registry_connection_state(tmp_path, "default")
 
-    assert state == AgentRuntimeState()
-    assert any("Agent runtime state load failed" in record.message for record in caplog.records)
+    assert state == RegistryConnectionState(registry_id="default")
+    assert any("Registry connection state load failed" in record.message for record in caplog.records)
 
 
-def test_load_agent_runtime_state_migrates_legacy_raw_last_error(tmp_path: Path):
-    state_path = tmp_path / "agent" / "registry_state.json"
+def test_load_registry_connection_state_normalizes_raw_last_error(tmp_path: Path):
+    state_path = tmp_path / "agent" / "registries" / "default.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(
         '{"connectivity_state":"degraded","last_error":"registry unavailable"}',
         encoding="utf-8",
     )
 
-    state = load_agent_runtime_state(tmp_path)
+    state = load_registry_connection_state(tmp_path, "default")
 
     assert state.last_error == "registry_request_failed"
     assert state.last_error_detail == "registry unavailable"
 
 
-def test_save_agent_runtime_state_uses_private_file_permissions(tmp_path: Path):
-    save_agent_runtime_state(
+def test_save_registry_connection_state_uses_private_file_permissions(tmp_path: Path):
+    save_registry_connection_state(
         tmp_path,
-        AgentRuntimeState(agent_id="agent-1", agent_token="secret-token"),
+        RegistryConnectionState(
+            registry_id="default",
+            agent_id="agent-1",
+            agent_token="secret-token",
+        ),
     )
 
-    state_path = tmp_path / "agent" / "registry_state.json"
+    state_path = tmp_path / "agent" / "registries" / "default.json"
     mode = state_path.stat().st_mode & 0o777
 
     assert mode == 0o600
@@ -238,17 +239,7 @@ def test_registry_connection_state_uses_defaults_when_missing_or_corrupt(tmp_pat
     assert any("Registry connection state load failed" in record.message for record in caplog.records)
 
 
-def test_runtime_registry_connection_state_projects_legacy_default_state(tmp_path: Path):
-    save_agent_runtime_state(
-        tmp_path,
-        AgentRuntimeState(
-            agent_id="legacy-agent",
-            agent_token="legacy-token",
-            poll_cursor="9",
-            connectivity_state="connected",
-        ),
-    )
-
+def test_runtime_registry_connection_state_applies_requested_scope_when_file_is_missing(tmp_path: Path):
     state = load_runtime_registry_connection_state(
         tmp_path,
         "default",
@@ -258,42 +249,7 @@ def test_runtime_registry_connection_state_projects_legacy_default_state(tmp_pat
     assert state == RegistryConnectionState(
         registry_id="default",
         registry_scope="coordination",
-        agent_id="legacy-agent",
-        agent_token="legacy-token",
-        poll_cursor="9",
-        connectivity_state="connected",
     )
-
-
-def test_registry_connection_state_projection_helpers_round_trip():
-    legacy = AgentRuntimeState(
-        agent_id="agent-1",
-        agent_token="secret-token",
-        poll_cursor="4",
-        registered_slug="bot-one",
-        connectivity_state="degraded",
-        last_error="registry_timeout",
-        last_error_detail="timed out",
-    )
-
-    projected = project_registry_connection_state(
-        legacy,
-        registry_id="prod",
-        registry_scope="channel",
-    )
-
-    assert projected == RegistryConnectionState(
-        registry_id="prod",
-        registry_scope="channel",
-        agent_id="agent-1",
-        agent_token="secret-token",
-        poll_cursor="4",
-        registered_slug="bot-one",
-        connectivity_state="degraded",
-        last_error="registry_timeout",
-        last_error_detail="timed out",
-    )
-    assert project_agent_runtime_state(projected) == legacy
 
 
 async def test_agent_runtime_standalone_marks_state(tmp_path: Path):
@@ -305,7 +261,7 @@ async def test_agent_runtime_standalone_marks_state(tmp_path: Path):
     runtime = AgentRuntime(config)
 
     result = await runtime.sync_once()
-    state = load_agent_runtime_state(tmp_path)
+    state = load_runtime_registry_connection_state(tmp_path, "default")
 
     assert result == "standalone"
     assert state.connectivity_state == "standalone"
@@ -317,14 +273,13 @@ async def test_agent_runtime_registry_without_url_degrades(tmp_path: Path):
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="",
-        agent_registry_enroll_token="token",
+        agent_registries=(make_registry_connection(url="", enroll_token="token"),),
         agent_display_name="Registry Bot",
     )
     runtime = AgentRuntime(config)
 
     result = await runtime.sync_once()
-    state = load_agent_runtime_state(tmp_path)
+    state = load_runtime_registry_connection_state(tmp_path, "default")
 
     assert result == "degraded"
     assert state.connectivity_state == "degraded"
@@ -388,13 +343,12 @@ async def test_agent_runtime_persists_safe_registry_error_code_and_detail(monkey
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
     runtime = AgentRuntime(config)
 
     result = await runtime.sync_once()
-    state = load_agent_runtime_state(tmp_path)
+    state = load_runtime_registry_connection_state(tmp_path, "default")
 
     assert result == "degraded"
     assert state.connectivity_state == "degraded"
@@ -436,13 +390,12 @@ async def test_agent_runtime_registry_enrolls_and_registers(monkeypatch, tmp_pat
         agent_slug="product-bot",
         agent_role="product",
         agent_capabilities=("planning", "delegation"),
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
     runtime = AgentRuntime(config)
 
     result = await runtime.sync_once()
-    state = load_agent_runtime_state(tmp_path)
+    state = load_runtime_registry_connection_state(tmp_path, "default")
 
     assert result == "connected"
     assert state.connectivity_state == "connected"
@@ -512,8 +465,7 @@ async def test_agent_runtime_registry_heartbeat_includes_runtime_health(monkeypa
         provider_name="codex",
         agent_mode="registry",
         agent_display_name="Product Bot",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
     runtime = AgentRuntime(
         config,
@@ -599,14 +551,13 @@ async def test_agent_runtime_poll_dispatches_and_acks(monkeypatch, tmp_path: Pat
         data_dir=tmp_path,
         agent_mode="registry",
         agent_display_name="Product Bot",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
     runtime = AgentRuntime(config, delivery_handler=handler)
     assert await runtime.sync_once() == "connected"
 
     processed = await runtime.poll_once()
-    state = load_agent_runtime_state(tmp_path)
+    state = load_runtime_registry_connection_state(tmp_path, "default")
 
     assert processed == 2
     assert seen_deliveries == ["d1", "d2"]
@@ -667,8 +618,7 @@ async def test_agent_runtime_poll_isolates_bad_delivery_and_acks_rest(monkeypatc
         data_dir=tmp_path,
         agent_mode="registry",
         agent_display_name="Product Bot",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
     runtime = AgentRuntime(config, delivery_handler=handler)
     assert await runtime.sync_once() == "connected"
@@ -688,8 +638,7 @@ async def test_agent_runtime_run_forever_survives_unexpected_poll_error(tmp_path
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
     runtime = AgentRuntime(config)
     stop_event = asyncio.Event()
@@ -727,8 +676,7 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
 
     outcome_message = await admit_registry_delivery(
@@ -784,8 +732,7 @@ async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeyp
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
 
     outcome = await admit_registry_delivery(
@@ -833,8 +780,7 @@ async def test_handle_registry_routed_result_publishes_parent_timeline_before_re
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (_data_dir, config, prov):
         parent_conversation_ref = telegram_conversation_ref(config, 12345)
@@ -877,8 +823,7 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, _prov):
         runtime = build_registry_delivery_runtime(
@@ -957,8 +902,7 @@ async def test_handle_registry_delivery_rejects_legacy_surface_input_kind(monkey
     config = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
     )
 
     outcome = await handle_registry_delivery(
@@ -983,8 +927,7 @@ async def test_handle_registry_delivery_rejects_legacy_surface_action_kind(tmp_p
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, _prov):
         runtime = build_registry_delivery_runtime(

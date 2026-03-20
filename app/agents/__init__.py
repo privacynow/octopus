@@ -2,13 +2,10 @@
 
 from app.agents.client import AgentRegistryClient, RegistryClientError
 from app.agents.state import (
-    AgentRuntimeState,
     BotIdentityState,
     bot_identity,
-    load_agent_runtime_state,
     load_bot_identity_state,
     load_registry_connection_state,
-    save_agent_runtime_state,
     save_registry_connection_state,
 )
 from app.agents.types import (
@@ -30,7 +27,6 @@ __all__ = [
     "AgentDiscoveryQuery",
     "AgentRegistryClient",
     "AgentRuntime",
-    "AgentRuntimeState",
     "BotIdentityState",
     "ConversationRef",
     "RegistryClientError",
@@ -43,10 +39,8 @@ __all__ = [
     "ChannelEvent",
     "TimelineEvent",
     "bot_identity",
-    "load_agent_runtime_state",
     "load_bot_identity_state",
     "load_registry_connection_state",
-    "save_agent_runtime_state",
     "save_registry_connection_state",
     "AgentRuntime",
     "start_agent_runtime_task",

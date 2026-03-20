@@ -9,7 +9,8 @@ import pytest
 
 from app.agents.bridge import conversation_key_for_ref, telegram_conversation_ref
 from app.agents.client import RegistryClientError
-from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+from app.agents.state import save_registry_connection_state
+from app.agents.types import RegistryConnectionState
 from app.agents.delivery import handle_registry_delivery
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
 from app.channels.telegram.bootstrap import build_bootstrap
@@ -23,6 +24,7 @@ from app.providers.base import RunContext, RunResult
 from app.runtime.inbound_types import InboundMessage, InboundUser
 from app.storage import debug_session_connection, default_session, save_session
 from app import work_queue
+from tests.support.config_support import make_registry_connection
 from tests.support.handler_support import (
     current_bot_instance,
     current_execution_runtime,
@@ -168,8 +170,7 @@ async def test_worker_dispatch_skips_completion_webhook_for_delegation_proposed(
             "approval_mode": "off",
             "completion_webhook_url": "https://hooks.example.com/completed",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (_data_dir, _cfg, prov):
         import app.channels.telegram.ingress as th
@@ -231,8 +232,7 @@ async def test_help_and_start_include_discover_in_registry_mode():
         cfg = make_config(
             data_dir,
             agent_mode="registry",
-            agent_registry_url="http://registry.test",
-            agent_registry_enroll_token="enroll-secret",
+            agent_registries=(make_registry_connection(),),
         )
         prov = FakeProvider("claude")
         setup_globals(cfg, prov)
@@ -253,8 +253,7 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, _cfg, prov):
         import app.channels.telegram.ingress as th
@@ -341,8 +340,7 @@ async def test_discover_degraded_reports_registry_connectivity():
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, _cfg, prov):
         import app.channels.telegram.ingress as th
@@ -382,8 +380,7 @@ async def test_discover_registry_failure_omits_backend_response_details():
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -430,8 +427,7 @@ async def test_registry_channel_input_respects_approval_mode():
         config_overrides={
             "approval_mode": "on",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -463,8 +459,7 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         submitted = []
@@ -496,9 +491,10 @@ async def test_approve_delegation_from_registry_delivery(monkeypatch):
                 assert registry_id == "default"
                 return "origin-agent"
 
-        save_agent_runtime_state(
+        save_registry_connection_state(
             data_dir,
-            AgentRuntimeState(
+            RegistryConnectionState(
+                registry_id="default",
                 agent_id="origin-agent",
                 agent_token="secret",
                 connectivity_state="connected",
@@ -554,8 +550,7 @@ async def test_cancel_delegation_from_registry_delivery():
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         save_session(
@@ -604,8 +599,7 @@ async def test_delegation_proposed_event_published(monkeypatch):
         config_overrides={
             "approval_mode": "off",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (_, _, prov):
         import app.channels.telegram.ingress as th
@@ -660,8 +654,7 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
         config_overrides={
             "approval_mode": "on",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (_, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -684,7 +677,11 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
                 reported.append(("result", routed_task_id, result))
                 return {"ok": True}
 
-        monkeypatch.setattr(bridge, "registry_client", lambda config, registry_id=None: FakeRegistryClient())
+        monkeypatch.setattr(
+            bridge,
+            "registry_connection_client",
+            lambda config, registry_id=None: FakeRegistryClient(),
+        )
         current_runtime().registry_client_factory = lambda config: FakeRegistryClient()
         monkeypatch.setattr("app.channels.registry.egress.bind_conversation", async_noop)
 
@@ -736,8 +733,7 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
         config_overrides={
             "approval_mode": "on",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (_, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -755,7 +751,11 @@ async def test_registry_routed_task_result_report_failure_does_not_escape_worker
                 del routed_task_id, result
                 raise RuntimeError("registry unavailable")
 
-        monkeypatch.setattr(bridge, "registry_client", lambda config, registry_id=None: FakeRegistryClient())
+        monkeypatch.setattr(
+            bridge,
+            "registry_connection_client",
+            lambda config, registry_id=None: FakeRegistryClient(),
+        )
         current_runtime().registry_client_factory = lambda config: FakeRegistryClient()
         prov.run_results = [RunResult(text="Delegated review complete.")]
 
@@ -785,8 +785,7 @@ async def test_registry_routed_result_resumes_parent_conversation_without_new_ap
         config_overrides={
             "approval_mode": "on",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -842,8 +841,7 @@ async def test_delegation_completion_sends_final_message_all_completed():
         config_overrides={
             "approval_mode": "on",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -893,8 +891,7 @@ async def test_delegation_completion_sends_final_message_partial_failed():
         config_overrides={
             "approval_mode": "on",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -965,8 +962,7 @@ async def test_registry_routed_result_busy_keeps_pending_delegation_for_retry(mo
         config_overrides={
             "approval_mode": "on",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -1021,8 +1017,7 @@ async def test_registry_routed_result_duplicate_resume_does_not_resend_completio
         config_overrides={
             "approval_mode": "on",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -1079,8 +1074,7 @@ async def test_registry_routed_result_multi_child_resumes_only_after_final_child
         config_overrides={
             "approval_mode": "on",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -1164,8 +1158,7 @@ async def test_registry_channel_parent_resumes_through_registry_channel(monkeypa
         config_overrides={
             "approval_mode": "on",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -1184,7 +1177,11 @@ async def test_registry_channel_parent_resumes_through_registry_channel(monkeypa
                     published.append((event.kind, event.title, event.body))
                 return {"accepted": len(events)}
 
-        monkeypatch.setattr(bridge, "registry_client", lambda config, registry_id=None: FakeRegistryClient())
+        monkeypatch.setattr(
+            bridge,
+            "registry_connection_client",
+            lambda config, registry_id=None: FakeRegistryClient(),
+        )
         monkeypatch.setattr("app.channels.registry.egress.bind_conversation", async_noop)
 
         async def fake_publish_event(self, *, kind, title, body="", status="", progress=None, metadata=None, event_id=None):
@@ -1242,8 +1239,7 @@ async def test_registry_channel_action_retry_skip_clears_pending_retry():
         config_overrides={
             "approval_mode": "on",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -1284,8 +1280,7 @@ async def test_registry_channel_action_retry_allow_executes_request():
         config_overrides={
             "approval_mode": "on",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         chat_id = 12345
@@ -1328,8 +1323,7 @@ async def test_registry_channel_action_recovery_discard_discards_pending_recover
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         import app.runtime_backend as runtime_backend
@@ -1373,8 +1367,7 @@ async def test_registry_channel_action_recovery_replay_executes_request():
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         import app.runtime_backend as runtime_backend
@@ -1420,8 +1413,7 @@ async def test_registry_recovery_notice_timeline_includes_update_id(monkeypatch)
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
         ) as (_, cfg, prov):
             import app.channels.telegram.ingress as th

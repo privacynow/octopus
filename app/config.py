@@ -176,8 +176,6 @@ class BotConfig:
     agent_description: str
     agent_capabilities: tuple[str, ...]
     agent_registries: tuple[RegistryConnectionConfig, ...]
-    agent_registry_url: str
-    agent_registry_enroll_token: str
     agent_poll_interval_seconds: float
     # Runtime mode. local = inline/worker hybrid; shared = persist-first worker-owned ingress.
     runtime_mode: str  # BOT_RUNTIME_MODE: "local" (default) | "shared"
@@ -273,8 +271,6 @@ def _parse_agent_registries(
     *,
     get,
     env_keys: set[str],
-    default_url: str,
-    default_enroll_token: str,
     default_scope: str,
     default_poll_interval_seconds: float,
 ) -> tuple[RegistryConnectionConfig, ...]:
@@ -305,19 +301,7 @@ def _parse_agent_registries(
                 poll_interval_seconds=default_poll_interval_seconds,
             )
         )
-    if registries:
-        return tuple(registries)
-    if not default_url and not default_enroll_token:
-        return ()
-    return (
-        RegistryConnectionConfig(
-            registry_id="default",
-            url=default_url,
-            enroll_token=default_enroll_token,
-            registry_scope=default_scope,
-            poll_interval_seconds=default_poll_interval_seconds,
-        ),
-    )
+    return tuple(registries)
 
 
 def load_config(instance: str | None = None) -> BotConfig:
@@ -383,22 +367,12 @@ def load_config(instance: str | None = None) -> BotConfig:
     )
 
     agent_display_name = get("BOT_AGENT_DISPLAY_NAME", instance).strip() or instance
-    raw_agent_registry_url = get("BOT_AGENT_REGISTRY_URL").strip()
-    raw_agent_registry_enroll_token = get("BOT_AGENT_REGISTRY_ENROLL_TOKEN").strip()
     agent_poll_interval_seconds = max(1.0, get_float("BOT_AGENT_POLL_INTERVAL_SECONDS", "5.0"))
-    default_registry_scope = get("BOT_AGENT_REGISTRY_SCOPE", "full").strip().lower() or "full"
     agent_registries = _parse_agent_registries(
         get=get,
         env_keys=env_keys,
-        default_url=raw_agent_registry_url,
-        default_enroll_token=raw_agent_registry_enroll_token,
-        default_scope=default_registry_scope,
+        default_scope="full",
         default_poll_interval_seconds=agent_poll_interval_seconds,
-    )
-    primary_registry = agent_registries[0] if agent_registries else None
-    agent_registry_url = primary_registry.url if primary_registry is not None else raw_agent_registry_url
-    agent_registry_enroll_token = (
-        primary_registry.enroll_token if primary_registry is not None else raw_agent_registry_enroll_token
     )
     raw_agent_mode = get("BOT_AGENT_MODE", "").strip().lower()
     agent_mode = raw_agent_mode or ("registry" if agent_registries else "standalone")
@@ -488,8 +462,6 @@ def load_config(instance: str | None = None) -> BotConfig:
         agent_description=get("BOT_AGENT_DESCRIPTION").strip(),
         agent_capabilities=agent_capabilities,
         agent_registries=agent_registries,
-        agent_registry_url=agent_registry_url,
-        agent_registry_enroll_token=agent_registry_enroll_token,
         agent_poll_interval_seconds=agent_poll_interval_seconds,
         runtime_mode=get("BOT_RUNTIME_MODE", "local").strip().lower() or "local",
         process_role=get("BOT_PROCESS_ROLE", "all").strip().lower() or "all",
@@ -588,8 +560,6 @@ def load_config_provider_health() -> BotConfig:
         agent_description="",
         agent_capabilities=(),
         agent_registries=(),
-        agent_registry_url="",
-        agent_registry_enroll_token="",
         agent_poll_interval_seconds=5.0,
         runtime_mode="local",
         process_role="all",
@@ -661,15 +631,28 @@ def validate_config(config: BotConfig) -> list[str]:
             f"BOT_AGENT_MODE must be 'registry' or 'standalone', got '{config.agent_mode}'"
         )
 
-    if config.agent_registry_url and not _has_valid_http_url(config.agent_registry_url):
-        errors.append(
-            "BOT_AGENT_REGISTRY_URL must be a valid http:// or https:// URL when set"
-        )
-    elif config.agent_registry_url.startswith("http://") and not _is_local_http_url(config.agent_registry_url):
-        errors.append(
-            "BOT_AGENT_REGISTRY_URL uses plain HTTP over a non-local address. "
-            "Use https:// for remote registries."
-        )
+    seen_registry_ids: set[str] = set()
+    for registry in config.agent_registries:
+        if not registry.registry_id:
+            errors.append("Each registry connection must have a non-empty BOT_AGENT_REGISTRY_<n>_ID")
+        elif registry.registry_id in seen_registry_ids:
+            errors.append(f"Duplicate registry connection id: '{registry.registry_id}'")
+        seen_registry_ids.add(registry.registry_id)
+        if not _has_valid_http_url(registry.url):
+            errors.append(
+                f"BOT_AGENT_REGISTRY_<n>_URL must be a valid http:// or https:// URL when set "
+                f"(connection '{registry.registry_id}')"
+            )
+        elif registry.url.startswith("http://") and not _is_local_http_url(registry.url):
+            errors.append(
+                f"Registry connection '{registry.registry_id}' uses plain HTTP over a non-local address. "
+                "Use https:// for remote registries."
+            )
+        if registry.registry_scope not in {"channel", "coordination", "full"}:
+            errors.append(
+                f"Registry connection '{registry.registry_id}' has invalid scope '{registry.registry_scope}'. "
+                "Use channel, coordination, or full."
+            )
 
     if config.agent_poll_interval_seconds <= 0:
         errors.append("BOT_AGENT_POLL_INTERVAL_SECONDS must be greater than 0")

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from app.agents.client import AgentRegistryClient, RegistryClientError
@@ -63,7 +62,7 @@ class RegistryRuntime:
 
         for registry in self._registries:
             runtime = AgentRuntime(
-                self._connection_config(registry),
+                self._config,
                 delivery_handler=self._annotated_delivery_handler(registry.registry_id),
                 runtime_health_provider=self._runtime_health_provider,
                 runtime_health_projector=self._runtime_health_projector,
@@ -271,16 +270,6 @@ class RegistryRuntime:
                 )
 
         self._channels_registered = True
-
-    def _connection_config(self, registry: RegistryConnectionConfig) -> BotConfig:
-        return replace(
-            self._config,
-            agent_registries=(registry,),
-            agent_registry_url=registry.url,
-            agent_registry_enroll_token=registry.enroll_token,
-            agent_poll_interval_seconds=registry.poll_interval_seconds,
-        )
-
     def _annotated_delivery_handler(
         self,
         registry_id: str,

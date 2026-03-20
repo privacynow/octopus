@@ -12,7 +12,7 @@ from typing import Any
 
 from collections.abc import Callable
 
-from app.agents.bridge import bind_conversation, registry_client
+from app.agents.bridge import bind_conversation, registry_connection_client
 from app.agents.client import AgentRegistryClient
 from app.agents.types import TimelineEvent
 from app.channels.registry.refs import parse_registry_ref, registry_ref_external_id
@@ -99,14 +99,14 @@ class RegistryChannelEgress(ChannelEgress):
             return
         self._output_log.append({"type": kind, "text": text})
 
-    def _registry_client(self) -> AgentRegistryClient | None:
+    def _timeline_client_for_publish(self) -> AgentRegistryClient | None:
         if self._timeline_client_checked:
             return self._timeline_client
         self._timeline_client_checked = True
         if self._registry_client_factory is not None:
             self._timeline_client = self._registry_client_factory()
             return self._timeline_client
-        self._timeline_client = registry_client(self.config, registry_id=self.registry_id)
+        self._timeline_client = registry_connection_client(self.config, registry_id=self.registry_id)
         return self._timeline_client
 
     def _plain_text_snippet(self, text: str, *, limit: int = 200) -> str:
@@ -127,7 +127,7 @@ class RegistryChannelEgress(ChannelEgress):
         metadata: dict[str, Any] | None = None,
         event_id: str | None = None,
     ) -> None:
-        client = self._registry_client()
+        client = self._timeline_client_for_publish()
         if client is None:
             return
         event = TimelineEvent(

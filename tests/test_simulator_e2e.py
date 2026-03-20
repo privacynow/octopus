@@ -12,6 +12,7 @@ from app.identity import telegram_conversation_key, telegram_actor_key, telegram
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
 from app import user_messages as _msg
+from tests.support.config_support import make_registry_connection
 from tests.support.handler_support import (
     live_cancel_registry,
     FakeCallbackQuery,
@@ -282,8 +283,7 @@ async def test_simulator_registry_message_runs_through_registry_surface_output()
         cfg = make_config(
             data_dir,
             agent_mode="registry",
-            agent_registry_url="http://registry.test",
-            agent_registry_enroll_token="enroll-secret",
+            agent_registries=(make_registry_connection(),),
         )
         prov = FakeProvider("claude")
         sim = ConversationSimulator(data_dir, cfg, prov)

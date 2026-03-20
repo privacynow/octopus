@@ -209,7 +209,8 @@ async def _publish_timeline_event_for_runtime(
     **kwargs: Any,
 ) -> None:
     conversation_ref = str(kwargs.get("conversation_ref", ""))
-    if runtime.registry_runtime is not None and conversation_ref.startswith("telegram:"):
+    dispatcher = _channel_dispatcher(runtime)
+    if runtime.registry_runtime is not None and dispatcher.channel_type_for_ref(conversation_ref) == "telegram":
         await publish_timeline_to_registries(
             runtime.registry_runtime,
             conversation_ref=conversation_ref,

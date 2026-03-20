@@ -510,73 +510,90 @@ def _collect_registry_diagnostics(config: BotConfig) -> list[RuntimeDiagnostic]:
     if config.agent_mode != "registry":
         return diagnostics
 
-    if not config.agent_registry_url:
+    if not config.agent_registries:
         diagnostics.append(
             _diag(
                 "warning",
-                "registry.missing_url",
-                "BOT_AGENT_MODE=registry but BOT_AGENT_REGISTRY_URL is empty — bot will run in degraded standalone operation until the registry is configured.",
+                "registry.missing_connections",
+                "BOT_AGENT_MODE=registry but no BOT_AGENT_REGISTRY_<n>_* connections are configured.",
             )
         )
-    if not config.agent_registry_enroll_token:
-        diagnostics.append(
-            _diag(
-                "warning",
-                "registry.missing_enroll_token",
-                "BOT_AGENT_MODE=registry but BOT_AGENT_REGISTRY_ENROLL_TOKEN is empty — first-time enrollment will fail and the bot will remain degraded until a token is provided.",
-            )
-        )
+        return diagnostics
     if not config.data_dir.is_dir():
         return diagnostics
 
-    from app.agents.state import load_agent_runtime_state
+    from app.agents.state import load_runtime_registry_connection_state
 
-    agent_state = load_agent_runtime_state(config.data_dir)
-    if agent_state.connectivity_state == "degraded":
-        detail_text = registry_error_detail(agent_state.last_error, agent_state.last_error_detail)
-        detail = f": {detail_text}" if detail_text else ""
-        diagnostics.append(
-            _diag(
-                "warning",
-                "registry.degraded_connectivity",
-                f"Registry connectivity is degraded{detail}. Bot is operating in standalone fallback mode.",
-            )
-        )
-    elif agent_state.connectivity_state == "standalone":
-        if not agent_state.agent_id:
+    for registry in config.agent_registries:
+        if not registry.url:
             diagnostics.append(
                 _diag(
                     "warning",
-                    "registry.not_enrolled",
-                    "Registry enrollment has not completed. Bot is in standalone mode until the first successful registry sync.",
+                    "registry.missing_url",
+                    f"Registry '{registry.registry_id}' is missing a URL. This connection will stay degraded until configured.",
                 )
             )
-    elif agent_state.connectivity_state == "connected" and not agent_state.agent_id:
-        diagnostics.append(
-            _diag(
-                "warning",
-                "registry.missing_agent_id",
-                "Registry reports connected but agent_id is missing — registry state may be corrupt. Delete data/agent/registry_state.json and restart.",
+        if not registry.enroll_token:
+            diagnostics.append(
+                _diag(
+                    "warning",
+                    "registry.missing_enroll_token",
+                    f"Registry '{registry.registry_id}' is missing an enrollment token. First-time enrollment will fail until a token is provided.",
+                )
             )
-        )
 
-    if agent_state.last_successful_contact_at:
-        try:
-            last = datetime.datetime.fromisoformat(agent_state.last_successful_contact_at)
-            if last.tzinfo is None:
-                last = last.replace(tzinfo=datetime.timezone.utc)
-            age = (datetime.datetime.now(datetime.timezone.utc) - last).total_seconds()
-            if age > 300:
-                minutes = int(age // 60)
+        agent_state = load_runtime_registry_connection_state(
+            config.data_dir,
+            registry.registry_id,
+            registry_scope=registry.registry_scope,
+        )
+        if agent_state.connectivity_state == "degraded":
+            detail_text = registry_error_detail(agent_state.last_error, agent_state.last_error_detail)
+            detail = f": {detail_text}" if detail_text else ""
+            diagnostics.append(
+                _diag(
+                    "warning",
+                    "registry.degraded_connectivity",
+                    f"Registry '{registry.registry_id}' connectivity is degraded{detail}.",
+                )
+            )
+        elif agent_state.connectivity_state == "standalone":
+            if not agent_state.agent_id:
                 diagnostics.append(
                     _diag(
                         "warning",
-                        "registry.stale_contact",
-                        f"Registry: last successful contact was {minutes}m ago. Bot may be running in degraded mode.",
+                        "registry.not_enrolled",
+                        f"Registry '{registry.registry_id}' enrollment has not completed.",
                     )
                 )
-        except ValueError:
-            pass
+        elif agent_state.connectivity_state == "connected" and not agent_state.agent_id:
+            diagnostics.append(
+                _diag(
+                    "warning",
+                    "registry.missing_agent_id",
+                    "Registry '%s' reports connected but agent_id is missing — state may be corrupt. "
+                    "Delete data/agent/registries/%s.json and restart."
+                    % (registry.registry_id, registry.registry_id),
+                )
+            )
+
+        if agent_state.last_successful_contact_at:
+            try:
+                last = datetime.datetime.fromisoformat(agent_state.last_successful_contact_at)
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=datetime.timezone.utc)
+                age = (datetime.datetime.now(datetime.timezone.utc) - last).total_seconds()
+                if age > 300:
+                    minutes = int(age // 60)
+                    diagnostics.append(
+                        _diag(
+                            "warning",
+                            "registry.stale_contact",
+                            f"Registry '{registry.registry_id}': last successful contact was {minutes}m ago.",
+                        )
+                    )
+            except ValueError:
+                pass
 
     return diagnostics
 

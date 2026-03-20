@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.agents.client import RegistryClientError
-from app.agents.bridge import registry_client
+from app.agents.bridge import registry_connection_client, resolve_registry_connection
 from app.registry_errors import registry_error_summary
-from app.agents.state import load_agent_runtime_state
+from app.agents.state import load_runtime_registry_connection_state
 from app.agents.types import RoutedTaskRequest
 from app.agents.registry_runtime import RegistryRuntime
 from app.config import BotConfig
@@ -97,7 +97,18 @@ async def handle_delegation_approve(
             )
             return
     else:
-        state = load_agent_runtime_state(cfg.data_dir)
+        registry = resolve_registry_connection(cfg)
+        if registry is None or registry.registry_scope not in {"coordination", "full"}:
+            await channel_egress.send_text(
+                "Delegation unavailable: no coordination-capable registry connections are configured.",
+                reply_markup=retry_markup,
+            )
+            return
+        state = load_runtime_registry_connection_state(
+            cfg.data_dir,
+            registry.registry_id,
+            registry_scope=registry.registry_scope,
+        )
         if state.connectivity_state != "connected":
             detail = f" {registry_error_summary(state.last_error)}" if state.last_error else ""
             await channel_egress.send_text(
@@ -139,8 +150,21 @@ async def handle_delegation_approve(
                 client = runtime.registry_runtime.client_for_registry(registry_id)
                 origin_agent_id = runtime.registry_runtime.origin_agent_id(registry_id)
             else:
-                state = load_agent_runtime_state(cfg.data_dir)
-                client = registry_client(cfg)
+                registry = resolve_registry_connection(cfg)
+                if registry is None or registry.registry_scope not in {"coordination", "full"}:
+                    _save_session(runtime, chat_id, session)
+                    await channel_egress.send_text(
+                        "Delegation unavailable: no coordination-capable registry connections are configured.",
+                        reply_markup=retry_markup,
+                    )
+                    return
+                registry_id = registry.registry_id
+                state = load_runtime_registry_connection_state(
+                    cfg.data_dir,
+                    registry.registry_id,
+                    registry_scope=registry.registry_scope,
+                )
+                client = registry_connection_client(cfg, registry_id=registry.registry_id)
                 origin_agent_id = state.agent_id or ""
             if client is None or not origin_agent_id:
                 _save_session(runtime, chat_id, session)

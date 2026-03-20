@@ -244,12 +244,16 @@ def main() -> None:
     log.info("Data dir: %s", config.data_dir)
     log.info("Agent mode: %s", config.agent_mode)
     if config.agent_mode == "registry":
-        registry_url = (
-            sanitize_url_for_logging(config.agent_registry_url)
-            if config.agent_registry_url
-            else "(degraded: not configured)"
-        )
-        log.info("Agent registry: %s", registry_url)
+        if config.agent_registries:
+            for registry in config.agent_registries:
+                log.info(
+                    "Registry connection [%s] (%s): %s",
+                    registry.registry_id,
+                    registry.registry_scope,
+                    sanitize_url_for_logging(registry.url) if registry.url else "(missing url)",
+                )
+        else:
+            log.info("Registry connections: (none configured)")
 
     if config.allowed_actor_keys or config.allowed_usernames:
         log.info("Allowed actor keys: %s", sorted(config.allowed_actor_keys))

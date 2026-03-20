@@ -16,7 +16,7 @@ from telegram.error import InvalidToken, NetworkError
 from app.agents.types import RegistryConnectionConfig
 from app.config import _parse_projects, load_config, load_dotenv_file, parse_allowed_users, validate_config
 from app.session_state import ProjectBinding
-from tests.support.config_support import make_config
+from tests.support.config_support import make_config, make_registry_connection
 
 
 # -- load_dotenv_file --
@@ -100,8 +100,6 @@ def test_validate_config_accepts_channel_capable_registry_without_telegram():
             telegram_token="",
             agent_mode="registry",
             agent_registries=(registry,),
-            agent_registry_url=registry.url,
-            agent_registry_enroll_token=registry.enroll_token,
         )
     )
 
@@ -120,8 +118,6 @@ def test_validate_config_rejects_coordination_only_registry_without_telegram():
             telegram_token="",
             agent_mode="registry",
             agent_registries=(registry,),
-            agent_registry_url=registry.url,
-            agent_registry_enroll_token=registry.enroll_token,
         )
     )
 
@@ -250,19 +246,21 @@ def test_validate_config_database_url_must_be_postgres():
 
 
 def test_validate_config_rejects_malformed_registry_url():
-    errors = validate_config(make_config(agent_registry_url="http://"))
-    assert any("BOT_AGENT_REGISTRY_URL" in e and "valid http" in e for e in errors)
+    errors = validate_config(
+        make_config(agent_registries=(make_registry_connection(url="http://"),))
+    )
+    assert any("valid http" in e and "default" in e for e in errors)
 
 
 def test_validate_config_rejects_remote_http_registry_url(tmp_path: Path):
     errors = validate_config(
         make_config(
-            agent_registry_url="http://registry.example.com",
+            agent_registries=(make_registry_connection(url="http://registry.example.com"),),
             working_dir=tmp_path,
         )
     )
     assert any(
-        "BOT_AGENT_REGISTRY_URL uses plain HTTP over a non-local address" in error
+        "uses plain HTTP over a non-local address" in error
         for error in errors
     )
 
@@ -485,8 +483,7 @@ def test_main_registry_runtime_starts_and_stops_with_dispatcher_lifecycle():
         process_role="webhook",
         bot_mode="webhook",
         webhook_url="https://bot.example.com/webhook",
-        agent_registry_url="http://registry.test",
-        agent_registry_enroll_token="enroll-secret",
+        agent_registries=(make_registry_connection(),),
         database_url="postgresql://bot:bot@localhost:5432/bot",
     )
     mock_app = MagicMock()
@@ -527,8 +524,6 @@ def test_main_registry_only_starts_without_telegram_ingress():
         credential_key="credential-secret",
         agent_mode="registry",
         agent_registries=(registry,),
-        agent_registry_url=registry.url,
-        agent_registry_enroll_token=registry.enroll_token,
         runtime_mode="shared",
         process_role="webhook",
         bot_mode="webhook",
@@ -727,13 +722,15 @@ def test_load_config_reads_bot_credential_key():
         assert cfg.credential_key == "credential-key-123"
 
 
-def test_load_config_builds_default_agent_registries_from_singleton_fields():
+def test_load_config_reads_indexed_agent_registries():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
         f.write("TELEGRAM_BOT_TOKEN=tok\n")
         f.write("BOT_PROVIDER=claude\n")
         f.write("BOT_ALLOW_OPEN=1\n")
-        f.write("BOT_AGENT_REGISTRY_URL=http://registry:8787\n")
-        f.write("BOT_AGENT_REGISTRY_ENROLL_TOKEN=enroll-secret\n")
+        f.write("BOT_AGENT_REGISTRY_1_ID=default\n")
+        f.write("BOT_AGENT_REGISTRY_1_URL=http://registry:8787\n")
+        f.write("BOT_AGENT_REGISTRY_1_ENROLL_TOKEN=enroll-secret\n")
+        f.write("BOT_AGENT_REGISTRY_1_SCOPE=full\n")
         env_path = f.name
     try:
         with patch("app.config.env_path_for_instance", return_value=Path(env_path)):
@@ -747,13 +744,11 @@ def test_load_config_builds_default_agent_registries_from_singleton_fields():
                 poll_interval_seconds=5.0,
             ),
         )
-        assert cfg.agent_registry_url == "http://registry:8787"
-        assert cfg.agent_registry_enroll_token == "enroll-secret"
     finally:
         os.unlink(env_path)
 
 
-def test_load_config_reads_indexed_agent_registries_and_projects_first_back_to_singleton():
+def test_load_config_reads_multiple_indexed_agent_registries():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
         f.write("TELEGRAM_BOT_TOKEN=tok\n")
         f.write("BOT_PROVIDER=claude\n")
@@ -786,8 +781,6 @@ def test_load_config_reads_indexed_agent_registries_and_projects_first_back_to_s
                 poll_interval_seconds=5.0,
             ),
         )
-        assert cfg.agent_registry_url == "https://registry-prod.example.com"
-        assert cfg.agent_registry_enroll_token == "prod-secret"
         assert cfg.agent_mode == "registry"
     finally:
         os.unlink(env_path)

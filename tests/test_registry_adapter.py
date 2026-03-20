@@ -12,7 +12,7 @@ from app.channels.registry.channel import RegistryConversationChannel, RegistryT
 from app.providers.base import RunResult
 from app.channels.registry.egress import RegistryChannelEgress
 from app.channels.registry.refs import registry_conversation_ref, registry_task_ref
-from tests.support.config_support import make_config
+from tests.support.config_support import make_config, make_registry_connection
 
 
 class _FakeRegistryClient:
@@ -42,12 +42,12 @@ async def test_registry_channel_publishes_started_event_on_bind(monkeypatch, tmp
     cfg = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
+        agent_registries=(make_registry_connection(),),
     )
     client = _FakeRegistryClient()
     channel_egress = RegistryChannelEgress(cfg, conversation_ref="conv-1")
     monkeypatch.setattr("app.channels.registry.egress.bind_conversation", _noop_bind)
-    monkeypatch.setattr(channel_egress, "_registry_client", lambda: client)
+    monkeypatch.setattr(channel_egress, "_timeline_client_for_publish", lambda: client)
 
     await channel_egress.bind(title="Spec review", config=cfg)
 
@@ -59,11 +59,11 @@ async def test_registry_channel_publishes_completed_event_on_outcome(monkeypatch
     cfg = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
+        agent_registries=(make_registry_connection(),),
     )
     client = _FakeRegistryClient()
     channel_egress = RegistryChannelEgress(cfg, conversation_ref="conv-2")
-    monkeypatch.setattr(channel_egress, "_registry_client", lambda: client)
+    monkeypatch.setattr(channel_egress, "_timeline_client_for_publish", lambda: client)
 
     await channel_egress.on_outcome(RunResult(text="done", returncode=0))
 
@@ -75,11 +75,11 @@ async def test_registry_channel_publishes_failed_event_on_outcome(monkeypatch, t
     cfg = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
+        agent_registries=(make_registry_connection(),),
     )
     client = _FakeRegistryClient()
     channel_egress = RegistryChannelEgress(cfg, conversation_ref="conv-3")
-    monkeypatch.setattr(channel_egress, "_registry_client", lambda: client)
+    monkeypatch.setattr(channel_egress, "_timeline_client_for_publish", lambda: client)
 
     await channel_egress.on_outcome(RunResult(text="boom", returncode=1))
 
@@ -91,11 +91,11 @@ async def test_registry_channel_rate_limits_progress_events(monkeypatch, tmp_pat
     cfg = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
+        agent_registries=(make_registry_connection(),),
     )
     client = _FakeRegistryClient()
     channel_egress = RegistryChannelEgress(cfg, conversation_ref="conv-4")
-    monkeypatch.setattr(channel_egress, "_registry_client", lambda: client)
+    monkeypatch.setattr(channel_egress, "_timeline_client_for_publish", lambda: client)
 
     monotonic_values = iter([10.0, 11.0])
 
@@ -121,11 +121,15 @@ async def test_registry_channel_swallows_publish_error(monkeypatch, tmp_path):
     cfg = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
+        agent_registries=(make_registry_connection(),),
     )
     output_log: list[dict[str, str]] = []
     channel_egress = RegistryChannelEgress(cfg, conversation_ref="conv-5", output_log=output_log)
-    monkeypatch.setattr(channel_egress, "_registry_client", lambda: _FakeRegistryClient(fail=True))
+    monkeypatch.setattr(
+        channel_egress,
+        "_timeline_client_for_publish",
+        lambda: _FakeRegistryClient(fail=True),
+    )
 
     await channel_egress.send_text("hello")
     await channel_egress.on_outcome(types.SimpleNamespace(status="completed", reply_text="done"))
@@ -138,17 +142,17 @@ async def test_registry_channel_caches_missing_client_state(monkeypatch, tmp_pat
     cfg = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
+        agent_registries=(make_registry_connection(),),
     )
     calls = {"count": 0}
 
-    def fake_registry_client(config, *, registry_id=None):
+    def fake_registry_connection_client(config, *, registry_id=None):
         del config, registry_id
         calls["count"] += 1
         return None
 
     channel_egress = RegistryChannelEgress(cfg, conversation_ref="conv-6")
-    monkeypatch.setattr("app.channels.registry.egress.registry_client", fake_registry_client)
+    monkeypatch.setattr("app.channels.registry.egress.registry_connection_client", fake_registry_connection_client)
     monkeypatch.setattr("app.channels.registry.egress.bind_conversation", _noop_bind)
 
     await channel_egress.bind(title="No enrollment yet", config=cfg)
@@ -163,7 +167,6 @@ async def test_registry_channels_build_scoped_egress_from_qualified_refs(monkeyp
         data_dir=tmp_path,
         agent_mode="registry",
         agent_registries=(),
-        agent_registry_url="http://registry.default",
     )
     save_registry_connection_state(
         tmp_path,
@@ -222,7 +225,7 @@ def test_registry_task_channel_does_not_contribute_channel_capability(tmp_path):
     cfg = make_config(
         data_dir=tmp_path,
         agent_mode="registry",
-        agent_registry_url="http://registry.test",
+        agent_registries=(make_registry_connection(),),
     )
     registry = RegistryConnectionConfig(
         registry_id="ops",

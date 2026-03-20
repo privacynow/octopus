@@ -728,10 +728,11 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
     import asyncio
 
     from app.agents.client import AgentRegistryClient
-    from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+    from app.agents.state import save_registry_connection_state
+    from app.agents.types import RegistryConnectionState
     from app.agents.types import AgentCard
     from app.channels.registry.egress import RegistryChannelEgress
-    from tests.support.config_support import make_config
+    from tests.support.config_support import make_config, make_registry_connection
 
     ctx = _registry_ui_ctx(postgres_up)
     registry_up = _compose(ctx, "--profile", "registry", "up", "-d", "registry")
@@ -758,14 +759,16 @@ def test_compose_registry_ui_conversation_detail(postgres_up):
         cfg = make_config(
             data_dir=Path(ctx["artifacts_dir"]) / "registry-e2e-agent",
             agent_mode="registry",
-            agent_registry_url=base_url,
-            agent_registry_enroll_token=_E2E_REGISTRY_ENROLL_TOKEN,
+            agent_registries=(
+                make_registry_connection(url=base_url, enroll_token=_E2E_REGISTRY_ENROLL_TOKEN),
+            ),
             agent_display_name="Registry E2E Bot",
             agent_slug=str(enrolled["slug"]),
         )
-        save_agent_runtime_state(
+        save_registry_connection_state(
             cfg.data_dir,
-            AgentRuntimeState(
+            RegistryConnectionState(
+                registry_id="default",
                 agent_id=agent_id,
                 agent_token=agent_token,
                 connectivity_state="connected",
@@ -838,10 +841,11 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
 
     from app.agents.client import AgentRegistryClient
     from app.agents.delivery import handle_registry_delivery
-    from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+    from app.agents.state import save_registry_connection_state
     from app.agents.types import AgentCard, RoutedTaskResult
+    from app.agents.types import RegistryConnectionState
     from app.providers.base import RunResult
-    from tests.support.config_support import make_config
+    from tests.support.config_support import make_config, make_registry_connection
     from tests.support.handler_support import (
         FakeProvider,
         current_bot_instance,
@@ -891,15 +895,17 @@ def test_compose_registry_ui_delegation_flow(postgres_up):
         cfg = make_config(
             data_dir=Path(ctx["artifacts_dir"]) / "registry-e2e-parent",
             agent_mode="registry",
-            agent_registry_url=base_url,
-            agent_registry_enroll_token=_E2E_REGISTRY_ENROLL_TOKEN,
+            agent_registries=(
+                make_registry_connection(url=base_url, enroll_token=_E2E_REGISTRY_ENROLL_TOKEN),
+            ),
             agent_display_name="Registry Parent Bot",
             agent_slug=str(enrolled_parent["slug"]),
             approval_mode="off",
         )
-        save_agent_runtime_state(
+        save_registry_connection_state(
             cfg.data_dir,
-            AgentRuntimeState(
+            RegistryConnectionState(
+                registry_id="default",
                 agent_id=parent_id,
                 agent_token=parent_token,
                 connectivity_state="connected",

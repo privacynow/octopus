@@ -8,6 +8,23 @@ from app.identity import telegram_actor_key
 from app.session_state import ProjectBinding
 
 
+def make_registry_connection(
+    *,
+    registry_id: str = "default",
+    url: str = "http://registry.test",
+    enroll_token: str = "enroll-secret",
+    registry_scope: str = "full",
+    poll_interval_seconds: float = 5.0,
+) -> RegistryConnectionConfig:
+    return RegistryConnectionConfig(
+        registry_id=registry_id,
+        url=url,
+        enroll_token=enroll_token,
+        registry_scope=registry_scope,
+        poll_interval_seconds=poll_interval_seconds,
+    )
+
+
 def _normalize_projects(projects):
     """Convert raw tuples to ProjectBinding for backward compatibility with existing tests."""
     if not projects:
@@ -94,8 +111,6 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         agent_description="",
         agent_capabilities=(),
         agent_registries=(),
-        agent_registry_url="",
-        agent_registry_enroll_token="",
         agent_poll_interval_seconds=5.0,
         runtime_mode="local",
         process_role="all",
@@ -107,19 +122,6 @@ def make_config(*, data_dir: Path = Path("/tmp/test-data"), **overrides) -> BotC
         db_connect_timeout_seconds=10,
     )
     defaults.update(overrides)
-    if not defaults.get("agent_registries"):
-        agent_registry_url = defaults.get("agent_registry_url", "")
-        agent_registry_enroll_token = defaults.get("agent_registry_enroll_token", "")
-        if agent_registry_url or agent_registry_enroll_token:
-            defaults["agent_registries"] = (
-                RegistryConnectionConfig(
-                    registry_id="default",
-                    url=agent_registry_url,
-                    enroll_token=agent_registry_enroll_token,
-                    registry_scope="full",
-                    poll_interval_seconds=defaults.get("agent_poll_interval_seconds", 5.0),
-                ),
-            )
     if "projects" in defaults:
         defaults["projects"] = _normalize_projects(defaults["projects"])
     return BotConfig(**defaults)

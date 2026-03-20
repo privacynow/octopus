@@ -1,8 +1,10 @@
 from app.agents.bridge import telegram_conversation_ref
-from app.agents.state import AgentRuntimeState, save_agent_runtime_state
+from app.agents.state import save_registry_connection_state
+from app.agents.types import RegistryConnectionState
 from app.identity import telegram_conversation_key
 from app.providers.base import RunResult
 from app.storage import default_session, save_session
+from tests.support.config_support import make_registry_connection
 from tests.support.handler_support import (
     current_runtime,
     current_bot_instance,
@@ -20,8 +22,7 @@ async def test_execute_request_proposes_delegation_and_persists_pending_delegati
         config_overrides={
             "approval_mode": "off",
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -73,8 +74,7 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -109,9 +109,10 @@ async def test_telegram_delegation_approve_callback_submits_tasks_and_updates_se
                 assert registry_id == "default"
                 return "origin-agent"
 
-        save_agent_runtime_state(
+        save_registry_connection_state(
             data_dir,
-            AgentRuntimeState(
+            RegistryConnectionState(
+                registry_id="default",
                 agent_id="origin-agent",
                 agent_token="secret",
                 connectivity_state="connected",
@@ -158,8 +159,7 @@ async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_s
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -172,7 +172,10 @@ async def test_telegram_delegation_cancel_callback_clears_session_and_does_not_s
                 called.append(request)
                 return {"ok": True}
 
-        monkeypatch.setattr("app.agents.delegation.registry_client", lambda cfg: FakeRegistryClient())
+        monkeypatch.setattr(
+            "app.agents.delegation.registry_connection_client",
+            lambda cfg, registry_id=None: FakeRegistryClient(),
+        )
 
         chat = FakeChat()
         user = FakeUser()
@@ -205,8 +208,7 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -232,9 +234,10 @@ async def test_delegation_approve_degraded_mode_blocks_submission_and_preserves_
             def first_coordination_error(self):
                 return "registry_unreachable"
 
-        save_agent_runtime_state(
+        save_registry_connection_state(
             data_dir,
-            AgentRuntimeState(
+            RegistryConnectionState(
+                registry_id="default",
                 agent_id="origin-agent",
                 agent_token="secret",
                 connectivity_state="degraded",
@@ -278,16 +281,16 @@ async def test_delegation_approve_no_pending_is_a_no_op():
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, _, prov):
         import app.channels.telegram.ingress as th
         from tests.support.handler_support import FakeChat, FakeUser
 
-        save_agent_runtime_state(
+        save_registry_connection_state(
             data_dir,
-            AgentRuntimeState(
+            RegistryConnectionState(
+                registry_id="default",
                 agent_id="origin-agent",
                 agent_token="secret",
                 connectivity_state="connected",
@@ -308,8 +311,7 @@ async def test_delegation_approve_hides_registry_error_text(monkeypatch):
     with fresh_env(
         config_overrides={
             "agent_mode": "registry",
-            "agent_registry_url": "http://registry.test",
-            "agent_registry_enroll_token": "enroll-secret",
+            "agent_registries": (make_registry_connection(),),
         }
     ) as (data_dir, cfg, prov):
         import app.channels.telegram.ingress as th
@@ -348,9 +350,10 @@ async def test_delegation_approve_hides_registry_error_text(monkeypatch):
                 assert registry_id == "default"
                 return "origin-agent"
 
-        save_agent_runtime_state(
+        save_registry_connection_state(
             data_dir,
-            AgentRuntimeState(
+            RegistryConnectionState(
+                registry_id="default",
                 agent_id="origin-agent",
                 agent_token="secret",
                 connectivity_state="connected",

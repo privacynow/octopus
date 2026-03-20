@@ -10,10 +10,81 @@
 ## Current State
 
 - Phases 1-8 of the control-plane rollout landed and the repo is green.
-- Phase 9 remediation is complete; slices 9A-9H are landed and the repo is green.
-- Status should be read as: rollout complete through Phase 8 and Phase 9 remediation complete.
+- Phase 9 remediation landed and the repo was green at the end of that pass.
+- A deeper post-Phase-9 architecture review found additional
+  structural issues that were not caught during rollout:
+  - routed tasks are still partially modeled as projected
+    conversations instead of pure task-routing surfaces
+  - residual raw surface-name checks remain in delivery/admission
+    policy code
+  - one dead `"default"` registry-id default remains in
+    `RegistryConnectionState`
+- Phase 10 is now open and in progress; Slice 10A is landed and
+  Slices 10B-10E remain.
+- Status should be read as: rollout complete through Phase 9, but the
+  architecture cleanup is not complete until Phase 10 lands.
 
 ## Slice Log
+
+- Complete: Phase 10A remediation — correct the routed-task channel contract.
+  Scope:
+  - changed `RegistryTaskChannel` so it no longer advertises projected
+    timeline support
+  - removed routed-task admission-time `sync_binding()` /
+    `publish_timeline()` side effects from `app/agents/bridge.py`
+    while keeping routed-task work admission intact
+  - updated admission and adapter tests to enforce the corrected
+    contract
+  - added a dispatch-boundary test proving the routed-task execution
+    context still has no projected timeline callback in the interim
+    state before Phase 10C
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_agents.py::test_admit_registry_delivery_queued_is_accepted tests/test_registry_adapter.py::test_registry_task_channel_does_not_contribute_channel_capability tests/test_runtime_dispatch_boundary.py::test_workflow_context_builder_keeps_registry_task_without_timeline_callback tests/test_handlers.py::test_registry_routed_task_executes_and_reports_result tests/test_control_plane_integration.py::test_coordination_only_registry_enqueues_no_projection_commands`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified only `RegistryConversationChannel` still advertises
+    `supports_timeline=True`; `RegistryTaskChannel` is now
+    `supports_timeline=False`
+  - verified `app/agents/bridge.py` still emits bind/timeline side
+    effects for `channel_input`, but no longer does so for
+    `routed_task`
+  Review:
+  - this slice removed an invalid projected-task side-effect path
+    instead of preserving it behind more no-op behavior
+  - the existing task-channel egress class remains in place as a
+    dispatcher seam, but admission no longer treats routed tasks as
+    projected conversations
+  - existing routed-task execution still completes successfully, so
+    this slice stayed a contract correction rather than an execution
+    behavior rewrite
+  Verified:
+  - routed-task admission still works
+  - task-channel projection side effects are gone
+  - full suite status after Phase 10A: `1923 passed, 23 skipped`
+
+- Pending: Phase 10 remediation — remaining routed-task surface and
+  final surface-boundary cleanup (Slices 10B-10E).
+  Planned scope:
+  - thread explicit `authority_ref` through existing execution
+    metadata/context and route routed-task progress through
+    `TaskRoutingPort.update_routed_task_status()`
+  - add the routed-task progress callback bridge explicitly
+    (`html_text`/`force` -> `RoutedTaskUpdate`) with throttling on the
+    existing progress cadence rather than flooding the bus
+  - fix the callback-builder seam explicitly so progress callback
+    selection can use `authority_ref` without reparsing refs
+  - replace remaining raw `"telegram"` checks in shared
+    delivery/admission policy code with the correct existing seam:
+    dispatcher runtime-readiness for delivery, descriptor/static policy
+    for admission
+  - remove the dead `RegistryConnectionState.registry_id =
+    "default"` default
+  Notes:
+  - the repo is currently green, but this residual drift means the
+    remaining task-progress and surface-policy work is still not fully
+    aligned with the target architecture
+  - execution should follow the remaining Phase 10 slices 10B-10E from
+    `PLAN-control-plane-bus.md` in order
 
 - Complete: Phase 9H remediation — final test-hygiene and guardrail cleanup.
   Scope:

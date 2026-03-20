@@ -225,6 +225,40 @@ def test_workflow_context_builder_resolves_registry_conversation_metadata() -> N
     assert context.timeline_callback is not None
 
 
+def test_workflow_context_builder_keeps_registry_task_without_timeline_callback() -> None:
+    context = build_execution_channel_context(
+        ExecutionChannelMetadata(
+            descriptor=ChannelDescriptor(
+                channel_type="registry",
+                display_name="Registry Tasks",
+                supports_multiple=True,
+                requires_polling=True,
+                trust_tier="trusted",
+                contributes_channel_capability=False,
+                accepts_channel_input=False,
+                supports_conversation_binding=False,
+                supports_timeline=False,
+            ),
+            message_conversation_ref="registry:ops:task:task-1",
+            routed_task_id="task-1",
+            chat_id="registry:ops:task:task-1",
+        ),
+        build_conversation_ref=lambda chat_id: str(chat_id),
+        timeline_callback_factory=lambda conversation_ref, routed_task_id: (
+            lambda html_text, force=False: _no_op(
+                conversation_ref,
+                routed_task_id,
+                html_text,
+                force=force,
+            )
+        ),
+    )
+
+    assert context.conversation_ref == "registry:ops:task:task-1"
+    assert context.routed_task_id == "task-1"
+    assert context.timeline_callback is None
+
+
 @pytest.mark.asyncio
 async def test_format_provider_error_returns_plain_text() -> None:
     text = await format_provider_error("<boom>", 1)

@@ -656,8 +656,8 @@ async def test_admit_registry_delivery_queued_is_accepted(monkeypatch, tmp_path:
     assert outcome_task == "accepted"
     assert ("bind", registry_conversation_ref("prod", "conv-1")) in seen
     assert ("timeline", registry_conversation_ref("prod", "conv-1")) in seen
-    assert ("bind", registry_task_ref("prod", "task-1")) in seen
-    assert ("timeline", registry_task_ref("prod", "task-1")) in seen
+    assert ("bind", registry_task_ref("prod", "task-1")) not in seen
+    assert ("timeline", registry_task_ref("prod", "task-1")) not in seen
 
 
 async def test_admit_registry_delivery_rejects_legacy_surface_input_kind(monkeypatch, tmp_path: Path):

@@ -306,3 +306,4 @@ def test_registry_task_channel_does_not_contribute_channel_capability(tmp_path):
 
     assert task_channel.descriptor.contributes_channel_capability is False
     assert task_channel.descriptor.accepts_channel_input is False
+    assert task_channel.descriptor.supports_timeline is False

@@ -192,10 +192,6 @@ async def admit_registry_delivery(
         if context_lines:
             text = text + "\n\n" + "\n".join(context_lines)
         conversation_ref = registry_task_ref(registry_id, request["routed_task_id"])
-        parent_conversation_id = qualify_registry_conversation_ref(
-            registry_id,
-            str(request.get("parent_conversation_id", "") or ""),
-        )
         conversation_key, actor_key, event_id, serialized = build_registry_message_delivery(
             conversation_ref=conversation_ref,
             text=text,
@@ -212,38 +208,6 @@ async def admit_registry_delivery(
             "message",
             serialized,
         )
-        if status in {"admitted", "queued", "duplicate"}:
-            if dispatcher is None:
-                raise RuntimeError("Registry delivery admission requires a channel dispatcher")
-            channel_egress = dispatcher.create_egress(
-                conversation_ref,
-                config=config,
-                bot=_egress_bot(bot),
-                conversation_key=conversation_key,
-                source="registry",
-            )
-            await channel_egress.sync_binding(
-                {
-                    "conversation_ref": conversation_ref,
-                    "title": request.get("title", "Delegated task"),
-                    "origin_channel": "registry",
-                    "external_id": request["routed_task_id"],
-                }
-            )
-            await channel_egress.publish_timeline(
-                TimelineEvent(
-                    event_id=event_id,
-                    conversation_id=conversation_ref,
-                    kind="routed_task",
-                    title="Delegated task received",
-                    body=text,
-                    metadata={
-                        "routed_task_id": request["routed_task_id"],
-                        "parent_conversation_id": parent_conversation_id,
-                        "origin_agent_id": request.get("origin_agent_id", ""),
-                    },
-                )
-            )
         return "accepted"
 
     return "rejected"

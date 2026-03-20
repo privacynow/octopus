@@ -130,7 +130,7 @@ class RegistryTaskChannel(_RegistryChannel):
                 contributes_channel_capability=False,
                 accepts_channel_input=False,
                 supports_conversation_binding=False,
-                supports_timeline=True,
+                supports_timeline=False,
             ),
             services=services,
         )

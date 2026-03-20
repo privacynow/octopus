@@ -1,5 +1,6 @@
 """Tests for config.py — env parsing, validation, webhook mode."""
 
+import asyncio
 import os
 import subprocess
 import sys
@@ -293,6 +294,7 @@ def _patched_main_runtime(cfg, mock_app, provider=None):
         yield MagicMock()
 
     dispatcher = MagicMock()
+    mock_app.bot_data = {}
     ingress = SimpleNamespace(
         application=mock_app,
         runtime=SimpleNamespace(boot_id="test-boot"),
@@ -433,6 +435,40 @@ def test_main_worker_role_runs_worker_process_only():
 
         main()
     dispatcher_runner.assert_awaited_once_with(dispatcher)
+
+
+def test_main_registry_runtime_starts_and_stops_with_dispatcher_lifecycle():
+    cfg = make_config(
+        agent_mode="registry",
+        runtime_mode="shared",
+        process_role="webhook",
+        bot_mode="webhook",
+        webhook_url="https://bot.example.com/webhook",
+        agent_registry_url="http://registry.test",
+        agent_registry_enroll_token="enroll-secret",
+        database_url="postgresql://bot:bot@localhost:5432/bot",
+    )
+    mock_app = MagicMock()
+    registry_runtime = SimpleNamespace(
+        start=AsyncMock(return_value=None),
+        stop=AsyncMock(return_value=None),
+    )
+
+    with _patched_main_runtime(cfg, mock_app) as (_provider, dispatcher, ingress, dispatcher_runner):
+        async def _run_dispatcher(_dispatcher):
+            ingress.application.bot_data["dispatcher_stop_event"] = asyncio.Event()
+            await ingress.application.post_init(ingress.application)
+            await ingress.application.post_shutdown(ingress.application)
+
+        dispatcher_runner.side_effect = _run_dispatcher
+        with patch("app.main.RegistryRuntime", return_value=registry_runtime):
+            from app.main import main
+
+            main()
+
+    dispatcher_runner.assert_awaited_once_with(dispatcher)
+    registry_runtime.start.assert_awaited_once()
+    registry_runtime.stop.assert_awaited_once()
 
 
 def test_main_webhook_role_skips_provider_runtime_validation():

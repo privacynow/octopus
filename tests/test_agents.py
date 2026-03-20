@@ -20,6 +20,9 @@ from app.runtime_health import RuntimeHealthReport, RuntimeHealthSummary
 from app.agents.state import (
     load_bot_identity_state,
     load_registry_connection_state,
+    load_runtime_registry_connection_state,
+    project_agent_runtime_state,
+    project_registry_connection_state,
     save_agent_runtime_state,
     save_registry_connection_state,
 )
@@ -146,6 +149,64 @@ def test_registry_connection_state_uses_defaults_when_missing_or_corrupt(tmp_pat
 
     assert restored == RegistryConnectionState(registry_id="analytics")
     assert any("Registry connection state load failed" in record.message for record in caplog.records)
+
+
+def test_runtime_registry_connection_state_projects_legacy_default_state(tmp_path: Path):
+    save_agent_runtime_state(
+        tmp_path,
+        AgentRuntimeState(
+            agent_id="legacy-agent",
+            agent_token="legacy-token",
+            poll_cursor="9",
+            connectivity_state="connected",
+        ),
+    )
+
+    state = load_runtime_registry_connection_state(
+        tmp_path,
+        "default",
+        registry_scope="coordination",
+    )
+
+    assert state == RegistryConnectionState(
+        registry_id="default",
+        registry_scope="coordination",
+        agent_id="legacy-agent",
+        agent_token="legacy-token",
+        poll_cursor="9",
+        connectivity_state="connected",
+    )
+
+
+def test_registry_connection_state_projection_helpers_round_trip():
+    legacy = AgentRuntimeState(
+        agent_id="agent-1",
+        agent_token="secret-token",
+        poll_cursor="4",
+        registered_slug="bot-one",
+        connectivity_state="degraded",
+        last_error="registry_timeout",
+        last_error_detail="timed out",
+    )
+
+    projected = project_registry_connection_state(
+        legacy,
+        registry_id="prod",
+        registry_scope="channel",
+    )
+
+    assert projected == RegistryConnectionState(
+        registry_id="prod",
+        registry_scope="channel",
+        agent_id="agent-1",
+        agent_token="secret-token",
+        poll_cursor="4",
+        registered_slug="bot-one",
+        connectivity_state="degraded",
+        last_error="registry_timeout",
+        last_error_detail="timed out",
+    )
+    assert project_agent_runtime_state(projected) == legacy
 
 
 async def test_agent_runtime_standalone_marks_state(tmp_path: Path):

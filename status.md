@@ -78,6 +78,30 @@
   - Telegram now satisfies the new `ChannelBootstrap` / `ChannelIngress` contract without introducing a parallel Telegram runtime path
   - `main.py` uses dispatcher-managed Telegram ingress startup while preserving current worker and registry scaffolding behavior
   - full suite status after slice 3: `1787 passed, 23 skipped`
+- Complete: Slice 4 registry runtime.
+  Scope:
+  - added `app/agents/registry_runtime.py` with one wrapped `AgentRuntime` per configured registry connection and one sync loop per connection
+  - extended `AgentRuntime` to accept an explicit `RegistryConnectionConfig`, per-connection state loading/saving, and an optional `kind_filter` for scoped polling
+  - extended `AgentRegistryClient.poll()` with an optional `kind_filter` query so scoped registry polling can be threaded through the existing client seam
+  - added runtime-only per-connection state loading in `app/agents/state.py`, including legacy projection from `registry_state.json` for the default connection and dual-write back to the legacy state file for the default connection during scaffolding
+  - rewired `main.py` to construct `RegistryRuntime` and start/stop it from the Telegram dispatcher lifecycle instead of calling `start_agent_runtime_task()` directly
+  - kept registry egress and ref routing unchanged for this slice; registry channels are still deferred to slice 5 and the old factory still owns registry refs during the scaffolding window
+  Tests:
+  - `./.venv/bin/python -m pytest -q -n 0 tests/test_agents.py tests/test_agents_runtime.py tests/test_registry_runtime.py tests/test_config.py tests/test_telegram_channel_state.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Direct checks:
+  - verified per-connection runtime polling annotates every delivered item with `registry_id` before it reaches the delivery handler
+  - verified scoped polling uses `channel_input/channel_action` for channel connections and preserves legacy full-scope behavior without changing the old singleton runtime path
+  - verified the default connection projects legacy `registry_state.json` into `registries/default.json` semantics on read and dual-writes back to the legacy file on save so old consumers stay green during scaffolding
+  - verified `main.py` now starts and stops the registry runtime through Telegram lifecycle hooks instead of the old direct agent-runtime startup helper
+  Review:
+  - slice 4 extends the existing `AgentRuntime` path instead of forking a second registry runtime implementation, which keeps the battle-tested enrollment/heartbeat/poll loop authoritative
+  - the only Telegram ingress change was making `bot_data` initialization resilient for both the real PTB application and the lightweight fake used by the channel-state tests
+  - registry ref ownership and outbound routing were intentionally left on the old factory for this slice to avoid mixing the runtime cutover with the channel-registration cutover planned for slice 5
+  Verified:
+  - per-connection registry runtime ownership now exists without changing registry egress or ref-routing behavior ahead of schedule
+  - `main.py` no longer relies on `start_agent_runtime_task()` for the live registry path
+  - full suite status after slice 4: `1793 passed, 23 skipped`
 
 # Octopus CLI Implementation Status
 

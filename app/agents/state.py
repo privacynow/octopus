@@ -118,6 +118,54 @@ def save_agent_runtime_state(data_dir: Path, state: AgentRuntimeState) -> None:
     path.chmod(0o600)
 
 
+def project_agent_runtime_state(
+    state: RegistryConnectionState,
+) -> AgentRuntimeState:
+    return AgentRuntimeState(
+        agent_id=state.agent_id,
+        agent_token=state.agent_token,
+        poll_cursor=state.poll_cursor,
+        registered_slug=state.registered_slug,
+        last_successful_contact_at=state.last_successful_contact_at,
+        connectivity_state=state.connectivity_state,
+        last_error=state.last_error,
+        last_error_detail=state.last_error_detail,
+    )
+
+
+def project_registry_connection_state(
+    state: AgentRuntimeState,
+    *,
+    registry_id: str = "default",
+    registry_scope: str = "full",
+) -> RegistryConnectionState:
+    return RegistryConnectionState(
+        registry_id=registry_id,
+        registry_scope=registry_scope,
+        agent_id=state.agent_id,
+        agent_token=state.agent_token,
+        poll_cursor=state.poll_cursor,
+        registered_slug=state.registered_slug,
+        last_successful_contact_at=state.last_successful_contact_at,
+        connectivity_state=state.connectivity_state,
+        last_error=state.last_error,
+        last_error_detail=state.last_error_detail,
+    )
+
+
+def _agent_runtime_state_has_data(state: AgentRuntimeState) -> bool:
+    return any(
+        (
+            state.agent_id,
+            state.agent_token,
+            state.registered_slug,
+            state.last_successful_contact_at,
+            state.last_error,
+            state.last_error_detail,
+        )
+    ) or state.poll_cursor != "0" or state.connectivity_state != "standalone"
+
+
 def load_registry_connection_state(data_dir: Path, registry_id: str) -> RegistryConnectionState:
     path = registry_connection_state_path(data_dir, registry_id)
     if not path.exists():
@@ -145,8 +193,47 @@ def load_registry_connection_state(data_dir: Path, registry_id: str) -> Registry
     )
 
 
-def save_registry_connection_state(data_dir: Path, state: RegistryConnectionState) -> None:
+def load_runtime_registry_connection_state(
+    data_dir: Path,
+    registry_id: str,
+    *,
+    registry_scope: str = "full",
+) -> RegistryConnectionState:
+    state = load_registry_connection_state(data_dir, registry_id)
+    default_state = RegistryConnectionState(registry_id=registry_id)
+    if registry_id != "default":
+        if state == default_state or not state.registry_scope:
+            state.registry_scope = registry_scope
+        return state
+
+    if state != default_state:
+        if not state.registry_scope:
+            state.registry_scope = registry_scope
+        return state
+
+    legacy_state = load_agent_runtime_state(data_dir)
+    if _agent_runtime_state_has_data(legacy_state):
+        return project_registry_connection_state(
+            legacy_state,
+            registry_id="default",
+            registry_scope=registry_scope,
+        )
+    state.registry_scope = registry_scope
+    return state
+
+
+def save_registry_connection_state(
+    data_dir: Path,
+    state: RegistryConnectionState,
+    *,
+    project_legacy_default: bool = False,
+) -> None:
     path = registry_connection_state_path(data_dir, state.registry_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(asdict(state), indent=2, sort_keys=True))
     path.chmod(0o600)
+    if project_legacy_default and state.registry_id == "default":
+        save_agent_runtime_state(
+            data_dir,
+            project_agent_runtime_state(state),
+        )

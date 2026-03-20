@@ -589,3 +589,22 @@
   - shared control-plane contracts now exist independently of any concrete registry runtime wiring
   - standalone/no-control-plane behavior is explicit and typed instead of implicit `None` handling
   - full suite status after slice 2: `1832 passed, 23 skipped`
+- Complete: Slice 3A bus contract, models, and lifecycle.
+  Scope:
+  - added the `app/control_plane/` package with typed envelope models in `models.py` and the store protocol in `bus_base.py`
+  - added typed per-operation payload models under `app/control_plane/requests/`, including the full routed-task status/result payload shapes and a shared `TimelineEventPayload`
+  - added `app/control_plane/machine.py` with a `python-statemachine`-backed lifecycle helper covering claim, completion, claimed-failure, retry, lease-expiry reclaim, and dead-letter transitions
+  - kept the slice contract-only: no storage implementation, runtime backend wiring, or consumer migration landed yet
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_control_plane_machine.py tests/test_control_plane_models.py`
+  - `./.venv/bin/python -m compileall app/control_plane tests/test_control_plane_machine.py tests/test_control_plane_models.py`
+  - `./.venv/bin/python -m pytest -q tests/test_control_plane_ports.py tests/test_control_plane_machine.py tests/test_control_plane_models.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - the new bus contract follows the existing transport pattern: a dedicated store protocol in its own file, typed facade envelopes, and no backend selection logic outside `runtime_backend`
+  - request payload models mirror the current domain dataclasses without lossy flattening; tuple-valued runtime collections become lists only where pydantic serialization requires it
+  - the reply envelope was hardened during review so failed replies cannot accidentally carry a result payload, which keeps request/reply semantics unambiguous before storage lands
+  Verified:
+  - the control-plane bus now has typed command/reply contracts and validated payload models without introducing persistence or runtime wiring ahead of schedule
+  - lifecycle invariants for retry budget and lease-expiry reclaim are now explicit and tested instead of being deferred to store-specific SQL
+  - full suite status after slice 3A: `1844 passed, 23 skipped`

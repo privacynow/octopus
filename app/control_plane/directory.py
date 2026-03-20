@@ -28,3 +28,13 @@ class ControlPlaneDirectory:
             for authority_ref in authorities:
                 pairs.add((authority_ref, capability))
         return pairs
+
+
+def build_control_plane_directory(
+    authority_capabilities: dict[str, set[str]],
+) -> ControlPlaneDirectory:
+    directory = ControlPlaneDirectory()
+    for authority_ref, capabilities in authority_capabilities.items():
+        for capability in capabilities:
+            directory.register(capability=capability, authority_ref=authority_ref)
+    return directory

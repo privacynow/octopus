@@ -14,14 +14,21 @@ from app.identity import telegram_numeric_id
 from app.ports.channel import ChannelBootstrap, ChannelDescriptor, ChannelIngress
 from app.ports.egress import ChannelEgress
 from app.providers.base import Provider
+from app.runtime.services import BotServices, build_noop_bot_services
 
 
 class TelegramChannelBootstrap(ChannelBootstrap):
     """Channel bootstrap for the Telegram runtime."""
 
-    def __init__(self, config: BotConfig, provider: Provider) -> None:
+    def __init__(
+        self,
+        config: BotConfig,
+        provider: Provider,
+        services: BotServices | None = None,
+    ) -> None:
         self._config = config
         self._provider = provider
+        self._services = services or build_noop_bot_services()
 
     @property
     def channel_id(self) -> str:
@@ -74,7 +81,7 @@ class TelegramChannelBootstrap(ChannelBootstrap):
     def build_ingress(self, *, config: Any, delivery_handler: Any) -> ChannelIngress:
         del config, delivery_handler
         return TelegramChannelIngress(
-            build_bootstrap(self._config, self._provider),
+            build_bootstrap(self._config, self._provider, services=self._services),
             descriptor=self.descriptor,
         )
 

@@ -12,18 +12,23 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.control_plane.bus import ControlPlaneBus
+from app.control_plane.directory import build_control_plane_directory
 from app.agents.delivery import build_registry_delivery_runtime
+from app.agents.registry_capabilities import registry_authority_capabilities
 import app.channels.telegram.execution as _telegram_execution
 import app.channels.telegram.ingress as _th
 import app.channels.telegram.progress as _telegram_progress
 import app.channels.telegram.worker as _telegram_worker
 from app.channels.telegram.bootstrap import build_application
+from app.channels.registry.channel import register_registry_channels
 from app.channels.telegram.channel import TelegramChannelBootstrap
 from app.channels.telegram.delegation_channel import propose_delegation_plan as _propose_delegation_plan
 from app.channels.telegram.state import TelegramRuntime, build_telegram_runtime
 from app.content_models import RuntimeSkillTrackRecord, SkillRevisionRecord
 from app.providers.base import RunResult
 from app.runtime.channel_dispatcher import ChannelDispatcher
+from app.runtime.services import build_bus_bot_services, build_noop_bot_services
 from app.storage import close_db, ensure_data_dirs, load_session
 from app import work_queue as _work_queue
 from app.agents.registry_runtime import RegistryRuntime
@@ -505,16 +510,29 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
                     )
                 )
     test_bot = bot_instance if bot_instance is not None else MinimalFakeBot()
+    authority_capabilities = (
+        registry_authority_capabilities(config.agent_registries)
+        if config.agent_registries
+        else {}
+    )
+    directory = build_control_plane_directory(authority_capabilities)
+    services = (
+        build_bus_bot_services(ControlPlaneBus(config.data_dir), directory)
+        if authority_capabilities
+        else build_noop_bot_services()
+    )
     _TEST_RUNTIME = build_telegram_runtime(
         config,
         provider,
         boot_id=boot_id,
         bot_instance=test_bot,
+        services=services,
     )
     dispatcher = ChannelDispatcher()
-    dispatcher.register(TelegramChannelBootstrap(config, provider))
+    dispatcher.register(TelegramChannelBootstrap(config, provider, services))
     registry_runtime = None
     if config.agent_mode == "registry" and config.agent_registries:
+        register_registry_channels(config, config.agent_registries, dispatcher)
         registry_runtime = RegistryRuntime(
             config.agent_registries,
             dispatcher,
@@ -522,7 +540,6 @@ def setup_globals(config, provider, *, boot_id="test-boot", bot_instance=None):
             config=config,
             provider=provider,
         )
-        registry_runtime.register_channels()
     _TEST_RUNTIME.channel_dispatcher = dispatcher
     _TEST_RUNTIME.registry_runtime = registry_runtime
     _TEST_APPLICATION = build_application(_TEST_RUNTIME)

@@ -12,7 +12,12 @@ from app.config import BotConfig, ProcessRole, fail_fast, load_config, load_conf
 from app.providers.base import Provider
 from app.providers.claude import ClaudeProvider
 from app.providers.codex import CodexProvider
+from app.control_plane.bus import ControlPlaneBus
+from app.control_plane.directory import build_control_plane_directory
+from app.control_plane.processor_runner import ProcessorRunner
 from app.agents.delivery import build_registry_delivery_runtime, handle_registry_delivery
+from app.agents.registry_capabilities import registry_authority_capabilities
+from app.agents.registry_control_processor import RegistryControlProcessor
 from app.agents.registry_runtime import RegistryRuntime
 from app.content_store import init_content_store_for_config
 from app.credential_store import init_credential_store_for_config
@@ -21,7 +26,9 @@ from app.work_queue import close_transport_db, recover_stale_claims, purge_old
 from app.worker import poll_interval_for_runtime, start_worker_task
 from app.channels.telegram.channel import TelegramChannelBootstrap
 from app.channels.telegram.bootstrap import build_worker_bundle
+from app.channels.registry.channel import register_registry_channels
 from app.runtime.channel_dispatcher import ChannelDispatcher
+from app.runtime.services import build_bus_bot_services, build_noop_bot_services
 from app.runtime_health import CanonicalRuntimeHealthProvider
 from app.startup_diagnostics import (
     collect_telegram_doctor_diagnostics,
@@ -262,12 +269,24 @@ def main() -> None:
         log.warning("Bot is open to everyone (BOT_ALLOW_OPEN=1)")
 
     log.info("Process role: %s", config.process_role)
+    bus = ControlPlaneBus(config.data_dir)
+    authority_capabilities = (
+        registry_authority_capabilities(config.agent_registries)
+        if config.agent_registries
+        else {}
+    )
+    directory = build_control_plane_directory(authority_capabilities)
+    services = (
+        build_bus_bot_services(bus, directory)
+        if authority_capabilities
+        else build_noop_bot_services()
+    )
     dispatcher = ChannelDispatcher()
     telegram_ingress = None
     worker_runtime_bundle = None
     app = None
     if config.telegram_token:
-        dispatcher.register(TelegramChannelBootstrap(config, provider))
+        dispatcher.register(TelegramChannelBootstrap(config, provider, services))
         dispatcher.build_all_ingresses(config=config, delivery_handler=lambda *_args, **_kwargs: None)
         telegram_ingress = dispatcher.get_ingress("telegram")
         if telegram_ingress is None:
@@ -276,7 +295,7 @@ def main() -> None:
         worker_runtime_bundle = telegram_ingress
         app = telegram_ingress.application
     else:
-        worker_runtime_bundle = build_worker_bundle(config, provider)
+        worker_runtime_bundle = build_worker_bundle(config, provider, services=services)
         worker_runtime_bundle.runtime.channel_dispatcher = dispatcher
 
     assert worker_runtime_bundle is not None
@@ -297,6 +316,10 @@ def main() -> None:
     _worker_task = None
     _worker_stop = None
     registry_runtime = None
+    control_plane_runner = None
+    control_plane_runner_task = None
+    if config.agent_registries:
+        register_registry_channels(config, config.agent_registries, dispatcher)
     if _runs_registry_runtime(config):
         delivery_runtime = build_registry_delivery_runtime(
             provider_name=provider.name,
@@ -316,11 +339,12 @@ def main() -> None:
             runtime_health_provider=CanonicalRuntimeHealthProvider(),
             provider=provider,
         )
-        registry_runtime.register_channels()
+        control_plane_runner = ProcessorRunner(bus)
+        control_plane_runner.register(RegistryControlProcessor(registry_runtime))
         worker_runtime_bundle.runtime.registry_runtime = registry_runtime
 
     async def _start_background_runtime(stop_event: asyncio.Event) -> None:
-        nonlocal _worker_task, _worker_stop
+        nonlocal _worker_task, _worker_stop, control_plane_runner_task
         if _runs_worker(config):
             _worker_task, _worker_stop = start_worker_task(
                 config.data_dir,
@@ -335,8 +359,23 @@ def main() -> None:
             )
         if registry_runtime is not None:
             await registry_runtime.start(stop_event=stop_event)
+        if control_plane_runner is not None:
+            await bus.reconcile_orphans(allowed_pairs=directory.all_pairs())
+            control_plane_runner_task = asyncio.create_task(
+                control_plane_runner.run(stop_event=stop_event)
+            )
 
     async def _stop_background_runtime() -> None:
+        nonlocal control_plane_runner_task
+        if control_plane_runner is not None:
+            await control_plane_runner.stop()
+        if control_plane_runner_task is not None:
+            try:
+                await asyncio.wait_for(control_plane_runner_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                control_plane_runner_task.cancel()
+            finally:
+                control_plane_runner_task = None
         if registry_runtime is not None:
             await registry_runtime.stop()
         if _worker_stop:

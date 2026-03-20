@@ -20,7 +20,7 @@
   - one dead `"default"` registry-id default remains in
     `RegistryConnectionState`
 - Phase 10 is now open and in progress; Slice 10A is landed and
-  Slices 10B-10E remain.
+  Slices 10A-10B are landed and Slices 10C-10E remain.
 - Status should be read as: rollout complete through Phase 9, but the
   architecture cleanup is not complete until Phase 10 lands.
 
@@ -63,10 +63,9 @@
   - full suite status after Phase 10A: `1923 passed, 23 skipped`
 
 - Pending: Phase 10 remediation — remaining routed-task surface and
-  final surface-boundary cleanup (Slices 10B-10E).
+  final surface-boundary cleanup (Slices 10C-10E).
   Planned scope:
-  - thread explicit `authority_ref` through existing execution
-    metadata/context and route routed-task progress through
+  - route routed-task progress through
     `TaskRoutingPort.update_routed_task_status()`
   - add the routed-task progress callback bridge explicitly
     (`html_text`/`force` -> `RoutedTaskUpdate`) with throttling on the
@@ -84,7 +83,44 @@
     remaining task-progress and surface-policy work is still not fully
     aligned with the target architecture
   - execution should follow the remaining Phase 10 slices 10B-10E from
+  - execution should follow the remaining Phase 10 slices 10C-10E from
     `PLAN-control-plane-bus.md` in order
+
+- Complete: Phase 10B remediation — thread canonical authority provenance through execution context.
+  Scope:
+  - added `authority_ref` to the existing `ExecutionChannelMetadata`
+    and `ExecutionChannelContext` dataclasses without changing their
+    ownership or introducing a new seam
+  - updated Telegram execution metadata building to copy
+    `message.authority_ref` directly from the canonical inbound event
+    alongside `routed_task_id`
+  - updated workflow context resolution to carry the explicit
+    `authority_ref` through unchanged so the later routed-task progress
+    slice can consume provenance without reparsing registry refs
+  - added execution-boundary tests proving the metadata copies
+    canonical authority provenance and leaves it empty when the inbound
+    message omitted it, rather than synthesizing it from a registry ref
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_runtime_dispatch_boundary.py tests/test_handlers.py::test_registry_routed_task_executes_and_reports_result tests/test_runtime_inbound_types.py`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified the new `authority_ref` field is only threaded through
+    `execution_channel_metadata()` and `build_execution_channel_context()`
+    at the existing execution seam
+  - verified there is still no registry-ref parsing or authority
+    synthesis in Telegram execution/workflow code
+  Review:
+  - this slice stayed a pure provenance-threading change so 10C can
+    select the correct progress path by concern without inventing a
+    new builder or fallback
+  - the negative boundary test is important here: routed-task
+    authority now depends on canonical inbound provenance, not on
+    reconstructing ownership from `registry:{id}:task:{task}`
+  Verified:
+  - execution metadata/context now carry explicit canonical
+    `authority_ref`
+  - no new inference path was introduced
+  - full suite status after Phase 10B: `1925 passed, 23 skipped`
 
 - Complete: Phase 9H remediation — final test-hygiene and guardrail cleanup.
   Scope:

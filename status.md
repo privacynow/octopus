@@ -667,3 +667,23 @@
   - command execution now has one generic processor loop that honors per-authority capability ownership and keeps leases alive while handlers run
   - positive and negative runner paths are covered: routing by pair, transient failure retry, dead-letter on exhausted retries, reclaim of expired claims, lease heartbeats, and stop-with-inflight semantics
   - full suite status after slice 4B: `1876 passed, 23 skipped`
+- Complete: Slice 4C registry control processor.
+  Scope:
+  - added `app/agents/registry_capabilities.py` with the shared `registry_authority_capabilities()` builder plus `registry:` authority ref helpers
+  - added `app/agents/registry_control_processor.py` as the registry-backed `ControlProcessor` implementation for conversation projection, task routing, agent directory, and health publication
+  - added a public `registries` property on `RegistryRuntime` so startup and processor slices can share the same configured connection set without reaching into private fields
+  - kept registry HTTP ownership on existing seams: the processor reuses `RegistryRuntime.client_for_registry()` and existing `AgentRegistryClient` methods instead of creating a second registry-I/O path
+  - added focused processor coverage in `tests/test_registry_control_processor.py`
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_registry_control_processor.py`
+  - `./.venv/bin/python -m compileall app/agents/registry_capabilities.py app/agents/registry_control_processor.py app/agents/registry_runtime.py tests/test_registry_control_processor.py`
+  - `./.venv/bin/python -m pytest -q tests/test_registry_runtime.py tests/test_registry_control_processor.py tests/test_control_plane_processor_runner.py tests/test_control_plane_adapters.py`
+  - `./.venv/bin/python -m pytest -q -n 4`
+  Review:
+  - scope-to-capability ownership now has one shared builder; the processor does not re-encode `registry_scope` locally, which avoids the drift problem called out in the plan review
+  - the processor translates only real registry request failures (`RegistryClientError`) into failed replies and leaves ordinary coding errors visible, so retry semantics stay correct without hiding defects
+  - routed-task status processing preserves timeline events, progress, and `updated_at` all the way into the existing client/store path instead of flattening the payload
+  Verified:
+  - registry now has a concrete control-plane processor that can execute every planned capability over existing runtime/client seams
+  - positive and negative processor paths are covered: scope mapping, projection, routing, discovery, authority resolution, health publication, and isolated registry request failure handling
+  - full suite status after slice 4C: `1880 passed, 23 skipped`

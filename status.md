@@ -10,15 +10,33 @@
 ## Current State
 
 - Phases 1-8 of the control-plane rollout landed and the repo is green.
-- Phase 9 remediation is in progress; slices 9A-9C are now complete and the repo is green.
+- Phase 9 remediation is in progress; slices 9A-9D are now complete and the repo is green.
 - The remaining work is now tracked explicitly in `PLAN-control-plane-bus.md` Phase 9:
-  - generic health/discovery still leaks `registry_scope`
   - compatibility translators and singleton/default fallbacks still remain
   - some tests still encode scaffolding behavior instead of the final architecture
 - Status should be read as: rollout complete through Phase 8, remediation in progress through Phase 9.
 
 ## Slice Log
 
+- Complete: Phase 9D remediation — generic health/discovery cleanup.
+  Scope:
+  - replaced `AuthorityStatus.registry_scope` with capability lists on the generic health-publication port
+  - updated the bus-backed health adapter to report sorted authority capabilities instead of reconstructing synthetic registry scope names
+  - updated Telegram `/discover` to gate on `agent_directory` capability instead of reading `registry_scope`
+  - added a zero-import gate that forbids `registry_scope` from reappearing in the generic health port, health adapter, or Telegram discover path
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_control_plane_adapters.py tests/test_handlers.py -k discover tests/test_control_plane_ports.py tests/test_zero_import_gates.py`
+  - `./.venv/bin/python -m pytest -q`
+  Direct checks:
+  - verified `app/ports/health_publication.py`, `app/control_plane/adapters/health_publication.py`, and `app/channels/telegram/ingress.py` no longer reference `registry_scope`
+  - verified `/discover` still treats enrolled coordination/discovery authorities as available when they advertise `agent_directory`
+  Review:
+  - this slice removed backend vocabulary from the generic port instead of renaming the old field or creating a second summary shape
+  - the contract change stayed inside the existing health/discovery seam; no new adapter, presenter, or health model layer was introduced
+  Verified:
+  - generic health/discovery no longer depends on synthetic registry scope names
+  - `/discover` uses capability data from the generic health port
+  - full suite status after Phase 9D: `1912 passed, 23 skipped`
 - Complete: Phase 9C remediation — registry delivery timeline convergence.
   Scope:
   - removed the last direct registry-delivery timeline side effects from `app/agents/delivery.py`; routed-result and delegation-ready publication now go through dispatcher-built channel egress instead of bridge HTTP helpers

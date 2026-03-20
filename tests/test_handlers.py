@@ -291,7 +291,7 @@ async def test_discover_connected_registry_returns_matching_agents(monkeypatch):
                     AuthorityStatus(
                         authority_ref="registry:prod",
                         connectivity_state="configured",
-                        registry_scope="full",
+                        capabilities=["agent_directory", "task_routing"],
                     )
                 ]
             )
@@ -359,7 +359,7 @@ async def test_discover_degraded_reports_registry_connectivity():
                     AuthorityStatus(
                         authority_ref="registry:default",
                         connectivity_state="configured",
-                        registry_scope="full",
+                        capabilities=["agent_directory", "task_routing"],
                     )
                 ]
             )
@@ -402,7 +402,7 @@ async def test_discover_registry_failure_omits_backend_response_details():
                     AuthorityStatus(
                         authority_ref="registry:default",
                         connectivity_state="configured",
-                        registry_scope="full",
+                        capabilities=["agent_directory", "task_routing"],
                     )
                 ]
             )

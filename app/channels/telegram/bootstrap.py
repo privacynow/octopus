@@ -52,6 +52,7 @@ def _execution_runtime(runtime: TelegramRuntime):
         keep_typing_fn=telegram_progress.keep_typing,
         heartbeat_fn=telegram_progress.heartbeat,
         progress_timeline_callback_fn=telegram_progress.progress_timeline_callback,
+        routed_task_progress_callback_fn=telegram_progress.routed_task_progress_callback,
         propose_delegation_plan_fn=propose_delegation_plan,
     )
     return telegram_execution.build_execution_runtime(

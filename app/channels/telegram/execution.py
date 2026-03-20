@@ -45,7 +45,8 @@ class TelegramExecutionCollaborators:
     progress_factory: type
     keep_typing: Callable[[Any], Any]
     heartbeat: Callable[..., Any]
-    build_timeline_callback: Callable[[str, str], Callable[[str, bool], Awaitable[None]]]
+    build_conversation_progress_callback: Callable[[str, str], Callable[[str, bool], Awaitable[None]]]
+    build_routed_task_progress_callback: Callable[[str, str], Callable[[str, bool], Awaitable[None]]]
     propose_delegation_plan: Callable[
         [int | str, Any, SessionState, str, Any],
         Awaitable[RequestExecutionOutcome],
@@ -59,17 +60,27 @@ def bind_execution_collaborators(
     keep_typing_fn: Callable[[Any], Any],
     heartbeat_fn: Callable[..., Any],
     progress_timeline_callback_fn: Callable[..., Awaitable[None]],
+    routed_task_progress_callback_fn: Callable[..., Awaitable[None]],
     propose_delegation_plan_fn: Callable[..., Awaitable[RequestExecutionOutcome]],
 ) -> TelegramExecutionCollaborators:
     return TelegramExecutionCollaborators(
         progress_factory=progress_factory,
         keep_typing=lambda chat: keep_typing_fn(chat, runtime=runtime),
         heartbeat=heartbeat_fn,
-        build_timeline_callback=lambda conversation_ref, routed_task_id: (
+        build_conversation_progress_callback=lambda conversation_ref, routed_task_id: (
             lambda html_text, force=False: progress_timeline_callback_fn(
                 runtime,
                 conversation_ref,
                 routed_task_id,
+                html_text,
+                force=force,
+            )
+        ),
+        build_routed_task_progress_callback=lambda routed_task_id, authority_ref: (
+            lambda html_text, force=False: routed_task_progress_callback_fn(
+                runtime,
+                routed_task_id,
+                authority_ref,
                 html_text,
                 force=force,
             )
@@ -324,7 +335,8 @@ def build_execution_runtime(
                 runtime.config,
                 telegram_chat_id(numeric_chat_id),
             ),
-            timeline_callback_factory=collaborators.build_timeline_callback,
+            conversation_callback_factory=collaborators.build_conversation_progress_callback,
+            routed_task_callback_factory=collaborators.build_routed_task_progress_callback,
         ),
         render_provider_error=html.escape,
         show_foreign_setup=show_foreign_setup,

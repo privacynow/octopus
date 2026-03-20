@@ -75,10 +75,18 @@ def test_dispatch_runtime_uses_injected_collaborators() -> None:
             progress_factory=FakeChat,
             keep_typing=lambda chat: ("typing", chat),
             heartbeat=fake_heartbeat,
-            build_timeline_callback=lambda conversation_ref, routed_task_id: (
+            build_conversation_progress_callback=lambda conversation_ref, routed_task_id: (
                 lambda html_text, force=False: _no_op(
                     conversation_ref,
                     routed_task_id,
+                    html_text,
+                    force=force,
+                )
+            ),
+            build_routed_task_progress_callback=lambda routed_task_id, authority_ref: (
+                lambda html_text, force=False: _no_op(
+                    routed_task_id,
+                    authority_ref,
                     html_text,
                     force=force,
                 )
@@ -98,6 +106,10 @@ def test_execution_runtime_uses_injected_timeline_and_delegation_callbacks() -> 
         del args, kwargs
         return None
 
+    async def fake_routed_task(*args, **kwargs):
+        del args, kwargs
+        return None
+
     async def fake_propose(*args, **kwargs):
         del args, kwargs
         return RequestExecutionOutcome(status="completed")
@@ -107,7 +119,8 @@ def test_execution_runtime_uses_injected_timeline_and_delegation_callbacks() -> 
             progress_factory=FakeChat,
             keep_typing=lambda chat: chat,
             heartbeat=_no_op,
-            build_timeline_callback=lambda _conversation_ref, _routed_task_id: fake_timeline,
+            build_conversation_progress_callback=lambda _conversation_ref, _routed_task_id: fake_timeline,
+            build_routed_task_progress_callback=lambda _routed_task_id, _authority_ref: fake_routed_task,
             propose_delegation_plan=fake_propose,
         )
 
@@ -211,10 +224,18 @@ def test_workflow_context_builder_resolves_registry_conversation_metadata() -> N
             chat_id=12345,
         ),
         build_conversation_ref=lambda chat_id: f"registry:{chat_id}",
-        timeline_callback_factory=lambda conversation_ref, routed_task_id: (
+        conversation_callback_factory=lambda conversation_ref, routed_task_id: (
             lambda html_text, force=False: _no_op(
                 conversation_ref,
                 routed_task_id,
+                html_text,
+                force=force,
+            )
+        ),
+        routed_task_callback_factory=lambda routed_task_id, authority_ref: (
+            lambda html_text, force=False: _no_op(
+                routed_task_id,
+                authority_ref,
                 html_text,
                 force=force,
             )
@@ -247,10 +268,18 @@ def test_workflow_context_builder_keeps_registry_task_without_timeline_callback(
             chat_id="registry:ops:task:task-1",
         ),
         build_conversation_ref=lambda chat_id: str(chat_id),
-        timeline_callback_factory=lambda conversation_ref, routed_task_id: (
+        conversation_callback_factory=lambda conversation_ref, routed_task_id: (
             lambda html_text, force=False: _no_op(
                 conversation_ref,
                 routed_task_id,
+                html_text,
+                force=force,
+            )
+        ),
+        routed_task_callback_factory=lambda routed_task_id, authority_ref: (
+            lambda html_text, force=False: _no_op(
+                routed_task_id,
+                authority_ref,
                 html_text,
                 force=force,
             )
@@ -260,7 +289,44 @@ def test_workflow_context_builder_keeps_registry_task_without_timeline_callback(
     assert context.conversation_ref == "registry:ops:task:task-1"
     assert context.routed_task_id == "task-1"
     assert context.authority_ref == "registry:ops"
-    assert context.timeline_callback is None
+    assert context.timeline_callback is not None
+
+
+async def test_workflow_context_builder_chooses_routed_task_callback_by_concern() -> None:
+    observed: list[tuple[str, str, str]] = []
+
+    async def fake_routed_task(html_text: str, force: bool = False) -> None:
+        observed.append(("routed_task", html_text, str(force)))
+
+    async def fake_conversation(html_text: str, force: bool = False) -> None:
+        observed.append(("conversation", html_text, str(force)))
+
+    context = build_execution_channel_context(
+        ExecutionChannelMetadata(
+            descriptor=ChannelDescriptor(
+                channel_type="registry",
+                display_name="Registry Tasks",
+                supports_multiple=True,
+                requires_polling=True,
+                trust_tier="trusted",
+                contributes_channel_capability=False,
+                accepts_channel_input=False,
+                supports_conversation_binding=False,
+                supports_timeline=False,
+            ),
+            message_conversation_ref="registry:ops:task:task-1",
+            routed_task_id="task-1",
+            authority_ref="registry:ops",
+            chat_id="registry:ops:task:task-1",
+        ),
+        build_conversation_ref=lambda chat_id: str(chat_id),
+        conversation_callback_factory=lambda _conversation_ref, _routed_task_id: fake_conversation,
+        routed_task_callback_factory=lambda _routed_task_id, _authority_ref: fake_routed_task,
+    )
+
+    assert context.timeline_callback is fake_routed_task
+    await context.timeline_callback("working…", force=True)
+    assert observed == [("routed_task", "working…", "True")]
 
 
 def test_execution_channel_metadata_copies_authority_ref_from_inbound_message() -> None:

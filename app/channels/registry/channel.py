@@ -75,6 +75,7 @@ class _RegistryChannel(Channel):
             conversation_ref=conversation_ref,
             registry_id=self._registry.registry_id,
             routed_task_id=routed_task_id,
+            authority_ref=str(kw.get("authority_ref", "")),
             title=str(kw.get("title", "")),
             output_log=kw.get("output_log"),
             external_id=external_id,

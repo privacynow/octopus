@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import app.channels.telegram.progress as telegram_progress
+from app.agents.types import RoutedTaskUpdate
 from app.ports.agent_directory import NoOpAgentDirectory
 from app.ports.health_publication import NoOpHealthPublication
 from app.ports.task_routing import NoOpTaskRouting
@@ -15,7 +16,7 @@ from tests.support.config_support import make_config
 from tests.support.handler_support import FakeProvider
 
 
-def _services(*, publish=None) -> BotServices:
+def _services(*, publish=None, task_routing=None) -> BotServices:
     projection = SimpleNamespace(
         bind_external_conversation=AsyncMock(),
         publish_external_timeline=publish or AsyncMock(),
@@ -23,7 +24,7 @@ def _services(*, publish=None) -> BotServices:
     return BotServices(
         control_plane=ControlPlaneServices(
             conversation_projection=projection,
-            task_routing=NoOpTaskRouting(),
+            task_routing=task_routing or NoOpTaskRouting(),
             agent_directory=NoOpAgentDirectory(),
             health_publication=NoOpHealthPublication(),
         )
@@ -102,3 +103,74 @@ async def test_progress_timeline_callback_uses_port_without_registry_runtime(mon
         body="<i>Working</i>",
         metadata={"routed_task_id": "task-1"},
     )
+
+
+@pytest.mark.asyncio
+async def test_routed_task_progress_callback_updates_task_status_via_port() -> None:
+    routing = SimpleNamespace(update_routed_task_status=AsyncMock())
+    runtime = build_telegram_runtime(
+        make_config(data_dir=Path("/tmp/telegram-progress-routed-task")),
+        FakeProvider("codex"),
+        services=_services(task_routing=routing),
+    )
+
+    await telegram_progress.routed_task_progress_callback(
+        runtime,
+        "task-1",
+        "registry:ops",
+        "<i>Still working</i>\n<b>Reviewing diff</b>",
+        force=True,
+    )
+
+    routing.update_routed_task_status.assert_awaited_once()
+    kwargs = routing.update_routed_task_status.await_args.kwargs
+    assert kwargs["authority_ref"] == "registry:ops"
+    update = kwargs["update"]
+    assert isinstance(update, RoutedTaskUpdate)
+    assert update.routed_task_id == "task-1"
+    assert update.status == "running"
+    assert update.summary == "Reviewing diff"
+    assert update.progress is None
+    assert update.timeline_events == ()
+
+
+@pytest.mark.asyncio
+async def test_routed_task_progress_callback_skips_empty_markup() -> None:
+    routing = SimpleNamespace(update_routed_task_status=AsyncMock())
+    runtime = build_telegram_runtime(
+        make_config(data_dir=Path("/tmp/telegram-progress-routed-task-empty")),
+        FakeProvider("codex"),
+        services=_services(task_routing=routing),
+    )
+
+    await telegram_progress.routed_task_progress_callback(
+        runtime,
+        "task-1",
+        "registry:ops",
+        "<b> </b>",
+    )
+
+    routing.update_routed_task_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_routed_task_progress_callback_maps_terminal_progress_label() -> None:
+    routing = SimpleNamespace(update_routed_task_status=AsyncMock())
+    runtime = build_telegram_runtime(
+        make_config(data_dir=Path("/tmp/telegram-progress-routed-task-terminal")),
+        FakeProvider("codex"),
+        services=_services(task_routing=routing),
+    )
+
+    await telegram_progress.routed_task_progress_callback(
+        runtime,
+        "task-1",
+        "registry:ops",
+        "Completed.",
+        force=True,
+    )
+
+    kwargs = routing.update_routed_task_status.await_args.kwargs
+    update = kwargs["update"]
+    assert update.status == "completed"
+    assert update.summary == "Completed."

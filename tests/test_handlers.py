@@ -716,6 +716,76 @@ async def test_registry_routed_task_executes_and_reports_result(monkeypatch):
         )
 
 
+async def test_registry_routed_task_progress_updates_task_status(monkeypatch):
+    with fresh_env(
+        config_overrides={
+            "approval_mode": "on",
+            "agent_mode": "registry",
+            "agent_registries": (make_registry_connection(),),
+        }
+    ) as (_, _cfg, prov):
+        status_updates: list[tuple[str, object]] = []
+
+        async def fake_update_routed_task_status(*, update, authority_ref):
+            status_updates.append((authority_ref, update))
+
+        async def fake_report_routed_task_result(*, routed_task_id, authority_ref, result):
+            del routed_task_id, authority_ref, result
+            return TaskResultReport(status="reported")
+
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "update_routed_task_status",
+            fake_update_routed_task_status,
+        )
+        monkeypatch.setattr(
+            current_runtime().services.control_plane.task_routing,
+            "report_routed_task_result",
+            fake_report_routed_task_result,
+        )
+
+        prov.run_results = [RunResult(text="Delegated review complete.")]
+
+        event = InboundMessage(
+            user=InboundUser(id=_actor(42), username="origin-bot"),
+            conversation_key=_reg_task("routed-task-progress-1"),
+            text="Review the latest spec.",
+            source="registry",
+            conversation_ref=_reg_task("routed-task-progress-1"),
+            routed_task_id="routed-task-progress-1",
+            authority_ref="registry:default",
+        )
+        item = {
+            "id": "registry-item-progress-1",
+            "conversation_key": _reg_task("routed-task-progress-1"),
+            "event_id": _event(7003),
+            "dispatch_mode": "fresh",
+        }
+
+        await telegram_worker.worker_dispatch(
+            "message",
+            event,
+            item,
+            runtime=current_runtime(),
+            execution_runtime=current_execution_runtime(),
+        )
+
+        assert len(status_updates) == 2
+        first_authority_ref, first_update = status_updates[0]
+        assert first_authority_ref == "registry:default"
+        assert first_update.routed_task_id == "routed-task-progress-1"
+        assert first_update.status == "running"
+        assert first_update.summary == "working…"
+        assert first_update.timeline_events == ()
+        assert first_update.progress is None
+
+        last_authority_ref, last_update = status_updates[-1]
+        assert last_authority_ref == "registry:default"
+        assert last_update.routed_task_id == "routed-task-progress-1"
+        assert last_update.status == "completed"
+        assert last_update.summary == "Completed."
+
+
 async def test_registry_routed_task_result_report_failure_does_not_escape_worker(monkeypatch):
     with fresh_env(
         config_overrides={

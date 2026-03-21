@@ -15,6 +15,10 @@ from app.progress import (
 )
 from app.progress import ProgressEvent
 from app.providers.base import PreflightContext, ProgressSink, RunContext, RunResult
+from app.providers.codex_security import (
+    validate_codex_sandbox,
+    validated_codex_config_overrides,
+)
 from app.subprocess_env import build_subprocess_env
 
 log = logging.getLogger(__name__)
@@ -561,7 +565,15 @@ class CodexProvider:
         elif context and context.provider_config:
             pc = context.provider_config
             if "sandbox" in pc:
-                sandbox_override = pc["sandbox"]
+                raw_sandbox = str(pc["sandbox"])
+                try:
+                    sandbox_override = validate_codex_sandbox(raw_sandbox)
+                except ValueError:
+                    log.warning(
+                        "Rejected invalid Codex sandbox override %r; using configured default",
+                        raw_sandbox,
+                    )
+                    sandbox_override = None
 
         effective_model = context.effective_model if context else ""
         if thread_id:
@@ -585,7 +597,10 @@ class CodexProvider:
 
         # Inject config_overrides as -c flags
         if context and context.provider_config:
-            for override in context.provider_config.get("config_overrides", []):
+            for override in validated_codex_config_overrides(
+                context.provider_config.get("config_overrides", []),
+                logger=log,
+            ):
                 cmd.insert(-1, "-c")  # Insert before the prompt (last arg)
                 cmd.insert(-1, override)
 

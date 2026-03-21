@@ -9,8 +9,8 @@
 
 ## Current State
 
-- Phases 1-18 are implemented and closed.
-- Phase 18C landed green: the repo-wide boundary-validation and seam-audit pass is complete after raw registry HTTP/store contract hardening, UI/recovery parity fixes, explicit inbound-source enforcement, and the final full-suite rerun.
+- Phases 1-18 are implemented and closed. Phase 19 is active.
+- Phase 19A1 landed green: Codex security-sensitive input now flows through one shared validator, invalid `CODEX_SANDBOX` values fail fast at config load, stale repo tests now match the live Codex CLI contract, and the README command-section contract was restored after the earlier docs refresh changed the tested heading.
 - Registry delivery now publishes parent-conversation timeline events through the existing `ConversationProjectionPort`; dispatcher/egress creation remains reserved for real live-output and readiness concerns.
 - Bridge admission and recovery/ref resolution now stay on their intended seams:
   - registry `channel_input` admission no longer fabricates bot presence
@@ -53,8 +53,12 @@
   - `InboundMessage` / `InboundCommand` / `InboundCallback` / `InboundAction` now require explicit source at construction time
   - Telegram-owned builders and runtime tests pass `source="telegram"` explicitly instead of inheriting it implicitly
 - Shared workflow/doc surfaces no longer keep the stale Telegram-first framing in generic ownership/docstrings.
+- Codex provider/runtime hardening is now underway:
+  - sandbox values are validated against the current CLI contract (`read-only`, `workspace-write`, `danger-full-access`)
+  - skill-provided Codex `config_overrides` are restricted to the audited allowlisted key set instead of being appended raw to argv
+  - invalid override entries are rejected with warnings instead of silently weakening execution
 - Accepted limitation: the registry UI shell regressions still prove static HTML/JS shell wiring, not browser-rendered DOM behavior. That limitation is now explicit and is not being overclaimed as runtime UI proof.
-- Latest verified full-suite run: `2040 passed, 23 skipped`.
+- Latest verified full-suite run: `2047 passed, 23 skipped`.
 
 ## Phase Summary
 
@@ -92,6 +96,31 @@
   - `18A` registry HTTP/store contract hardening
   - `18B` UI/recovery/schema parity sweep
   - `18C` explicit inbound-source enforcement and closeout
+- Phase 19 is the final remediation track:
+  - Track A security hardening
+  - Track B durability and data-integrity hardening
+  - Track C resource-lifecycle cleanup
+  - Track D delegation correctness
+  - Track E error-handling and polish
+
+## Phase 19 Slice Log
+
+- Complete: Phase 19A1 remediation — codify the current Codex sandbox/override contract in one shared validator before execution reaches the provider argv builder.
+  Scope:
+  - added `app/providers/codex_security.py` as the shared Codex security seam for sandbox validation and allowlisted `config_overrides`
+  - updated `app/config.py` so invalid `CODEX_SANDBOX` values fail fast at config load/provider-health load, and `validate_config(...)` now flags invalid Codex sandbox settings on direct config objects
+  - updated `app/providers/codex.py` so invalid provider-config sandbox overrides are rejected with warnings and invalid `config_overrides` entries are filtered instead of being appended raw to argv
+  - refreshed the stale Codex-contract tests to use the live CLI sandbox values and the repo’s actual allowlisted override key (`sandbox_permissions`)
+  - restored the README commands-section heading required by the existing README contract tests after the earlier doc refresh renamed it
+  Tests:
+  - `./.venv/bin/python -m pytest -q tests/test_codex_provider.py tests/test_execution_context.py tests/test_config.py tests/test_skills.py -k 'codex or inspect_mode or sandbox or config_overrides or build_provider_config or placeholder_resolution'`
+  - `./.venv/bin/python -m pytest -q tests/test_readme_commands.py`
+  - `./.venv/bin/python -m pytest -q`
+  Verified:
+  - Codex sandbox values are now validated against the live CLI contract instead of accepting stale repo-only strings like `off` / `networking`
+  - the only current skill-owned Codex override key in the repo (`sandbox_permissions`) still flows through, while unsafe/non-allowlisted entries are rejected before argv construction
+  - config-load failure is now explicit at the owner seam, not deferred until provider execution
+  - full suite status after Phase 19A1: `2047 passed, 23 skipped`
 
 ## Phase 18 Slice Log
 
